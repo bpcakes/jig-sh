@@ -41,6 +41,7 @@ pub(crate) struct WorkStartRequest {
     pub(crate) title: String,
     pub(crate) body: Option<String>,
     pub(crate) body_file: Option<PathBuf>,
+    pub(crate) base: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +54,8 @@ pub(crate) struct WorkAppendRequest {
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkCheckRequest {
     pub(crate) plan_id: String,
+    #[serde(default, deserialize_with = "crate::serde_helpers::null_or_default")]
+    pub(crate) gates: Vec<String>,
     #[serde(default, deserialize_with = "crate::serde_helpers::null_or_default")]
     pub(crate) tools: Vec<String>,
 }

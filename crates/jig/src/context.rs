@@ -47,11 +47,11 @@ pub(crate) use migration::RustMigrationLayout;
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
-    ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
-    parse_review_scope_arg,
+    ReviewScopeArg, WorkCheckGate, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
+    parse_review_scope_arg, validate_gate_path_pattern,
 };
 
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 5;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
@@ -104,6 +104,8 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     schema_dump_command: String,
+    #[serde(default = "default_schema_docs_dir")]
+    schema_docs_dir: String,
     #[allow(dead_code)]
     #[serde(default)]
     schema_check_command: String,
@@ -138,8 +140,14 @@ struct RepoConfig {
     commands: BTreeMap<String, String>,
     #[serde(default = "default_web_package_manager")]
     web_package_manager: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    application_contracts_enabled: bool,
     #[serde(default)]
     frontend_apps: Vec<FrontendAppConfig>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    frontend_workspace_roots: Vec<String>,
     #[serde(default)]
     vault: VaultConfig,
     #[serde(default)]
@@ -314,6 +322,9 @@ impl RepoContext {
         if manifest.required_commands.is_empty() {
             bail!("jig contract manifest does not declare required commands");
         }
+        config
+            .work
+            .validate_contract_version(manifest.contract_version)?;
         if manifest.contract_version <= LAST_VERSION_LOCKED_CONTRACT_VERSION {
             let config_version =
                 non_empty_legacy_jig_version(config.jig_version.as_deref(), ".jig.toml")?;
@@ -415,6 +426,10 @@ impl RepoContext {
         &self.config.rust_migration_dir
     }
 
+    pub(crate) fn rust_sqlx_metadata_dir(&self) -> &str {
+        &self.config.rust_sqlx_metadata_dir
+    }
+
     pub(crate) const fn rust_migration_layout(&self) -> RustMigrationLayout {
         self.config.rust_migration_layout
     }
@@ -425,6 +440,10 @@ impl RepoContext {
 
     pub(crate) fn schema_dump_command(&self) -> &str {
         &self.config.schema_dump_command
+    }
+
+    pub(crate) fn schema_docs_dir(&self) -> &str {
+        &self.config.schema_docs_dir
     }
 
     pub(crate) fn source_commit(&self) -> &str {
@@ -666,9 +685,44 @@ fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_command_map(&config.commands)?;
     validate_web_package_manager(&config.web_package_manager)?;
     validate_frontend_app_roles(config)?;
+    for root in &config.frontend_workspace_roots {
+        normalize_config_app_dir(root, "frontend workspace root")?;
+    }
+    validate_schema_docs_dir(&config.schema_docs_dir)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
     status_config::validate_runtime_config(config)
+}
+
+fn default_schema_docs_dir() -> String {
+    "docs/schema".into()
+}
+
+pub(crate) fn validate_schema_docs_dir(value: &str) -> Result<()> {
+    let normalized = normalize_config_app_dir(value, "schema_docs_dir")?;
+    if normalized != value {
+        bail!(
+            "schema_docs_dir must be a normalized portable repository-relative directory: {value}"
+        );
+    }
+    if value == "." {
+        bail!("schema_docs_dir must name a dedicated directory below the repository root");
+    }
+    if value.split('/').any(|component| {
+        is_reserved_agent_state_component(component)
+            || is_reserved_git_metadata_component(component)
+    }) {
+        bail!("schema_docs_dir must stay outside reserved .agent and .git directories");
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        bail!(
+            "schema_docs_dir contains unsupported characters; use ASCII letters, numbers, '/', '.', '-' or '_'"
+        );
+    }
+    Ok(())
 }
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
@@ -872,118 +926,7 @@ pub(crate) fn normalize_config_app_dir(value: &str, label: &str) -> Result<Strin
     }
 }
 
-fn is_supported_frontend_kind(kind: &str) -> bool {
-    matches!(kind, "vite" | "env-port")
-}
-
-fn validate_dev_app_env_prefixes<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-    section: &str,
-) -> Result<()> {
-    let mut prefixes = BTreeMap::new();
-    for name in names {
-        let prefix = jig_core::dev_app_env_prefix(name);
-        if let Some(previous) = prefixes.insert(prefix.clone(), name) {
-            bail!(
-                "{section} entries '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
-fn find_optional_repo_root() -> Result<Option<PathBuf>> {
-    find_optional_repo_root_from(&std::env::current_dir()?)
-}
-
-pub(crate) fn find_repo_root_from(start: &Path) -> Result<PathBuf> {
-    find_optional_repo_root_from(start)?.context(REPO_CONTEXT_NOT_FOUND)
-}
-
-pub(crate) fn find_repo_root_from_or_env(start: &Path) -> Result<PathBuf> {
-    if let Some(root) = repo_root_from_env()? {
-        Ok(root)
-    } else {
-        find_repo_root_from(start)
-    }
-}
-
-fn repo_root_from_env() -> Result<Option<PathBuf>> {
-    let Some(root) = std::env::var_os(JIG_REPO_ROOT_ENV) else {
-        return Ok(None);
-    };
-    let root = PathBuf::from(root);
-    if root.as_os_str().is_empty() {
-        return Ok(None);
-    }
-    if !root.join(".jig.toml").exists() {
-        bail!(
-            "{JIG_REPO_ROOT_ENV} does not contain .jig.toml: {}",
-            root.display()
-        );
-    }
-    fs::canonicalize(&root)
-        .with_context(|| {
-            format!(
-                "Failed to canonicalize {JIG_REPO_ROOT_ENV}: {}",
-                root.display()
-            )
-        })
-        .map(Some)
-}
-
-fn find_optional_repo_root_from(start: &Path) -> Result<Option<PathBuf>> {
-    let mut current = start.to_path_buf();
-    loop {
-        if current.join(".jig.toml").exists() {
-            return Ok(Some(current));
-        }
-        if !current.pop() {
-            return Ok(None);
-        }
-    }
-}
-
-fn resolve_current_session_path(root: &Path) -> PathBuf {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE])
-        .output();
-
-    if let Ok(output) = output
-        && output.status.success()
-    {
-        let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !resolved.is_empty() {
-            let path = PathBuf::from(&resolved);
-            return if path.is_absolute() {
-                path
-            } else {
-                root.join(path)
-            };
-        }
-    }
-
-    root.join(".agent/.cache").join(CURRENT_SESSION_FILE)
-}
-
-#[cfg(test)]
-impl RepoContext {
-    pub(crate) fn load_from(root: &Path) -> Result<Self> {
-        let config_text = fs::read_to_string(root.join(".jig.toml"))?;
-        let config: RepoConfig = toml::from_str(&config_text)?;
-        validate_config(&config)?;
-        let manifest_text = fs::read_to_string(root.join(".agent/jig-contract.json"))?;
-        let manifest: ContractManifest = serde_json::from_str(&manifest_text)?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            current_session_path: root.join(".agent/.cache").join(CURRENT_SESSION_FILE),
-            config,
-            manifest,
-        })
-    }
-}
+include!("context/tail.rs");
 
 #[cfg(test)]
 mod contract_tests;

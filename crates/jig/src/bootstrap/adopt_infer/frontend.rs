@@ -21,6 +21,7 @@ const REQUIRED_FRONTEND_SCRIPTS: &[&str] = &["lint", "typecheck", "build:bundle"
 #[derive(Clone, Debug, Default)]
 pub(super) struct FrontendAppsInference {
     pub(super) apps: Vec<FrontendApp>,
+    pub(super) workspace_roots: Vec<String>,
     pub(super) profiles: Vec<FrontendAppProfile>,
     pub(super) sources: Vec<String>,
     pub(super) warnings: Vec<String>,
@@ -42,6 +43,11 @@ pub(super) fn infer_frontend_apps_with_metadata(
 ) -> FrontendAppsInference {
     let workspace_declared = workspace_declaration_present(root, warnings);
     let workspace_candidates = workspace_package_dirs(root, warnings);
+    let mut workspace_roots = workspace_candidates
+        .iter()
+        .map(|dir| relative_path_string(dir.strip_prefix(root).unwrap_or(dir)))
+        .map(|dir| if dir.is_empty() { ".".into() } else { dir })
+        .collect::<Vec<_>>();
     let mut candidates = Vec::new();
     if workspace_candidates.is_empty() && !workspace_declared {
         if root.join("package.json").is_file() {
@@ -151,10 +157,14 @@ pub(super) fn infer_frontend_apps_with_metadata(
         sources.push(source);
     }
     apps.sort_by(|left, right| left.dir.cmp(&right.dir));
+    workspace_roots.retain(|root| !apps.iter().any(|app| app.dir == *root));
+    workspace_roots.sort();
+    workspace_roots.dedup();
     profiles.sort_by(|left, right| left.dir.cmp(&right.dir));
     sources.sort();
     FrontendAppsInference {
         apps,
+        workspace_roots,
         profiles,
         sources,
         warnings: metadata_warnings,

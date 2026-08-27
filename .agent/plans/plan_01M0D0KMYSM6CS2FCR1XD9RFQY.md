@@ -65,7 +65,7 @@ Finally build `jig-sh`, set `JIG_DEV_BIN=target/debug/jig`, run `scripts/jig wor
 
 ## Concrete Steps
 
-Run all commands from `/Users/aa/Documents/jig-sh`.
+Run all commands from `<private-path>`.
 
 1. Build with `cargo build -p jig-sh --bin jig` and use `JIG_DEV_BIN=target/debug/jig` for every harness command.
 2. After each slice, run focused `cargo test` targets and `cargo fmt --check`, inspect `git diff`, and commit only that slice.

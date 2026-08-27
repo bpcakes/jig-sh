@@ -115,7 +115,7 @@ Finally, document the lifecycle and test it at state, process, CLI, output, feat
 
 ## Concrete Steps
 
-All commands run from `/Users/aa/Documents/jig-sh`.
+All commands run from `<private-path>`.
 
 1. Maintain this plan after every material design or implementation discovery. Edit source only with `apply_patch`, then format:
 

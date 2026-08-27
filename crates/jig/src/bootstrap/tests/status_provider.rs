@@ -15,7 +15,7 @@ sqlx_enabled = false
 schema_dump_enabled = false
 
 [[status.providers]]
-id = "factorish.rewrite"
+id = "example.rewrite"
 argv = ["ruby", "scripts/status.rb", "--jig-v1"]
 timeout_seconds = 45
 "#,
@@ -41,7 +41,7 @@ timeout_seconds = 45
 
     let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(rendered.contains("[[status.providers]]"));
-    assert!(rendered.contains("id = \"factorish.rewrite\""));
+    assert!(rendered.contains("id = \"example.rewrite\""));
     assert!(rendered.contains("argv = [\"ruby\", \"scripts/status.rb\", \"--jig-v1\"]"));
     assert!(rendered.contains("timeout_seconds = 45"));
 
@@ -60,7 +60,7 @@ timeout_seconds = 45
 
     let recopied = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(recopied.contains("[[status.providers]]"));
-    assert!(recopied.contains("id = \"factorish.rewrite\""));
+    assert!(recopied.contains("id = \"example.rewrite\""));
     assert!(recopied.contains("argv = [\"ruby\", \"scripts/status.rb\", \"--jig-v1\"]"));
     assert!(recopied.contains("timeout_seconds = 45"));
 }

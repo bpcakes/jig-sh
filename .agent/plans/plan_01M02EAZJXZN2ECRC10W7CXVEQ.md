@@ -63,7 +63,7 @@ Add a narrowly scoped Unix module in `jig-owned-process` with a validated positi
 
 ## Concrete Commands
 
-From `/home/aa/Documents/jig-sh`:
+From `.`:
 
     cargo build -p jig-sh --bin jig
     export JIG_DEV_BIN=target/debug/jig

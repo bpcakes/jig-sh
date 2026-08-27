@@ -1,11 +1,11 @@
 {
   "protocol": "jig.status-provider/v1",
   "provider": {
-    "id": "factorish.rails-rewrite",
+    "id": "example.rails-rewrite",
     "adapter_version": "0.1.0",
-    "display_name": "Factorish Rails rewrite status provider",
+    "display_name": "ExampleProject Rails rewrite status provider",
     "extensions": {
-      "factorish.rails-rewrite": {
+      "example.rails-rewrite": {
         "rails_version": "4.2.11"
       }
     }
@@ -85,7 +85,7 @@
         }
       ],
       "extensions": {
-        "factorish.rails-rewrite": {
+        "example.rails-rewrite": {
           "compatibility_confidence": 0.92
         }
       }

@@ -68,6 +68,17 @@ fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
         "repo_name =",
         "jig_version = \"<<[ jig_version ]>>\"\nrepo_name =",
     );
+    let answers = answers
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with("paths =")
+                && !line.starts_with("paths_ignore =")
+                && !line.starts_with("reuse =")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
     fs::write(&answers_template, answers).unwrap();
 
     let contract_template = template

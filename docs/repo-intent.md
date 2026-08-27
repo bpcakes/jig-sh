@@ -37,7 +37,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 - agent tooling doctor/bootstrap commands for Codex-side Jig skills
 - receipt metadata collection, including git changed paths and diff stats
 
-The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 3`, with command-backed tools such as `jig.bootstrap`, `jig.fmt_check`, `jig.clippy`, `jig.test`, `jig.test_locked`, `jig.contract_check`, and optional SQLx/schema/migration tools. Legacy `contract_version: 2` command-backed manifests can still be loaded by the runtime.
+The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 5`, with command-backed tools such as `jig.bootstrap`, `jig.fmt_check`, `jig.clippy`, `jig.test`, `jig.test_locked`, `jig.contract_check`, generated per-app frontend tools, optional application-contract/public-artifact tools, and optional SQLx/schema/migration tools. Supported legacy contract manifests remain runtime-readable.
 
 The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. The `jig` runtime configures and safely executes providers and exposes a versioned aggregate through `jig status`; `crates/jig-status-tui` presents that aggregate without importing runtime internals. The Codex-home launcher is a separate CLI-owned feature and presentation crate rather than launch policy inferred from status observations. Provider caching and general implementation launchability policy remain later milestones.
 

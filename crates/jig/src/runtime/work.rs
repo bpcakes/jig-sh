@@ -22,6 +22,7 @@ pub(in crate::runtime) use checks::check_tools_collect_failures_with_observer;
 mod gates;
 mod goal;
 mod review;
+mod scope;
 mod tools;
 
 impl From<WorkStartRequest> for PlanOpenRequest {
@@ -30,6 +31,7 @@ impl From<WorkStartRequest> for PlanOpenRequest {
             title: request.title,
             body: request.body,
             body_file: request.body_file,
+            base: request.base,
         }
     }
 }
@@ -124,7 +126,7 @@ pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     // Resolve and validate all caller-controlled plan input before starting a
     // durable session. CLI parsing catches common conflicts, while this keeps
     // MCP and other runtime callers from leaving an orphan session on failure.
-    let plan = prepare_plan_open(plan)?;
+    let plan = prepare_plan_open(ctx, plan)?;
     let session = session_start(ctx)?;
     let plan = plans_open_prepared(ctx, plan)?;
 

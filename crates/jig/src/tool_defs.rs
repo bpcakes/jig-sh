@@ -12,6 +12,7 @@ pub(crate) mod args {
     pub(crate) const ALTERNATIVES: &str = "alternatives";
     pub(crate) const BODY: &str = "body";
     pub(crate) const BODY_FILE: &str = "body_file";
+    pub(crate) const BASE: &str = "base";
     pub(crate) const FAILED_ONLY: &str = "failed_only";
     pub(crate) const LIMIT: &str = "limit";
     pub(crate) const NAME: &str = "name";
@@ -240,12 +241,14 @@ impl MemoryTool {
                 "Create a goal-mode work harness with a durable plan and validation contract."
             }
             Self::Start => {
-                "Start structured work by opening a session and plan; body and body_file are optional but mutually exclusive."
+                "Start structured work by opening a session and a plan with a resolved Git baseline; body and body_file are optional but mutually exclusive."
             }
             Self::Append => {
                 "Append nonblank progress to a structured work plan using exactly one of body or body_file."
             }
-            Self::Check => "Run configured or selected work checks.",
+            Self::Check => {
+                "Classify and run required applicable work gates by default, or force selected gate ids or legacy tool names."
+            }
             Self::Gates => "Report configured work gate status for a plan.",
             Self::Evidence => {
                 "Summarize work gate evidence and receipt freshness; ok=true means inspection succeeded, while overall reports passed or blocked gates."
@@ -328,19 +331,7 @@ impl MemoryTool {
             ),
             Self::Start => work_start_input_schema(),
             Self::Append => work_append_input_schema(),
-            Self::Check => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (
-                        args::TOOLS,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }),
-                    ),
-                ],
-                &[args::PLAN_ID],
-            ),
+            Self::Check => work_check_input_schema(),
             Self::Decide => object_schema(
                 &[
                     (args::TITLE, string_schema()),
@@ -457,10 +448,47 @@ fn work_start_input_schema() -> Value {
             (args::TITLE, string_schema()),
             (args::BODY, string_schema()),
             (args::BODY_FILE, string_schema()),
+            (args::BASE, string_schema()),
         ],
         &[args::TITLE],
     );
     schema["not"] = json!({ "required": [args::BODY, args::BODY_FILE] });
+    schema
+}
+
+fn work_check_input_schema() -> Value {
+    let mut schema = object_schema(
+        &[
+            (args::PLAN_ID, string_schema()),
+            (
+                args::GATES,
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" }
+                }),
+            ),
+            (
+                args::TOOLS,
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" }
+                }),
+            ),
+        ],
+        &[args::PLAN_ID],
+    );
+    schema["not"] = json!({
+        "allOf": [
+            {
+                "required": [args::GATES],
+                "properties": { "gates": { "minItems": 1 } }
+            },
+            {
+                "required": [args::TOOLS],
+                "properties": { "tools": { "minItems": 1 } }
+            }
+        ]
+    });
     schema
 }
 
@@ -578,6 +606,27 @@ mod tests {
             schema["not"],
             json!({ "required": [args::BODY, args::BODY_FILE] })
         );
+    }
+
+    #[test]
+    fn work_check_schema_matches_runtime_selector_semantics() {
+        let schema = MemoryTool::Check.input_schema();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+
+        assert_eq!(schema["required"], json!([args::PLAN_ID]));
+        for valid in [
+            json!({ "plan_id": "plan_1" }),
+            json!({ "plan_id": "plan_1", "gates": [], "tools": [] }),
+            json!({ "plan_id": "plan_1", "gates": ["tests"], "tools": [] }),
+            json!({ "plan_id": "plan_1", "gates": [], "tools": ["jig.test"] }),
+        ] {
+            assert!(validator.is_valid(&valid), "schema rejected {valid}");
+        }
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "gates": ["tests"],
+            "tools": ["jig.test"]
+        })));
     }
 
     #[test]

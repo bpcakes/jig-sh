@@ -1,5 +1,8 @@
 mod agent_guides;
 mod bootstrap;
+#[cfg(test)]
+#[path = "../build_identity.rs"]
+mod build_identity;
 mod cancellation;
 mod cli;
 mod codex;
@@ -154,5 +157,256 @@ mod no_dev_proxy_feature_tests {
                 .to_string();
             assert!(error.contains("without the `dev-proxy` feature"));
         }
+    }
+}
+
+#[cfg(test)]
+mod build_identity_tests {
+    use tempfile::tempdir;
+
+    fn build_configuration() -> Vec<(String, String)> {
+        vec![
+            ("TARGET".into(), "x86_64-unknown-linux-gnu".into()),
+            ("HOST".into(), "x86_64-unknown-linux-gnu".into()),
+            ("PROFILE".into(), "debug".into()),
+            ("CARGO_PKG_VERSION".into(), "0.2.0".into()),
+            (
+                "JIG_BUILD_OFFICIAL_TEMPLATE_PIN".into(),
+                "unreleased".into(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn packaged_layout_identity_uses_only_package_local_inputs() {
+        let package = tempdir().unwrap();
+        std::fs::create_dir_all(package.path().join("src/nested")).unwrap();
+        std::fs::write(
+            package.path().join("Cargo.toml"),
+            "[package]\nname='jig-sh'\n",
+        )
+        .unwrap();
+        std::fs::write(package.path().join("build.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(package.path().join("build_identity.rs"), "shared helper\n").unwrap();
+        std::fs::write(package.path().join("src/lib.rs"), "pub fn one() {}\n").unwrap();
+        std::fs::write(package.path().join("src/nested/data.txt"), "one\n").unwrap();
+
+        let first = crate::build_identity::compute(package.path(), &build_configuration()).unwrap();
+        std::fs::write(package.path().join("src/nested/data.txt"), "two\n").unwrap();
+        let second =
+            crate::build_identity::compute(package.path(), &build_configuration()).unwrap();
+
+        assert!(first.starts_with("sha256:"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn packaged_layout_nested_at_crates_jig_ignores_unrelated_host_workspace() {
+        let workspace = tempdir().unwrap();
+        let package = workspace.path().join("crates/jig");
+        std::fs::create_dir_all(package.join("src")).unwrap();
+        std::fs::create_dir_all(workspace.path().join("templates/project")).unwrap();
+        std::fs::create_dir_all(workspace.path().join("templates/scaffolds")).unwrap();
+        std::fs::write(workspace.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(workspace.path().join("Cargo.lock"), "# host lock\n").unwrap();
+        std::fs::write(
+            workspace.path().join("templates/project/ambient.jinja"),
+            "ambient one\n",
+        )
+        .unwrap();
+        std::fs::write(package.join("Cargo.toml"), "[package]\nname='jig-sh'\n").unwrap();
+        std::fs::write(package.join("build.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(package.join("build_identity.rs"), "shared helper\n").unwrap();
+        std::fs::write(package.join("src/lib.rs"), "pub fn packaged() {}\n").unwrap();
+
+        let layout = crate::build_identity::resolve_source_layout(&package).unwrap();
+        assert!(layout.live_template_root("project").is_none());
+        let first = crate::build_identity::compute(&package, &build_configuration()).unwrap();
+        std::fs::write(
+            workspace.path().join("templates/project/ambient.jinja"),
+            "ambient two\n",
+        )
+        .unwrap();
+        let second = crate::build_identity::compute(&package, &build_configuration()).unwrap();
+
+        assert!(first.starts_with("sha256:"));
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn native_identity_changes_with_behavior_affecting_build_configuration() {
+        let package = tempdir().unwrap();
+        std::fs::create_dir_all(package.path().join("src")).unwrap();
+        std::fs::write(
+            package.path().join("Cargo.toml"),
+            "[package]\nname='jig-sh'\n",
+        )
+        .unwrap();
+        std::fs::write(package.path().join("build.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(package.path().join("build_identity.rs"), "shared helper\n").unwrap();
+        std::fs::write(package.path().join("src/lib.rs"), "pub fn packaged() {}\n").unwrap();
+        let baseline_configuration = build_configuration();
+        let baseline =
+            crate::build_identity::compute(package.path(), &baseline_configuration).unwrap();
+
+        for (key, value) in [
+            ("TARGET", "aarch64-apple-darwin"),
+            ("CARGO_FEATURE_DEV_PROXY", "1"),
+            ("PROFILE", "release"),
+            ("CARGO_PKG_VERSION", "0.3.0"),
+            ("JIG_EMBEDDED_TEMPLATE_SNAPSHOT", "1"),
+            ("JIG_BUILD_OFFICIAL_TEMPLATE_PIN", "released"),
+        ] {
+            let mut changed = baseline_configuration.clone();
+            changed.retain(|(existing, _)| existing != key);
+            changed.push((key.into(), value.into()));
+            assert_ne!(
+                baseline,
+                crate::build_identity::compute(package.path(), &changed).unwrap(),
+                "build identity ignored {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn cargo_rerun_keys_cover_every_build_identity_environment_input() {
+        let mut configuration = build_configuration();
+        configuration.extend([
+            ("CARGO_CFG_TARGET_ARCH".into(), "x86_64".into()),
+            ("CARGO_FEATURE_DEV_PROXY".into(), "1".into()),
+            ("RUSTC_VERSION_VERBOSE".into(), "rustc example".into()),
+        ]);
+
+        let keys = crate::build_identity::cargo_rerun_environment_keys(&configuration);
+
+        assert!(
+            crate::build_identity::FIXED_BUILD_ENVIRONMENT_KEYS
+                .iter()
+                .all(|key| keys.iter().any(|candidate| candidate == key))
+        );
+        assert!(keys.iter().any(|key| key == "CARGO_CFG_TARGET_ARCH"));
+        assert!(keys.iter().any(|key| key == "CARGO_FEATURE_DEV_PROXY"));
+        assert!(!keys.iter().any(|key| key == "RUSTC_VERSION_VERBOSE"));
+        assert!(
+            !keys
+                .iter()
+                .any(|key| key == "JIG_BUILD_OFFICIAL_TEMPLATE_PIN")
+        );
+    }
+
+    #[test]
+    fn refreshed_build_identity_is_a_fixed_point() {
+        let package = tempdir().unwrap();
+        let snapshot = package.path().join("src/bootstrap/snapshot.rs");
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        std::fs::write(
+            package.path().join("Cargo.toml"),
+            "[package]\nname='jig-sh'\n",
+        )
+        .unwrap();
+        std::fs::write(package.path().join("build.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(package.path().join("build_identity.rs"), "shared helper\n").unwrap();
+        std::fs::write(package.path().join("src/lib.rs"), "pub fn packaged() {}\n").unwrap();
+        std::fs::write(&snapshot, "stale snapshot\n").unwrap();
+        let configuration = build_configuration();
+        let stale = crate::build_identity::compute(package.path(), &configuration).unwrap();
+
+        let layout = crate::build_identity::resolve_source_layout(package.path()).unwrap();
+        let refreshed =
+            crate::build_identity::compute_after_input_refresh(&layout, &configuration, |_| {
+                std::fs::write(&snapshot, "current snapshot\n").unwrap()
+            })
+            .unwrap();
+        let repeated =
+            crate::build_identity::compute_after_input_refresh(&layout, &configuration, |_| {
+                std::fs::write(&snapshot, "current snapshot\n").unwrap()
+            })
+            .unwrap();
+
+        assert_ne!(stale, refreshed);
+        assert_eq!(refreshed, repeated);
+    }
+
+    #[test]
+    fn build_configuration_records_the_final_template_pin_policy() {
+        let _guard = crate::test_env::lock_env();
+        let configuration =
+            crate::build_identity::configuration_from_environment("released").unwrap();
+
+        assert!(configuration.iter().any(|(key, value)| {
+            key == "JIG_BUILD_OFFICIAL_TEMPLATE_PIN" && value == "released"
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packaged_layout_rejects_symlinked_source_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let package = tempdir().unwrap();
+        std::fs::create_dir_all(package.path().join("src")).unwrap();
+        std::fs::write(
+            package.path().join("Cargo.toml"),
+            "[package]\nname='jig-sh'\n",
+        )
+        .unwrap();
+        std::fs::write(package.path().join("build.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(package.path().join("build_identity.rs"), "shared helper\n").unwrap();
+        std::fs::write(package.path().join("outside.rs"), "pub fn linked() {}\n").unwrap();
+        symlink("../outside.rs", package.path().join("src/generated.rs")).unwrap();
+
+        let error =
+            crate::build_identity::compute(package.path(), &build_configuration()).unwrap_err();
+
+        assert!(error.contains("must not be a symlink"), "{error}");
+        assert!(error.contains("src/generated.rs"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkout_layout_rejects_symlinked_template_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempdir().unwrap();
+        let package = workspace.path().join("crates/jig");
+        for directory in [
+            "crates/jig/src",
+            "crates/jig-core",
+            "crates/jig-features",
+            "templates/project",
+            "templates/scaffolds",
+        ] {
+            std::fs::create_dir_all(workspace.path().join(directory)).unwrap();
+        }
+        for (relative, contents) in [
+            ("Cargo.toml", "[workspace]\n"),
+            ("Cargo.lock", "# lock\n"),
+            ("crates/jig/Cargo.toml", "[package]\nname='jig-sh'\n"),
+            ("crates/jig/build.rs", "fn main() {}\n"),
+            ("crates/jig/build_identity.rs", "shared helper\n"),
+            ("crates/jig/src/lib.rs", "pub fn checkout() {}\n"),
+            ("crates/jig-core/Cargo.toml", "[package]\nname='jig-core'\n"),
+            (
+                "crates/jig-features/Cargo.toml",
+                "[package]\nname='jig-features'\n",
+            ),
+            (
+                "templates/project/.jig.toml.jinja",
+                "repo_name = 'fixture'\n",
+            ),
+            ("outside.jinja", "linked template\n"),
+        ] {
+            std::fs::write(workspace.path().join(relative), contents).unwrap();
+        }
+        symlink(
+            "../../outside.jinja",
+            workspace.path().join("templates/project/linked.jinja"),
+        )
+        .unwrap();
+
+        let error = crate::build_identity::compute(&package, &build_configuration()).unwrap_err();
+
+        assert!(error.contains("must not be a symlink"), "{error}");
+        assert!(error.contains("templates/project/linked.jinja"), "{error}");
     }
 }

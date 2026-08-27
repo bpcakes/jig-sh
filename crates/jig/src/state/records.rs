@@ -96,6 +96,15 @@ impl SessionEvent {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PlanBaseline {
+    pub(crate) requested_ref: String,
+    pub(crate) commit_oid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) empty_tree_oid: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum PlanEvent {
     Open {
@@ -104,6 +113,7 @@ pub(super) enum PlanEvent {
         timestamp_ms: u64,
         title: String,
         body_path: Option<String>,
+        baseline: Option<PlanBaseline>,
     },
     Append {
         id: String,
@@ -139,6 +149,25 @@ impl PlanEvent {
             timestamp_ms,
             title,
             body_path,
+            baseline: None,
+        }
+    }
+
+    pub(super) const fn open_with_baseline(
+        id: String,
+        plan_id: String,
+        timestamp_ms: u64,
+        title: String,
+        body_path: Option<String>,
+        baseline: PlanBaseline,
+    ) -> Self {
+        Self::Open {
+            id,
+            plan_id,
+            timestamp_ms,
+            title,
+            body_path,
+            baseline: Some(baseline),
         }
     }
 
@@ -197,6 +226,13 @@ impl PlanEvent {
 
     pub(super) const fn is_open(&self) -> bool {
         matches!(self, Self::Open { .. })
+    }
+
+    pub(super) fn baseline(&self) -> Option<&PlanBaseline> {
+        match self {
+            Self::Open { baseline, .. } => baseline.as_ref(),
+            _ => None,
+        }
     }
 }
 
@@ -309,6 +345,8 @@ struct LegacyPlanEvent {
     title: Option<String>,
     body_path: Option<String>,
     resolution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    baseline: Option<PlanBaseline>,
 }
 
 impl Serialize for PlanEvent {
@@ -323,6 +361,7 @@ impl Serialize for PlanEvent {
                 timestamp_ms,
                 title,
                 body_path,
+                baseline,
             } => LegacyPlanEvent {
                 id: id.clone(),
                 plan_id: plan_id.clone(),
@@ -331,6 +370,7 @@ impl Serialize for PlanEvent {
                 title: Some(title.clone()),
                 body_path: body_path.clone(),
                 resolution: None,
+                baseline: baseline.clone(),
             },
             Self::Append {
                 id,
@@ -345,6 +385,7 @@ impl Serialize for PlanEvent {
                 title: None,
                 body_path: body_path.clone(),
                 resolution: None,
+                baseline: None,
             },
             Self::Close {
                 id,
@@ -359,6 +400,7 @@ impl Serialize for PlanEvent {
                 title: None,
                 body_path: None,
                 resolution: resolution.clone(),
+                baseline: None,
             },
             Self::Unknown {
                 id,
@@ -373,6 +415,7 @@ impl Serialize for PlanEvent {
                 title: None,
                 body_path: None,
                 resolution: None,
+                baseline: None,
             },
         };
         legacy.serialize(serializer)
@@ -386,13 +429,23 @@ impl<'de> Deserialize<'de> for PlanEvent {
     {
         let legacy = LegacyPlanEvent::deserialize(deserializer)?;
         Ok(match legacy.event.as_str() {
-            "open" => Self::open(
-                legacy.id,
-                legacy.plan_id,
-                legacy.timestamp_ms,
-                legacy.title.unwrap_or_else(|| "Untitled plan".into()),
-                legacy.body_path,
-            ),
+            "open" => match legacy.baseline {
+                Some(baseline) => Self::open_with_baseline(
+                    legacy.id,
+                    legacy.plan_id,
+                    legacy.timestamp_ms,
+                    legacy.title.unwrap_or_else(|| "Untitled plan".into()),
+                    legacy.body_path,
+                    baseline,
+                ),
+                None => Self::open(
+                    legacy.id,
+                    legacy.plan_id,
+                    legacy.timestamp_ms,
+                    legacy.title.unwrap_or_else(|| "Untitled plan".into()),
+                    legacy.body_path,
+                ),
+            },
             "append" => Self::append(
                 legacy.id,
                 legacy.plan_id,

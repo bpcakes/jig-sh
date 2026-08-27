@@ -125,7 +125,7 @@ Then run comprehensive review using the repository's `comprehensive-review` skil
 
 ## Concrete Steps
 
-Work from `/Users/aa/Documents/jig-sh`.
+Work from `<private-path>`.
 
 Build the current Jig binary before dogfooding runtime commands:
 

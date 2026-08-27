@@ -10,6 +10,7 @@ fn adopt_infers_repo_shape_before_resolving_answers() {
     fs::create_dir_all(repo.join("migrations")).unwrap();
     fs::create_dir_all(repo.join(".sqlx")).unwrap();
     fs::create_dir_all(repo.join("web")).unwrap();
+    fs::create_dir_all(repo.join("scripts")).unwrap();
     fs::create_dir_all(repo.join(".github/workflows")).unwrap();
     fs::write(
         repo.join("Cargo.toml"),
@@ -41,6 +42,11 @@ sqlx = { workspace = true }
     )
     .unwrap();
     fs::write(repo.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+    fs::write(
+        repo.join("scripts/contracts.mjs"),
+        "// jig-application-contract-checker: v1 modes=check,public-check\n",
+    )
+    .unwrap();
     fs::write(
         repo.join("web/package.json"),
         r#"{
@@ -122,7 +128,14 @@ sqlx = { workspace = true }
             .iter()
             .map(|value| value.as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["Rust workspace", "SQLx", "pnpm", "Vite", "GitHub Actions"]
+        vec![
+            "Rust workspace",
+            "SQLx",
+            "pnpm",
+            "Vite",
+            "application contracts",
+            "GitHub Actions",
+        ]
     );
     assert_eq!(
         output["adoption_profile"]["ci_shape"]["workflow_files"][0],
@@ -158,14 +171,21 @@ sqlx = { workspace = true }
             .as_array()
             .unwrap()
             .iter()
-            .any(|gate| gate == "scripts/jig check typescript-coverage")
+            .any(|gate| gate == "scripts/check-webapps.sh app-check web coverage")
     );
     assert!(
         output["adoption_profile"]["generated_gates"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|gate| gate.as_str().unwrap().starts_with("scripts/jig "))
+            .all(|gate| {
+                let gate = gate.as_str().unwrap();
+                gate.starts_with("scripts/jig ")
+                    || gate.starts_with("scripts/check-rust-file-loc.sh ")
+                    || gate.starts_with("scripts/check-webapps.sh app-check ")
+                    || gate == "scripts/check-webapps.sh application-contracts"
+                    || gate == "scripts/check-webapps.sh public-artifacts"
+            })
     );
     assert!(
         output["render_report"]["commands_detected_or_skipped"]
@@ -225,10 +245,30 @@ sqlx = { workspace = true }
     assert!(answers.contains("sqlx_check_command = "));
     assert!(answers.contains("cargo sqlx prepare --check"));
     assert!(answers.contains("web_package_manager = \"pnpm\""));
+    assert!(answers.contains("application_contracts_enabled = true"));
     assert!(answers.contains("[[frontend_apps]]"));
     assert!(answers.contains("name = \"web\""));
     assert!(answers.contains("dir = \"web\""));
     assert!(answers.contains("argv = [\"pnpm\", \"run\", \"dev\"]"));
+    let parsed_answers = toml::from_str::<toml::Value>(&answers).unwrap();
+    let rendered_gates = parsed_answers["work"]["gates"].as_array().unwrap();
+    let gate_paths = |id: &str| {
+        rendered_gates
+            .iter()
+            .find(|gate| gate["id"].as_str() == Some(id))
+            .unwrap()["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|path| path.as_str().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert!(gate_paths("rust-fmt").contains(&"rustfmt.toml"));
+    assert!(gate_paths("rust-fmt").contains(&".rustfmt.toml"));
+    assert!(gate_paths("rust-clippy").contains(&"clippy.toml"));
+    assert!(gate_paths("rust-clippy").contains(&".clippy.toml"));
+    assert!(gate_paths("rust-tests").contains(&"nextest.toml"));
+    assert!(gate_paths("rust-tests").contains(&".config/nextest.toml"));
     let generated_gates = output["adoption_profile"]["generated_gates"]
         .as_array()
         .unwrap()
@@ -243,10 +283,14 @@ sqlx = { workspace = true }
                 .and_then(|value| value.strip_suffix('"'))
         })
         .collect::<Vec<_>>();
+    assert_eq!(generated_gates.len(), rendered_work_gate_tools.len());
     for tool in rendered_work_gate_tools {
         let expected = match tool {
             "jig.contract_check" => "scripts/jig check contract",
+            "jig.fmt_check" => "scripts/jig check fmt",
+            "jig.clippy" => "scripts/jig check clippy",
             "jig.test" => "scripts/jig check test",
+            "jig.rust_file_loc" => "scripts/check-rust-file-loc.sh main",
             "jig.typescript_lint" => "scripts/jig check typescript-lint",
             "jig.typescript_typecheck" => "scripts/jig check typescript-typecheck",
             "jig.typescript_build" => "scripts/jig check typescript-build",
@@ -254,6 +298,12 @@ sqlx = { workspace = true }
             "jig.sqlx_check" => "scripts/jig check sqlx",
             "jig.schema_check" => "scripts/jig check schema",
             "jig.schema_dump" => "scripts/jig sqlx schema dump",
+            "jig.typescript_web_lint" => "scripts/check-webapps.sh app-check web lint",
+            "jig.typescript_web_typecheck" => "scripts/check-webapps.sh app-check web typecheck",
+            "jig.typescript_web_build" => "scripts/check-webapps.sh app-check web build",
+            "jig.typescript_web_coverage" => "scripts/check-webapps.sh app-check web coverage",
+            "jig.application_contract_check" => "scripts/check-webapps.sh application-contracts",
+            "jig.public_artifacts_check" => "scripts/check-webapps.sh public-artifacts",
             other => panic!("unmapped rendered work gate tool {other}"),
         };
         assert!(
@@ -795,6 +845,13 @@ edition = "2024"
     );
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
     assert!(answers.contains("rust_test_command = \"cargo nextest run --workspace\""));
+    assert!(
+        answers.contains(
+            "paths = [\"src/**\", \"tests/**\", \"benches/**\", \"examples/**\", \"*.rs\", \"Cargo.toml\""
+        ),
+        "{answers}"
+    );
+    assert!(!answers.contains("paths = [\"**\""), "{answers}");
 }
 
 #[test]
@@ -1171,93 +1228,4 @@ fn adopt_defaults_with_migration_dir_keeps_sqlx_enabled() {
     assert!(!answers.contains("schema_dump_command"));
 }
 
-#[test]
-fn adopt_schema_dump_command_opts_into_schema_dumps() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-
-    run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            rust_migration_dir: Some("migrations".into()),
-            schema_dump_command: Some("scripts/custom-dump-schema.sh".into()),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("sqlx_enabled = true"));
-    assert!(answers.contains("schema_dump_enabled = true"));
-    assert!(answers.contains("schema_dump_command = \"scripts/custom-dump-schema.sh\""));
-}
-
-#[test]
-fn adopt_defaults_with_schema_dump_enabled_still_requires_sqlx_migration_answer() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-
-    let error = run_adopt(AdoptOpts {
-        path: repo,
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            schema_dump_enabled: Some(true),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Missing required answer when sqlx_enabled is true"));
-    assert!(error.contains("--rust-migration-dir <dir>"));
-}
-
-#[test]
-fn adopt_no_input_without_defaults_uses_inferred_no_sqlx_profile() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let repo = temp.path().join("repo");
-    fs::create_dir_all(&repo).unwrap();
-
-    run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: false,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts::default(),
-    })
-    .unwrap();
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("sqlx_enabled = false"));
-}
+include!("inference_parts/part_01.rs");

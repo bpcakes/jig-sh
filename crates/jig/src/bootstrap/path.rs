@@ -1202,30 +1202,8 @@ fn reserved_git_metadata_component(relative: &Path) -> Option<&str> {
             return None;
         };
         let component = component.to_str()?;
-        is_hfs_git_metadata_alias(component).then_some(component)
+        crate::context::is_reserved_git_metadata_component(component).then_some(component)
     })
-}
-
-// Behavioral reference only; this is an independent Rust implementation of Git's
-// HFS protection pinned at f60db8d575adb79761d363e026fb49bddf330c73:
-// https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/utf8.c#L698-L787
-fn is_hfs_git_metadata_alias(component: &str) -> bool {
-    let mut normalized = component
-        .chars()
-        .filter(|character| !is_hfs_ignored(*character));
-    let expected = ['.', 'g', 'i', 't'];
-    expected.into_iter().all(|expected| {
-        normalized
-            .next()
-            .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
-    }) && normalized.next().is_none()
-}
-
-const fn is_hfs_ignored(character: char) -> bool {
-    matches!(
-        character,
-        '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
-    )
 }
 
 pub(super) fn validate_repository_relative_ancestors(root: &Path, relative: &Path) -> Result<()> {

@@ -93,7 +93,7 @@ Finally, build `target/debug/jig` and force every dogfood command through `JIG_D
 
 ## Concrete Steps
 
-All commands run from `/Users/aa/Documents/jig-sh` unless a command explicitly changes directory.
+All commands run from `<private-path>` unless a command explicitly changes directory.
 
 1. Keep the living plan and structured work open:
 

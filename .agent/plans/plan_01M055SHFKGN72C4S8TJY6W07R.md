@@ -99,7 +99,7 @@ Finally, refresh embedded templates, update assertions and changelog, build the 
 
 ## Concrete Steps
 
-Run commands from `/home/aa/Documents/jig-sh` unless otherwise noted.
+Run commands from `.` unless otherwise noted.
 
 1. Query authoritative npm registry metadata for remaining ambiguous compatible versions and patch canonical package templates plus version assertions.
 2. Patch `templates/project/scripts/check-webapps.sh.jinja` and `crates/jig/src/bootstrap/scaffold/frontend.rs`; add or adjust bootstrap and dependency-lifecycle tests.

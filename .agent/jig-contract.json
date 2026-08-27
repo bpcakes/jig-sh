@@ -1,12 +1,13 @@
 {
-  "contract_version": 4,
+  "contract_version": 5,
   "tool_namespace": "jig",
   "required_commands": [
     "bootstrap_command",
     "rust_fmt_check_command",
     "rust_clippy_command",
     "rust_test_command",
-    "rust_test_locked_command"
+    "rust_test_locked_command",
+    "rust_file_loc_command"
   ],
   "tools": [
     {
@@ -38,6 +39,12 @@
       "kind": "command",
       "description": "Run the configured locked test command.",
       "command": "rust_test_locked_command"
+    },
+    {
+      "name": "jig.rust_file_loc",
+      "kind": "command",
+      "description": "Enforce the changed-file Rust source size policy.",
+      "command": "rust_file_loc_command"
     },
     {
       "name": "jig.contract_check",

@@ -463,7 +463,11 @@ role = "spa"
     })
     .unwrap_err()
     .to_string();
-    assert!(error.contains("Scaffold SQLx metadata dir must not contain '.' or '..'"));
+    assert!(
+        error.contains("Rust SQLx metadata directory must not contain '..'")
+            && error.contains("stay inside the repository"),
+        "{error:?}"
+    );
     assert!(!unsafe_metadata_destination.exists());
 
     let custom_metadata_destination = temp.path().join("custom-metadata-repo");

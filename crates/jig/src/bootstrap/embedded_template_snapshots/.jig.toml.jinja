@@ -15,6 +15,7 @@ rust_migration_layout = "<<[ rust_migration_layout ]>>"
 rust_sqlx_metadata_dir = "<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 schema_dump_enabled = [% if schema_dump_enabled %]true[% else %]false[% endif %]
+schema_docs_dir = "<<[ schema_docs_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if sqlx_enabled and schema_dump_enabled %]
 schema_dump_command = "<<[ schema_dump_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
@@ -35,6 +36,8 @@ rust_clippy_command = "<<[ rust_clippy_command | replace("\\", "\\\\") | replace
 rust_test_command = "<<[ rust_test_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_test_locked_command = "<<[ rust_test_locked_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 web_package_manager = "<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+application_contracts_enabled = [% if application_contracts_enabled %]true[% else %]false[% endif %]
+frontend_workspace_roots = [[% for root in frontend_workspace_roots %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
 [% if frontend_apps | length == 0 %]
 frontend_apps = []
 [% else %]
@@ -53,15 +56,26 @@ scope = "<<[ vault.scope | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 scope_id = "<<[ vault.scope_id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 allow_global = [% if vault.allow_global %]true[% else %]false[% endif %]
 
+[commands]
+rust_file_loc_command = "scripts/check-rust-file-loc.sh <<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if frontend_harness_enabled %]
 # Extra command keys must use *_command names so contract required_commands
 # stay distinct from tool names and gate ids. Entries here override same-named
 # legacy top-level command fields.
-[commands]
 typescript_lint_command = "<<[ typescript_lint_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_typecheck_command = "<<[ typescript_typecheck_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_build_command = "<<[ typescript_build_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_coverage_command = "<<[ typescript_coverage_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if application_contracts_enabled %]
+application_contract_check_command = "scripts/check-webapps.sh application-contracts"
+public_artifacts_check_command = "scripts/check-webapps.sh public-artifacts"
+[% endif %]
+[% for app in frontend_gate_apps %]
+typescript_<<[ app.key ]>>_lint_command = "scripts/check-webapps.sh app-check <<[ app.dir ]>> lint"
+typescript_<<[ app.key ]>>_typecheck_command = "scripts/check-webapps.sh app-check <<[ app.dir ]>> typecheck"
+typescript_<<[ app.key ]>>_build_command = "scripts/check-webapps.sh app-check <<[ app.dir ]>> build"
+typescript_<<[ app.key ]>>_coverage_command = "scripts/check-webapps.sh app-check <<[ app.dir ]>> coverage"
+[% endfor %]
 
 [% endif %]
 [dev]
@@ -121,35 +135,84 @@ timeout_seconds = <<[ provider.timeout_seconds ]>>
 [% endif %]
 
 [[work.gates]]
-id = "contract"
+id = "jig-contract"
 kind = "check"
 tool = "jig.contract_check"
 
 [[work.gates]]
-id = "tests"
+id = "rust-file-loc"
+kind = "check"
+tool = "jig.rust_file_loc"
+
+[% if frontend_harness_enabled and application_contracts_enabled %]
+[[work.gates]]
+id = "application-contracts"
+kind = "check"
+tool = "jig.application_contract_check"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]"openapi/**", "docs/public/**", "public-docs/**", "scripts/contracts.mjs"[% for path in frontend_gate_shared_paths %], "<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% endfor %][% for app in frontend_gate_apps %], [% if app.dir == "." %]"**"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %][% endfor %]]
+
+[% endif %]
+
+[[work.gates]]
+id = "rust-fmt"
+kind = "check"
+tool = "jig.fmt_check"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]"rustfmt.toml", ".rustfmt.toml"]
+
+[[work.gates]]
+id = "rust-clippy"
+kind = "check"
+tool = "jig.clippy"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]"clippy.toml", ".clippy.toml"]
+
+[[work.gates]]
+id = "rust-tests"
 kind = "check"
 tool = "jig.test"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %][% if sqlx_enabled %][% if rust_migration_dir == "." %]"**", [% else %]"<<[ rust_migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endif %]"nextest.toml", ".config/nextest.toml"]
 
 [% if frontend_harness_enabled %]
+[% for app in frontend_gate_apps %]
 [[work.gates]]
-id = "typescript-lint"
+id = "typescript-<<[ app.name ]>>-lint"
 kind = "check"
-tool = "jig.typescript_lint"
+tool = "jig.typescript_<<[ app.key ]>>_lint"
+paths = [[% if app.dir == "." %]"**"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %][% for path in frontend_gate_shared_paths %], "<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% endfor %]]
+[% if app.paths_ignore | length > 0 %]paths_ignore = [[% for path in app.paths_ignore %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]]
+[% endif %]
 
 [[work.gates]]
-id = "typescript-typecheck"
+id = "typescript-<<[ app.name ]>>-typecheck"
 kind = "check"
-tool = "jig.typescript_typecheck"
+tool = "jig.typescript_<<[ app.key ]>>_typecheck"
+paths = [[% if app.dir == "." %]"**"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %][% for path in frontend_gate_shared_paths %], "<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% endfor %]]
+[% if app.paths_ignore | length > 0 %]paths_ignore = [[% for path in app.paths_ignore %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]]
+[% endif %]
 
 [[work.gates]]
-id = "typescript-build"
+id = "typescript-<<[ app.name ]>>-build"
 kind = "check"
-tool = "jig.typescript_build"
+tool = "jig.typescript_<<[ app.key ]>>_build"
+paths = [[% if app.dir == "." %]"**"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %][% for path in frontend_gate_shared_paths %], "<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% endfor %]]
+[% if app.paths_ignore | length > 0 %]paths_ignore = [[% for path in app.paths_ignore %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]]
+[% endif %]
 
 [[work.gates]]
-id = "typescript-coverage"
+id = "typescript-<<[ app.name ]>>-coverage"
 kind = "check"
-tool = "jig.typescript_coverage"
+tool = "jig.typescript_<<[ app.key ]>>_coverage"
+paths = [[% if app.dir == "." %]"**"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %][% for path in frontend_gate_shared_paths %], "<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% endfor %]]
+[% if app.paths_ignore | length > 0 %]paths_ignore = [[% for path in app.paths_ignore %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]]
+[% endif %]
+
+[% endfor %]
+[% endif %]
+[% if frontend_harness_enabled and application_contracts_enabled %]
+[[work.gates]]
+id = "public-artifacts"
+kind = "check"
+tool = "jig.public_artifacts_check"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %]"openapi/**", "docs/public/**", "public-docs/**", "scripts/contracts.mjs"[% for path in frontend_gate_shared_paths %], "<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% endfor %][% for app in frontend_gate_apps %], [% if app.dir == "." %]"package.json"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/package.json"[% endif %][% if app.role != "admin" %], [% if app.dir == "." %]"**"[% else %]"<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %][% endif %][% endfor %]]
 
 [% endif %]
 [% if sqlx_enabled %]
@@ -157,6 +220,7 @@ tool = "jig.typescript_coverage"
 id = "sqlx"
 kind = "check"
 tool = "jig.sqlx_check"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %][% if rust_migration_dir == "." %]"**"[% else %]"<<[ rust_migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %], [% if rust_sqlx_metadata_dir == "." %]"**"[% else %]"<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %], "**/*.sql"]
 
 [% endif %]
 [% if sqlx_enabled and schema_dump_enabled %]
@@ -164,11 +228,7 @@ tool = "jig.sqlx_check"
 id = "schema"
 kind = "check"
 tool = "jig.schema_check"
-
-[[work.gates]]
-id = "schema-dump"
-kind = "check"
-tool = "jig.schema_dump"
+paths = [[% for root in rust_crate_roots %][% if root == "." %]"src/**", "tests/**", "benches/**", "examples/**", "*.rs", [% else %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**", [% endif %][% endfor %][% for path in rust_gate_command_authority_paths %]"<<[ path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", [% endfor %][% if rust_migration_dir == "." %]"**"[% else %]"<<[ rust_migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %], [% if rust_sqlx_metadata_dir == "." %]"**"[% else %]"<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %], "**/*.sql", [% if schema_docs_dir == "." %]"**"[% else %]"<<[ schema_docs_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>/**"[% endif %]]
 
 [% endif %]
 [% if agent_tooling.codex.marketplaces | length == 0 %]

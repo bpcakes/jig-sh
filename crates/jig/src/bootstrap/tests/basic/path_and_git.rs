@@ -426,7 +426,10 @@ fn adopt_keeps_project_owned_makefile() {
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
     assert!(!answers.contains("makefile_enabled"));
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(r#""contract_version": 4"#));
+    assert!(contract.contains(&format!(
+        r#""contract_version": {}"#,
+        crate::context::CURRENT_CONTRACT_VERSION
+    )));
     assert!(!contract.contains("jig_version"));
     assert!(contract.contains(r#""kind": "command""#));
     assert!(!contract.contains("jig.run_target"));
@@ -750,3 +753,5 @@ fn adopt_with_sqlx_and_schema_dumps_disabled_hides_schema_dump_target() {
     assert!(!answers.contains("schema_check_command"));
     assert!(!answers.contains("tool = \"jig.schema_check\""));
 }
+
+include!("path_and_git_parts/part_01.rs");

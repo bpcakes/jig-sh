@@ -9,6 +9,7 @@ template_source_url = "https://github.com/bpcakes/jig-sh.git"
 sqlx_enabled = false
 rust_crate_roots = ["crates"]
 schema_dump_enabled = false
+schema_docs_dir = "docs/schema"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "scripts/check-rust-format.sh"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
@@ -16,6 +17,9 @@ rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) |
 rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' && cargo nextest run -p jig-sh --test vault_tui --locked -j 1"
 web_package_manager = "bun"
 frontend_apps = []
+
+[commands]
+rust_file_loc_command = "scripts/check-rust-file-loc.sh master"
 
 [execution]
 # Applies to configured checks and Codex-backed work/loop workers.
@@ -40,9 +44,14 @@ workspace_discovery = false
 # entries remain a fallback when no dev apps are configured.
 
 [[work.gates]]
-id = "contract"
+id = "jig-contract"
 kind = "check"
 tool = "jig.contract_check"
+
+[[work.gates]]
+id = "rust-file-loc"
+kind = "check"
+tool = "jig.rust_file_loc"
 
 [[work.gates]]
 id = "tests"

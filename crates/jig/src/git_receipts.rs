@@ -1,30 +1,332 @@
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write, copy};
+use std::io::{Read, copy};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::NamedTempFile;
 
-#[cfg(unix)]
-use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+use crate::bootstrap::scrub_known_repository_git_environment;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(unix)]
+use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+
 use jig_owned_process::{
-    ProcessOutputLimits, format_exit_status, require_success, run_checked_output_with_context,
-    run_owned_process_tree_with_output_limits,
+    OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError, ProcessOutputLimits,
+    ProcessOutputOverflowPolicy, format_exit_status, require_success,
+    run_checked_output_with_context, run_owned_process_tree_with_output_limits,
+    run_owned_process_tree_with_output_policy_and_observer,
 };
+
+mod process;
+mod scope;
+mod worktree;
+
+use process::*;
+use scope::*;
+use worktree::*;
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
-const FINGERPRINT_HASH_WRITE_CHUNK: usize = 64 * 1024;
 const MAX_RECEIPT_CHANGED_PATHS: usize = 100;
+const MAX_CHANGED_PATH_GIT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CHANGED_PATH_DISCOVERY_ENTRIES: usize = 250_000;
+const MAX_WORKTREE_STATUS_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_WORKTREE_DIFF_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_GATE_SCOPE_DIFF_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_WORKTREE_STATUS_ENTRIES: usize = 250_000;
+const MAX_GIT_LITERAL_PATHS_PER_DIFF: usize = 512;
+const MAX_GIT_LITERAL_PATHSPEC_BYTES_PER_DIFF: usize = 64 * 1024;
 const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
+const GATE_SCOPE_FINGERPRINT_DOMAIN: &[u8] = b"jig-gate-scope-v1\0";
+const GATE_SCOPE_INPUT_FINGERPRINT_DOMAIN: &[u8] = b"jig-gate-scope-input-v2\0";
+const WORKTREE_FINGERPRINT_DOMAIN: &[u8] = b"jig-worktree-fingerprint-v4\0";
+const MAX_GIT_ERROR_PREVIEW_BYTES: u64 = 64 * 1024;
+const GLOBAL_GATE_AUTHORITY_PATHS: &[&str] = &[".jig.toml", ".agent/jig-contract.json"];
+
+#[cfg(test)]
+thread_local! {
+    static GATE_SCOPE_INPUT_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static PLAN_CHANGE_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static CHANGED_PATH_GIT_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static WORKTREE_PROOF_GIT_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static WORKTREE_STATUS_ENTRY_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static WORKTREE_FINGERPRINT_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_worktree_fingerprint_collection_count() {
+    WORKTREE_FINGERPRINT_COLLECTION_COUNT.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn worktree_fingerprint_collection_count() -> usize {
+    WORKTREE_FINGERPRINT_COLLECTION_COUNT.get()
+}
+
+#[cfg(test)]
+pub(crate) fn reset_gate_scope_collection_counts() {
+    PLAN_CHANGE_COLLECTION_COUNT.set(0);
+    GATE_SCOPE_INPUT_COLLECTION_COUNT.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn plan_change_collection_count() -> usize {
+    PLAN_CHANGE_COLLECTION_COUNT.get()
+}
+
+#[cfg(test)]
+pub(crate) fn gate_scope_input_collection_count() -> usize {
+    GATE_SCOPE_INPUT_COLLECTION_COUNT.get()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GateApplicability {
+    Applicable,
+    NotApplicable,
+}
+
+impl GateApplicability {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Applicable => "applicable",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GateScopeFacts {
+    pub(crate) baseline_oid: String,
+    pub(crate) applicability: GateApplicability,
+    pub(crate) reason: String,
+    pub(crate) changed_paths: Vec<String>,
+    pub(crate) changed_path_count: usize,
+    pub(crate) changed_paths_truncated: bool,
+    pub(crate) changed_paths_digest: String,
+    pub(crate) matching_paths: Vec<String>,
+    pub(crate) matching_path_count: usize,
+    pub(crate) matching_paths_truncated: bool,
+    pub(crate) matching_paths_digest: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GateScopeSnapshot {
+    pub(crate) facts: GateScopeFacts,
+    pub(crate) scope_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct GateScopePolicyKey {
+    paths: Option<Vec<String>>,
+    paths_ignore: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct GateScopeInputSnapshot {
+    facts: GateScopeFacts,
+    input_fingerprint: String,
+}
+
+impl GateScopeInputSnapshot {
+    fn for_gate_signature(self, gate_signature: &str) -> GateScopeSnapshot {
+        let scope_fingerprint = gate_scope_fingerprint(
+            &self.facts.baseline_oid,
+            gate_signature,
+            &self.input_fingerprint,
+        );
+        GateScopeSnapshot {
+            facts: self.facts,
+            scope_fingerprint,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PlanChangeSnapshot {
+    baseline_oid: String,
+    changed_paths: Vec<String>,
+    untracked_paths: Vec<String>,
+    scope_cache:
+        RefCell<BTreeMap<GateScopePolicyKey, std::result::Result<GateScopeInputSnapshot, String>>>,
+}
+
+#[cfg(test)]
+pub(crate) fn gate_scope_snapshot(
+    root: &Path,
+    baseline_oid: &str,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+) -> Result<GateScopeSnapshot> {
+    let plan = plan_change_snapshot(root, baseline_oid)?;
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        &plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        GitReceiptCollection::Blocking,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn gate_scope_snapshot_with_cancellation(
+    root: &Path,
+    baseline_oid: &str,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<GateScopeSnapshot> {
+    let collection = GitReceiptCollection::Cancellable(cancelled);
+    let plan = plan_change_snapshot_inner(root, baseline_oid, collection)?;
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        &plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        collection,
+    )
+}
+
+pub(crate) fn plan_change_snapshot(root: &Path, baseline_oid: &str) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_inner(root, baseline_oid, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn plan_change_snapshot_with_cancellation(
+    root: &Path,
+    baseline_oid: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_inner(
+        root,
+        baseline_oid,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn plan_change_snapshot_from_empty_tree(
+    root: &Path,
+    expected_oid: &str,
+) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_from_empty_tree_inner(root, expected_oid, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn plan_change_snapshot_from_empty_tree_with_cancellation(
+    root: &Path,
+    expected_oid: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_from_empty_tree_inner(
+        root,
+        expected_oid,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn gate_scope_snapshot_from_plan_change(
+    root: &Path,
+    plan: &PlanChangeSnapshot,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+) -> Result<GateScopeSnapshot> {
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        GitReceiptCollection::Blocking,
+    )
+}
+
+pub(crate) fn gate_scope_snapshot_from_plan_change_with_cancellation(
+    root: &Path,
+    plan: &PlanChangeSnapshot,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<GateScopeSnapshot> {
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn resolve_git_commit(root: &Path, reference: &str) -> Result<String> {
+    resolve_git_commit_inner(root, reference, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn resolve_empty_tree_for_unborn_repository(root: &Path) -> Result<Option<String>> {
+    if git_output(
+        root,
+        &["symbolic-ref", "-q", "HEAD"],
+        "git symbolic-ref HEAD",
+    )
+    .is_err()
+    {
+        return Ok(None);
+    }
+    Ok(Some(resolve_empty_tree_oid_inner(
+        root,
+        GitReceiptCollection::Blocking,
+    )?))
+}
+
+fn resolve_empty_tree_oid_inner(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<String> {
+    let output = collection.git_output(root, &["mktree"], "git mktree empty baseline")?;
+    parse_git_object_oid(&output.stdout, "empty tree")
+}
+
+fn parse_git_object_oid(stdout: &[u8], label: &str) -> Result<String> {
+    let oid = std::str::from_utf8(stdout)
+        .with_context(|| format!("Git {label} object id was not UTF-8"))?
+        .trim();
+    if oid.is_empty() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("Git returned an invalid {label} object id");
+    }
+    Ok(oid.to_ascii_lowercase())
+}
+
+fn resolve_git_commit_inner(
+    root: &Path,
+    reference: &str,
+    collection: GitReceiptCollection<'_>,
+) -> Result<String> {
+    let reference = reference.trim();
+    if reference.is_empty() || reference.starts_with('-') || reference.contains(['\0', '\n', '\r'])
+    {
+        bail!("Unsupported Git baseline ref '{reference}'");
+    }
+    let commit_ref = format!("{reference}^{{commit}}");
+    let output = collection.git_output(
+        root,
+        &["rev-parse", "--verify", "--end-of-options", &commit_ref],
+        "git rev-parse baseline",
+    )?;
+    parse_git_object_oid(&output.stdout, "baseline")
+}
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct DiffStat {
@@ -138,20 +440,23 @@ fn repo_changed_paths_inner(
     collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<String>> {
     collection.ensure_active()?;
-    let output = collection.git_output(
+    let output = collection.git_changed_path_stdout(
         root,
         &[
+            "-c",
+            "diff.ignoreSubmodules=none",
             "status",
             "--porcelain=v1",
             "-z",
             "--untracked-files=all",
+            "--ignore-submodules=none",
             "--",
             ".",
             ":(exclude).agent/**",
         ],
         "git status --porcelain -z",
     )?;
-    parse_porcelain_status_z(&output.stdout).map(|entries| {
+    parse_porcelain_status_z(&output).map(|entries| {
         entries
             .into_iter()
             .flat_map(|entry| {
@@ -167,12 +472,21 @@ fn repo_changed_paths_inner(
 
 fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Result<DiffStat> {
     collection.ensure_active()?;
-    let output = collection.git_output(
+    let output = collection.git_changed_path_stdout(
         root,
-        &["diff", "--numstat", "--", ".", ":(exclude).agent/**"],
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "diff",
+            "--numstat",
+            "--ignore-submodules=none",
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
         "git diff --numstat",
     )?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output);
     parse_diff_stat_output(&stdout)
 }
 
@@ -250,13 +564,8 @@ impl GitReceiptCollection<'_> {
         }
     }
 
-    fn git_hash_object(self, root: &Path, input: &[u8]) -> Result<String> {
-        match self {
-            Self::Blocking => git_hash_object(root, input),
-            Self::Cancellable(cancelled) => {
-                git_hash_object_with_cancellation(root, input, cancelled)
-            }
-        }
+    fn git_changed_path_stdout(self, root: &Path, args: &[&str], label: &str) -> Result<Vec<u8>> {
+        git_changed_path_stdout(root, args, label, self)
     }
 
     fn git_hash_file(self, root: &Path, full_path: &Path) -> Result<String> {
@@ -279,561 +588,6 @@ impl std::fmt::Display for GitReceiptCollectionCancelled {
 }
 
 impl std::error::Error for GitReceiptCollectionCancelled {}
-
-fn repo_worktree_fingerprint_inner(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<String> {
-    collection.ensure_active()?;
-    let status = collection.git_output(
-        root,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git status --porcelain",
-    )?;
-    collection.ensure_active()?;
-    let unstaged = collection.git_output(
-        root,
-        &["diff", "--binary", "--", ".", ":(exclude).agent/**"],
-        "git diff --binary",
-    )?;
-    collection.ensure_active()?;
-    let staged = collection.git_output(
-        root,
-        &[
-            "diff",
-            "--cached",
-            "--binary",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git diff --cached --binary",
-    )?;
-    collection.ensure_active()?;
-    let untracked = untracked_file_contents(root, &status.stdout, collection)?;
-
-    let mut input = Vec::new();
-    input.extend_from_slice(b"status\0");
-    input.extend_from_slice(&status.stdout);
-    input.extend_from_slice(b"\0unstaged\0");
-    input.extend_from_slice(&unstaged.stdout);
-    input.extend_from_slice(b"\0staged\0");
-    input.extend_from_slice(&staged.stdout);
-    input.extend_from_slice(b"\0untracked\0");
-    input.extend_from_slice(&untracked);
-
-    collection.ensure_active()?;
-    collection.git_hash_object(root, &input)
-}
-
-fn untracked_file_contents(
-    root: &Path,
-    status_stdout: &[u8],
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<u8>> {
-    let mut contents = Vec::new();
-    let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
-    for entry in parse_porcelain_status_z(status_stdout)? {
-        collection.ensure_active()?;
-        if entry.status != "??" {
-            continue;
-        }
-        let full_path = root.join(&entry.path);
-        let metadata = fs::symlink_metadata(&full_path).with_context(|| {
-            format!(
-                "Failed to read untracked path metadata {}",
-                full_path.display()
-            )
-        })?;
-
-        contents.extend_from_slice(entry.path.as_os_str().as_encoded_bytes());
-        contents.push(0);
-        append_untracked_path_fingerprint(
-            &mut contents,
-            root,
-            &full_path,
-            &metadata,
-            &mut remaining_inline_bytes,
-            collection,
-        )?;
-        contents.push(0);
-    }
-    collection.ensure_active()?;
-    Ok(contents)
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct PorcelainStatusEntry {
-    status: String,
-    path: PathBuf,
-    original_path: Option<PathBuf>,
-}
-
-fn parse_porcelain_status_z(stdout: &[u8]) -> Result<Vec<PorcelainStatusEntry>> {
-    let fields = stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-    let mut entries = Vec::new();
-    let mut index = 0;
-    while index < fields.len() {
-        let field = fields[index];
-        if field.is_empty() {
-            if index == fields.len() - 1 {
-                break;
-            }
-            bail!("Malformed git status --porcelain -z output: empty path field");
-        }
-        if field.len() < 4 || field[2] != b' ' {
-            bail!(
-                "Malformed git status --porcelain -z record: {}",
-                String::from_utf8_lossy(field)
-            );
-        }
-        let status = String::from_utf8_lossy(&field[..2]).to_string();
-        #[cfg(unix)]
-        let path = path_buf_from_git_bytes(&field[3..]);
-        #[cfg(not(unix))]
-        let path = path_buf_from_git_bytes(&field[3..])?;
-        index += 1;
-
-        let original_path = if status.as_bytes().contains(&b'R')
-            || status.as_bytes().contains(&b'C')
-        {
-            let original = fields.get(index).context(
-                "Malformed git status --porcelain -z output: rename/copy record missing original path",
-            )?;
-            if original.is_empty() {
-                bail!("Malformed git status --porcelain -z output: empty original path");
-            }
-            index += 1;
-            #[cfg(unix)]
-            {
-                Some(path_buf_from_git_bytes(original))
-            }
-            #[cfg(not(unix))]
-            {
-                Some(path_buf_from_git_bytes(original)?)
-            }
-        } else {
-            None
-        };
-
-        entries.push(PorcelainStatusEntry {
-            status,
-            path,
-            original_path,
-        });
-    }
-    Ok(entries)
-}
-
-#[cfg(unix)]
-fn path_buf_from_git_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(OsString::from_vec(bytes.to_vec()))
-}
-
-#[cfg(not(unix))]
-fn path_buf_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
-    String::from_utf8(bytes.to_vec())
-        .map(PathBuf::from)
-        .context("Git status path is not UTF-8")
-}
-
-fn append_untracked_path_fingerprint(
-    contents: &mut Vec<u8>,
-    root: &Path,
-    full_path: &Path,
-    metadata: &fs::Metadata,
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    collection.ensure_active()?;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        contents.extend_from_slice(b"symlink\0");
-        let target = fs::read_link(full_path)
-            .with_context(|| format!("Failed to read symlink target {}", full_path.display()))?;
-        contents.extend_from_slice(target.as_os_str().as_encoded_bytes());
-        return Ok(());
-    }
-
-    if metadata.is_dir() {
-        contents.extend_from_slice(b"dir");
-        return Ok(());
-    }
-
-    if metadata.is_file() {
-        append_untracked_file_fingerprint(
-            contents,
-            root,
-            full_path,
-            metadata,
-            remaining_inline_bytes,
-            collection,
-        )?;
-        return Ok(());
-    }
-
-    contents.extend_from_slice(b"other\0");
-    append_metadata_fallback(contents, metadata);
-    Ok(())
-}
-
-fn append_untracked_file_fingerprint(
-    contents: &mut Vec<u8>,
-    root: &Path,
-    full_path: &Path,
-    metadata: &fs::Metadata,
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    collection.ensure_active()?;
-    if metadata.len() > MAX_INLINE_UNTRACKED_BYTES || metadata.len() > *remaining_inline_bytes {
-        append_hashed_file_fingerprint(contents, root, full_path, collection)?;
-        return Ok(());
-    }
-
-    let mut file = fs::File::open(full_path)
-        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MAX_INLINE_UNTRACKED_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("Failed to read untracked file {}", full_path.display()))?;
-    collection.ensure_active()?;
-
-    if bytes.len() as u64 > MAX_INLINE_UNTRACKED_BYTES {
-        append_hashed_file_fingerprint(contents, root, full_path, collection)?;
-        return Ok(());
-    }
-
-    contents.extend_from_slice(b"file\0");
-    contents.extend_from_slice(&bytes);
-    *remaining_inline_bytes = remaining_inline_bytes.saturating_sub(bytes.len() as u64);
-    Ok(())
-}
-
-fn append_hashed_file_fingerprint(
-    contents: &mut Vec<u8>,
-    root: &Path,
-    full_path: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    contents.extend_from_slice(b"file-hash\0");
-    contents.extend_from_slice(collection.git_hash_file(root, full_path)?.as_bytes());
-    Ok(())
-}
-
-fn append_metadata_fallback(contents: &mut Vec<u8>, metadata: &fs::Metadata) {
-    contents.extend_from_slice(format!("len={}\0", metadata.len()).as_bytes());
-    contents.extend_from_slice(
-        format!("modified={}\0", system_time_key(metadata.modified().ok())).as_bytes(),
-    );
-}
-
-fn system_time_key(time: Option<SystemTime>) -> u128 {
-    time.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
-}
-
-fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
-    let mut command = Command::new("git");
-    command.current_dir(root).args(args);
-    configure_read_only_git_environment(&mut command);
-
-    run_checked_output_with_context(
-        &mut command,
-        || format!("Failed to run {label} in {}", root.display()),
-        |output| {
-            format!(
-                "{label} failed with {}.\nstdout:\n{}\nstderr:\n{}",
-                format_exit_status(&output.status),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        },
-    )
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_output_with_cancellation(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output = run_git_command_with_cancellation(root, &mut command, label, cancelled)?;
-    require_success(&output, |output| {
-        format!(
-            "{label} failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })?;
-    Ok(output)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_output_with_cancellation(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let output = git_output(root, args, label)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(output)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn run_git_command_with_cancellation(
-    root: &Path,
-    command: &mut Command,
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    configure_read_only_git_environment(command);
-    let output = match run_owned_process_tree_with_output_limits(
-        command,
-        Duration::MAX,
-        ProcessOutputLimits {
-            stdout: usize::MAX,
-            stderr: usize::MAX,
-        },
-        cancelled,
-    ) {
-        Ok(output) => output,
-        Err(error) if error.is_cancellation() => {
-            return Err(GitReceiptCollectionCancelled.into());
-        }
-        Err(error) => {
-            return Err(anyhow::Error::new(error)
-                .context(format!("Failed to run {label} in {}", root.display())));
-        }
-    };
-    let stdout = output
-        .stdout
-        .context("supervised Git command did not capture stdout")?;
-    let stderr = output
-        .stderr
-        .context("supervised Git command did not capture stderr")?;
-    if !stdout.complete || !stderr.complete {
-        bail!(
-            "Failed to capture complete output from {label} in {}",
-            root.display()
-        );
-    }
-    if stdout.truncated || stderr.truncated {
-        bail!(
-            "Unexpected bounded output from {label} in {}",
-            root.display()
-        );
-    }
-    Ok(Output {
-        status: output.status,
-        stdout: stdout.bytes,
-        stderr: stderr.bytes,
-    })
-}
-
-fn git_hash_object(root: &Path, input: &[u8]) -> Result<String> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_read_only_git_environment(&mut command);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to start git hash-object in {}", root.display()))?;
-
-    child
-        .stdin
-        .as_mut()
-        .context("git hash-object stdin was not available")?
-        .write_all(input)
-        .context("Failed to write worktree fingerprint input to git hash-object")?;
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git hash-object")?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_hash_object_with_cancellation(
-    root: &Path,
-    input: &[u8],
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    let mut input_file =
-        NamedTempFile::new().context("Failed to stage worktree fingerprint hash input")?;
-    write_fingerprint_hash_input(&mut input_file, input, cancelled)?;
-    let stdin = input_file
-        .reopen()
-        .context("Failed to reopen worktree fingerprint hash input")?;
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output =
-        run_git_command_with_cancellation(root, &mut command, "git hash-object", cancelled)?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn write_fingerprint_hash_input(
-    writer: &mut impl Write,
-    input: &[u8],
-    cancelled: &dyn Fn() -> bool,
-) -> Result<()> {
-    let collection = GitReceiptCollection::Cancellable(cancelled);
-    for chunk in input.chunks(FINGERPRINT_HASH_WRITE_CHUNK) {
-        collection.ensure_active()?;
-        writer
-            .write_all(chunk)
-            .context("Failed to write worktree fingerprint hash input")?;
-    }
-    collection.ensure_active()?;
-    writer
-        .flush()
-        .context("Failed to flush worktree fingerprint hash input")?;
-    collection.ensure_active()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_hash_object_with_cancellation(
-    root: &Path,
-    input: &[u8],
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let hash = git_hash_object(root, input)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(hash)
-}
-
-fn git_hash_file(root: &Path, full_path: &Path) -> Result<String> {
-    let mut file = fs::File::open(full_path)
-        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_read_only_git_environment(&mut command);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to start git hash-object in {}", root.display()))?;
-
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .context("git hash-object stdin was not available")?;
-        copy(&mut file, &mut stdin)
-            .with_context(|| format!("Failed to hash untracked file {}", full_path.display()))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git hash-object")?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_hash_file_with_cancellation(
-    root: &Path,
-    full_path: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    let file = fs::File::open(full_path)
-        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::from(file))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output =
-        run_git_command_with_cancellation(root, &mut command, "git hash-object", cancelled)?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_hash_file_with_cancellation(
-    root: &Path,
-    full_path: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let hash = git_hash_file(root, full_path)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(hash)
-}
-
-fn configure_read_only_git_environment(command: &mut Command) {
-    // Receipt and gate fingerprint probes are observational. In particular,
-    // `git status` must not refresh stat data by taking an optional index lock.
-    command.env("GIT_OPTIONAL_LOCKS", "0");
-}
 
 pub(crate) fn parse_diff_stat_output(stdout: &str) -> Result<DiffStat> {
     let mut diff_stat = DiffStat::default();
@@ -859,326 +613,4 @@ fn parse_numstat_count(field: &str, line_number: usize, kind: &str) -> Result<u6
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::Cell;
-    use std::ffi::OsStr;
-    use std::time::{Duration, UNIX_EPOCH};
-    use tempfile::tempdir;
-
-    #[test]
-    fn read_only_git_commands_disable_optional_locks() {
-        let mut command = Command::new("git");
-        command.env("GIT_OPTIONAL_LOCKS", "1");
-
-        configure_read_only_git_environment(&mut command);
-
-        assert_eq!(
-            command
-                .get_envs()
-                .find(|(name, _)| *name == OsStr::new("GIT_OPTIONAL_LOCKS"))
-                .and_then(|(_, value)| value),
-            Some(OsStr::new("0"))
-        );
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn cancellation_before_fingerprint_git_spawn_remains_typed() {
-        let temp = tempdir().unwrap();
-        let calls = Cell::new(0);
-        let error = repo_worktree_fingerprint_with_cancellation(temp.path(), &|| {
-            let current = calls.get();
-            calls.set(current + 1);
-            current == 1
-        })
-        .unwrap_err();
-
-        assert!(is_git_receipt_collection_cancellation(&error), "{error:#}");
-        assert_eq!(calls.get(), 2);
-    }
-
-    #[test]
-    fn fingerprint_hash_staging_checks_cancellation_between_chunks() {
-        let input = vec![b'x'; FINGERPRINT_HASH_WRITE_CHUNK * 3];
-        let checks = Cell::new(0);
-        let mut staged = Vec::new();
-
-        let error = write_fingerprint_hash_input(&mut staged, &input, &|| {
-            let current = checks.get();
-            checks.set(current + 1);
-            current >= 1
-        })
-        .unwrap_err();
-
-        assert!(is_git_receipt_collection_cancellation(&error));
-        assert_eq!(staged.len(), FINGERPRINT_HASH_WRITE_CHUNK);
-    }
-
-    #[test]
-    fn parse_diff_stat_output_counts_binary_files_without_swallowing_other_errors() {
-        let diff_stat =
-            parse_diff_stat_output("12\t3\tsrc/main.rs\n-\t-\tassets/logo.png\n").unwrap();
-        assert_eq!(diff_stat.files, 2);
-        assert_eq!(diff_stat.insertions, 12);
-        assert_eq!(diff_stat.deletions, 3);
-    }
-
-    #[test]
-    fn parse_diff_stat_output_rejects_invalid_counts() {
-        let error = parse_diff_stat_output("oops\t3\tsrc/main.rs\n")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("Invalid git diff --numstat insertions count"));
-    }
-
-    #[test]
-    fn collect_git_receipt_metadata_records_git_failures() {
-        let temp = tempdir().unwrap();
-        let metadata = collect_git_receipt_metadata(temp.path());
-
-        assert!(metadata.changed_paths.is_empty());
-        assert_eq!(metadata.changed_path_count, None);
-        assert!(!metadata.changed_paths_truncated);
-        assert_eq!(metadata.changed_paths_digest, None);
-        assert_eq!(metadata.diff_stat.files, 0);
-        assert!(metadata.git_status_error.is_some());
-        assert!(metadata.git_diff_stat_error.is_some());
-        assert!(metadata.worktree_fingerprint.is_none());
-        assert!(metadata.worktree_fingerprint_error.is_some());
-    }
-
-    #[test]
-    fn cancelled_receipt_metadata_starts_no_git_subcollection() {
-        let temp = tempdir().unwrap();
-        let checks = Cell::new(0);
-
-        let metadata = collect_git_receipt_metadata_with_cancellation(temp.path(), &|| {
-            checks.set(checks.get() + 1);
-            true
-        });
-
-        assert!(metadata.changed_paths.is_empty());
-        assert_eq!(metadata.changed_path_count, None);
-        assert_eq!(metadata.diff_stat.files, 0);
-        assert!(
-            metadata
-                .git_status_error
-                .as_deref()
-                .is_some_and(|error| error.contains("collection was cancelled"))
-        );
-        assert!(
-            metadata
-                .git_diff_stat_error
-                .as_deref()
-                .is_some_and(|error| error.contains("collection was cancelled"))
-        );
-        assert!(metadata.worktree_fingerprint.is_none());
-        assert!(
-            metadata
-                .worktree_fingerprint_error
-                .as_deref()
-                .is_some_and(|error| error.contains("collection was cancelled"))
-        );
-        assert_eq!(checks.get(), 3);
-    }
-
-    #[test]
-    fn changed_paths_preserve_spaces_and_rename_paths() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("old name.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "old name.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        run_git(temp.path(), &["mv", "old name.txt", "new name.txt"]);
-        std::fs::write(temp.path().join("loose note.txt"), "untracked").unwrap();
-
-        let paths = repo_changed_paths(temp.path()).unwrap();
-
-        assert!(paths.contains(&"new name.txt".to_string()));
-        assert!(paths.contains(&"old name.txt".to_string()));
-        assert!(paths.contains(&"loose note.txt".to_string()));
-    }
-
-    #[test]
-    fn receipt_metadata_excludes_agent_state_from_paths_and_diff_stat() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
-        std::fs::write(temp.path().join("src.rs"), "one\n").unwrap();
-        std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "old\n").unwrap();
-        run_git(temp.path(), &["add", "."]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        std::fs::write(temp.path().join("src.rs"), "one\ntwo\n").unwrap();
-        std::fs::write(
-            temp.path().join(".agent/state/receipts.jsonl"),
-            "old\nnew\n",
-        )
-        .unwrap();
-        std::fs::write(temp.path().join("note.txt"), "untracked\n").unwrap();
-        std::fs::write(
-            temp.path().join(".agent/state/untracked.jsonl"),
-            "ignored by receipt metadata\n",
-        )
-        .unwrap();
-
-        let metadata = collect_git_receipt_metadata_without_worktree_fingerprint(temp.path());
-
-        assert_eq!(metadata.changed_paths, ["note.txt", "src.rs"]);
-        assert_eq!(metadata.changed_path_count, Some(2));
-        assert!(!metadata.changed_paths_truncated);
-        assert!(metadata.changed_paths_digest.is_some());
-        assert_eq!(metadata.diff_stat.files, 1);
-        assert_eq!(metadata.diff_stat.insertions, 1);
-        assert_eq!(metadata.diff_stat.deletions, 0);
-    }
-
-    #[test]
-    fn changed_path_preview_is_bounded_sorted_and_digest_covers_the_full_set() {
-        let paths = (0..105)
-            .rev()
-            .map(|index| format!("src/path-{index:03}.rs"))
-            .chain(["src/path-042.rs".to_string()])
-            .collect::<Vec<_>>();
-        let bounded = bounded_changed_paths(paths.clone());
-        let reordered = bounded_changed_paths(paths.into_iter().rev().collect());
-
-        assert_eq!(bounded.preview.len(), MAX_RECEIPT_CHANGED_PATHS);
-        assert_eq!(bounded.total, 105);
-        assert!(bounded.truncated);
-        assert_eq!(bounded.preview[0], "src/path-000.rs");
-        assert_eq!(bounded.preview[99], "src/path-099.rs");
-        assert!(bounded.digest.starts_with("sha256:"));
-        assert_eq!(bounded.digest, reordered.digest);
-        assert_eq!(bounded.preview, reordered.preview);
-
-        let preview_only_digest = changed_paths_digest(&bounded.preview);
-        assert_ne!(bounded.digest, preview_only_digest);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn porcelain_z_parser_preserves_non_utf8_path_bytes() {
-        let entries = parse_porcelain_status_z(b"?? bad\xFFname\0").unwrap();
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].path.as_os_str().as_encoded_bytes(),
-            b"bad\xFFname"
-        );
-    }
-
-    #[test]
-    fn worktree_fingerprint_changes_when_untracked_file_content_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        std::fs::write(temp.path().join("new.txt"), "one").unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-        std::fs::write(temp.path().join("new.txt"), "two").unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn worktree_fingerprint_changes_when_large_untracked_file_content_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        let large_path = temp.path().join("large.bin");
-        let fixed_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        std::fs::write(
-            &large_path,
-            vec![b'a'; MAX_INLINE_UNTRACKED_BYTES as usize + 1],
-        )
-        .unwrap();
-        std::fs::File::open(&large_path)
-            .unwrap()
-            .set_modified(fixed_mtime)
-            .unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        std::fs::write(
-            &large_path,
-            vec![b'b'; MAX_INLINE_UNTRACKED_BYTES as usize + 1],
-        )
-        .unwrap();
-        std::fs::File::open(&large_path)
-            .unwrap()
-            .set_modified(fixed_mtime)
-            .unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn worktree_fingerprint_changes_when_untracked_symlink_target_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        let first_target = temp.path().join("outside-one");
-        let second_target = temp.path().join("outside-two");
-        let link = temp.path().join("link");
-        std::os::unix::fs::symlink(&first_target, &link).unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-        std::fs::remove_file(&link).unwrap();
-        std::os::unix::fs::symlink(&second_target, &link).unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    fn run_git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {} failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-}
+mod tests;

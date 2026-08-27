@@ -6,11 +6,18 @@
     "rust_fmt_check_command",
     "rust_clippy_command",
     "rust_test_command",
-    "rust_test_locked_command"[% if frontend_harness_enabled %],
+    "rust_test_locked_command",
+    "rust_file_loc_command"[% if frontend_harness_enabled %],
     "typescript_lint_command",
     "typescript_typecheck_command",
     "typescript_build_command",
-    "typescript_coverage_command"[% endif %][% if sqlx_enabled %],
+    "typescript_coverage_command"[% if application_contracts_enabled %],
+    "application_contract_check_command",
+    "public_artifacts_check_command"[% endif %][% for app in frontend_gate_apps %],
+    "typescript_<<[ app.key ]>>_lint_command",
+    "typescript_<<[ app.key ]>>_typecheck_command",
+    "typescript_<<[ app.key ]>>_build_command",
+    "typescript_<<[ app.key ]>>_coverage_command"[% endfor %][% endif %][% if sqlx_enabled %],
     "sqlx_check_command"[% endif %][% if sqlx_enabled and schema_dump_enabled %],
     "schema_dump_command"[% endif %]
   ],
@@ -45,6 +52,12 @@
       "description": "Run the configured locked test command.",
       "command": "rust_test_locked_command"
     },
+    {
+      "name": "jig.rust_file_loc",
+      "kind": "command",
+      "description": "Enforce the changed-file Rust source size policy.",
+      "command": "rust_file_loc_command"
+    },
 [% if frontend_harness_enabled %]
     {
       "name": "jig.typescript_lint",
@@ -70,6 +83,46 @@
       "description": "Run the configured TypeScript coverage command.",
       "command": "typescript_coverage_command"
     },
+[% if application_contracts_enabled %]
+    {
+      "name": "jig.application_contract_check",
+      "kind": "command",
+      "description": "Verify committed application contracts and generated clients.",
+      "command": "application_contract_check_command"
+    },
+    {
+      "name": "jig.public_artifacts_check",
+      "kind": "command",
+      "description": "Build and verify public artifacts against privileged-boundary leaks.",
+      "command": "public_artifacts_check_command"
+    },
+[% endif %]
+[% for app in frontend_gate_apps %]
+    {
+      "name": "jig.typescript_<<[ app.key ]>>_lint",
+      "kind": "command",
+      "description": "Run TypeScript lint for <<[ app.name ]>> only.",
+      "command": "typescript_<<[ app.key ]>>_lint_command"
+    },
+    {
+      "name": "jig.typescript_<<[ app.key ]>>_typecheck",
+      "kind": "command",
+      "description": "Run TypeScript typecheck for <<[ app.name ]>> only.",
+      "command": "typescript_<<[ app.key ]>>_typecheck_command"
+    },
+    {
+      "name": "jig.typescript_<<[ app.key ]>>_build",
+      "kind": "command",
+      "description": "Run TypeScript build for <<[ app.name ]>> only.",
+      "command": "typescript_<<[ app.key ]>>_build_command"
+    },
+    {
+      "name": "jig.typescript_<<[ app.key ]>>_coverage",
+      "kind": "command",
+      "description": "Run TypeScript coverage for <<[ app.name ]>> only.",
+      "command": "typescript_<<[ app.key ]>>_coverage_command"
+    },
+[% endfor %]
 [% endif %]
 [% if sqlx_enabled %]
 [% if schema_dump_enabled %]
