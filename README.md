@@ -47,7 +47,7 @@ scripts/jig setup
 
 # 3. Do work behind gates
 plan_id="$(scripts/jig work start --title "First change" --body "Validate the harness loop." --print-plan-id)"
-scripts/jig check test
+scripts/jig work check --plan-id "$plan_id"
 scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified" --outcome success
 ```
 
@@ -146,7 +146,7 @@ See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md) for 
 
 ### Structured work & receipts
 
-`work start` opens a plan, `check` runs gates, and `work finish` closes a plan only after fresh evidence exists. Contract and gate commands append receipts under `.agent/state/`, giving every change a reviewable trail. See [Developer UX](docs/developer-ux.md#work-receipts-and-gate-evidence).
+`work start` opens a plan with an exact Git baseline (the repository's hash-format-specific empty tree before its first commit), `work check` runs only required gates whose path policy applies, and `work finish` closes a plan only after every required gate has fresh executed, reused, or explicit not-applicable evidence. `jig-contract` proves harness wiring; scaffolds with OpenAPI clients use separate application-contract and public-artifact gates. Contract and gate commands append receipts under `.agent/state/`, giving every change a reviewable trail. See [Developer UX](docs/developer-ux.md#work-receipts-and-gate-evidence).
 
 ### Local state maintenance
 

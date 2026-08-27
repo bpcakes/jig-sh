@@ -75,8 +75,11 @@ wait-timeout.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-jig-vault = { workspace = true, features = ["test-utils"] }
 jsonschema.workspace = true
+jig-vault = { workspace = true, features = ["test-utils"] }
+
+[build-dependencies]
+sha2.workspace = true
 
 [lints]
 workspace = true

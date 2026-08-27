@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -6,17 +7,19 @@ use serde_json::{Value, json};
 use crate::cancellation::ensure_status_collection_active;
 use crate::command::{WorkEvidenceRequest, WorkGatesRequest};
 use crate::context::{RepoContext, WorkGate};
+use crate::git_receipts::PlanChangeSnapshot;
 use crate::repository::{RepositoryCatalog, resolve_evidence_targets};
 use crate::state::{
-    PlanStatus, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptEvidence,
-    WorkReviewReceiptStatus, current_worktree_fingerprint,
+    PlanBaseline, PlanStatus, ToolReceiptStatus, WorkCheckGateEvidence, WorkGateReceiptIndex,
+    WorkReviewReceiptEvidence, WorkReviewReceiptStatus, current_worktree_fingerprint,
     current_worktree_fingerprint_with_cancellation, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, open_plan_summaries,
-    open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
-    work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
-    work_gate_receipt_indexes_with_cancellation,
+    open_plan_summaries_with_cancellation, plan_baselines_with_cancellation, plan_status,
+    plan_status_with_cancellation, work_gate_receipt_index,
+    work_gate_receipt_index_with_cancellation, work_gate_receipt_indexes_with_cancellation,
 };
 
+use super::scope::{GateScopeEvaluation, PlanGateContext};
 use super::tools::validate_check_tool;
 
 use target_evidence::EvidenceGateEvaluation;
@@ -41,6 +44,8 @@ impl GateCollection<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GateOutcome {
     Passed,
+    Reused,
+    NotApplicable,
     Missing,
     Failed,
     InvalidOutput,
@@ -53,6 +58,8 @@ impl GateOutcome {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Passed => "passed",
+            Self::Reused => "reused",
+            Self::NotApplicable => "not_applicable",
             Self::Missing => "missing",
             Self::Failed => "failed",
             Self::InvalidOutput => "invalid_output",
@@ -63,8 +70,11 @@ impl GateOutcome {
     }
 
     const fn with_freshness(self, freshness: GateFreshness) -> Self {
-        if matches!(self, Self::Passed) {
-            freshness.as_gate_outcome()
+        if matches!(self, Self::Passed | Self::Reused | Self::NotApplicable) {
+            match freshness {
+                GateFreshness::Fresh => self,
+                _ => freshness.as_gate_outcome(),
+            }
         } else {
             self
         }
@@ -148,7 +158,7 @@ impl EvaluatedReceipt {
         let freshness = gate_freshness(freshness_receipt, current_fingerprint);
         let freshness_reason = freshness
             .reason(freshness_receipt, current_fingerprint)
-            .to_owned();
+            .to_string();
         Self::with_freshness(
             receipt,
             freshness_receipt,
@@ -185,6 +195,75 @@ impl EvaluatedReceipt {
             current_worktree_fingerprint_error: current_fingerprint.error.clone(),
         }
     }
+
+    fn scoped(
+        status: &crate::state::WorkCheckGateReceiptStatus,
+        current: &GateScopeEvaluation,
+    ) -> Self {
+        let evidence = &status.evidence;
+        let (freshness, freshness_reason) =
+            if let Some(error) = status.batch.worktree_fingerprint_error.as_deref() {
+                (
+                    GateFreshness::Unknown,
+                    format!("work-check batch could not prove a stable worktree: {error}"),
+                )
+            } else if let Some(error) = current.error() {
+                (
+                    GateFreshness::Unknown,
+                    format!("current gate scope could not be collected: {error}"),
+                )
+            } else if evidence.gate_signature != current.gate_signature() {
+                (
+                    GateFreshness::Stale,
+                    "gate policy or execution definition changed since the receipt".into(),
+                )
+            } else {
+                match (
+                    evidence.scope_fingerprint.as_deref(),
+                    current.scope_fingerprint(),
+                ) {
+                    (Some(receipt), Some(current)) if receipt == current => (
+                        GateFreshness::Fresh,
+                        "receipt matches the current gate-scoped fingerprint".into(),
+                    ),
+                    (Some(_), Some(_)) => (
+                        GateFreshness::Stale,
+                        "receipt was recorded for a different gate-scoped fingerprint".into(),
+                    ),
+                    _ => (
+                        GateFreshness::Unknown,
+                        "gate-scoped freshness could not be determined".into(),
+                    ),
+                }
+            };
+        Self {
+            receipt_id: evidence
+                .tool_receipt_id
+                .clone()
+                .or_else(|| Some(status.batch.receipt_id.clone())),
+            freshness_receipt_id: Some(status.batch.receipt_id.clone()),
+            exit_status: match evidence.status.as_str() {
+                "executed" | "failed" | "cancelled" => evidence.exit_status,
+                "reused" | "not_applicable" => Some(0),
+                "unknown" => None,
+                _ => None,
+            },
+            ended_at_ms: Some(status.batch.ended_at_ms),
+            freshness,
+            freshness_reason,
+            changed_paths: evidence.changed_paths.clone(),
+            changed_path_count: evidence.changed_path_count,
+            changed_paths_truncated: evidence.changed_paths_truncated,
+            changed_paths_digest: evidence.changed_paths_digest.clone(),
+            diff_summary: Some(status.batch.diff_summary.clone()),
+            receipt_worktree_fingerprint_error: status
+                .batch
+                .worktree_fingerprint_error
+                .clone()
+                .or_else(|| evidence.scope_error.clone()),
+            current_worktree_fingerprint_error: current.error().map(str::to_string),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -192,8 +271,13 @@ struct CheckGateEvaluation {
     id: String,
     required: bool,
     tool: String,
+    paths: Option<Vec<String>>,
+    paths_ignore: Vec<String>,
+    reuse: bool,
     outcome: GateOutcome,
     receipt: EvaluatedReceipt,
+    evidence: Option<WorkCheckGateEvidence>,
+    current_scope: GateScopeEvaluation,
 }
 
 #[derive(Clone, Debug)]
@@ -216,9 +300,9 @@ struct UnsupportedGateEvaluation {
 
 #[derive(Clone, Debug)]
 enum GateEvaluation {
-    Check(CheckGateEvaluation),
+    Check(Box<CheckGateEvaluation>),
     Evidence(EvidenceGateEvaluation),
-    CodexReview(ReviewGateEvaluation),
+    CodexReview(Box<ReviewGateEvaluation>),
     Unsupported(UnsupportedGateEvaluation),
 }
 
@@ -271,7 +355,7 @@ impl GateEvaluation {
 
     fn evidence_key(&self) -> Option<String> {
         match self {
-            Self::Check(gate) => Some(format!("tool:{}", gate.tool)),
+            Self::Check(gate) => Some(format!("gate:{}", gate.id)),
             Self::Evidence(gate) => Some(gate.evidence_key()),
             Self::CodexReview(gate) => Some(format!("gate:{}", gate.id)),
             Self::Unsupported(_) => None,
@@ -282,6 +366,8 @@ impl GateEvaluation {
         match self {
             Self::Check(gate) => {
                 let receipt = &gate.receipt;
+                let evidence = gate.evidence.as_ref();
+                let current = &gate.current_scope;
                 json!({
                     "id": gate.id,
                     "kind": "check",
@@ -301,6 +387,28 @@ impl GateEvaluation {
                     "diff_summary": receipt.diff_summary,
                     "receipt_worktree_fingerprint_error": receipt.receipt_worktree_fingerprint_error,
                     "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
+                    "evidence_status": evidence.map(|evidence| evidence.status.as_str()),
+                    "receipt_applicability": evidence.map(|evidence| evidence.applicability.as_str()),
+                    "applicability": current.applicability().map(crate::git_receipts::GateApplicability::as_str),
+                    "applicability_reason": current.reason(),
+                    "applicability_error": current.error(),
+                    "paths": gate.paths,
+                    "paths_ignore": gate.paths_ignore,
+                    "reuse": gate.reuse,
+                    "forced": evidence.map(|evidence| evidence.forced),
+                    "baseline_oid": current.baseline_oid(),
+                    "receipt_baseline_oid": evidence.and_then(|evidence| evidence.baseline_oid.as_deref()),
+                    "gate_signature": current.gate_signature(),
+                    "receipt_gate_signature": evidence.map(|evidence| evidence.gate_signature.as_str()),
+                    "scope_fingerprint": current.scope_fingerprint(),
+                    "receipt_scope_fingerprint": evidence.and_then(|evidence| evidence.scope_fingerprint.as_deref()),
+                    "matching_paths": current.matching_paths(),
+                    "matching_path_count": current.matching_path_count(),
+                    "matching_paths_truncated": current.matching_paths_truncated(),
+                    "matching_paths_digest": current.matching_paths_digest(),
+                    "source_plan_id": evidence.and_then(|evidence| evidence.source_plan_id.as_deref()),
+                    "source_batch_receipt_id": evidence.and_then(|evidence| evidence.source_batch_receipt_id.as_deref()),
+                    "source_tool_receipt_id": evidence.and_then(|evidence| evidence.source_tool_receipt_id.as_deref()),
                 })
             }
             Self::Evidence(gate) => gate.to_value(),
@@ -351,13 +459,21 @@ impl GateEvaluation {
     }
 
     fn to_latest_evidence(&self) -> Option<Value> {
-        if let Self::Evidence(gate) = self {
-            return gate.to_latest_evidence();
-        }
-
         let receipt = self.receipt()?;
-        if receipt.exit_status != Some(0) {
-            return None;
+        match self {
+            Self::Evidence(gate) => return gate.to_latest_evidence(),
+            Self::Check(_) => {
+                if !matches!(
+                    self.outcome(),
+                    GateOutcome::Passed | GateOutcome::Reused | GateOutcome::NotApplicable
+                ) || receipt.freshness != GateFreshness::Fresh
+                {
+                    return None;
+                }
+            }
+            Self::CodexReview(_) if receipt.exit_status != Some(0) => return None,
+            Self::CodexReview(_) => {}
+            Self::Unsupported(_) => return None,
         }
         let (tool, skill, freshness_receipt_id) = match self {
             Self::Check(gate) => (
@@ -371,7 +487,7 @@ impl GateEvaluation {
             Self::Evidence(_) => unreachable!("evidence gates return above"),
             Self::Unsupported(_) => return None,
         };
-        Some(json!({
+        let mut value = json!({
             "tool": tool,
             "skill": skill,
             "gate_id": self.id(),
@@ -387,13 +503,46 @@ impl GateEvaluation {
             "changed_paths_digest": receipt.changed_paths_digest,
             "diff_summary": receipt.diff_summary,
             "ended_at_ms": receipt.ended_at_ms.unwrap_or(0),
-        }))
+        });
+        if let Self::Check(gate) = self {
+            value["applicability"] = json!(
+                gate.current_scope
+                    .applicability()
+                    .map(crate::git_receipts::GateApplicability::as_str)
+            );
+            value["applicability_reason"] = json!(gate.current_scope.reason());
+            value["baseline_oid"] = json!(gate.current_scope.baseline_oid());
+            value["matching_paths"] = json!(gate.current_scope.matching_paths());
+            value["matching_path_count"] = json!(gate.current_scope.matching_path_count());
+            value["matching_paths_truncated"] =
+                json!(gate.current_scope.matching_paths_truncated());
+            value["matching_paths_digest"] = json!(gate.current_scope.matching_paths_digest());
+            value["scope_fingerprint"] = json!(gate.current_scope.scope_fingerprint());
+            value["gate_signature"] = json!(gate.current_scope.gate_signature());
+            value["evidence_status"] = json!(
+                gate.evidence
+                    .as_ref()
+                    .map(|evidence| evidence.status.as_str())
+            );
+            value["source_plan_id"] = json!(
+                gate.evidence
+                    .as_ref()
+                    .and_then(|evidence| evidence.source_plan_id.as_deref())
+            );
+            value["source_tool_receipt_id"] = json!(
+                gate.evidence
+                    .as_ref()
+                    .and_then(|evidence| evidence.source_tool_receipt_id.as_deref())
+            );
+        }
+        Some(value)
     }
 }
 
 struct GateReport {
     plan_id: String,
     plan_state: &'static str,
+    plan_baseline: Option<PlanBaseline>,
     current_worktree_fingerprint: Option<String>,
     current_worktree_fingerprint_error: Option<String>,
     gates: Vec<GateEvaluation>,
@@ -412,6 +561,7 @@ impl GateReport {
             "gates_ok": gates_ok,
             "plan_id": self.plan_id,
             "plan_state": self.plan_state,
+            "plan_baseline": self.plan_baseline,
             "overall": if gates_ok { "passed" } else { "blocked" },
             "current_worktree_fingerprint": self.current_worktree_fingerprint,
             "current_worktree_fingerprint_error": self.current_worktree_fingerprint_error,
@@ -476,7 +626,7 @@ impl RequiredGateFailures {
         }
 
         match gate.outcome() {
-            GateOutcome::Passed => {}
+            GateOutcome::Passed | GateOutcome::Reused | GateOutcome::NotApplicable => {}
             GateOutcome::Missing => self.missing.push(gate.id().to_string()),
             GateOutcome::Failed | GateOutcome::InvalidOutput => {
                 self.failed.push(gate.id().to_string());
@@ -597,94 +747,6 @@ fn gate_report_with_cancellation(
     )
 }
 
-#[derive(Default)]
-struct WorkGateDependencies {
-    check_tools: BTreeSet<String>,
-    review_gate_ids: BTreeSet<String>,
-    evidence_targets: BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
-    resolution_errors: BTreeMap<String, String>,
-}
-
-struct GateEvaluationInputs<'a> {
-    repository: Option<&'a RepositoryCatalog>,
-    receipt_index: &'a WorkGateReceiptIndex,
-    resolution_errors: &'a BTreeMap<String, String>,
-}
-
-fn collect_work_gate_dependencies(
-    ctx: &RepoContext,
-    work_gates: &[WorkGate],
-    repository: Option<&RepositoryCatalog>,
-    repository_error: Option<&str>,
-    collection: GateCollection<'_>,
-) -> Result<WorkGateDependencies> {
-    let mut dependencies = WorkGateDependencies::default();
-    for gate in work_gates {
-        collection.ensure_active()?;
-        match gate {
-            WorkGate::Check(gate) => match validate_check_tool(ctx, &gate.tool, "Work gate") {
-                Ok(()) => {
-                    dependencies.check_tools.insert(gate.tool.clone());
-                }
-                Err(error) => {
-                    dependencies
-                        .resolution_errors
-                        .insert(gate.id.clone(), format!("{error:#}"));
-                }
-            },
-            WorkGate::Evidence(gate) => {
-                if let Some(error) = repository_error {
-                    dependencies
-                        .resolution_errors
-                        .insert(gate.id.clone(), error.to_owned());
-                    continue;
-                }
-                let catalog = repository.expect("evidence gates initialize the repository catalog");
-                match resolve_evidence_targets(catalog, &gate.selector) {
-                    Ok(targets) => {
-                        dependencies
-                            .evidence_targets
-                            .insert(gate.id.clone(), targets);
-                    }
-                    Err(error) => {
-                        // A renamed target or profile is a broken gate, not a
-                        // reason for read-only status inspection to disappear.
-                        // Execution paths still reject the selector before
-                        // running any target.
-                        dependencies
-                            .resolution_errors
-                            .insert(gate.id.clone(), format!("{error:#}"));
-                    }
-                }
-            }
-            WorkGate::CodexReview(gate) => {
-                dependencies.review_gate_ids.insert(gate.id.clone());
-            }
-            WorkGate::Unsupported(_) => {}
-        }
-    }
-    Ok(dependencies)
-}
-
-fn repository_for_gate_status(
-    ctx: &RepoContext,
-    work_gates: &[WorkGate],
-) -> (Option<RepositoryCatalog>, Option<String>) {
-    if !work_gates
-        .iter()
-        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
-    {
-        return (None, None);
-    }
-    match RepositoryCatalog::from_context(ctx) {
-        Ok(catalog) => (Some(catalog), None),
-        Err(error) => (
-            None,
-            Some(format!("repository catalog is invalid: {error:#}")),
-        ),
-    }
-}
-
 fn evaluate_gate_report(
     ctx: &RepoContext,
     plan_id: &str,
@@ -694,62 +756,102 @@ fn evaluate_gate_report(
 ) -> Result<GateReport> {
     collection.ensure_active()?;
     let work_gates = ctx.work_gates();
-    let (repository, repository_error) = repository_for_gate_status(ctx, &work_gates);
-    let dependencies = collect_work_gate_dependencies(
-        ctx,
-        &work_gates,
-        repository.as_ref(),
-        repository_error.as_deref(),
-        collection,
-    )?;
+    let mut check_tools = BTreeSet::new();
+    let mut review_gate_ids = BTreeSet::new();
+    let mut evidence_targets = BTreeMap::new();
+    let repository = repository_for_evidence_gates(ctx, &work_gates).ok();
+    for gate in &work_gates {
+        collection.ensure_active()?;
+        match gate {
+            WorkGate::Check(gate) => {
+                if validate_check_tool(ctx, &gate.tool, "Work gate").is_ok() {
+                    check_tools.insert(gate.tool.clone());
+                }
+            }
+            WorkGate::CodexReview(gate) => {
+                review_gate_ids.insert(gate.id.clone());
+            }
+            WorkGate::Evidence(gate) => {
+                if let Some(repository) = &repository
+                    && let Ok(targets) = resolve_evidence_targets(repository, &gate.selector)
+                {
+                    evidence_targets.insert(gate.id.clone(), targets);
+                }
+            }
+            WorkGate::Unsupported(_) => {}
+        }
+    }
     collection.ensure_active()?;
     let receipt_index = match collection {
         GateCollection::Blocking => work_gate_receipt_index(
             ctx,
             plan_id,
-            &dependencies.check_tools,
-            &dependencies.review_gate_ids,
-            &dependencies.evidence_targets,
+            &check_tools,
+            &review_gate_ids,
+            &evidence_targets,
         )?,
         GateCollection::Cancellable(cancelled) => work_gate_receipt_index_with_cancellation(
             ctx,
             plan_id,
-            &dependencies.check_tools,
-            &dependencies.review_gate_ids,
-            &dependencies.evidence_targets,
+            &check_tools,
+            &review_gate_ids,
+            &evidence_targets,
             cancelled,
         )?,
     };
     collection.ensure_active()?;
 
     evaluate_gate_report_from_index(
-        plan_id,
-        plan_state,
+        ctx,
+        GateReportPlanInput {
+            plan_id,
+            plan_state,
+            prepared_scope: None,
+        },
         current_fingerprint,
         work_gates,
-        GateEvaluationInputs {
-            repository: repository.as_ref(),
-            receipt_index: &receipt_index,
-            resolution_errors: &dependencies.resolution_errors,
-        },
+        &receipt_index,
         collection,
     )
 }
 
 fn evaluate_gate_report_from_index(
-    plan_id: &str,
-    plan_state: &'static str,
+    ctx: &RepoContext,
+    plan: GateReportPlanInput<'_>,
     current_fingerprint: crate::state::CurrentWorktreeFingerprint,
     work_gates: Vec<WorkGate>,
-    inputs: GateEvaluationInputs<'_>,
+    receipt_index: &WorkGateReceiptIndex,
     collection: GateCollection<'_>,
 ) -> Result<GateReport> {
+    let GateReportPlanInput {
+        plan_id,
+        plan_state,
+        prepared_scope,
+    } = plan;
     let mut gates = Vec::new();
     let mut required_failures = RequiredGateFailures::default();
+    let plan_scope = if let Some(plan_scope) = prepared_scope {
+        plan_scope
+    } else {
+        match collection {
+            GateCollection::Blocking => PlanGateContext::load(ctx, plan_id)?,
+            GateCollection::Cancellable(cancelled) => {
+                PlanGateContext::load_with_cancellation(ctx, plan_id, cancelled)?
+            }
+        }
+    };
+    plan_scope.seed_legacy_fingerprint(current_fingerprint.clone());
 
     for gate in work_gates {
         collection.ensure_active()?;
-        let status = evaluate_gate(&gate, &current_fingerprint, &inputs, collection)?;
+        let status = evaluate_gate(
+            ctx,
+            &plan_scope,
+            &gate,
+            &current_fingerprint,
+            receipt_index,
+            collection,
+        )?;
         collection.ensure_active()?;
         required_failures.observe(&status);
         gates.push(status);
@@ -759,6 +861,7 @@ fn evaluate_gate_report_from_index(
     Ok(GateReport {
         plan_id: plan_id.to_string(),
         plan_state,
+        plan_baseline: plan_scope.baseline().cloned(),
         current_worktree_fingerprint: current_fingerprint.fingerprint,
         current_worktree_fingerprint_error: current_fingerprint.error,
         gates,
@@ -766,10 +869,125 @@ fn evaluate_gate_report_from_index(
     })
 }
 
-mod resolution;
-pub(super) use resolution::open_plan_snapshots_with_cancellation;
-use resolution::*;
+struct GateReportPlanInput<'a> {
+    plan_id: &'a str,
+    plan_state: &'static str,
+    prepared_scope: Option<PlanGateContext>,
+}
+
+pub(super) fn open_plan_snapshots_with_cancellation(
+    ctx: &RepoContext,
+    plan_ids: &[String],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, Value>> {
+    ensure_gate_collection_active(cancelled)?;
+    if plan_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
+    let work_gates = ctx.work_gates();
+    let mut check_tools = BTreeSet::new();
+    let mut review_gate_ids = BTreeSet::new();
+    let mut evidence_targets = BTreeMap::new();
+    let repository = repository_for_evidence_gates(ctx, &work_gates).ok();
+    for gate in &work_gates {
+        ensure_gate_collection_active(cancelled)?;
+        match gate {
+            WorkGate::Check(gate) => {
+                if validate_check_tool(ctx, &gate.tool, "Work gate").is_ok() {
+                    check_tools.insert(gate.tool.clone());
+                }
+            }
+            WorkGate::CodexReview(gate) => {
+                review_gate_ids.insert(gate.id.clone());
+            }
+            WorkGate::Evidence(gate) => {
+                if let Some(repository) = &repository
+                    && let Ok(targets) = resolve_evidence_targets(repository, &gate.selector)
+                {
+                    evidence_targets.insert(gate.id.clone(), targets);
+                }
+            }
+            WorkGate::Unsupported(_) => {}
+        }
+    }
+    let plan_ids_set = plan_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let indexes = work_gate_receipt_indexes_with_cancellation(
+        ctx,
+        &plan_ids_set,
+        &check_tools,
+        &review_gate_ids,
+        &evidence_targets,
+        cancelled,
+    )?;
+    let baselines = plan_baselines_with_cancellation(ctx, &plan_ids_set, cancelled)?;
+    let mut snapshots = BTreeMap::new();
+    let mut plan_changes =
+        BTreeMap::<String, Option<std::result::Result<Rc<PlanChangeSnapshot>, String>>>::new();
+    for plan_id in plan_ids {
+        ensure_gate_collection_active(cancelled)?;
+        let index = indexes
+            .get(plan_id)
+            .expect("every requested open plan has a receipt index");
+        let baseline = baselines.get(plan_id).cloned().flatten();
+        let cache_key = baseline.as_ref().and_then(plan_change_cache_key);
+        let prepared = if let Some(cache_key) = cache_key {
+            if let Some(prepared) = plan_changes.get(&cache_key) {
+                prepared.clone()
+            } else {
+                let prepared = PlanGateContext::prepare_plan_change_with_cancellation(
+                    ctx, &baseline, cancelled,
+                );
+                plan_changes.insert(cache_key, prepared.clone());
+                prepared
+            }
+        } else {
+            None
+        };
+        let plan_scope = PlanGateContext::from_prepared(baseline, prepared);
+        let report = evaluate_gate_report_from_index(
+            ctx,
+            GateReportPlanInput {
+                plan_id,
+                plan_state: "open",
+                prepared_scope: Some(plan_scope),
+            },
+            current_fingerprint.clone(),
+            work_gates.clone(),
+            index,
+            GateCollection::Cancellable(cancelled),
+        )?;
+        snapshots.insert(plan_id.clone(), report.to_value());
+    }
+    Ok(snapshots)
+}
+
+fn plan_change_cache_key(baseline: &PlanBaseline) -> Option<String> {
+    baseline
+        .commit_oid
+        .as_deref()
+        .map(|oid| format!("commit:{oid}"))
+        .or_else(|| {
+            baseline
+                .empty_tree_oid
+                .as_deref()
+                .map(|oid| format!("empty-tree:{oid}"))
+        })
+}
+
+include!("gates/tail.rs");
 
 mod target_evidence;
-#[cfg(test)]
-mod tests;
+
+fn repository_for_evidence_gates(
+    ctx: &RepoContext,
+    work_gates: &[WorkGate],
+) -> Result<RepositoryCatalog> {
+    if !work_gates
+        .iter()
+        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
+    {
+        bail!("no evidence gates are configured");
+    }
+    RepositoryCatalog::from_context(ctx)
+}

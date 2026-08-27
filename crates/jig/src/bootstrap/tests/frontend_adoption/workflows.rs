@@ -1,5 +1,80 @@
 use super::*;
 
+#[test]
+fn generated_frontend_ignores_never_mask_nested_owned_scopes() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("nested-frontend-scopes");
+    run_init(InitOpts {
+        path: repo.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("nested-frontend-scopes".into()),
+            sqlx_enabled: Some(false),
+            frontend_apps: vec![
+                FrontendApp {
+                    name: "suite".into(),
+                    dir: "apps/suite".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                },
+                FrontendApp {
+                    name: "admin".into(),
+                    dir: "apps/suite/admin".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "admin".into(),
+                },
+                FrontendApp {
+                    name: "other".into(),
+                    dir: "apps/other".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                },
+            ],
+            frontend_workspace_roots: vec!["apps/suite/shared".into()],
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let config: toml::Value =
+        toml::from_str(&fs::read_to_string(repo.join(".jig.toml")).unwrap()).unwrap();
+    let gates = config["work"]["gates"].as_array().unwrap();
+    let ignores = |id: &str| {
+        gates
+            .iter()
+            .find(|gate| gate["id"].as_str() == Some(id))
+            .unwrap()
+            .get("paths_ignore")
+            .and_then(toml::Value::as_array)
+            .map(|paths| {
+                paths
+                    .iter()
+                    .map(|path| path.as_str().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    assert_eq!(ignores("typescript-suite-lint"), ["apps/other/**"]);
+    assert_eq!(ignores("typescript-admin-lint"), ["apps/other/**"]);
+    assert!(
+        !ignores("typescript-other-lint").contains(&"apps/suite/**"),
+        "an ignored parent app would mask apps/suite/shared/**"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn generated_npm_run_script_selects_exact_app_without_installing() {
@@ -44,6 +119,22 @@ fn generated_npm_run_script_selects_exact_app_without_installing() {
         },
     })
     .unwrap();
+
+    let jig_config = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert_eq!(
+        jig_config
+            .matches("paths_ignore = [\"standalone/**\", ]")
+            .count(),
+        4,
+        "{jig_config}"
+    );
+    assert_eq!(
+        jig_config
+            .matches("paths_ignore = [\"apps/web/**\", ]")
+            .count(),
+        4,
+        "{jig_config}"
+    );
 
     fs::create_dir_all(repo.join("apps/web")).unwrap();
     fs::create_dir_all(repo.join("standalone")).unwrap();
@@ -336,7 +427,7 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
 
     let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
     assert!(policy.contains("JIG_DEFAULT_BRANCH:"));
-    assert!(policy.contains(r#""origin/$JIG_DEFAULT_BRANCH""#));
+    assert!(policy.contains(r#"run: scripts/check-rust-file-loc.sh "$JIG_DEFAULT_BRANCH""#));
     assert!(!policy.contains(&format!("origin/{default_branch}")));
 }
 

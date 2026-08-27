@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -40,17 +39,22 @@ pub(super) fn check_with_control(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
     let runner = runner::resolve(ctx, schema_check_target)?;
-    let configured_schema_docs_dir = runner
+    let configured_schema_docs_dir = ctx.schema_docs_dir();
+    if let Some(runner_schema_docs_dir) = runner
         .environment
         .and_then(|environment| environment.get("SCHEMA_DOCS_DIR"))
-        .cloned()
-        .or_else(|| env::var("SCHEMA_DOCS_DIR").ok())
-        .unwrap_or_else(|| "docs/schema".into());
+        && runner_schema_docs_dir != configured_schema_docs_dir
+    {
+        bail!(
+            "schema-dump runner SCHEMA_DOCS_DIR must match committed schema_docs_dir '{}'",
+            configured_schema_docs_dir
+        );
+    }
     let schema_docs_dir =
-        normalize_repo_relative_path(Path::new(&configured_schema_docs_dir), "SCHEMA_DOCS_DIR")?;
+        normalize_repo_relative_path(Path::new(configured_schema_docs_dir), "schema_docs_dir")?;
     let schema_docs_dir = schema_docs_dir
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("SCHEMA_DOCS_DIR must be valid UTF-8"))?;
+        .ok_or_else(|| anyhow::anyhow!("schema_docs_dir must be valid UTF-8"))?;
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| anyhow::anyhow!("schema check timeout is too large"))?;

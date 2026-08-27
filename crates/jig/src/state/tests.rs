@@ -591,3 +591,5 @@ use receipt_cases::receipt_record;
 mod session_and_plans;
 
 mod archive_validation;
+
+include!("tests_parts/part_01.rs");

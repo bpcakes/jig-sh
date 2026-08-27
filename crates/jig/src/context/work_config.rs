@@ -1,6 +1,8 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use anyhow::{Result, bail};
+use globset::GlobBuilder;
 use jig_contract::{ProfileId, TargetId};
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +43,12 @@ struct WorkGateConfig {
     conclusion: Option<String>,
     #[serde(default = "default_required")]
     required: bool,
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    #[serde(default)]
+    paths_ignore: Option<Vec<String>>,
+    #[serde(default)]
+    reuse: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,6 +64,9 @@ pub(crate) struct WorkCheckGate {
     pub(crate) id: String,
     pub(crate) tool: String,
     pub(crate) required: bool,
+    pub(crate) paths: Option<Vec<String>>,
+    pub(crate) paths_ignore: Vec<String>,
+    pub(crate) reuse: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,6 +149,9 @@ impl WorkConfig {
                 profile: None,
                 conclusion: None,
                 required: true,
+                paths: None,
+                paths_ignore: None,
+                reuse: None,
             });
         }
 
@@ -180,10 +194,11 @@ impl WorkConfig {
                         || gate.conclusion.is_some()
                     {
                         bail!(
-                            "work gate '{}' with kind 'check' only supports tool and required",
+                            "work gate '{}' with kind 'check' only supports tool, required, paths, paths_ignore, and reuse",
                             gate.id
                         );
                     }
+                    validate_check_gate_paths(gate)?;
                 }
                 "evidence" => {
                     if gate.target.is_some() == gate.profile.is_some() {
@@ -198,6 +213,9 @@ impl WorkConfig {
                         || gate.severity.is_some()
                         || gate.scope.is_some()
                         || gate.model.is_some()
+                        || gate.paths.is_some()
+                        || gate.paths_ignore.is_some()
+                        || gate.reuse.is_some()
                     {
                         bail!(
                             "work gate '{}' with kind 'evidence' only supports target or profile, conclusion, and required",
@@ -227,6 +245,9 @@ impl WorkConfig {
                         || gate.target.is_some()
                         || gate.profile.is_some()
                         || gate.conclusion.is_some()
+                        || gate.paths.is_some()
+                        || gate.paths_ignore.is_some()
+                        || gate.reuse.is_some()
                     {
                         bail!(
                             "work gate '{}' with kind 'codex_review' uses skill and review fields, not tool, target, profile, or conclusion",
@@ -291,6 +312,22 @@ impl WorkConfig {
 
         Ok(())
     }
+
+    pub(crate) fn validate_contract_version(&self, contract_version: u32) -> Result<()> {
+        if contract_version >= 5 {
+            return Ok(());
+        }
+        for gate in &self.gates {
+            if gate.paths.is_some() || gate.paths_ignore.is_some() || gate.reuse.is_some() {
+                bail!(
+                    "work gate '{}' uses paths, paths_ignore, or reuse, which require contract version 5 or newer; repository contract is {}",
+                    gate.id,
+                    contract_version
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 impl WorkGate {
@@ -305,7 +342,12 @@ impl WorkGate {
 
     pub(crate) fn same_definition(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Check(left), Self::Check(right)) => left.tool == right.tool,
+            (Self::Check(left), Self::Check(right)) => {
+                left.tool == right.tool
+                    && left.paths == right.paths
+                    && left.paths_ignore == right.paths_ignore
+                    && left.reuse == right.reuse
+            }
             (Self::Evidence(left), Self::Evidence(right)) => {
                 left.selector == right.selector && left.conclusion == right.conclusion
             }
@@ -346,6 +388,9 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
         profile,
         conclusion,
         required,
+        paths,
+        paths_ignore,
+        reuse,
     } = gate;
 
     match kind.as_str() {
@@ -353,7 +398,14 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
             let Some(tool) = tool else {
                 return unsupported_work_gate(id, kind, required);
             };
-            WorkGate::Check(WorkCheckGate { id, tool, required })
+            WorkGate::Check(WorkCheckGate {
+                id,
+                tool,
+                required,
+                paths,
+                paths_ignore: paths_ignore.unwrap_or_default(),
+                reuse: reuse.unwrap_or(false),
+            })
         }
         "evidence" => {
             let selector = match (target, profile) {
@@ -392,6 +444,60 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
         }
         _ => unsupported_work_gate(id, kind, required),
     }
+}
+
+fn validate_check_gate_paths(gate: &WorkGateConfig) -> Result<()> {
+    let Some(paths) = gate.paths.as_deref() else {
+        if gate.paths_ignore.is_some() {
+            bail!(
+                "work gate '{}' configures paths_ignore without paths",
+                gate.id
+            );
+        }
+        return Ok(());
+    };
+    if paths.is_empty() {
+        bail!(
+            "work gate '{}' paths must contain at least one repository-relative glob",
+            gate.id
+        );
+    }
+    for pattern in paths {
+        validate_gate_path_pattern(&gate.id, "paths", pattern)?;
+    }
+    for pattern in gate.paths_ignore.as_deref().unwrap_or_default() {
+        validate_gate_path_pattern(&gate.id, "paths_ignore", pattern)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_gate_path_pattern(gate_id: &str, field: &str, pattern: &str) -> Result<()> {
+    let has_unsupported_double_star = pattern
+        .split('/')
+        .any(|component| component.contains("**") && component != "**");
+    if pattern.trim().is_empty()
+        || pattern != pattern.trim()
+        || Path::new(pattern).is_absolute()
+        || pattern.contains(['\0', '\n', '\r', '\\', '{', '}'])
+        || has_unsupported_double_star
+        || pattern
+            .split('/')
+            .any(|component| matches!(component, "." | ".." | ".agent"))
+    {
+        bail!(
+            "work gate '{gate_id}' has unsafe {field} pattern '{pattern}'; use a nonblank repository-relative glob outside .agent, without brace expansion, and use ** only as a complete path component"
+        );
+    }
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .backslash_escape(false)
+        .build()
+        .map(|_| ())
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "work gate '{gate_id}' has invalid {field} pattern '{pattern}': {error}"
+            )
+        })
 }
 
 const fn unsupported_work_gate(id: String, kind: String, required: bool) -> WorkGate {

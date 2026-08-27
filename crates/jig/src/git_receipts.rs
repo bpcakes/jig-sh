@@ -1,36 +1,306 @@
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write, copy};
+use std::io::{Read, copy};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::NamedTempFile;
 
 use crate::bootstrap::scrub_known_repository_git_environment;
 
 #[cfg(unix)]
-use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use jig_owned_process::{
-    ProcessOutputLimits, format_exit_status, require_success, run_checked_output_with_context,
-    run_owned_process_tree_with_output_limits,
+    OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError, ProcessOutputLimits,
+    ProcessOutputOverflowPolicy, format_exit_status, require_success,
+    run_checked_output_with_context, run_owned_process_tree_with_output_limits,
+    run_owned_process_tree_with_output_policy_and_observer,
 };
+
+mod process;
+mod scope;
+mod worktree;
+
+use process::*;
+use scope::*;
+use worktree::*;
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
-const FINGERPRINT_HASH_WRITE_CHUNK: usize = 64 * 1024;
 const MAX_RECEIPT_CHANGED_PATHS: usize = 100;
+const MAX_CHANGED_PATH_GIT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CHANGED_PATH_DISCOVERY_ENTRIES: usize = 250_000;
+const MAX_WORKTREE_STATUS_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_WORKTREE_DIFF_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_GATE_SCOPE_DIFF_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_WORKTREE_STATUS_ENTRIES: usize = 250_000;
+const MAX_GIT_LITERAL_PATHS_PER_DIFF: usize = 512;
+const MAX_GIT_LITERAL_PATHSPEC_BYTES_PER_DIFF: usize = 64 * 1024;
 const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
-/// Git pathspec authority shared by source fingerprints and affected planning.
-/// `.agent/**` is runtime and harness metadata; the canonical contract model is
-/// represented separately by `RepoContext::contract_digest`.
-const SOURCE_IDENTITY_PATHSPECS: &[&str] = &[".", ":(exclude).agent/**"];
+const GATE_SCOPE_FINGERPRINT_DOMAIN: &[u8] = b"jig-gate-scope-v1\0";
+const GATE_SCOPE_INPUT_FINGERPRINT_DOMAIN: &[u8] = b"jig-gate-scope-input-v2\0";
+const WORKTREE_FINGERPRINT_DOMAIN: &[u8] = b"jig-worktree-fingerprint-v4\0";
+const MAX_GIT_ERROR_PREVIEW_BYTES: u64 = 64 * 1024;
+const GLOBAL_GATE_AUTHORITY_PATHS: &[&str] = &[".jig.toml", ".agent/jig-contract.json"];
+
+#[cfg(test)]
+thread_local! {
+    static GATE_SCOPE_INPUT_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static PLAN_CHANGE_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static CHANGED_PATH_GIT_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static WORKTREE_PROOF_GIT_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static WORKTREE_STATUS_ENTRY_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    static WORKTREE_FINGERPRINT_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GateApplicability {
+    Applicable,
+    NotApplicable,
+}
+
+impl GateApplicability {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Applicable => "applicable",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GateScopeFacts {
+    pub(crate) baseline_oid: String,
+    pub(crate) applicability: GateApplicability,
+    pub(crate) reason: String,
+    pub(crate) changed_paths: Vec<String>,
+    pub(crate) changed_path_count: usize,
+    pub(crate) changed_paths_truncated: bool,
+    pub(crate) changed_paths_digest: String,
+    pub(crate) matching_paths: Vec<String>,
+    pub(crate) matching_path_count: usize,
+    pub(crate) matching_paths_truncated: bool,
+    pub(crate) matching_paths_digest: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GateScopeSnapshot {
+    pub(crate) facts: GateScopeFacts,
+    pub(crate) scope_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct GateScopePolicyKey {
+    paths: Option<Vec<String>>,
+    paths_ignore: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct GateScopeInputSnapshot {
+    facts: GateScopeFacts,
+    input_fingerprint: String,
+}
+
+impl GateScopeInputSnapshot {
+    fn for_gate_signature(self, gate_signature: &str) -> GateScopeSnapshot {
+        let scope_fingerprint = gate_scope_fingerprint(
+            &self.facts.baseline_oid,
+            gate_signature,
+            &self.input_fingerprint,
+        );
+        GateScopeSnapshot {
+            facts: self.facts,
+            scope_fingerprint,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PlanChangeSnapshot {
+    baseline_oid: String,
+    changed_paths: Vec<String>,
+    untracked_paths: Vec<String>,
+    scope_cache:
+        RefCell<BTreeMap<GateScopePolicyKey, std::result::Result<GateScopeInputSnapshot, String>>>,
+}
+
+#[cfg(test)]
+pub(crate) fn gate_scope_snapshot(
+    root: &Path,
+    baseline_oid: &str,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+) -> Result<GateScopeSnapshot> {
+    let plan = plan_change_snapshot(root, baseline_oid)?;
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        &plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        GitReceiptCollection::Blocking,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn gate_scope_snapshot_with_cancellation(
+    root: &Path,
+    baseline_oid: &str,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<GateScopeSnapshot> {
+    let collection = GitReceiptCollection::Cancellable(cancelled);
+    let plan = plan_change_snapshot_inner(root, baseline_oid, collection)?;
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        &plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        collection,
+    )
+}
+
+pub(crate) fn plan_change_snapshot(root: &Path, baseline_oid: &str) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_inner(root, baseline_oid, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn plan_change_snapshot_with_cancellation(
+    root: &Path,
+    baseline_oid: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_inner(
+        root,
+        baseline_oid,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn plan_change_snapshot_from_empty_tree(
+    root: &Path,
+    expected_oid: &str,
+) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_from_empty_tree_inner(root, expected_oid, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn plan_change_snapshot_from_empty_tree_with_cancellation(
+    root: &Path,
+    expected_oid: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PlanChangeSnapshot> {
+    plan_change_snapshot_from_empty_tree_inner(
+        root,
+        expected_oid,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn gate_scope_snapshot_from_plan_change(
+    root: &Path,
+    plan: &PlanChangeSnapshot,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+) -> Result<GateScopeSnapshot> {
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        GitReceiptCollection::Blocking,
+    )
+}
+
+pub(crate) fn gate_scope_snapshot_from_plan_change_with_cancellation(
+    root: &Path,
+    plan: &PlanChangeSnapshot,
+    paths: Option<&[String]>,
+    paths_ignore: &[String],
+    gate_signature: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<GateScopeSnapshot> {
+    gate_scope_snapshot_from_plan_change_inner(
+        root,
+        plan,
+        paths,
+        paths_ignore,
+        gate_signature,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn resolve_git_commit(root: &Path, reference: &str) -> Result<String> {
+    resolve_git_commit_inner(root, reference, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn resolve_empty_tree_for_unborn_repository(root: &Path) -> Result<Option<String>> {
+    if git_output(
+        root,
+        &["symbolic-ref", "-q", "HEAD"],
+        "git symbolic-ref HEAD",
+    )
+    .is_err()
+    {
+        return Ok(None);
+    }
+    Ok(Some(resolve_empty_tree_oid_inner(
+        root,
+        GitReceiptCollection::Blocking,
+    )?))
+}
+
+fn resolve_empty_tree_oid_inner(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<String> {
+    let output = collection.git_output(root, &["mktree"], "git mktree empty baseline")?;
+    parse_git_object_oid(&output.stdout, "empty tree")
+}
+
+fn parse_git_object_oid(stdout: &[u8], label: &str) -> Result<String> {
+    let oid = std::str::from_utf8(stdout)
+        .with_context(|| format!("Git {label} object id was not UTF-8"))?
+        .trim();
+    if oid.is_empty() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("Git returned an invalid {label} object id");
+    }
+    Ok(oid.to_ascii_lowercase())
+}
+
+fn resolve_git_commit_inner(
+    root: &Path,
+    reference: &str,
+    collection: GitReceiptCollection<'_>,
+) -> Result<String> {
+    let reference = reference.trim();
+    if reference.is_empty() || reference.starts_with('-') || reference.contains(['\0', '\n', '\r'])
+    {
+        bail!("Unsupported Git baseline ref '{reference}'");
+    }
+    let commit_ref = format!("{reference}^{{commit}}");
+    let output = collection.git_output(
+        root,
+        &["rev-parse", "--verify", "--end-of-options", &commit_ref],
+        "git rev-parse baseline",
+    )?;
+    parse_git_object_oid(&output.stdout, "baseline")
+}
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct DiffStat {
@@ -113,8 +383,8 @@ fn collect_git_receipt_metadata_with_options(
         Err(error) => (DiffStat::default(), Some(format!("{error:#}"))),
     };
     let (worktree_fingerprint, worktree_fingerprint_error) = if collect_worktree_fingerprint {
-        match repo_worktree_fingerprint_inner(root, collection, 0) {
-            Ok(snapshot) => (Some(snapshot.worktree_fingerprint), None),
+        match repo_worktree_fingerprint_inner(root, collection) {
+            Ok(fingerprint) => (Some(fingerprint), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         }
     } else {
@@ -144,20 +414,23 @@ fn repo_changed_paths_inner(
     collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<String>> {
     collection.ensure_active()?;
-    let output = collection.git_output(
+    let output = collection.git_changed_path_stdout(
         root,
         &[
+            "-c",
+            "diff.ignoreSubmodules=none",
             "status",
             "--porcelain=v1",
             "-z",
             "--untracked-files=all",
+            "--ignore-submodules=none",
             "--",
             ".",
             ":(exclude).agent/**",
         ],
         "git status --porcelain -z",
     )?;
-    parse_porcelain_status_z(&output.stdout).map(|entries| {
+    parse_porcelain_status_z(&output).map(|entries| {
         entries
             .into_iter()
             .flat_map(|entry| {
@@ -172,16 +445,23 @@ fn repo_changed_paths_inner(
 }
 
 fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut args = vec![
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--",
-    ];
-    args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
-    let output = git_output(root, &args, "git status --porcelain -z")?;
-    parse_porcelain_status_z(&output.stdout).map(|entries| {
+    let output = GitReceiptCollection::Blocking.git_changed_path_stdout(
+        root,
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
+        "git status --porcelain -z for affected selection",
+    )?;
+    parse_porcelain_status_z(&output).map(|entries| {
         entries
             .into_iter()
             .flat_map(|entry| {
@@ -193,84 +473,6 @@ fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBu
             })
             .collect()
     })
-}
-
-fn affected_ignored_dotenv_paths(root: &Path, submodule_depth: usize) -> Result<Vec<PathBuf>> {
-    if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
-        bail!("affected dotenv inputs exceed the supported submodule nesting depth");
-    }
-    let collection = GitReceiptCollection::Blocking;
-    let mut paths = ignored_dotenv_paths(root, collection)?;
-    for submodule in initialized_submodule_paths(root, collection)? {
-        for nested in affected_ignored_dotenv_paths(&root.join(&submodule), submodule_depth + 1)? {
-            paths.push(submodule.join(nested));
-        }
-    }
-    Ok(paths)
-}
-
-/// Returns presence-only observations for ignored dotenv files. Git has no
-/// committed value to diff for these paths, so they are not changed paths.
-/// The affected planner uses them only when an action explicitly declares the
-/// path as an input; they never become unclaimed changes or component-root
-/// fallbacks.
-pub(crate) fn repo_observed_ignored_dotenv_paths(root: &Path) -> Result<Vec<String>> {
-    let mut paths = affected_ignored_dotenv_paths(root, 0)?
-        .into_iter()
-        .map(strict_git_path)
-        .collect::<Result<Vec<_>>>()?;
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
-}
-
-/// Returns the deterministic union of paths changed from the merge base of an
-/// explicit Git revision to `HEAD` and paths currently changed in the
-/// worktree. Runtime-owned agent state and cache data are excluded because
-/// planning and execution mutate them. Contract authority is tracked by the
-/// separately canonicalized repository configuration digest.
-pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
-    let base_commit = resolve_commit(root, base, "affected Git base")?;
-    let head_commit = resolve_commit(root, "HEAD", "Git HEAD for affected selection")?;
-    let range = format!("{base_commit}...{head_commit}");
-    let mut args = vec!["diff", "--name-only", "-z", "--no-renames", &range, "--"];
-    args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
-    let committed = git_output(root, &args, "git diff for affected selection")?;
-
-    let mut paths = parse_name_only_z(&committed.stdout)?;
-    paths.extend(repo_affected_worktree_changed_path_buffers(root)?);
-    let mut normalized = paths
-        .into_iter()
-        .map(strict_git_path)
-        .collect::<Result<Vec<_>>>()?;
-    normalized.sort();
-    normalized.dedup();
-    Ok(normalized)
-}
-
-fn resolve_commit(root: &Path, revision: &str, label: &str) -> Result<String> {
-    let peeled = revision.strip_suffix("^{commit}").unwrap_or(revision);
-    let resolved_revision = format!("{peeled}^{{commit}}");
-    let output = git_output(
-        root,
-        &[
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &resolved_revision,
-        ],
-        label,
-    )
-    .with_context(|| format!("Invalid {label} {revision:?}"))?;
-    let object_id = String::from_utf8(output.stdout)
-        .with_context(|| format!("{label} resolved to a non-UTF-8 object id"))?;
-    let object_id = object_id.trim();
-    if !matches!(object_id.len(), 40 | 64)
-        || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        bail!("{label} resolved to invalid object id {object_id:?}");
-    }
-    Ok(object_id.to_owned())
 }
 
 fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
@@ -299,21 +501,221 @@ fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
 }
 
 fn strict_git_path(path: PathBuf) -> Result<String> {
-    let bytes = path.as_os_str().as_encoded_bytes();
-    let path = std::str::from_utf8(bytes)
-        .context("Affected selection requires UTF-8 Git paths")?
-        .to_owned();
-    Ok(path)
+    std::str::from_utf8(path.as_os_str().as_encoded_bytes())
+        .context("Affected selection requires UTF-8 Git paths")
+        .map(str::to_owned)
+}
+
+/// Returns the deterministic union of paths changed from the merge base of an
+/// explicit Git revision to `HEAD` and paths currently changed in the worktree.
+pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
+    let base_commit = resolve_git_commit(root, base)?;
+    let head_commit = resolve_git_commit(root, "HEAD")?;
+    let range = format!("{base_commit}...{head_commit}");
+    let committed = GitReceiptCollection::Blocking.git_changed_path_stdout(
+        root,
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--no-ext-diff",
+            "--ignore-submodules=none",
+            &range,
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
+        "git diff for affected selection",
+    )?;
+    let mut paths = parse_name_only_z(&committed)?;
+    paths.extend(repo_affected_worktree_changed_path_buffers(root)?);
+    let mut normalized = paths
+        .into_iter()
+        .map(strict_git_path)
+        .collect::<Result<Vec<_>>>()?;
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn ignored_dotenv_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = GitReceiptCollection::Blocking.git_changed_path_stdout(
+        root,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            ":(glob)**/.env",
+            ":(glob)**/.env.*",
+        ],
+        "git ls-files for ignored dotenv files",
+    )?;
+    parse_name_only_z(&output).map(|paths| {
+        paths
+            .into_iter()
+            .filter(|path| !path.as_os_str().as_encoded_bytes().ends_with(b"/"))
+            .collect()
+    })
+}
+
+fn initialized_submodule_paths_for_affected(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.join(".gitmodules").is_file() {
+        return Ok(Vec::new());
+    }
+    let output = git_output(
+        root,
+        &[
+            "config",
+            "-z",
+            "--file",
+            ".gitmodules",
+            "--get-regexp",
+            "^submodule\\..*\\.path$",
+        ],
+        "git config for affected submodules",
+    )?;
+    let mut paths = crate::source_projection::initialized_submodule_paths(root, &output.stdout)?;
+    paths.sort();
+    Ok(paths)
+}
+
+fn affected_ignored_dotenv_paths(root: &Path, submodule_depth: usize) -> Result<Vec<PathBuf>> {
+    if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
+        bail!("affected dotenv inputs exceed the supported submodule nesting depth");
+    }
+    let mut paths = ignored_dotenv_paths(root)?;
+    for submodule in initialized_submodule_paths_for_affected(root)? {
+        for nested in affected_ignored_dotenv_paths(&root.join(&submodule), submodule_depth + 1)? {
+            paths.push(submodule.join(nested));
+        }
+    }
+    Ok(paths)
+}
+
+pub(crate) fn repo_observed_ignored_dotenv_paths(root: &Path) -> Result<Vec<String>> {
+    let mut paths = affected_ignored_dotenv_paths(root, 0)?
+        .into_iter()
+        .map(strict_git_path)
+        .collect::<Result<Vec<_>>>()?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+pub(crate) struct RepositorySourceSnapshot {
+    pub(crate) head_commit: Option<String>,
+    pub(crate) worktree_fingerprint: String,
+}
+
+pub(crate) fn repository_source_snapshot(root: &Path) -> Result<RepositorySourceSnapshot> {
+    repository_source_snapshot_inner(root, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn repository_source_snapshot_with_cancellation(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<RepositorySourceSnapshot> {
+    repository_source_snapshot_inner(root, GitReceiptCollection::Cancellable(cancelled))
+}
+
+fn repository_source_snapshot_inner(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<RepositorySourceSnapshot> {
+    collection.ensure_active()?;
+    let head_commit = match resolve_git_commit(root, "HEAD") {
+        Ok(commit) => Some(commit),
+        Err(error) => match resolve_empty_tree_for_unborn_repository(root)? {
+            Some(_) => None,
+            None => return Err(error),
+        },
+    };
+    collection.ensure_active()?;
+    let committed_tree = if let Some(head_commit) = head_commit.as_deref() {
+        let tree = git_worktree_proof_stdout(
+            root,
+            &["ls-tree", "-z", "--full-tree", head_commit],
+            "git ls-tree HEAD for repository source identity",
+            worktree_diff_output_limit(),
+            collection,
+        )?;
+        committed_source_tree_without_agent_state(&tree, collection)?
+    } else {
+        b"unborn".to_vec()
+    };
+    collection.ensure_active()?;
+    let base = repo_worktree_fingerprint_inner(root, collection)?;
+    let mut digest = Sha256::new();
+    digest.update(b"jig-repository-source-v6\0");
+    hash_field(&mut digest, &committed_tree);
+    digest.update(base.as_bytes());
+    for path in affected_ignored_dotenv_paths(root, 0)? {
+        digest.update(path.as_os_str().as_encoded_bytes());
+        digest.update([0]);
+        let bytes = fs::read(root.join(&path)).with_context(|| {
+            format!(
+                "Failed to read ignored dotenv source input {}",
+                root.join(&path).display()
+            )
+        })?;
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    Ok(RepositorySourceSnapshot {
+        head_commit,
+        worktree_fingerprint: format!("sha256:{:x}", digest.finalize()),
+    })
+}
+
+fn committed_source_tree_without_agent_state(
+    tree: &[u8],
+    collection: GitReceiptCollection<'_>,
+) -> Result<Vec<u8>> {
+    let mut source_tree = Vec::with_capacity(tree.len());
+    for record in tree
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        collection.ensure_active()?;
+        let path_offset = record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .context("Git ls-tree record is missing its path separator")?
+            + 1;
+        let path = &record[path_offset..];
+        if path == b".agent" || path.starts_with(b".agent/") {
+            continue;
+        }
+        source_tree.extend_from_slice(record);
+        source_tree.push(0);
+    }
+    Ok(source_tree)
 }
 
 fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Result<DiffStat> {
     collection.ensure_active()?;
-    let output = collection.git_output(
+    let output = collection.git_changed_path_stdout(
         root,
-        &["diff", "--numstat", "--", ".", ":(exclude).agent/**"],
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "diff",
+            "--numstat",
+            "--ignore-submodules=none",
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
         "git diff --numstat",
     )?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&output);
     parse_diff_stat_output(&stdout)
 }
 
@@ -353,27 +755,15 @@ fn changed_paths_digest(paths: &[String]) -> String {
     format!("sha256:{:x}", digest.finalize())
 }
 
-pub(crate) struct RepositorySourceSnapshot {
-    pub(crate) head_commit: Option<String>,
-    pub(crate) worktree_fingerprint: String,
-}
-
-pub(crate) fn repository_source_snapshot(root: &Path) -> Result<RepositorySourceSnapshot> {
-    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Blocking, 0)
-}
-
 pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
-    Ok(repository_source_snapshot(root)?.worktree_fingerprint)
+    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Blocking)
 }
 
 pub(crate) fn repo_worktree_fingerprint_with_cancellation(
     root: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    Ok(
-        repo_worktree_fingerprint_inner(root, GitReceiptCollection::Cancellable(cancelled), 0)?
-            .worktree_fingerprint,
-    )
+    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Cancellable(cancelled))
 }
 
 pub(crate) fn is_git_receipt_collection_cancellation(error: &anyhow::Error) -> bool {
@@ -403,22 +793,8 @@ impl GitReceiptCollection<'_> {
         }
     }
 
-    fn git_output_unchecked(self, root: &Path, args: &[&str], label: &str) -> Result<Output> {
-        match self {
-            Self::Blocking => git_output_unchecked(root, args, label),
-            Self::Cancellable(cancelled) => {
-                git_output_unchecked_with_cancellation(root, args, label, cancelled)
-            }
-        }
-    }
-
-    fn git_hash_object(self, root: &Path, input: &[u8]) -> Result<String> {
-        match self {
-            Self::Blocking => git_hash_object(root, input),
-            Self::Cancellable(cancelled) => {
-                git_hash_object_with_cancellation(root, input, cancelled)
-            }
-        }
+    fn git_changed_path_stdout(self, root: &Path, args: &[&str], label: &str) -> Result<Vec<u8>> {
+        git_changed_path_stdout(root, args, label, self)
     }
 
     fn git_hash_file(self, root: &Path, full_path: &Path) -> Result<String> {
@@ -442,475 +818,28 @@ impl std::fmt::Display for GitReceiptCollectionCancelled {
 
 impl std::error::Error for GitReceiptCollectionCancelled {}
 
-fn repo_worktree_fingerprint_inner(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-    submodule_depth: usize,
-) -> Result<RepositorySourceSnapshot> {
-    if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
-        bail!("worktree fingerprint submodules exceed the supported nesting depth");
+pub(crate) fn parse_diff_stat_output(stdout: &str) -> Result<DiffStat> {
+    let mut diff_stat = DiffStat::default();
+    for (index, line) in stdout.lines().enumerate() {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 3 {
+            bail!("Unexpected git diff --numstat line {}: {}", index + 1, line);
+        }
+        diff_stat.files += 1;
+        diff_stat.insertions += parse_numstat_count(fields[0], index + 1, "insertions")?;
+        diff_stat.deletions += parse_numstat_count(fields[1], index + 1, "deletions")?;
     }
-    collection.ensure_active()?;
-    let committed_source = committed_source_tree_identity(root, collection)?;
-    collection.ensure_active()?;
-    let mut status_args = vec![
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--",
-    ];
-    status_args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
-    let status = collection.git_output(root, &status_args, "git status --porcelain")?;
-    collection.ensure_active()?;
-    let mut unstaged_args = vec!["diff", "--binary", "--"];
-    unstaged_args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
-    let unstaged = collection.git_output(root, &unstaged_args, "git diff --binary")?;
-    collection.ensure_active()?;
-    let mut staged_args = vec!["diff", "--cached", "--binary", "--"];
-    staged_args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
-    let staged = collection.git_output(root, &staged_args, "git diff --cached --binary")?;
-    collection.ensure_active()?;
-    let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
-    let untracked = untracked_file_contents(
-        root,
-        &status.stdout,
-        &mut remaining_inline_bytes,
-        collection,
-    )?;
-    collection.ensure_active()?;
-    let ignored_dotenv = ignored_dotenv_contents(root, &mut remaining_inline_bytes, collection)?;
-    collection.ensure_active()?;
-    let submodules = initialized_submodule_fingerprints(root, collection, submodule_depth)?;
+    Ok(diff_stat)
+}
 
-    let mut input = Vec::new();
-    input.extend_from_slice(b"committed-source-tree\0");
-    input.extend_from_slice(&committed_source.tree_identity);
-    input.extend_from_slice(b"\0status\0");
-    input.extend_from_slice(&status.stdout);
-    input.extend_from_slice(b"\0unstaged\0");
-    input.extend_from_slice(&unstaged.stdout);
-    input.extend_from_slice(b"\0staged\0");
-    input.extend_from_slice(&staged.stdout);
-    input.extend_from_slice(b"\0untracked\0");
-    input.extend_from_slice(&untracked);
-    input.extend_from_slice(b"\0ignored-dotenv\0");
-    input.extend_from_slice(&ignored_dotenv);
-    input.extend_from_slice(b"\0initialized-submodules\0");
-    input.extend_from_slice(&submodules);
-
-    collection.ensure_active()?;
-    Ok(RepositorySourceSnapshot {
-        head_commit: committed_source.head_commit,
-        worktree_fingerprint: collection.git_hash_object(root, &input)?,
+fn parse_numstat_count(field: &str, line_number: usize, kind: &str) -> Result<u64> {
+    if field == "-" {
+        return Ok(0);
+    }
+    field.parse::<u64>().with_context(|| {
+        format!("Invalid git diff --numstat {kind} count on line {line_number}: {field}")
     })
 }
-
-struct CommittedSourceIdentity {
-    head_commit: Option<String>,
-    tree_identity: Vec<u8>,
-}
-
-fn committed_source_tree_identity(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<CommittedSourceIdentity> {
-    let head = collection.git_output_unchecked(
-        root,
-        &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-        "git rev-parse HEAD for worktree fingerprint",
-    )?;
-    match head.status.code() {
-        Some(0) => {
-            let object_id =
-                String::from_utf8(head.stdout).context("Git HEAD object id is not UTF-8")?;
-            let object_id = object_id.trim();
-            if !matches!(object_id.len(), 40 | 64)
-                || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                bail!("Git HEAD resolved to invalid object id {object_id:?}");
-            }
-            collection.ensure_active()?;
-            let tree = collection.git_output(
-                root,
-                &["ls-tree", "-z", "--full-tree", object_id],
-                "git ls-tree HEAD for worktree fingerprint",
-            )?;
-            Ok(CommittedSourceIdentity {
-                head_commit: Some(object_id.to_owned()),
-                tree_identity: committed_source_tree_without_agent_state(&tree.stdout, collection)?,
-            })
-        }
-        Some(1) => Ok(CommittedSourceIdentity {
-            head_commit: None,
-            tree_identity: b"unborn".to_vec(),
-        }),
-        _ => {
-            bail!(
-                "git rev-parse HEAD for worktree fingerprint failed with {}.\nstdout:\n{}\nstderr:\n{}",
-                format_exit_status(&head.status),
-                String::from_utf8_lossy(&head.stdout),
-                String::from_utf8_lossy(&head.stderr)
-            )
-        }
-    }
-}
-
-fn committed_source_tree_without_agent_state(
-    tree: &[u8],
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<u8>> {
-    let mut source_tree = Vec::with_capacity(tree.len());
-    for record in tree
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty())
-    {
-        collection.ensure_active()?;
-        let path_offset = record
-            .iter()
-            .position(|byte| *byte == b'\t')
-            .context("Git ls-tree record is missing its path separator")?
-            + 1;
-        let path = &record[path_offset..];
-        if path == b".agent" || path.starts_with(b".agent/") {
-            continue;
-        }
-        source_tree.extend_from_slice(record);
-        source_tree.push(0);
-    }
-    Ok(source_tree)
-}
-
-fn untracked_file_contents(
-    root: &Path,
-    status_stdout: &[u8],
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<u8>> {
-    let paths = parse_porcelain_status_z(status_stdout)?
-        .into_iter()
-        .filter(|entry| entry.status == "??")
-        .map(|entry| entry.path)
-        .collect::<Vec<_>>();
-    path_fingerprint_contents(root, paths, remaining_inline_bytes, collection)
-}
-
-fn ignored_dotenv_contents(
-    root: &Path,
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<u8>> {
-    path_fingerprint_contents(
-        root,
-        ignored_dotenv_paths(root, collection)?,
-        remaining_inline_bytes,
-        collection,
-    )
-}
-
-fn ignored_dotenv_paths(root: &Path, collection: GitReceiptCollection<'_>) -> Result<Vec<PathBuf>> {
-    let mut args = vec![
-        "ls-files",
-        "--others",
-        "--ignored",
-        "--exclude-standard",
-        "--directory",
-        "-z",
-        "--",
-    ];
-    args.extend_from_slice(crate::source_projection::IGNORED_DOTENV_PATHSPECS);
-    let output = collection.git_output(root, &args, "git ls-files for ignored dotenv files")?;
-    // `--directory` lets Git prune a wholly ignored tree instead of walking
-    // build products and dependency caches looking for dotenv-shaped files.
-    // Directory records end in `/`; only actual files are source inputs.
-    parse_name_only_z(&output.stdout).map(|paths| {
-        paths
-            .into_iter()
-            .filter(|path| !path.as_os_str().as_encoded_bytes().ends_with(b"/"))
-            .collect()
-    })
-}
-
-fn path_fingerprint_contents(
-    root: &Path,
-    paths: Vec<PathBuf>,
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<u8>> {
-    let mut contents = Vec::new();
-    for path in paths {
-        collection.ensure_active()?;
-        let full_path = root.join(&path);
-        let metadata = fs::symlink_metadata(&full_path).with_context(|| {
-            format!(
-                "Failed to read observable path metadata {}",
-                full_path.display()
-            )
-        })?;
-
-        contents.extend_from_slice(path.as_os_str().as_encoded_bytes());
-        contents.push(0);
-        append_untracked_path_fingerprint(
-            &mut contents,
-            root,
-            &full_path,
-            &metadata,
-            remaining_inline_bytes,
-            collection,
-        )?;
-        contents.push(0);
-    }
-    collection.ensure_active()?;
-    Ok(contents)
-}
-
-fn initialized_submodule_fingerprints(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-    submodule_depth: usize,
-) -> Result<Vec<u8>> {
-    let paths = initialized_submodule_paths(root, collection)?;
-
-    let mut fingerprints = Vec::new();
-    for relative in paths {
-        collection.ensure_active()?;
-        let fingerprint = repo_worktree_fingerprint_inner(
-            &root.join(&relative),
-            collection,
-            submodule_depth + 1,
-        )?;
-        fingerprints.extend_from_slice(relative.as_os_str().as_encoded_bytes());
-        fingerprints.push(0);
-        fingerprints.extend_from_slice(fingerprint.worktree_fingerprint.as_bytes());
-        fingerprints.push(0);
-    }
-    Ok(fingerprints)
-}
-
-fn initialized_submodule_paths(
-    root: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<PathBuf>> {
-    if !root.join(".gitmodules").is_file() {
-        return Ok(Vec::new());
-    }
-    let output = collection.git_output_unchecked(
-        root,
-        &[
-            "config",
-            "-z",
-            "--file",
-            ".gitmodules",
-            "--get-regexp",
-            "^submodule\\..*\\.path$",
-        ],
-        "git config for worktree fingerprint submodules",
-    )?;
-    let mut paths = match output.status.code() {
-        Some(0) => crate::source_projection::initialized_submodule_paths(root, &output.stdout)?,
-        Some(1) => return Ok(Vec::new()),
-        _ => {
-            bail!(
-                "git config for worktree fingerprint submodules failed with {}.\nstdout:\n{}\nstderr:\n{}",
-                format_exit_status(&output.status),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        }
-    };
-    paths.sort();
-    Ok(paths)
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct PorcelainStatusEntry {
-    status: String,
-    path: PathBuf,
-    original_path: Option<PathBuf>,
-}
-
-fn parse_porcelain_status_z(stdout: &[u8]) -> Result<Vec<PorcelainStatusEntry>> {
-    let fields = stdout.split(|byte| *byte == 0).collect::<Vec<_>>();
-    let mut entries = Vec::new();
-    let mut index = 0;
-    while index < fields.len() {
-        let field = fields[index];
-        if field.is_empty() {
-            if index == fields.len() - 1 {
-                break;
-            }
-            bail!("Malformed git status --porcelain -z output: empty path field");
-        }
-        if field.len() < 4 || field[2] != b' ' {
-            bail!(
-                "Malformed git status --porcelain -z record: {}",
-                String::from_utf8_lossy(field)
-            );
-        }
-        let status = String::from_utf8_lossy(&field[..2]).to_string();
-        #[cfg(unix)]
-        let path = path_buf_from_git_bytes(&field[3..]);
-        #[cfg(not(unix))]
-        let path = path_buf_from_git_bytes(&field[3..])?;
-        index += 1;
-
-        let original_path = if status.as_bytes().contains(&b'R')
-            || status.as_bytes().contains(&b'C')
-        {
-            let original = fields.get(index).context(
-                "Malformed git status --porcelain -z output: rename/copy record missing original path",
-            )?;
-            if original.is_empty() {
-                bail!("Malformed git status --porcelain -z output: empty original path");
-            }
-            index += 1;
-            #[cfg(unix)]
-            {
-                Some(path_buf_from_git_bytes(original))
-            }
-            #[cfg(not(unix))]
-            {
-                Some(path_buf_from_git_bytes(original)?)
-            }
-        } else {
-            None
-        };
-
-        entries.push(PorcelainStatusEntry {
-            status,
-            path,
-            original_path,
-        });
-    }
-    Ok(entries)
-}
-
-#[cfg(unix)]
-fn path_buf_from_git_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(OsString::from_vec(bytes.to_vec()))
-}
-
-#[cfg(not(unix))]
-fn path_buf_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
-    String::from_utf8(bytes.to_vec())
-        .map(PathBuf::from)
-        .context("Git status path is not UTF-8")
-}
-
-fn append_untracked_path_fingerprint(
-    contents: &mut Vec<u8>,
-    root: &Path,
-    full_path: &Path,
-    metadata: &fs::Metadata,
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    collection.ensure_active()?;
-    append_path_permission_fingerprint(contents, metadata);
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        contents.extend_from_slice(b"symlink\0");
-        let target = fs::read_link(full_path)
-            .with_context(|| format!("Failed to read symlink target {}", full_path.display()))?;
-        contents.extend_from_slice(target.as_os_str().as_encoded_bytes());
-        return Ok(());
-    }
-
-    if metadata.is_dir() {
-        contents.extend_from_slice(b"dir");
-        return Ok(());
-    }
-
-    if metadata.is_file() {
-        append_untracked_file_fingerprint(
-            contents,
-            root,
-            full_path,
-            metadata,
-            remaining_inline_bytes,
-            collection,
-        )?;
-        return Ok(());
-    }
-
-    contents.extend_from_slice(b"other\0");
-    append_metadata_fallback(contents, metadata);
-    Ok(())
-}
-
-#[cfg(unix)]
-fn append_path_permission_fingerprint(contents: &mut Vec<u8>, metadata: &fs::Metadata) {
-    use std::os::unix::fs::MetadataExt;
-
-    contents.extend_from_slice(format!("mode={:04o}\0", metadata.mode() & 0o7777).as_bytes());
-}
-
-#[cfg(not(unix))]
-fn append_path_permission_fingerprint(contents: &mut Vec<u8>, metadata: &fs::Metadata) {
-    contents
-        .extend_from_slice(format!("readonly={}\0", metadata.permissions().readonly()).as_bytes());
-}
-
-fn append_untracked_file_fingerprint(
-    contents: &mut Vec<u8>,
-    root: &Path,
-    full_path: &Path,
-    metadata: &fs::Metadata,
-    remaining_inline_bytes: &mut u64,
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    collection.ensure_active()?;
-    if metadata.len() > MAX_INLINE_UNTRACKED_BYTES || metadata.len() > *remaining_inline_bytes {
-        append_hashed_file_fingerprint(contents, root, full_path, collection)?;
-        return Ok(());
-    }
-
-    let mut file = fs::File::open(full_path)
-        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MAX_INLINE_UNTRACKED_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("Failed to read untracked file {}", full_path.display()))?;
-    collection.ensure_active()?;
-
-    if bytes.len() as u64 > MAX_INLINE_UNTRACKED_BYTES {
-        append_hashed_file_fingerprint(contents, root, full_path, collection)?;
-        return Ok(());
-    }
-
-    contents.extend_from_slice(b"file\0");
-    contents.extend_from_slice(&bytes);
-    *remaining_inline_bytes = remaining_inline_bytes.saturating_sub(bytes.len() as u64);
-    Ok(())
-}
-
-fn append_hashed_file_fingerprint(
-    contents: &mut Vec<u8>,
-    root: &Path,
-    full_path: &Path,
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    contents.extend_from_slice(b"file-hash\0");
-    contents.extend_from_slice(collection.git_hash_file(root, full_path)?.as_bytes());
-    Ok(())
-}
-
-fn append_metadata_fallback(contents: &mut Vec<u8>, metadata: &fs::Metadata) {
-    contents.extend_from_slice(format!("len={}\0", metadata.len()).as_bytes());
-    contents.extend_from_slice(
-        format!("modified={}\0", system_time_key(metadata.modified().ok())).as_bytes(),
-    );
-}
-
-fn system_time_key(time: Option<SystemTime>) -> u128 {
-    time.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default()
-}
-
-mod git_command;
-use git_command::*;
 
 #[cfg(test)]
 mod tests;

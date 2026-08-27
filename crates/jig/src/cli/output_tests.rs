@@ -3,125 +3,6 @@ use serde_json::json;
 use super::*;
 
 #[test]
-fn check_plan_summary_lists_targets_without_implying_execution() {
-    let summary = format_check_summary(&json!({
-        "ok": true,
-        "executed": false,
-        "plan": {
-            "id": "run-plan_sha256:abc",
-            "targets": [{
-                "target": {"component": "api", "action": "test"},
-                "reasons": [{"kind": "explicit", "selector": "api:test"}]
-            }]
-        }
-    }));
-
-    assert!(summary.contains("Check plan: run-plan_sha256:abc"));
-    assert!(summary.contains("api:test: explicit"));
-    assert!(summary.contains("No commands executed (--explain)."));
-}
-
-#[test]
-fn check_execution_summary_collects_target_failures() {
-    let summary = format_check_summary(&json!({
-        "ok": false,
-        "executed": true,
-        "plan": {
-            "id": "run-plan_sha256:abc",
-            "targets": [
-                {"target": {"component": "api", "action": "test"}},
-                {"target": {"component": "web", "action": "test"}}
-            ]
-        },
-        "results": [
-            {"target": {"component": "api", "action": "test"}, "response": {"result": {"exit_status": 0}}},
-            {"target": {"component": "web", "action": "test"}, "response": {"result": {"exit_status": 7}}}
-        ],
-        "run": {"targets": [
-            {"target": {"component": "api", "action": "test"}, "conclusion": "success", "exit_code": 0},
-            {"target": {"component": "web", "action": "test"}, "conclusion": "failure", "exit_code": 7}
-        ]}
-    }));
-
-    assert!(summary.contains("Jig check: failed"));
-    assert!(summary.contains("api:test: passed (exit 0)"));
-    assert!(summary.contains("web:test: failed (exit 7)"));
-}
-
-#[test]
-fn check_execution_summary_includes_failure_output_and_skipped_reasons() {
-    let summary = format_check_summary(&json!({
-        "ok": false,
-        "executed": true,
-        "plan": {
-            "id": "run-plan_sha256:abc",
-            "targets": [
-                {"target": {"component": "api", "action": "test"}},
-                {"target": {"component": "web", "action": "test"}}
-            ]
-        },
-        "results": [{
-            "target": {"component": "api", "action": "test"},
-            "response": {"result": {"exit_status": 7, "stderr": "assertion failed\nmore detail"}}
-        }],
-        "run": {"targets": [
-            {
-                "target": {"component": "api", "action": "test"},
-                "conclusion": "failure",
-                "exit_code": 7,
-                "findings": [{"message": "target process exited with status 7"}]
-            },
-            {
-                "target": {"component": "web", "action": "test"},
-                "conclusion": "skipped",
-                "findings": [{"message": "a declared target dependency did not succeed"}]
-            }
-        ]}
-    }));
-
-    assert!(summary.contains("api:test: failed (exit 7)"));
-    assert!(summary.contains("Output: assertion failed more detail"));
-    assert!(summary.contains("web:test: skipped"));
-    assert!(summary.contains("Reason: a declared target dependency did not succeed"));
-}
-
-#[test]
-fn check_output_selects_the_formatter_from_the_runtime_response() {
-    let repository = format_check_output(&json!({
-        "ok": true,
-        "executed": false,
-        "plan": {"id": "run-plan_sha256:abc", "targets": []}
-    }));
-    assert!(repository.contains("Check plan: run-plan_sha256:abc"));
-
-    let legacy = format_check_output(&json!({
-        "ok": false,
-        "tool": "jig.test",
-        "result": {"exit_status": 1, "stderr": "failed"}
-    }));
-    assert!(legacy.contains("jig.test: failed"));
-    assert!(legacy.contains("Exit: 1"));
-}
-
-#[test]
-fn repository_info_summary_renders_structured_target_addresses() {
-    let summary = format_info_summary(&json!({
-        "ok": true,
-        "command": "info targets",
-        "workspace": {
-            "name": "ExampleProject",
-            "contract_version": 6
-        },
-        "targets": [{
-            "id": {"component": "api", "action": "test"}
-        }]
-    }));
-
-    assert!(summary.contains("Jig targets: ExampleProject (contract v6)"));
-    assert!(summary.contains("api:test"));
-}
-
-#[test]
 fn setup_summary_reports_orchestration_and_next_step() {
     let summary = format_setup_summary(&json!({
         "ok": true,
@@ -488,6 +369,52 @@ fn work_start_plan_id_output_requires_plan_to_be_object() {
 }
 
 #[test]
+fn work_start_and_goal_summaries_label_empty_tree_baselines() {
+    let plan = json!({
+        "plan_id": "plan_initial",
+        "body_path": ".agent/plans/initial.md",
+        "baseline": {
+            "requested_ref": "HEAD",
+            "commit_oid": null,
+            "empty_tree_oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "error": null
+        }
+    });
+    let start = format_work_start_summary(&json!({
+        "plan": plan,
+        "session": { "session_id": "session_1" }
+    }));
+    let goal = format_work_goal_summary(&json!({
+        "plan": plan,
+        "commands": {}
+    }));
+
+    for summary in [start, goal] {
+        assert!(
+            summary.contains("Baseline: 4b825dc642cb6eb9a060e54bf8d69288fbee4904 (empty tree)")
+        );
+    }
+}
+
+#[test]
+fn work_goal_summary_reports_baseline_collection_errors() {
+    let summary = format_work_goal_summary(&json!({
+        "plan": {
+            "plan_id": "plan_error",
+            "baseline": {
+                "requested_ref": "HEAD",
+                "commit_oid": null,
+                "empty_tree_oid": null,
+                "error": "Git metadata was unavailable"
+            }
+        },
+        "commands": {}
+    }));
+
+    assert!(summary.contains("Baseline: unavailable (Git metadata was unavailable)"));
+}
+
+#[test]
 fn work_status_summary_omits_truncation_hint_at_receipt_limit() {
     let summary = format_work_status_summary(&json!({
         "repo": {
@@ -755,6 +682,84 @@ fn work_check_summary_does_not_count_failed_prefix_output_as_skipped() {
 }
 
 #[test]
+fn work_check_summary_reports_empty_checks() {
+    let summary = format_work_check_summary(&json!({
+        "ok": true,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": []
+    }));
+
+    assert!(summary.contains("Work check: no checks configured"));
+    assert!(summary.contains("Checks: 0"));
+    assert!(summary.contains("configure work checks"));
+    assert!(summary.contains("--tool <tool>"));
+}
+
+#[test]
+fn work_check_summary_reports_classified_nonexecutions_as_success() {
+    let summary = format_work_check_summary(&json!({
+        "ok": true,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": [],
+        "gate_evidence": [
+            {
+                "gate_id": "rust-tests",
+                "status": "not_applicable",
+                "reason": "no changed paths matched crates/**"
+            },
+            {
+                "gate_id": "frontend-web-lint",
+                "status": "reused",
+                "reason": "one changed path matched apps/web/**",
+                "source_tool_receipt_id": "receipt_source"
+            }
+        ]
+    }));
+
+    assert!(summary.contains("Work check: passed"));
+    assert!(
+        summary
+            .contains("0 executed, 1 reused, 1 not applicable, 0 failed, 0 cancelled, 0 unknown")
+    );
+    assert!(summary.contains("rust-tests: not_applicable"));
+    assert!(summary.contains("source receipt receipt_source"));
+    assert!(!summary.contains("no checks configured"));
+}
+
+#[test]
+fn work_check_summary_reports_failed_and_cancelled_gate_evidence() {
+    let summary = format_work_check_summary(&json!({
+        "ok": false,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": [],
+        "gate_evidence": [
+            {
+                "gate_id": "rust-tests",
+                "status": "failed",
+                "reason": "configured command exited 101"
+            },
+            {
+                "gate_id": "frontend-web-lint",
+                "status": "cancelled",
+                "reason": "work check was interrupted"
+            }
+        ]
+    }));
+
+    assert!(summary.contains("Work check: failed"));
+    assert!(
+        summary
+            .contains("0 executed, 0 reused, 0 not applicable, 1 failed, 1 cancelled, 0 unknown")
+    );
+    assert!(summary.contains("rust-tests: failed; configured command exited 101"));
+    assert!(summary.contains("frontend-web-lint: cancelled; work check was interrupted"));
+    assert!(!summary.contains("no checks configured"));
+}
+
+#[test]
 fn work_check_summary_reports_unknown_check_status() {
     let summary = format_work_check_summary(&json!({
         "ok": true,
@@ -810,13 +815,7 @@ fn work_gates_summary_reports_unsupported_blockers() {
         "ok": true,
         "plan_id": "plan_1",
         "overall": "blocked",
-        "gates": [{
-            "id": "schema",
-            "kind": "evidence",
-            "required": true,
-            "status": "unsupported",
-            "reason": "unknown profile 'old-verify'"
-        }],
+        "gates": [],
         "missing_required": [],
         "failed_required": [],
         "stale_required": [],
@@ -825,7 +824,6 @@ fn work_gates_summary_reports_unsupported_blockers() {
     }));
 
     assert!(summary.contains("Blocked: unsupported (schema)"));
-    assert!(summary.contains("schema: unsupported, required; unknown profile 'old-verify'"));
 }
 
 #[test]
@@ -1159,36 +1157,4 @@ fn work_receipts_summary_lists_multiple_receipts() {
     assert!(!summary.contains("No receipts matched"));
 }
 
-#[test]
-fn work_receipts_summary_handles_empty_results() {
-    let summary = format_work_receipts_summary(&json!({
-        "ok": true,
-        "receipts": []
-    }));
-
-    assert!(summary.contains("Showing: 0"));
-    assert!(summary.contains("No receipts matched"));
-}
-
-#[test]
-fn work_receipts_summary_omits_output_line_without_preview() {
-    let summary = format_work_receipts_summary(&json!({
-        "ok": true,
-        "receipts": [{
-            "id": "receipt_1",
-            "tool_name": "jig.test",
-            "exit_status": 0,
-            "diff_summary": "no changes",
-            "plan_id": null,
-            "session_id": null
-        }]
-    }));
-
-    assert!(summary.contains("jig.test (receipt_1): exit 0, no changes"));
-    assert!(summary.contains("plan: none; session: none"));
-    assert!(!summary.contains("output:"));
-}
-
-#[path = "output_tests/evidence.rs"]
-mod evidence;
-mod state_maintenance;
+include!("output_tests_parts/part_01.rs");

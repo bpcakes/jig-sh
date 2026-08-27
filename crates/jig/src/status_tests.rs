@@ -21,7 +21,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::test_env::TestRepoBuilder;
 
-const PROVIDER_ID: &str = "factorish.test-status";
+const PROVIDER_ID: &str = "example.test-status";
 
 fn report_value(outcome: &str, revision: Option<&str>) -> Value {
     let inputs = revision
@@ -115,7 +115,7 @@ fn decoder_rejects_multiple_documents_identity_mismatch_and_semantic_errors() {
     assert_eq!(multiple.code, "invalid_json");
 
     let mut mismatch = report_value("complete", None);
-    mismatch["provider"]["id"] = json!("factorish.other");
+    mismatch["provider"]["id"] = json!("example.other");
     let mismatch = decode_report(
         &provider(vec!["unused".into()]),
         &serde_json::to_string(&mismatch).unwrap(),
@@ -179,12 +179,12 @@ fn aggregate_runs_independent_providers_concurrently_and_keeps_configured_order(
         .config(
             r#"
 [[status.providers]]
-id = "factorish.provider-a"
+id = "example.provider-a"
 argv = ["sh", "provider-a.sh"]
 timeout_seconds = 3
 
 [[status.providers]]
-id = "factorish.provider-b"
+id = "example.provider-b"
 argv = ["sh", "provider-b.sh"]
 timeout_seconds = 3
 "#,
@@ -192,8 +192,8 @@ timeout_seconds = 3
         .write();
 
     for (name, other, id) in [
-        ("a", "b", "factorish.provider-a"),
-        ("b", "a", "factorish.provider-b"),
+        ("a", "b", "example.provider-a"),
+        ("b", "a", "example.provider-b"),
     ] {
         let mut report = report_value("complete", None);
         report["provider"]["id"] = json!(id);
@@ -224,8 +224,8 @@ timeout_seconds = 3
     .unwrap();
 
     assert_eq!(runs.len(), 2);
-    assert_eq!(runs[0].id, "factorish.provider-a");
-    assert_eq!(runs[1].id, "factorish.provider-b");
+    assert_eq!(runs[0].id, "example.provider-a");
+    assert_eq!(runs[1].id, "example.provider-b");
     assert!(runs.iter().all(|run| run.report.is_some()));
 }
 
@@ -292,7 +292,7 @@ impl ExecutionObserver for LifecycleObserver {
 fn scheduler_providers(count: usize) -> Vec<StatusProviderConfig> {
     (0..count)
         .map(|index| StatusProviderConfig {
-            id: format!("factorish.provider-{index}"),
+            id: format!("example.provider-{index}"),
             argv: vec!["unused".into()],
             timeout_seconds: 1,
         })
@@ -394,7 +394,7 @@ fn provider_scheduler_balances_a_panicked_phase() {
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("factorish.provider-0"));
+    assert!(error.to_string().contains("example.provider-0"));
     let mut started = observer.started;
     let mut finished = observer
         .finished
@@ -408,7 +408,7 @@ fn provider_scheduler_balances_a_panicked_phase() {
         observer
             .finished
             .iter()
-            .any(|(label, success)| label == "factorish.provider-0" && !success)
+            .any(|(label, success)| label == "example.provider-0" && !success)
     );
 }
 

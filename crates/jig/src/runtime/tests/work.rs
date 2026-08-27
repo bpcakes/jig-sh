@@ -397,12 +397,14 @@ fn work_start_validates_plan_body_before_starting_session() {
             title: "Conflicting body".into(),
             body: Some("inline".into()),
             body_file: Some(temp.path().join("plan.md")),
+            base: None,
             print_plan_id: false,
         },
         crate::cli::WorkStartOpts {
             title: "Missing body file".into(),
             body: None,
             body_file: Some(temp.path().join("missing-plan.md")),
+            base: None,
             print_plan_id: false,
         },
     ] {
@@ -631,16 +633,13 @@ fn work_goal_defaults_blank_title_to_generated_title() {
     assert_eq!(title, "Reduce API handler duplication");
 }
 
-fn read_receipts(root: &Path) -> Vec<Value> {
-    fs::read_to_string(root.join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .collect()
-}
-
 mod checks;
 mod evidence;
 mod gate_receipt_ordering;
 mod gates;
 mod review;
+
+include!("work_parts/part_01.rs");
+include!("work_parts/part_02.rs");
+include!("work_parts/part_03.rs");
+include!("work_parts/part_04.rs");

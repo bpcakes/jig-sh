@@ -235,6 +235,7 @@ fn plans_append_serializes_concurrent_writers() {
             title: "Concurrent plan".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -313,6 +314,7 @@ fn plans_close_rejects_already_closed_plan() {
             title: "Close once".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -351,6 +353,7 @@ fn plans_close_rejects_an_active_linked_repository_run() {
             title: "Run before close".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -452,6 +455,7 @@ fn plans_append_rejects_closed_plan() {
             title: "Append after close".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -490,6 +494,7 @@ fn plans_append_requires_progress_text_without_mutating_plan() {
             title: "Append input".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -542,6 +547,7 @@ fn structured_work_keeps_legacy_state_receipt_tool_names() {
             title: "Receipt compatibility".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();

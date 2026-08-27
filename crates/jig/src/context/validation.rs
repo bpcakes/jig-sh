@@ -4,6 +4,9 @@ pub(super) fn validate_repository_source(
     config: &RepoConfig,
     manifest: &ContractManifest,
 ) -> Result<()> {
+    config
+        .work
+        .validate_contract_version(manifest.contract_version)?;
     if manifest.contract_version < 6 {
         if config.repository.is_some() {
             bail!("[repository] requires jig contract version 6 or later");
@@ -170,9 +173,60 @@ pub(super) fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_command_map(&config.commands)?;
     validate_web_package_manager(&config.web_package_manager)?;
     validate_frontend_app_roles(config)?;
+    for root in &config.frontend_workspace_roots {
+        normalize_portable_repo_path(root, "frontend workspace root")?;
+    }
+    validate_schema_docs_dir(&config.schema_docs_dir)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
     status_config::validate_runtime_config(config)
+}
+
+pub(super) fn default_schema_docs_dir() -> String {
+    "docs/schema".into()
+}
+
+pub(crate) fn validate_schema_docs_dir(value: &str) -> Result<()> {
+    let normalized = normalize_portable_repo_path(value, "schema_docs_dir")?;
+    if normalized != value || value == "." {
+        bail!(
+            "schema_docs_dir must be a normalized repository-relative dedicated directory: {value}"
+        );
+    }
+    if value.split('/').any(|component| {
+        is_reserved_agent_state_component(component)
+            || is_reserved_git_metadata_component(component)
+    }) {
+        bail!("schema_docs_dir must stay outside reserved .agent and .git directories");
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        bail!(
+            "schema_docs_dir contains unsupported characters; use ASCII letters, numbers, '/', '.', '-' or '_'"
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn is_reserved_git_metadata_component(component: &str) -> bool {
+    is_hfs_component_alias(component, ['.', 'g', 'i', 't'])
+}
+
+fn is_reserved_agent_state_component(component: &str) -> bool {
+    is_hfs_component_alias(component, ['.', 'a', 'g', 'e', 'n', 't'])
+}
+
+fn is_hfs_component_alias<const N: usize>(component: &str, expected: [char; N]) -> bool {
+    let mut normalized = component
+        .chars()
+        .filter(|character| !matches!(character, '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'));
+    expected.into_iter().all(|expected| {
+        normalized
+            .next()
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
+    }) && normalized.next().is_none()
 }
 
 pub(super) fn validate_backend_config(config: &RepoConfig) -> Result<()> {

@@ -24,6 +24,49 @@ use crate::progress::CliProgress;
 
 const TEMPLATE_SUBDIRECTORY: &str = "templates/project";
 const TEMPLATE_SUFFIX: &str = ".jinja";
+pub(super) const RUST_GATE_COMMAND_AUTHORITY_PATHS: &[&str] =
+    &["Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"];
+pub(super) const FRONTEND_GATE_SHARED_PATHS: &[&str] = &[
+    "packages/**",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    ".node-version",
+    "**/.node-version",
+    ".npmrc",
+    "**/.npmrc",
+    ".yarnrc",
+    ".yarnrc.yml",
+    "**/.yarnrc",
+    "**/.yarnrc.yml",
+    ".pnpmfile.cjs",
+    "pnpmfile.cjs",
+    "**/.pnpmfile.cjs",
+    "**/pnpmfile.cjs",
+    "bunfig.toml",
+    "**/bunfig.toml",
+    "patches/**",
+    "**/patches/**",
+    ".yarn/patches/**",
+    ".yarn/plugins/**",
+    ".yarn/releases/**",
+    "**/.yarn/patches/**",
+    "**/.yarn/plugins/**",
+    "**/.yarn/releases/**",
+    "tsconfig*.json",
+    "eslint.config.*",
+    "vite.config.*",
+    "vitest.config.*",
+    "scripts/check-webapps.sh",
+    "scripts/check-webapp-scripts.mjs",
+    "scripts/enforce-coverage.cjs",
+    "scripts/web-node.cjs",
+];
 
 pub(super) struct RenderStageRequest<'a> {
     pub(super) template: &'a PreparedTemplateSource,
@@ -619,6 +662,61 @@ fn render_context(
         JsonValue::Bool(answers.frontend_harness_enabled()),
     );
     context.insert(
+        "frontend_gate_apps".into(),
+        JsonValue::Array(
+            answers
+                .frontend_apps()
+                .iter()
+                .map(|app| {
+                    let paths_ignore = answers
+                        .frontend_apps()
+                        .iter()
+                        .filter(|other| other.name != app.name && other.dir != ".")
+                        .filter(|other| {
+                            !repo_dirs_intersect(&app.dir, &other.dir)
+                                && !answers
+                                    .frontend_workspace_roots()
+                                    .iter()
+                                    .any(|root| repo_dirs_intersect(root, &other.dir))
+                        })
+                        .map(|other| format!("{}/**", other.dir))
+                        .collect::<Vec<_>>();
+                    json!({
+                        "name": app.name,
+                        "dir": app.dir,
+                        "coverage_threshold": app.coverage_threshold,
+                        "key": super::answers::frontend_gate_key(&app.name),
+                        "role": app.role,
+                        "paths_ignore": paths_ignore,
+                    })
+                })
+                .collect(),
+        ),
+    );
+    context.insert(
+        "rust_gate_command_authority_paths".into(),
+        json!(RUST_GATE_COMMAND_AUTHORITY_PATHS),
+    );
+    let mut frontend_gate_shared_paths = FRONTEND_GATE_SHARED_PATHS
+        .iter()
+        .map(|path| (*path).to_string())
+        .collect::<Vec<_>>();
+    for path in answers.frontend_workspace_roots().iter().map(|root| {
+        if root == "." {
+            "**".into()
+        } else {
+            format!("{root}/**")
+        }
+    }) {
+        if !frontend_gate_shared_paths.contains(&path) {
+            frontend_gate_shared_paths.push(path);
+        }
+    }
+    context.insert(
+        "frontend_gate_shared_paths".into(),
+        json!(frontend_gate_shared_paths),
+    );
+    context.insert(
         "go_backend_enabled".into(),
         JsonValue::Bool(answers.go_backend_enabled()),
     );
@@ -725,6 +823,18 @@ fn render_context(
         }),
     );
     Ok(JsonValue::Object(context))
+}
+
+fn repo_dirs_intersect(left: &str, right: &str) -> bool {
+    left == "."
+        || right == "."
+        || left == right
+        || left
+            .strip_prefix(right)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn collect_template_paths(root: &Path) -> Result<Vec<PathBuf>> {

@@ -10,6 +10,7 @@ fn work_check_runs_configured_tools() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -57,6 +58,7 @@ fn work_check_emits_one_balanced_phase_per_tool_with_aggregate_positions() {
         RuntimeCommand::Work(crate::command::WorkCommand::Check(
             crate::command::WorkCheckRequest {
                 plan_id: "plan_1".into(),
+                gates: Vec::new(),
                 tools: Vec::new(),
             },
         )),
@@ -85,6 +87,7 @@ fn work_check_rejects_unknown_plan_before_running_tools() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_missing".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -115,6 +118,7 @@ fn work_check_rejects_closed_plan_before_running_tools() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -139,6 +143,7 @@ fn work_check_collects_change_metadata_only_on_batch_receipt() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -186,6 +191,7 @@ fn failed_work_check_records_metadata_on_batch_and_stops_later_tools() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: vec!["jig.failing_check".into(), "jig.later_check".into()],
         })),
     )
@@ -407,6 +413,7 @@ fn timed_out_work_check_records_child_and_batch_failure_receipts() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -477,6 +484,7 @@ tool = "jig.overflow_check"
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -513,6 +521,7 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )

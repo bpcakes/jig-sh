@@ -817,3 +817,5 @@ fn adopt_with_sqlx_and_schema_dumps_disabled_hides_schema_dump_target() {
     assert!(!answers.contains("schema_check_command"));
     assert!(!answers.contains("tool = \"jig.schema_check\""));
 }
+
+include!("path_and_git_parts/part_01.rs");

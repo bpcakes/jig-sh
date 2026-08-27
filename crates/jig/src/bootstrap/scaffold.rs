@@ -175,6 +175,9 @@ impl InitScaffoldPlan {
         if answers.web_package_manager.is_none() {
             answers.web_package_manager = Some(self.package_manager.clone());
         }
+        if answers.application_contracts_enabled.is_none() {
+            answers.application_contracts_enabled = Some(!self.frontends.is_empty());
+        }
         if answers.bootstrap_command.is_none() {
             answers.bootstrap_command = Some(match &self.backend {
                 ScaffoldBackendPlan::Rust(backend) => scaffold_bootstrap_command(

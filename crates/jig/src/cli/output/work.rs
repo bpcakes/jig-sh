@@ -25,11 +25,11 @@ pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
 pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
     let plan_id = value_str(value, "plan_id").unwrap_or("<unknown>");
     let checks = value["checks"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let targets = value["run"]["targets"]
+    let gate_evidence = value["gate_evidence"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let status = work_check_summary_status(checks, targets);
+    let status = work_check_summary_status(checks, gate_evidence);
     let skipped_checks = checks
         .iter()
         .filter(|check| {
@@ -54,8 +54,41 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             value_str(value, "receipt_id").unwrap_or("none")
         ),
         format!("  Checks: {}", checks.len()),
-        format!("  Targets: {}", targets.len()),
     ];
+
+    if !gate_evidence.is_empty() {
+        let count = |status: &str| {
+            gate_evidence
+                .iter()
+                .filter(|gate| value_str(gate, "status") == Some(status))
+                .count()
+        };
+        lines.push(format!(
+            "  Gate evidence: {} executed, {} reused, {} not applicable, {} failed, {} cancelled, {} unknown",
+            count("executed"),
+            count("reused"),
+            count("not_applicable"),
+            count("failed"),
+            count("cancelled"),
+            count("unknown")
+        ));
+        for gate in gate_evidence.iter().filter(|gate| {
+            matches!(
+                value_str(gate, "status"),
+                Some("reused" | "not_applicable" | "failed" | "cancelled" | "unknown")
+            )
+        }) {
+            let id = value_str(gate, "gate_id").unwrap_or("<unknown>");
+            let gate_status = value_str(gate, "status").unwrap_or("unknown");
+            let reason = value_str(gate, "reason")
+                .map(|reason| format!("; {}", concise_preview(reason, 140)))
+                .unwrap_or_default();
+            let source = value_str(gate, "source_tool_receipt_id")
+                .map(|receipt| format!(", source receipt {receipt}"))
+                .unwrap_or_default();
+            lines.push(format!("  - {id}: {gate_status}{source}{reason}"));
+        }
+    }
 
     for check in checks {
         let tool = value_str(check, "tool").unwrap_or("<unknown>");
@@ -69,14 +102,6 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             .unwrap_or_default();
         lines.push(format!(
             "  - {tool}: exit {exit_status_label}, receipt {receipt}{output_note}"
-        ));
-    }
-    for target in targets {
-        let target_name = structured_target_label(&target["target"]);
-        let conclusion = value_str(target, "conclusion").unwrap_or("unknown");
-        let receipt = value_str(target, "receipt_id").unwrap_or("none");
-        lines.push(format!(
-            "  - {target_name}: {conclusion}, receipt {receipt}"
         ));
     }
 
@@ -157,9 +182,9 @@ impl WorkCheckSummaryStatus {
 
 fn work_check_summary_status(
     checks: &[serde_json::Value],
-    targets: &[serde_json::Value],
+    gate_evidence: &[serde_json::Value],
 ) -> WorkCheckSummaryStatus {
-    if checks.is_empty() && targets.is_empty() {
+    if checks.is_empty() && gate_evidence.is_empty() {
         return WorkCheckSummaryStatus::NoChecksConfigured;
     }
 
@@ -171,25 +196,21 @@ fn work_check_summary_status(
             None => saw_unknown = true,
         }
     }
-    for target in targets {
-        match value_str(target, "conclusion") {
-            Some("success") => {}
-            Some(_) => return WorkCheckSummaryStatus::Failed,
-            None => saw_unknown = true,
-        }
+
+    if gate_evidence
+        .iter()
+        .any(|gate| matches!(value_str(gate, "status"), Some("failed" | "cancelled")))
+    {
+        return WorkCheckSummaryStatus::Failed;
     }
+    saw_unknown |= gate_evidence
+        .iter()
+        .any(|gate| value_str(gate, "status") == Some("unknown"));
 
     if saw_unknown {
         WorkCheckSummaryStatus::Unknown
     } else {
         WorkCheckSummaryStatus::Passed
-    }
-}
-
-fn structured_target_label(target: &serde_json::Value) -> String {
-    match (value_str(target, "component"), value_str(target, "action")) {
-        (Some(component), Some(action)) => format!("{component}:{action}"),
-        _ => "<unknown target>".into(),
     }
 }
 
@@ -212,20 +233,36 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
         let tool = value_str(gate, "tool")
             .map(|tool| format!(" ({tool})"))
             .or_else(|| value_str(gate, "skill").map(|skill| format!(" ({skill})")))
-            .or_else(|| value_str(gate, "target").map(|target| format!(" (target {target})")))
-            .or_else(|| value_str(gate, "profile").map(|profile| format!(" (profile {profile})")))
             .unwrap_or_default();
         let freshness = value_str(gate, "freshness")
             .map(|freshness| format!(", freshness {freshness}"))
             .unwrap_or_default();
         let mut line = format!("  - {id}: {status}{freshness}, {required_label}{tool}");
         if !matches!(status, "passed" | "missing")
-            && let Some(reason) =
-                value_str(gate, "reason").or_else(|| value_str(gate, "freshness_reason"))
+            && let Some(reason) = value_str(gate, "freshness_reason")
         {
             let _ = write!(line, "; {reason}");
         }
         lines.push(line);
+        if let Some(reason) = value_str(gate, "applicability_reason") {
+            let applicability = value_str(gate, "applicability").unwrap_or("unknown");
+            lines.push(format!(
+                "    applicability: {applicability}; {}",
+                concise_preview(reason, 180)
+            ));
+        }
+        if let Some(baseline) = value_str(gate, "baseline_oid") {
+            lines.push(format!("    baseline: {baseline}"));
+        }
+        let matching_paths = value_string_list(gate, "matching_paths");
+        if !matching_paths.is_empty() {
+            lines.push(format!("    matching paths: {}", matching_paths.join(", ")));
+        }
+        if status == "reused"
+            && let Some(source) = value_str(gate, "source_tool_receipt_id")
+        {
+            lines.push(format!("    reused source receipt: {source}"));
+        }
         if status != "missing"
             && let Some(diff) = value_str(gate, "diff_summary").filter(|diff| !diff.is_empty())
         {
@@ -291,10 +328,7 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         for gate in latest {
             let tool = value_str(gate, "tool")
                 .or_else(|| value_str(gate, "skill"))
-                .map(str::to_string)
-                .or_else(|| value_str(gate, "target").map(|target| format!("target {target}")))
-                .or_else(|| value_str(gate, "profile").map(|profile| format!("profile {profile}")))
-                .unwrap_or_else(|| "<unknown>".into());
+                .unwrap_or("<unknown>");
             let gate_id = value_str(gate, "gate_id").unwrap_or("<unknown>");
             let receipt = value_str(gate, "freshness_receipt_id")
                 .or_else(|| value_str(gate, "receipt_id"))
@@ -307,6 +341,22 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
             ));
             if let Some(reason) = value_str(gate, "freshness_reason") {
                 lines.push(format!("    reason: {reason}"));
+            }
+            if let Some(applicability) = value_str(gate, "applicability") {
+                let reason = value_str(gate, "applicability_reason")
+                    .map(|reason| format!("; {}", concise_preview(reason, 180)))
+                    .unwrap_or_default();
+                lines.push(format!("    applicability: {applicability}{reason}"));
+            }
+            if let Some(baseline) = value_str(gate, "baseline_oid") {
+                lines.push(format!("    baseline: {baseline}"));
+            }
+            let matching_paths = value_string_list(gate, "matching_paths");
+            if !matching_paths.is_empty() {
+                lines.push(format!("    matching paths: {}", matching_paths.join(", ")));
+            }
+            if let Some(source) = value_str(gate, "source_tool_receipt_id") {
+                lines.push(format!("    reused source receipt: {source}"));
             }
             if let Some(diff) = value_str(gate, "diff_summary").filter(|diff| !diff.is_empty()) {
                 lines.push(format!("    receipt diff: {diff}"));
@@ -323,7 +373,12 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
 
     let unresolved = gates
         .iter()
-        .filter(|gate| value_str(gate, "status") != Some("passed"))
+        .filter(|gate| {
+            !matches!(
+                value_str(gate, "status"),
+                Some("passed" | "reused" | "not_applicable")
+            )
+        })
         .collect::<Vec<_>>();
     if unresolved.is_empty() {
         lines.push("Unresolved gates: none".into());
@@ -332,9 +387,8 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         for gate in unresolved {
             let id = value_str(gate, "id").unwrap_or("<unknown>");
             let status = value_str(gate, "status").unwrap_or("unknown");
-            let reason = value_str(gate, "reason")
-                .or_else(|| value_str(gate, "freshness_reason"))
-                .unwrap_or("no receipt evidence for this gate");
+            let reason =
+                value_str(gate, "freshness_reason").unwrap_or("no receipt evidence for this gate");
             lines.push(format!("  - {id}: {status}; {reason}"));
         }
     }
@@ -527,6 +581,7 @@ pub(super) fn format_work_start_summary(value: &serde_json::Value) -> String {
     if let Some(path) = body_path {
         lines.push(format!("  Body: {path}"));
     }
+    append_plan_baseline(&mut lines, plan);
     lines.push(format!(
         "Next step: scripts/jig work check --plan-id {plan_id}"
     ));
@@ -542,6 +597,7 @@ pub(super) fn format_work_goal_summary(value: &serde_json::Value) -> String {
     if let Some(path) = value_str(plan, "body_path") {
         lines.push(format!("  Body: {path}"));
     }
+    append_plan_baseline(&mut lines, plan);
     if let Some(status) = value_str(commands, "status") {
         lines.push(format!("  Status command: {status}"));
     }
@@ -554,6 +610,19 @@ pub(super) fn format_work_goal_summary(value: &serde_json::Value) -> String {
     }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+fn append_plan_baseline(lines: &mut Vec<String>, plan: &serde_json::Value) {
+    if let Some(baseline) = value_str(&plan["baseline"], "commit_oid") {
+        lines.push(format!("  Baseline: {baseline}"));
+    } else if let Some(baseline) = value_str(&plan["baseline"], "empty_tree_oid") {
+        lines.push(format!("  Baseline: {baseline} (empty tree)"));
+    } else if let Some(error) = value_str(&plan["baseline"], "error") {
+        lines.push(format!(
+            "  Baseline: unavailable ({})",
+            concise_preview(error, 140)
+        ));
+    }
 }
 
 pub(super) fn format_work_append_summary(value: &serde_json::Value) -> String {

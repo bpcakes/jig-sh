@@ -1490,3 +1490,5 @@ proxy_por = 1556
 
 mod runtime;
 mod strict_config;
+
+include!("tests_parts/part_01.rs");

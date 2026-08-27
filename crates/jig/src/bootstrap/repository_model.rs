@@ -418,6 +418,9 @@ impl<'a> ModelBuilder<'a> {
             CommandScope::Component,
             |_| true,
         )?;
+        if !self.answers.backend_language().is_go() {
+            self.add_rust_file_loc_action()?;
+        }
         if adapters.iter().any(|adapter| adapter == "sqlx") {
             let schema_dump_enabled = self.answers.schema_dump_enabled();
             let migration_add_enabled = self.answers.migration_add_enabled();
@@ -435,6 +438,46 @@ impl<'a> ModelBuilder<'a> {
             )?;
         }
         Ok(())
+    }
+
+    fn add_rust_file_loc_action(&mut self) -> Result<()> {
+        let action_id = "rust-file-loc";
+        let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
+        let command = format!(
+            "scripts/check-rust-file-loc.sh {}",
+            crate::shell::quote(self.answers.default_branch())
+        );
+        self.insert_command(&command_key, &command)?;
+        let mut action = ActionSpec::new(
+            target_id(REPO_COMPONENT, action_id)?,
+            ActionIntent::Check,
+            ActionRunner::command(command_key.clone()),
+        );
+        action.description = Some("Enforce the changed-file Rust source size policy.".into());
+        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+        action.inputs = vec![
+            "**/*.rs".into(),
+            "Cargo.toml".into(),
+            "Cargo.lock".into(),
+            "rust-toolchain*".into(),
+            ".cargo/**".into(),
+            "scripts/check-rust-file-loc.sh".into(),
+        ];
+        action.legacy_aliases = vec!["jig.rust_file_loc".into()];
+        action.provenance = provenance(&[
+            ("target", FieldProvenance::Inherited),
+            ("intent", FieldProvenance::Inherited),
+            ("effects", FieldProvenance::Inherited),
+            ("runner", FieldProvenance::Inferred),
+            ("inputs", FieldProvenance::Inherited),
+            ("legacy_aliases", FieldProvenance::Inherited),
+        ]);
+        self.insert_tool(
+            "jig.rust_file_loc",
+            "Enforce the changed-file Rust source size policy.",
+            Some(&command_key),
+        )?;
+        self.insert_action(action)
     }
 
     fn add_frontend_components(&mut self) -> Result<()> {
@@ -580,11 +623,18 @@ impl<'a> ModelBuilder<'a> {
             return vec![format!("{}/**", migration_dir.trim_end_matches('/'))];
         }
 
-        descriptor
+        let mut inputs = descriptor
             .inputs
             .iter()
             .map(|input| (*input).into())
-            .collect()
+            .collect::<Vec<String>>();
+        if matches!(descriptor.id, "schema" | "schema-dump") {
+            inputs.push(format!(
+                "{}/**",
+                self.answers.schema_docs_dir().trim_end_matches('/')
+            ));
+        }
+        inputs
     }
 
     fn add_typescript_actions(&mut self, component: &str, app: &FrontendApp) -> Result<()> {

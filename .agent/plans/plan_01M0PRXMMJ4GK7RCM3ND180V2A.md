@@ -88,7 +88,7 @@ Focused validation passed 5 supported-host integration tests, 11 MCP tests, 12 s
 
 ## Context and Orientation
 
-The repository root is `/home/aa/Documents/jig-sh`. `scripts/check-supported-host-surface.sh` is a committed contract check. Its first `git grep` rejects current tracked content associated with an unsupported host; its second `git ls-files` pipeline rejects tracked artifact names. `crates/jig/tests/supported_host_surface.rs` executes the real script and substitutes a small fake `git` program to verify failure handling. `CHANGELOG.md` contains both an `Unreleased` section describing the current cutover and versioned sections that are immutable historical claims.
+The repository root is `.`. `scripts/check-supported-host-surface.sh` is a committed contract check. Its first `git grep` rejects current tracked content associated with an unsupported host; its second `git ls-files` pipeline rejects tracked artifact names. `crates/jig/tests/supported_host_surface.rs` executes the real script and substitutes a small fake `git` program to verify failure handling. `CHANGELOG.md` contains both an `Unreleased` section describing the current cutover and versioned sections that are immutable historical claims.
 
 `crates/jig/src/mcp.rs` implements the standard-input/standard-output Model Context Protocol server. A tool call runs through `handle_tool_call`. `McpProgressObserver` buffers lifecycle messages and bounded stdout/stderr previews during the call, then `flush` writes JSON-RPC progress notifications. A deferred finalizer is work that runs after the primary operation to publish observations or clean up. The primary operation's error must not disappear merely because that finalizer also failed.
 
@@ -110,7 +110,7 @@ After all four milestones, format the workspace, rebuild the development binary,
 
 ## Concrete Steps
 
-Run every command from `/home/aa/Documents/jig-sh`.
+Run every command from `.`.
 
 Create the structured plan and establish the development binary:
 

@@ -256,12 +256,9 @@ impl ExecutionSourceEpoch {
 pub(super) fn collect_execution_fingerprint(
     ctx: &RepoContext,
 ) -> std::result::Result<String, String> {
-    let current = crate::state::current_worktree_fingerprint(ctx);
-    current.fingerprint.ok_or_else(|| {
-        current
-            .error
-            .unwrap_or_else(|| "worktree fingerprint was unavailable".into())
-    })
+    crate::git_receipts::repository_source_snapshot(ctx.root())
+        .map(|snapshot| snapshot.worktree_fingerprint)
+        .map_err(|error| format!("{error:#}"))
 }
 
 pub(super) fn block_for_unverifiable_effect_policy(

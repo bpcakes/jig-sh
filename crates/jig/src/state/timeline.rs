@@ -4,7 +4,7 @@ use crate::context::RepoContext;
 
 use super::jsonl::{read_jsonl, read_receipt_window, receipts_for_plan};
 use super::receipts::receipt_diff_summary;
-use super::records::{DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent};
+use super::records::{DecisionRecord, PlanBaseline, PlanEvent, ReceiptRecord, SessionEvent};
 use super::sessions::read_session_events;
 
 pub(crate) struct SessionStreamEvent {
@@ -19,6 +19,7 @@ pub(crate) struct PlanStreamEvent {
     pub plan_id: String,
     pub title: Option<String>,
     pub body_path: Option<String>,
+    pub baseline: Option<PlanBaseline>,
     pub resolution: Option<String>,
 }
 pub(crate) struct DecisionStreamRecord {
@@ -92,6 +93,7 @@ impl From<PlanEvent> for PlanStreamEvent {
                 timestamp_ms,
                 title,
                 body_path,
+                baseline,
                 ..
             } => Self {
                 event: "open".into(),
@@ -99,6 +101,7 @@ impl From<PlanEvent> for PlanStreamEvent {
                 plan_id,
                 title: Some(title),
                 body_path,
+                baseline,
                 resolution: None,
             },
             PlanEvent::Append {
@@ -112,6 +115,7 @@ impl From<PlanEvent> for PlanStreamEvent {
                 plan_id,
                 title: None,
                 body_path,
+                baseline: None,
                 resolution: None,
             },
             PlanEvent::Close {
@@ -125,6 +129,7 @@ impl From<PlanEvent> for PlanStreamEvent {
                 plan_id,
                 title: None,
                 body_path: None,
+                baseline: None,
                 resolution,
             },
             PlanEvent::Unknown {
@@ -138,6 +143,7 @@ impl From<PlanEvent> for PlanStreamEvent {
                 plan_id,
                 title: None,
                 body_path: None,
+                baseline: None,
                 resolution: None,
             },
         }

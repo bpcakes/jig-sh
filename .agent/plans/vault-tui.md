@@ -186,7 +186,7 @@ Define a narrow `VaultBackend` trait in `crates/jig-vault-tui/src/lib.rs`. It re
 
 Add explicit `jig vault tui` CLI parsing, scope options, help, and `--json` rejection. Resolve and validate scope and require terminal stdin/stdout before capturing a passphrase or creating a home. Strip both reserved passphrase environment variables before any worker starts. Support a previously captured environment credential without showing it in the model; otherwise begin at a protected unlock form. Use the existing Unix process-wide signal supervisor so interruption requests cancellation, joins the current worker, drops secret state, restores the terminal, retires handlers, and only then re-delivers the signal.
 
-Extend `jig-tui::TerminalSession` with paired bracketed-paste enablement/restoration if the feature-specific runtime needs it, keeping this as generic terminal mechanics. Implement model states for absent-vault initialization or restore choice, v1 read-only browsing and deliberate migration, locked, loading, browsing, help, confirmation, busy, and error. The wide renderer uses Items / Fields / Details, a persistent header with scope/home/lock/version/audit/count information, and a contextual footer. The compact renderer uses a focused pane and breadcrumb. Filtering searches item, field, reference, and legacy names only. Values never decrypt while moving selection.
+Extend `jig-tui::TerminalSession` with paired bracketed-paste enablement/restoration if the feature-specific runtime needs it, keeping this as generic terminal mechanics. Implement model states for absent-vault initialization or restore choice, v1 read-only browsing and deliberate migration, locked, loading, browsing, help, confirmation, busy, and error. The wide renderer uses Items / Fields / Details, a persistent header with scope<private-path> information, and a contextual footer. The compact renderer uses a focused pane and breadcrumb. Filtering searches item, field, reference, and legacy names only. Values never decrypt while moving selection.
 
 Expose arrows plus `h/j/k/l`, `/` search, `Tab` focus, `Enter` open/accept, `Esc` back/cancel, `?` help, `:` tools, `r` refresh, `L` lock, and `q` quit. Preserve selection by exact `VaultReference` or exact legacy name across refreshes. Add pure model tests, wide/compact/minimum-size TestBackend tests, no-secret frame assertions, backend failure tests, and PTY smoke coverage for unlock, resize, lock, quit, and terminal restoration. Commit the browsing foundation after focused tests and Clippy pass.
 
@@ -218,7 +218,7 @@ Finish by reviewing every diff and running the development binary through the fu
 
 ## Concrete Steps
 
-Work from `/home/aa/.herdr/worktrees/jig-sh/feat-vault-tui`.
+Work from `<private-path>`.
 
 1. Open structured work and record its identifier in `Progress`:
 

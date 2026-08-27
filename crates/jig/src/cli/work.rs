@@ -174,6 +174,11 @@ pub(crate) struct WorkStartOpts {
     pub(crate) body_file: Option<PathBuf>,
     #[arg(
         long,
+        help = "Git commit/ref to use as the plan change baseline; defaults to HEAD"
+    )]
+    pub(crate) base: Option<String>,
+    #[arg(
+        long,
         help = "Print only the new plan id (for shell capture); conflicts with --json"
     )]
     pub(crate) print_plan_id: bool,
@@ -201,8 +206,15 @@ pub(crate) struct WorkCheckOpts {
     pub(crate) plan_id: String,
 
     #[arg(
+        long = "gate",
+        conflicts_with = "tools",
+        help = "Specific configured gate id to force-run; may be repeated"
+    )]
+    pub(crate) gates: Vec<String>,
+
+    #[arg(
         long = "tool",
-        help = "Specific legacy gate tool to run; defaults to all configured execution evidence"
+        help = "Specific execution tool to force-run; defaults to required applicable gates"
     )]
     pub(crate) tools: Vec<String>,
 }

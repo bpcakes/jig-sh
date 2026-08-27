@@ -19,7 +19,7 @@ use crate::backend::{
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
     RustMigrationLayout, StatusConfig, config_app_dirs_match, default_codex_marketplace_plugins,
-    validate_web_package_manager,
+    validate_gate_path_pattern, validate_schema_docs_dir, validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::repository_path::{
@@ -75,6 +75,7 @@ pub(super) struct RenderAnswers {
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: bool,
     schema_dump_command: String,
+    schema_docs_dir: String,
     schema_check_command: String,
     sqlx_check_command: String,
     migration_add_command: Option<String>,
@@ -91,6 +92,7 @@ pub(super) struct RenderAnswers {
     go_test_locked_command: String,
     sqlc_check_command: String,
     web_package_manager: String,
+    application_contracts_enabled: bool,
     web_package_manager_spec: String,
     web_package_manager_version: String,
     node_version: String,
@@ -102,6 +104,7 @@ pub(super) struct RenderAnswers {
     typescript_coverage_command: String,
     dev_apps: Vec<DevApp>,
     frontend_apps: Vec<FrontendApp>,
+    frontend_workspace_roots: Vec<String>,
     generated_frontend_dev_apps: Vec<FrontendApp>,
     vault: vault::VaultAnswers,
     status: StatusConfig,
@@ -505,6 +508,10 @@ impl RenderAnswers {
         &self.frontend_apps
     }
 
+    pub(super) fn frontend_workspace_roots(&self) -> &[String] {
+        &self.frontend_workspace_roots
+    }
+
     pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
         self.harness_footprint
     }
@@ -687,6 +694,10 @@ impl RenderAnswers {
 
     pub(super) const fn schema_dump_enabled(&self) -> bool {
         self.schema_dump_enabled
+    }
+
+    pub(super) fn schema_docs_dir(&self) -> &str {
+        &self.schema_docs_dir
     }
 
     pub(super) const fn migration_add_enabled(&self) -> bool {
@@ -979,6 +990,30 @@ pub(super) fn web_run_command(package_manager: &str) -> &'static str {
         "yarn" => "yarn run",
         _ => unreachable!("web package manager was already validated"),
     }
+}
+
+fn normalize_generated_gate_root(value: &str, label: &str) -> Result<String> {
+    let normalized = normalize_portable_repo_path(value, label)?;
+    if normalized.chars().any(|character| {
+        character.is_control() || matches!(character, '*' | '?' | '[' | ']' | '{' | '}')
+    }) {
+        bail!(
+            "{label} '{value}' cannot be represented safely as a literal generated gate path; control characters and glob metacharacters (*, ?, [, ], {{, }}) are unsupported"
+        );
+    }
+    let pattern = if normalized == "." {
+        "**".to_string()
+    } else {
+        format!("{normalized}/**")
+    };
+    validate_gate_path_pattern("generated-policy", label, &pattern).with_context(|| {
+        format!("{label} '{value}' cannot be represented safely as a generated gate path")
+    })?;
+    Ok(normalized)
+}
+
+pub(super) fn frontend_gate_key(name: &str) -> String {
+    name.to_ascii_lowercase().replace('-', "_")
 }
 
 mod serialization;

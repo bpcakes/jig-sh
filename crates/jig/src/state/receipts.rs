@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use jig_contract::{Finding, TargetId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cancellation::{ensure_status_collection_active, status_collection_cancellation};
@@ -16,23 +16,29 @@ use crate::git_receipts::{
     collect_git_receipt_metadata_without_worktree_fingerprint,
     collect_git_receipt_metadata_without_worktree_fingerprint_with_cancellation,
     is_git_receipt_collection_cancellation, repo_worktree_fingerprint,
-    repo_worktree_fingerprint_with_cancellation,
+    repo_worktree_fingerprint_with_cancellation, repository_source_snapshot,
+    repository_source_snapshot_with_cancellation,
 };
 use crate::tool_defs::tool;
 
 use super::jsonl::{RawJsonlRecord, append_jsonl, read_receipts_reverse, scan_jsonl_raw};
+use super::privacy::{
+    redact_repository_root, redact_repository_root_in_value, repository_root_spellings,
+};
 use super::records::ReceiptRecord;
 use super::sessions::current_session;
 use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
-pub(crate) use target_evidence::TargetReceiptStatus;
-use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
+mod archive;
+mod target_evidence;
 
 pub(super) use archive::parse_archive_before_ms;
 use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
 use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
 pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
+pub(crate) use target_evidence::TargetReceiptStatus;
+use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
 
 const SUCCESSFUL_RECEIPT_PREVIEW_BYTES: usize = 512;
 
@@ -128,6 +134,130 @@ pub(crate) struct WorkReviewReceiptEvidence {
     parse: WorkReviewEvidenceParse,
 }
 
+pub(crate) const WORK_CHECK_EVIDENCE_SCHEMA: &str = "jig.work_check/v2";
+
+const fn usize_is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+const fn bool_is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct WorkCheckBatchEvidence {
+    pub(crate) schema: String,
+    #[serde(default)]
+    pub(crate) changed_paths: Vec<String>,
+    #[serde(default)]
+    pub(crate) changed_path_count: usize,
+    #[serde(default)]
+    pub(crate) changed_paths_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) changed_paths_digest: Option<String>,
+    pub(crate) gates: Vec<WorkCheckGateEvidence>,
+}
+
+impl WorkCheckBatchEvidence {
+    pub(crate) fn into_hydrated_gates(self) -> Vec<WorkCheckGateEvidence> {
+        let Self {
+            changed_paths,
+            changed_path_count,
+            changed_paths_truncated,
+            changed_paths_digest,
+            mut gates,
+            ..
+        } = self;
+        for gate in &mut gates {
+            if gate.changed_paths_digest.is_none() && changed_paths_digest.is_some() {
+                gate.changed_paths.clone_from(&changed_paths);
+                gate.changed_path_count = changed_path_count;
+                gate.changed_paths_truncated = changed_paths_truncated;
+                gate.changed_paths_digest.clone_from(&changed_paths_digest);
+            }
+        }
+        gates
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct WorkCheckGateEvidence {
+    pub(crate) gate_id: String,
+    pub(crate) tool: String,
+    pub(crate) status: String,
+    pub(crate) applicability: String,
+    #[serde(default)]
+    pub(crate) required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) paths: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) paths_ignore: Vec<String>,
+    #[serde(default)]
+    pub(crate) reuse: bool,
+    #[serde(default)]
+    pub(crate) forced: bool,
+    pub(crate) gate_signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) baseline_oid: Option<String>,
+    pub(crate) reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) changed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "usize_is_zero")]
+    pub(crate) changed_path_count: usize,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub(crate) changed_paths_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) changed_paths_digest: Option<String>,
+    #[serde(default)]
+    pub(crate) matching_paths: Vec<String>,
+    #[serde(default)]
+    pub(crate) matching_path_count: usize,
+    #[serde(default)]
+    pub(crate) matching_paths_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) matching_paths_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scope_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scope_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_status: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_plan_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_batch_receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_tool_receipt_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorkCheckGateReceiptStatus {
+    pub(crate) batch: ToolReceiptStatus,
+    pub(crate) evidence: WorkCheckGateEvidence,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ReusableWorkCheckEvidence {
+    pub(crate) source_plan_id: String,
+    pub(crate) source_batch_receipt_id: String,
+    pub(crate) source_tool_receipt_id: String,
+}
+
+enum ReusableWorkCheckScanState {
+    Direct(ReusableWorkCheckEvidence),
+    Tombstone,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ReusableWorkCheckQuery {
+    pub(crate) gate_id: String,
+    pub(crate) tool: String,
+    pub(crate) gate_signature: String,
+    pub(crate) scope_fingerprint: String,
+}
+
 #[derive(Clone, Debug)]
 enum WorkReviewEvidenceParse {
     Valid,
@@ -151,13 +281,12 @@ struct IndexedCheckReceipts {
 }
 
 /// A request-scoped view of the receipts needed to evaluate configured work
-/// gates. Building it scans the receipt stream exactly once. Check and review
-/// indexes retain bounded latest evidence; profile indexes retain incomplete
-/// concurrent runs up to a fail-closed safety bound until the scan can prove
-/// which runs are complete.
+/// gates. Building it retains a bounded number of statuses per configured gate
+/// while scanning the receipt stream exactly once.
 #[derive(Debug, Default)]
 pub(crate) struct WorkGateReceiptIndex {
     checks: BTreeMap<String, IndexedCheckReceipts>,
+    check_gates: BTreeMap<String, WorkCheckGateReceiptStatus>,
     reviews: BTreeMap<String, WorkReviewReceiptStatus>,
     evidence: BTreeMap<String, IndexedTargetReceipts>,
 }
@@ -188,6 +317,10 @@ impl WorkGateReceiptIndex {
         self.reviews.get(gate_id)
     }
 
+    pub(crate) fn check_gate_receipt(&self, gate_id: &str) -> Option<&WorkCheckGateReceiptStatus> {
+        self.check_gates.get(gate_id)
+    }
+
     pub(crate) fn target_receipts(&self, gate_id: &str) -> Option<&TargetReceiptGroup> {
         self.evidence
             .get(gate_id)
@@ -204,6 +337,7 @@ impl WorkGateReceiptIndex {
 #[cfg(test)]
 thread_local! {
     static WORK_GATE_RECEIPT_INDEX_SCAN_COUNT: Cell<usize> = const { Cell::new(0) };
+    static REUSABLE_WORK_CHECK_SCAN_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -273,6 +407,133 @@ pub(crate) fn work_gate_receipt_index(
     )
 }
 
+pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
+    ctx: &RepoContext,
+    current_plan_id: &str,
+    queries: &[ReusableWorkCheckQuery],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, ReusableWorkCheckEvidence>> {
+    ensure_receipt_scan_active(cancelled)?;
+    if queries.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    #[cfg(test)]
+    REUSABLE_WORK_CHECK_SCAN_COUNT.set(REUSABLE_WORK_CHECK_SCAN_COUNT.get() + 1);
+    ensure_state_layout(ctx)?;
+    let path = ctx.state_file("receipts.jsonl");
+    let queries = queries
+        .iter()
+        .map(|query| (query.gate_id.as_str(), query))
+        .collect::<BTreeMap<_, _>>();
+    let requested_tools = queries
+        .values()
+        .map(|query| query.tool.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut successful_receipts = BTreeMap::new();
+    let mut latest_matching_evidence = BTreeMap::new();
+    let mut current_plan_evidence = BTreeSet::new();
+    scan_jsonl_raw(&path, cancelled, |record| {
+        ensure_receipt_scan_active(cancelled)?;
+        let receipt = parse_raw_receipt(record, &path)?;
+        if receipt.exit_status == 0 && requested_tools.contains(receipt.tool_name.as_str()) {
+            successful_receipts.insert(receipt.id.clone(), receipt.tool_name.clone());
+        }
+        if receipt.tool_name != tool::WORK_CHECK {
+            return Ok(());
+        }
+        let Some(plan_id) = receipt.plan_id.as_deref() else {
+            return Ok(());
+        };
+        let selected_query_gates = receipt_arg_strings(&receipt, "gates")
+            .filter(|gate_id| queries.contains_key(*gate_id))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if plan_id == current_plan_id {
+            current_plan_evidence.extend(selected_query_gates.iter().cloned());
+        }
+        let Some(evidence) = receipt
+            .evidence
+            .as_ref()
+            .and_then(|evidence| {
+                serde_json::from_value::<WorkCheckBatchEvidence>(evidence.clone()).ok()
+            })
+            .filter(|evidence| evidence.schema == WORK_CHECK_EVIDENCE_SCHEMA)
+        else {
+            if plan_id != current_plan_id {
+                for gate_id in selected_query_gates {
+                    latest_matching_evidence.insert(gate_id, ReusableWorkCheckScanState::Tombstone);
+                }
+            }
+            return Ok(());
+        };
+        if plan_id == current_plan_id {
+            current_plan_evidence.extend(
+                evidence
+                    .gates
+                    .iter()
+                    .filter(|gate| queries.contains_key(gate.gate_id.as_str()))
+                    .map(|gate| gate.gate_id.clone()),
+            );
+            return Ok(());
+        }
+        let gates = evidence.into_hydrated_gates();
+        let reported_query_gates = gates
+            .iter()
+            .filter(|gate| queries.contains_key(gate.gate_id.as_str()))
+            .map(|gate| gate.gate_id.clone())
+            .collect::<BTreeSet<_>>();
+        for gate_id in selected_query_gates {
+            if !reported_query_gates.contains(gate_id.as_str()) {
+                latest_matching_evidence.insert(gate_id, ReusableWorkCheckScanState::Tombstone);
+            }
+        }
+        for gate in gates {
+            let Some(query) = queries.get(gate.gate_id.as_str()) else {
+                continue;
+            };
+            if gate.tool != query.tool
+                || gate.gate_signature != query.gate_signature
+                || gate.scope_fingerprint.as_deref() != Some(query.scope_fingerprint.as_str())
+            {
+                continue;
+            }
+            if gate.status == "reused" {
+                continue;
+            }
+            let candidate = gate.tool_receipt_id.as_deref().and_then(|proving_receipt| {
+                (receipt.exit_status == 0
+                    && receipt.worktree_fingerprint.is_some()
+                    && receipt.worktree_fingerprint_error.is_none()
+                    && gate.status == "executed"
+                    && successful_receipts.get(proving_receipt).map(String::as_str)
+                        == Some(gate.tool.as_str()))
+                .then(|| ReusableWorkCheckEvidence {
+                    source_plan_id: plan_id.to_string(),
+                    source_batch_receipt_id: receipt.id.clone(),
+                    source_tool_receipt_id: proving_receipt.to_string(),
+                })
+            });
+            latest_matching_evidence.insert(
+                gate.gate_id,
+                candidate.map_or(
+                    ReusableWorkCheckScanState::Tombstone,
+                    ReusableWorkCheckScanState::Direct,
+                ),
+            );
+        }
+        Ok(())
+    })?;
+    ensure_receipt_scan_active(cancelled)?;
+    latest_matching_evidence.retain(|gate_id, _| !current_plan_evidence.contains(gate_id));
+    Ok(latest_matching_evidence
+        .into_iter()
+        .filter_map(|(gate_id, evidence)| match evidence {
+            ReusableWorkCheckScanState::Direct(evidence) => Some((gate_id, evidence)),
+            ReusableWorkCheckScanState::Tombstone => None,
+        })
+        .collect())
+}
+
 pub(crate) fn work_gate_receipt_index_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
@@ -315,6 +576,7 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
                         .iter()
                         .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
                         .collect(),
+                    check_gates: BTreeMap::new(),
                     reviews: BTreeMap::new(),
                     evidence: evidence_targets
                         .iter()
@@ -363,8 +625,32 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
             receipts.legacy_work_check = None;
         }
 
-        if receipt.tool_name == tool::WORK_CHECK && receipt.exit_status == 0 {
+        if receipt.tool_name == tool::WORK_CHECK {
             let batch_status = tool_receipt_status(&receipt);
+            for gate_id in receipt_arg_strings(&receipt, "gates") {
+                index.check_gates.remove(gate_id);
+            }
+            if let Some(evidence) = receipt
+                .evidence
+                .as_ref()
+                .and_then(|evidence| {
+                    serde_json::from_value::<WorkCheckBatchEvidence>(evidence.clone()).ok()
+                })
+                .filter(|evidence| evidence.schema == WORK_CHECK_EVIDENCE_SCHEMA)
+            {
+                for gate in evidence.into_hydrated_gates() {
+                    index.check_gates.insert(
+                        gate.gate_id.clone(),
+                        WorkCheckGateReceiptStatus {
+                            batch: batch_status.clone(),
+                            evidence: gate,
+                        },
+                    );
+                }
+            }
+            if receipt.exit_status != 0 {
+                return Ok(());
+            }
             let has_receipt_ids = receipt_args_has_receipt_ids(&receipt);
             for tool_name in receipt_arg_strings(&receipt, "tools") {
                 // If jig.work_check itself is configured as a check gate, the
@@ -410,238 +696,7 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
     Ok(indexes)
 }
 
-fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> impl Iterator<Item = &'a str> {
-    receipt
-        .args
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-}
+include!("receipts/tail.rs");
 
-fn ensure_receipt_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
-    ensure_status_collection_active(cancelled)
-}
-
-pub(crate) fn current_worktree_fingerprint(ctx: &RepoContext) -> CurrentWorktreeFingerprint {
-    current_worktree_fingerprint_from_result(repo_worktree_fingerprint(ctx.root()))
-        .expect("blocking worktree fingerprint collection cannot be cancelled")
-}
-
-pub(crate) fn current_worktree_fingerprint_with_cancellation(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<CurrentWorktreeFingerprint> {
-    current_worktree_fingerprint_from_result(repo_worktree_fingerprint_with_cancellation(
-        ctx.root(),
-        cancelled,
-    ))
-}
-
-pub(crate) fn current_worktree_fingerprint_for_receipt_with_cancellation(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> CurrentWorktreeFingerprint {
-    current_worktree_fingerprint_from_result_for_receipt(
-        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled),
-    )
-}
-
-fn current_worktree_fingerprint_from_result(
-    result: Result<String>,
-) -> Result<CurrentWorktreeFingerprint> {
-    match result {
-        Ok(fingerprint) => Ok(CurrentWorktreeFingerprint {
-            fingerprint: Some(fingerprint),
-            error: None,
-        }),
-        Err(error) if is_git_receipt_collection_cancellation(&error) => {
-            Err(status_collection_cancellation())
-        }
-        Err(error) => Ok(CurrentWorktreeFingerprint {
-            fingerprint: None,
-            error: Some(format!("{error:#}")),
-        }),
-    }
-}
-
-fn current_worktree_fingerprint_from_result_for_receipt(
-    result: Result<String>,
-) -> CurrentWorktreeFingerprint {
-    match result {
-        Ok(fingerprint) => CurrentWorktreeFingerprint {
-            fingerprint: Some(fingerprint),
-            error: None,
-        },
-        Err(error) => CurrentWorktreeFingerprint {
-            fingerprint: None,
-            error: Some(format!("{error:#}")),
-        },
-    }
-}
-
-pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
-    record_receipt_inner(ctx, input, None, None)
-}
-
-pub(crate) fn record_target_receipt(
-    ctx: &RepoContext,
-    input: ReceiptInput<'_>,
-    target: TargetReceiptMetadata,
-) -> Result<String> {
-    record_receipt_inner(ctx, input, Some(target), None)
-}
-
-pub(crate) fn record_receipt_with_cancellation(
-    ctx: &RepoContext,
-    input: ReceiptInput<'_>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    record_receipt_inner(ctx, input, None, Some(cancelled))
-}
-
-fn record_receipt_inner(
-    ctx: &RepoContext,
-    input: ReceiptInput<'_>,
-    target: Option<TargetReceiptMetadata>,
-    cancelled: Option<&dyn Fn() -> bool>,
-) -> Result<String> {
-    ensure_state_layout(ctx)?;
-    let mut git_metadata = receipt_git_metadata(
-        ctx,
-        input.collect_git_metadata,
-        input.collect_worktree_fingerprint,
-        cancelled,
-    );
-    if let Some(override_result) = input.worktree_fingerprint_override {
-        match override_result {
-            Ok(fingerprint) => {
-                git_metadata.worktree_fingerprint = Some(fingerprint);
-                git_metadata.worktree_fingerprint_error = None;
-            }
-            Err(error) => {
-                git_metadata.worktree_fingerprint = None;
-                git_metadata.worktree_fingerprint_error = Some(error);
-            }
-        }
-    }
-    let (run_id, target_id, config_digest, input_digest, findings) = target.map_or_else(
-        || (None, None, None, None, Vec::new()),
-        |metadata| {
-            (
-                Some(metadata.run_id),
-                Some(metadata.target),
-                Some(metadata.config_digest),
-                Some(metadata.input_digest),
-                metadata.findings,
-            )
-        },
-    );
-    let receipt = ReceiptRecord {
-        id: new_id("receipt"),
-        session_id: match input.session_override {
-            Some(session_id) => Some(session_id),
-            None => current_session(ctx)?,
-        },
-        plan_id: input.plan_id,
-        tool_name: input.tool_name.to_string(),
-        args: input.args,
-        invoked_command_key: input.invoked_command_key,
-        started_at_ms: input.started_at_ms,
-        ended_at_ms: input.ended_at_ms,
-        exit_status: input.exit_status,
-        stdout_preview: receipt_output_preview(input.stdout, input.exit_status),
-        stderr_preview: receipt_output_preview(input.stderr, input.exit_status),
-        evidence: input.evidence,
-        run_id,
-        target: target_id,
-        config_digest,
-        input_digest,
-        findings,
-        changed_paths: git_metadata.changed_paths,
-        changed_path_count: git_metadata.changed_path_count,
-        changed_paths_truncated: git_metadata.changed_paths_truncated,
-        changed_paths_digest: git_metadata.changed_paths_digest,
-        diff_stat: git_metadata.diff_stat,
-        git_status_error: git_metadata.git_status_error,
-        git_diff_stat_error: git_metadata.git_diff_stat_error,
-        worktree_fingerprint: git_metadata.worktree_fingerprint,
-        worktree_fingerprint_error: git_metadata.worktree_fingerprint_error,
-    };
-    let receipt_id = receipt.id.clone();
-    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt)?;
-    Ok(receipt_id)
-}
-
-pub(super) fn record_successful_state_tool(
-    ctx: &RepoContext,
-    input: StateToolReceipt<'_>,
-) -> Result<String> {
-    record_receipt(
-        ctx,
-        ReceiptInput {
-            tool_name: input.tool_name,
-            args: input.args,
-            invoked_command_key: None,
-            plan_id: input.plan_id,
-            started_at_ms: input.started_at_ms,
-            ended_at_ms: now_ms(),
-            exit_status: 0,
-            stdout: "",
-            stderr: "",
-            evidence: None,
-            session_override: input.session_override,
-            collect_git_metadata: false,
-            collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
-        },
-    )
-}
-
-fn receipt_matches_filters(receipt: &ReceiptRecord, filter: &ReceiptListFilter) -> bool {
-    let session_matches = filter
-        .session_id
-        .as_ref()
-        .is_none_or(|session_id| receipt.session_id.as_ref() == Some(session_id));
-    let plan_matches = filter
-        .plan_id
-        .as_ref()
-        .is_none_or(|plan_id| receipt.plan_id.as_ref() == Some(plan_id));
-    let tool_matches = filter
-        .tool_name
-        .as_ref()
-        .is_none_or(|tool_name| receipt.tool_name == *tool_name);
-    let failure_matches = !filter.failed_only || receipt.exit_status != 0;
-
-    session_matches && plan_matches && tool_matches && failure_matches
-}
-
-fn receipt_args_include_receipt_id(receipt: &ReceiptRecord, receipt_id: &str) -> bool {
-    receipt
-        .args
-        .get("receipt_ids")
-        .and_then(Value::as_array)
-        .is_some_and(|receipt_ids| {
-            receipt_ids
-                .iter()
-                .any(|candidate| candidate.as_str() == Some(receipt_id))
-        })
-}
-
-fn receipt_args_has_receipt_ids(receipt: &ReceiptRecord) -> bool {
-    receipt
-        .args
-        .get("receipt_ids")
-        .and_then(Value::as_array)
-        .is_some()
-}
-
-mod presentation;
-pub(super) use presentation::receipt_diff_summary;
-use presentation::*;
-
-mod archive;
-mod target_evidence;
 #[cfg(test)]
 mod tests;

@@ -130,10 +130,16 @@ fn v6_schema_check_uses_the_dump_runner_schema_output_directory() {
         "mkdir -p \"$JIG_REPO_ROOT/$SCHEMA_DOCS_DIR\" && printf 'changed\\n' > \"$JIG_REPO_ROOT/$SCHEMA_DOCS_DIR/tables.sql\"",
     );
     let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replace(
-        "SCHEMA_VALUE = \"changed\"",
-        "SCHEMA_VALUE = \"changed\", SCHEMA_DOCS_DIR = \"generated/schema\"",
-    );
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "SCHEMA_VALUE = \"changed\"",
+            "SCHEMA_VALUE = \"changed\", SCHEMA_DOCS_DIR = \"generated/schema\"",
+        )
+        .replace(
+            "schema_dump_enabled = true",
+            "schema_dump_enabled = true\nschema_docs_dir = \"generated/schema\"",
+        );
     fs::write(config_path, config).unwrap();
     let contract_path = temp.path().join(".agent/jig-contract.json");
     let mut contract: serde_json::Value =

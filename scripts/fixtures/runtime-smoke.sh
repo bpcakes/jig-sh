@@ -712,6 +712,7 @@ tools = {receipt["tool_name"] for receipt in payload["receipts"]}
 required = {
     "jig.plans_open",
     "jig.contract_check",
+    "jig.rust_file_loc",
     "jig.test",
     "jig.decisions_add",
 }

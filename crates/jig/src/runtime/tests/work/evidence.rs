@@ -129,6 +129,7 @@ profile = "verify"
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -317,6 +318,7 @@ profile = "does-not-exist"
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -464,6 +466,7 @@ tool = "jig.custom_check"
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -550,6 +553,7 @@ legacy_aliases = ["jig.failing_check"]
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -638,6 +642,7 @@ legacy_aliases = ["jig.broken_check"]
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -645,7 +650,7 @@ legacy_aliases = ["jig.broken_check"]
     .to_string();
 
     assert!(
-        error.contains("jig.broken_check could not execute"),
+        error.contains("Unsupported command key in jig contract: missing_check_command"),
         "{error}"
     );
     assert_eq!(

@@ -463,7 +463,10 @@ role = "spa"
     })
     .unwrap_err()
     .to_string();
-    assert!(error.contains("Scaffold SQLx metadata dir must not contain '.' or '..'"));
+    assert!(
+        error.contains("SQLx metadata") && error.contains("must not contain '.' or '..'"),
+        "{error:?}"
+    );
     assert!(!unsafe_metadata_destination.exists());
 
     let custom_metadata_destination = temp.path().join("custom-metadata-repo");

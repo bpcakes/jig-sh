@@ -4,6 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "build_identity.rs"]
+mod build_identity;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TemplatePinPolicy {
     Released,
@@ -27,7 +30,13 @@ impl std::fmt::Display for TemplatePinPolicy {
     }
 }
 
-fn detect_template_pin_policy(manifest_dir: &str) -> TemplatePinPolicy {
+fn detect_template_pin_policy(
+    manifest_dir: &str,
+    source_layout: &build_identity::BuildSourceLayout,
+) -> TemplatePinPolicy {
+    if !source_layout.is_checkout() {
+        return TemplatePinPolicy::Unknown;
+    }
     if !is_git_worktree(manifest_dir) {
         if warn_about_git_metadata_without_git(manifest_dir) {
             return TemplatePinPolicy::Unreleased;
@@ -54,20 +63,31 @@ fn emit_template_pin_policy(policy: TemplatePinPolicy) {
     );
 }
 
-fn add_git_rerun_inputs(manifest_dir: &str) {
-    for path in [
+fn add_git_rerun_inputs(manifest_dir: &str, source_layout: &build_identity::BuildSourceLayout) {
+    let mut paths = vec![
         Path::new(manifest_dir).join("build.rs"),
+        Path::new(manifest_dir).join("build_identity.rs"),
         Path::new(manifest_dir).join("Cargo.toml"),
+        Path::new(manifest_dir).join("Cargo.lock"),
         Path::new(manifest_dir).join("src"),
-        Path::new(manifest_dir).join("../../Cargo.toml"),
-        Path::new(manifest_dir).join("../../Cargo.lock"),
-        Path::new(manifest_dir).join("../../templates"),
-    ] {
+    ];
+    if source_layout.is_checkout() {
+        paths.extend([
+            source_layout.root().join("Cargo.toml"),
+            source_layout.root().join("Cargo.lock"),
+            source_layout.root().join("crates"),
+            source_layout.root().join("templates"),
+        ]);
+    }
+    for path in paths {
         if path.exists() {
             println!("cargo:rerun-if-changed={}", path.display());
         }
     }
 
+    if !source_layout.is_checkout() {
+        return;
+    }
     for git_dir in git_dirs(manifest_dir) {
         for path in [
             git_dir.join("HEAD"),
@@ -84,8 +104,27 @@ fn add_git_rerun_inputs(manifest_dir: &str) {
     }
 }
 
+fn refresh_templates_and_emit_build_identity(
+    manifest_dir: &str,
+    source_layout: &build_identity::BuildSourceLayout,
+    template_pin_policy: TemplatePinPolicy,
+) {
+    let configuration =
+        build_identity::configuration_from_environment(template_pin_policy.as_str())
+            .unwrap_or_else(|error| panic!("failed to collect Jig build configuration: {error}"));
+    for key in build_identity::cargo_rerun_environment_keys(&configuration) {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    let identity =
+        build_identity::compute_after_input_refresh(source_layout, &configuration, |layout| {
+            generate_embedded_template_manifests(manifest_dir, layout)
+        })
+        .unwrap_or_else(|error| panic!("failed to compute Jig native build identity: {error}"));
+    println!("cargo:rustc-env=JIG_BUILD_IDENTITY={identity}");
+}
+
 struct EmbeddedTemplateManifest<'a> {
-    root: &'a str,
+    template_subdirectory: &'a str,
     output_file: &'a str,
     snapshot_file: &'a str,
     snapshot_dir: &'a str,
@@ -95,11 +134,15 @@ struct EmbeddedTemplateManifest<'a> {
     snapshot_comment: &'a str,
 }
 
-fn generate_embedded_template_manifest(manifest_dir: &str, manifest: EmbeddedTemplateManifest<'_>) {
-    let template_root = Path::new(manifest_dir).join(manifest.root);
+fn generate_embedded_template_manifest(
+    manifest_dir: &str,
+    source_layout: &build_identity::BuildSourceLayout,
+    manifest: EmbeddedTemplateManifest<'_>,
+) {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let output_path = out_dir.join(manifest.output_file);
-    if env::var_os("JIG_EMBEDDED_TEMPLATE_SNAPSHOT").is_some() || !template_root.is_dir() {
+    let template_root = source_layout.live_template_root(manifest.template_subdirectory);
+    if env::var_os("JIG_EMBEDDED_TEMPLATE_SNAPSHOT").is_some() || template_root.is_none() {
         let snapshot = Path::new(manifest_dir).join(manifest.snapshot_file);
         let snapshot_dir = Path::new(manifest_dir).join(manifest.snapshot_dir);
         println!("cargo:rerun-if-changed={}", snapshot.display());
@@ -113,6 +156,12 @@ fn generate_embedded_template_manifest(manifest_dir: &str, manifest: EmbeddedTem
         });
         return;
     }
+    let template_root = template_root.expect("live template root was checked above");
+    assert!(
+        template_root.is_dir(),
+        "validated Jig checkout template root {} is missing",
+        template_root.display()
+    );
 
     println!("cargo:rerun-if-changed={}", template_root.display());
     let mut templates = Vec::new();
@@ -147,11 +196,15 @@ fn generate_embedded_template_manifest(manifest_dir: &str, manifest: EmbeddedTem
     });
 }
 
-fn generate_embedded_template_manifests(manifest_dir: &str) {
+fn generate_embedded_template_manifests(
+    manifest_dir: &str,
+    source_layout: &build_identity::BuildSourceLayout,
+) {
     generate_embedded_template_manifest(
         manifest_dir,
+        source_layout,
         EmbeddedTemplateManifest {
-            root: "../../templates/project",
+            template_subdirectory: "project",
             output_file: "embedded_templates.rs",
             snapshot_file: "src/bootstrap/embedded_templates_snapshot.rs",
             snapshot_dir: "src/bootstrap/embedded_template_snapshots",
@@ -163,8 +216,9 @@ fn generate_embedded_template_manifests(manifest_dir: &str) {
     );
     generate_embedded_template_manifest(
         manifest_dir,
+        source_layout,
         EmbeddedTemplateManifest {
-            root: "../../templates/scaffolds",
+            template_subdirectory: "scaffolds",
             output_file: "embedded_scaffold_templates.rs",
             snapshot_file: "src/bootstrap/scaffold/embedded_templates_snapshot.rs",
             snapshot_dir: "src/bootstrap/scaffold/embedded_template_snapshots",
@@ -467,16 +521,15 @@ fn git_output(manifest_dir: &str, args: &[&str]) -> Option<String> {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=JIG_ASSUME_RELEASE_BUILD");
-    println!("cargo:rerun-if-env-changed=JIG_EMBEDDED_TEMPLATE_SNAPSHOT");
     println!("cargo:rerun-if-env-changed=JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT");
     println!("cargo:rerun-if-env-changed=CI");
 
     let assume_release = env::var_os("JIG_ASSUME_RELEASE_BUILD").is_some();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo");
-    add_git_rerun_inputs(&manifest_dir);
-    generate_embedded_template_manifests(&manifest_dir);
-
-    let detected_policy = detect_template_pin_policy(&manifest_dir);
+    let source_layout = build_identity::resolve_source_layout(Path::new(&manifest_dir))
+        .unwrap_or_else(|error| panic!("failed to resolve Jig build source layout: {error}"));
+    add_git_rerun_inputs(&manifest_dir, &source_layout);
+    let detected_policy = detect_template_pin_policy(&manifest_dir, &source_layout);
     let policy = if assume_release {
         if detected_policy != TemplatePinPolicy::Released {
             println!(
@@ -488,5 +541,6 @@ fn main() {
         detected_policy
     };
 
+    refresh_templates_and_emit_build_identity(&manifest_dir, &source_layout, policy);
     emit_template_pin_policy(policy);
 }

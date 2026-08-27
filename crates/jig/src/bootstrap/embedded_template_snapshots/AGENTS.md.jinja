@@ -12,6 +12,8 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
 - For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
+- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
+- `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
 ## Compatibility And Cutovers
@@ -69,6 +71,10 @@ Configured web apps:
 [% endfor %]
 
 Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, and `test:coverage`.
+Structured work uses four atomic path-aware gates per app; repository-wide TypeScript checks remain available for an intentional full-matrix run.
+[% if application_contracts_enabled -%]
+Application contract freshness and public deployment boundaries have separate `application-contracts` and `public-artifacts` work gates; `jig-contract` remains limited to Jig harness wiring.
+[% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
 Jig validates those scripts during adoption; generated web CI validates them again before running.
 Generated install steps select the package-manager project from workspace membership, not root-lock presence: npm, pnpm, Bun, and Yarn Classic members use the root project, while standalone apps and nested Yarn Berry projects use their app-local project.
@@ -102,6 +108,10 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig check typescript-typecheck`
 - `scripts/jig check typescript-build`
 - `scripts/jig check typescript-coverage`
+[% if application_contracts_enabled %]
+- `scripts/check-webapps.sh application-contracts`
+- `scripts/check-webapps.sh public-artifacts`
+[% endif %]
 [% endif %]
 [% if sqlx_enabled %]
 - `scripts/jig check sqlx`

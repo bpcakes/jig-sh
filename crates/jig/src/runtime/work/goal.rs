@@ -68,6 +68,7 @@ pub(super) fn goal(ctx: &RepoContext, request: WorkGoalRequest) -> Result<Value>
             title: goal.title.clone(),
             body: Some(body),
             body_file: None,
+            base: None,
         },
     )?;
 

@@ -173,6 +173,7 @@ fn work_gates_keep_failed_checks_failed_when_freshness_is_unknown() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )

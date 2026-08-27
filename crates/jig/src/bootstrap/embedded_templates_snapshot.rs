@@ -68,6 +68,10 @@ pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/agent-map.md.jinja")),
     },
     EmbeddedTemplateFile {
+        relative_path: "scripts/check-rust-file-loc.sh.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/scripts/check-rust-file-loc.sh.jinja")),
+    },
+    EmbeddedTemplateFile {
         relative_path: "scripts/check-webapp-scripts.mjs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/scripts/check-webapp-scripts.mjs.jinja")),
     },

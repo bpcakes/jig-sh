@@ -46,8 +46,9 @@ pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migrati
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
-    ReviewScopeArg, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
+    ReviewScopeArg, WorkCheckGate, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
     WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg, parse_work_gate,
+    validate_gate_path_pattern,
 };
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -106,6 +107,8 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     schema_dump_command: String,
+    #[serde(default = "default_schema_docs_dir")]
+    schema_docs_dir: String,
     #[allow(dead_code)]
     #[serde(default)]
     schema_check_command: String,
@@ -140,8 +143,14 @@ struct RepoConfig {
     commands: BTreeMap<String, String>,
     #[serde(default = "default_web_package_manager")]
     web_package_manager: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    application_contracts_enabled: bool,
     #[serde(default)]
     frontend_apps: Vec<FrontendAppConfig>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    frontend_workspace_roots: Vec<String>,
     #[serde(default)]
     repository: Option<AuthoredRepositoryConfig>,
     #[serde(default)]
@@ -511,6 +520,18 @@ impl RepoContext {
         self.config.schema_dump_enabled
     }
 
+    pub(crate) fn rust_sqlx_metadata_dir(&self) -> &str {
+        &self.config.rust_sqlx_metadata_dir
+    }
+
+    pub(crate) fn schema_dump_command(&self) -> &str {
+        &self.config.schema_dump_command
+    }
+
+    pub(crate) fn schema_docs_dir(&self) -> &str {
+        &self.config.schema_docs_dir
+    }
+
     pub(crate) fn rust_crate_roots(&self) -> &[String] {
         &self.config.rust_crate_roots
     }
@@ -815,6 +836,7 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         rust_sqlx_metadata_dir,
         schema_dump_enabled,
         schema_dump_command: _,
+        schema_docs_dir: _,
         schema_check_command: _,
         sqlx_check_command: _,
         migration_add_command: _,
@@ -827,7 +849,9 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         rust_test_locked_command: _,
         commands,
         web_package_manager: _,
+        application_contracts_enabled: _,
         frontend_apps,
+        frontend_workspace_roots: _,
         repository: _,
         vault: _,
         dev: _,
@@ -954,7 +978,8 @@ impl FeatureContext for RepoContext {
 mod validation;
 use validation::*;
 pub(crate) use validation::{
-    config_app_dirs_match, default_codex_marketplace_plugins, validate_web_package_manager,
+    config_app_dirs_match, default_codex_marketplace_plugins, is_reserved_git_metadata_component,
+    validate_schema_docs_dir, validate_web_package_manager,
 };
 
 mod repository_root;

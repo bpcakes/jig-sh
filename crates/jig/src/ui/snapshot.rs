@@ -130,6 +130,9 @@ struct PlanInfo {
     opened_at_ms: Option<u64>,
     closed_at_ms: Option<u64>,
     resolution: Option<String>,
+    baseline_ref: Option<String>,
+    baseline_oid: Option<String>,
+    baseline_error: Option<String>,
     opened: bool,
     closed: bool,
 }
@@ -146,6 +149,9 @@ impl PlanInfo {
                 .opened_at_ms
                 .zip(self.closed_at_ms)
                 .map(|(a, b)| b.saturating_sub(a)),
+            baseline_ref: self.baseline_ref.clone(),
+            baseline_oid: self.baseline_oid.clone(),
+            baseline_error: self.baseline_error.clone(),
         }
     }
 }
@@ -163,6 +169,20 @@ fn plan_index(events: &[PlanStreamEvent]) -> BTreeMap<String, PlanInfo> {
                     .clone()
                     .unwrap_or_else(|| "Untitled plan".into());
                 info.body_path = event.body_path.clone();
+                info.baseline_ref = event
+                    .baseline
+                    .as_ref()
+                    .map(|baseline| baseline.requested_ref.clone());
+                info.baseline_oid = event.baseline.as_ref().and_then(|baseline| {
+                    baseline
+                        .commit_oid
+                        .clone()
+                        .or_else(|| baseline.empty_tree_oid.clone())
+                });
+                info.baseline_error = event
+                    .baseline
+                    .as_ref()
+                    .and_then(|baseline| baseline.error.clone());
                 info.opened_at_ms = Some(event.timestamp_ms);
                 info.opened = true;
                 info.closed = false;
@@ -218,6 +238,9 @@ fn open_plans_with_gates(
                 title: p.title.clone(),
                 body_path: p.body_path.clone(),
                 opened_at_ms: p.opened_at_ms,
+                baseline_ref: p.baseline_ref.clone(),
+                baseline_oid: p.baseline_oid.clone(),
+                baseline_error: p.baseline_error.clone(),
                 gates,
                 gates_error,
             }

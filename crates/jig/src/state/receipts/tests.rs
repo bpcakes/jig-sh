@@ -89,7 +89,13 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
         test_receipt("receipt_closed", "plan_closed", tool::TEST, 50, json!({})),
     ];
     for receipt in &receipts {
-        index.observe(receipt, &open_plan_ids, &check_gate_tools, &review_gate_ids);
+        index.observe(
+            receipt,
+            &open_plan_ids,
+            &check_gate_tools,
+            &BTreeSet::new(),
+            &review_gate_ids,
+        );
     }
 
     let protected = index.protected_receipt_ids().unwrap();
@@ -124,7 +130,13 @@ fn receipt_archive_protection_keeps_only_the_selected_evidence_group_after_overf
         );
         partial.run_id = Some(format!("run_partial_{sequence}"));
         partial.target = Some("api:lint".parse().unwrap());
-        index.observe(&partial, &open_plan_ids, &BTreeSet::new(), &BTreeSet::new());
+        index.observe(
+            &partial,
+            &open_plan_ids,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
     }
     for (receipt_id, target) in [
         ("receipt_complete_lint", "api:lint"),
@@ -137,6 +149,7 @@ fn receipt_archive_protection_keeps_only_the_selected_evidence_group_after_overf
         index.observe(
             &complete,
             &open_plan_ids,
+            &BTreeSet::new(),
             &BTreeSet::new(),
             &BTreeSet::new(),
         );
@@ -170,7 +183,13 @@ fn receipt_archive_refuses_to_drop_protection_when_evidence_indexing_overflows()
         );
         partial.run_id = Some(format!("run_partial_{sequence}"));
         partial.target = Some("api:lint".parse().unwrap());
-        index.observe(&partial, &open_plan_ids, &BTreeSet::new(), &BTreeSet::new());
+        index.observe(
+            &partial,
+            &open_plan_ids,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
     }
 
     let error = index.protected_receipt_ids().unwrap_err().to_string();
@@ -221,6 +240,7 @@ fn receipt_protection_matches_successful_legacy_batch_lookup() {
             &receipt,
             &open_plan_ids,
             &check_gate_tools,
+            &BTreeSet::new(),
             &review_gate_ids,
         );
     }
@@ -278,6 +298,7 @@ fn newest_review_protects_its_worker_receipt_by_physical_order() {
             &receipt,
             &open_plan_ids,
             &check_gate_tools,
+            &BTreeSet::new(),
             &review_gate_ids,
         );
     }

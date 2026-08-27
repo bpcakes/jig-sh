@@ -726,7 +726,7 @@ fn mcp_work_check_aggregates_a_late_non_contention_error_and_preserves_prior_res
     .to_string();
 
     assert!(
-        error.contains("jig.second_check could not execute"),
+        error.contains("Failed to refresh repository authority") && error.contains(".jig.toml"),
         "{error}"
     );
     let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
@@ -749,7 +749,7 @@ fn mcp_work_check_aggregates_a_late_non_contention_error_and_preserves_prior_res
         batch["stderr_preview"]
             .as_str()
             .unwrap()
-            .contains("jig.second_check could not execute"),
+            .contains("Failed to refresh repository authority"),
         "{batch:#}"
     );
 }

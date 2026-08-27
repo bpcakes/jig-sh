@@ -25,8 +25,9 @@ use super::super::maintenance::create_receipts_backup;
 use super::super::records::{PlanEvent, ReceiptRecord};
 use super::super::support::ensure_state_layout;
 use super::{
-    IndexedTargetReceipts, parse_raw_receipt, receipt_arg_strings, receipt_args_has_receipt_ids,
-    target_receipt_status, validate_receipt_stream,
+    IndexedTargetReceipts, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, parse_raw_receipt,
+    receipt_arg_strings, receipt_args_has_receipt_ids, target_receipt_status,
+    validate_receipt_stream,
 };
 
 #[derive(Debug)]
@@ -58,6 +59,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
                 &receipt,
                 &open_plan_ids,
                 &configured_evidence.check_tools,
+                &configured_evidence.check_gate_ids,
                 &configured_evidence.review_gate_ids,
             );
             Ok(())
@@ -467,6 +469,7 @@ fn current_open_plan_ids(events: &[PlanEvent]) -> BTreeSet<String> {
 
 struct ConfiguredGateEvidence {
     check_tools: BTreeSet<String>,
+    check_gate_ids: BTreeSet<String>,
     review_gate_ids: BTreeSet<String>,
     targets: BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
 }
@@ -474,6 +477,7 @@ struct ConfiguredGateEvidence {
 fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvidence> {
     let mut configured = ConfiguredGateEvidence {
         check_tools: BTreeSet::new(),
+        check_gate_ids: BTreeSet::new(),
         review_gate_ids: BTreeSet::new(),
         targets: BTreeMap::new(),
     };
@@ -486,7 +490,11 @@ fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvid
     for gate in gates {
         match gate {
             WorkGate::Check(gate) => {
+                configured.check_gate_ids.insert(gate.id);
                 configured.check_tools.insert(gate.tool);
+            }
+            WorkGate::CodexReview(gate) => {
+                configured.review_gate_ids.insert(gate.id);
             }
             WorkGate::Evidence(gate) => {
                 let catalog = repository
@@ -495,9 +503,6 @@ fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvid
                 configured
                     .targets
                     .insert(gate.id, resolve_evidence_targets(catalog, &gate.selector)?);
-            }
-            WorkGate::CodexReview(gate) => {
-                configured.review_gate_ids.insert(gate.id);
             }
             WorkGate::Unsupported(_) => {}
         }
@@ -527,6 +532,7 @@ struct ProtectedCheckReceipts {
 #[derive(Debug, Default)]
 pub(super) struct ReceiptProtectionIndex {
     checks: BTreeMap<(String, String), ProtectedCheckReceipts>,
+    latest_check_by_plan_gate: BTreeMap<(String, String), ProtectedWorkCheck>,
     latest_review_by_plan_gate: BTreeMap<(String, String), LatestReceipt>,
     target_evidence: BTreeMap<(String, String), IndexedTargetReceipts>,
 }
@@ -558,6 +564,7 @@ impl ReceiptProtectionIndex {
         receipt: &ReceiptRecord,
         open_plan_ids: &BTreeSet<String>,
         check_gate_tools: &BTreeSet<String>,
+        check_gate_ids: &BTreeSet<String>,
         review_gate_ids: &BTreeSet<String>,
     ) {
         let Some(plan_id) = receipt
@@ -603,6 +610,57 @@ impl ReceiptProtectionIndex {
                         .map(str::to_string),
                 },
             );
+        }
+        if receipt.tool_name == tool::WORK_CHECK {
+            for gate_id in receipt_arg_strings(receipt, "gates") {
+                if !check_gate_ids.contains(gate_id) {
+                    continue;
+                }
+                let key = (plan_id.clone(), gate_id.to_string());
+                self.latest_check_by_plan_gate.remove(&key);
+                // The batch itself is the durable supersession tombstone even
+                // when its structured evidence is malformed or omits this
+                // selected gate. Retaining it keeps an archived rewrite from
+                // revealing an older pass when the stream is read again.
+                self.latest_check_by_plan_gate.insert(
+                    key,
+                    ProtectedWorkCheck {
+                        id: receipt.id.clone(),
+                        receipt_ids: Vec::new(),
+                    },
+                );
+            }
+            if let Some(evidence) = receipt
+                .evidence
+                .as_ref()
+                .and_then(|evidence| {
+                    serde_json::from_value::<WorkCheckBatchEvidence>(evidence.clone()).ok()
+                })
+                .filter(|evidence| evidence.schema == WORK_CHECK_EVIDENCE_SCHEMA)
+            {
+                for gate in evidence.gates {
+                    if !check_gate_ids.contains(&gate.gate_id) {
+                        continue;
+                    }
+                    let receipt_ids = [
+                        gate.tool_receipt_id,
+                        gate.source_batch_receipt_id,
+                        gate.source_tool_receipt_id,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                    self.latest_check_by_plan_gate.insert(
+                        (plan_id.clone(), gate.gate_id),
+                        ProtectedWorkCheck {
+                            id: receipt.id.clone(),
+                            receipt_ids,
+                        },
+                    );
+                }
+            }
         }
         if receipt.tool_name == tool::WORK_CHECK && receipt.exit_status == 0 {
             let receipt_ids = receipt_arg_strings(receipt, "receipt_ids")
@@ -658,6 +716,10 @@ impl ReceiptProtectionIndex {
                 protected.insert(work_check.id.clone());
                 protected.extend(work_check.receipt_ids.iter().cloned());
             }
+        }
+        for work_check in self.latest_check_by_plan_gate.values() {
+            protected.insert(work_check.id.clone());
+            protected.extend(work_check.receipt_ids.iter().cloned());
         }
         for receipt in self.latest_review_by_plan_gate.values() {
             protected.insert(receipt.id.clone());

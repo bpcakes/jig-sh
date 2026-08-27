@@ -6,7 +6,7 @@ use crate::context::RepoContext;
 use crate::tool_defs::tool;
 
 pub(crate) use execution_leases::{
-    RepositoryExecutionBusy, RepositoryExecutionLease, acquire_repository_execution_lease,
+    RepositoryExecutionLease, acquire_repository_execution_lease,
     acquire_repository_execution_lease_without_wait, try_acquire_repository_execution_lease,
 };
 use jsonl::append_jsonl;
@@ -15,16 +15,20 @@ use jsonl::read_jsonl;
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,
-    open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
-    plans_append, plans_close, plans_open_prepared, prepare_plan_open,
+    open_plan_summaries_with_cancellation, plan_baseline, plan_baseline_with_cancellation,
+    plan_baselines_with_cancellation, plan_status, plan_status_with_cancellation, plans_append,
+    plans_close, plans_open_prepared, prepare_plan_open,
 };
 #[cfg(test)]
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
 pub(crate) use receipts::{
-    CurrentWorktreeFingerprint, TargetReceiptStatus, ToolReceiptStatus, WorkGateReceiptIndex,
+    CurrentWorktreeFingerprint, ReusableWorkCheckEvidence, ReusableWorkCheckQuery,
+    TargetReceiptStatus, ToolReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence,
+    WorkCheckGateEvidence, WorkCheckGateReceiptStatus, WorkGateReceiptIndex,
     WorkReviewReceiptEvidence, WorkReviewReceiptStatus, current_worktree_fingerprint,
     current_worktree_fingerprint_for_receipt_with_cancellation,
-    current_worktree_fingerprint_with_cancellation, work_gate_receipt_index,
+    current_worktree_fingerprint_with_cancellation,
+    reusable_work_check_evidence_batch_with_cancellation, work_gate_receipt_index,
     work_gate_receipt_index_with_cancellation, work_gate_receipt_indexes_with_cancellation,
 };
 pub(crate) use receipts::{
@@ -39,6 +43,7 @@ pub(crate) use receipts::{
     reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,
 };
 use records::DecisionRecord;
+pub(crate) use records::PlanBaseline;
 #[cfg(test)]
 use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
@@ -70,6 +75,7 @@ mod execution_leases;
 mod jsonl;
 mod maintenance;
 mod plans;
+mod privacy;
 mod receipts;
 mod records;
 mod runs;

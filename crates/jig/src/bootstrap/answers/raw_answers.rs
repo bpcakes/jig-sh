@@ -21,6 +21,7 @@ pub(super) struct RawAnswers {
     pub(super) rust_sqlx_metadata_dir: Option<String>,
     pub(super) schema_dump_enabled: Option<bool>,
     pub(super) schema_dump_command: Option<String>,
+    pub(super) schema_docs_dir: Option<String>,
     pub(super) schema_check_command: Option<String>,
     pub(super) sqlx_check_command: Option<String>,
     pub(super) migration_add_command: Option<String>,
@@ -41,7 +42,10 @@ pub(super) struct RawAnswers {
     pub(super) typescript_build_command: Option<String>,
     pub(super) typescript_coverage_command: Option<String>,
     pub(super) web_package_manager: Option<String>,
+    pub(super) application_contracts_enabled: Option<bool>,
     pub(super) frontend_apps: Option<Vec<FrontendApp>>,
+    #[serde(default)]
+    pub(super) frontend_workspace_roots: Option<Vec<String>>,
     pub(super) dev: Option<dev::RawDevAnswers>,
     pub(super) vault: Option<vault::VaultAnswers>,
     pub(super) status: Option<StatusConfig>,
@@ -279,6 +283,7 @@ impl RawAnswers {
             &mut self.schema_dump_command,
             opts.schema_dump_command.clone(),
         );
+        merge_option(&mut self.schema_docs_dir, opts.schema_docs_dir.clone());
         merge_option(
             &mut self.schema_check_command,
             opts.schema_check_command.clone(),
@@ -314,8 +319,15 @@ impl RawAnswers {
             &mut self.web_package_manager,
             opts.web_package_manager.clone(),
         );
+        merge_option(
+            &mut self.application_contracts_enabled,
+            opts.application_contracts_enabled,
+        );
         if !opts.frontend_apps.is_empty() {
             self.frontend_apps = Some(opts.frontend_apps.clone());
+        }
+        if !opts.frontend_workspace_roots.is_empty() {
+            self.frontend_workspace_roots = Some(opts.frontend_workspace_roots.clone());
         }
         if !opts.dev_apps.is_empty() {
             self.dev
@@ -334,6 +346,17 @@ impl RawAnswers {
                     &format!("frontend app '{}' dir", app.name),
                 )?;
             }
+        }
+        if let Some(workspace_roots) = self.frontend_workspace_roots.as_mut() {
+            for root in workspace_roots.iter_mut() {
+                *root = normalize_generated_gate_root(root, "frontend workspace root")?;
+            }
+            workspace_roots.sort();
+            workspace_roots.dedup();
+        }
+        if let Some(schema_docs_dir) = self.schema_docs_dir.as_mut() {
+            *schema_docs_dir = normalize_generated_gate_root(schema_docs_dir, "schema_docs_dir")?;
+            validate_schema_docs_dir(schema_docs_dir)?;
         }
         if let Some(dev_apps) = self.dev.as_mut().and_then(|dev| dev.apps.as_mut()) {
             for app in dev_apps {
@@ -368,6 +391,7 @@ impl RawAnswers {
             rust_sqlx_metadata_dir: self.rust_sqlx_metadata_dir,
             schema_dump_enabled: self.schema_dump_enabled,
             schema_dump_command: self.schema_dump_command,
+            schema_docs_dir: self.schema_docs_dir,
             schema_check_command: self.schema_check_command,
             sqlx_check_command: self.sqlx_check_command,
             migration_add_command: self.migration_add_command,
@@ -379,7 +403,9 @@ impl RawAnswers {
             rust_test_command: self.rust_test_command,
             rust_test_locked_command: self.rust_test_locked_command,
             web_package_manager: self.web_package_manager,
+            application_contracts_enabled: self.application_contracts_enabled,
             frontend_apps: self.frontend_apps.unwrap_or_default(),
+            frontend_workspace_roots: self.frontend_workspace_roots.unwrap_or_default(),
             dev_apps,
             status: self.status,
             execution: self.execution,
@@ -521,6 +547,17 @@ impl RawAnswers {
 
         let frontend_apps = self.frontend_apps.unwrap_or_default();
         validate_frontend_apps(&frontend_apps)?;
+        let mut frontend_workspace_roots = self.frontend_workspace_roots.unwrap_or_default();
+        for root in &mut frontend_workspace_roots {
+            *root = normalize_generated_gate_root(root, "frontend workspace root")?;
+        }
+        frontend_workspace_roots.retain(|root| {
+            !frontend_apps
+                .iter()
+                .any(|app| config_app_dirs_match(&app.dir, root))
+        });
+        frontend_workspace_roots.sort();
+        frontend_workspace_roots.dedup();
         let dev::ResolvedDevApps {
             dev_apps,
             generated_frontend_dev_apps,
@@ -549,6 +586,11 @@ impl RawAnswers {
         let schema_dump_command = self
             .schema_dump_command
             .unwrap_or_else(|| "scripts/dump-schema.sh".into());
+        let schema_docs_dir = normalize_generated_gate_root(
+            self.schema_docs_dir.as_deref().unwrap_or("docs/schema"),
+            "schema_docs_dir",
+        )?;
+        validate_schema_docs_dir(&schema_docs_dir)?;
         let rust_sqlx_metadata_dir = self.rust_sqlx_metadata_dir.or_else(|| Some(".sqlx".into()));
         let sqlx_check_command = self.sqlx_check_command.unwrap_or_else(|| {
             let metadata_dir = rust_sqlx_metadata_dir.as_deref().unwrap_or(".sqlx");
@@ -604,6 +646,7 @@ impl RawAnswers {
             rust_sqlx_metadata_dir,
             schema_dump_enabled,
             schema_dump_command,
+            schema_docs_dir,
             schema_check_command: self.schema_check_command.unwrap_or_default(),
             sqlx_check_command,
             migration_add_command,
@@ -641,6 +684,7 @@ impl RawAnswers {
                 .sqlc_check_command
                 .unwrap_or_else(|| "go tool sqlc vet && go tool sqlc diff".into()),
             web_package_manager,
+            application_contracts_enabled: self.application_contracts_enabled.unwrap_or(false),
             web_package_manager_spec,
             web_package_manager_version,
             node_version: GENERATED_NODE_VERSION.into(),
@@ -661,6 +705,7 @@ impl RawAnswers {
             dev_apps,
             generated_frontend_dev_apps,
             frontend_apps,
+            frontend_workspace_roots,
             vault,
             status,
             execution,

@@ -46,6 +46,7 @@ fn status_gate_batch_scans_receipts_once_for_multiple_open_plans() {
             title: "Second plan".into(),
             body: Some("Validate shared gate indexing.".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -88,6 +89,7 @@ fn work_gates_reports_missing_and_passing_required_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -171,6 +173,7 @@ fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() 
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -244,6 +247,7 @@ fn work_evidence_reports_closed_plan_state() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -285,6 +289,7 @@ fn work_evidence_requires_plan_id_when_multiple_plans_are_open() {
             title: "Second plan".into(),
             body: Some("Second plan body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -425,6 +430,7 @@ fn work_finish_allows_passing_required_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -461,6 +467,7 @@ fn work_finish_holds_checkout_read_lease_through_plan_closure() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -527,6 +534,7 @@ fn work_finish_rejects_gate_authority_that_changed_after_evaluation() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -583,6 +591,7 @@ fn work_finish_rejects_source_that_changed_after_gate_evaluation() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -631,6 +640,7 @@ fn work_gates_reject_stale_required_gate_receipts() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )
@@ -677,6 +687,7 @@ fn work_gates_reject_unknown_required_gate_freshness() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
+            gates: Vec::new(),
             tools: Vec::new(),
         })),
     )

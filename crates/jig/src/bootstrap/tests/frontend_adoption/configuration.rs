@@ -618,6 +618,12 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
 
     assert!(!repo.join("Makefile").exists());
     let web_check = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    for compatibility_mode in ["app-check)", "application-contracts)", "public-artifacts)"] {
+        assert!(
+            web_check.contains(compatibility_mode),
+            "generated web helper must retain {compatibility_mode} for contract-v5 commands"
+        );
+    }
     assert!(!repo.join("scripts/contracts.mjs").exists());
     let missing_contract_runner = std::process::Command::new("bash")
         .args([

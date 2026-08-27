@@ -33,7 +33,7 @@ After this change, `scripts/jig check test` and `scripts/jig check test-locked` 
 - Observation: The local Node 22.23.2 binary can segfault on one generated `for ... fs.rmSync` command, and alternate serial/direct test topologies exposed frontend failures that the passing default run did not expose. This makes process isolation a correctness requirement as well as a performance optimization; every isolated failure must be understood rather than hidden.
   Evidence: `strace` observed Node exit by `SIGSEGV` in `scaffold_sqlite_branch_generates_sqlite_db_helper` during a diagnostic exact run.
 
-- Observation: Unconstrained nextest correctly isolated environment and working-directory state, but it also allowed enough simultaneous external Node processes to expose the environment-managed `/home/aa/.hermes/node/bin/node` resource failure. The repository's supported stock Node 22.22.2 binary passed when all 97 Node-backed bootstrap tests shared a two-slot group.
+- Observation: Unconstrained nextest correctly isolated environment and working-directory state, but it also allowed enough simultaneous external Node processes to expose the environment-managed `<private-path>` resource failure. The repository's supported stock Node 22.22.2 binary passed when all 97 Node-backed bootstrap tests shared a two-slot group.
   Evidence: the first configured attempt finished 2,022 passing and 30 signal-11 failures in 69.41 seconds; after expanding the group and using the exact supported stock Node distribution, the full run passed 2,052 tests.
 
 - Observation: Supplying a global `NODE` override is not equivalent to placing Node on `PATH` for this suite because many bootstrap fixtures deliberately install fake `node` executables at the front of a child-specific `PATH`. The supported validation topology leaves `NODE` unset.
@@ -98,7 +98,7 @@ Finally, build the current `jig` binary and force `JIG_DEV_BIN=target/debug/jig`
 
 ## Concrete Steps
 
-Work from `/home/aa/Documents/jig-sh`.
+Work from `.`.
 
 Capture the process-isolated baseline:
 

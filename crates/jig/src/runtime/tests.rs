@@ -412,6 +412,7 @@ fn runtime_does_not_reclassify_committed_work_as_cancelled() {
                 title: "Example committed work".into(),
                 body: Some("Regression fixture for the durable commit boundary.".into()),
                 body_file: None,
+                base: None,
             },
         )),
         &mut observer,

@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+#[cfg(test)]
+use std::cell::Cell;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::PathBuf;
@@ -10,14 +12,20 @@ use serde_json::{Value, json};
 
 use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
+use crate::git_receipts::{resolve_empty_tree_for_unborn_repository, resolve_git_commit};
 use crate::tool_defs::{args, tool};
 
 use super::jsonl::{append_jsonl, append_text, read_jsonl, read_jsonl_with_cancellation};
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
-use super::records::PlanEvent;
+use super::records::{PlanBaseline, PlanEvent};
 use super::support::{ensure_state_layout, new_id, now_ms, rel_path};
 
 const PLAN_EXECUTION_LEASE_DIR: &str = ".agent/.cache/plan-execution-leases";
+
+#[cfg(test)]
+thread_local! {
+    static PLAN_BASELINE_SCAN_COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 pub(super) struct ActivePlanRunLease {
     _file: File,
@@ -32,11 +40,13 @@ pub(crate) struct PlanOpenRequest {
     pub(crate) title: String,
     pub(crate) body: Option<String>,
     pub(crate) body_file: Option<PathBuf>,
+    pub(crate) base: Option<String>,
 }
 
 pub(crate) struct PreparedPlanOpen {
     title: String,
     body: String,
+    baseline: PlanBaseline,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,13 +70,18 @@ pub(crate) enum PlanStatus {
 
 #[cfg(test)]
 pub(crate) fn plans_open(ctx: &RepoContext, request: PlanOpenRequest) -> Result<Value> {
-    plans_open_prepared(ctx, prepare_plan_open(request)?)
+    plans_open_prepared(ctx, prepare_plan_open(ctx, request)?)
 }
 
-pub(crate) fn prepare_plan_open(request: PlanOpenRequest) -> Result<PreparedPlanOpen> {
+pub(crate) fn prepare_plan_open(
+    ctx: &RepoContext,
+    request: PlanOpenRequest,
+) -> Result<PreparedPlanOpen> {
+    let baseline = plan_baseline_for_open(ctx, request.base.as_deref())?;
     Ok(PreparedPlanOpen {
         title: request.title,
         body: plan_open_body(request.body, request.body_file)?,
+        baseline,
     })
 }
 
@@ -79,12 +94,13 @@ pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) 
     }
     fs::write(&plan_path, request.body)?;
 
-    let event = PlanEvent::open(
+    let event = PlanEvent::open_with_baseline(
         new_id("plan-event"),
         plan_id.clone(),
         now_ms(),
         request.title.clone(),
         Some(rel_path(ctx.root(), &plan_path)?),
+        request.baseline.clone(),
     );
     append_jsonl(&ctx.state_file("plans.jsonl"), &event)?;
 
@@ -95,6 +111,7 @@ pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) 
             args: json!({
                 args::OPERATION: "plan_open",
                 "title": request.title,
+                "baseline": event.baseline(),
             }),
             started_at_ms: event.timestamp_ms(),
             plan_id: Some(plan_id.clone()),
@@ -106,8 +123,40 @@ pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) 
         "ok": true,
         "plan_id": plan_id,
         "body_path": event.body_path(),
+        "baseline": event.baseline(),
         "receipt_id": receipt_id,
     }))
+}
+
+fn plan_baseline_for_open(ctx: &RepoContext, requested: Option<&str>) -> Result<PlanBaseline> {
+    let reference = requested.unwrap_or("HEAD").trim();
+    if reference.is_empty() {
+        bail!("Plan baseline ref must not be blank");
+    }
+    match resolve_git_commit(ctx.root(), reference) {
+        Ok(commit_oid) => Ok(PlanBaseline {
+            requested_ref: reference.to_string(),
+            commit_oid: Some(commit_oid),
+            empty_tree_oid: None,
+            error: None,
+        }),
+        Err(error) if requested.is_some() => Err(error)
+            .with_context(|| format!("Failed to resolve explicit plan baseline ref '{reference}'")),
+        Err(error) => match resolve_empty_tree_for_unborn_repository(ctx.root()) {
+            Ok(Some(empty_tree_oid)) => Ok(PlanBaseline {
+                requested_ref: reference.to_string(),
+                commit_oid: None,
+                empty_tree_oid: Some(empty_tree_oid),
+                error: None,
+            }),
+            Ok(None) | Err(_) => Ok(PlanBaseline {
+                requested_ref: reference.to_string(),
+                commit_oid: None,
+                empty_tree_oid: None,
+                error: Some(format!("{error:#}")),
+            }),
+        },
+    }
 }
 
 pub(crate) fn plans_append(ctx: &RepoContext, request: PlanAppendRequest) -> Result<Value> {
@@ -318,6 +367,79 @@ pub(crate) fn open_plan_summaries(ctx: &RepoContext) -> Result<Vec<Value>> {
     Ok(open_plans(&events))
 }
 
+pub(crate) fn plan_baseline(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanBaseline>> {
+    #[cfg(test)]
+    PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
+    ensure_state_layout(ctx)?;
+    let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
+    unique_plan_baselines(&events, &BTreeSet::from([plan_id.to_string()]))?
+        .remove(plan_id)
+        .ok_or_else(|| anyhow::anyhow!("Plan baseline resolver omitted requested plan {plan_id}"))
+}
+
+pub(crate) fn plan_baseline_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<PlanBaseline>> {
+    #[cfg(test)]
+    PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
+    ensure_plan_scan_active(cancelled)?;
+    ensure_state_layout(ctx)?;
+    let events =
+        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    ensure_plan_scan_active(cancelled)?;
+    unique_plan_baselines(&events, &BTreeSet::from([plan_id.to_string()]))?
+        .remove(plan_id)
+        .ok_or_else(|| anyhow::anyhow!("Plan baseline resolver omitted requested plan {plan_id}"))
+}
+
+pub(crate) fn plan_baselines_with_cancellation(
+    ctx: &RepoContext,
+    plan_ids: &BTreeSet<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, Option<PlanBaseline>>> {
+    #[cfg(test)]
+    PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
+    ensure_plan_scan_active(cancelled)?;
+    ensure_state_layout(ctx)?;
+    let events =
+        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let baselines = unique_plan_baselines(&events, plan_ids)?;
+    ensure_plan_scan_active(cancelled)?;
+    Ok(baselines)
+}
+
+fn unique_plan_baselines(
+    events: &[PlanEvent],
+    plan_ids: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Option<PlanBaseline>>> {
+    let mut baselines = plan_ids
+        .iter()
+        .cloned()
+        .map(|plan_id| (plan_id, None))
+        .collect::<BTreeMap<_, _>>();
+    let mut opened = BTreeSet::new();
+    for event in events {
+        let PlanEvent::Open {
+            plan_id, baseline, ..
+        } = event
+        else {
+            continue;
+        };
+        let Some(slot) = baselines.get_mut(plan_id) else {
+            continue;
+        };
+        if !opened.insert(plan_id.clone()) {
+            bail!(
+                "Plan {plan_id} has multiple Open records; repair the append-only plan stream before collecting gate evidence"
+            );
+        }
+        slot.clone_from(baseline);
+    }
+    Ok(baselines)
+}
+
 pub(crate) fn open_plan_summaries_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
@@ -327,7 +449,7 @@ pub(crate) fn open_plan_summaries_with_cancellation(
     let events =
         read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
     let mut closed = HashSet::new();
-    let mut opened = BTreeMap::<String, (&str, Option<&str>)>::new();
+    let mut opened = BTreeMap::<String, (&str, Option<&str>, Option<&PlanBaseline>)>::new();
     for event in &events {
         ensure_plan_scan_active(cancelled)?;
         match event {
@@ -335,9 +457,13 @@ pub(crate) fn open_plan_summaries_with_cancellation(
                 plan_id,
                 title,
                 body_path,
+                baseline,
                 ..
             } => {
-                opened.insert(plan_id.clone(), (title.as_str(), body_path.as_deref()));
+                opened.insert(
+                    plan_id.clone(),
+                    (title.as_str(), body_path.as_deref(), baseline.as_ref()),
+                );
             }
             PlanEvent::Close { plan_id, .. } => {
                 closed.insert(plan_id.clone());
@@ -349,11 +475,12 @@ pub(crate) fn open_plan_summaries_with_cancellation(
     Ok(opened
         .into_iter()
         .filter(|(plan_id, _)| !closed.contains(plan_id))
-        .map(|(plan_id, (title, body_path))| {
+        .map(|(plan_id, (title, body_path, baseline))| {
             json!({
                 "plan_id": plan_id,
                 "title": title,
                 "body_path": body_path,
+                "baseline": baseline,
             })
         })
         .collect())
@@ -388,16 +515,20 @@ pub(crate) fn seed_open_plan_for_test(
 
 pub(super) fn open_plans(events: &[PlanEvent]) -> Vec<Value> {
     let mut closed = HashSet::new();
-    let mut opened = BTreeMap::<String, (&str, Option<&str>)>::new();
+    let mut opened = BTreeMap::<String, (&str, Option<&str>, Option<&PlanBaseline>)>::new();
     for event in events {
         match event {
             PlanEvent::Open {
                 plan_id,
                 title,
                 body_path,
+                baseline,
                 ..
             } => {
-                opened.insert(plan_id.clone(), (title.as_str(), body_path.as_deref()));
+                opened.insert(
+                    plan_id.clone(),
+                    (title.as_str(), body_path.as_deref(), baseline.as_ref()),
+                );
             }
             PlanEvent::Close { plan_id, .. } => {
                 closed.insert(plan_id.clone());
@@ -409,11 +540,12 @@ pub(super) fn open_plans(events: &[PlanEvent]) -> Vec<Value> {
     opened
         .into_iter()
         .filter(|(plan_id, _)| !closed.contains(plan_id))
-        .map(|(plan_id, (title, body_path))| {
+        .map(|(plan_id, (title, body_path, baseline))| {
             json!({
                 "plan_id": plan_id,
                 "title": title,
                 "body_path": body_path,
+                "baseline": baseline,
             })
         })
         .collect()

@@ -23,6 +23,7 @@ use super::template_source::PrivateAnswerOverrides;
 #[cfg(test)]
 use super::{TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY};
 use crate::bootstrap::path::validate_portable_planned_file_collisions;
+use crate::context::RepoContext;
 use crate::progress::CliProgress;
 
 const ANSWERS_DETAIL: &str = ".jig.toml values and command defaults";
@@ -129,11 +130,13 @@ pub(super) fn render_and_copy_bootstrap_template(
         contract_version: None,
         progress: request.progress,
     })?;
+    let staged_context = RepoContext::load_from_root(staged.destination.clone())?;
     let render_preview = AdoptionRenderPreview::from_staged_render(
         &answers,
+        &staged_context,
         &staged.active_paths,
         &staged.retirement_paths,
-    );
+    )?;
     request
         .progress
         .info("generated gates", render_preview.generated_gates.join(", "));
@@ -206,11 +209,12 @@ fn reject_reserved_output_collisions(
 impl AdoptionRenderPreview {
     fn from_staged_render(
         answers: &RenderAnswers,
+        staged_context: &RepoContext,
         active_paths: &BTreeSet<PathBuf>,
         retirement_paths: &BTreeSet<PathBuf>,
-    ) -> Self {
-        Self {
-            generated_gates: generated_gates(answers),
+    ) -> Result<Self> {
+        Ok(Self {
+            generated_gates: generated_gates(staged_context, answers)?,
             managed_files: active_paths
                 .iter()
                 .map(|path| path.display().to_string())
@@ -219,7 +223,7 @@ impl AdoptionRenderPreview {
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
-        }
+        })
     }
 }
 
@@ -352,6 +356,11 @@ pub(super) fn seed_answers_toml(
     );
     insert_string(
         &mut mapping,
+        "schema_docs_dir",
+        opts.schema_docs_dir.as_deref(),
+    );
+    insert_string(
+        &mut mapping,
         "schema_check_command",
         opts.schema_check_command.as_deref(),
     );
@@ -395,6 +404,11 @@ pub(super) fn seed_answers_toml(
         &mut mapping,
         "rust_test_locked_command",
         opts.rust_test_locked_command.as_deref(),
+    );
+    insert_bool(
+        &mut mapping,
+        "application_contracts_enabled",
+        opts.application_contracts_enabled,
     );
     insert_string(
         &mut mapping,
@@ -440,6 +454,18 @@ pub(super) fn seed_answers_toml(
                         );
                         TomlValue::Table(app_table)
                     })
+                    .collect(),
+            ),
+        );
+    }
+    if !opts.frontend_workspace_roots.is_empty() {
+        mapping.insert(
+            "frontend_workspace_roots".into(),
+            TomlValue::Array(
+                opts.frontend_workspace_roots
+                    .iter()
+                    .cloned()
+                    .map(TomlValue::String)
                     .collect(),
             ),
         );

@@ -38,7 +38,7 @@ Configure a provider with an exact argv array in `.jig.toml`:
 
 ```toml
 [[status.providers]]
-id = "factorish.hocr2.migration-readiness"
+id = "example.vault.migration-readiness"
 argv = ["ruby", "scripts/verify_migration_readiness.rb", "--status-provider-v1"]
 timeout_seconds = 30
 ```
@@ -133,7 +133,7 @@ Providers should emit deterministic arrays so reports are reviewable and cacheab
 
 The core schema and Rust DTOs are distributed under Jig's MIT license. A provider implementation remains under its own license. Private Rails discovery, compatibility heuristics, and customer-specific analysis may be translated into the public fields without publishing how they were calculated.
 
-The report, provider, and work-package objects contain explicit `extensions` maps. Extension keys should use a collision-resistant namespace such as `factorish.rails-rewrite`. Extension contents may remain proprietary, but information required for generic status, blocker, dependency, and evidence rendering must also be represented in core fields. A consumer that requires a private extension is a specialized consumer, not a conforming generic one.
+The report, provider, and work-package objects contain explicit `extensions` maps. Extension keys should use a collision-resistant namespace such as `example.rails-rewrite`. Extension contents may remain proprietary, but information required for generic status, blocker, dependency, and evidence rendering must also be represented in core fields. A consumer that requires a private extension is a specialized consumer, not a conforming generic one.
 
 Consumers must ignore unknown fields in a supported major version. Unknown fields are tolerated for forward-compatible additions, but explicit extensions are preferred when provider-specific data must survive a deserialize/serialize round trip.
 

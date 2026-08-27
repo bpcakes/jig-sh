@@ -22,6 +22,7 @@ rust_migration_layout = "<<[ rust_migration_layout ]>>"
 rust_sqlx_metadata_dir = "<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 schema_dump_enabled = [% if schema_dump_enabled %]true[% else %]false[% endif %]
+schema_docs_dir = "<<[ schema_docs_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if _jig.contract_version < 6 and sqlx_enabled and schema_dump_enabled %]
 schema_dump_command = "<<[ schema_dump_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
@@ -48,6 +49,8 @@ rust_test_locked_command = "<<[ rust_test_locked_command | replace("\\", "\\\\")
 [% endif %]
 [% endif %]
 web_package_manager = "<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+application_contracts_enabled = [% if application_contracts_enabled %]true[% else %]false[% endif %]
+frontend_workspace_roots = [[% for root in frontend_workspace_roots %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
 [% if frontend_apps | length == 0 %]
 frontend_apps = []
 [% else %]

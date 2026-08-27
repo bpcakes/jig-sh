@@ -71,6 +71,7 @@ const MINIMAL_MANAGED_PATHS: &[&str] = &[
     MANIFEST_PATH,
     ROOT_GITATTRIBUTES_PATH,
     ROOT_GITIGNORE_PATH,
+    "scripts/check-rust-file-loc.sh",
 ];
 
 #[derive(Debug, Deserialize, Serialize)]
