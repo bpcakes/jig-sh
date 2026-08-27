@@ -18,27 +18,54 @@ use crate::state::{
 const GATE_SIGNATURE_DOMAIN: &[u8] = b"jig-work-gate-signature-v2\0";
 
 pub(super) struct PlanGateContext {
-    baseline: Option<PlanBaseline>,
-    plan_change: Option<std::result::Result<Rc<PlanChangeSnapshot>, String>>,
+    source: PlanScopeSource,
     legacy_fingerprint: RefCell<Option<CurrentWorktreeFingerprint>>,
 }
 
+enum PlanScopeSource {
+    Legacy,
+    BaselineUnavailable(PlanBaseline),
+    Baseline {
+        baseline: PlanBaseline,
+        oid: String,
+        change: PreparedPlanChange,
+    },
+}
+
+#[derive(Clone)]
+enum PreparedPlanChange {
+    Ready(std::result::Result<Rc<PlanChangeSnapshot>, String>),
+    Missing,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct GateScopeEvaluation {
-    pub(super) gate_signature: String,
-    pub(super) baseline_oid: Option<String>,
-    pub(super) applicability: Option<GateApplicability>,
-    pub(super) reason: String,
-    pub(super) changed_paths: Vec<String>,
-    pub(super) changed_path_count: usize,
-    pub(super) changed_paths_truncated: bool,
-    pub(super) changed_paths_digest: Option<String>,
-    pub(super) matching_paths: Vec<String>,
-    pub(super) matching_path_count: usize,
-    pub(super) matching_paths_truncated: bool,
-    pub(super) matching_paths_digest: Option<String>,
-    pub(super) scope_fingerprint: Option<String>,
-    pub(super) error: Option<String>,
+pub(super) enum GateScopeEvaluation {
+    Known(KnownGateScope),
+    Unknown(UnknownGateScope),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct KnownGateScope {
+    gate_signature: String,
+    baseline_oid: Option<String>,
+    applicability: GateApplicability,
+    reason: String,
+    changed_paths: Vec<String>,
+    changed_path_count: usize,
+    changed_paths_truncated: bool,
+    changed_paths_digest: Option<String>,
+    matching_paths: Vec<String>,
+    matching_path_count: usize,
+    matching_paths_truncated: bool,
+    matching_paths_digest: Option<String>,
+    scope_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct UnknownGateScope {
+    gate_signature: String,
+    baseline_oid: Option<String>,
+    error: String,
 }
 
 impl PlanGateContext {
@@ -57,11 +84,7 @@ impl PlanGateContext {
                 })
                 .map(|result| result.map(Rc::new).map_err(|error| format!("{error:#}")))
         });
-        Ok(Self {
-            baseline,
-            plan_change,
-            legacy_fingerprint: RefCell::new(None),
-        })
+        Ok(Self::from_prepared(baseline, plan_change))
     }
 
     pub(super) fn load_with_cancellation(
@@ -109,9 +132,27 @@ impl PlanGateContext {
         baseline: Option<PlanBaseline>,
         plan_change: Option<std::result::Result<Rc<PlanChangeSnapshot>, String>>,
     ) -> Self {
+        let source = match baseline {
+            None => PlanScopeSource::Legacy,
+            Some(baseline) => {
+                let oid = baseline
+                    .commit_oid
+                    .clone()
+                    .or_else(|| baseline.empty_tree_oid.clone());
+                match oid {
+                    Some(oid) => PlanScopeSource::Baseline {
+                        baseline,
+                        oid,
+                        change: plan_change
+                            .map(PreparedPlanChange::Ready)
+                            .unwrap_or(PreparedPlanChange::Missing),
+                    },
+                    None => PlanScopeSource::BaselineUnavailable(baseline),
+                }
+            }
+        };
         Self {
-            baseline,
-            plan_change,
+            source,
             legacy_fingerprint: RefCell::new(None),
         }
     }
@@ -121,7 +162,11 @@ impl PlanGateContext {
     }
 
     pub(super) fn baseline(&self) -> Option<&PlanBaseline> {
-        self.baseline.as_ref()
+        match &self.source {
+            PlanScopeSource::Legacy => None,
+            PlanScopeSource::BaselineUnavailable(baseline)
+            | PlanScopeSource::Baseline { baseline, .. } => Some(baseline),
+        }
     }
 
     pub(super) fn evaluate(&self, ctx: &RepoContext, gate: &WorkCheckGate) -> GateScopeEvaluation {
@@ -147,45 +192,46 @@ impl PlanGateContext {
             Ok(signature) => signature,
             Err(error) => return GateScopeEvaluation::unknown(None, None, format!("{error:#}")),
         };
-        let Some(baseline) = self.baseline.as_ref() else {
-            return self.evaluate_legacy_unconditional(ctx, gate, signature, cancelled);
-        };
-        let Some(baseline_oid) = baseline
-            .commit_oid
-            .as_deref()
-            .or(baseline.empty_tree_oid.as_deref())
-        else {
-            let error = baseline
-                .error
-                .as_deref()
-                .unwrap_or("plan baseline commit is unavailable");
-            if gate.paths.is_none() && !gate.reuse {
+        let (baseline_oid, plan_change) = match &self.source {
+            PlanScopeSource::Legacy => {
                 return self.evaluate_legacy_unconditional(ctx, gate, signature, cancelled);
             }
-            return GateScopeEvaluation::unknown(
-                Some(signature),
-                None,
-                format!(
-                    "plan baseline '{}' is unavailable: {error}",
-                    baseline.requested_ref
-                ),
-            );
-        };
-        let Some(plan_change) = self.plan_change.as_ref() else {
-            return GateScopeEvaluation::unknown(
-                Some(signature),
-                Some(baseline_oid.to_string()),
-                "plan change snapshot was not prepared".into(),
-            );
-        };
-        let plan_change = match plan_change {
-            Ok(plan_change) => plan_change,
-            Err(error) => {
+            PlanScopeSource::BaselineUnavailable(baseline) => {
+                let error = baseline
+                    .error
+                    .as_deref()
+                    .unwrap_or("plan baseline commit is unavailable");
+                if gate.paths.is_none() && !gate.reuse {
+                    return self.evaluate_legacy_unconditional(ctx, gate, signature, cancelled);
+                }
                 return GateScopeEvaluation::unknown(
                     Some(signature),
-                    Some(baseline_oid.to_string()),
-                    error.clone(),
+                    None,
+                    format!(
+                        "plan baseline '{}' is unavailable: {error}",
+                        baseline.requested_ref
+                    ),
                 );
+            }
+            PlanScopeSource::Baseline { oid, change, .. } => {
+                let change = match change {
+                    PreparedPlanChange::Ready(Ok(change)) => change,
+                    PreparedPlanChange::Ready(Err(error)) => {
+                        return GateScopeEvaluation::unknown(
+                            Some(signature),
+                            Some(oid.clone()),
+                            error.clone(),
+                        );
+                    }
+                    PreparedPlanChange::Missing => {
+                        return GateScopeEvaluation::unknown(
+                            Some(signature),
+                            Some(oid.clone()),
+                            "plan change snapshot was not prepared".into(),
+                        );
+                    }
+                };
+                (oid.as_str(), change)
             }
         };
         let command_scope_safe = gate_command_scope_is_safe(ctx, gate);
@@ -220,7 +266,7 @@ impl PlanGateContext {
             Ok(snapshot) => {
                 let mut evaluation = GateScopeEvaluation::from_snapshot(signature, snapshot);
                 if gate.paths.is_some() && !command_scope_safe {
-                    evaluation.reason = "gate command is not a recognized scope-safe Jig command; classified conservatively against all baseline-relative changes".into();
+                    evaluation.replace_reason("gate command is not a recognized scope-safe Jig command; classified conservatively against all baseline-relative changes".into());
                 }
                 evaluation
             }
@@ -268,10 +314,10 @@ impl GateScopeEvaluation {
             facts,
             scope_fingerprint,
         } = snapshot;
-        Self {
+        Self::Known(KnownGateScope {
             gate_signature,
             baseline_oid: Some(facts.baseline_oid),
-            applicability: Some(facts.applicability),
+            applicability: facts.applicability,
             reason: facts.reason,
             changed_paths: facts.changed_paths,
             changed_path_count: facts.changed_path_count,
@@ -282,8 +328,7 @@ impl GateScopeEvaluation {
             matching_paths_truncated: facts.matching_paths_truncated,
             matching_paths_digest: Some(facts.matching_paths_digest),
             scope_fingerprint: Some(scope_fingerprint),
-            error: None,
-        }
+        })
     }
 
     fn legacy_unconditional(
@@ -291,10 +336,10 @@ impl GateScopeEvaluation {
         fingerprint: Result<CurrentWorktreeFingerprint>,
     ) -> Self {
         match fingerprint {
-            Ok(fingerprint) => Self {
+            Ok(fingerprint) => Self::Known(KnownGateScope {
                 gate_signature,
                 baseline_oid: None,
-                applicability: Some(GateApplicability::Applicable),
+                applicability: GateApplicability::Applicable,
                 reason: "gate has no path filter and the legacy plan uses whole-worktree freshness"
                     .into(),
                 changed_paths: Vec::new(),
@@ -310,8 +355,7 @@ impl GateScopeEvaluation {
                 // applicability of a legacy unconditional gate. The batch
                 // receipt retains the collection diagnostic and fails closed
                 // during gate evaluation exactly as it did before path gates.
-                error: None,
-            },
+            }),
             Err(error) => Self::unknown(Some(gate_signature), None, format!("{error:#}")),
         }
     }
@@ -321,11 +365,134 @@ impl GateScopeEvaluation {
         baseline_oid: Option<String>,
         error: String,
     ) -> Self {
-        Self {
+        Self::Unknown(UnknownGateScope {
             gate_signature: gate_signature.unwrap_or_default(),
             baseline_oid,
-            applicability: None,
-            reason: "gate applicability could not be determined".into(),
+            error,
+        })
+    }
+
+    fn replace_reason(&mut self, reason: String) {
+        let Self::Known(scope) = self else {
+            debug_assert!(false, "unknown gate scopes cannot carry a known reason");
+            return;
+        };
+        scope.reason = reason;
+    }
+
+    pub(super) fn gate_signature(&self) -> &str {
+        match self {
+            Self::Known(scope) => &scope.gate_signature,
+            Self::Unknown(scope) => &scope.gate_signature,
+        }
+    }
+
+    pub(super) fn baseline_oid(&self) -> Option<&str> {
+        match self {
+            Self::Known(scope) => scope.baseline_oid.as_deref(),
+            Self::Unknown(scope) => scope.baseline_oid.as_deref(),
+        }
+    }
+
+    pub(super) fn applicability(&self) -> Option<GateApplicability> {
+        match self {
+            Self::Known(scope) => Some(scope.applicability),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    pub(super) fn reason(&self) -> &str {
+        match self {
+            Self::Known(scope) => &scope.reason,
+            Self::Unknown(_) => "gate applicability could not be determined",
+        }
+    }
+
+    pub(super) fn changed_paths(&self) -> &[String] {
+        match self {
+            Self::Known(scope) => &scope.changed_paths,
+            Self::Unknown(_) => &[],
+        }
+    }
+
+    pub(super) fn changed_path_count(&self) -> usize {
+        match self {
+            Self::Known(scope) => scope.changed_path_count,
+            Self::Unknown(_) => 0,
+        }
+    }
+
+    pub(super) fn changed_paths_truncated(&self) -> bool {
+        match self {
+            Self::Known(scope) => scope.changed_paths_truncated,
+            Self::Unknown(_) => false,
+        }
+    }
+
+    pub(super) fn changed_paths_digest(&self) -> Option<&str> {
+        match self {
+            Self::Known(scope) => scope.changed_paths_digest.as_deref(),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    pub(super) fn matching_paths(&self) -> &[String] {
+        match self {
+            Self::Known(scope) => &scope.matching_paths,
+            Self::Unknown(_) => &[],
+        }
+    }
+
+    pub(super) fn matching_path_count(&self) -> usize {
+        match self {
+            Self::Known(scope) => scope.matching_path_count,
+            Self::Unknown(_) => 0,
+        }
+    }
+
+    pub(super) fn matching_paths_truncated(&self) -> bool {
+        match self {
+            Self::Known(scope) => scope.matching_paths_truncated,
+            Self::Unknown(_) => false,
+        }
+    }
+
+    pub(super) fn matching_paths_digest(&self) -> Option<&str> {
+        match self {
+            Self::Known(scope) => scope.matching_paths_digest.as_deref(),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    pub(super) fn scope_fingerprint(&self) -> Option<&str> {
+        match self {
+            Self::Known(scope) => scope.scope_fingerprint.as_deref(),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    pub(super) fn error(&self) -> Option<&str> {
+        match self {
+            Self::Known(_) => None,
+            Self::Unknown(scope) => Some(&scope.error),
+        }
+    }
+
+    pub(super) fn is_known_applicable(&self) -> bool {
+        self.applicability() == Some(GateApplicability::Applicable)
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_known(
+        gate_signature: impl Into<String>,
+        reason: impl Into<String>,
+        scope_fingerprint: impl Into<String>,
+    ) -> Self {
+        Self::Known(KnownGateScope {
+            gate_signature: gate_signature.into(),
+            baseline_oid: None,
+            applicability: GateApplicability::Applicable,
+            reason: reason.into(),
             changed_paths: Vec::new(),
             changed_path_count: 0,
             changed_paths_truncated: false,
@@ -334,9 +501,8 @@ impl GateScopeEvaluation {
             matching_path_count: 0,
             matching_paths_truncated: false,
             matching_paths_digest: None,
-            scope_fingerprint: None,
-            error: Some(error),
-        }
+            scope_fingerprint: Some(scope_fingerprint.into()),
+        })
     }
 }
 

@@ -149,12 +149,12 @@ impl BatchChanges {
         checks
             .iter()
             .find_map(|check| match check {
-                PreparedCheck::Gate { scope, .. } if scope.changed_paths_digest.is_some() => {
+                PreparedCheck::Gate { scope, .. } if scope.changed_paths_digest().is_some() => {
                     Some(Self {
-                        paths: scope.changed_paths.clone(),
-                        path_count: scope.changed_path_count,
-                        paths_truncated: scope.changed_paths_truncated,
-                        paths_digest: scope.changed_paths_digest.clone(),
+                        paths: scope.changed_paths().to_vec(),
+                        path_count: scope.changed_path_count(),
+                        paths_truncated: scope.changed_paths_truncated(),
+                        paths_digest: scope.changed_paths_digest().map(str::to_string),
                     })
                 }
                 _ => None,
@@ -263,19 +263,14 @@ fn prepare_check_batch(
                 force: false,
                 scope,
                 ..
-            } if gate.reuse
-                && scope.error.is_none()
-                && scope.applicability
-                    == Some(crate::git_receipts::GateApplicability::Applicable) =>
-            {
+            } if gate.reuse && scope.is_known_applicable() => {
                 scope
-                    .scope_fingerprint
-                    .as_ref()
+                    .scope_fingerprint()
                     .map(|scope_fingerprint| ReusableWorkCheckQuery {
                         gate_id: gate.id.clone(),
                         tool: gate.tool.clone(),
-                        gate_signature: scope.gate_signature.clone(),
-                        scope_fingerprint: scope_fingerprint.clone(),
+                        gate_signature: scope.gate_signature().to_string(),
+                        scope_fingerprint: scope_fingerprint.to_string(),
                     })
             }
             _ => None,
@@ -424,7 +419,7 @@ fn classify_prepared_check(
         }
     };
 
-    if let Some(error) = scope.error.as_deref()
+    if let Some(error) = scope.error()
         && !*force
     {
         let evidence = gate_evidence_from_scope(gate, "unknown", scope, None, None, *force, None);
@@ -440,7 +435,8 @@ fn classify_prepared_check(
             PreparedCheckAction::Evidence(evidence)
         };
     }
-    if !*force && scope.applicability == Some(crate::git_receipts::GateApplicability::NotApplicable)
+    if !*force
+        && scope.applicability() == Some(crate::git_receipts::GateApplicability::NotApplicable)
     {
         return PreparedCheckAction::Evidence(gate_evidence_from_scope(
             gate,
@@ -710,9 +706,9 @@ impl PreparedCheck {
             Self::Gate {
                 scope, reusable, ..
             } => {
-                scope.error.is_none()
+                scope.error().is_none()
                     && reusable.is_none()
-                    && scope.applicability
+                    && scope.applicability()
                         != Some(crate::git_receipts::GateApplicability::NotApplicable)
             }
         }
@@ -733,7 +729,7 @@ fn gate_evidence_from_scope(
         tool: gate.tool.clone(),
         status: status.into(),
         applicability: scope
-            .applicability
+            .applicability()
             .map(crate::git_receipts::GateApplicability::as_str)
             .unwrap_or("unknown")
             .into(),
@@ -742,23 +738,23 @@ fn gate_evidence_from_scope(
         paths_ignore: gate.paths_ignore.clone(),
         reuse: gate.reuse,
         forced,
-        gate_signature: scope.gate_signature.clone(),
-        baseline_oid: scope.baseline_oid.clone(),
+        gate_signature: scope.gate_signature().to_string(),
+        baseline_oid: scope.baseline_oid().map(str::to_string),
         reason: if forced {
-            format!("gate was explicitly force-run; {}", scope.reason)
+            format!("gate was explicitly force-run; {}", scope.reason())
         } else {
-            scope.reason.clone()
+            scope.reason().to_string()
         },
         changed_paths: Vec::new(),
         changed_path_count: 0,
         changed_paths_truncated: false,
         changed_paths_digest: None,
-        matching_paths: scope.matching_paths.clone(),
-        matching_path_count: scope.matching_path_count,
-        matching_paths_truncated: scope.matching_paths_truncated,
-        matching_paths_digest: scope.matching_paths_digest.clone(),
-        scope_fingerprint: scope.scope_fingerprint.clone(),
-        scope_error: scope.error.clone(),
+        matching_paths: scope.matching_paths().to_vec(),
+        matching_path_count: scope.matching_path_count(),
+        matching_paths_truncated: scope.matching_paths_truncated(),
+        matching_paths_digest: scope.matching_paths_digest().map(str::to_string),
+        scope_fingerprint: scope.scope_fingerprint().map(str::to_string),
+        scope_error: scope.error().map(str::to_string),
         tool_receipt_id,
         exit_status,
         source_plan_id: reusable.map(|source| source.source_plan_id.clone()),

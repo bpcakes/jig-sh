@@ -188,12 +188,12 @@ impl EvaluatedReceipt {
                     GateFreshness::Unknown,
                     format!("work-check batch could not prove a stable worktree: {error}"),
                 )
-            } else if let Some(error) = current.error.as_deref() {
+            } else if let Some(error) = current.error() {
                 (
                     GateFreshness::Unknown,
                     format!("current gate scope could not be collected: {error}"),
                 )
-            } else if evidence.gate_signature != current.gate_signature {
+            } else if evidence.gate_signature != current.gate_signature() {
                 (
                     GateFreshness::Stale,
                     "gate policy or execution definition changed since the receipt".into(),
@@ -201,7 +201,7 @@ impl EvaluatedReceipt {
             } else {
                 match (
                     evidence.scope_fingerprint.as_deref(),
-                    current.scope_fingerprint.as_deref(),
+                    current.scope_fingerprint(),
                 ) {
                     (Some(receipt), Some(current)) if receipt == current => (
                         GateFreshness::Fresh,
@@ -242,7 +242,7 @@ impl EvaluatedReceipt {
                 .worktree_fingerprint_error
                 .clone()
                 .or_else(|| evidence.scope_error.clone()),
-            current_worktree_fingerprint_error: current.error.clone(),
+            current_worktree_fingerprint_error: current.error().map(str::to_string),
         }
     }
 }
@@ -360,23 +360,23 @@ impl GateEvaluation {
                     "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
                     "evidence_status": evidence.map(|evidence| evidence.status.as_str()),
                     "receipt_applicability": evidence.map(|evidence| evidence.applicability.as_str()),
-                    "applicability": current.applicability.map(crate::git_receipts::GateApplicability::as_str),
-                    "applicability_reason": current.reason,
-                    "applicability_error": current.error,
+                    "applicability": current.applicability().map(crate::git_receipts::GateApplicability::as_str),
+                    "applicability_reason": current.reason(),
+                    "applicability_error": current.error(),
                     "paths": gate.paths,
                     "paths_ignore": gate.paths_ignore,
                     "reuse": gate.reuse,
                     "forced": evidence.map(|evidence| evidence.forced),
-                    "baseline_oid": current.baseline_oid,
+                    "baseline_oid": current.baseline_oid(),
                     "receipt_baseline_oid": evidence.and_then(|evidence| evidence.baseline_oid.as_deref()),
-                    "gate_signature": current.gate_signature,
+                    "gate_signature": current.gate_signature(),
                     "receipt_gate_signature": evidence.map(|evidence| evidence.gate_signature.as_str()),
-                    "scope_fingerprint": current.scope_fingerprint,
+                    "scope_fingerprint": current.scope_fingerprint(),
                     "receipt_scope_fingerprint": evidence.and_then(|evidence| evidence.scope_fingerprint.as_deref()),
-                    "matching_paths": current.matching_paths,
-                    "matching_path_count": current.matching_path_count,
-                    "matching_paths_truncated": current.matching_paths_truncated,
-                    "matching_paths_digest": current.matching_paths_digest,
+                    "matching_paths": current.matching_paths(),
+                    "matching_path_count": current.matching_path_count(),
+                    "matching_paths_truncated": current.matching_paths_truncated(),
+                    "matching_paths_digest": current.matching_paths_digest(),
                     "source_plan_id": evidence.and_then(|evidence| evidence.source_plan_id.as_deref()),
                     "source_batch_receipt_id": evidence.and_then(|evidence| evidence.source_batch_receipt_id.as_deref()),
                     "source_tool_receipt_id": evidence.and_then(|evidence| evidence.source_tool_receipt_id.as_deref()),
@@ -469,17 +469,18 @@ impl GateEvaluation {
         if let Self::Check(gate) = self {
             value["applicability"] = json!(
                 gate.current_scope
-                    .applicability
+                    .applicability()
                     .map(crate::git_receipts::GateApplicability::as_str)
             );
-            value["applicability_reason"] = json!(gate.current_scope.reason);
-            value["baseline_oid"] = json!(gate.current_scope.baseline_oid);
-            value["matching_paths"] = json!(gate.current_scope.matching_paths);
-            value["matching_path_count"] = json!(gate.current_scope.matching_path_count);
-            value["matching_paths_truncated"] = json!(gate.current_scope.matching_paths_truncated);
-            value["matching_paths_digest"] = json!(gate.current_scope.matching_paths_digest);
-            value["scope_fingerprint"] = json!(gate.current_scope.scope_fingerprint);
-            value["gate_signature"] = json!(gate.current_scope.gate_signature);
+            value["applicability_reason"] = json!(gate.current_scope.reason());
+            value["baseline_oid"] = json!(gate.current_scope.baseline_oid());
+            value["matching_paths"] = json!(gate.current_scope.matching_paths());
+            value["matching_path_count"] = json!(gate.current_scope.matching_path_count());
+            value["matching_paths_truncated"] =
+                json!(gate.current_scope.matching_paths_truncated());
+            value["matching_paths_digest"] = json!(gate.current_scope.matching_paths_digest());
+            value["scope_fingerprint"] = json!(gate.current_scope.scope_fingerprint());
+            value["gate_signature"] = json!(gate.current_scope.gate_signature());
             value["evidence_status"] = json!(
                 gate.evidence
                     .as_ref()
@@ -1044,7 +1045,7 @@ fn evaluate_gate(
             if gate.paths.is_some() || gate.reuse {
                 let mut evaluated_receipt =
                     EvaluatedReceipt::new::<ToolReceiptStatus>(None, None, current_fingerprint);
-                let outcome = if let Some(error) = current_scope.error.as_deref() {
+                let outcome = if let Some(error) = current_scope.error() {
                     evaluated_receipt.freshness = GateFreshness::Unknown;
                     evaluated_receipt.freshness_reason =
                         format!("gate applicability could not be determined: {error}");
@@ -1327,22 +1328,11 @@ mod tests {
                 receipt_worktree_fingerprint_error: None,
                 current_worktree_fingerprint_error: None,
             },
-            current_scope: GateScopeEvaluation {
-                gate_signature: "signature".into(),
-                baseline_oid: None,
-                applicability: Some(crate::git_receipts::GateApplicability::Applicable),
-                reason: "always applicable".into(),
-                changed_paths: Vec::new(),
-                changed_path_count: 0,
-                changed_paths_truncated: false,
-                changed_paths_digest: None,
-                matching_paths: Vec::new(),
-                matching_path_count: 0,
-                matching_paths_truncated: false,
-                matching_paths_digest: None,
-                scope_fingerprint: Some("fingerprint".into()),
-                error: None,
-            },
+            current_scope: GateScopeEvaluation::test_known(
+                "signature",
+                "always applicable",
+                "fingerprint",
+            ),
         }))
     }
 
