@@ -2,7 +2,7 @@
 
 use std::io::{ErrorKind, Read};
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -336,19 +336,10 @@ impl OpPipe {
     #[cfg(unix)]
     fn prepare(&self) -> std::io::Result<()> {
         let descriptor = match self {
-            Self::Stdout(reader) => reader.as_raw_fd(),
-            Self::Stderr(reader) => reader.as_raw_fd(),
+            Self::Stdout(reader) => reader.as_fd(),
+            Self::Stderr(reader) => reader.as_fd(),
         };
-        // SAFETY: the descriptor is owned by this live pipe. F_GETFL only
-        // reads its flags, and F_SETFL preserves them while adding O_NONBLOCK.
-        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if flags == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
+        jig_owned_process::unix::set_nonblocking(descriptor)
     }
 
     #[cfg(not(unix))]

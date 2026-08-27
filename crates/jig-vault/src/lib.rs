@@ -10,6 +10,7 @@ mod exec_process;
 mod format;
 mod output;
 mod path_security;
+mod process_pipe;
 mod redact;
 mod run;
 mod secret;

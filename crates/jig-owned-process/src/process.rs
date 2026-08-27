@@ -359,22 +359,13 @@ enum ProcessPipe {
 impl ProcessPipe {
     #[cfg(unix)]
     fn prepare(&self) -> std::io::Result<()> {
-        use std::os::fd::AsRawFd;
+        use std::os::fd::AsFd;
 
         let descriptor = match self {
-            Self::Stdout(reader) => reader.as_raw_fd(),
-            Self::Stderr(reader) => reader.as_raw_fd(),
+            Self::Stdout(reader) => reader.as_fd(),
+            Self::Stderr(reader) => reader.as_fd(),
         };
-        // SAFETY: the live pipe reader owns the descriptor; F_GETFL only inspects its flags.
-        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if flags == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: the live descriptor keeps every flag when F_SETFL adds nonblocking reads.
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
+        crate::unix::set_nonblocking(descriptor)
     }
 
     #[cfg(not(unix))]
