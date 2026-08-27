@@ -151,7 +151,8 @@ command_timeout_seconds = 30
         &git,
         r#"#!/bin/sh
 set -eu
-test "${1:-}" = "status"
+test "${1:-}" = "--literal-pathspecs"
+test "${2:-}" = "status"
 test -f "$JIG_TEST_SCHEMA_DUMP_FINISHED"
 printf '%s' "$$" > "$JIG_TEST_GIT_PID"
 : > "$JIG_TEST_GIT_STARTED"

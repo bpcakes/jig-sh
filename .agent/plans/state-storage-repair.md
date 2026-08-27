@@ -139,7 +139,7 @@ Finally, replace avoidable whole-stream consumers with folds or reverse scans. `
 
 ## Concrete Steps
 
-Work from `/Users/aa/Documents/jig-sh`.
+Work from `<private-path>`.
 
 1. Add the gzip dependency to the workspace and `jig-sh` crate, then implement and test streaming storage helpers.
 

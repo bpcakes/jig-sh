@@ -47,11 +47,11 @@ pub(crate) use migration::RustMigrationLayout;
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
-    ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
-    parse_review_scope_arg,
+    ReviewScopeArg, WorkCheckGate, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
+    parse_review_scope_arg, validate_gate_path_pattern,
 };
 
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 5;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
@@ -104,6 +104,8 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     schema_dump_command: String,
+    #[serde(default = "default_schema_docs_dir")]
+    schema_docs_dir: String,
     #[allow(dead_code)]
     #[serde(default)]
     schema_check_command: String,
@@ -138,8 +140,14 @@ struct RepoConfig {
     commands: BTreeMap<String, String>,
     #[serde(default = "default_web_package_manager")]
     web_package_manager: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    application_contracts_enabled: bool,
     #[serde(default)]
     frontend_apps: Vec<FrontendAppConfig>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    frontend_workspace_roots: Vec<String>,
     #[serde(default)]
     vault: VaultConfig,
     #[serde(default)]
@@ -314,6 +322,9 @@ impl RepoContext {
         if manifest.required_commands.is_empty() {
             bail!("jig contract manifest does not declare required commands");
         }
+        config
+            .work
+            .validate_contract_version(manifest.contract_version)?;
         if manifest.contract_version <= LAST_VERSION_LOCKED_CONTRACT_VERSION {
             let config_version =
                 non_empty_legacy_jig_version(config.jig_version.as_deref(), ".jig.toml")?;
@@ -415,6 +426,10 @@ impl RepoContext {
         &self.config.rust_migration_dir
     }
 
+    pub(crate) fn rust_sqlx_metadata_dir(&self) -> &str {
+        &self.config.rust_sqlx_metadata_dir
+    }
+
     pub(crate) const fn rust_migration_layout(&self) -> RustMigrationLayout {
         self.config.rust_migration_layout
     }
@@ -425,6 +440,10 @@ impl RepoContext {
 
     pub(crate) fn schema_dump_command(&self) -> &str {
         &self.config.schema_dump_command
+    }
+
+    pub(crate) fn schema_docs_dir(&self) -> &str {
+        &self.config.schema_docs_dir
     }
 
     pub(crate) fn source_commit(&self) -> &str {
@@ -666,9 +685,44 @@ fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_command_map(&config.commands)?;
     validate_web_package_manager(&config.web_package_manager)?;
     validate_frontend_app_roles(config)?;
+    for root in &config.frontend_workspace_roots {
+        normalize_config_app_dir(root, "frontend workspace root")?;
+    }
+    validate_schema_docs_dir(&config.schema_docs_dir)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
     status_config::validate_runtime_config(config)
+}
+
+fn default_schema_docs_dir() -> String {
+    "docs/schema".into()
+}
+
+pub(crate) fn validate_schema_docs_dir(value: &str) -> Result<()> {
+    let normalized = normalize_config_app_dir(value, "schema_docs_dir")?;
+    if normalized != value {
+        bail!(
+            "schema_docs_dir must be a normalized portable repository-relative directory: {value}"
+        );
+    }
+    if value == "." {
+        bail!("schema_docs_dir must name a dedicated directory below the repository root");
+    }
+    if value.split('/').any(|component| {
+        is_reserved_agent_state_component(component)
+            || is_reserved_git_metadata_component(component)
+    }) {
+        bail!("schema_docs_dir must stay outside reserved .agent and .git directories");
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        bail!(
+            "schema_docs_dir contains unsupported characters; use ASCII letters, numbers, '/', '.', '-' or '_'"
+        );
+    }
+    Ok(())
 }
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
@@ -870,6 +924,35 @@ pub(crate) fn normalize_config_app_dir(value: &str, label: &str) -> Result<Strin
     } else {
         Ok(normalized.join("/"))
     }
+}
+
+pub(crate) fn is_reserved_git_metadata_component(component: &str) -> bool {
+    is_hfs_component_alias(component, ['.', 'g', 'i', 't'])
+}
+
+fn is_reserved_agent_state_component(component: &str) -> bool {
+    is_hfs_component_alias(component, ['.', 'a', 'g', 'e', 'n', 't'])
+}
+
+// Behavioral reference only; this is an independent Rust implementation of Git's
+// HFS protection pinned at f60db8d575adb79761d363e026fb49bddf330c73:
+// https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/utf8.c#L698-L787
+fn is_hfs_component_alias<const N: usize>(component: &str, expected: [char; N]) -> bool {
+    let mut normalized = component
+        .chars()
+        .filter(|character| !is_hfs_ignored(*character));
+    expected.into_iter().all(|expected| {
+        normalized
+            .next()
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
+    }) && normalized.next().is_none()
+}
+
+const fn is_hfs_ignored(character: char) -> bool {
+    matches!(
+        character,
+        '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
+    )
 }
 
 fn is_supported_frontend_kind(kind: &str) -> bool {

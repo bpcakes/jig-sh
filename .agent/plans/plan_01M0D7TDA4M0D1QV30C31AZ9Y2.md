@@ -52,7 +52,7 @@ Compatibility constraints are the Rust 2024 workspace with Rust 1.85 MSRV, exist
 
 ## Concrete steps
 
-Run from `/Users/aa/Documents/jig-sh`:
+Run from `<private-path>`:
 
 1. `cargo build -p jig-sh --bin jig`
 2. `JIG_DEV_BIN=target/debug/jig scripts/jig check fmt --plan-id plan_01M0D7TDA4M0D1QV30C31AZ9Y2`

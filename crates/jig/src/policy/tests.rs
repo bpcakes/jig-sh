@@ -588,6 +588,116 @@ fn schema_check_reports_stale_schema_dump() {
 }
 
 #[test]
+fn schema_check_uses_the_committed_schema_docs_directory() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "mkdir -p artifacts/schema && printf 'changed\\n' > artifacts/schema/tables.sql",
+        None,
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "schema_dump_enabled = true",
+        "schema_dump_enabled = true\nschema_docs_dir = \"artifacts/schema\"",
+    );
+    fs::write(&config_path, config).unwrap();
+    fs::create_dir_all(temp.path().join("artifacts/schema")).unwrap();
+    fs::write(temp.path().join("artifacts/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("artifacts/schema"));
+}
+
+#[test]
+fn schema_check_rejects_an_ignored_output_destination() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "mkdir -p target/schema && printf 'generated\\n' > target/schema/tables.sql",
+        None,
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "schema_dump_enabled = true",
+        "schema_dump_enabled = true\nschema_docs_dir = \"target/schema\"",
+    );
+    fs::write(&config_path, config).unwrap();
+    fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("target/schema"));
+    assert!(output.stderr.contains("ignored by Git"));
+    assert!(!temp.path().join("target/schema/tables.sql").exists());
+}
+
+#[test]
+fn schema_check_explicitly_reports_untracked_output_hidden_by_git_config() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "mkdir -p docs/schema && printf 'generated\\n' > docs/schema/new.sql",
+        None,
+    );
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    git(temp.path(), &["config", "status.showUntrackedFiles", "no"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("Schema dump is stale"));
+    assert!(output.stderr.contains("docs/schema/new.sql"));
+}
+
+#[test]
+fn schema_git_commands_scrub_repository_redirects() {
+    use std::ffi::OsStr;
+
+    let mut command = Command::new("git");
+    command
+        .env("GIT_DIR", "elsewhere/.git")
+        .env("GIT_WORK_TREE", "elsewhere")
+        .env("GIT_INDEX_FILE", "elsewhere/index")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.worktree")
+        .env("GIT_CONFIG_VALUE_0", "elsewhere");
+
+    configure_known_root_git_environment(&mut command);
+
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+    ] {
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(candidate, _)| *candidate == OsStr::new(name))
+                .map(|(_, value)| value),
+            Some(None),
+            "{name} was not scrubbed"
+        );
+    }
+}
+
+#[test]
 fn schema_check_supervises_timeout_and_descendant_cleanup() {
     let temp = tempdir().unwrap();
     let marker = temp.path().join("schema-descendant-survived");

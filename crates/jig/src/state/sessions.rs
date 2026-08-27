@@ -12,6 +12,7 @@ use crate::tool_defs::{args, tool};
 
 use super::jsonl::{append_jsonl, read_jsonl, read_jsonl_with_cancellation, scan_jsonl_raw};
 use super::plans::open_plans;
+use super::privacy::{redact_repository_root, repository_root_spellings};
 use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_state_tool};
 use super::records::{
     DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, SessionEventEnvelope,
@@ -19,6 +20,10 @@ use super::records::{
 use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
+
+fn public_source_path(ctx: &RepoContext) -> String {
+    redact_repository_root(ctx.source_path(), &repository_root_spellings(ctx.root()))
+}
 
 #[derive(Deserialize)]
 pub(crate) struct SessionEndRequest {
@@ -199,7 +204,7 @@ pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
         "repo_name": ctx.repo_name(),
         "default_branch": ctx.default_branch(),
         "source_commit": ctx.source_commit(),
-        "source_path": ctx.source_path(),
+        "source_path": public_source_path(ctx),
         "recent_sessions": sessions
             .into_iter()
             .rev()
@@ -253,7 +258,7 @@ pub(crate) fn state_summary_with_cancellation(
             "name": ctx.repo_name(),
             "default_branch": ctx.default_branch(),
             "source_commit": ctx.source_commit(),
-            "source_path": ctx.source_path(),
+            "source_path": public_source_path(ctx),
         },
         "current_session_id": current_session_id,
         "counts": {

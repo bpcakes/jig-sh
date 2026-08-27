@@ -48,7 +48,7 @@ fn fixture() -> Value {
             "needs_attention": {"exhausted_attempts": [{}]}
         },
         "providers": [{
-            "id": "factorish.rewrite",
+            "id": "example.rewrite",
             "status": "complete",
             "duration_ms": 4700,
             "summary": {
@@ -100,7 +100,7 @@ fn fixture() -> Value {
             }],
             "report": {
                 "provider": {
-                    "id": "factorish.rewrite",
+                    "id": "example.rewrite",
                     "display_name": "Rewrite readiness",
                     "adapter_version": "1.2.3"
                 },
@@ -148,7 +148,7 @@ fn fixture() -> Value {
                         "digest": "sha256:evidence"
                     }],
                     "extensions": {
-                        "factorish.rewrite": {
+                        "example.rewrite": {
                             "acceptance_check_text": [
                                 "First acceptance criterion",
                                 "Second acceptance criterion"
@@ -188,7 +188,7 @@ fn fixture() -> Value {
             },
             "error": null
         }, {
-            "id": "factorish.failed",
+            "id": "example.failed",
             "status": "failed",
             "duration_ms": 30000,
             "summary": null,
@@ -355,7 +355,7 @@ fn navigation_filters_and_preserves_stable_selection_across_refresh() {
     );
 
     app.accept_snapshot(fixture());
-    assert_eq!(app.current_provider().unwrap().id, "factorish.rewrite");
+    assert_eq!(app.current_provider().unwrap().id, "example.rewrite");
     assert_eq!(app.selected_package().unwrap().id, "WP-001");
     assert_eq!(
         app.selected_blocker().unwrap().blocker.code,
@@ -363,9 +363,9 @@ fn navigation_filters_and_preserves_stable_selection_across_refresh() {
     );
 
     app.switch_provider(false);
-    assert_eq!(app.current_provider().unwrap().id, "factorish.failed");
+    assert_eq!(app.current_provider().unwrap().id, "example.failed");
     app.switch_provider(false);
-    assert_eq!(app.current_provider().unwrap().id, "factorish.rewrite");
+    assert_eq!(app.current_provider().unwrap().id, "example.rewrite");
 }
 
 #[test]

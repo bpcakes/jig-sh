@@ -10,8 +10,7 @@ use crate::state::{
 };
 use crate::tool_defs::tool;
 
-use super::checks::check_tools_collect_failures_with_observer;
-use super::tools::selected_tools;
+use super::checks::check_required_collect_failures_with_observer;
 
 mod evidence;
 mod process;
@@ -87,18 +86,9 @@ pub(super) fn refine_with_observer(
     }
 
     let remaining_findings = actionable_findings(&review_result)?;
-    let check_result = if ctx.work_check_tools().is_empty() {
-        None
-    } else {
-        // Refinement verifies the full configured check gate set, even when the
-        // review gate subset was narrowed with --gate.
-        Some(check_tools_collect_failures_with_observer(
-            ctx,
-            &opts.plan_id,
-            selected_tools(ctx, &[])?,
-            observer,
-        )?)
-    };
+    // Refinement verifies every required applicable check gate, even when the
+    // review gate subset was narrowed with --gate. Optional gates remain explicit.
+    let check_result = check_required_collect_failures_with_observer(ctx, &opts.plan_id, observer)?;
     let failed_review_gates = review_failed_gates(&review_result)?;
     let checks_ok = check_result
         .as_ref()

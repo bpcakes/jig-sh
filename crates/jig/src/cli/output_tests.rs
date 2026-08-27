@@ -369,6 +369,52 @@ fn work_start_plan_id_output_requires_plan_to_be_object() {
 }
 
 #[test]
+fn work_start_and_goal_summaries_label_empty_tree_baselines() {
+    let plan = json!({
+        "plan_id": "plan_initial",
+        "body_path": ".agent/plans/initial.md",
+        "baseline": {
+            "requested_ref": "HEAD",
+            "commit_oid": null,
+            "empty_tree_oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "error": null
+        }
+    });
+    let start = format_work_start_summary(&json!({
+        "plan": plan,
+        "session": { "session_id": "session_1" }
+    }));
+    let goal = format_work_goal_summary(&json!({
+        "plan": plan,
+        "commands": {}
+    }));
+
+    for summary in [start, goal] {
+        assert!(
+            summary.contains("Baseline: 4b825dc642cb6eb9a060e54bf8d69288fbee4904 (empty tree)")
+        );
+    }
+}
+
+#[test]
+fn work_goal_summary_reports_baseline_collection_errors() {
+    let summary = format_work_goal_summary(&json!({
+        "plan": {
+            "plan_id": "plan_error",
+            "baseline": {
+                "requested_ref": "HEAD",
+                "commit_oid": null,
+                "empty_tree_oid": null,
+                "error": "Git metadata was unavailable"
+            }
+        },
+        "commands": {}
+    }));
+
+    assert!(summary.contains("Baseline: unavailable (Git metadata was unavailable)"));
+}
+
+#[test]
 fn work_status_summary_omits_truncation_hint_at_receipt_limit() {
     let summary = format_work_status_summary(&json!({
         "repo": {
@@ -648,6 +694,69 @@ fn work_check_summary_reports_empty_checks() {
     assert!(summary.contains("Checks: 0"));
     assert!(summary.contains("configure work checks"));
     assert!(summary.contains("--tool <tool>"));
+}
+
+#[test]
+fn work_check_summary_reports_classified_nonexecutions_as_success() {
+    let summary = format_work_check_summary(&json!({
+        "ok": true,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": [],
+        "gate_evidence": [
+            {
+                "gate_id": "rust-tests",
+                "status": "not_applicable",
+                "reason": "no changed paths matched crates/**"
+            },
+            {
+                "gate_id": "frontend-web-lint",
+                "status": "reused",
+                "reason": "one changed path matched apps/web/**",
+                "source_tool_receipt_id": "receipt_source"
+            }
+        ]
+    }));
+
+    assert!(summary.contains("Work check: passed"));
+    assert!(
+        summary
+            .contains("0 executed, 1 reused, 1 not applicable, 0 failed, 0 cancelled, 0 unknown")
+    );
+    assert!(summary.contains("rust-tests: not_applicable"));
+    assert!(summary.contains("source receipt receipt_source"));
+    assert!(!summary.contains("no checks configured"));
+}
+
+#[test]
+fn work_check_summary_reports_failed_and_cancelled_gate_evidence() {
+    let summary = format_work_check_summary(&json!({
+        "ok": false,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": [],
+        "gate_evidence": [
+            {
+                "gate_id": "rust-tests",
+                "status": "failed",
+                "reason": "configured command exited 101"
+            },
+            {
+                "gate_id": "frontend-web-lint",
+                "status": "cancelled",
+                "reason": "work check was interrupted"
+            }
+        ]
+    }));
+
+    assert!(summary.contains("Work check: failed"));
+    assert!(
+        summary
+            .contains("0 executed, 0 reused, 0 not applicable, 1 failed, 1 cancelled, 0 unknown")
+    );
+    assert!(summary.contains("rust-tests: failed; configured command exited 101"));
+    assert!(summary.contains("frontend-web-lint: cancelled; work check was interrupted"));
+    assert!(!summary.contains("no checks configured"));
 }
 
 #[test]

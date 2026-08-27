@@ -10,7 +10,7 @@ use std::{
     fs::File,
     io::Write,
     os::fd::{AsRawFd, FromRawFd},
-    os::unix::process::ExitStatusExt,
+    os::unix::process::{CommandExt, ExitStatusExt},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -55,6 +55,23 @@ impl Drop for ChildGuard {
     }
 }
 
+fn make_controlling_terminal(command: &mut Command) {
+    // SAFETY: the closure runs in the forked child before exec. `setsid` and
+    // `ioctl(TIOCSCTTY)` are async-signal-safe platform calls, and Command has
+    // already duplicated the PTY slave onto stdin before invoking `pre_exec`.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let temp = support::tempdir().unwrap();
@@ -78,7 +95,8 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
+    command
         .args(["vault", "tui", "--home"])
         .arg(&home)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
@@ -86,9 +104,9 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         .env("TERM", "xterm-256color")
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::from(stderr));
+    make_controlling_terminal(&mut command);
+    let child = command.spawn().unwrap();
     let mut child = ChildGuard(child);
     set_nonblocking(&master);
 
@@ -134,6 +152,18 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
+    // The activity rows are rendered before the modal footer. Under a slow
+    // outer output consumer, observing the first row is not proof that the
+    // command-palette Enter has finished transitioning the input state. Wait
+    // for the final footer before sending the Enter that closes the modal, or
+    // that key can still be consumed by the palette transition.
+    read_until_from(
+        &mut master,
+        &mut output,
+        activity_offset,
+        "Enter/Esc close",
+        UI_INTERACTION_TIMEOUT,
+    );
     let browse_offset = output.len();
     master.write_all(b"\r").unwrap();
     read_until_from(
@@ -296,16 +326,17 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
+    command
         .args(["vault", "tui", "--home"])
         .arg(&home)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
         .env("TERM", "xterm-256color")
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::from(stderr));
+    make_controlling_terminal(&mut command);
+    let child = command.spawn().unwrap();
     let mut child = ChildGuard(child);
     set_nonblocking(&master);
 

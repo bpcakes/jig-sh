@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashSet};
-use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
@@ -11,11 +10,13 @@ use anyhow::{Context, Result, bail};
 use jig_owned_process::require_success;
 use serde_json::{Value, json};
 
+use crate::bootstrap::scrub_known_repository_git_environment;
 use crate::context::RepoContext;
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
 use crate::execution::{
-    ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
+    ExecutionCommandError, ExecutionCommandOutput, ExecutionControl,
+    run_authoritative_execution_command,
 };
 use crate::tool_defs::{self, kind};
 
@@ -312,7 +313,44 @@ pub(crate) fn schema_check_with_observer(
             "schema_dump_command is empty"
         )));
     }
-    let schema_docs_dir = env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
+    let schema_docs_dir = ctx.schema_docs_dir();
+    let ignored = schema_git_command_inner(
+        ctx,
+        &[
+            "check-ignore",
+            "--no-index",
+            "--quiet",
+            "--",
+            schema_docs_dir,
+        ],
+        "Schema Git ignore check",
+        observer,
+        false,
+    )?;
+    match ignored.status.code() {
+        Some(0) => {
+            return Ok(NativeToolOutput {
+                exit_status: 1,
+                stdout: String::new(),
+                stderr: format!(
+                    "Schema dump destination {schema_docs_dir} is ignored by Git and cannot provide committed freshness evidence. Choose an unignored schema_docs_dir or update the repository ignore policy.\n"
+                ),
+            });
+        }
+        Some(1) => {}
+        _ => {
+            return Err(schema_git_failure(
+                &[
+                    "check-ignore",
+                    "--no-index",
+                    "--quiet",
+                    "--",
+                    schema_docs_dir,
+                ],
+                &ignored,
+            ));
+        }
+    }
     // A check intentionally reruns the configured dump command, then fails if
     // the dump output path has uncommitted changes.
     let mut command = Command::new("bash");
@@ -349,14 +387,21 @@ pub(crate) fn schema_check_with_observer(
     }
     let status = schema_git_text(
         ctx,
-        &["status", "--porcelain", "--", schema_docs_dir.as_str()],
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+            "--",
+            schema_docs_dir,
+        ],
         "Schema Git status",
         observer,
     )?;
     if !status.trim().is_empty() {
         let diff = schema_git_text(
             ctx,
-            &["--no-pager", "diff", "--", schema_docs_dir.as_str()],
+            &["--no-pager", "diff", "--", schema_docs_dir],
             "Schema Git diff",
             observer,
         )?;
@@ -381,29 +426,61 @@ fn schema_git_text(
     label: &str,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<String, ExecutionCommandError> {
+    let output = schema_git_command(ctx, args, label, observer)?;
+    if !output.status.success() {
+        return Err(schema_git_failure(args, &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn schema_git_command(
+    ctx: &RepoContext,
+    args: &[&str],
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<ExecutionCommandOutput, ExecutionCommandError> {
+    schema_git_command_inner(ctx, args, label, observer, true)
+}
+
+fn schema_git_command_inner(
+    ctx: &RepoContext,
+    args: &[&str],
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+    literal_pathspecs: bool,
+) -> std::result::Result<ExecutionCommandOutput, ExecutionCommandError> {
     let mut command = Command::new("git");
+    command.current_dir(ctx.root());
+    configure_known_root_git_environment(&mut command);
+    if literal_pathspecs {
+        command.arg("--literal-pathspecs");
+    }
     command
-        .current_dir(ctx.root())
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = run_authoritative_execution_command(
+    run_authoritative_execution_command(
         &mut command,
         ctx.command_timeout(),
         ctx.command_output_limit(),
         label,
         observer,
-    )?;
-    if !output.status.success() {
-        return Err(ExecutionCommandError::failed(anyhow::anyhow!(
-            "git {} failed with status {}\nstderr:\n{}",
-            args.join(" "),
-            output.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    )
+}
+
+fn configure_known_root_git_environment(command: &mut Command) {
+    scrub_known_repository_git_environment(command);
+    command.env("GIT_OPTIONAL_LOCKS", "0");
+}
+
+fn schema_git_failure(args: &[&str], output: &ExecutionCommandOutput) -> ExecutionCommandError {
+    ExecutionCommandError::failed(anyhow::anyhow!(
+        "git {} failed with status {}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code().unwrap_or(1),
+        String::from_utf8_lossy(&output.stderr)
+    ))
 }
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
@@ -684,11 +761,14 @@ fn git_blob(root: &Path, spec: &str) -> Result<String> {
 }
 
 fn git_blob_optional(root: &Path, spec: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
         .args(["show", spec])
-        .stderr(Stdio::null())
-        .output()?;
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    configure_known_root_git_environment(&mut command);
+    let output = command.output()?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -696,13 +776,15 @@ fn git_blob_optional(root: &Path, spec: &str) -> Result<Option<String>> {
 }
 
 pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
-    Ok(Command::new("git")
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
         .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?
-        .success())
+        .stderr(Stdio::null());
+    configure_known_root_git_environment(&mut command);
+    Ok(command.status()?.success())
 }
 
 fn git_text(root: &Path, args: &[&str]) -> Result<String> {
@@ -710,7 +792,10 @@ fn git_text(root: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new("git").current_dir(root).args(args).output()?;
+    let mut command = Command::new("git");
+    command.current_dir(root).args(args).stdin(Stdio::null());
+    configure_known_root_git_environment(&mut command);
+    let output = command.output()?;
     if !output.status.success() {
         bail!(
             "git {} failed with status {}\nstderr:\n{}",

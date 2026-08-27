@@ -17,7 +17,7 @@ After changing Utoipa operations or HTTP DTOs, run the transactional contract co
 
     <<[ web_run_command ]>> contract:generate
 
-`cargo test` rejects stale OpenAPI documents. `scripts/check-webapps.sh typecheck` runs `contract:check`, which regenerates every contract in a temporary directory and rejects drift without modifying the worktree. The build gate also scans public application artifacts for privileged package, contract, and binary markers.
+`cargo test` rejects stale OpenAPI documents. The path-aware `application-contracts` work gate runs `scripts/check-webapps.sh application-contracts`, which regenerates every contract in a temporary directory and rejects drift without modifying the worktree. The separate `public-artifacts` gate builds public applications and scans their output for privileged package, contract, and binary markers.
 
 A full `scripts/jig dev` session supplies the current backend through `JIG_DEV_API_ORIGIN`, which takes precedence over an inherited generic override. For a direct Vite start or `scripts/jig dev --app <frontend-name>` against a separately managed backend, set `API_ORIGIN`. Replace the starter with the first product feature while keeping the tested API boundary or evolving it with the backend.
 

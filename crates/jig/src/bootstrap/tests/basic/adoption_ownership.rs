@@ -143,7 +143,8 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
             .iter()
             .all(|gate| gate.as_str().unwrap().starts_with("jig "))
     );
-    assert!(generated_gates.iter().any(|gate| gate == "jig bootstrap"));
+    assert_eq!(generated_gates.len(), 4);
+    assert!(!generated_gates.iter().any(|gate| gate == "jig bootstrap"));
     let command_report = output["render_report"]["commands_detected_or_skipped"]
         .as_array()
         .unwrap();

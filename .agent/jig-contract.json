@@ -1,5 +1,5 @@
 {
-  "contract_version": 4,
+  "contract_version": 5,
   "tool_namespace": "jig",
   "required_commands": [
     "bootstrap_command",

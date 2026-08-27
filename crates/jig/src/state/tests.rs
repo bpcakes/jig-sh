@@ -519,6 +519,57 @@ fn session_summary_includes_open_plans() {
 }
 
 #[test]
+fn duplicate_plan_open_records_fail_all_baseline_readers_closed() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    ensure_state_layout(&ctx).unwrap();
+    let plans_path = ctx.state_file("plans.jsonl");
+    for id in ["open-one", "open-two"] {
+        append_jsonl(
+            &plans_path,
+            &PlanEvent::open(
+                id.into(),
+                "plan_duplicate".into(),
+                1,
+                "Example".into(),
+                None,
+            ),
+        )
+        .unwrap();
+    }
+
+    let single = plan_baseline(&ctx, "plan_duplicate").unwrap_err();
+    assert!(single.to_string().contains("multiple Open records"));
+    let cancellable =
+        plan_baseline_with_cancellation(&ctx, "plan_duplicate", &|| false).unwrap_err();
+    assert!(cancellable.to_string().contains("multiple Open records"));
+    let requested = std::collections::BTreeSet::from(["plan_duplicate".to_string()]);
+    let batch = plan_baselines_with_cancellation(&ctx, &requested, &|| false).unwrap_err();
+    assert!(batch.to_string().contains("multiple Open records"));
+}
+
+#[test]
+fn persisted_session_summary_redacts_a_repository_source_path() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        r#"_src_path = "/tmp/template""#,
+        &format!(r#"_src_path = {:?}"#, temp.path().display().to_string()),
+    );
+    fs::write(&config_path, config).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let started = session_start(&ctx).unwrap();
+
+    assert_eq!(started["summary"]["source_path"], "<repository-root>");
+    let persisted = fs::read_to_string(ctx.state_file("sessions.jsonl")).unwrap();
+    assert!(!persisted.contains(&temp.path().display().to_string()));
+    assert!(persisted.contains("<repository-root>"));
+}
+
+#[test]
 fn session_summary_reference_discards_an_in_memory_nested_snapshot() {
     let event = SessionEvent::start(
         "event".into(),
@@ -731,6 +782,7 @@ fn plans_append_serializes_concurrent_writers() {
             title: "Concurrent plan".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -809,6 +861,7 @@ fn plans_close_rejects_already_closed_plan() {
             title: "Close once".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -847,6 +900,7 @@ fn plans_append_rejects_closed_plan() {
             title: "Append after close".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -885,6 +939,7 @@ fn plans_append_requires_progress_text_without_mutating_plan() {
             title: "Append input".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -937,6 +992,7 @@ fn structured_work_keeps_legacy_state_receipt_tool_names() {
             title: "Receipt compatibility".into(),
             body: Some("Initial body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();

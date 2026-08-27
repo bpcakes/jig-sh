@@ -344,7 +344,7 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
                 .contains("authenticate backup archive")
         );
         assert_contains_no_lifecycle_secrets(&wrong_passphrase_output);
-        for created in [temp.path().join("restore-base"), restored_parent.clone()] {
+        for created in [temp.path().join("restore-base"), restored_parent] {
             assert!(created.is_dir());
             assert_eq!(
                 std::fs::metadata(created).unwrap().permissions().mode() & 0o777,

@@ -19,7 +19,7 @@ Do not edit either package's `src/generated` tree. After changing Utoipa operati
 
     <<[ web_run_command ]>> contract:generate
 
-`cargo test` rejects stale OpenAPI documents. `scripts/check-webapps.sh typecheck` stages and compares every contract and client without modifying the worktree. The build gate scans public frontend output and any supplied public deployment artifact for privileged markers; pass extracted container or documentation paths to `node scripts/contracts.mjs public-check <path>...` in deployment CI.
+`cargo test` rejects stale OpenAPI documents. The path-aware `application-contracts` work gate runs `scripts/check-webapps.sh application-contracts`, which stages and compares every contract and client without modifying the worktree. The separate `public-artifacts` gate builds only non-admin frontends and scans their output for privileged markers; pass extracted container or documentation paths to `node scripts/contracts.mjs public-check <path>...` in deployment CI.
 
 A full `scripts/jig dev` session supplies the public and admin backends through `JIG_DEV_API_ORIGIN` and `JIG_DEV_ADMIN_API_ORIGIN`. For direct Vite starts against separately managed backends, set `API_ORIGIN` and `ADMIN_API_ORIGIN`. Authentication is intentionally project-owned; enforce authentication and authorization in the admin HTTP crate before adding privileged operations, then add browser session handling at the root route/provider boundary. Separate deployment reduces accidental exposure but is not an authorization control.
 

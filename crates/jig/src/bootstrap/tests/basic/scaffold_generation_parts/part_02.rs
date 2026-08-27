@@ -48,6 +48,154 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(database_config < setup);
 
     let context = crate::context::RepoContext::load_from(&destination).unwrap();
+    let jig_config: toml::Value =
+        toml::from_str(&fs::read_to_string(destination.join(".jig.toml")).unwrap()).unwrap();
+    assert_eq!(jig_config["application_contracts_enabled"].as_bool(), Some(true));
+    assert_eq!(
+        jig_config["commands"]["application_contract_check_command"].as_str(),
+        Some("scripts/check-webapps.sh application-contracts")
+    );
+    assert_eq!(
+        jig_config["commands"]["public_artifacts_check_command"].as_str(),
+        Some("scripts/check-webapps.sh public-artifacts")
+    );
+    let work_gates = jig_config["work"]["gates"].as_array().unwrap();
+    let application_gate = work_gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("application-contracts"))
+        .unwrap();
+    assert_eq!(
+        application_gate["tool"].as_str(),
+        Some("jig.application_contract_check")
+    );
+    assert!(
+        application_gate["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str() == Some("scripts/contracts.mjs"))
+    );
+    for public_docs in ["docs/public/**", "public-docs/**"] {
+        assert!(
+            application_gate["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path.as_str() == Some(public_docs)),
+            "application contract scope omitted {public_docs}"
+        );
+    }
+    for app_path in ["web/**", "landing/**", "admin-panel/**"] {
+        assert!(
+            application_gate["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path.as_str() == Some(app_path)),
+            "application contract scope omitted {app_path}"
+        );
+    }
+    let public_gate = work_gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("public-artifacts"))
+        .unwrap();
+    assert_eq!(
+        public_gate["tool"].as_str(),
+        Some("jig.public_artifacts_check")
+    );
+    assert!(
+        public_gate["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str() == Some("web/**"))
+    );
+    for public_docs in ["docs/public/**", "public-docs/**"] {
+        assert!(
+            public_gate["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path.as_str() == Some(public_docs)),
+            "public artifact scope omitted {public_docs}"
+        );
+    }
+    assert!(
+        public_gate["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|path| path.as_str() != Some("admin-panel/**"))
+    );
+    let web_build_gate = work_gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("typescript-web-build"))
+        .unwrap();
+    let rust_test_gate = work_gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("rust-tests"))
+        .unwrap();
+    let sqlx_gate = work_gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("sqlx"))
+        .unwrap();
+    assert!(
+        rust_test_gate["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str() == Some("migrations/**")),
+        "Rust tests must own the migration tree embedded by sqlx::migrate!"
+    );
+    for authority in crate::bootstrap::renderer::FRONTEND_GATE_SHARED_PATHS {
+        for gate in [application_gate, public_gate, web_build_gate] {
+            assert!(
+                gate["paths"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|path| path.as_str() == Some(authority)),
+                "gate {} omitted frontend authority {authority}",
+                gate["id"]
+            );
+        }
+    }
+    for authority in crate::bootstrap::renderer::RUST_GATE_COMMAND_AUTHORITY_PATHS {
+        for gate in [application_gate, public_gate, sqlx_gate] {
+            assert!(
+                gate["paths"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|path| path.as_str() == Some(authority)),
+                "gate {} omitted Rust authority {authority}",
+                gate["id"]
+            );
+        }
+    }
+    assert!(
+        public_gate["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path.as_str() == Some("admin-panel/package.json"))
+    );
+    let jig_contract: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap(),
+    )
+    .unwrap();
+    for tool in [
+        "jig.application_contract_check",
+        "jig.public_artifacts_check",
+    ] {
+        assert!(
+            jig_contract["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["name"].as_str() == Some(tool))
+        );
+    }
     let agent_map_check = crate::policy::run_check(
         &context,
         crate::policy::PolicyCheckCommand::AgentMap(crate::policy::AgentMapInput {
@@ -216,6 +364,9 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(shared_eslint.contains("src/components/**/*.{ts,tsx}"));
     assert!(shared_eslint.contains("src/domain/**/*.{ts,tsx}"));
     let contracts_script = fs::read_to_string(destination.join("scripts/contracts.mjs")).unwrap();
+    assert!(contracts_script.starts_with(
+        "// jig-application-contract-checker: v1 modes=check,public-check\n"
+    ));
     assert!(contracts_script.contains("await withStagedContracts(mode)"));
     assert!(contracts_script.contains("async function publishAtomically("));
     assert!(contracts_script.contains("async function assertPublicBoundary("));
@@ -223,6 +374,75 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(contracts_script.contains(r#"cargoPackage: "my-app-api""#));
     assert!(contracts_script.contains(r#"cargoPackage: "my-app-admin-api""#));
     assert!(contracts_script.contains("Contract recovery data was preserved"));
+    let web_checker = fs::read_to_string(destination.join("scripts/check-webapps.sh")).unwrap();
+    assert!(web_checker.contains("run_application_contract_check"));
+    let dependency_preparation = web_checker
+        .split("prepare_application_contract_dependencies() {")
+        .nth(1)
+        .unwrap()
+        .split("run_application_contract_check() {")
+        .next()
+        .unwrap();
+    assert!(dependency_preparation.contains("install_dependencies \".\""));
+    for app_dir in ["web", "landing", "admin-panel"] {
+        assert!(
+            dependency_preparation.contains(&format!("app_dir=\"{app_dir}\"")),
+            "application contract dependency preparation omitted {app_dir}"
+        );
+    }
+    assert!(dependency_preparation.contains("prepared_scopes"));
+    assert!(dependency_preparation.contains("prepared_scopes=(\"/\")"));
+    #[cfg(unix)]
+    {
+        let function_start = web_checker
+            .find("prepare_application_contract_dependencies() {")
+            .unwrap();
+        let function_end = web_checker[function_start..]
+            .find("\n}\n\nrun_application_contract_check() {")
+            .map(|offset| function_start + offset + 2)
+            .unwrap();
+        let function = &web_checker[function_start..function_end];
+        let shell_fixture = tempdir().unwrap();
+        let script = format!(
+            "set -u\ndependency_scope() {{ printf '%s\\n' \"$1\"; }}\ninstall_dependencies() {{ printf '%s\\n' \"$1\"; }}\n{function}\nprepare_application_contract_dependencies\n"
+        );
+        let output = Command::new("bash")
+            .current_dir(shell_fixture.path())
+            .arg("--noprofile")
+            .arg("--norc")
+            .arg("-c")
+            .arg(script)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "independent dependency preparation failed under nounset\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "web\nlanding\nadmin-panel\n"
+        );
+    }
+    assert_eq!(
+        web_checker
+            .matches("prepare_application_contract_dependencies\n")
+            .count(),
+        2,
+        "application and public contract checks must share dependency preparation"
+    );
+    assert!(web_checker.contains("run_public_artifacts_check"));
+    let public_artifacts_check = web_checker
+        .split_once("run_public_artifacts_check() {")
+        .unwrap()
+        .1
+        .split_once("\n}\n\ncase \"$mode\"")
+        .unwrap()
+        .0;
+    assert!(public_artifacts_check.contains(r#"run_check "web" "80" "build:bundle""#));
+    assert!(public_artifacts_check.contains(r#"run_check "landing" "0" "build:bundle""#));
+    assert!(!public_artifacts_check.contains(r#"run_check "admin-panel" "80" "build:bundle""#));
     assert_eq!(
         fs::read_to_string(destination.join(".node-version")).unwrap(),
         format!("{GENERATED_NODE_VERSION}\n")

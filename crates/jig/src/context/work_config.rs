@@ -1,6 +1,8 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use anyhow::{Result, bail};
+use globset::GlobBuilder;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -34,6 +36,12 @@ struct WorkGateConfig {
     model: Option<String>,
     #[serde(default = "default_required")]
     required: bool,
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    #[serde(default)]
+    paths_ignore: Option<Vec<String>>,
+    #[serde(default)]
+    reuse: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +56,9 @@ pub(crate) struct WorkCheckGate {
     pub(crate) id: String,
     pub(crate) tool: String,
     pub(crate) required: bool,
+    pub(crate) paths: Option<Vec<String>>,
+    pub(crate) paths_ignore: Vec<String>,
+    pub(crate) reuse: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +124,9 @@ impl WorkConfig {
                 scope: None,
                 model: None,
                 required: true,
+                paths: None,
+                paths_ignore: None,
+                reuse: None,
             });
         }
 
@@ -152,10 +166,11 @@ impl WorkConfig {
                         || gate.model.is_some()
                     {
                         bail!(
-                            "work gate '{}' with kind 'check' only supports tool and required; review-only fields belong on kind 'codex_review'",
+                            "work gate '{}' with kind 'check' only supports tool, required, paths, paths_ignore, and reuse; review-only fields belong on kind 'codex_review'",
                             gate.id
                         );
                     }
+                    validate_check_gate_paths(gate)?;
                 }
                 "codex_review" => {
                     if gate.tool.is_some() {
@@ -167,6 +182,12 @@ impl WorkConfig {
                     if gate.skill.is_none() {
                         bail!(
                             "work gate '{}' with kind 'codex_review' requires skill",
+                            gate.id
+                        );
+                    }
+                    if gate.paths.is_some() || gate.paths_ignore.is_some() || gate.reuse.is_some() {
+                        bail!(
+                            "work gate '{}' with kind 'codex_review' does not support paths, paths_ignore, or reuse; those fields belong on kind 'check'",
                             gate.id
                         );
                     }
@@ -222,6 +243,23 @@ impl WorkConfig {
 
         Ok(())
     }
+
+    pub(crate) fn validate_contract_version(&self, contract_version: u32) -> Result<()> {
+        if contract_version >= crate::context::CURRENT_CONTRACT_VERSION {
+            return Ok(());
+        }
+        for gate in &self.gates {
+            if gate.paths.is_some() || gate.paths_ignore.is_some() || gate.reuse.is_some() {
+                bail!(
+                    "work gate '{}' uses paths, paths_ignore, or reuse, which require contract version {} or newer; repository contract is {}",
+                    gate.id,
+                    crate::context::CURRENT_CONTRACT_VERSION,
+                    contract_version
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
@@ -235,6 +273,9 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
         scope,
         model,
         required,
+        paths,
+        paths_ignore,
+        reuse,
     } = gate;
 
     match kind.as_str() {
@@ -242,7 +283,14 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
             let Some(tool) = tool else {
                 return unsupported_work_gate(id, kind, required);
             };
-            WorkGate::Check(WorkCheckGate { id, tool, required })
+            WorkGate::Check(WorkCheckGate {
+                id,
+                tool,
+                required,
+                paths,
+                paths_ignore: paths_ignore.unwrap_or_default(),
+                reuse: reuse.unwrap_or(false),
+            })
         }
         "codex_review" => {
             let Some(skill) = skill else {
@@ -342,6 +390,62 @@ fn validate_codex_arg_value(label: &str, value: &str) -> Result<()> {
         bail!("Unsupported codex_review {label} value '{value}'");
     }
     Ok(())
+}
+
+fn validate_check_gate_paths(gate: &WorkGateConfig) -> Result<()> {
+    let Some(paths) = gate.paths.as_deref() else {
+        if gate.paths_ignore.is_some() {
+            bail!(
+                "work gate '{}' configures paths_ignore without paths",
+                gate.id
+            );
+        }
+        return Ok(());
+    };
+
+    if paths.is_empty() {
+        bail!(
+            "work gate '{}' paths must contain at least one repository-relative glob",
+            gate.id
+        );
+    }
+    for pattern in paths {
+        validate_gate_path_pattern(&gate.id, "paths", pattern)?;
+    }
+    for pattern in gate.paths_ignore.as_deref().unwrap_or_default() {
+        validate_gate_path_pattern(&gate.id, "paths_ignore", pattern)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_gate_path_pattern(gate_id: &str, field: &str, pattern: &str) -> Result<()> {
+    let has_unsupported_double_star = pattern
+        .split('/')
+        .any(|component| component.contains("**") && component != "**");
+    if pattern.trim().is_empty()
+        || pattern != pattern.trim()
+        || Path::new(pattern).is_absolute()
+        || pattern.contains(['\0', '\n', '\r', '\\', '{', '}'])
+        || has_unsupported_double_star
+        || pattern
+            .split('/')
+            .any(|component| matches!(component, "." | ".." | ".agent"))
+    {
+        bail!(
+            "work gate '{gate_id}' has unsafe {field} pattern '{pattern}'; use a nonblank repository-relative glob outside .agent, without brace expansion, and use ** only as a complete path component"
+        );
+    }
+
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .backslash_escape(false)
+        .build()
+        .map(|_| ())
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "work gate '{gate_id}' has invalid {field} pattern '{pattern}': {error}"
+            )
+        })
 }
 
 fn validate_prompt_token(label: &str, value: &str) -> Result<()> {

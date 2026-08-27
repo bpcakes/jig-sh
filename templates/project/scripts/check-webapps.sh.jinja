@@ -13,7 +13,7 @@ recovery_claim_token=""
 dependency_stamp_dir=".agent/tmp/web-dependencies"
 
 usage() {
-  echo "Usage: scripts/check-webapps.sh bootstrap|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
+  echo "Usage: scripts/check-webapps.sh bootstrap|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|app-check <app-dir> <lint|typecheck|build|coverage>|application-contracts|public-artifacts|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
 }
 
 
@@ -2017,10 +2017,90 @@ run_check() {
   install_dependencies "$app_dir"
   run_package_script "$app_dir" "$script_name"
 
-  if [ "$mode" = "coverage" ]; then
+  if [ "$script_name" = "test:coverage" ]; then
     COVERAGE_DIR="$app_dir/coverage" COVERAGE_THRESHOLD="$coverage_threshold" \
       "$node_bin" scripts/enforce-coverage.cjs
   fi
+}
+
+run_app_check() {
+  local app_dir="$1"
+  local operation="$2"
+  local script_name
+
+  case "$operation" in
+    lint) script_name="lint" ;;
+    typecheck) script_name="typecheck" ;;
+    build) script_name="build:bundle" ;;
+    coverage) script_name="test:coverage" ;;
+    *)
+      echo "Unsupported app check '$operation'. Expected lint, typecheck, build, or coverage." >&2
+      return 2
+      ;;
+  esac
+  case "$app_dir" in
+[% for app in frontend_apps %]
+    "<<[ app.dir ]>>") run_check "$app_dir" "<<[ app.coverage_threshold ]>>" "$script_name" ;;
+[% endfor %]
+    *)
+      echo "Web app '$app_dir' is not configured in [[frontend_apps]]." >&2
+      return 2
+      ;;
+  esac
+}
+
+require_application_contract_checker() {
+  if [ ! -f scripts/contracts.mjs ]; then
+    echo "Application contract checks are enabled, but scripts/contracts.mjs is missing." >&2
+    return 2
+  fi
+}
+
+prepare_application_contract_dependencies() {
+  local app_dir scope prepared_scope already_prepared
+  # Bash 3.2 treats an empty-array expansion as unbound under `set -u`.
+  # Dependency scopes are normalized repository-relative paths, so `/` is a
+  # safe non-matching sentinel that keeps every supported Bash expansion bound.
+  local -a prepared_scopes=("/")
+
+  # scripts/contracts.mjs executes from the repository root. When the root
+  # owns a package manifest, prepare that dependency boundary first.
+  if [ -f package.json ]; then
+    install_dependencies "."
+    prepared_scopes+=(".")
+  fi
+[% for app in frontend_apps %]
+  app_dir="<<[ app.dir ]>>"
+  scope="$(dependency_scope "$app_dir")" || return
+  already_prepared=false
+  for prepared_scope in "${prepared_scopes[@]}"; do
+    if [ "$prepared_scope" = "$scope" ]; then
+      already_prepared=true
+      break
+    fi
+  done
+  if [ "$already_prepared" = false ]; then
+    install_dependencies "$app_dir"
+    prepared_scopes+=("$scope")
+  fi
+[% endfor %]
+}
+
+run_application_contract_check() {
+  require_application_contract_checker
+  prepare_application_contract_dependencies
+  "$node_bin" scripts/contracts.mjs check
+}
+
+run_public_artifacts_check() {
+  require_application_contract_checker
+  prepare_application_contract_dependencies
+[% for app in frontend_apps %]
+[% if app.role != "admin" %]
+  run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "build:bundle"
+[% endif %]
+[% endfor %]
+  "$node_bin" scripts/contracts.mjs public-check
 }
 
 case "$mode" in
@@ -2062,6 +2142,27 @@ case "$mode" in
       exit 2
     fi
     run_public_package_script "$2" "$3"
+    ;;
+  app-check)
+    if [ "$#" -ne 3 ]; then
+      usage
+      exit 2
+    fi
+    run_app_check "$2" "$3"
+    ;;
+  application-contracts)
+    if [ "$#" -ne 1 ]; then
+      usage
+      exit 2
+    fi
+    run_application_contract_check
+    ;;
+  public-artifacts)
+    if [ "$#" -ne 1 ]; then
+      usage
+      exit 2
+    fi
+    run_public_artifacts_check
     ;;
   node-version-file)
     if [ "$#" -ne 2 ]; then

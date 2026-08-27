@@ -124,7 +124,7 @@ jig_version = "0.2.0-beta.1"
         let config: RepoConfig = toml::from_str(&format!(
             r#"{CONFIG_PREFIX}
 [[status.providers]]
-id = "factorish.example"
+id = "example.example"
 argv = ["ruby", "scripts/status.rb", "--jig-v1"]
 "#
         ))
@@ -132,7 +132,7 @@ argv = ["ruby", "scripts/status.rb", "--jig-v1"]
 
         validate_runtime_config(&config).unwrap();
         assert_eq!(config.status.providers.len(), 1);
-        assert_eq!(config.status.providers[0].id, "factorish.example");
+        assert_eq!(config.status.providers[0].id, "example.example");
         assert_eq!(
             config.status.providers[0].timeout_seconds,
             DEFAULT_STATUS_PROVIDER_TIMEOUT_SECONDS
@@ -144,25 +144,25 @@ argv = ["ruby", "scripts/status.rb", "--jig-v1"]
         for (body, expected) in [
             (
                 r#"[[status.providers]]
-id = "factorish.duplicate"
+id = "example.duplicate"
 argv = ["first"]
 
 [[status.providers]]
-id = "factorish.duplicate"
+id = "example.duplicate"
 argv = ["second"]
 "#,
                 "Duplicate status provider id",
             ),
             (
                 r#"[[status.providers]]
-id = "factorish.empty"
+id = "example.empty"
 argv = []
 "#,
                 "nonempty argv",
             ),
             (
                 r#"[[status.providers]]
-id = "factorish.timeout"
+id = "example.timeout"
 argv = ["provider"]
 timeout_seconds = 0
 "#,
@@ -170,7 +170,7 @@ timeout_seconds = 0
             ),
             (
                 r#"[[status.providers]]
-id = "factorish.control"
+id = "example.control"
 argv = ["provider", "line\nbreak"]
 "#,
                 "must not contain control characters",

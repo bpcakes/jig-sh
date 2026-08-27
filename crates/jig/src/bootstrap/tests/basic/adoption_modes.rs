@@ -39,11 +39,12 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
     for gate in gates.iter_mut() {
         let gate = gate.as_table_mut().unwrap();
         match gate["id"].as_str().unwrap() {
-            "contract" => {
+            "jig-contract" => {
+                gate.insert("id".into(), toml::Value::String("contract".into()));
                 gate.insert("tool".into(), toml::Value::String("jig.fmt_check".into()));
                 gate.insert("required".into(), toml::Value::Boolean(false));
             }
-            "tests" => {
+            "rust-tests" => {
                 gate.insert("required".into(), toml::Value::Boolean(false));
             }
             _ => {}
@@ -53,6 +54,15 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
         ("id".into(), toml::Value::String("project-fmt".into())),
         ("kind".into(), toml::Value::String("check".into())),
         ("tool".into(), toml::Value::String("jig.fmt_check".into())),
+        ("required".into(), toml::Value::Boolean(false)),
+    ])));
+    gates.push(toml::Value::Table(toml::Table::from_iter([
+        (
+            "id".into(),
+            toml::Value::String("project-backend-tests".into()),
+        ),
+        ("kind".into(), toml::Value::String("check".into())),
+        ("tool".into(), toml::Value::String("jig.test".into())),
         ("required".into(), toml::Value::Boolean(false)),
     ])));
     gates.push(toml::Value::Table(toml::Table::from_iter([
@@ -79,6 +89,15 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
         ]))]),
     );
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    let contract_path = repo.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["contract_version"] = serde_json::json!(4);
+    fs::write(
+        &contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
     crate::context::RepoContext::load_from(&repo).unwrap();
     fs::remove_file(repo.join("apps/web/package.json")).unwrap();
     fs::remove_file(repo.join("package.json")).unwrap();
@@ -105,21 +124,31 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
             .unwrap()
     };
     assert_eq!(
-        gate("contract")["tool"].as_str(),
+        gate("jig-contract")["tool"].as_str(),
         Some("jig.contract_check")
     );
     assert_eq!(
-        gate("contract")
+        gate("jig-contract")
             .as_table()
             .unwrap()
             .get("required")
             .and_then(toml::Value::as_bool),
         None
     );
-    assert_eq!(gate("tests")["tool"].as_str(), Some("jig.test"));
-    assert_eq!(gate("tests")["required"].as_bool(), Some(false));
+    assert_eq!(gate("contract")["tool"].as_str(), Some("jig.fmt_check"));
+    assert_eq!(gate("contract")["required"].as_bool(), Some(false));
+    assert_eq!(gate("rust-tests")["tool"].as_str(), Some("jig.test"));
+    assert_eq!(gate("rust-tests")["required"].as_bool(), Some(false));
     assert_eq!(gate("project-fmt")["tool"].as_str(), Some("jig.fmt_check"));
     assert_eq!(gate("project-fmt")["required"].as_bool(), Some(false));
+    assert_eq!(
+        gate("project-backend-tests")["tool"].as_str(),
+        Some("jig.test")
+    );
+    assert_eq!(
+        gate("project-backend-tests")["required"].as_bool(),
+        Some(false)
+    );
     assert_eq!(
         gate("project-review")["kind"].as_str(),
         Some("codex_review")
@@ -376,6 +405,183 @@ rust_test_command = "cargo nextest run"
     }
     assert!(workflow["jobs"]["clippy"]["env"].is_null());
     assert!(workflow["jobs"]["test"]["env"].is_null());
+}
+
+#[test]
+fn readoption_rejects_generated_gate_id_collision_with_another_tool() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    let config_path = repo.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let jig_contract = config["work"]["gates"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|gate| gate["id"].as_str() == Some("jig-contract"))
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    jig_contract.insert("tool".into(), toml::Value::String("jig.fmt_check".into()));
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    let before = fs::read(&config_path).unwrap();
+
+    let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, true))
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("Cannot reconcile generated work gate 'jig-contract'"));
+    assert!(error.contains("jig.fmt_check"));
+    assert_eq!(fs::read(config_path).unwrap(), before);
+}
+
+#[test]
+fn readoption_prefers_an_exact_generated_gate_over_its_legacy_alias() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    let config_path = repo.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let gates = config["work"]["gates"].as_array_mut().unwrap();
+    let exact = gates
+        .iter_mut()
+        .find(|gate| gate["id"].as_str() == Some("jig-contract"))
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    exact.insert("required".into(), toml::Value::Boolean(true));
+    exact.insert("reuse".into(), toml::Value::Boolean(false));
+    let exact_rust_tests = gates
+        .iter_mut()
+        .find(|gate| gate["id"].as_str() == Some("rust-tests"))
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    exact_rust_tests.insert("required".into(), toml::Value::Boolean(true));
+    exact_rust_tests.insert("reuse".into(), toml::Value::Boolean(false));
+    gates.insert(
+        0,
+        toml::Value::Table(toml::Table::from_iter([
+            ("id".into(), toml::Value::String("contract".into())),
+            ("kind".into(), toml::Value::String("check".into())),
+            (
+                "tool".into(),
+                toml::Value::String("jig.contract_check".into()),
+            ),
+            ("required".into(), toml::Value::Boolean(false)),
+            ("reuse".into(), toml::Value::Boolean(true)),
+        ])),
+    );
+    gates.insert(
+        1,
+        toml::Value::Table(toml::Table::from_iter([
+            ("id".into(), toml::Value::String("tests".into())),
+            ("kind".into(), toml::Value::String("check".into())),
+            ("tool".into(), toml::Value::String("jig.test".into())),
+            ("required".into(), toml::Value::Boolean(false)),
+            ("reuse".into(), toml::Value::Boolean(true)),
+        ])),
+    );
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
+
+    let config = toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let gates = config["work"]["gates"].as_array().unwrap();
+    assert_eq!(
+        gates
+            .iter()
+            .filter(|gate| gate["id"].as_str() == Some("jig-contract"))
+            .count(),
+        1
+    );
+    let exact = gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("jig-contract"))
+        .unwrap();
+    assert_eq!(exact["required"].as_bool(), Some(true));
+    assert_eq!(exact["reuse"].as_bool(), Some(false));
+    assert!(
+        gates
+            .iter()
+            .all(|gate| gate["id"].as_str() != Some("contract"))
+    );
+    let exact_rust_tests = gates
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("rust-tests"))
+        .unwrap();
+    assert_eq!(exact_rust_tests["required"].as_bool(), Some(true));
+    assert_eq!(exact_rust_tests["reuse"].as_bool(), Some(false));
+    assert!(
+        gates
+            .iter()
+            .all(|gate| gate["id"].as_str() != Some("tests"))
+    );
+}
+
+#[test]
+fn readoption_refreshes_generated_gate_scopes_but_preserves_project_policy() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    let config_path = repo.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let rust_tests = config["work"]["gates"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|gate| gate["id"].as_str() == Some("rust-tests"))
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    rust_tests.insert(
+        "paths".into(),
+        toml::Value::Array(vec![toml::Value::String("project-only/**".into())]),
+    );
+    rust_tests.insert(
+        "paths_ignore".into(),
+        toml::Value::Array(vec![toml::Value::String(
+            "project-only/generated/**".into(),
+        )]),
+    );
+    rust_tests.insert("required".into(), toml::Value::Boolean(false));
+    rust_tests.insert("reuse".into(), toml::Value::Boolean(true));
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
+
+    let config = toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let rust_tests = config["work"]["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("rust-tests"))
+        .unwrap();
+    let paths = rust_tests["paths"].as_array().unwrap();
+    assert!(paths.iter().any(|path| path.as_str() == Some("crates/**")));
+    assert!(
+        !paths
+            .iter()
+            .any(|path| path.as_str() == Some("project-only/**"))
+    );
+    assert!(rust_tests.as_table().unwrap().get("paths_ignore").is_none());
+    assert_eq!(rust_tests["required"].as_bool(), Some(false));
+    assert_eq!(rust_tests["reuse"].as_bool(), Some(true));
 }
 
 #[test]

@@ -127,7 +127,7 @@ At the end of this milestone, all targeted tests and the full configured test su
 
 ## Concrete Steps
 
-Run commands from `/home/aa/Documents/jig-sh`.
+Run commands from `.`.
 
 1. Inspect the diff and commit this plan plus the append-only records created by `scripts/jig work start`.
 

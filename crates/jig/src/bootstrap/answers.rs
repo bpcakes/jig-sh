@@ -13,7 +13,8 @@ use super::{
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
     RustMigrationLayout, StatusConfig, config_app_dirs_match, default_codex_marketplace_plugins,
-    normalize_config_app_dir, validate_web_package_manager,
+    normalize_config_app_dir, validate_gate_path_pattern, validate_schema_docs_dir,
+    validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::shell::quote as shell_quote;
@@ -57,6 +58,7 @@ pub(super) struct RenderAnswers {
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: bool,
     schema_dump_command: String,
+    schema_docs_dir: String,
     schema_check_command: String,
     sqlx_check_command: String,
     migration_add_command: Option<String>,
@@ -68,6 +70,7 @@ pub(super) struct RenderAnswers {
     rust_test_command: String,
     rust_test_locked_command: String,
     web_package_manager: String,
+    application_contracts_enabled: bool,
     web_package_manager_spec: String,
     web_package_manager_version: String,
     node_version: String,
@@ -79,6 +82,7 @@ pub(super) struct RenderAnswers {
     typescript_coverage_command: String,
     dev_apps: Vec<DevApp>,
     frontend_apps: Vec<FrontendApp>,
+    frontend_workspace_roots: Vec<String>,
     generated_frontend_dev_apps: Vec<FrontendApp>,
     vault: vault::VaultAnswers,
     status: StatusConfig,
@@ -108,6 +112,7 @@ const SQLX_SHAPED_ANSWER_KEYS: &[&str] = &[
     "rust_migration_layout",
     "rust_sqlx_metadata_dir",
     "schema_dump_command",
+    "schema_docs_dir",
     "schema_check_command",
     "sqlx_check_command",
     "migration_add_command",
@@ -281,6 +286,10 @@ impl RenderAnswers {
         &self.frontend_apps
     }
 
+    pub(super) fn frontend_workspace_roots(&self) -> &[String] {
+        &self.frontend_workspace_roots
+    }
+
     pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
         self.harness_footprint
     }
@@ -334,6 +343,7 @@ struct RawAnswers {
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: Option<bool>,
     schema_dump_command: Option<String>,
+    schema_docs_dir: Option<String>,
     schema_check_command: Option<String>,
     sqlx_check_command: Option<String>,
     migration_add_command: Option<String>,
@@ -345,7 +355,10 @@ struct RawAnswers {
     rust_test_command: Option<String>,
     rust_test_locked_command: Option<String>,
     web_package_manager: Option<String>,
+    application_contracts_enabled: Option<bool>,
     frontend_apps: Option<Vec<FrontendApp>>,
+    #[serde(default)]
+    frontend_workspace_roots: Option<Vec<String>>,
     dev: Option<dev::RawDevAnswers>,
     vault: Option<vault::VaultAnswers>,
     status: Option<StatusConfig>,
@@ -471,6 +484,7 @@ impl RawAnswers {
             &mut self.schema_dump_command,
             opts.schema_dump_command.clone(),
         );
+        merge_option(&mut self.schema_docs_dir, opts.schema_docs_dir.clone());
         merge_option(
             &mut self.schema_check_command,
             opts.schema_check_command.clone(),
@@ -506,8 +520,15 @@ impl RawAnswers {
             &mut self.web_package_manager,
             opts.web_package_manager.clone(),
         );
+        merge_option(
+            &mut self.application_contracts_enabled,
+            opts.application_contracts_enabled,
+        );
         if !opts.frontend_apps.is_empty() {
             self.frontend_apps = Some(opts.frontend_apps.clone());
+        }
+        if !opts.frontend_workspace_roots.is_empty() {
+            self.frontend_workspace_roots = Some(opts.frontend_workspace_roots.clone());
         }
         if !opts.dev_apps.is_empty() {
             self.dev
@@ -519,6 +540,24 @@ impl RawAnswers {
     }
 
     fn normalize_app_dirs(&mut self) -> Result<()> {
+        if let Some(rust_crate_roots) = self.rust_crate_roots.as_mut() {
+            for root in rust_crate_roots {
+                *root = normalize_generated_gate_root(root, "Rust crate root")?;
+            }
+        }
+        if self.rust_migration_dir.as_deref() == Some("") {
+            self.rust_migration_dir = None;
+        }
+        if let Some(rust_migration_dir) = self.rust_migration_dir.as_mut() {
+            *rust_migration_dir =
+                normalize_generated_gate_root(rust_migration_dir, "Rust migration directory")?;
+        }
+        if let Some(rust_sqlx_metadata_dir) = self.rust_sqlx_metadata_dir.as_mut() {
+            *rust_sqlx_metadata_dir = normalize_generated_gate_root(
+                rust_sqlx_metadata_dir,
+                "Rust SQLx metadata directory",
+            )?;
+        }
         if let Some(frontend_apps) = self.frontend_apps.as_mut() {
             for app in frontend_apps {
                 app.dir = normalize_config_app_dir(
@@ -526,6 +565,17 @@ impl RawAnswers {
                     &format!("frontend app '{}' dir", app.name),
                 )?;
             }
+        }
+        if let Some(workspace_roots) = self.frontend_workspace_roots.as_mut() {
+            for root in workspace_roots.iter_mut() {
+                *root = normalize_generated_gate_root(root, "frontend workspace root")?;
+            }
+            workspace_roots.sort();
+            workspace_roots.dedup();
+        }
+        if let Some(schema_docs_dir) = self.schema_docs_dir.as_mut() {
+            *schema_docs_dir = normalize_generated_gate_root(schema_docs_dir, "schema_docs_dir")?;
+            validate_schema_docs_dir(schema_docs_dir)?;
         }
         if let Some(dev_apps) = self.dev.as_mut().and_then(|dev| dev.apps.as_mut()) {
             for app in dev_apps {
@@ -554,6 +604,7 @@ impl RawAnswers {
             rust_sqlx_metadata_dir: self.rust_sqlx_metadata_dir,
             schema_dump_enabled: self.schema_dump_enabled,
             schema_dump_command: self.schema_dump_command,
+            schema_docs_dir: self.schema_docs_dir,
             schema_check_command: self.schema_check_command,
             sqlx_check_command: self.sqlx_check_command,
             migration_add_command: self.migration_add_command,
@@ -565,7 +616,9 @@ impl RawAnswers {
             rust_test_command: self.rust_test_command,
             rust_test_locked_command: self.rust_test_locked_command,
             web_package_manager: self.web_package_manager,
+            application_contracts_enabled: self.application_contracts_enabled,
             frontend_apps: self.frontend_apps.unwrap_or_default(),
+            frontend_workspace_roots: self.frontend_workspace_roots.unwrap_or_default(),
             dev_apps,
             status: self.status,
             execution: self.execution,
@@ -645,6 +698,17 @@ impl RawAnswers {
 
         let frontend_apps = self.frontend_apps.unwrap_or_default();
         validate_frontend_apps(&frontend_apps)?;
+        let mut frontend_workspace_roots = self.frontend_workspace_roots.unwrap_or_default();
+        for root in &mut frontend_workspace_roots {
+            *root = normalize_generated_gate_root(root, "frontend workspace root")?;
+        }
+        frontend_workspace_roots.retain(|root| {
+            !frontend_apps
+                .iter()
+                .any(|app| config_app_dirs_match(&app.dir, root))
+        });
+        frontend_workspace_roots.sort();
+        frontend_workspace_roots.dedup();
         let dev::ResolvedDevApps {
             dev_apps,
             generated_frontend_dev_apps,
@@ -673,6 +737,11 @@ impl RawAnswers {
         let schema_dump_command = self
             .schema_dump_command
             .unwrap_or_else(|| "scripts/dump-schema.sh".into());
+        let schema_docs_dir = normalize_generated_gate_root(
+            self.schema_docs_dir.as_deref().unwrap_or("docs/schema"),
+            "schema_docs_dir",
+        )?;
+        validate_schema_docs_dir(&schema_docs_dir)?;
         let rust_sqlx_metadata_dir = self.rust_sqlx_metadata_dir.or_else(|| Some(".sqlx".into()));
         let sqlx_check_command = self.sqlx_check_command.unwrap_or_else(|| {
             let metadata_dir = rust_sqlx_metadata_dir.as_deref().unwrap_or(".sqlx");
@@ -703,6 +772,7 @@ impl RawAnswers {
             rust_sqlx_metadata_dir,
             schema_dump_enabled,
             schema_dump_command,
+            schema_docs_dir,
             schema_check_command: self.schema_check_command.unwrap_or_default(),
             sqlx_check_command,
             migration_add_command,
@@ -727,6 +797,7 @@ impl RawAnswers {
                 optional_cargo_command("cargo test --workspace --locked", "test-locked")
             }),
             web_package_manager,
+            application_contracts_enabled: self.application_contracts_enabled.unwrap_or(false),
             web_package_manager_spec,
             web_package_manager_version,
             node_version: GENERATED_NODE_VERSION.into(),
@@ -739,6 +810,7 @@ impl RawAnswers {
             dev_apps,
             generated_frontend_dev_apps,
             frontend_apps,
+            frontend_workspace_roots,
             vault,
             status,
             execution,
@@ -756,6 +828,7 @@ fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {
         "rust_migration_layout" => answers.rust_migration_layout.is_some(),
         "rust_sqlx_metadata_dir" => answers.rust_sqlx_metadata_dir.is_some(),
         "schema_dump_command" => answers.schema_dump_command.is_some(),
+        "schema_docs_dir" => answers.schema_docs_dir.is_some(),
         "schema_check_command" => answers.schema_check_command.is_some(),
         "sqlx_check_command" => answers.sqlx_check_command.is_some(),
         "migration_add_command" => answers.migration_add_command.is_some(),
@@ -790,6 +863,7 @@ fn optional_cargo_command(command: &str, label: &str) -> String {
 
 pub(super) fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
     let mut names = HashSet::new();
+    let mut gate_keys = HashSet::new();
     for app in apps {
         if !is_safe_frontend_app_name(&app.name) {
             bail!(
@@ -799,6 +873,14 @@ pub(super) fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
         }
         if !names.insert(app.name.as_str()) {
             bail!("Duplicate frontend app name '{}'", app.name);
+        }
+        let gate_key = frontend_gate_key(&app.name);
+        if !gate_keys.insert(gate_key.clone()) {
+            bail!(
+                "Frontend app name '{}' conflicts with another app after normalization to gate key '{}'. Rename one app so lowercase names with '-' converted to '_' remain unique.",
+                app.name,
+                gate_key
+            );
         }
         if !is_supported_frontend_app_kind(&app.kind) {
             bail!(
@@ -815,6 +897,30 @@ pub(super) fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
         validate_frontend_app_dir(&app.name, &app.dir)?;
     }
     Ok(())
+}
+
+fn normalize_generated_gate_root(value: &str, label: &str) -> Result<String> {
+    let normalized = normalize_config_app_dir(value, label)?;
+    if normalized.chars().any(|character| {
+        character.is_control() || matches!(character, '*' | '?' | '[' | ']' | '{' | '}')
+    }) {
+        bail!(
+            "{label} '{value}' cannot be represented safely as a literal generated gate path; control characters and glob metacharacters (*, ?, [, ], {{, }}) are unsupported"
+        );
+    }
+    let pattern = if normalized == "." {
+        "**".to_string()
+    } else {
+        format!("{normalized}/**")
+    };
+    validate_gate_path_pattern("generated-policy", label, &pattern).with_context(|| {
+        format!("{label} '{value}' cannot be represented safely as a generated gate path")
+    })?;
+    Ok(normalized)
+}
+
+pub(super) fn frontend_gate_key(name: &str) -> String {
+    name.to_ascii_lowercase().replace('-', "_")
 }
 
 fn is_safe_frontend_app_name(value: &str) -> bool {

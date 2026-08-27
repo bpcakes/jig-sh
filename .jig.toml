@@ -9,6 +9,7 @@ template_source_url = "https://github.com/bpcakes/jig-sh.git"
 sqlx_enabled = false
 rust_crate_roots = ["crates"]
 schema_dump_enabled = false
+schema_docs_dir = "docs/schema"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "scripts/check-rust-format.sh"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
@@ -40,7 +41,7 @@ workspace_discovery = false
 # entries remain a fallback when no dev apps are configured.
 
 [[work.gates]]
-id = "contract"
+id = "jig-contract"
 kind = "check"
 tool = "jig.contract_check"
 
