@@ -1,7 +1,5 @@
-use std::io::{self, Read};
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-use std::process::{Child, ChildStderr, ChildStdout};
+use std::io;
+use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,62 +7,12 @@ use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use zeroize::Zeroizing;
 
 use crate::SecretBytes;
+use crate::process_pipe::ProcessPipe;
 
 use super::{
     ACTIVE_OUTPUT_POLL_INTERVAL, MAX_CAPTURED_STREAM_BYTES, MAX_STREAM_BYTES_PER_POLL,
     MAX_STREAM_READS_PER_POLL, checked_deadline,
 };
-
-enum ProcessPipe {
-    Stdout(ChildStdout),
-    Stderr(ChildStderr),
-}
-
-impl ProcessPipe {
-    #[cfg(unix)]
-    fn prepare(&self) -> io::Result<()> {
-        let descriptor = match self {
-            Self::Stdout(reader) => reader.as_raw_fd(),
-            Self::Stderr(reader) => reader.as_raw_fd(),
-        };
-        // SAFETY: the descriptor is owned by this live pipe. F_GETFL only
-        // inspects its current status flags.
-        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if flags == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: the descriptor remains live and F_SETFL preserves all
-        // existing flags while adding nonblocking reads.
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn prepare(&self) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "nonblocking brokered process-pipe reads are unavailable on this platform",
-        ))
-    }
-
-    #[cfg(unix)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Stdout(reader) => reader.read(buffer),
-            Self::Stderr(reader) => reader.read(buffer),
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn read_available(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "nonblocking brokered process-pipe reads are unavailable on this platform",
-        ))
-    }
-}
 
 struct CappedOutputDrain {
     label: &'static str,
@@ -76,7 +24,7 @@ struct CappedOutputDrain {
 impl CappedOutputDrain {
     fn start(label: &'static str, reader: ProcessPipe) -> AnyResult<Self> {
         reader
-            .prepare()
+            .prepare("nonblocking brokered process-pipe reads are unavailable on this platform")
             .with_context(|| format!("failed to prepare brokered command {label} capture"))?;
         Ok(Self {
             label,

@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use jig_tui::is_terminal_safe_character;
 use zeroize::Zeroizing;
 
 pub(crate) const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
@@ -161,7 +162,7 @@ impl<'a> TerminalSafePreviewWriter<'a> {
                 '\r' => self.output.write_all(br"\r")?,
                 '\t' => self.output.write_all(br"\t")?,
                 '\\' => self.output.write_all(br"\\")?,
-                character if terminal_safe_character(character) => {
+                character if is_terminal_safe_character(character) => {
                     let mut encoded = Zeroizing::new([0_u8; 4]);
                     self.output
                         .write_all(character.encode_utf8(&mut *encoded).as_bytes())?;
@@ -209,25 +210,6 @@ impl Write for TerminalSafePreviewWriter<'_> {
         self.flush_pending_utf8()?;
         self.output.flush()
     }
-}
-
-fn terminal_safe_character(character: char) -> bool {
-    !character.is_control()
-        && !matches!(
-            character,
-            '\u{00ad}'
-                | '\u{061c}'
-                | '\u{180e}'
-                | '\u{200b}'
-                | '\u{200e}'..='\u{200f}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{206f}'
-                | '\u{feff}'
-                | '\u{fff9}'..='\u{fffb}'
-                | '\u{e0001}'
-                | '\u{e0020}'..='\u{e007f}'
-        )
 }
 
 #[cfg(test)]

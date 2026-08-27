@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
+use crate::aad::push_length_prefixed_field;
 use crate::crypto::{KdfParams, decode_array};
 use crate::types::FieldKind;
 
@@ -218,7 +219,7 @@ pub(crate) const fn is_supported_format_version(version: u32) -> bool {
 
 pub(crate) fn payload_aad(header: &VaultHeader, role: AeadRole) -> Vec<u8> {
     let mut aad = header_aad_string(header);
-    push_aad_field(&mut aad, "payload_role", role.as_str());
+    push_length_prefixed_field(&mut aad, "payload_role", role.as_str());
     aad.into_bytes()
 }
 
@@ -233,42 +234,34 @@ fn header_aad_string(header: &VaultHeader) -> String {
         // caller asks for AAD before validation.
         _ => "jig-vault-header-unsupported\n",
     });
-    push_aad_field(&mut aad, "magic", &header.magic);
-    push_aad_field(&mut aad, "version", &header.version.to_string());
-    push_aad_field(&mut aad, "vault_id", &header.vault_id);
-    push_aad_field(&mut aad, "created_at_ms", &header.created_at_ms.to_string());
-    push_aad_field(&mut aad, "kdf.algorithm", &header.kdf.algorithm);
-    push_aad_field(
+    push_length_prefixed_field(&mut aad, "magic", &header.magic);
+    push_length_prefixed_field(&mut aad, "version", &header.version.to_string());
+    push_length_prefixed_field(&mut aad, "vault_id", &header.vault_id);
+    push_length_prefixed_field(&mut aad, "created_at_ms", &header.created_at_ms.to_string());
+    push_length_prefixed_field(&mut aad, "kdf.algorithm", &header.kdf.algorithm);
+    push_length_prefixed_field(
         &mut aad,
         "kdf.memory_kib",
         &header.kdf.memory_kib.to_string(),
     );
-    push_aad_field(
+    push_length_prefixed_field(
         &mut aad,
         "kdf.iterations",
         &header.kdf.iterations.to_string(),
     );
-    push_aad_field(
+    push_length_prefixed_field(
         &mut aad,
         "kdf.parallelism",
         &header.kdf.parallelism.to_string(),
     );
-    push_aad_field(
+    push_length_prefixed_field(
         &mut aad,
         "kdf.output_len",
         &header.kdf.output_len.to_string(),
     );
-    push_aad_field(&mut aad, "salt_b64", &header.salt_b64);
-    push_aad_field(&mut aad, "aead", &header.aead);
+    push_length_prefixed_field(&mut aad, "salt_b64", &header.salt_b64);
+    push_length_prefixed_field(&mut aad, "aead", &header.aead);
     aad
-}
-
-fn push_aad_field(output: &mut String, name: &str, value: &str) {
-    use std::fmt::Write;
-
-    // Lengths are UTF-8 byte counts, not character counts, for a stable AAD
-    // byte string.
-    writeln!(output, "{name}:{}:{value}", value.len()).expect("writing to String cannot fail");
 }
 
 pub(crate) fn decode_b64_array<const N: usize>(label: &str, value: &str) -> Result<[u8; N]> {

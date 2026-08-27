@@ -1,6 +1,6 @@
 use std::{cell::Cell, collections::BTreeMap};
 
-use jig_tui::{FuzzyMatchScore, PreparedFuzzyText};
+use jig_tui::{FuzzyMatchScore, PreparedFuzzyText, RankedFuzzyText, best_ranked_fuzzy_match};
 use jig_vault::{FieldKind, VaultReference};
 
 use crate::{
@@ -82,50 +82,35 @@ impl QuickAccessTarget {
 }
 
 #[derive(Debug)]
-struct SearchTerm {
-    priority: usize,
-    text: PreparedFuzzyText,
-}
-
-impl SearchTerm {
-    fn new(priority: usize, text: &str) -> Self {
-        Self {
-            priority,
-            text: PreparedFuzzyText::new(text),
-        }
-    }
-}
-
-#[derive(Debug)]
 struct QuickAccessEntry {
     target: QuickAccessTarget,
-    search_terms: Vec<SearchTerm>,
+    search_terms: Vec<RankedFuzzyText>,
 }
 
 impl QuickAccessEntry {
     fn new(target: QuickAccessTarget) -> Self {
         let search_terms = match &target {
             QuickAccessTarget::Item { item, .. } => vec![
-                SearchTerm::new(0, item),
-                SearchTerm::new(1, &format!("jig://{item}")),
-                SearchTerm::new(2, "item"),
+                RankedFuzzyText::new(0, item),
+                RankedFuzzyText::new(1, &format!("jig://{item}")),
+                RankedFuzzyText::new(2, "item"),
             ],
             QuickAccessTarget::Field { reference, kind } => vec![
-                SearchTerm::new(0, reference.field()),
-                SearchTerm::new(1, reference.item()),
-                SearchTerm::new(2, &reference.to_string()),
-                SearchTerm::new(3, kind.as_str()),
-                SearchTerm::new(4, "field"),
+                RankedFuzzyText::new(0, reference.field()),
+                RankedFuzzyText::new(1, reference.item()),
+                RankedFuzzyText::new(2, &reference.to_string()),
+                RankedFuzzyText::new(3, kind.as_str()),
+                RankedFuzzyText::new(4, "field"),
             ],
             QuickAccessTarget::LegacyGroup { .. } => vec![
-                SearchTerm::new(0, "legacy"),
-                SearchTerm::new(1, "legacy entries"),
-                SearchTerm::new(2, "group"),
+                RankedFuzzyText::new(0, "legacy"),
+                RankedFuzzyText::new(1, "legacy entries"),
+                RankedFuzzyText::new(2, "group"),
             ],
             QuickAccessTarget::LegacyEntry { name } => vec![
-                SearchTerm::new(0, name),
-                SearchTerm::new(1, "legacy"),
-                SearchTerm::new(2, "legacy entry"),
+                RankedFuzzyText::new(0, name),
+                RankedFuzzyText::new(1, "legacy"),
+                RankedFuzzyText::new(2, "legacy entry"),
             ],
         };
         Self {
@@ -135,14 +120,7 @@ impl QuickAccessEntry {
     }
 
     fn match_score(&self, query: &PreparedFuzzyText) -> Option<(usize, FuzzyMatchScore)> {
-        self.search_terms
-            .iter()
-            .filter_map(|term| {
-                term.text
-                    .match_score(query)
-                    .map(|score| (term.priority, score))
-            })
-            .min()
+        best_ranked_fuzzy_match(&self.search_terms, query)
     }
 }
 

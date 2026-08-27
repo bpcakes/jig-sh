@@ -17,7 +17,7 @@ use crate::{
         ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus,
         FieldWriteIntent, Focus, ImportPreviewState, InitializeFocus, ItemIdentity,
         LegacyWriteFocus, ManagementForm, MutationConfirmation, MutationConfirmationKind,
-        PeekConfirmation, RenameFieldFocus, Screen, StatusKind, kind_label,
+        PeekConfirmation, RenameFieldFocus, Screen, StatusKind,
     },
     quick_access::{QuickAccess, QuickAccessTarget},
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
@@ -439,7 +439,7 @@ fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|(identity, kind)| {
             let suffix = match kind {
-                BrowseEntryKind::Field(kind) => format!("  [{}]", kind_label(*kind)),
+                BrowseEntryKind::Field(kind) => format!("  [{}]", kind.as_str()),
                 BrowseEntryKind::Legacy => "  [legacy]".to_owned(),
             };
             ListItem::new(format!("{}{}", identity.label(), suffix))
@@ -464,7 +464,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
             key_value("Reference", &field.reference.to_string()),
             key_value("Item", field.reference.item()),
             key_value("Field", field.reference.field()),
-            key_value("Kind", kind_label(field.kind)),
+            key_value("Kind", field.kind.as_str()),
             key_value("Length", &format!("{} bytes", field.value_len)),
             key_value("Created", &format!("{} ms", field.created_at_ms)),
             key_value("Updated", &format!("{} ms", field.updated_at_ms)),
@@ -683,7 +683,7 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
                 editor_value_line("Field", field, *focus == FieldWriteFocus::Field, area.width),
                 form_value_line(
                     "Kind",
-                    kind_label(*kind),
+                    kind.as_str(),
                     *focus == FieldWriteFocus::Kind,
                     false,
                 ),
@@ -753,8 +753,8 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
             "Change field kind",
             vec![
                 key_value("Reference", &reference.to_string()),
-                key_value("Current kind", kind_label(*from)),
-                form_value_line("New kind", kind_label(*to), true, false),
+                key_value("Current kind", from.as_str()),
+                form_value_line("New kind", to.as_str(), true, false),
                 Line::from(""),
                 Line::from("Space toggles the target kind."),
             ],
@@ -804,12 +804,7 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
                 key_value("Legacy source", source),
                 editor_value_line("Item", item, *focus == ConvertFocus::Item, area.width),
                 editor_value_line("Field", field, *focus == ConvertFocus::Field, area.width),
-                form_value_line(
-                    "Kind",
-                    kind_label(*kind),
-                    *focus == ConvertFocus::Kind,
-                    false,
-                ),
+                form_value_line("Kind", kind.as_str(), *focus == ConvertFocus::Kind, false),
                 Line::from(""),
                 Line::from("Conversion atomically moves the existing encrypted value."),
             ],
@@ -1153,7 +1148,7 @@ fn draw_quick_access_preview(frame: &mut Frame, area: Rect, target: Option<&Quic
             key_value("Reference", &reference.to_string()),
             key_value("Item", reference.item()),
             key_value("Field", reference.field()),
-            key_value("Kind", kind_label(*kind)),
+            key_value("Kind", kind.as_str()),
             Line::from(""),
             Line::from(Span::styled(
                 "The encrypted value is never loaded.",
@@ -1393,16 +1388,12 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
     for row in preview.rows.iter().take(visible_rows) {
         let change = match row.change {
             ImportFieldChange::Create { kind } => {
-                format!("[{}]  create", kind_label(kind))
+                format!("[{}]  create", kind.as_str())
             }
             ImportFieldChange::Replace {
                 previous_kind,
                 kind,
-            } => format!(
-                "[{} → {}]  replace",
-                kind_label(previous_kind),
-                kind_label(kind)
-            ),
+            } => format!("[{} → {}]  replace", previous_kind.as_str(), kind.as_str()),
         };
         lines.push(clipped_line(
             &format!("{} → {}  {change}", row.variable, row.reference),
