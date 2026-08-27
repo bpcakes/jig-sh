@@ -417,30 +417,25 @@ fn assert_only_between_controlled_peek(output: &str, sentinel: &str) {
 }
 
 fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {
-    // SAFETY: each successful descriptor is immediately wrapped exactly once.
-    let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
-    if master < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `master` is a newly owned descriptor.
-    let master = unsafe { File::from_raw_fd(master) };
-    // SAFETY: the descriptor is a live PTY master owned by `master`.
-    if unsafe { libc::grantpt(master.as_raw_fd()) } != 0
-        || unsafe { libc::unlockpt(master.as_raw_fd()) } != 0
+    let mut master = -1;
+    let mut slave = -1;
+    // SAFETY: `openpty` initializes both descriptors on success. They are
+    // immediately wrapped exactly once and the remaining pointers are valid.
+    if unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } != 0
     {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: `ptsname` returns storage managed by libc for this live master.
-    let name = unsafe { libc::ptsname(master.as_raw_fd()) };
-    if name.is_null() {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `name` is the NUL-terminated slave path returned above.
-    let slave = unsafe { libc::open(name, libc::O_RDWR | libc::O_NOCTTY) };
-    if slave < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `slave` is a newly owned descriptor.
+    // SAFETY: successful `openpty` returned distinct owned descriptors.
+    let master = unsafe { File::from_raw_fd(master) };
+    // SAFETY: successful `openpty` returned distinct owned descriptors.
     let slave = unsafe { File::from_raw_fd(slave) };
     resize_terminal(&slave, columns, rows);
     Ok((master, slave))
