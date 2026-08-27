@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 
@@ -15,6 +16,19 @@ pub(crate) struct RepositoryExecutionLease {
     _file: File,
     exclusive: bool,
 }
+
+#[derive(Debug)]
+pub(crate) struct RepositoryExecutionBusy;
+
+impl fmt::Display for RepositoryExecutionBusy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "repository execution is busy with an incompatible run; retry after it finishes or cancel that run first",
+        )
+    }
+}
+
+impl std::error::Error for RepositoryExecutionBusy {}
 
 pub(crate) fn acquire_repository_execution_lease(
     ctx: &RepoContext,
@@ -58,6 +72,14 @@ pub(crate) fn try_acquire_repository_execution_lease(
         _file: file,
         exclusive,
     }))
+}
+
+pub(crate) fn acquire_repository_execution_lease_without_wait(
+    ctx: &RepoContext,
+    effects: &[ActionEffect],
+) -> Result<RepositoryExecutionLease> {
+    try_acquire_repository_execution_lease(ctx, effects)?
+        .ok_or_else(|| RepositoryExecutionBusy.into())
 }
 
 impl RepositoryExecutionLease {

@@ -243,7 +243,7 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
             // durable run creation both succeed, so validating once here keeps
             // the same safety ordering without an extra full fingerprint scan
             // on the request thread.
-            let (run, _lease, event_cursor) = match start_check_run_with_event_cursor(
+            let (run, execution_lease, event_cursor) = match start_check_run_with_event_cursor(
                 &worker_ctx,
                 &worker_catalog,
                 worker_plan,
@@ -271,6 +271,10 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
             let _ = execute_started_check_run(&worker_ctx, &worker_catalog, run, request, &|| {
                 cancellation.is_cancelled()
             });
+            // wait_for_live_runs is also used as a lifecycle barrier before
+            // callers inspect or close linked work. Keep the run registered
+            // until its execution lease is observably released.
+            drop(execution_lease);
         })
         .context("Failed to start the repository run worker")?;
 

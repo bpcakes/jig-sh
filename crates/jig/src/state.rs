@@ -6,8 +6,8 @@ use crate::context::RepoContext;
 use crate::tool_defs::tool;
 
 pub(crate) use execution_leases::{
-    RepositoryExecutionLease, acquire_repository_execution_lease,
-    try_acquire_repository_execution_lease,
+    RepositoryExecutionBusy, RepositoryExecutionLease, acquire_repository_execution_lease,
+    acquire_repository_execution_lease_without_wait, try_acquire_repository_execution_lease,
 };
 use jsonl::append_jsonl;
 #[cfg(test)]

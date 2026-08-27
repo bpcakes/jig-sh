@@ -1,4 +1,5 @@
 use super::*;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
 
@@ -190,6 +191,86 @@ targets = [
                     {"component": "web", "action": "test"}
                 ]
             }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_open_plan(root);
+}
+
+pub(super) fn write_wide_v6_evidence_fixture_repo(root: &Path, commands: &[String]) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    let mut config = String::from(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+"#,
+    );
+    for (index, command) in commands.iter().enumerate() {
+        writeln!(
+            config,
+            "example_{index}_test_command = {}",
+            serde_json::to_string(command).unwrap()
+        )
+        .unwrap();
+    }
+    config.push_str("\n[repository]\ndefault_check_profile = \"verify\"\n");
+
+    let mut components = Vec::new();
+    let mut actions = Vec::new();
+    let mut targets = Vec::new();
+    let mut required_commands = Vec::new();
+    for index in 0..commands.len() {
+        let component = format!("example{index}");
+        let command = format!("example_{index}_test_command");
+        fs::create_dir_all(root.join(&component)).unwrap();
+        fs::write(root.join(&component).join("example.txt"), "example\n").unwrap();
+        writeln!(
+            config,
+            "\n[[repository.components]]\nid = \"{component}\"\nroot = \"{component}\""
+        )
+        .unwrap();
+        writeln!(
+            config,
+            "\n[[repository.actions]]\ntarget = {{ component = \"{component}\", action = \"test\" }}\nintent = \"check\"\neffects = [\"read_only\", \"process\"]\nrunner = {{ kind = \"command\", command = \"{command}\" }}\ninputs = [\"{component}/**\"]"
+        )
+        .unwrap();
+        components.push(json!({"id": component, "root": component}));
+        actions.push(json!({
+            "target": {"component": component, "action": "test"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": command},
+            "inputs": [format!("{component}/**")]
+        }));
+        targets.push(json!({"component": component, "action": "test"}));
+        required_commands.push(command);
+    }
+    config.push_str("\n[[repository.profiles]]\nid = \"verify\"\ntargets = [\n");
+    for target in &targets {
+        writeln!(
+            config,
+            "  {{ component = {:?}, action = \"test\" }},",
+            target["component"].as_str().unwrap()
+        )
+        .unwrap();
+    }
+    config.push_str("]\n");
+    fs::write(root.join(".jig.toml"), config).unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": required_commands,
+            "tools": [],
+            "components": components,
+            "actions": actions,
+            "profiles": [{"id": "verify", "targets": targets}],
             "default_check_profile": "verify"
         }))
         .unwrap(),

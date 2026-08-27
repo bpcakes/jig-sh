@@ -105,6 +105,25 @@ pub(super) fn execute_manifest_tool_with_options_for_work_check(
     )
 }
 
+pub(super) fn execute_manifest_tool_without_lease_wait_for_work_check(
+    ctx: &RepoContext,
+    tool_name: &str,
+    args: Value,
+    plan_id: Option<String>,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ManifestToolExecutionOutcome> {
+    execute_manifest_tool_with_options(
+        ctx,
+        tool_name,
+        args,
+        plan_id,
+        ManifestToolExecutionOptions::collect_result_without_lease_wait(true, false, false),
+        position,
+        observer,
+    )
+}
+
 pub(super) enum ManifestToolExecutionOutcome {
     Completed(Value),
     Cancelled(Value),
@@ -149,6 +168,28 @@ struct ManifestToolExecutionOptions {
     collect_git_metadata: bool,
     collect_worktree_fingerprint: bool,
     failure_mode: ToolFailureMode,
+    lease_contention: LeaseContention,
+}
+
+#[derive(Clone, Copy)]
+enum LeaseContention {
+    Wait,
+    Reject,
+}
+
+impl LeaseContention {
+    fn acquire(
+        self,
+        ctx: &RepoContext,
+        effects: &[jig_contract::ActionEffect],
+    ) -> Result<crate::state::RepositoryExecutionLease> {
+        match self {
+            Self::Wait => crate::state::acquire_repository_execution_lease(ctx, effects),
+            Self::Reject => {
+                crate::state::acquire_repository_execution_lease_without_wait(ctx, effects)
+            }
+        }
+    }
 }
 
 impl ManifestToolExecutionOptions {
@@ -162,6 +203,7 @@ impl ManifestToolExecutionOptions {
             collect_git_metadata,
             collect_worktree_fingerprint,
             failure_mode: ToolFailureMode::FailFast,
+            lease_contention: LeaseContention::Wait,
         }
     }
 
@@ -175,6 +217,21 @@ impl ManifestToolExecutionOptions {
             collect_git_metadata,
             collect_worktree_fingerprint,
             failure_mode: ToolFailureMode::CollectResult,
+            lease_contention: LeaseContention::Wait,
+        }
+    }
+
+    const fn collect_result_without_lease_wait(
+        record_receipt: bool,
+        collect_git_metadata: bool,
+        collect_worktree_fingerprint: bool,
+    ) -> Self {
+        Self {
+            record_receipt,
+            collect_git_metadata,
+            collect_worktree_fingerprint,
+            failure_mode: ToolFailureMode::CollectResult,
+            lease_contention: LeaseContention::Reject,
         }
     }
 }
@@ -269,8 +326,9 @@ fn execute_v6_action_alias(
         // effects. The authority can change while this blocks, so this lease is
         // only admission to a second resolution below, not permission to run
         // the action value resolved above.
-        let repository_execution =
-            crate::state::acquire_repository_execution_lease(&current, &action.effects)?;
+        let repository_execution = options
+            .lease_contention
+            .acquire(&current, &action.effects)?;
 
         let refreshed = super::refreshed_repository_context(&current)?;
         let tool = refreshed

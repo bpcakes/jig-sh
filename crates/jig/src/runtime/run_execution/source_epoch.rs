@@ -8,6 +8,27 @@ pub(super) struct ExecutionSourceEpoch {
     observation_elapsed: Duration,
 }
 
+pub(super) struct ExecutionSourceObservation {
+    fingerprint: std::result::Result<String, String>,
+    elapsed: Duration,
+}
+
+impl ExecutionSourceObservation {
+    pub(super) fn collect(ctx: &RepoContext) -> Self {
+        Self::collect_with(|| collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn collect_with(
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> Self {
+        let started = Instant::now();
+        Self {
+            fingerprint: collect(),
+            elapsed: started.elapsed(),
+        }
+    }
+}
+
 impl ExecutionSourceEpoch {
     pub(super) fn from_plan(fingerprint: String) -> Self {
         Self {
@@ -32,6 +53,10 @@ impl ExecutionSourceEpoch {
 
     pub(super) fn discard_reusable_observation(&mut self) {
         self.reuse_observation_before_next_target = false;
+    }
+
+    pub(super) fn begin_read_only_layer(&mut self) {
+        self.discard_reusable_observation();
     }
 
     pub(super) fn prepare_target(
@@ -74,6 +99,35 @@ impl ExecutionSourceEpoch {
         }
     }
 
+    pub(super) fn prepare_queued_read_only_target(
+        &mut self,
+        planned: &PlannedTarget,
+        observation: ExecutionSourceObservation,
+    ) -> (
+        std::result::Result<(), String>,
+        std::result::Result<String, String>,
+    ) {
+        debug_assert!(!allows_worktree_mutation(planned));
+        self.discard_reusable_observation();
+        self.observation_count = self.observation_count.saturating_add(1);
+        self.observation_elapsed = self.observation_elapsed.saturating_add(observation.elapsed);
+        let current = observation.fingerprint;
+        self.observed_fingerprint = current.clone();
+        let precondition = match (self.trusted_fingerprint.as_deref(), current.as_deref()) {
+            (Ok(expected), Ok(actual)) if actual == expected => Ok(()),
+            (Ok(expected), Ok(actual)) => Err(format!(
+                "target '{}' could not start because the worktree changed after plan validation or the last declared worktree effect (expected {expected}, current {actual}); plan again",
+                planned.target
+            )),
+            (Ok(_), Err(error)) => Err(format!(
+                "could not establish the worktree effect invariant before target '{}': {error}",
+                planned.target
+            )),
+            (Err(error), _) => Err(error.to_string()),
+        };
+        (precondition, current)
+    }
+
     pub(super) fn finish_target(
         &mut self,
         ctx: &RepoContext,
@@ -81,6 +135,74 @@ impl ExecutionSourceEpoch {
         capture: TargetCapture,
     ) -> (TargetCapture, std::result::Result<String, String>) {
         self.finish_target_with(planned, capture, || collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn finish_completed_target(
+        &mut self,
+        ctx: &RepoContext,
+        planned: &PlannedTarget,
+        completed: CompletedTargetCapture,
+    ) -> (CompletedTargetCapture, std::result::Result<String, String>) {
+        let CompletedTargetCapture {
+            started_at_ms,
+            ended_at_ms,
+            capture,
+        } = completed;
+        let (capture, fingerprint) = self.finish_target(ctx, planned, capture);
+        (
+            CompletedTargetCapture {
+                started_at_ms,
+                ended_at_ms,
+                capture,
+            },
+            fingerprint,
+        )
+    }
+
+    pub(super) fn prepare_read_only_layer(
+        &mut self,
+        ctx: &RepoContext,
+        target_count: usize,
+    ) -> std::result::Result<(), String> {
+        let trusted_fingerprint = self.trusted_fingerprint.clone()?;
+        let current = self.observe_with(|| collect_execution_fingerprint(ctx));
+        self.observed_fingerprint = current.clone();
+        match current {
+            Ok(current) if current == trusted_fingerprint => Ok(()),
+            Ok(current) => Err(format!(
+                "parallel read-only layer of {target_count} targets could not start because the worktree changed after plan validation or the last declared worktree effect (expected {trusted_fingerprint}, current {current}); plan again"
+            )),
+            Err(error) => Err(format!(
+                "could not establish the worktree effect invariant before a parallel read-only layer of {target_count} targets: {error}"
+            )),
+        }
+    }
+
+    pub(super) fn observe_read_only_layer_postcondition(
+        &mut self,
+        ctx: &RepoContext,
+    ) -> std::result::Result<String, String> {
+        let current = self.observe_with(|| collect_execution_fingerprint(ctx));
+        self.observed_fingerprint = current.clone();
+        self.discard_reusable_observation();
+        current
+    }
+
+    pub(super) fn finish_started_read_only_layer_target(
+        &self,
+        planned: &PlannedTarget,
+        current: &std::result::Result<String, String>,
+        completed: CompletedTargetCapture,
+    ) -> (CompletedTargetCapture, std::result::Result<String, String>) {
+        debug_assert!(completed.was_started());
+        let completed =
+            completed.map_capture(|capture| match self.trusted_fingerprint.as_deref() {
+                Ok(expected) => {
+                    enforce_read_only_layer_worktree_effect(planned, expected, current, capture)
+                }
+                Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
+            });
+        (completed, current.clone())
     }
 
     pub(super) fn finish_target_with(
@@ -180,6 +302,32 @@ pub(super) fn enforce_declared_worktree_effect(
             let message = format!(
                 "the worktree fingerprint changed while target '{}' was running without a declared worktree effect (before {expected}, after {actual})",
                 planned.target
+            );
+            capture.stderr.push_str(&format!("{message}\n"));
+            capture.findings.push(finding(message, "effect_policy"));
+            if capture.conclusion == RunConclusion::Success {
+                capture.conclusion = RunConclusion::Failure;
+                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+            }
+            capture
+        }
+        Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
+    }
+}
+
+fn enforce_read_only_layer_worktree_effect(
+    planned: &PlannedTarget,
+    expected: &str,
+    current: &std::result::Result<String, String>,
+    mut capture: TargetCapture,
+) -> TargetCapture {
+    debug_assert!(!allows_worktree_mutation(planned));
+
+    match current.as_deref() {
+        Ok(actual) if actual == expected => capture,
+        Ok(actual) => {
+            let message = format!(
+                "the worktree fingerprint changed while a parallel read-only layer was running without a declared worktree effect (before {expected}, after {actual})"
             );
             capture.stderr.push_str(&format!("{message}\n"));
             capture.findings.push(finding(message, "effect_policy"));

@@ -231,6 +231,35 @@ fn a_skipped_target_discards_the_previous_source_observation() {
 }
 
 #[test]
+fn entering_a_parallel_layer_discards_the_previous_source_observation() {
+    let target: TargetId = "repo:test".parse().unwrap();
+    let planned = PlannedTarget::new(
+        target,
+        jig_contract::ActionIntent::Check,
+        ActionRunner::command("rust_test_command"),
+        "sha256:input",
+    );
+    let mut epoch = ExecutionSourceEpoch::from_plan("sha256:stable".into());
+    let capture =
+        TargetCapture::from_process(0, String::new(), String::new(), ResultParser::ExitCode);
+    let _ = epoch.finish_target_with(&planned, capture, || Ok("sha256:stable".into()));
+    epoch.begin_read_only_layer();
+    let mut scans = 0;
+
+    epoch
+        .prepare_target_with(&planned, || {
+            scans += 1;
+            Ok("sha256:stable".into())
+        })
+        .unwrap();
+
+    assert_eq!(
+        scans, 1,
+        "a layer boundary cannot reuse an observation from before authority validation"
+    );
+}
+
+#[test]
 fn a_worktree_mutating_target_refreshes_its_source_precondition() {
     let target: TargetId = "repo:test".parse().unwrap();
     let read_only = PlannedTarget::new(

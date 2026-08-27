@@ -355,6 +355,13 @@ pub(crate) enum ExecutionEvent<'a> {
 
 pub(crate) trait ExecutionObserver {
     fn event(&mut self, _event: ExecutionEvent<'_>) {}
+
+    /// Delivers events buffered since the previous successful flush.
+    ///
+    /// A later flush must not redeliver events that this call delivered.
+    fn flush(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) trait ExecutionCancellation {
@@ -377,6 +384,11 @@ pub(crate) struct ExecutionPhase<'a> {
     started: Instant,
 }
 
+pub(crate) struct CompletedExecutionPhase {
+    label: String,
+    elapsed: Duration,
+}
+
 impl<'a> ExecutionPhase<'a> {
     pub(crate) fn start<O: ExecutionObserver + ?Sized>(
         observer: &mut O,
@@ -393,6 +405,23 @@ impl<'a> ExecutionPhase<'a> {
             label: self.label,
             success,
             elapsed: self.started.elapsed(),
+        });
+    }
+
+    pub(crate) fn complete_owned(self) -> CompletedExecutionPhase {
+        CompletedExecutionPhase {
+            label: self.label.to_owned(),
+            elapsed: self.started.elapsed(),
+        }
+    }
+}
+
+impl CompletedExecutionPhase {
+    pub(crate) fn finish<O: ExecutionObserver + ?Sized>(self, observer: &mut O, success: bool) {
+        observer.event(ExecutionEvent::PhaseFinished {
+            label: &self.label,
+            success,
+            elapsed: self.elapsed,
         });
     }
 }

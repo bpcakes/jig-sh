@@ -201,16 +201,16 @@ requests do not wait for an incompatible lease: they fail through
 the pre-acceptance protocol error channel so the transport remains able to
 inspect or cancel the active run. Independent
 read-only members of one execution layer use a bounded worker pool and bounded,
-backpressured event and outcome queues; effectful and fail-fast layers remain
-sequential. `work finish` holds a shared checkout lease while it evaluates gate
+backpressured event and outcome queues. The layer-entry source observation
+authorizes the initial worker cohort; every later queue claim takes a fresh
+precondition so a target cannot start against drift introduced while it was
+waiting. Effectful and fail-fast layers remain sequential. `work finish` holds a shared checkout lease while it evaluates gate
 freshness and commits plan closure, preventing an effectful run from invalidating
 the evidence inside that decision window. The execution phase therefore
-performs at most two source
-observations per started target and reports their actual `count` and
-`elapsed_ms` as `source_observations` in structured check output. This cost is
-intentionally linear in executed targets because coalescing postconditions
-would lose exact effect attribution and could let a later target run against
-mutated source.
+reports the actual fingerprint scan `count` and `elapsed_ms` as
+`source_observations` in structured check output. Sequential targets reuse safe
+adjacent observations, while a parallel layer takes an entry observation, one
+for each claim beyond the initial worker cohort, and a shared postcondition.
 
 ## Human command-line experience
 

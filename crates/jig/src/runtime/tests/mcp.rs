@@ -463,6 +463,298 @@ target = "api:test"
 }
 
 #[test]
+fn mcp_work_check_rejects_repository_lease_contention_without_blocking_the_transport() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let held = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::Worktree],
+    )
+    .unwrap();
+    let root = temp.path().to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let ctx = RepoContext::load_from(&root).unwrap();
+        ready_tx.send(()).unwrap();
+        start_rx.recv().unwrap();
+        let result = call_tool(&ctx, tool::WORK_CHECK, json!({"plan_id": "plan_1"}))
+            .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    });
+
+    ready_rx.recv().unwrap();
+    start_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    drop(held);
+    let result = match timely {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().unwrap();
+            panic!("MCP work check blocked the request loop on repository contention: {error}");
+        }
+    };
+    worker.join().unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("repository execution is busy with an incompatible run"),
+        "{error}"
+    );
+}
+
+#[test]
+fn mcp_explicit_work_check_rejects_repository_lease_contention_without_blocking_the_transport() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replacen(
+        "inputs = [\"api/**\"]",
+        "inputs = [\"api/**\"]\nlegacy_aliases = [\"jig.api_test\"]",
+        1,
+    );
+    fs::write(config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.api_test",
+        "kind": "command",
+        "description": "Run API tests.",
+        "command": "api_test_command"
+    }));
+    manifest["actions"][0]["legacy_aliases"] = json!(["jig.api_test"]);
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let held = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::Worktree],
+    )
+    .unwrap();
+    let root = temp.path().to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let ctx = RepoContext::load_from(&root).unwrap();
+        ready_tx.send(()).unwrap();
+        start_rx.recv().unwrap();
+        let result = call_tool(
+            &ctx,
+            tool::WORK_CHECK,
+            json!({"plan_id": "plan_1", "tools": ["jig.api_test"]}),
+        )
+        .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    });
+
+    ready_rx.recv().unwrap();
+    start_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    drop(held);
+    let result = match timely {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().unwrap();
+            panic!("explicit MCP work check blocked the request loop on contention: {error}");
+        }
+    };
+    worker.join().unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("repository execution is busy with an incompatible run"),
+        "{error}"
+    );
+}
+
+#[test]
+fn mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "review"
+kind = "codex_review"
+skill = "jig-rust:rust-error-handling-review"
+severity = "high"
+required = true
+
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    init_git_repo(temp.path());
+    let codex_path = temp.path().join("codex-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+printf '{"summary":"clean","findings":[]}\n' > "$out"
+"#,
+    );
+    let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let held = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::Worktree],
+    )
+    .unwrap();
+    let root = temp.path().to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let ctx = RepoContext::load_from(&root).unwrap();
+        ready_tx.send(()).unwrap();
+        start_rx.recv().unwrap();
+        let result = call_tool(
+            &ctx,
+            tool::WORK_REFINE,
+            json!({"plan_id": "plan_1", "max_iterations": 1}),
+        )
+        .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    });
+
+    ready_rx.recv().unwrap();
+    start_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    drop(held);
+    let result = match timely {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().unwrap();
+            panic!("MCP work refine blocked on final check contention: {error}");
+        }
+    };
+    worker.join().unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("repository execution is busy with an incompatible run"),
+        "{error}"
+    );
+}
+
+#[test]
+fn mcp_work_check_aggregates_a_late_non_contention_error_and_preserves_prior_results() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"mv .jig.toml .jig.toml.hidden; printf 'first passed\\n'\"",
+        )
+        .replacen(
+            "inputs = [\"api/**\"]",
+            "inputs = [\"api/**\"]\nlegacy_aliases = [\"jig.first_check\"]",
+            1,
+        )
+        .replacen(
+            "inputs = [\"web/**\"]",
+            "inputs = [\"web/**\"]\nlegacy_aliases = [\"jig.second_check\"]",
+            1,
+        );
+    fs::write(&config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["tools"] = json!([
+        {
+            "name": "jig.first_check",
+            "kind": "command",
+            "description": "Run the first check.",
+            "command": "api_test_command"
+        },
+        {
+            "name": "jig.second_check",
+            "kind": "command",
+            "description": "Run the second check.",
+            "command": "web_test_command"
+        }
+    ]);
+    manifest["actions"][0]["legacy_aliases"] = json!(["jig.first_check"]);
+    manifest["actions"][1]["legacy_aliases"] = json!(["jig.second_check"]);
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = call_tool(
+        &ctx,
+        tool::WORK_CHECK,
+        json!({
+            "plan_id": "plan_1",
+            "tools": ["jig.first_check", "jig.second_check"]
+        }),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("jig.second_check could not execute"),
+        "{error}"
+    );
+    let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let child = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.first_check")
+        .expect("the successful earlier check must retain its receipt");
+    let batch = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.work_check")
+        .expect("the late execution error must retain the batch receipt");
+    assert_eq!(child["stdout_preview"], "first passed\n");
+    assert_eq!(batch["exit_status"], 1);
+    assert_eq!(batch["args"]["receipt_ids"], json!([child["id"]]));
+    assert!(
+        batch["stderr_preview"]
+            .as_str()
+            .unwrap()
+            .contains("jig.second_check could not execute"),
+        "{batch:#}"
+    );
+}
+
+#[test]
 fn mcp_work_start_and_status_refresh_repository_metadata_after_server_start() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

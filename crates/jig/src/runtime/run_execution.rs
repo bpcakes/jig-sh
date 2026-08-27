@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use jig_contract::{
     ActionEffect, ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser,
     RunConclusion, RunPlan, RunStatus, TargetId, TargetRunResult,
@@ -16,8 +16,9 @@ use serde_json::{Value, json};
 
 use crate::context::RepoContext;
 use crate::execution::{
-    ExecutionCancellation, ExecutionControl, ExecutionEvent, ExecutionObserver, ExecutionPhase,
-    PhasePosition, SupervisedExecutionError, run_supervised_execution_command,
+    CompletedExecutionPhase, ExecutionCancellation, ExecutionControl, ExecutionEvent,
+    ExecutionObserver, ExecutionPhase, ExecutionStream, PhasePosition, SupervisedExecutionError,
+    run_supervised_execution_command,
 };
 use crate::repository::{RepositoryCatalog, target_input_digest};
 use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
@@ -31,6 +32,9 @@ use crate::state::{
 use super::tool_execution::run_native_tool_with_control;
 
 const GENERIC_TARGET_TOOL: &str = "jig.target_run";
+const REPOSITORY_EXECUTION_LEASE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const REPOSITORY_EXECUTION_WAIT_MESSAGE: &[u8] =
+    b"Waiting for another repository execution to finish...\n";
 
 #[derive(Debug, Serialize)]
 pub(super) struct CheckRunExecution {
@@ -44,13 +48,6 @@ pub(super) struct CheckRunExecution {
 pub(super) struct SourceObservationMetrics {
     count: usize,
     elapsed_ms: u64,
-}
-
-impl SourceObservationMetrics {
-    fn add(&mut self, other: Self) {
-        self.count = self.count.saturating_add(other.count);
-        self.elapsed_ms = self.elapsed_ms.saturating_add(other.elapsed_ms);
-    }
 }
 
 pub(super) struct ExecuteCheckRunRequest {
@@ -86,7 +83,44 @@ pub(super) fn execute_freshly_planned_check_run(
     observer: &mut dyn ExecutionControl,
 ) -> Result<CheckRunExecution> {
     let repository_execution =
-        crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
+        acquire_observed_repository_execution_lease(ctx, &plan.effects, observer)?;
+    execute_freshly_planned_check_run_with_lease(
+        ctx,
+        catalog,
+        plan,
+        request,
+        observer,
+        repository_execution,
+    )
+}
+
+pub(super) fn execute_freshly_planned_check_run_without_lease_wait(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    plan: RunPlan,
+    request: ExecuteCheckRunRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<CheckRunExecution> {
+    let repository_execution =
+        crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
+    execute_freshly_planned_check_run_with_lease(
+        ctx,
+        catalog,
+        plan,
+        request,
+        observer,
+        repository_execution,
+    )
+}
+
+fn execute_freshly_planned_check_run_with_lease(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    plan: RunPlan,
+    request: ExecuteCheckRunRequest,
+    observer: &mut dyn ExecutionControl,
+    repository_execution: crate::state::RepositoryExecutionLease,
+) -> Result<CheckRunExecution> {
     crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     // A nonempty run gets the same source check from its first target
     // precondition. An empty affected plan has no such target, so it must prove
@@ -103,6 +137,35 @@ pub(super) fn execute_freshly_planned_check_run(
     )?;
     let mut control = ObservedRunControl { observer };
     execute_started_check_run_with_control(ctx, catalog, run, request, &mut control)
+}
+
+fn acquire_observed_repository_execution_lease(
+    ctx: &RepoContext,
+    effects: &[ActionEffect],
+    observer: &mut dyn ExecutionControl,
+) -> Result<crate::state::RepositoryExecutionLease> {
+    if let Some(lease) = crate::state::try_acquire_repository_execution_lease(ctx, effects)? {
+        return Ok(lease);
+    }
+    if observer.cancelled() {
+        bail!("repository execution was cancelled while waiting for another repository execution");
+    }
+    observer.event(ExecutionEvent::Output {
+        stream: ExecutionStream::Stderr,
+        bytes: REPOSITORY_EXECUTION_WAIT_MESSAGE,
+    });
+    observer.flush()?;
+    loop {
+        if observer.cancelled() {
+            bail!(
+                "repository execution was cancelled while waiting for another repository execution"
+            );
+        }
+        if let Some(lease) = crate::state::try_acquire_repository_execution_lease(ctx, effects)? {
+            return Ok(lease);
+        }
+        std::thread::sleep(REPOSITORY_EXECUTION_LEASE_POLL_INTERVAL);
+    }
 }
 
 #[cfg(test)]
@@ -129,13 +192,7 @@ pub(super) fn start_check_run_with_event_cursor(
     crate::state::RunEventCursor,
 )> {
     let repository_execution =
-        crate::state::try_acquire_repository_execution_lease(ctx, &plan.effects)?.ok_or_else(
-            || {
-                anyhow::anyhow!(
-                    "repository execution is busy with an incompatible run; retry after it finishes or cancel that run first"
-                )
-            },
-        )?;
+        crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
     crate::state::start_run_with_event_cursor_and_execution_lease(
         ctx,
@@ -201,7 +258,6 @@ fn execute_started_check_run_inner(
     let mut stop_after_failure = false;
     let mut source_epoch =
         ExecutionSourceEpoch::from_plan(run.plan.source.worktree_fingerprint.clone());
-    let mut parallel_source_observations = SourceObservationMetrics::default();
     let finisher = TargetFinisher {
         ctx,
         catalog,
@@ -240,18 +296,21 @@ fn execute_started_check_run_inner(
                 })
                 .collect::<Vec<_>>();
             target_index += positioned.len();
-            let outcomes =
-                execute_parallel_read_only_layer(ctx, catalog, &run, control, &positioned)?;
-            for ((target_id, planned), outcome) in
-                layer.iter().zip(planned_layer.iter()).zip(outcomes)
+            let execution = execute_parallel_read_only_layer(
+                ctx,
+                catalog,
+                &run,
+                control,
+                &mut source_epoch,
+                &positioned,
+            )?;
+            for ((target_id, planned), outcome) in layer
+                .iter()
+                .zip(planned_layer.iter())
+                .zip(execution.outcomes)
             {
-                parallel_source_observations.add(outcome.source_observations);
-                let (result, compatibility) = finisher.finish(
-                    planned,
-                    outcome.started_at_ms,
-                    outcome.capture,
-                    outcome.fingerprint,
-                )?;
+                let (result, compatibility) =
+                    finisher.finish(planned, outcome.completed, outcome.fingerprint)?;
                 record_finished_target(
                     ctx,
                     &run_id,
@@ -305,8 +364,7 @@ fn execute_started_check_run_inner(
                     .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
                 finisher.finish(
                     planned,
-                    None,
-                    capture,
+                    CompletedTargetCapture::now(None, capture),
                     Err(format!(
                         "target '{}' did not start, so no execution-time worktree fingerprint was observed",
                         planned.target
@@ -323,11 +381,19 @@ fn execute_started_check_run_inner(
                 );
                 let capture = TargetCapture::blocked(message.clone())
                     .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
-                finisher.finish(planned, None, capture, Err(message))?
+                finisher.finish(
+                    planned,
+                    CompletedTargetCapture::now(None, capture),
+                    Err(message),
+                )?
             } else if let Err(message) = source_epoch.prepare_target(ctx, planned) {
                 let capture = TargetCapture::blocked(message)
                     .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
-                finisher.finish(planned, None, capture, source_epoch.receipt_fingerprint())?
+                finisher.finish(
+                    planned,
+                    CompletedTargetCapture::now(None, capture),
+                    source_epoch.receipt_fingerprint(),
+                )?
             } else {
                 mark_target_started(ctx, &run_id, target_id.clone())?;
                 let started_at_ms = now_ms();
@@ -338,10 +404,12 @@ fn execute_started_check_run_inner(
                     PhasePosition::new(target_index, target_count)
                         .expect("planned target position must be valid"),
                 );
-                let (capture, fingerprint) =
-                    run_target(ctx, catalog, planned, control, &mut source_epoch);
-                phase.finish(control, capture.conclusion == RunConclusion::Success);
-                finisher.finish(planned, Some(started_at_ms), capture, fingerprint)?
+                let capture = run_target_capture(ctx, catalog, planned, control);
+                let completed = CompletedTargetCapture::now(Some(started_at_ms), capture);
+                let (completed, fingerprint) =
+                    source_epoch.finish_completed_target(ctx, planned, completed);
+                phase.finish(control, completed.succeeded());
+                finisher.finish(planned, completed, fingerprint)?
             };
 
             record_finished_target(
@@ -365,8 +433,7 @@ fn execute_started_check_run_inner(
     }
     let conclusion = aggregate_conclusion(conclusions.values().copied());
     complete_run(ctx, &run_id, conclusion)?;
-    let mut source_observations = source_epoch.metrics();
-    source_observations.add(parallel_source_observations);
+    let source_observations = source_epoch.metrics();
     debug_assert!(source_observations.count <= target_count.saturating_mul(2));
     Ok(CheckRunExecution {
         run: run_by_id(ctx, &run_id)?,
@@ -426,13 +493,12 @@ fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a Planne
         .ok_or_else(|| anyhow::anyhow!("run plan references missing target '{target}'"))
 }
 
-fn run_target(
+fn run_target_capture(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     planned: &PlannedTarget,
     run_control: &mut dyn RepositoryRunControl,
-    source_epoch: &mut ExecutionSourceEpoch,
-) -> (TargetCapture, std::result::Result<String, String>) {
+) -> TargetCapture {
     let mut control = TargetExecutionControl::new(ctx, planned, run_control);
     let capture = match &planned.runner {
         ActionRunner::Command {
@@ -470,9 +536,7 @@ fn run_target(
     let capture = control
         .enforce_poll_health(capture)
         .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
-    let capture =
-        enforce_current_repository_authority(ctx, catalog.config_digest(), planned, capture);
-    source_epoch.finish_target(ctx, planned, capture)
+    enforce_current_repository_authority(ctx, catalog.config_digest(), planned, capture)
 }
 
 fn native_runner_error_capture(
@@ -548,6 +612,10 @@ struct ObservedRunControl<'a> {
 impl ExecutionObserver for ObservedRunControl<'_> {
     fn event(&mut self, event: ExecutionEvent<'_>) {
         self.observer.event(event);
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.observer.flush()
     }
 }
 
@@ -656,6 +724,10 @@ impl<'a> TargetExecutionControl<'a> {
 impl ExecutionObserver for TargetExecutionControl<'_> {
     fn event(&mut self, event: ExecutionEvent<'_>) {
         self.run_control.event(event);
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.run_control.flush()
     }
 }
 

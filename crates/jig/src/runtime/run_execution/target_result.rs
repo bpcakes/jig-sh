@@ -8,15 +8,47 @@ pub(super) struct TargetFinisher<'a> {
     pub(super) record_receipts: bool,
 }
 
+pub(super) struct CompletedTargetCapture {
+    pub(super) started_at_ms: Option<u64>,
+    pub(super) ended_at_ms: u64,
+    pub(super) capture: TargetCapture,
+}
+
+impl CompletedTargetCapture {
+    pub(super) fn now(started_at_ms: Option<u64>, capture: TargetCapture) -> Self {
+        Self {
+            started_at_ms,
+            ended_at_ms: now_ms(),
+            capture,
+        }
+    }
+
+    pub(super) fn was_started(&self) -> bool {
+        self.started_at_ms.is_some()
+    }
+
+    pub(super) fn succeeded(&self) -> bool {
+        self.capture.conclusion == RunConclusion::Success
+    }
+
+    pub(super) fn map_capture(mut self, map: impl FnOnce(TargetCapture) -> TargetCapture) -> Self {
+        self.capture = map(self.capture);
+        self
+    }
+}
+
 impl TargetFinisher<'_> {
     pub(super) fn finish(
         &self,
         planned: &PlannedTarget,
-        started_at_ms: Option<u64>,
-        capture: TargetCapture,
+        completed: CompletedTargetCapture,
         worktree_fingerprint: std::result::Result<String, String>,
     ) -> Result<(TargetRunResult, Option<Value>)> {
-        let ended_at_ms = now_ms();
+        let CompletedTargetCapture {
+            started_at_ms,
+            ended_at_ms,
+            capture,
+        } = completed;
         let tool_name = capture.alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL);
         let input_digest = match &worktree_fingerprint {
             Ok(fingerprint) => target_input_digest(self.catalog, &planned.target, fingerprint)?,

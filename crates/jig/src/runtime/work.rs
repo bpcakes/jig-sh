@@ -253,7 +253,7 @@ pub(super) fn check_from_args_with_observer(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let request: WorkCheckRequest = request_from_args(args)?;
-    checks::check_with_observer(ctx, request, observer)
+    checks::check_from_mcp_with_observer(ctx, request, observer)
 }
 
 pub(super) fn gates_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
@@ -281,7 +281,7 @@ pub(super) fn refine_from_args_with_observer(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let request: WorkRefineRequest = request_from_args(args)?;
-    review::refine_with_observer(ctx, request, observer)
+    review::refine_from_mcp_with_observer(ctx, request, observer)
 }
 
 pub(super) fn decide_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {

@@ -14,7 +14,10 @@ use crate::state::{
 };
 use crate::tool_defs::tool;
 
-use super::super::run_execution::{ExecuteCheckRunRequest, execute_freshly_planned_check_run};
+use super::super::run_execution::{
+    CheckRunExecution, ExecuteCheckRunRequest, execute_freshly_planned_check_run,
+    execute_freshly_planned_check_run_without_lease_wait,
+};
 use super::super::tool_execution::{ManifestToolExecutionOutcome, manifest_tool_result_failure};
 use super::tools::{selected_tools, validate_check_tool};
 
@@ -23,28 +26,45 @@ pub(super) fn check_with_observer(
     opts: WorkCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
+    check_with_execution(ctx, opts, WorkCheckExecution::WaitForLease, observer)
+}
+
+pub(super) fn check_from_mcp_with_observer(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_with_execution(ctx, opts, WorkCheckExecution::RejectContention, observer)
+}
+
+fn check_with_execution(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     if opts.tools.is_empty() {
-        check_configured(ctx, &opts.plan_id, CheckFailureMode::ReportError, observer)
+        check_configured(
+            ctx,
+            &opts.plan_id,
+            CheckFailureMode::ReportError,
+            execution,
+            observer,
+        )
     } else {
-        check_tools_with_observer(
+        run_check_tools(
             ctx,
             &opts.plan_id,
             selected_tools(ctx, &opts.tools)?,
+            CheckFailureMode::ReportError,
+            execution,
             observer,
-        )
+        )?
+        .require_success()
     }
-}
-
-pub(super) fn check_tools_with_observer(
-    ctx: &RepoContext,
-    plan_id: &str,
-    tools: Vec<String>,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    run_check_tools(ctx, plan_id, tools, CheckFailureMode::ReportError, observer)?.require_success()
 }
 
 pub(super) fn check_configured_collect_failures_with_observer(
@@ -52,7 +72,34 @@ pub(super) fn check_configured_collect_failures_with_observer(
     plan_id: &str,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_configured(ctx, plan_id, CheckFailureMode::Collect, observer)
+    check_configured_collect_failures_with_execution(
+        ctx,
+        plan_id,
+        WorkCheckExecution::WaitForLease,
+        observer,
+    )
+}
+
+pub(super) fn check_configured_collect_failures_from_mcp_with_observer(
+    ctx: &RepoContext,
+    plan_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_configured_collect_failures_with_execution(
+        ctx,
+        plan_id,
+        WorkCheckExecution::RejectContention,
+        observer,
+    )
+}
+
+fn check_configured_collect_failures_with_execution(
+    ctx: &RepoContext,
+    plan_id: &str,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_configured(ctx, plan_id, CheckFailureMode::Collect, execution, observer)
 }
 
 #[cfg(test)]
@@ -62,14 +109,75 @@ pub(in crate::runtime) fn check_tools_collect_failures_with_observer(
     tools: Vec<String>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    run_check_tools(ctx, plan_id, tools, CheckFailureMode::Collect, observer)
-        .map(|batch| batch.result)
+    run_check_tools(
+        ctx,
+        plan_id,
+        tools,
+        CheckFailureMode::Collect,
+        WorkCheckExecution::WaitForLease,
+        observer,
+    )
+    .map(|batch| batch.result)
 }
 
 #[derive(Clone, Copy)]
 enum CheckFailureMode {
     ReportError,
     Collect,
+}
+
+#[derive(Clone, Copy)]
+enum WorkCheckExecution {
+    WaitForLease,
+    RejectContention,
+}
+
+impl WorkCheckExecution {
+    fn execute_evidence(
+        self,
+        ctx: &RepoContext,
+        catalog: &RepositoryCatalog,
+        plan: jig_contract::RunPlan,
+        request: ExecuteCheckRunRequest,
+        observer: &mut dyn ExecutionControl,
+    ) -> Result<CheckRunExecution> {
+        match self {
+            Self::WaitForLease => {
+                execute_freshly_planned_check_run(ctx, catalog, plan, request, observer)
+            }
+            Self::RejectContention => execute_freshly_planned_check_run_without_lease_wait(
+                ctx, catalog, plan, request, observer,
+            ),
+        }
+    }
+
+    fn execute_tool(
+        self,
+        ctx: &RepoContext,
+        name: &str,
+        plan_id: &str,
+        position: PhasePosition,
+        observer: &mut dyn ExecutionControl,
+    ) -> Result<ManifestToolExecutionOutcome> {
+        match self {
+            Self::WaitForLease => super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
+                ctx,
+                name,
+                json!({}),
+                Some(plan_id.to_string()),
+                position,
+                observer,
+            ),
+            Self::RejectContention => super::super::tool_execution::execute_manifest_tool_without_lease_wait_for_work_check(
+                ctx,
+                name,
+                json!({}),
+                Some(plan_id.to_string()),
+                position,
+                observer,
+            ),
+        }
+    }
 }
 
 impl CheckFailureMode {
@@ -82,6 +190,7 @@ fn check_configured(
     ctx: &RepoContext,
     plan_id: &str,
     failure_mode: CheckFailureMode,
+    execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let tools = ctx.work_check_tools();
@@ -115,7 +224,7 @@ fn check_configured(
             failures: Vec::new(),
         }
     } else {
-        run_check_tools(ctx, plan_id, tools, failure_mode, observer)?
+        run_check_tools(ctx, plan_id, tools, failure_mode, execution, observer)?
     };
 
     if targets.is_empty() {
@@ -140,7 +249,7 @@ fn check_configured(
             affected_base: None,
         },
     )?;
-    let execution = execute_freshly_planned_check_run(
+    let execution = execution.execute_evidence(
         ctx,
         catalog,
         plan.clone(),
@@ -259,14 +368,15 @@ fn run_check_tools(
     plan_id: &str,
     tools: Vec<String>,
     failure_mode: CheckFailureMode,
+    execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CheckBatch> {
     let started = now_ms();
-    let before_fingerprint =
-        current_worktree_fingerprint_with_cancellation(ctx, &|| observer.cancelled())?;
     for name in &tools {
         validate_check_tool(ctx, name, "Work check")?;
     }
+    let before_fingerprint =
+        current_worktree_fingerprint_with_cancellation(ctx, &|| observer.cancelled())?;
 
     let mut results = Vec::with_capacity(tools.len());
     let mut check_failures = Vec::<CheckFailure>::new();
@@ -283,15 +393,21 @@ fn run_check_tools(
         }
         let position = PhasePosition::new(index + 1, tools.len())
             .expect("work checks are enumerated within a nonempty tool list");
-        let execution =
-            super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
-                ctx,
-                name,
-                json!({}),
-                Some(plan_id.to_string()),
-                position,
-                observer,
-            );
+        let execution = match execution.execute_tool(ctx, name, plan_id, position, observer) {
+            Err(error)
+                if error.is::<crate::state::RepositoryExecutionBusy>()
+                    && results.is_empty()
+                    && check_failures.is_empty() =>
+            {
+                // A synchronous MCP request must return pre-execution failures
+                // directly. Folding lease contention into a batch receipt would
+                // delay the transport before it can accept cancellation for
+                // the active run. Once the batch has evidence, every later
+                // error belongs to it so earlier receipts are not orphaned.
+                return Err(error);
+            }
+            result => result,
+        };
         match execution {
             Ok(ManifestToolExecutionOutcome::Completed(result)) => {
                 let result_failure = manifest_tool_result_failure(&result)?;

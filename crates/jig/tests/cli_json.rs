@@ -2,7 +2,7 @@
 
 use std::fs;
 #[cfg(unix)]
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -13,7 +13,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(unix)]
 use std::process::Stdio;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use support::tempdir;
 
@@ -117,6 +121,63 @@ fn named_v6_check_uses_aggregate_output_and_exits_unsuccessfully() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Jig check: failed"), "{stdout}");
     assert!(stdout.contains("api:test: failed (exit 7)"), "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_check_prints_lease_contention_before_the_lease_is_released() {
+    let repo = tempdir().unwrap();
+    write_v6_failing_test_repo(repo.path());
+    fs::create_dir_all(repo.path().join(".agent/.cache")).unwrap();
+    let lease = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(repo.path().join(".agent/.cache/repository-execution.lock"))
+        .unwrap();
+    lease.lock_exclusive().unwrap();
+    let stderr_path = repo.path().join("lease-wait.stderr");
+    let stderr = File::create(&stderr_path).unwrap();
+    let mut child = jig()
+        .current_dir(repo.path())
+        .args(["check", "api:test", "--no-receipt"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let observed = loop {
+        let stderr = fs::read_to_string(&stderr_path).unwrap();
+        if stderr.contains("Waiting for another repository execution") {
+            break true;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("repository check exited with {status} before reporting lease contention");
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if !observed {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("lease contention remained buffered while the command was waiting");
+    }
+
+    drop(lease);
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(1));
+    let stderr = fs::read_to_string(stderr_path).unwrap();
+    assert_eq!(
+        stderr
+            .matches("Waiting for another repository execution")
+            .count(),
+        1,
+        "a final progress flush must not redeliver the wait notice: {stderr}"
+    );
 }
 
 #[test]
