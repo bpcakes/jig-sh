@@ -360,8 +360,11 @@ fn go_backend_rejects_rust_sqlx_answers() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_files() {
+    use std::os::unix::fs::PermissionsExt;
+
     let rendered = RawAnswers {
         repo_name: Some("demo".into()),
         backend_language: Some(BackendLanguage::Go),
@@ -385,6 +388,28 @@ fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_file
     assert!(rendered.go_fmt_check_command.contains(") || exit $?"));
 
     let temp = tempdir().unwrap();
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let gofmt = bin.join("gofmt");
+    fs::write(
+        &gofmt,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = "-l"
+test "$2" = "--"
+shift 2
+test "$#" -eq 1
+test "$1" = "current.go"
+exit "${FAKE_GOFMT_EXIT:-0}"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&gofmt, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+
     fs::write(temp.path().join("current.go"), "package example\n").unwrap();
     fs::write(temp.path().join("deleted.go"), "package example\n").unwrap();
     fs::write(temp.path().join("ignored.go"), "not valid Go\n").unwrap();
@@ -409,12 +434,22 @@ fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_file
 
     let output = Command::new("bash")
         .args(["-c", &rendered.go_fmt_check_command])
+        .env("PATH", &path)
         .current_dir(temp.path())
         .output()
         .unwrap();
 
     assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
+
+    let parser_failure = Command::new("bash")
+        .args(["-c", &rendered.go_fmt_check_command])
+        .env("PATH", path)
+        .env("FAKE_GOFMT_EXIT", "7")
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(!parser_failure.status.success(), "{parser_failure:?}");
 }
 
 #[test]
