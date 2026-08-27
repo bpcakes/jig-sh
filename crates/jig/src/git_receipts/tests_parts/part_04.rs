@@ -85,7 +85,7 @@ fn prepared_plan_change_snapshot_feeds_multiple_gate_scopes() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn plan_change_snapshot_fails_closed_for_non_utf8_repository_paths() {
     let _env = crate::test_env::lock_env();

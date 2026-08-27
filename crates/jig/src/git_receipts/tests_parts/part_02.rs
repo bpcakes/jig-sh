@@ -10,7 +10,7 @@ fn porcelain_z_parser_preserves_non_utf8_path_bytes() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn whole_worktree_fingerprint_preserves_non_utf8_tracked_paths() {
     let _env = crate::test_env::lock_env();
@@ -280,7 +280,7 @@ fn staged_deletion_with_ignored_same_path_replacement_fails_all_evidence_closed(
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn canonical_diff_order_file_preserves_non_utf8_temporary_directory() {
     let temp = tempdir().unwrap();
@@ -317,7 +317,7 @@ fn canonical_diff_order_file_preserves_non_utf8_temporary_directory() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn canonical_diff_order_file_preserves_non_utf8_temporary_directory_helper() {
     if std::env::var_os(NON_UTF8_TMPDIR_HELPER_ENV).is_none() {
