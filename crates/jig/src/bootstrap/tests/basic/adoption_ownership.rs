@@ -138,12 +138,11 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
     let generated_gates = output["adoption_profile"]["generated_gates"]
         .as_array()
         .unwrap();
-    assert!(
-        generated_gates
-            .iter()
-            .all(|gate| gate.as_str().unwrap().starts_with("jig "))
-    );
-    assert_eq!(generated_gates.len(), 4);
+    assert!(generated_gates.iter().all(|gate| {
+        let gate = gate.as_str().unwrap();
+        gate.starts_with("jig ") || gate.starts_with("scripts/check-rust-file-loc.sh ")
+    }));
+    assert_eq!(generated_gates.len(), 5);
     assert!(!generated_gates.iter().any(|gate| gate == "jig bootstrap"));
     let command_report = output["render_report"]["commands_detected_or_skipped"]
         .as_array()
@@ -171,6 +170,7 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
     assert!(repo.join(".gitattributes").is_file());
     assert!(!repo.join("scripts/jig").exists());
     assert!(!repo.join("scripts/install-jig.sh").exists());
+    assert!(repo.join("scripts/check-rust-file-loc.sh").is_file());
     assert!(!repo.join(".mcp.json").exists());
     assert!(!repo.join("AGENTS.md").exists());
     assert!(!repo.join("agent-map.md").exists());
@@ -283,11 +283,10 @@ fn minimal_frontend_keeps_metadata_without_enabling_web_harness_capabilities() {
             .all(|gate| !gate.as_str().unwrap().contains("typescript"))
     );
     assert!(generated_gates.iter().any(|gate| gate == "jig check sqlx"));
-    assert!(
-        generated_gates
-            .iter()
-            .all(|gate| gate.as_str().unwrap().starts_with("jig "))
-    );
+    assert!(generated_gates.iter().all(|gate| {
+        let gate = gate.as_str().unwrap();
+        gate.starts_with("jig ") || gate.starts_with("scripts/check-rust-file-loc.sh ")
+    }));
     let command_report = output["render_report"]["commands_detected_or_skipped"]
         .as_array()
         .unwrap();
@@ -1020,7 +1019,10 @@ fn invalid_runtime_config_is_not_preserved_by_readoption_or_update() {
         let repaired =
             toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
                 .unwrap();
-        assert!(repaired.get("commands").is_none());
+        assert_eq!(
+            repaired["commands"]["rust_file_loc_command"].as_str(),
+            Some("scripts/check-rust-file-loc.sh main")
+        );
         crate::context::RepoContext::load_from(&repo).unwrap();
     }
 }

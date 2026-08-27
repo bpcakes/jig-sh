@@ -1254,7 +1254,10 @@ fn adopt_minimal_preview_keeps_write_flag_in_next_steps() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|gate| gate.as_str().unwrap().starts_with("jig "))
+            .all(|gate| {
+                let gate = gate.as_str().unwrap();
+                gate.starts_with("jig ") || gate.starts_with("scripts/check-rust-file-loc.sh ")
+            })
     );
     assert!(
         output["render_report"]["commands_detected_or_skipped"]

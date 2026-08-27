@@ -181,6 +181,7 @@ sqlx = { workspace = true }
             .all(|gate| {
                 let gate = gate.as_str().unwrap();
                 gate.starts_with("scripts/jig ")
+                    || gate.starts_with("scripts/check-rust-file-loc.sh ")
                     || gate.starts_with("scripts/check-webapps.sh app-check ")
                     || gate == "scripts/check-webapps.sh application-contracts"
                     || gate == "scripts/check-webapps.sh public-artifacts"
@@ -289,6 +290,7 @@ sqlx = { workspace = true }
             "jig.fmt_check" => "scripts/jig check fmt",
             "jig.clippy" => "scripts/jig check clippy",
             "jig.test" => "scripts/jig check test",
+            "jig.rust_file_loc" => "scripts/check-rust-file-loc.sh main",
             "jig.typescript_lint" => "scripts/jig check typescript-lint",
             "jig.typescript_typecheck" => "scripts/jig check typescript-typecheck",
             "jig.typescript_build" => "scripts/jig check typescript-build",

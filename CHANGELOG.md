@@ -24,6 +24,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Make the changed-file Rust source-size policy a required work gate, and route both local work checks and repository-policy CI through the same merge-base-aware script so work cannot finish with an untested LOC violation.
 - Fail closed when a staged deletion is recreated at the same ignored worktree path, preserve non-UTF-8 temporary order-file paths in canonical Git proofs, and omit child exit statuses from unknown gate evidence.
 - Frame untracked whole-worktree entries and gate-signature path lists unambiguously; probe only changed Gitlink candidates with byte-preserving literal pathspecs; treat malformed selected batches as reuse tombstones while keeping reused records inert; reject nonliteral generated policy roots while preserving the optional empty migration-directory sentinel; and derive adoption previews from the staged closure gates instead of repository utilities.
 - Let the latest exact gate outcome supersede older reusable evidence even when it failed, preserve non-UTF-8 tracked path bytes in legacy whole-worktree fingerprints, and TOML-escape every dynamic generated gate path.

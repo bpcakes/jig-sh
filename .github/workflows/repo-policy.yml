@@ -11,6 +11,7 @@ on:
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
+      - "scripts/check-rust-file-loc.sh"
       - "scripts/install-jig.sh"
       - ".github/workflows/repo-policy.yml"
   push:
@@ -25,6 +26,7 @@ on:
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
+      - "scripts/check-rust-file-loc.sh"
       - "scripts/install-jig.sh"
       - ".github/workflows/repo-policy.yml"
   merge_group:
@@ -79,13 +81,4 @@ jobs:
       - name: Check Rust file LOC policy
         env:
           JIG_DEV_BIN: target/debug/jig
-        run: |
-          set -euo pipefail
-          if git rev-parse --verify origin/master >/dev/null 2>&1; then
-            base_ref="$(git merge-base HEAD origin/master)"
-          elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            base_ref="HEAD^"
-          else
-            base_ref="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-          fi
-          scripts/jig check rust-file-loc --changed-against "$base_ref"
+        run: scripts/check-rust-file-loc.sh master

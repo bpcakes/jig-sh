@@ -56,11 +56,12 @@ scope = "<<[ vault.scope | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 scope_id = "<<[ vault.scope_id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 allow_global = [% if vault.allow_global %]true[% else %]false[% endif %]
 
+[commands]
+rust_file_loc_command = "scripts/check-rust-file-loc.sh <<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if frontend_harness_enabled %]
 # Extra command keys must use *_command names so contract required_commands
 # stay distinct from tool names and gate ids. Entries here override same-named
 # legacy top-level command fields.
-[commands]
 typescript_lint_command = "<<[ typescript_lint_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_typecheck_command = "<<[ typescript_typecheck_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_build_command = "<<[ typescript_build_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
@@ -137,6 +138,11 @@ timeout_seconds = <<[ provider.timeout_seconds ]>>
 id = "jig-contract"
 kind = "check"
 tool = "jig.contract_check"
+
+[[work.gates]]
+id = "rust-file-loc"
+kind = "check"
+tool = "jig.rust_file_loc"
 
 [% if frontend_harness_enabled and application_contracts_enabled %]
 [[work.gates]]

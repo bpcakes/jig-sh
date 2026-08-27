@@ -423,7 +423,7 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
 
     let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
     assert!(policy.contains("JIG_DEFAULT_BRANCH:"));
-    assert!(policy.contains(r#""origin/$JIG_DEFAULT_BRANCH""#));
+    assert!(policy.contains(r#"run: scripts/check-rust-file-loc.sh "$JIG_DEFAULT_BRANCH""#));
     assert!(!policy.contains(&format!("origin/{default_branch}")));
 }
 
