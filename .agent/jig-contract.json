@@ -47,6 +47,18 @@
       "command": "rust_file_loc_command"
     },
     {
+      "name": "jig.source_fmt_check",
+      "kind": "command",
+      "description": "Run the source repository's complete Rust formatting checks.",
+      "command": "rust_fmt_check_command"
+    },
+    {
+      "name": "jig.source_test",
+      "kind": "command",
+      "description": "Run the source repository's partitioned Rust test suite.",
+      "command": "rust_test_command"
+    },
+    {
       "name": "jig.contract_check",
       "kind": "native",
       "description": "Run the native Jig contract check."
