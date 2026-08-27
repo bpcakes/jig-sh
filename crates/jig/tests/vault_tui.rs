@@ -64,7 +64,11 @@ fn make_controlling_terminal(command: &mut Command) {
             if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) < 0 {
+            #[cfg(target_vendor = "apple")]
+            let tiocsctty = libc::TIOCSCTTY as libc::c_ulong;
+            #[cfg(not(target_vendor = "apple"))]
+            let tiocsctty = libc::TIOCSCTTY;
+            if libc::ioctl(libc::STDIN_FILENO, tiocsctty, 0) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
