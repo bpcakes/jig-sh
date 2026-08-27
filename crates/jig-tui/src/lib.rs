@@ -140,6 +140,46 @@ impl PreparedFuzzyText {
     }
 }
 
+/// Prepared fuzzy-search text with a stable field priority.
+///
+/// Lower priority values sort before fuzzy-match quality, allowing callers to
+/// prefer matches from more meaningful fields without rebuilding normalized
+/// search text for each query.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RankedFuzzyText {
+    priority: usize,
+    text: PreparedFuzzyText,
+}
+
+impl RankedFuzzyText {
+    /// Prepares one ranked candidate field for repeated fuzzy matching.
+    pub fn new(priority: usize, text: &str) -> Self {
+        Self {
+            priority,
+            text: PreparedFuzzyText::new(text),
+        }
+    }
+}
+
+/// Returns the best match across ranked candidate fields.
+///
+/// Field priority is compared first and fuzzy-match quality second. `None`
+/// means no field contains the query as an ordered subsequence.
+pub fn best_ranked_fuzzy_match(
+    candidates: &[RankedFuzzyText],
+    query: &PreparedFuzzyText,
+) -> Option<(usize, FuzzyMatchScore)> {
+    candidates
+        .iter()
+        .filter_map(|candidate| {
+            candidate
+                .text
+                .match_score(query)
+                .map(|score| (candidate.priority, score))
+        })
+        .min()
+}
+
 /// Scores a case-insensitive fuzzy match without retaining either input.
 pub fn fuzzy_match_score(candidate: &str, query: &str) -> Option<FuzzyMatchScore> {
     PreparedFuzzyText::new(candidate).match_score(&PreparedFuzzyText::new(query))
@@ -514,6 +554,25 @@ mod tests {
                 "candidate={candidate:?}, query={query:?}"
             );
         }
+    }
+
+    #[test]
+    fn ranked_fuzzy_text_prefers_field_priority_then_match_quality() {
+        let candidates = [
+            RankedFuzzyText::new(1, "vault"),
+            RankedFuzzyText::new(0, "open vault item"),
+            RankedFuzzyText::new(0, "vault item"),
+        ];
+        let query = PreparedFuzzyText::new("vault");
+
+        assert_eq!(
+            best_ranked_fuzzy_match(&candidates, &query),
+            Some((0, fuzzy_match_score("vault item", "vault").unwrap()))
+        );
+        assert_eq!(
+            best_ranked_fuzzy_match(&candidates, &PreparedFuzzyText::new("missing")),
+            None
+        );
     }
 
     #[test]
