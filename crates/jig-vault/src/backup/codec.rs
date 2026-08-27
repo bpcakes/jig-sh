@@ -11,6 +11,7 @@ use zeroize::Zeroizing;
 use crate::SecretBytes;
 #[cfg(any(target_os = "linux", test))]
 use crate::VaultErrorKind;
+use crate::aad::push_length_prefixed_field;
 #[cfg(target_os = "linux")]
 use crate::crypto::open;
 use crate::crypto::{
@@ -311,40 +312,35 @@ pub(super) fn validate_short_ascii(label: &str, value: &str, max_len: usize) -> 
 
 pub(super) fn backup_aad(header: &BackupHeader) -> Vec<u8> {
     let mut aad = String::from(BACKUP_AAD_DOMAIN);
-    push_aad_field(&mut aad, "magic", &header.magic);
-    push_aad_field(&mut aad, "version", &header.version.to_string());
-    push_aad_field(&mut aad, "created_at_ms", &header.created_at_ms.to_string());
-    push_aad_field(&mut aad, "kdf.algorithm", &header.kdf.algorithm);
-    push_aad_field(
+    push_length_prefixed_field(&mut aad, "magic", &header.magic);
+    push_length_prefixed_field(&mut aad, "version", &header.version.to_string());
+    push_length_prefixed_field(&mut aad, "created_at_ms", &header.created_at_ms.to_string());
+    push_length_prefixed_field(&mut aad, "kdf.algorithm", &header.kdf.algorithm);
+    push_length_prefixed_field(
         &mut aad,
         "kdf.memory_kib",
         &header.kdf.memory_kib.to_string(),
     );
-    push_aad_field(
+    push_length_prefixed_field(
         &mut aad,
         "kdf.iterations",
         &header.kdf.iterations.to_string(),
     );
-    push_aad_field(
+    push_length_prefixed_field(
         &mut aad,
         "kdf.parallelism",
         &header.kdf.parallelism.to_string(),
     );
-    push_aad_field(
+    push_length_prefixed_field(
         &mut aad,
         "kdf.output_len",
         &header.kdf.output_len.to_string(),
     );
-    push_aad_field(&mut aad, "salt_b64", &header.salt_b64);
-    push_aad_field(&mut aad, "aead", &header.aead);
-    push_aad_field(&mut aad, "nonce_b64", &header.nonce_b64);
-    push_aad_field(&mut aad, "payload_role", "backup_payload");
+    push_length_prefixed_field(&mut aad, "salt_b64", &header.salt_b64);
+    push_length_prefixed_field(&mut aad, "aead", &header.aead);
+    push_length_prefixed_field(&mut aad, "nonce_b64", &header.nonce_b64);
+    push_length_prefixed_field(&mut aad, "payload_role", "backup_payload");
     aad.into_bytes()
-}
-
-fn push_aad_field(output: &mut String, name: &str, value: &str) {
-    use std::fmt::Write;
-    writeln!(output, "{name}:{}:{value}", value.len()).expect("writing to String cannot fail");
 }
 
 #[cfg(any(target_os = "linux", test))]

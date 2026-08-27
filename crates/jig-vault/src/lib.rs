@@ -1,3 +1,4 @@
+mod aad;
 mod audit;
 mod backup;
 mod broker;
