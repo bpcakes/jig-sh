@@ -9,7 +9,9 @@ use std::thread;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result as AnyResult, anyhow, bail};
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+use anyhow::{Result as AnyResult, anyhow, bail};
 #[cfg(target_os = "linux")]
 use jig_owned_process::unix::linux_process_group_has_live_members;
 use jig_owned_process::unix::{
