@@ -243,11 +243,11 @@ fn model_decodes_version_one_and_ignores_additive_fields() {
 
     let mut unsafe_text = fixture();
     unsafe_text["providers"][0]["report"]["diagnostics"][0]["message"] =
-        json!("unsafe\u{1b}[31m diagnostic");
+        json!("unsafe\u{1b}[31m \u{202e}diagnostic\u{2069}");
     let dashboard = Dashboard::from_value(unsafe_text).unwrap();
     assert_eq!(
         dashboard.providers[0].diagnostics[0].message,
-        "unsafe\u{fffd}[31m diagnostic"
+        "unsafe\u{fffd}[31m \u{fffd}diagnostic\u{fffd}"
     );
 
     let mut unsafe_key = fixture();

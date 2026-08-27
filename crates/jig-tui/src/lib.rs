@@ -61,13 +61,21 @@ pub const fn is_actionable_key(key: KeyEvent) -> bool {
 pub fn sanitize_text(text: &str) -> String {
     text.chars()
         .map(|character| {
-            if character.is_control() || is_unsafe_format_character(character) {
-                '\u{fffd}'
-            } else {
+            if is_terminal_safe_character(character) {
                 character
+            } else {
+                '\u{fffd}'
             }
         })
         .collect()
+}
+
+/// Returns whether one character is safe to emit at a human-facing terminal boundary.
+///
+/// This excludes terminal controls and Unicode formatting characters that can
+/// reorder, hide, or otherwise misrepresent surrounding text.
+pub fn is_terminal_safe_character(character: char) -> bool {
+    !character.is_control() && !is_unsafe_format_character(character)
 }
 
 /// Formats a bounded percentage without rounding a positive value to zero or
@@ -445,6 +453,10 @@ mod tests {
             sanitize_text("safe\u{1b}[31m\u{202e}text\u{2069}\u{200c}\u{200d}"),
             "safe\u{fffd}[31m\u{fffd}text\u{fffd}\u{200c}\u{200d}"
         );
+        assert!(is_terminal_safe_character('é'));
+        assert!(is_terminal_safe_character('\u{200c}'));
+        assert!(!is_terminal_safe_character('\u{1b}'));
+        assert!(!is_terminal_safe_character('\u{202e}'));
     }
 
     #[test]
