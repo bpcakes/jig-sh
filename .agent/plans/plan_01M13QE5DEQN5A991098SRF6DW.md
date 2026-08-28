@@ -14,9 +14,10 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 - [x] (2026-08-28 08:23Z) Captured baseline commit `68856a09f5e976f499d86a8b86159ae57b62a393` and opened structured work plan `plan_01M13QE5DEQN5A991098SRF6DW`.
 - [x] (2026-08-28 12:48Z) Implement slice `.7.1`: published the self-contained managed Rust checker, safe rendered root arguments, nine focused mode/policy integration tests, and a recopy-root regression.
 - [x] (2026-08-28 15:21Z) Verify slice `.7.1` and complete three fingerprint-verified working-tree comprehensive-review rounds, addressing every actionable finding. The final full suite reached 2052 passes with one unrelated transient SQLx driver-probe failure that passed immediately in isolation; format, clippy, diff checks, focused tests, and the development build pass. Bead mutation remains unavailable because the installed `br` runtime schema is incompatible.
-- [ ] Commit the reviewed `.7.1` slice before beginning native deletion.
-- [ ] Implement slice `.7.2`: remove native LOC surfaces and cut generated/runtime/fixture/docs behavior over to ordinary repository actions.
-- [ ] Verify slice `.7.2`, run up to three working-tree comprehensive-review rounds, address every actionable finding, close/sync the bead, and commit the slice.
+- [x] (2026-08-28 15:27Z) Commit the reviewed `.7.1` slice as `56bbba1` before beginning native deletion.
+- [x] (2026-08-28 16:08Z) Implement slice `.7.2`: removed native LOC CLI/DTO/runtime/policy/tool-definition surfaces; routed launchers, CI, release validation, rendered fixtures, compatibility coverage, and documentation through ordinary command actions; added generic non-Rust action/evidence and authored-authority recopy proofs.
+- [x] (2026-08-28) Verify slice `.7.2` and complete all three allowed fingerprint-verified working-tree comprehensive-review rounds, addressing every actionable finding. The clean configured test rerun passed 2,665 core, 440 vault, and 2 serialized vault-TUI tests; rendered backend/full/tooling fixture repositories and configured LOC, fmt, clippy, and contract actions pass.
+- [x] (2026-08-28) Record that bead `.7.2` cannot be closed safely with the schema-incompatible installed `br`, preserve Beads files unchanged, and commit the reviewed slice in this commit.
 - [ ] Run full configured gates and a clean branch-scope comprehensive review against the pinned `origin/master` baseline, addressing findings for up to three rounds.
 - [ ] Audit every epic acceptance criterion against current files and command evidence, close/sync epic `.7`, finish the Jig work plan, and record outcomes.
 
@@ -40,6 +41,14 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Evidence: diagnostics now byte-escape every non-printable value and use `printf`, including under `xpg_echo`; shared repository-model authority recognizes the managed checker by target, runner, and script binding independent of branch text; the checker validates configured roots against the index or baseline and fails operationally when all are unmatched.
 - Observation: the final full `.7.1` suite exposed a transient, scope-unrelated SQLx driver-probe startup failure after 2052 tests had passed.
   Evidence: `cargo test -p jig-sh` reported only `doctor::tests::sqlx_driver_probe_invokes_shim_safely_and_times_out` as failed (`Indeterminate("the driver probe could not start")` versus `Compatible`); the exact test passed immediately in isolation. No LOC test failed. `cargo fmt --all -- --check`, clippy with warnings denied, `git diff --check`, and a fresh binary build also passed.
+- Observation: the first real generic-action invocation correctly reached `repo:rust-file-loc` but exposed three edited Rust files above the checker's absolute limit.
+  Evidence: `JIG_DEV_BIN=target/debug/jig scripts/jig check rust-file-loc --no-receipt` initially reported `answers.rs` at 1008, `repository_model.rs` at 1025, and its tests at 1050 lines. Small cohesive modules now own answer accessors, managed-checker recognition, and LOC projection tests; the same launcher invocation passes with the main files at 973, 998, and 897 lines.
+- Observation: the `.7.2` review rounds exposed authority bugs beyond native deletion: removing the authored action still rendered its CI job, a same-key authored direct mode could be rewritten as a branch invocation, gate previews could remain stale, and the generated workflow selected every component action named `rust-file-loc`.
+  Evidence: CI and gate-preview rendering now require the exact `repo:rust-file-loc` action, the workflow invokes `scripts/jig check repo:rust-file-loc`, and recopy regressions cover action/alias/profile removal plus preservation of `--all` and configured roots.
+- Observation: refreshing a generated default-branch command in `RepositoryRenderModel` was insufficient because runtime-config reconciliation could restore the pre-render command from the destination `.jig.toml`.
+  Evidence: reconciliation now prefers the refreshed rendering only when both old and new values match the narrow generated single-positional-branch form. The integration test changes `main` to `master` and observes the on-disk command refresh, then changes to authored `--all` and proves a later recopy preserves it.
+- Observation: the first configured full test run passed 2,664 of 2,665 core tests before an existing work-evidence assertion saw a transient null tool identity; the exact test passed immediately in isolation.
+  Evidence: an independent full configured rerun passed all 2,665 core tests, followed by all 440 vault tests and both serialized vault-TUI tests. No implementation change was needed for the transient.
 
 ## Decision Log
 
@@ -61,6 +70,15 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 - Decision: Preserve configured `rust_crate_roots` only for the exact generated LOC action runner and command, not merely for its stable target id.
   Rationale: configured roots are explicit template policy while the action still invokes the managed checker through its generated runner binding; a custom runner or different implementation is an authored replacement and returns root authority to authored Rust components. The invocation's branch argument may legitimately lag a top-level default-branch rename without changing implementation ownership.
   Date/Author: 2026-08-28 / Codex
+- Decision: Keep the stable `jig.rust_file_loc` string only as an authored compatibility alias while deleting every native CLI, request, runtime, and policy implementation behind that name.
+  Rationale: older supported contracts can still bind the alias to a command, and current v6 repositories reach the same action through the generic selector and supervisor without retaining product-owned policy semantics.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Distinguish broad managed-checker ownership from the narrow generated default-branch command shape.
+  Rationale: `scripts/check-rust-file-loc.sh --all` still means the template checker owns configured Rust roots, but it is authored direct-mode authority and must not be rewritten during a default-branch refresh. Only one non-flag positional argument is generated branch authority.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Generated CI selects `repo:rust-file-loc` exactly while documentation and fixture coverage retain action-wide `rust-file-loc` examples.
+  Rationale: CI is rendered only for the repository target and must not accidentally execute a second component's same-named action; action-wide selection remains an intentional generic CLI capability tested elsewhere.
+  Date/Author: 2026-08-28 / Codex
 
 ## Outcomes & Retrospective
 
@@ -70,9 +88,9 @@ Implementation is in progress. No epic outcome is claimed until both slices, the
 
 Jig is a Rust workspace whose main CLI/runtime crate is `crates/jig`. The checked-in `scripts/jig` launcher selects either a built development binary through `JIG_DEV_BIN` or an installed runtime. `.jig.toml` is this repository's source configuration and `.agent/jig-contract.json` is its resolved contract. Contract v5 exposes named tools such as `jig.rust_file_loc`; contract v6 describes repositories, components, actions, profiles, commands, aliases, and evidence.
 
-The current managed checker exists in three synchronized places: source template `templates/project/scripts/check-rust-file-loc.sh.jinja`, compiled snapshot `crates/jig/src/bootstrap/embedded_template_snapshots/scripts/check-rust-file-loc.sh.jinja`, and this repository's generated `scripts/check-rust-file-loc.sh`. It currently resolves a comparison ref and recursively calls the dedicated native command. Template rendering receives `rust_crate_roots` from bootstrap answers; those roots must be rendered safely as repository-relative Git pathspecs, with an empty list meaning repository-wide selection.
+The managed checker exists in three synchronized places: source template `templates/project/scripts/check-rust-file-loc.sh.jinja`, compiled snapshot `crates/jig/src/bootstrap/embedded_template_snapshots/scripts/check-rust-file-loc.sh.jinja`, and this repository's generated `scripts/check-rust-file-loc.sh`. It is now self-contained and receives `rust_crate_roots` from bootstrap answers as safely rendered repository-relative Git pathspecs, with an empty list meaning repository-wide selection.
 
-Native LOC behavior lives in `crates/jig/src/policy.rs`, with CLI types in `crates/jig/src/cli/check.rs`, conversions in `crates/jig/src/cli/command_conversion.rs`, request DTOs in `crates/jig/src/command/check.rs`, and runtime dispatch in `crates/jig/src/runtime.rs`. Launcher strict-subcommand metadata in `scripts/jig` and `templates/project/scripts/jig.jinja` currently prevents an unknown `check rust-file-loc` from falling through to contract-v6 selector resolution. Native tests are spread across policy, CLI, help, and launcher parsing modules.
+Before slice `.7.2`, native LOC behavior lived in `crates/jig/src/policy.rs`, with CLI types in `crates/jig/src/cli/check.rs`, conversions in `crates/jig/src/cli/command_conversion.rs`, request DTOs in `crates/jig/src/command/check.rs`, runtime dispatch in `crates/jig/src/runtime.rs`, and strict launcher metadata. Those surfaces are now removed; `check rust-file-loc` falls through to ordinary action selection, while checker-only modes remain direct script arguments.
 
 Bootstrap v6 construction is centered in `crates/jig/src/bootstrap/repository_model.rs`. Its `add_rust_file_loc_action` method declares the repository action, command binding, inputs, and optional legacy alias. Update/recopy compares rendered defaults with authored current authority; regression tests must demonstrate that authored action replacement/removal, alias removal, and verification-profile removal are not recreated. Generic execution and evidence tests live under `crates/jig/src/runtime/tests/repository_execution.rs` and `crates/jig/src/runtime/tests/mcp/repository_execution.rs`; extend focused helpers rather than introducing an LOC-specific runtime fixture framework.
 

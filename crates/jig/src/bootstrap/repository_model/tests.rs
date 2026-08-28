@@ -6,6 +6,8 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod rust_file_loc;
+
 fn answers(contents: &str) -> RenderAnswers {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("answers.toml");
@@ -676,77 +678,6 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
         "scripts/check-worker-loc.sh"
     );
     assert_eq!(rerendered.default_check_profile.as_str(), "ci");
-}
-
-#[test]
-fn same_target_custom_loc_runner_returns_root_authority_to_authored_components() {
-    let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
-    let action = authored
-        .actions
-        .iter_mut()
-        .find(|action| action.target.to_string() == "repo:rust-file-loc")
-        .unwrap();
-    action.runner = ActionRunner::command("custom_loc_command");
-    authored
-        .required_commands
-        .retain(|command| command != "repo_rust_file_loc_command");
-    authored.required_commands.push("custom_loc_command".into());
-    authored.commands.remove("repo_rust_file_loc_command");
-    authored.commands.insert(
-        "custom_loc_command".into(),
-        "scripts/check-authored-loc.sh".into(),
-    );
-
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("answers.toml");
-    fs::write(
-        &path,
-        format!(
-            "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\nrust_crate_roots = [\"crates\"]\n{}\n{}",
-            authored.authored_toml().unwrap(),
-            authored.commands_toml().unwrap()
-        ),
-    )
-    .unwrap();
-
-    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
-    assert_eq!(
-        serde_json::to_value(&reloaded).unwrap()["rust_crate_roots"],
-        serde_json::json!(["."])
-    );
-    let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
-    let loc = rerendered
-        .actions
-        .iter()
-        .find(|action| action.target.to_string() == "repo:rust-file-loc")
-        .unwrap();
-    assert_eq!(loc.runner, ActionRunner::command("custom_loc_command"));
-    assert_eq!(
-        rerendered.commands["custom_loc_command"],
-        "scripts/check-authored-loc.sh"
-    );
-}
-
-#[test]
-fn default_branch_change_does_not_discard_managed_checker_roots() {
-    let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let authored = RepositoryRenderModel::from_answers(&initial).unwrap();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("answers.toml");
-    fs::write(
-        &path,
-        format!(
-            "repo_name = \"ExampleProject\"\ndefault_branch = \"master\"\nsqlx_enabled = false\nschema_dump_enabled = false\nrust_crate_roots = [\"crates\"]\n{}\n{}",
-            authored.authored_toml().unwrap(),
-            authored.commands_toml().unwrap()
-        ),
-    )
-    .unwrap();
-
-    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
-    assert_eq!(reloaded.default_branch(), "master");
-    assert_eq!(reloaded.rust_crate_roots(), ["crates"]);
 }
 
 #[test]

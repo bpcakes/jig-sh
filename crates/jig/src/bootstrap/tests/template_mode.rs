@@ -1,4 +1,5 @@
 use super::*;
+use crate::bootstrap::repository_model::RepositoryRenderModel;
 
 #[test]
 fn adopt_local_git_template_defaults_to_committed_mode() {
@@ -308,9 +309,13 @@ fn update_recopy_refreshes_the_checker_with_configured_rust_roots() {
         "{answers}"
     );
 
+    let answers_path = repo.join(".jig.toml");
+    let mut answers = read_answers_toml(&answers_path).unwrap();
+    answers.insert("default_branch".into(), TomlValue::String("master".into()));
+    write_answers_toml(&answers_path, &answers).unwrap();
     fs::write(&checker_path, "authored stale checker\n").unwrap();
     run_update(UpdateOpts {
-        path: repo,
+        path: repo.clone(),
         template: None,
         template_mode: None,
         recopy: true,
@@ -325,6 +330,197 @@ fn update_recopy_refreshes_the_checker_with_configured_rust_roots() {
     let checker = fs::read_to_string(checker_path).unwrap();
     assert!(checker.contains("readonly rust_root_count=1"), "{checker}");
     assert!(checker.contains("rust_roots=(crates)"), "{checker}");
+    let mut answers = read_answers_toml(&answers_path).unwrap();
+    assert_eq!(
+        answers["commands"]["repo_rust_file_loc_command"].as_str(),
+        Some("scripts/check-rust-file-loc.sh master")
+    );
+
+    answers.insert("default_branch".into(), TomlValue::String("develop".into()));
+    answers
+        .get_mut("commands")
+        .and_then(TomlValue::as_table_mut)
+        .unwrap()
+        .insert(
+            "repo_rust_file_loc_command".into(),
+            TomlValue::String("scripts/check-rust-file-loc.sh --all".into()),
+        );
+    write_answers_toml(&answers_path, &answers).unwrap();
+    run_update(UpdateOpts {
+        path: repo,
+        template: None,
+        template_mode: None,
+        recopy: true,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    let answers = read_answers_toml(&answers_path).unwrap();
+    assert_eq!(
+        answers["commands"]["repo_rust_file_loc_command"].as_str(),
+        Some("scripts/check-rust-file-loc.sh --all")
+    );
+    assert_eq!(
+        answers["rust_crate_roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|root| root.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["crates"]
+    );
+}
+
+#[test]
+fn update_recopy_preserves_authored_loc_action_alias_and_profile_removals() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_git_worktree();
+
+    for choice in ["action", "alias", "profile"] {
+        let repo = temp.path().join(format!("repo-{choice}"));
+        write_test_crate_guide(&repo);
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: Some(template.path().display().to_string()),
+            template_mode: Some(TemplateMode::Committed),
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some(format!("Example{choice}")),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap();
+
+        let answers_path = repo.join(".jig.toml");
+        let mut answers = read_answers_toml(&answers_path).unwrap();
+        let repository = answers
+            .get_mut("repository")
+            .and_then(TomlValue::as_table_mut)
+            .unwrap();
+        let is_loc_target = |value: &TomlValue| {
+            let Some(target) = value
+                .get("target")
+                .and_then(TomlValue::as_table)
+                .or_else(|| value.as_table())
+            else {
+                return false;
+            };
+            target.get("component").and_then(TomlValue::as_str) == Some("repo")
+                && target.get("action").and_then(TomlValue::as_str) == Some("rust-file-loc")
+        };
+
+        if choice == "action" {
+            repository
+                .get_mut("actions")
+                .and_then(TomlValue::as_array_mut)
+                .unwrap()
+                .retain(|action| !is_loc_target(action));
+        } else if choice == "alias" {
+            let action = repository
+                .get_mut("actions")
+                .and_then(TomlValue::as_array_mut)
+                .unwrap()
+                .iter_mut()
+                .find(|action| is_loc_target(action))
+                .unwrap();
+            action
+                .as_table_mut()
+                .unwrap()
+                .insert("legacy_aliases".into(), TomlValue::Array(Vec::new()));
+        }
+
+        if matches!(choice, "action" | "profile") {
+            for profile in repository
+                .get_mut("profiles")
+                .and_then(TomlValue::as_array_mut)
+                .unwrap()
+            {
+                profile
+                    .get_mut("targets")
+                    .and_then(TomlValue::as_array_mut)
+                    .unwrap()
+                    .retain(|target| !is_loc_target(target));
+            }
+        }
+        if choice == "action" {
+            answers
+                .get_mut("commands")
+                .and_then(TomlValue::as_table_mut)
+                .unwrap()
+                .remove("repo_rust_file_loc_command");
+        }
+        write_answers_toml(&answers_path, &answers).unwrap();
+
+        run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: true,
+            launcher_only: false,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+
+        let reloaded = RenderAnswers::from_answers_file(&answers_path).unwrap();
+        let context = RepoContext::load_from(&repo).unwrap();
+        let generated_gates =
+            crate::bootstrap::gate_preview::generated_gates(&context, &reloaded).unwrap();
+        assert_eq!(
+            generated_gates
+                .iter()
+                .any(|gate| gate == "scripts/jig run repo:rust-file-loc"),
+            choice != "action"
+        );
+        let model = RepositoryRenderModel::from_answers(&reloaded).unwrap();
+        let loc = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == "repo:rust-file-loc");
+        let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
+        serde_yaml_ng::from_str::<serde_json::Value>(&policy)
+            .unwrap_or_else(|error| panic!("repo policy was invalid YAML: {error}\n{policy}"));
+        match choice {
+            "action" => {
+                assert!(loc.is_none());
+                assert!(!policy.contains("run: scripts/jig check repo:rust-file-loc"));
+                assert!(
+                    !fs::read_to_string(&answers_path)
+                        .unwrap()
+                        .contains("repo_rust_file_loc_command")
+                );
+            }
+            "alias" => {
+                assert!(loc.unwrap().legacy_aliases.is_empty());
+                assert!(policy.contains("run: scripts/jig check repo:rust-file-loc"));
+            }
+            "profile" => {
+                assert!(loc.is_some());
+                assert!(policy.contains("run: scripts/jig check repo:rust-file-loc"));
+                assert!(model.profiles.iter().all(|profile| {
+                    profile
+                        .targets
+                        .iter()
+                        .all(|target| target.to_string() != "repo:rust-file-loc")
+                }));
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[test]

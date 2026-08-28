@@ -130,6 +130,7 @@ jobs:
         run: |
           scripts/jig check no-mod-rs
 
+[% if rust_file_loc_ci_enabled %]
   rust-file-loc:
     name: Enforce agentic-first Rust file size policy
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -147,9 +148,8 @@ jobs:
           cache: false
           rustflags: ""
       - name: Check Rust file LOC policy
-        env:
-          JIG_DEFAULT_BRANCH: <<[ default_branch | tojson ]>>
-        run: scripts/check-rust-file-loc.sh "$JIG_DEFAULT_BRANCH"
+        run: scripts/jig check repo:rust-file-loc
+[% endif %]
 
 [% if sqlx_enabled %]
   sqlx-unchecked-queries:

@@ -22,7 +22,6 @@ pub(crate) enum CheckCommand {
     Contract(ToolRequest),
     AgentMap(AgentMapRequest),
     AgentGuides,
-    RustFileLoc(RustFileLocRequest),
     NoModRs,
     MigrationImmutability(MigrationImmutabilityRequest),
     SqlxUncheckedNonTest,
@@ -48,13 +47,6 @@ pub(crate) enum AgentMapCommand {
 #[derive(Debug)]
 pub(crate) struct AgentMapRequest {
     pub(crate) map_path: PathBuf,
-}
-
-#[derive(Debug)]
-pub(crate) struct RustFileLocRequest {
-    pub(crate) staged: bool,
-    pub(crate) changed_against: Option<String>,
-    pub(crate) all: bool,
 }
 
 #[derive(Debug)]

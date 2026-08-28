@@ -54,6 +54,101 @@ fn repository_command_failures_mark_the_compatibility_response_not_ok() {
     assert_eq!(output["run"]["conclusion"], "failure");
 }
 
+#[test]
+fn non_rust_file_loc_action_uses_generic_planning_receipts_and_evidence() {
+    let temp = tempdir().unwrap();
+    write_non_rust_file_loc_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+
+    let exact = crate::repository::plan_run(
+        &ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: vec!["web:file-loc".into()],
+            ..crate::repository::PlanRunRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(exact.targets[0].target.to_string(), "web:file-loc");
+    assert_eq!(exact.targets.len(), 1);
+
+    let action_wide = crate::repository::plan_run(
+        &ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: vec!["file-loc".into()],
+            ..crate::repository::PlanRunRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        action_wide
+            .targets
+            .iter()
+            .map(|target| target.target.to_string())
+            .collect::<Vec<_>>(),
+        ["docs:file-loc", "web:file-loc"]
+    );
+
+    let unaffected = crate::repository::plan_run(
+        &ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: vec!["file-loc".into()],
+            affected_base: Some("HEAD".into()),
+            ..crate::repository::PlanRunRequest::default()
+        },
+    )
+    .unwrap();
+    assert!(unaffected.targets.is_empty());
+
+    fs::write(
+        temp.path().join("web/example.ts"),
+        "export const example = false;\n",
+    )
+    .unwrap();
+    let affected = crate::repository::plan_run(
+        &ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: vec!["file-loc".into()],
+            affected_base: Some("HEAD".into()),
+            ..crate::repository::PlanRunRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(affected.targets[0].target.to_string(), "web:file-loc");
+    assert_eq!(affected.targets.len(), 1);
+
+    let passed = run_repository_target(&ctx, "web:file-loc");
+    assert_eq!(passed["ok"], true, "{passed:#}");
+    assert_eq!(passed["run"]["targets"][0]["target"]["component"], "web");
+    assert_eq!(passed["run"]["targets"][0]["target"]["action"], "file-loc");
+    let receipt_id = passed["run"]["targets"][0]["receipt_id"].as_str().unwrap();
+    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|receipt| receipt["id"].as_str() == Some(receipt_id))
+        .unwrap();
+    assert_eq!(receipt["tool_name"], "jig.target_run");
+    assert_eq!(receipt["target"]["component"], "web");
+    assert_eq!(receipt["target"]["action"], "file-loc");
+
+    let evidence = work_gates(&ctx);
+    assert_eq!(evidence["overall"], "passed", "{evidence:#}");
+    assert_eq!(evidence["gates"][0]["target"], "web:file-loc");
+    assert_eq!(evidence["gates"][0]["targets"][0]["receipt_id"], receipt_id);
+
+    fs::write(temp.path().join("web/fail.loc"), "fail\n").unwrap();
+    let failed = run_repository_target(&ctx, "web:file-loc");
+    assert_eq!(failed["ok"], false, "{failed:#}");
+    assert_eq!(failed["run"]["conclusion"], "failure");
+    assert_eq!(failed["run"]["targets"][0]["exit_code"], 1);
+}
+
 fn work_gates(ctx: &RepoContext) -> Value {
     dispatch(
         ctx,

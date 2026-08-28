@@ -26,6 +26,31 @@ fn external_check_selectors_accept_execution_flags_after_targets() {
 }
 
 #[test]
+fn repository_action_selectors_reject_checker_specific_mode_flags() {
+    for flag in ["--all", "--staged", "--changed-against"] {
+        let mut selectors = vec!["rust-file-loc".into(), flag.into()];
+        if flag == "--changed-against" {
+            selectors.push("origin/main".into());
+        }
+        let error = command::CheckCommand::try_from(CheckOpts {
+            tool: ToolOpts::default(),
+            profile: None,
+            affected: None,
+            explain: false,
+            fail_fast: false,
+            command: Some(CheckCommand::Selectors(selectors)),
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains(&format!("unknown check option '{flag}'")),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn built_in_action_names_compose_with_additional_selectors() {
     let request = command::CheckCommand::try_from(CheckOpts {
         tool: ToolOpts::default(),

@@ -735,6 +735,10 @@ fn render_context(
         JsonValue::Bool(answers.rust_backend_enabled()),
     );
     context.insert(
+        "rust_file_loc_ci_enabled".into(),
+        JsonValue::Bool(answers.rust_file_loc_ci_enabled()),
+    );
+    context.insert(
         "go_postgres_enabled".into(),
         JsonValue::Bool(answers.go_postgres_enabled()),
     );

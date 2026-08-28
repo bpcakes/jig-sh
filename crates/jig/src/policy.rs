@@ -1,6 +1,6 @@
 // agentic-loc-exception: policy dispatch and repository-wide check implementations remain co-located for consistent Git boundary handling.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
@@ -22,17 +22,6 @@ use crate::execution::{ExecutionCommandError, ExecutionControl};
 use crate::repository_path::validate_repository_directory_path;
 use crate::tool_defs::{self, kind};
 
-const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-// New or growing files above this fail unless an explicit exception is present.
-const HARD_LIMIT: usize = 800;
-// Files above this fail even with an exception unless they are legacy and non-increasing.
-const ABSOLUTE_MAX: usize = 1000;
-// Files entering this band warn but do not fail.
-const SOFT_LIMIT_START: usize = 500;
-// Files above this warn that they are approaching the hard limit.
-const SOFT_LIMIT_END: usize = 600;
-// Files above this emit informational guidance for agent-review ergonomics.
-const TARGET_HIGH: usize = 400;
 // Git output is sometimes repository authority rather than user-facing
 // diagnostics (for example an unborn schema snapshot's complete file list).
 // Keep that capture bounded, but large enough for ordinary repositories and
@@ -41,12 +30,6 @@ const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 
 pub(crate) struct AgentMapInput {
     pub(crate) map_path: PathBuf,
-}
-
-pub(crate) struct RustFileLocInput {
-    pub(crate) staged: bool,
-    pub(crate) changed_against: Option<String>,
-    pub(crate) all: bool,
 }
 
 pub(crate) struct MigrationImmutabilityInput {
@@ -100,7 +83,6 @@ pub(crate) fn run_direct(ctx: &RepoContext, command: PolicyDirectCommand) -> Res
 pub(crate) enum PolicyCheckCommand {
     AgentMap(AgentMapInput),
     AgentGuides,
-    RustFileLoc(RustFileLocInput),
     NoModRs,
     MigrationImmutability(MigrationImmutabilityInput),
     SqlxUncheckedNonTest,
@@ -110,7 +92,6 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
     match command {
         PolicyCheckCommand::AgentMap(opts) => agent_map::check(ctx, &opts),
         PolicyCheckCommand::AgentGuides => agent_map::check_guides(ctx),
-        PolicyCheckCommand::RustFileLoc(opts) => check_rust_file_loc(ctx, &opts),
         PolicyCheckCommand::NoModRs => check_no_mod_rs(ctx),
         PolicyCheckCommand::MigrationImmutability(opts) => check_migration_immutability(ctx, &opts),
         PolicyCheckCommand::SqlxUncheckedNonTest => sqlx::check_non_test(ctx),
@@ -610,98 +591,6 @@ fn check_no_mod_rs(ctx: &RepoContext) -> Result<Value> {
     Ok(json!({ "ok": violations.is_empty(), "violations": violations }))
 }
 
-fn check_rust_file_loc(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<Value> {
-    let mode_count = [opts.staged, opts.changed_against.is_some(), opts.all]
-        .into_iter()
-        .filter(|value| *value)
-        .count();
-    if mode_count != 1 {
-        bail!("Exactly one of --staged, --changed-against, or --all is required.");
-    }
-    let previous_ref = if opts.staged {
-        if git_success(ctx.root(), &["rev-parse", "--verify", "HEAD"])? {
-            "HEAD".to_string()
-        } else {
-            EMPTY_TREE_HASH.into()
-        }
-    } else if let Some(ref_name) = &opts.changed_against {
-        ref_name.clone()
-    } else {
-        EMPTY_TREE_HASH.into()
-    };
-    let candidates = rust_candidate_files(ctx, opts)?;
-    let renames = if opts.all {
-        BTreeMap::new()
-    } else {
-        rust_renames(ctx, opts)?
-    };
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-    let mut infos = Vec::new();
-    for file in candidates {
-        if !ctx.root().join(&file).is_file() && !opts.staged {
-            continue;
-        }
-        let current = if opts.staged {
-            git_blob(ctx.root(), &format!(":{file}"))?
-        } else {
-            let path = ctx.root().join(&file);
-            fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read {}", path.display()))?
-        };
-        let current_count = current.lines().count();
-        let previous_count =
-            previous_line_count(ctx.root(), &previous_ref, &file, renames.get(&file))?;
-        let has_exception = current
-            .lines()
-            .take(40)
-            .any(|line| line.contains("agentic-loc-exception:") || line.contains("@generated"));
-        if current_count > ABSOLUTE_MAX {
-            if current_count <= previous_count && previous_count > ABSOLUTE_MAX {
-                warnings.push(format!(
-                    "{file} remains above the absolute max at {current_count} LOC but did not increase."
-                ));
-            } else {
-                errors.push(format!(
-                    "{file} is {current_count} LOC, above the absolute max of {ABSOLUTE_MAX}."
-                ));
-            }
-        } else if current_count > HARD_LIMIT {
-            if current_count <= previous_count && previous_count > HARD_LIMIT {
-                warnings.push(format!(
-                    "{file} remains above the hard limit at {current_count} LOC but did not increase."
-                ));
-            } else if has_exception {
-                warnings.push(format!(
-                    "{file} is {current_count} LOC and uses an explicit exception annotation."
-                ));
-            } else {
-                errors.push(format!(
-                    "{file} is {current_count} LOC, above the hard limit of {HARD_LIMIT}."
-                ));
-            }
-        } else if current_count > SOFT_LIMIT_END {
-            warnings.push(format!(
-                "{file} is {current_count} LOC and is approaching the hard limit."
-            ));
-        } else if current_count > SOFT_LIMIT_START {
-            warnings.push(format!(
-                "{file} is {current_count} LOC and is above the soft limit."
-            ));
-        } else if current_count > TARGET_HIGH {
-            infos.push(format!(
-                "{file} is {current_count} LOC and is approaching the soft limit."
-            ));
-        }
-    }
-    Ok(json!({
-        "ok": errors.is_empty(),
-        "errors": errors,
-        "warnings": warnings,
-        "infos": infos,
-    }))
-}
-
 fn check_migration_immutability(
     ctx: &RepoContext,
     opts: &MigrationImmutabilityInput,
@@ -758,102 +647,10 @@ fn migration_immutability_violations(bytes: &[u8]) -> Vec<String> {
     violations
 }
 
-fn rust_candidate_files(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<Vec<String>> {
-    let mut args = vec!["diff", "--name-only", "--diff-filter=AMRT", "-z"];
-    let changed_ref;
-    if opts.staged {
-        args.push("--cached");
-    } else if let Some(reference) = &opts.changed_against {
-        changed_ref = reference.as_str();
-        args.push(changed_ref);
-        args.push("HEAD");
-    }
-    if opts.all {
-        return git_list_files(ctx.root(), ctx.rust_crate_roots()).map(|files| {
-            files
-                .into_iter()
-                .filter(|path| path.ends_with(".rs"))
-                .collect::<Vec<_>>()
-        });
-    }
-    args.push("--");
-    let root_args = ctx
-        .rust_crate_roots()
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    args.extend(root_args);
-    Ok(split_nul(&git_output(ctx.root(), &args)?)
-        .into_iter()
-        .filter(|path| path.ends_with(".rs"))
-        .collect())
-}
-
-fn rust_renames(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<BTreeMap<String, String>> {
-    let mut args = vec!["diff", "--name-status", "--diff-filter=R", "-z"];
-    if opts.staged {
-        args.push("--cached");
-    } else if let Some(reference) = &opts.changed_against {
-        args.push(reference);
-        args.push("HEAD");
-    }
-    args.push("--");
-    let root_args = ctx
-        .rust_crate_roots()
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    args.extend(root_args);
-    let entries = split_nul(&git_output(ctx.root(), &args)?);
-    let mut renames = BTreeMap::new();
-    let mut index = 0usize;
-    while index + 2 < entries.len() {
-        let _status = &entries[index];
-        let old = entries[index + 1].clone();
-        let new = entries[index + 2].clone();
-        renames.insert(new, old);
-        index += 3;
-    }
-    Ok(renames)
-}
-
-fn previous_line_count(
-    root: &Path,
-    reference: &str,
-    path: &str,
-    renamed_from: Option<&String>,
-) -> Result<usize> {
-    if let Some(contents) = git_blob_optional(root, &format!("{reference}:{path}"))? {
-        return Ok(contents.lines().count());
-    }
-    let Some(old) = renamed_from else {
-        return Ok(0);
-    };
-    Ok(git_blob_optional(root, &format!("{reference}:{old}"))?
-        .map(|contents| contents.lines().count())
-        .unwrap_or(0))
-}
-
 fn git_list_files(root: &Path, roots: &[String]) -> Result<Vec<String>> {
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend(roots.iter().map(String::as_str));
     Ok(split_nul(&git_output(root, &args)?))
-}
-
-fn git_blob(root: &Path, spec: &str) -> Result<String> {
-    git_text(root, &["show", spec])
-}
-
-fn git_blob_optional(root: &Path, spec: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["show", spec])
-        .stderr(Stdio::null())
-        .output()?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
 pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
@@ -864,10 +661,6 @@ pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
         .stderr(Stdio::null())
         .status()?
         .success())
-}
-
-fn git_text(root: &Path, args: &[&str]) -> Result<String> {
-    Ok(String::from_utf8_lossy(&git_output(root, args)?).into_owned())
 }
 
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {

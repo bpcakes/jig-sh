@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 
 use super::answers::RenderAnswers;
+use super::repository_model::is_rust_file_loc_action;
 use crate::context::{RepoContext, WorkGate};
 use crate::tool_defs::{kind, tool};
 
@@ -33,8 +34,10 @@ pub(super) fn generated_gates(ctx: &RepoContext, answers: &RenderAnswers) -> Res
                 format!("{launcher} check fmt"),
                 format!("{launcher} check clippy"),
                 format!("{launcher} check test"),
-                format!("{launcher} run repo:rust-file-loc"),
             ]);
+            if ctx.action_specs().iter().any(is_rust_file_loc_action) {
+                gates.push(format!("{launcher} run repo:rust-file-loc"));
+            }
         }
         if answers.sqlx_enabled() {
             gates.push(format!("{launcher} check sqlx"));

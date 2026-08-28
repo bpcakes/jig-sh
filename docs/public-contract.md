@@ -263,6 +263,16 @@ response. `--fail-fast` is explicit; aggregate selection otherwise collects
 every target failure it can execute. Receipt options are accepted on either
 side of external target selectors.
 
+The generated Rust `repo:rust-file-loc` target is an ordinary command action,
+not a native Jig policy. `scripts/jig check rust-file-loc` uses the same
+selector, affected-planning, supervision, receipt, and evidence path as any
+other repository action. Rust roots, thresholds, exceptions, generated-file
+handling, and direct modes such as `--staged` or `--all` belong to
+`scripts/check-rust-file-loc.sh`. Repositories may replace or remove the action,
+its optional `jig.rust_file_loc` compatibility alias, or profile membership;
+non-Rust repositories can declare an equivalent action without extending Jig's
+contract or runtime.
+
 Every planned execution appends lifecycle events to `runs.jsonl`: one queued
 event owns the accepted immutable plan, followed by running/target events and
 exactly one terminal conclusion. `jig status run RUN_ID` returns that plan and

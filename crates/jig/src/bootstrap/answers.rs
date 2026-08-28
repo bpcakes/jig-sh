@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::repository_model::{
     AuthoredRepositoryModel, action_uses_managed_rust_file_loc_checker, frontend_component_id,
+    is_rust_file_loc_action,
 };
 use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
@@ -490,42 +491,6 @@ impl RenderAnswers {
         Ok(answers)
     }
 
-    pub(super) const fn authored_repository(&self) -> Option<&AuthoredRepositoryModel> {
-        self.authored_repository.as_ref()
-    }
-
-    pub(super) const fn authored_repository_commands(&self) -> &BTreeMap<String, String> {
-        &self.authored_repository_commands
-    }
-
-    pub(super) fn default_branch(&self) -> &str {
-        &self.default_branch
-    }
-
-    pub(super) fn template_source_url(&self) -> &str {
-        &self.template_source_url
-    }
-
-    pub(super) fn frontend_apps(&self) -> &[FrontendApp] {
-        &self.frontend_apps
-    }
-
-    pub(super) fn frontend_workspace_roots(&self) -> &[String] {
-        &self.frontend_workspace_roots
-    }
-
-    pub(super) fn rust_crate_roots(&self) -> &[String] {
-        &self.rust_crate_roots
-    }
-
-    pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
-        self.harness_footprint
-    }
-
-    pub(super) const fn backend_language(&self) -> BackendLanguage {
-        self.backend_language
-    }
-
     fn authored_repository_has_adapter(&self, expected: &str) -> Option<bool> {
         self.authored_repository.as_ref().map(|repository| {
             repository
@@ -633,6 +598,13 @@ impl RenderAnswers {
                 })
             })
             .unwrap_or_else(|| self.backend_language == BackendLanguage::Rust)
+    }
+
+    pub(super) fn rust_file_loc_ci_enabled(&self) -> bool {
+        self.authored_repository.as_ref().map_or_else(
+            || self.rust_backend_enabled(),
+            |repository| repository.actions.iter().any(is_rust_file_loc_action),
+        )
     }
 
     pub(super) fn go_postgres_enabled(&self) -> bool {
@@ -998,6 +970,7 @@ pub(super) fn frontend_gate_key(name: &str) -> String {
     name.to_ascii_lowercase().replace('-', "_")
 }
 
+mod accessors;
 mod serialization;
 use serialization::*;
 

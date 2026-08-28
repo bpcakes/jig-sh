@@ -81,4 +81,4 @@ jobs:
       - name: Check Rust file LOC policy
         env:
           JIG_DEV_BIN: target/debug/jig
-        run: scripts/check-rust-file-loc.sh master
+        run: scripts/jig check repo:rust-file-loc

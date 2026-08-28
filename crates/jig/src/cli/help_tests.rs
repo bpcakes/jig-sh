@@ -251,7 +251,8 @@ fn check_help_includes_examples() {
     let check_help = rendered_help(&["check"]);
     assert_help_contains(&check_help, "jig check fmt");
     assert_help_contains(&check_help, "jig check contract");
-    assert_help_contains(&check_help, "jig check rust-file-loc --changed-against");
+    assert_help_contains(&check_help, "jig check 'web:*'");
+    assert!(!check_help.contains("--changed-against"), "{check_help}");
 }
 
 #[test]

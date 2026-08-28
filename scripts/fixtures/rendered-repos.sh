@@ -107,7 +107,7 @@ validate_backend_fixture() {
     [[ ! -f Makefile ]]
     scripts/jig check agent-map >/dev/null
     scripts/jig check agent-guides >/dev/null
-    scripts/jig check rust-file-loc --all >/dev/null
+    scripts/jig check rust-file-loc >/dev/null
     scripts/jig check migration-immutability --changed-against HEAD >/dev/null
     scripts/jig check sqlx-unchecked-non-test >/dev/null
     [[ ! -f scripts/enforce-coverage.cjs ]]
@@ -152,7 +152,7 @@ validate_full_stack_fixture() {
     [[ ! -f Makefile ]]
     scripts/jig check agent-map >/dev/null
     scripts/jig check agent-guides >/dev/null
-    scripts/jig check rust-file-loc --all >/dev/null
+    scripts/jig check rust-file-loc >/dev/null
     scripts/jig check migration-immutability --changed-against HEAD >/dev/null
     scripts/jig check sqlx-unchecked-non-test >/dev/null
     scripts/jig check schema >/dev/null
@@ -187,7 +187,8 @@ validate_tooling_only_fixture() {
     [[ ! -f Makefile ]]
     scripts/jig check agent-map >/dev/null
     scripts/jig check agent-guides >/dev/null
-    scripts/jig check rust-file-loc --all >/dev/null
+    scripts/jig check rust-file-loc >/dev/null
+    scripts/check-rust-file-loc.sh --all >/dev/null
     [[ ! -f scripts/enforce-coverage.cjs ]]
     [[ ! -f scripts/add-migration.sh ]]
     [[ ! -f scripts/check-migration-immutability.sh ]]

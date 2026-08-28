@@ -15,43 +15,19 @@ use super::FrontendApp;
 use super::answers::RenderAnswers;
 use super::source_inputs::FRONTEND_SHARED_INPUTS;
 
+mod rust_file_loc;
+
+use rust_file_loc::refresh_managed_rust_file_loc_command;
+pub(super) use rust_file_loc::{
+    RUST_FILE_LOC_COMMAND_KEY, action_uses_managed_rust_file_loc_checker,
+    is_generated_rust_file_loc_command, is_rust_file_loc_action,
+};
+
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
-const RUST_FILE_LOC_ACTION: &str = "rust-file-loc";
-const RUST_FILE_LOC_COMMAND_KEY: &str = "repo_rust_file_loc_command";
-const RUST_FILE_LOC_SCRIPT: &str = "scripts/check-rust-file-loc.sh";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
-
-pub(super) fn action_uses_managed_rust_file_loc_checker(
-    action: &ActionSpec,
-    commands: &BTreeMap<String, String>,
-) -> bool {
-    if action.target.component.as_str() != REPO_COMPONENT
-        || action.target.action.as_str() != RUST_FILE_LOC_ACTION
-        || action.runner != ActionRunner::command(RUST_FILE_LOC_COMMAND_KEY)
-    {
-        return false;
-    }
-    commands
-        .get(RUST_FILE_LOC_COMMAND_KEY)
-        .and_then(|command| command.strip_prefix(RUST_FILE_LOC_SCRIPT))
-        .is_some_and(|suffix| {
-            suffix.is_empty()
-                || suffix
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_whitespace)
-        })
-}
-
-fn rust_file_loc_command(default_branch: &str) -> String {
-    format!(
-        "{RUST_FILE_LOC_SCRIPT} {}",
-        crate::shell::quote(default_branch)
-    )
-}
 // Explicit action inputs take precedence; these defaults suppress only
 // repository guidance, docs, and hosted-CI metadata. Unlisted files such as
 // `.gitignore`, `Makefile`, and `justfile` deliberately remain fail-closed.
@@ -154,7 +130,7 @@ struct AuthoredCommands<'a> {
 impl RepositoryRenderModel {
     pub(super) fn from_answers(answers: &RenderAnswers) -> Result<Self> {
         if let Some(authored) = answers.authored_repository() {
-            return Self::from_authored(authored, answers.authored_repository_commands());
+            return Self::from_authored(answers, authored, answers.authored_repository_commands());
         }
         let mut builder = ModelBuilder::new(answers)?;
         builder.add_repository_component()?;
@@ -164,10 +140,16 @@ impl RepositoryRenderModel {
     }
 
     fn from_authored(
+        answers: &RenderAnswers,
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> Result<Self> {
-        let commands = authored_commands.clone();
+        let mut commands = authored_commands.clone();
+        refresh_managed_rust_file_loc_command(
+            &authored.actions,
+            &mut commands,
+            answers.default_branch(),
+        );
         let mut required_commands = BTreeSet::new();
         let mut tools = BTreeMap::new();
         for action in &authored.actions {
@@ -469,44 +451,6 @@ impl<'a> ModelBuilder<'a> {
             )?;
         }
         Ok(())
-    }
-
-    fn add_rust_file_loc_action(&mut self) -> Result<()> {
-        let action_id = RUST_FILE_LOC_ACTION;
-        let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
-        debug_assert_eq!(command_key, RUST_FILE_LOC_COMMAND_KEY);
-        let command = rust_file_loc_command(self.answers.default_branch());
-        self.insert_command(&command_key, &command)?;
-        let mut action = ActionSpec::new(
-            target_id(REPO_COMPONENT, action_id)?,
-            ActionIntent::Check,
-            ActionRunner::command(command_key.clone()),
-        );
-        action.description = Some("Enforce the changed-file Rust source size policy.".into());
-        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        action.inputs = vec![
-            "**/*.rs".into(),
-            "Cargo.toml".into(),
-            "Cargo.lock".into(),
-            "rust-toolchain*".into(),
-            ".cargo/**".into(),
-            "scripts/check-rust-file-loc.sh".into(),
-        ];
-        action.legacy_aliases = vec!["jig.rust_file_loc".into()];
-        action.provenance = provenance(&[
-            ("target", FieldProvenance::Inherited),
-            ("intent", FieldProvenance::Inherited),
-            ("effects", FieldProvenance::Inherited),
-            ("runner", FieldProvenance::Inferred),
-            ("inputs", FieldProvenance::Inherited),
-            ("legacy_aliases", FieldProvenance::Inherited),
-        ]);
-        self.insert_tool(
-            "jig.rust_file_loc",
-            "Enforce the changed-file Rust source size policy.",
-            Some(&command_key),
-        )?;
-        self.insert_action(action)
     }
 
     fn add_frontend_components(&mut self) -> Result<()> {

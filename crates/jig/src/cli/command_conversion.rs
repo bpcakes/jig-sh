@@ -4,17 +4,17 @@ use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts, CheckTargetOpts,
-    DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
-    GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts, LoopCommand, LoopRunOpts,
-    LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts,
-    ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts,
-    ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
-    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
-    StateCompactCommand, StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand,
-    StateExportReceiptsOpts, StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts,
-    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
-    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts, DevLaunchOpts, DevOpts,
+    DevStatusOpts, DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts,
+    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
+    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
+    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
+    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
+    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
+    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
+    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
+    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
+    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -226,10 +226,6 @@ fn direct_check_command(
             reject_repository_options(&parent_tool)?;
             command::CheckCommand::AgentGuides
         }
-        CheckCommand::RustFileLoc(opts) => {
-            reject_repository_options(&parent_tool)?;
-            command::CheckCommand::RustFileLoc(opts.into())
-        }
         CheckCommand::NoModRs => {
             reject_repository_options(&parent_tool)?;
             command::CheckCommand::NoModRs
@@ -266,7 +262,6 @@ fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTarg
         CheckCommand::Contract(opts) => Ok(("contract", opts)),
         CheckCommand::AgentMap(_)
         | CheckCommand::AgentGuides
-        | CheckCommand::RustFileLoc(_)
         | CheckCommand::NoModRs
         | CheckCommand::MigrationImmutability(_)
         | CheckCommand::SqlxUncheckedNonTest => {
@@ -300,16 +295,6 @@ fn reject_repository_options(tool: &ToolOpts) -> Result<()> {
         );
     }
     Ok(())
-}
-
-impl From<CheckRustFileLocOpts> for command::RustFileLocRequest {
-    fn from(opts: CheckRustFileLocOpts) -> Self {
-        Self {
-            staged: opts.staged,
-            changed_against: opts.changed_against,
-            all: opts.all,
-        }
-    }
 }
 
 impl From<CheckMigrationImmutabilityOpts> for command::MigrationImmutabilityRequest {

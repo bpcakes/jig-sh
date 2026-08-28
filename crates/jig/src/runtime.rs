@@ -8,7 +8,7 @@ use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
-    RustFileLocInput, SqlxTodoInput,
+    SqlxTodoInput,
 };
 use crate::tool_defs::{self, MemoryTool, tool};
 
@@ -334,14 +334,6 @@ fn dispatch_check_with_observer(
             }),
         ),
         CheckCommand::AgentGuides => crate::policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
-        CheckCommand::RustFileLoc(opts) => crate::policy::run_check(
-            ctx,
-            PolicyCheckCommand::RustFileLoc(RustFileLocInput {
-                staged: opts.staged,
-                changed_against: opts.changed_against,
-                all: opts.all,
-            }),
-        ),
         CheckCommand::NoModRs => crate::policy::run_check(ctx, PolicyCheckCommand::NoModRs),
         CheckCommand::MigrationImmutability(opts) => crate::policy::run_check(
             ctx,
