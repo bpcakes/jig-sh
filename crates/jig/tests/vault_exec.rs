@@ -17,7 +17,7 @@ fn reference(value: &str) -> VaultReference {
 fn initialized_vault() -> (tempfile::TempDir, PathBuf, Vault) {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("vault-home");
-    let vault = Vault::resolve(Some(home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
     let passphrase = SecretString::from(PASSPHRASE.to_owned());
     vault.init(&passphrase).unwrap();
     vault

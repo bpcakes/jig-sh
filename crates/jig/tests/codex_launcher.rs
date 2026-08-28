@@ -515,16 +515,9 @@ sleep 30
         Duration::from_secs(3),
     );
     let pid_paths = [default.join("app-server.pid"), work.join("app-server.pid")];
-    for path in &pid_paths {
-        wait_for_path(path, Duration::from_secs(3));
-    }
-    let app_server_pids = pid_paths.map(|path| {
-        fs::read_to_string(path)
-            .unwrap()
-            .trim()
-            .parse::<libc::pid_t>()
-            .unwrap()
-    });
+    let app_server_pids = pid_paths
+        .each_ref()
+        .map(|path| wait_for_pid_file(path, Duration::from_secs(3)));
 
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
@@ -582,16 +575,9 @@ sleep 30
             .unwrap(),
     );
     let pid_paths = [default.join("app-server.pid"), work.join("app-server.pid")];
-    for path in &pid_paths {
-        wait_for_path(path, Duration::from_secs(3));
-    }
-    let app_server_pids = pid_paths.map(|path| {
-        fs::read_to_string(path)
-            .unwrap()
-            .trim()
-            .parse::<libc::pid_t>()
-            .unwrap()
-    });
+    let app_server_pids = pid_paths
+        .each_ref()
+        .map(|path| wait_for_pid_file(path, Duration::from_secs(3)));
 
     assert_eq!(
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
@@ -743,13 +729,24 @@ fn read_until(file: &mut File, output: &mut Vec<u8>, needle: &str, timeout: Dura
     }
 }
 
-fn wait_for_path(path: &Path, timeout: Duration) {
+fn wait_for_pid_file(path: &Path, timeout: Duration) -> libc::pid_t {
     let deadline = Instant::now() + timeout;
-    while !path.exists() {
+    loop {
+        let observation = match fs::read_to_string(path) {
+            Ok(contents) => match contents.trim().parse::<libc::pid_t>() {
+                Ok(pid) if pid > 0 => return pid,
+                Ok(pid) => format!("invalid non-positive PID {pid}"),
+                Err(error) => format!("unparseable contents {contents:?}: {error}"),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                "file does not exist yet".to_string()
+            }
+            Err(error) => format!("could not read file: {error}"),
+        };
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for {}",
-            path.display()
+            "timed out waiting for a parseable PID in {} ({observation})",
+            path.display(),
         );
         std::thread::sleep(Duration::from_millis(10));
     }

@@ -11,7 +11,7 @@ fn import_set(reference: &str, kind: FieldKind, value: &[u8]) -> FieldMutation {
 #[test]
 fn onepassword_import_is_atomic_replace_explicit_and_value_free() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let concealed = "import-secret-value-sentinel";
     let text = "import-text-value-sentinel";
@@ -115,7 +115,7 @@ fn onepassword_import_is_atomic_replace_explicit_and_value_free() {
 #[test]
 fn onepassword_import_validates_sets_duplicates_and_values_before_writing() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let before_vault = vault.store.read_vault_text().unwrap().unwrap();
     let before_audit = vault.store.read_audit_text().unwrap().unwrap();
@@ -179,7 +179,7 @@ fn onepassword_import_validates_sets_duplicates_and_values_before_writing() {
 #[test]
 fn import_preview_is_read_only_audit_verified_and_version_two_only() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     vault
         .import_fields(
@@ -215,7 +215,7 @@ fn import_preview_is_read_only_audit_verified_and_version_two_only() {
         before_audit
     );
 
-    let v1 = Vault::resolve(Some(temp.path().join("v1"))).unwrap();
+    let v1 = Vault::resolve_for_test(Some(temp.path().join("v1"))).unwrap();
     init_v1(&v1.store, &passphrase());
     let v1_error = v1
         .preview_import_fields(
@@ -268,7 +268,7 @@ fn import_preview_is_read_only_audit_verified_and_version_two_only() {
 #[test]
 fn planned_import_applies_only_to_its_exact_ordered_field_set() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let existing = VaultReference::parse("jig://Production/EXISTING").unwrap();
     let new = VaultReference::parse("jig://Production/NEW").unwrap();
@@ -351,7 +351,7 @@ fn planned_import_applies_only_to_its_exact_ordered_field_set() {
 #[test]
 fn planned_import_rejects_intervening_vault_state_without_audit_or_write() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let target = VaultReference::parse("jig://Production/TARGET").unwrap();
     let plan = vault
@@ -396,7 +396,7 @@ fn planned_import_rejects_intervening_vault_state_without_audit_or_write() {
 #[test]
 fn onepassword_import_save_fault_leaves_intent_ahead_and_retry_converges() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
     store.fail_next_vault_write_for_test();
@@ -451,7 +451,7 @@ fn onepassword_import_save_fault_leaves_intent_ahead_and_retry_converges() {
 #[test]
 fn oversized_onepassword_import_fails_before_audit_or_state_write() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let before_audit = store.read_audit_text().unwrap().unwrap();
@@ -479,7 +479,7 @@ fn concurrent_no_replace_imports_recheck_collisions_under_the_vault_lock() {
     use std::sync::{Arc, Barrier};
 
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let barrier = Arc::new(Barrier::new(3));
     let mut threads = Vec::new();
