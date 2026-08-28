@@ -17,6 +17,7 @@ use super::path::{
     validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
 };
 use super::preview_seed::seed_preview_workspace;
+use super::repository_model::RepositoryRenderModel;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
 use crate::progress::CliProgress;
@@ -73,6 +74,7 @@ pub(super) struct RenderStageRequest<'a> {
     pub(super) seed_repo_path: Option<&'a Path>,
     pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
     pub(super) reconcile_runtime_config: bool,
+    pub(super) preferred_rendered_commands: BTreeSet<String>,
     pub(super) contract_version: Option<u32>,
     pub(super) progress: CliProgress,
 }
@@ -131,7 +133,11 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         )?;
     }
     if request.reconcile_runtime_config {
-        super::runtime_config::reconcile_runtime_config(request.seed_repo_path, &destination)?;
+        super::runtime_config::reconcile_runtime_config(
+            request.seed_repo_path,
+            &destination,
+            &request.preferred_rendered_commands,
+        )?;
     }
 
     active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
@@ -646,6 +652,7 @@ fn render_context(
     answers: &RenderAnswers,
     contract_version: Option<u32>,
 ) -> Result<JsonValue> {
+    let contract_version = contract_version.unwrap_or(crate::context::CURRENT_CONTRACT_VERSION);
     let mut context = serde_json::to_value(answers)?
         .as_object()
         .cloned()
@@ -710,6 +717,98 @@ fn render_context(
         json!(frontend_gate_shared_paths),
     );
     context.insert(
+        "go_backend_enabled".into(),
+        JsonValue::Bool(answers.go_backend_enabled()),
+    );
+    context.insert(
+        "rust_backend_enabled".into(),
+        JsonValue::Bool(answers.rust_backend_enabled()),
+    );
+    context.insert(
+        "go_postgres_enabled".into(),
+        JsonValue::Bool(answers.go_postgres_enabled()),
+    );
+    context.insert(
+        "go_ci_workflow_enabled".into(),
+        JsonValue::Bool(answers.go_ci_workflow_enabled()),
+    );
+    context.insert(
+        "rust_ci_workflow_enabled".into(),
+        JsonValue::Bool(answers.rust_ci_workflow_enabled()),
+    );
+    context.insert(
+        "go_sqlc_ci_enabled".into(),
+        JsonValue::Bool(answers.go_sqlc_ci_enabled()),
+    );
+    for (name, target) in [
+        ("go_fmt_ci_target", answers.go_fmt_ci_target()),
+        ("go_lint_ci_target", answers.go_lint_ci_target()),
+        (
+            "go_test_locked_ci_target",
+            answers.go_test_locked_ci_target(),
+        ),
+        ("go_sqlc_ci_target", answers.go_sqlc_ci_target()),
+        ("rust_fmt_ci_target", answers.rust_fmt_ci_target()),
+        ("rust_clippy_ci_target", answers.rust_clippy_ci_target()),
+        (
+            "rust_test_locked_ci_target",
+            answers.rust_test_locked_ci_target(),
+        ),
+    ] {
+        context.insert(name.into(), target.unwrap_or_default().into());
+    }
+    context.insert(
+        "go_postgres_integration_ci_enabled".into(),
+        JsonValue::Bool(answers.go_postgres_integration_ci_enabled()),
+    );
+    let repository = (contract_version >= 6
+        || answers.go_ci_workflow_enabled()
+        || answers.rust_ci_workflow_enabled())
+    .then(|| RepositoryRenderModel::from_answers(answers))
+    .transpose()?;
+    context.insert(
+        "go_ci_input_paths".into(),
+        serde_json::to_value(
+            repository
+                .as_ref()
+                .map(RepositoryRenderModel::go_ci_input_paths)
+                .unwrap_or_default(),
+        )?,
+    );
+    context.insert(
+        "rust_ci_input_paths".into(),
+        serde_json::to_value(
+            repository
+                .as_ref()
+                .map(RepositoryRenderModel::rust_ci_input_paths)
+                .unwrap_or_default(),
+        )?,
+    );
+    context.insert(
+        "rust_component_input_paths".into(),
+        serde_json::to_value(
+            repository
+                .as_ref()
+                .map(RepositoryRenderModel::rust_component_input_paths)
+                .unwrap_or_default(),
+        )?,
+    );
+    if contract_version >= 6 {
+        let repository = repository.expect("contract v6 always resolves a repository model");
+        let repository_toml = repository.authored_toml()?;
+        let repository_commands_toml = repository.commands_toml()?;
+        context.insert(
+            "frontend_contracts_enabled".into(),
+            JsonValue::Bool(repository.frontend_contracts_enabled()),
+        );
+        context.insert("repository".into(), serde_json::to_value(repository)?);
+        context.insert("repository_toml".into(), repository_toml.into());
+        context.insert(
+            "repository_commands_toml".into(),
+            repository_commands_toml.into(),
+        );
+    }
+    context.insert(
         "_jig".into(),
         json!({
             "commit": template.vcs_ref().unwrap_or_default(),
@@ -720,8 +819,7 @@ fn render_context(
             },
             "template_mode": template.template_mode_answer().unwrap_or(""),
             "template_local_path": template.template_local_path_answer().unwrap_or(""),
-            "contract_version": contract_version
-                .unwrap_or(crate::context::CURRENT_CONTRACT_VERSION),
+            "contract_version": contract_version,
         }),
     );
     Ok(JsonValue::Object(context))
@@ -851,47 +949,5 @@ fn executable_script_paths(destination: &Path) -> Result<Vec<PathBuf>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn template_output_paths_reject_reserved_git_metadata_aliases() {
-        for relative in [
-            ".git/config.jinja",
-            "vendor/.GiT/config.jinja",
-            ".g\u{200c}it/config.jinja",
-            "\u{feff}.G\u{202e}i\u{206a}T/config.jinja",
-        ] {
-            let error = output_relative_path(Path::new(relative))
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("reserved Git metadata component"),
-                "{relative}: {error}"
-            );
-            assert!(
-                error.contains(relative.trim_end_matches(".jinja")),
-                "{relative}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn template_output_paths_allow_git_near_misses() {
-        for relative in [
-            ".github/workflows/check.yml.jinja",
-            ".gitignore.jinja",
-            ".gitkeep.jinja",
-            "git/config.jinja",
-            ".git .config.jinja",
-            ".git\u{a0}.jinja",
-            ".git\u{200b}.jinja",
-            ".gi\u{200b}t.jinja",
-            ".git\u{2029}.jinja",
-            ".git\u{2060}.jinja",
-            ".git\u{2069}.jinja",
-        ] {
-            output_relative_path(Path::new(relative)).unwrap();
-        }
-    }
-}
+#[path = "renderer_tests.rs"]
+mod tests;

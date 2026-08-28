@@ -190,6 +190,9 @@ impl PlanGateContext {
     ) -> GateScopeEvaluation {
         let signature = match gate_signature(ctx, gate) {
             Ok(signature) => signature,
+            Err(_) if gate.paths.is_none() && !gate.reuse => {
+                unavailable_unscoped_gate_signature(ctx, gate)
+            }
             Err(error) => return GateScopeEvaluation::unknown(None, None, format!("{error:#}")),
         };
         let (baseline_oid, plan_change) = match &self.source {
@@ -508,6 +511,16 @@ impl GateScopeEvaluation {
 
 pub(super) fn gate_signature(ctx: &RepoContext, gate: &WorkCheckGate) -> Result<String> {
     gate_signature_with_native_identity(ctx, gate, env!("JIG_BUILD_IDENTITY"))
+}
+
+fn unavailable_unscoped_gate_signature(ctx: &RepoContext, gate: &WorkCheckGate) -> String {
+    let mut digest = Sha256::new();
+    digest.update(GATE_SIGNATURE_DOMAIN);
+    hash_field(&mut digest, ctx.contract_version().to_string().as_bytes());
+    hash_field(&mut digest, gate.id.as_bytes());
+    hash_field(&mut digest, gate.tool.as_bytes());
+    hash_field(&mut digest, b"unavailable-unscoped-tool");
+    format!("sha256:{:x}", digest.finalize())
 }
 
 fn gate_signature_with_native_identity(

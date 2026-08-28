@@ -20,11 +20,13 @@ pub(crate) const DEFAULT_UI_PORT: u16 = jig_ui::DEFAULT_UI_PORT;
 
 impl SnapshotProvider for RepoContext {
     fn dashboard_snapshot(&self, query: UiQuery) -> Result<DashboardSnapshot> {
-        snapshot::snapshot_with_query(self, query)
+        let current = crate::runtime::refreshed_repository_context(self)?;
+        snapshot::snapshot_with_query(&current, query)
     }
 
     fn plan_snapshot(&self, plan_id: &str) -> Result<Option<PlanSnapshot>> {
-        snapshot::plan_snapshot(self, plan_id)
+        let current = crate::runtime::refreshed_repository_context(self)?;
+        snapshot::plan_snapshot(&current, plan_id)
     }
 }
 

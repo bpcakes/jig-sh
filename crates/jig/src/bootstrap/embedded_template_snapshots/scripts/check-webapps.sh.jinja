@@ -13,7 +13,7 @@ recovery_claim_token=""
 dependency_stamp_dir=".agent/tmp/web-dependencies"
 
 usage() {
-  echo "Usage: scripts/check-webapps.sh bootstrap|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|app-check <app-dir> <lint|typecheck|build|coverage>|application-contracts|public-artifacts|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
+  echo "Usage: scripts/check-webapps.sh bootstrap|check-one <app-dir> <coverage-threshold> <script>|app-check <app-dir> <lint|typecheck|build|coverage>|contracts-drift-check <app-dir>|contracts-boundary-check <app-dir>|application-contracts|public-artifacts|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
 }
 
 
@@ -1973,16 +1973,20 @@ run_package_script() {
 [% endif %]
 }
 
-configured_frontend_app() {
+frontend_app_role() {
   case "$1" in
 [% for app in frontend_apps %]
-    "<<[ app.dir ]>>") return 0 ;;
+    "<<[ app.dir ]>>") printf '%s\n' "<<[ app.role ]>>" ;;
 [% endfor %]
     *)
       echo "Web app '$1' is not configured in [[frontend_apps]]." >&2
       return 2
       ;;
   esac
+}
+
+configured_frontend_app() {
+  frontend_app_role "$1" >/dev/null
 }
 
 run_public_package_script() {
@@ -2012,6 +2016,9 @@ run_check() {
   local app_dir="$1"
   local coverage_threshold="$2"
   local script_name="$3"
+  local app_role
+
+  app_role="$(frontend_app_role "$app_dir")" || return
 
   "$node_bin" scripts/check-webapp-scripts.mjs "$app_dir" "$script_name"
   install_dependencies "$app_dir"
@@ -2021,6 +2028,15 @@ run_check() {
     COVERAGE_DIR="$app_dir/coverage" COVERAGE_THRESHOLD="$coverage_threshold" \
       "$node_bin" scripts/enforce-coverage.cjs
   fi
+[% if frontend_contracts_enabled %]
+  if [ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]; then
+    run_contract_script artifact-check "$app_dir/dist"
+  fi
+[% else %]
+  if [ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ] && [ -f scripts/contracts.mjs ]; then
+    "$node_bin" scripts/contracts.mjs artifact-check "$app_dir/dist"
+  fi
+[% endif %]
 }
 
 run_app_check() {
@@ -2049,11 +2065,16 @@ run_app_check() {
   esac
 }
 
-require_application_contract_checker() {
+require_contract_script() {
   if [ ! -f scripts/contracts.mjs ]; then
-    echo "Application contract checks are enabled, but scripts/contracts.mjs is missing." >&2
-    return 2
+    printf '%s\n' 'Required frontend contract runner scripts/contracts.mjs is missing; restore the scaffolded file or update the authored repository targets.' >&2
+    return 1
   fi
+}
+
+run_contract_script() {
+  require_contract_script || return
+  "$node_bin" scripts/contracts.mjs "$@"
 }
 
 prepare_application_contract_dependencies() {
@@ -2063,8 +2084,6 @@ prepare_application_contract_dependencies() {
   # safe non-matching sentinel that keeps every supported Bash expansion bound.
   local -a prepared_scopes=("/")
 
-  # scripts/contracts.mjs executes from the repository root. When the root
-  # owns a package manifest, prepare that dependency boundary first.
   if [ -f package.json ]; then
     install_dependencies "."
     prepared_scopes+=(".")
@@ -2087,20 +2106,20 @@ prepare_application_contract_dependencies() {
 }
 
 run_application_contract_check() {
-  require_application_contract_checker
+  require_contract_script
   prepare_application_contract_dependencies
-  "$node_bin" scripts/contracts.mjs check
+  run_contract_script check
 }
 
 run_public_artifacts_check() {
-  require_application_contract_checker
+  require_contract_script
   prepare_application_contract_dependencies
 [% for app in frontend_apps %]
 [% if app.role != "admin" %]
   run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "build:bundle"
 [% endif %]
 [% endfor %]
-  "$node_bin" scripts/contracts.mjs public-check
+  run_contract_script public-check
 }
 
 case "$mode" in
@@ -2143,12 +2162,33 @@ case "$mode" in
     fi
     run_public_package_script "$2" "$3"
     ;;
+  check-one)
+    if [ "$#" -ne 4 ]; then
+      usage
+      exit 2
+    fi
+    run_check "$2" "$3" "$4"
+    ;;
   app-check)
     if [ "$#" -ne 3 ]; then
       usage
       exit 2
     fi
     run_app_check "$2" "$3"
+    ;;
+  contracts-drift-check|contracts-boundary-check)
+    if [ "$#" -ne 2 ]; then
+      usage
+      exit 2
+    fi
+    configured_frontend_app "$2" || exit $?
+    require_contract_script
+    install_dependencies "$2"
+    if [ "$mode" = "contracts-drift-check" ]; then
+      run_contract_script drift-check
+    else
+      run_contract_script boundary-check
+    fi
     ;;
   application-contracts)
     if [ "$#" -ne 1 ]; then
@@ -2207,9 +2247,13 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "typecheck"
 [% endfor %]
+[% if frontend_contracts_enabled %]
+    run_contract_script check
+[% else %]
     if [ -f scripts/contracts.mjs ]; then
       "$node_bin" scripts/contracts.mjs check
     fi
+[% endif %]
 [% else %]
     echo "No web apps configured."
 [% endif %]
@@ -2219,9 +2263,13 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "build:bundle"
 [% endfor %]
+[% if frontend_contracts_enabled %]
+    run_contract_script public-check --skip-frontend-artifacts
+[% else %]
     if [ -f scripts/contracts.mjs ]; then
-      "$node_bin" scripts/contracts.mjs public-check
+      "$node_bin" scripts/contracts.mjs public-check --skip-frontend-artifacts
     fi
+[% endif %]
 [% else %]
     echo "No web apps configured."
 [% endif %]

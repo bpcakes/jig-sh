@@ -1,0 +1,16 @@
+[package]
+name = "jig-go"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Go feature-area checks and contract metadata for Jig."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+[dependencies]
+jig-contract.workspace = true
+
+[lints]
+workspace = true

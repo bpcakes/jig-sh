@@ -10,7 +10,7 @@ mod reason;
 use reason::ReasonCode;
 
 pub(super) const COMMAND: &str = "info commands";
-const SCHEMA_VERSION: u64 = 2;
+const SCHEMA_VERSION: u64 = 3;
 const REPO_CONTEXT_NEXT_STEP: &str = "Run `jig doctor`; for an unadopted repository, preview with `jig adopt .` and apply with `jig adopt . --write`.";
 pub(super) const INVALID_OVERRIDE_NEXT_STEP: &str =
     "Unset `JIG_REPO_ROOT` or point it to a valid adopted Jig repository, then rerun the command.";
@@ -165,6 +165,7 @@ pub(super) fn info_with_capabilities(
     // is configured or every configured custom workflow is disabled.
     commands.push(ready_command(root_commands::LOOP));
 
+    commands.push(migration_command(ctx));
     commands.push(sqlx_command(ctx));
     commands.push(vault_command(vault, &jig));
     commands.push(proxy_command(Some(ctx)));
@@ -245,6 +246,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::WORK, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::LOOP, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::MIGRATION, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::SQLX, repo_context_next_step),
         vault,
         proxy_without_valid_context_command(repo_context_next_step, dev_proxy_available),
@@ -355,24 +357,64 @@ fn sqlx_command(ctx: &RepoContext) -> Value {
             Some(&next_step),
         );
     }
-    if ctx.rust_migration_dir().trim().is_empty() {
-        let next_step = format!(
-            "Preview with `{adopt} --rust-migration-dir migrations`, then, after reviewing the preview, apply with `{adopt} --rust-migration-dir migrations --force --write`."
-        );
-        return command_value(
-            root_commands::SQLX,
-            "needs_setup",
-            Some(ReasonCode::MigrationDirectoryNotConfigured),
-            Some("Migration workflows require a non-empty rust_migration_dir."),
-            Some(&next_step),
+    ready_command(root_commands::SQLX)
+}
+
+fn migration_command(ctx: &RepoContext) -> Value {
+    if !ctx.migration_policy_enabled() {
+        return not_configured_command(
+            root_commands::MIGRATION,
+            ReasonCode::MigrationBackendNotConfigured,
+            "Migration authoring is unavailable because this repository has no configured SQLx or Go/PostgreSQL migration backend.",
+            Some("Enable a supported migration backend, then run `jig update --recopy`."),
         );
     }
-    if !ctx.migration_add_enabled() {
+    if ctx.migration_dir().trim().is_empty() {
+        return command_value(
+            root_commands::MIGRATION,
+            "needs_setup",
+            Some(ReasonCode::MigrationDirectoryNotConfigured),
+            Some(
+                "Migration workflows require a non-empty migration_dir or legacy rust_migration_dir fallback.",
+            ),
+            Some("Set migration_dir in .jig.toml, then run `jig update --recopy`."),
+        );
+    }
+    let migration_backend = match ctx.migration_backend() {
+        Ok(Some(backend)) => backend,
+        Ok(None) => {
+            if ctx.sqlx_owns_migration_authoring() && !ctx.migration_add_enabled() {
+                return ready_command(root_commands::SQLX);
+            }
+            return command_value(
+                root_commands::MIGRATION,
+                "needs_setup",
+                Some(ReasonCode::MigrationAddToolMissing),
+                Some("Migration authoring has no declared component action owner."),
+                Some(
+                    "Add one native migration-add action to the owning SQLx or Go/PostgreSQL component, then run `jig update --recopy`.",
+                ),
+            );
+        }
+        Err(error) => {
+            let reason = format!("Migration authoring ownership is invalid: {error}");
+            return command_value(
+                root_commands::MIGRATION,
+                "needs_setup",
+                Some(ReasonCode::MigrationAddToolInvalid),
+                Some(&reason),
+                Some(
+                    "Run `scripts/jig check contract --no-receipt`, correct the repository migration owner, then run `jig update --recopy`.",
+                ),
+            );
+        }
+    };
+    if migration_backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         return ready_command(root_commands::SQLX);
     }
     manifest_command(
         ctx,
-        root_commands::SQLX,
+        root_commands::MIGRATION,
         tool::MIGRATION_ADD,
         (
             ReasonCode::MigrationAddToolMissing,

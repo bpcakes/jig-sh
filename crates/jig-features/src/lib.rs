@@ -1,8 +1,12 @@
-use jig_contract::{FeatureContext, FeatureDescriptor, NativeToolDescriptor, NativeToolKind};
+use jig_contract::{
+    FeatureContext, FeatureDescriptor, NativeToolDescriptor, NativeToolKind,
+    RepositoryAdapterDescriptor,
+};
 
 // Feature order is not contractual; set-like public results sort and dedup.
 const FEATURES: &[FeatureDescriptor] = &[
     jig_core::FEATURE,
+    jig_go::FEATURE,
     jig_rust::FEATURE,
     jig_sqlx::FEATURE,
     jig_typescript::FEATURE,
@@ -54,10 +58,37 @@ pub fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Op
         .find_map(|feature| (feature.unavailable_tool_message)(ctx, tool_name))
 }
 
-pub fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+pub fn repository_adapters() -> Vec<&'static RepositoryAdapterDescriptor> {
+    let mut adapters = FEATURES
+        .iter()
+        .flat_map(|feature| feature.repository_adapters.iter())
+        .collect::<Vec<_>>();
+    adapters.sort_unstable_by_key(|adapter| adapter.id);
+    adapters
+}
+
+pub fn repository_adapter(id: &str) -> Option<&'static RepositoryAdapterDescriptor> {
     FEATURES
         .iter()
-        .find_map(|feature| (feature.tool_admission_error)(ctx, tool_name))
+        .flat_map(|feature| feature.repository_adapters.iter())
+        .find(|adapter| adapter.id == id)
+}
+
+pub fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    let mut errors = FEATURES
+        .iter()
+        .filter_map(|feature| (feature.tool_admission_error)(ctx, tool_name))
+        .collect::<Vec<_>>();
+    errors.sort();
+    errors.dedup();
+    match errors.as_slice() {
+        [] => None,
+        [error] => Some(error.clone()),
+        _ => Some(format!(
+            "{tool_name} is unavailable for multiple reasons: {}",
+            errors.join(" ")
+        )),
+    }
 }
 
 fn native_tool(tool_name: &str) -> Option<&'static NativeToolDescriptor> {
@@ -92,6 +123,7 @@ mod tests {
     fn registry_command_and_native_tool_keys_are_unique() {
         let mut command_keys = HashSet::new();
         let mut native_tools = HashSet::new();
+        let mut repository_adapters = HashSet::new();
 
         for feature in FEATURES {
             for key in feature.command_keys {
@@ -104,7 +136,43 @@ mod tests {
                     tool.name
                 );
             }
+            for adapter in feature.repository_adapters {
+                assert!(
+                    repository_adapters.insert(adapter.id),
+                    "duplicate repository adapter: {}",
+                    adapter.id
+                );
+                let mut action_ids = HashSet::new();
+                for action in adapter.actions {
+                    assert!(
+                        action_ids.insert(action.id),
+                        "duplicate action '{}' in repository adapter '{}'",
+                        action.id,
+                        adapter.id
+                    );
+                }
+            }
         }
+    }
+
+    #[test]
+    fn registry_exposes_stack_adapters_and_component_actions() {
+        assert_eq!(
+            repository_adapters()
+                .into_iter()
+                .map(|adapter| adapter.id)
+                .collect::<Vec<_>>(),
+            vec!["go", "go-postgres", "jig", "rust", "sqlx", "typescript"]
+        );
+        let go = repository_adapter("go").unwrap();
+        assert!(go.actions.iter().any(|action| action.id == "test"));
+        let typescript = repository_adapter("typescript").unwrap();
+        assert!(
+            typescript
+                .actions
+                .iter()
+                .any(|action| action.id == "typecheck")
+        );
     }
 
     #[test]

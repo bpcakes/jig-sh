@@ -1,23 +1,29 @@
 {
   "contract_version": <<[ _jig.contract_version ]>>,
   "tool_namespace": "jig",
+[% if _jig.contract_version >= 6 %]
+  "required_commands": <<[ repository.required_commands | tojson(indent=2) ]>>,
+  "tools": <<[ repository.tools | tojson(indent=2) ]>>,
+  "affected_ignore": <<[ repository.affected_ignore | tojson(indent=2) ]>>,
+  "components": <<[ repository.components | tojson(indent=2) ]>>,
+  "actions": <<[ repository.actions | tojson(indent=2) ]>>,
+  "profiles": <<[ repository.profiles | tojson(indent=2) ]>>,
+  "default_check_profile": <<[ repository.default_check_profile | tojson ]>>
+[% else %]
   "required_commands": [
     "bootstrap_command",
-    "rust_fmt_check_command",
+[% if backend_language == "rust" %]    "rust_fmt_check_command",
     "rust_clippy_command",
     "rust_test_command",
-    "rust_test_locked_command",
-    "rust_file_loc_command"[% if frontend_harness_enabled %],
+    "rust_test_locked_command"[% else %]    "go_fmt_check_command",
+    "go_lint_command",
+    "go_test_command",
+    "go_test_locked_command"[% if go_database == "postgres" %],
+    "sqlc_check_command"[% endif %][% endif %][% if frontend_harness_enabled %],
     "typescript_lint_command",
     "typescript_typecheck_command",
     "typescript_build_command",
-    "typescript_coverage_command"[% if application_contracts_enabled %],
-    "application_contract_check_command",
-    "public_artifacts_check_command"[% endif %][% for app in frontend_gate_apps %],
-    "typescript_<<[ app.key ]>>_lint_command",
-    "typescript_<<[ app.key ]>>_typecheck_command",
-    "typescript_<<[ app.key ]>>_build_command",
-    "typescript_<<[ app.key ]>>_coverage_command"[% endfor %][% endif %][% if sqlx_enabled %],
+    "typescript_coverage_command"[% endif %][% if sqlx_enabled %],
     "sqlx_check_command"[% endif %][% if sqlx_enabled and schema_dump_enabled %],
     "schema_dump_command"[% endif %]
   ],
@@ -32,31 +38,34 @@
       "name": "jig.fmt_check",
       "kind": "command",
       "description": "Run the configured format check command.",
-      "command": "rust_fmt_check_command"
+      "command": "[% if backend_language == "go" %]go_fmt_check_command[% else %]rust_fmt_check_command[% endif %]"
     },
+[% if backend_language == "go" %]
+    {
+      "name": "jig.lint",
+      "kind": "command",
+      "description": "Run the configured Go lint command.",
+      "command": "go_lint_command"
+    },
+[% else %]
     {
       "name": "jig.clippy",
       "kind": "command",
       "description": "Run the configured clippy command.",
       "command": "rust_clippy_command"
     },
+[% endif %]
     {
       "name": "jig.test",
       "kind": "command",
       "description": "Run the configured default test command.",
-      "command": "rust_test_command"
+      "command": "[% if backend_language == "go" %]go_test_command[% else %]rust_test_command[% endif %]"
     },
     {
       "name": "jig.test_locked",
       "kind": "command",
       "description": "Run the configured locked test command.",
-      "command": "rust_test_locked_command"
-    },
-    {
-      "name": "jig.rust_file_loc",
-      "kind": "command",
-      "description": "Enforce the changed-file Rust source size policy.",
-      "command": "rust_file_loc_command"
+      "command": "[% if backend_language == "go" %]go_test_locked_command[% else %]rust_test_locked_command[% endif %]"
     },
 [% if frontend_harness_enabled %]
     {
@@ -83,46 +92,6 @@
       "description": "Run the configured TypeScript coverage command.",
       "command": "typescript_coverage_command"
     },
-[% if application_contracts_enabled %]
-    {
-      "name": "jig.application_contract_check",
-      "kind": "command",
-      "description": "Verify committed application contracts and generated clients.",
-      "command": "application_contract_check_command"
-    },
-    {
-      "name": "jig.public_artifacts_check",
-      "kind": "command",
-      "description": "Build and verify public artifacts against privileged-boundary leaks.",
-      "command": "public_artifacts_check_command"
-    },
-[% endif %]
-[% for app in frontend_gate_apps %]
-    {
-      "name": "jig.typescript_<<[ app.key ]>>_lint",
-      "kind": "command",
-      "description": "Run TypeScript lint for <<[ app.name ]>> only.",
-      "command": "typescript_<<[ app.key ]>>_lint_command"
-    },
-    {
-      "name": "jig.typescript_<<[ app.key ]>>_typecheck",
-      "kind": "command",
-      "description": "Run TypeScript typecheck for <<[ app.name ]>> only.",
-      "command": "typescript_<<[ app.key ]>>_typecheck_command"
-    },
-    {
-      "name": "jig.typescript_<<[ app.key ]>>_build",
-      "kind": "command",
-      "description": "Run TypeScript build for <<[ app.name ]>> only.",
-      "command": "typescript_<<[ app.key ]>>_build_command"
-    },
-    {
-      "name": "jig.typescript_<<[ app.key ]>>_coverage",
-      "kind": "command",
-      "description": "Run TypeScript coverage for <<[ app.name ]>> only.",
-      "command": "typescript_<<[ app.key ]>>_coverage_command"
-    },
-[% endfor %]
 [% endif %]
 [% if sqlx_enabled %]
 [% if schema_dump_enabled %]
@@ -143,12 +112,22 @@
       "kind": "command",
       "description": "Run the configured SQLx check command.",
       "command": "sqlx_check_command"
-    }[% if rust_migration_layout == "flat_migrations" %],
+    },
+[% endif %]
+[% if (sqlx_enabled and rust_migration_layout == "flat_migrations") or (backend_language == "go" and go_database == "postgres") %]
     {
       "name": "jig.migration_add",
       "kind": "native",
-      "description": "Add timestamped SQL migration stubs."
-    }[% endif %],
+      "description": "Add a backend-compatible timestamped SQL migration."
+    },
+[% endif %]
+[% if backend_language == "go" and go_database == "postgres" %]
+    {
+      "name": "jig.sqlc_check",
+      "kind": "command",
+      "description": "Run the configured sqlc drift check.",
+      "command": "sqlc_check_command"
+    },
 [% endif %]
     {
       "name": "jig.contract_check",
@@ -156,4 +135,5 @@
       "description": "Run the native Jig contract check."
     }
   ]
+[% endif %]
 }

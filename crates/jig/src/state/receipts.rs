@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use jig_contract::{Finding, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -15,7 +16,8 @@ use crate::git_receipts::{
     collect_git_receipt_metadata_without_worktree_fingerprint,
     collect_git_receipt_metadata_without_worktree_fingerprint_with_cancellation,
     is_git_receipt_collection_cancellation, repo_worktree_fingerprint,
-    repo_worktree_fingerprint_with_cancellation,
+    repo_worktree_fingerprint_with_cancellation, repository_source_snapshot,
+    repository_source_snapshot_with_cancellation,
 };
 use crate::tool_defs::tool;
 
@@ -28,11 +30,15 @@ use super::sessions::current_session;
 use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
 mod archive;
+mod target_evidence;
 
+pub(super) use archive::parse_archive_before_ms;
 use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
 use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
 pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
+pub(crate) use target_evidence::TargetReceiptStatus;
+use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
 
 const SUCCESSFUL_RECEIPT_PREVIEW_BYTES: usize = 512;
 
@@ -51,6 +57,15 @@ pub(crate) struct ReceiptInput<'a> {
     pub(crate) collect_git_metadata: bool,
     pub(crate) collect_worktree_fingerprint: bool,
     pub(crate) worktree_fingerprint_override: Option<std::result::Result<String, String>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TargetReceiptMetadata {
+    pub(crate) run_id: String,
+    pub(crate) target: TargetId,
+    pub(crate) config_digest: String,
+    pub(crate) input_digest: String,
+    pub(crate) findings: Vec<Finding>,
 }
 
 pub(super) struct StateToolReceipt<'a> {
@@ -273,6 +288,7 @@ pub(crate) struct WorkGateReceiptIndex {
     checks: BTreeMap<String, IndexedCheckReceipts>,
     check_gates: BTreeMap<String, WorkCheckGateReceiptStatus>,
     reviews: BTreeMap<String, WorkReviewReceiptStatus>,
+    evidence: BTreeMap<String, IndexedTargetReceipts>,
 }
 
 impl WorkGateReceiptIndex {
@@ -304,6 +320,18 @@ impl WorkGateReceiptIndex {
     pub(crate) fn check_gate_receipt(&self, gate_id: &str) -> Option<&WorkCheckGateReceiptStatus> {
         self.check_gates.get(gate_id)
     }
+
+    pub(crate) fn target_receipts(&self, gate_id: &str) -> Option<&TargetReceiptGroup> {
+        self.evidence
+            .get(gate_id)
+            .and_then(IndexedTargetReceipts::selected)
+    }
+
+    pub(crate) fn target_receipt_error(&self, gate_id: &str) -> Option<&str> {
+        self.evidence
+            .get(gate_id)
+            .and_then(IndexedTargetReceipts::error)
+    }
 }
 
 #[cfg(test)]
@@ -320,16 +348,6 @@ pub(crate) fn reset_work_gate_receipt_index_scan_count() {
 #[cfg(test)]
 pub(crate) fn work_gate_receipt_index_scan_count() -> usize {
     WORK_GATE_RECEIPT_INDEX_SCAN_COUNT.get()
-}
-
-#[cfg(test)]
-pub(crate) fn reset_reusable_work_check_scan_count() {
-    REUSABLE_WORK_CHECK_SCAN_COUNT.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn reusable_work_check_scan_count() -> usize {
-    REUSABLE_WORK_CHECK_SCAN_COUNT.get()
 }
 
 #[derive(Clone, Debug)]
@@ -377,8 +395,16 @@ pub(crate) fn work_gate_receipt_index(
     plan_id: &str,
     check_tools: &BTreeSet<String>,
     review_gate_ids: &BTreeSet<String>,
+    evidence_targets: &BTreeMap<String, BTreeSet<TargetId>>,
 ) -> Result<WorkGateReceiptIndex> {
-    work_gate_receipt_index_with_cancellation(ctx, plan_id, check_tools, review_gate_ids, &|| false)
+    work_gate_receipt_index_with_cancellation(
+        ctx,
+        plan_id,
+        check_tools,
+        review_gate_ids,
+        evidence_targets,
+        &|| false,
+    )
 }
 
 pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
@@ -513,6 +539,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     plan_id: &str,
     check_tools: &BTreeSet<String>,
     review_gate_ids: &BTreeSet<String>,
+    evidence_targets: &BTreeMap<String, BTreeSet<TargetId>>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<WorkGateReceiptIndex> {
     let plan_ids = BTreeSet::from([plan_id.to_string()]);
@@ -521,6 +548,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
         &plan_ids,
         check_tools,
         review_gate_ids,
+        evidence_targets,
         cancelled,
     )?;
     Ok(indexes
@@ -533,6 +561,7 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
     plan_ids: &BTreeSet<String>,
     check_tools: &BTreeSet<String>,
     review_gate_ids: &BTreeSet<String>,
+    evidence_targets: &BTreeMap<String, BTreeSet<TargetId>>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<BTreeMap<String, WorkGateReceiptIndex>> {
     ensure_receipt_scan_active(cancelled)?;
@@ -549,11 +578,19 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
                         .collect(),
                     check_gates: BTreeMap::new(),
                     reviews: BTreeMap::new(),
+                    evidence: evidence_targets
+                        .iter()
+                        .map(|(gate_id, targets)| {
+                            (gate_id.clone(), IndexedTargetReceipts::new(targets.clone()))
+                        })
+                        .collect(),
                 },
             )
         })
         .collect::<BTreeMap<_, _>>();
-    if plan_ids.is_empty() || (check_tools.is_empty() && review_gate_ids.is_empty()) {
+    if plan_ids.is_empty()
+        || (check_tools.is_empty() && review_gate_ids.is_empty() && evidence_targets.is_empty())
+    {
         return Ok(indexes);
     }
     ensure_state_layout(ctx)?;
@@ -645,6 +682,13 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
             index
                 .reviews
                 .insert(gate_id.to_string(), work_review_receipt_status(&receipt));
+        }
+
+        if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
+            let status = target_receipt_status(&receipt, run_id, target);
+            for receipts in index.evidence.values_mut() {
+                receipts.observe(&status);
+            }
         }
         Ok(())
     })?;

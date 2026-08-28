@@ -7,17 +7,52 @@ use tempfile::tempdir;
 
 use common::*;
 
-use crate::cli::CommandKind;
+use crate::cli::{
+    CommandKind, MigrationCommand, SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand,
+};
 use crate::command::RuntimeCommand;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
-mod agent;
-mod common;
-mod loops;
-mod mcp;
-mod work;
+#[test]
+fn named_v6_checks_preserve_feature_specific_unavailable_diagnostics() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = crate::execution::NoopExecutionObserver;
+
+    let direct_error = dispatch_named_check(
+        &ctx,
+        "sqlc",
+        crate::tool_defs::tool::SQLC_CHECK,
+        crate::command::ToolRequest::default(),
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    let flagged_error = dispatch_repository_check(
+        &ctx,
+        crate::command::RepositoryCheckRequest {
+            selectors: vec!["sqlc".into()],
+            profile: None,
+            affected_base: None,
+            explain: true,
+            fail_fast: false,
+            tool: crate::command::ToolRequest::default(),
+        },
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        direct_error.contains("go_database is not \"postgres\""),
+        "{direct_error}"
+    );
+    assert_eq!(flagged_error, direct_error);
+}
 
 #[test]
 fn cli_runtime_rejects_migration_add_for_versioned_artifacts_without_mutation() {
@@ -40,12 +75,10 @@ rust_migration_layout = "versioned_artifacts"
 
     let error = super::dispatch(
         &ctx,
-        RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(
-            crate::command::MigrationAddRequest {
-                name: "create_users".into(),
-                tool: crate::command::ToolRequest::default(),
-            },
-        )),
+        RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
+            name: "create_users".into(),
+            tool: crate::command::ToolRequest::default(),
+        }),
     )
     .unwrap_err();
 
@@ -81,12 +114,10 @@ migration_add_command = "mkdir -p schema && touch schema/should-not-exist.sql"
 
     let error = super::dispatch(
         &ctx,
-        RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(
-            crate::command::MigrationAddRequest {
-                name: "create_users".into(),
-                tool: crate::command::ToolRequest::default(),
-            },
-        )),
+        RuntimeCommand::MigrationAdd(crate::command::MigrationAddRequest {
+            name: "create_users".into(),
+            tool: crate::command::ToolRequest::default(),
+        }),
     )
     .unwrap_err();
 
@@ -257,14 +288,20 @@ fn dispatch(ctx: &RepoContext, command: CommandKind) -> Result<Value> {
 fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
         CommandKind::Bootstrap(opts) => RuntimeCommand::Bootstrap(opts.into()),
-        CommandKind::Check(command) => RuntimeCommand::Check(command.into()),
-        CommandKind::Sqlx(command) => RuntimeCommand::Sqlx(command.into()),
+        CommandKind::Check(command) => RuntimeCommand::Check(command.try_into().unwrap()),
+        CommandKind::Migration(MigrationCommand::Add(opts)) => {
+            RuntimeCommand::MigrationAdd(opts.into())
+        }
+        CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
+            RuntimeCommand::MigrationAdd(opts.into())
+        }
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
+            RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(opts.into()))
+        }
         CommandKind::SchemaDump(opts) => {
             RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(opts.into()))
         }
-        CommandKind::MigrationAdd(opts) => {
-            RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(opts.into()))
-        }
+        CommandKind::MigrationAdd(opts) => RuntimeCommand::MigrationAdd(opts.into()),
         CommandKind::AgentMap(command) => RuntimeCommand::AgentMap(command.into()),
         CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => {
             RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts.into())
@@ -446,10 +483,15 @@ rust_test_command = "printf 'command tool ran\n'"
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let output = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: true,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: true,
+                },
+                selectors: Vec::new(),
+            }),
+        )),
     )
     .unwrap();
 
@@ -459,276 +501,300 @@ rust_test_command = "printf 'command tool ran\n'"
 }
 
 #[test]
-fn command_tool_streams_both_outputs_through_execution_observer() {
-    #[derive(Default)]
-    struct RecordingObserver {
-        output: Vec<u8>,
-        started: bool,
-        finished: bool,
-    }
-
-    impl crate::execution::ExecutionObserver for RecordingObserver {
-        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
-            match event {
-                crate::execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
-                crate::execution::ExecutionEvent::Output { bytes, .. } => {
-                    self.output.extend_from_slice(bytes)
-                }
-                crate::execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
-                crate::execution::ExecutionEvent::Heartbeat { .. } => {}
-            }
-        }
-    }
-
-    impl crate::execution::ExecutionCancellation for RecordingObserver {}
-
+fn repository_check_explains_and_executes_the_legacy_default_profile() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
+        .contract_version(5)
         .config(
             r#"
-rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
+[commands]
+fmt_command = "printf 'fmt ran\n'"
+test_command = "printf 'test ran\n'"
+
+[work]
+checks = ["jig.fmt_check", "jig.test"]
 "#,
         )
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
+        .required_commands(["fmt_command", "test_command"])
+        .tool(json!({
+            "name": "jig.fmt_check",
+            "kind": "command",
+            "description": "Run formatting.",
+            "command": "fmt_command"
+        }))
         .tool(json!({
             "name": "jig.test",
             "kind": "command",
-            "description": "Run configured test command.",
-            "command": "rust_test_command"
+            "description": "Run tests.",
+            "command": "test_command"
         }))
         .write();
+    init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut observer = RecordingObserver::default();
 
-    let output = dispatch_with_observer(
+    let explained = super::dispatch(
         &ctx,
-        RuntimeCommand::Check(
-            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: true,
-            })
-            .into(),
-        ),
-        &mut observer,
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: true,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(None, false),
+            },
+        )),
     )
     .unwrap();
+    assert_eq!(explained["executed"], false);
+    assert_eq!(explained["plan"]["profile"], "verify");
+    assert_eq!(explained["plan"]["targets"].as_array().unwrap().len(), 2);
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 
-    assert_eq!(output["result"]["stdout"], "live stdout");
-    assert_eq!(output["result"]["stderr"], "live stderr");
-    let observed = String::from_utf8(observer.output).unwrap();
-    assert!(observed.contains("live stdout"));
-    assert!(observed.contains("live stderr"));
-    assert!(observer.started);
-    assert!(observer.finished);
+    let executed = super::dispatch(
+        &ctx,
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(None, false),
+            },
+        )),
+    )
+    .unwrap();
+    assert_eq!(executed["ok"], true);
+    assert_eq!(executed["executed"], true);
+    assert_eq!(executed["results"].as_array().unwrap().len(), 2);
+    assert_eq!(executed["results"][0]["target"]["component"], "repo");
 }
 
-#[cfg(unix)]
 #[test]
-fn configured_command_output_limit_can_exceed_the_internal_protocol_bound() {
-    const OUTPUT_BYTES: usize = 4 * 1024 * 1024 + 1;
-
+fn repository_check_persists_queryable_runs_and_target_receipts() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
-        .config(format!(
+        .contract_version(5)
+        .config(
             r#"
-rust_test_command = "head -c {OUTPUT_BYTES} /dev/zero"
+[commands]
+fmt_command = "printf 'fmt ran\n'"
+test_command = "printf 'test ran\n'"
 
-[execution]
-command_output_limit_bytes = {OUTPUT_BYTES}
+[work]
+checks = ["jig.fmt_check", "jig.test"]
 "#,
-        ))
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
+        )
+        .required_commands(["fmt_command", "test_command"])
+        .tool(json!({
+            "name": "jig.fmt_check",
+            "kind": "command",
+            "description": "Run formatting.",
+            "command": "fmt_command"
+        }))
         .tool(json!({
             "name": "jig.test",
             "kind": "command",
-            "description": "Run configured test command.",
-            "command": "rust_test_command"
+            "description": "Run tests.",
+            "command": "test_command"
         }))
         .write();
+    init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    crate::state::seed_open_plan_for_test(&ctx, "plan_work", "Work", "Body").unwrap();
 
-    let output = crate::runtime::dispatch(
+    let output = super::dispatch(
         &ctx,
-        RuntimeCommand::Check(
-            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: true,
-            })
-            .into(),
-        ),
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(Some("plan_work".into()), true),
+            },
+        )),
     )
     .unwrap();
+    let run_id = output["run"]["run_id"].as_str().unwrap();
 
+    let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
+    assert_eq!(durable.work_plan_id.as_deref(), Some("plan_work"));
+    assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
     assert_eq!(
-        output["result"]["stdout"].as_str().unwrap().len(),
-        OUTPUT_BYTES
+        durable.result.conclusion,
+        Some(jig_contract::RunConclusion::Success)
+    );
+    assert_eq!(durable.result.targets.len(), 2);
+    assert!(
+        durable
+            .result
+            .targets
+            .iter()
+            .all(|target| target.receipt_id.is_some())
+    );
+
+    let receipts = crate::state::receipts_list(
+        &ctx,
+        crate::state::ReceiptListFilter {
+            session_id: None,
+            plan_id: Some("plan_work".into()),
+            tool_name: None,
+            failed_only: false,
+            limit: 20,
+        },
+    )
+    .unwrap();
+    let receipts = receipts["receipts"].as_array().unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert!(receipts.iter().all(|receipt| receipt["run_id"] == run_id));
+    assert!(receipts.iter().all(|receipt| receipt["target"].is_object()));
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["config_digest"].as_str().is_some())
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["input_digest"].as_str().is_some())
     );
 }
 
 #[test]
-fn command_tool_honors_repository_timeout() {
+fn repository_execution_rejects_a_stale_plan_before_creating_a_run() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
+        .contract_version(5)
         .config(
             r#"
-rust_test_command = "sleep 30"
+[commands]
+test_command = "printf 'test ran\n'"
 
-[execution]
-command_timeout_seconds = 1
+[work]
+checks = ["jig.test"]
 "#,
         )
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
+        .required_commands(["test_command"])
         .tool(json!({
             "name": "jig.test",
             "kind": "command",
-            "description": "Run configured test command.",
-            "command": "rust_test_command"
+            "description": "Run tests.",
+            "command": "test_command"
         }))
         .write();
+    init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let started = Instant::now();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan =
+        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+            .unwrap();
+    fs::write(temp.path().join("changed-after-plan.txt"), "changed\n").unwrap();
 
-    let error = dispatch(
+    let error = super::run_execution::execute_check_run(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: true,
-        })),
+        &catalog,
+        plan,
+        super::run_execution::ExecuteCheckRunRequest {
+            work_plan_id: None,
+            record_receipts: true,
+            fail_fast: false,
+        },
+        &|| false,
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap_err();
 
-    assert!(error.contains("timed out"), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(5));
-}
-
-#[test]
-fn native_tool_no_receipt_skips_receipt_append() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
-    fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
-    fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-bootstrap_command = "printf 'bootstrap\n'"
-rust_fmt_check_command = "printf 'fmt\n'"
-rust_clippy_command = "printf 'clippy\n'"
-rust_test_command = "printf 'test\n'"
-rust_test_locked_command = "printf 'test locked\n'"
-"#,
-        )
-        .required_commands([
-            "bootstrap_command",
-            "rust_fmt_check_command",
-            "rust_clippy_command",
-            "rust_test_command",
-            "rust_test_locked_command",
-        ])
-        .tool(json!({ "name": "jig.bootstrap", "kind": "command", "description": "Run bootstrap.", "command": "bootstrap_command" }))
-        .tool(json!({ "name": "jig.fmt_check", "kind": "command", "description": "Run fmt.", "command": "rust_fmt_check_command" }))
-        .tool(json!({ "name": "jig.clippy", "kind": "command", "description": "Run clippy.", "command": "rust_clippy_command" }))
-        .tool(json!({ "name": "jig.test", "kind": "command", "description": "Run tests.", "command": "rust_test_command" }))
-        .tool(json!({ "name": "jig.test_locked", "kind": "command", "description": "Run locked tests.", "command": "rust_test_locked_command" }))
-        .tool(json!({ "name": "jig.contract_check", "kind": "native", "description": "Run native contract check." }))
-        .write();
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Contract(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: true,
-        })),
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["receipt_id"], serde_json::Value::Null);
-    assert!(
-        output["result"]["stdout"]
-            .as_str()
-            .unwrap()
-            .contains("jig contract check passed")
-    );
+    assert!(error.to_string().contains("stale or was modified"));
+    assert!(!temp.path().join(".agent/state/runs.jsonl").exists());
     assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[test]
-fn failed_tool_error_remains_primary_when_receipt_append_fails() {
+fn repository_affected_check_explains_and_executes_only_matching_v6_targets() {
     let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n' >&2; exit 7"
-"#,
-        )
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
-        .tool(json!({
-            "name": "jig.test",
-            "kind": "command",
-            "description": "Run configured test command.",
-            "command": "rust_test_command"
-        }))
-        .write();
-    fs::write(temp.path().join(".agent/state"), "not a directory").unwrap();
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let error = dispatch(
-        &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "[repository]\ndefault_check_profile = \"verify\"",
+        "[repository]\ndefault_check_profile = \"verify\"\naffected_ignore = [\".env\", \".env.*\", \"**/.env\", \"**/.env.*\"]",
+    );
+    fs::write(&config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["affected_ignore"] = json!([".env", ".env.*", "**/.env", "**/.env.*"]);
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap();
+    fs::write(temp.path().join(".gitignore"), ".env\n.env.*\n").unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join(".env"),
+        "DATABASE_URL=postgres://example.invalid/app\n",
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let request = |explain| {
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: Some("HEAD".into()),
+                explain,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(None, true),
+            },
+        ))
+    };
 
-    assert!(error.contains("jig.test failed with status 7"), "{error}");
-    assert!(error.contains("command key: rust_test_command"), "{error}");
-    assert!(error.contains("tool failed stdout"), "{error}");
-    assert!(error.contains("tool failed stderr"), "{error}");
-    assert!(error.contains("receipt recording also failed"), "{error}");
+    let dotenv_only = super::dispatch(&ctx, request(true)).unwrap();
+
+    assert!(
+        dotenv_only["plan"]["targets"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    fs::write(
+        temp.path().join("api/example.go"),
+        "package example\n\nconst changed = true\n",
+    )
+    .unwrap();
+    let explained = super::dispatch(&ctx, request(true)).unwrap();
+
+    assert_eq!(explained["executed"], false);
+    assert_eq!(explained["plan"]["affected_base"], "HEAD");
+    assert_eq!(explained["plan"]["targets"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        explained["plan"]["targets"][0]["target"],
+        json!({"component": "api", "action": "test"})
+    );
+    assert!(
+        explained["plan"]["targets"][0]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| {
+                reason["kind"] == "direct_input" && reason["path"] == "api/example.go"
+            })
+    );
+
+    let executed = super::dispatch(&ctx, request(false)).unwrap();
+
+    assert_eq!(executed["ok"], true);
+    assert_eq!(executed["results"].as_array().unwrap().len(), 1);
+    assert_eq!(executed["results"][0]["target"]["component"], "api");
+    assert_eq!(executed["run"]["targets"].as_array().unwrap().len(), 1);
 }
 
-#[test]
-fn collect_result_keeps_failed_tool_context_when_receipt_append_fails() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n' >&2; exit 7"
-"#,
-        )
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
-        .tool(json!({
-            "name": "jig.test",
-            "kind": "command",
-            "description": "Run configured test command.",
-            "command": "rust_test_command"
-        }))
-        .write();
-    fs::write(temp.path().join(".agent/state"), "not a directory").unwrap();
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let error = tool_execution::execute_manifest_tool_result_without_worktree_fingerprint(
-        &ctx,
-        crate::tool_defs::tool::TEST,
-        json!({}),
-        None,
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("jig.test failed with status 7"), "{error}");
-    assert!(error.contains("command key: rust_test_command"), "{error}");
-    assert!(error.contains("tool failed stdout"), "{error}");
-    assert!(error.contains("tool failed stderr"), "{error}");
-    assert!(error.contains("receipt recording also failed"), "{error}");
-}
+mod agent;
+mod common;
+mod loops;
+mod mcp;
+mod repository_execution;
+mod work;

@@ -1,0 +1,1 @@
+Preserve intentional affected-selection semantics; centralize ecosystem inputs and Git authority isolation; hash validated configuration snapshots; keep lease inode identity stable; model frontend contract checks once per run; remove redundant MCP plan validation while preserving per-target source barriers; add focused regressions and run configured gates.

@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::{Result, anyhow, bail};
 
 use crate::context::{RepoContext, WorkCheckGate, WorkGate};
+use crate::repository::RepositoryCatalog;
 use crate::tool_defs;
 
 #[derive(Clone, Debug)]
@@ -55,7 +56,7 @@ pub(super) fn selected_checks(
     }
 
     if !explicit_tools.is_empty() {
-        if ctx.contract_version() < crate::context::CURRENT_CONTRACT_VERSION {
+        if ctx.contract_version() < 5 {
             return Ok(explicit_tools
                 .iter()
                 .cloned()
@@ -86,7 +87,7 @@ pub(super) fn selected_checks(
         return Ok(selected);
     }
 
-    if ctx.contract_version() < crate::context::CURRENT_CONTRACT_VERSION {
+    if ctx.contract_version() < 5 {
         return Ok(ctx
             .work_check_tools()
             .into_iter()
@@ -108,10 +109,23 @@ pub(super) fn validate_check_tool(ctx: &RepoContext, name: &str, label: &str) ->
             super::super::tool_execution::undeclared_tool_message(ctx, name)
         )
     })?;
-    if !tool_defs::is_no_arg_execution_tool(tool) {
-        if !tool_defs::is_execution_tool(tool) {
-            bail!("{label} is not an execution tool: {name}");
-        }
+    if !tool_defs::is_execution_tool(tool) {
+        bail!("{label} is not an execution tool: {name}");
+    }
+    let requires_name = if ctx.contract_version() >= 6 {
+        let catalog = RepositoryCatalog::from_context(ctx)?;
+        let native_operation =
+            catalog
+                .action_for_alias(name)
+                .and_then(|action| match &action.runner {
+                    jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+                    jig_contract::ActionRunner::Command { .. } => None,
+                });
+        tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation)
+    } else {
+        tool_defs::execution_tool_requires_name(tool)
+    };
+    if requires_name {
         bail!("{label} requires an argument and cannot run as a configured gate: {name}");
     }
     Ok(())

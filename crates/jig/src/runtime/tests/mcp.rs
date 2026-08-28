@@ -1,382 +1,671 @@
+// agentic-loc-exception: MCP lifecycle tests share one server fixture and durable repository-run polling helpers.
+
 use super::*;
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::test_env::TestRepoBuilder;
 
-#[test]
-fn mcp_call_dispatches_command_tool_declared_only_in_manifest() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = call_tool(&ctx, "jig.custom_check", json!({})).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["command_key"], "custom_check_command");
-    assert_eq!(output["result"]["stdout"], "manifest target ran\n");
-}
-
-#[test]
-fn mcp_call_dispatches_command_tool_without_makefile() {
-    let temp = tempdir().unwrap();
-    write_command_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = call_tool(&ctx, "jig.custom_check", json!({})).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["command_key"], "rust_test_command");
-    assert_eq!(output["result"]["stdout"], "command tool ran\n");
-    assert!(!temp.path().join("Makefile").exists());
-
-    let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
-    let receipt = receipts.lines().last().unwrap();
-    assert!(receipt.contains(r#""invoked_command_key":"rust_test_command""#));
-}
-
-#[test]
-fn mcp_native_migration_add_creates_files() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-sqlx_enabled = true
-rust_migration_dir = "migrations"
-"#,
-        )
-        .contract_version(2)
-        .required_commands(["rust_test_command"])
-        .tool(json!({
-            "name": "jig.migration_add",
-            "kind": "native",
-            "description": "Add migration."
-        }))
-        .write();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = call_tool(&ctx, "jig.migration_add", json!({ "name": "create_users" })).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert!(
-        output["result"]["stdout"]
-            .as_str()
-            .unwrap()
-            .contains("create_users")
-    );
-    let entries = fs::read_dir(temp.path().join("migrations"))
-        .unwrap()
-        .count();
-    assert_eq!(entries, 2);
-}
-
-#[test]
-fn mcp_rejects_advertised_migration_add_for_versioned_artifacts_without_mutation() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-sqlx_enabled = true
-rust_migration_dir = "schema"
-rust_migration_layout = "versioned_artifacts"
-"#,
-        )
-        .contract_version(2)
-        .tool(json!({
-            "name": "jig.migration_add",
-            "kind": "native",
-            "description": "Add migration."
-        }))
-        .write();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error =
-        call_tool(&ctx, "jig.migration_add", json!({ "name": "create_users" })).unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("configured Rust migration layout does not permit flat migration stubs")
-    );
-    assert!(!temp.path().join("schema").exists());
-}
-
-#[test]
-fn mcp_rejects_command_backed_migration_add_for_versioned_artifacts_without_mutation() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-sqlx_enabled = true
-rust_migration_dir = "schema"
-rust_migration_layout = "versioned_artifacts"
-migration_add_command = "mkdir -p schema && touch schema/should-not-exist.sql"
-"#,
-        )
-        .contract_version(2)
-        .required_commands(["migration_add_command"])
-        .tool(json!({
-            "name": "jig.migration_add",
-            "kind": "command",
-            "description": "Add migration.",
-            "command": "migration_add_command"
-        }))
-        .write();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error =
-        call_tool(&ctx, "jig.migration_add", json!({ "name": "create_users" })).unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("configured Rust migration layout does not permit flat migration stubs")
-    );
-    assert!(!temp.path().join("schema").exists());
-}
-
-#[test]
-fn mcp_native_contract_check_validates_manifest() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
-    fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
-    fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-bootstrap_command = "cargo fetch"
-rust_fmt_check_command = "cargo fmt --check"
-rust_clippy_command = "cargo clippy"
-rust_test_command = "cargo test"
-"#,
-        )
-        .contract_version(2)
-        .required_commands([
-            "bootstrap_command",
-            "rust_fmt_check_command",
-            "rust_clippy_command",
-            "rust_test_command",
-        ])
-        .tool(json!({ "name": "jig.bootstrap", "kind": "command", "description": "Bootstrap.", "command": "bootstrap_command" }))
-        .tool(json!({ "name": "jig.fmt_check", "kind": "command", "description": "Format.", "command": "rust_fmt_check_command" }))
-        .tool(json!({ "name": "jig.clippy", "kind": "command", "description": "Clippy.", "command": "rust_clippy_command" }))
-        .tool(json!({ "name": "jig.test", "kind": "command", "description": "Test.", "command": "rust_test_command" }))
-        .tool(json!({ "name": "jig.contract_check", "kind": "native", "description": "Contract check." }))
-        .write();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = call_tool(&ctx, "jig.contract_check", json!({})).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert!(
-        output["result"]["stdout"]
-            .as_str()
-            .unwrap()
-            .contains("jig contract check passed")
-    );
-}
-
-#[test]
-fn mcp_native_schema_check_detects_clean_schema_dump() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-sqlx_enabled = true
-schema_dump_enabled = true
-rust_migration_dir = "migrations"
-schema_dump_command = "mkdir -p docs/schema && printf 'stable\n' > docs/schema/tables.sql"
-rust_test_command = "cargo test"
-"#,
-        )
-        .contract_version(2)
-        .required_commands(["rust_test_command", "schema_dump_command"])
-        .tool(json!({
-            "name": "jig.schema_check",
-            "kind": "native",
-            "description": "Schema check."
-        }))
-        .write();
-    for args in [
-        ["init", "-q"].as_slice(),
-        ["config", "user.name", "Fixture"].as_slice(),
-        ["config", "user.email", "fixture@example.com"].as_slice(),
-        ["add", "."].as_slice(),
-        ["commit", "-m", "fixture", "-q"].as_slice(),
-    ] {
-        let status = Command::new("git")
-            .current_dir(temp.path())
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success());
+fn wait_for_repository_run(ctx: &RepoContext, run_id: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let inspected =
+            call_tool(ctx, tool::INSPECT, json!({"kind": "run", "run_id": run_id})).unwrap();
+        if inspected["result"]["run"]["result"]["status"] == "completed" {
+            return inspected;
+        }
+        assert!(Instant::now() < deadline, "run {run_id} did not complete");
+        thread::sleep(Duration::from_millis(10));
     }
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
+}
 
-    let output = call_tool(&ctx, "jig.schema_check", json!({})).unwrap();
+fn assert_repository_output_schema(ctx: &RepoContext, name: &str, output: &Value) {
+    let descriptor = crate::tool_defs::tool_descriptors(ctx.contract_version(), ctx.tool_specs())
+        .into_iter()
+        .find(|descriptor| descriptor["name"] == name)
+        .unwrap();
+    let validator = jsonschema::validator_for(&descriptor["outputSchema"]).unwrap();
+    assert!(
+        validator.is_valid(output),
+        "{name} output did not match its schema: {output:#}"
+    );
+}
 
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["result"]["stdout"], "Schema dump is up to date.\n");
+fn add_v6_generate_action(root: &std::path::Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let config = config
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"printf 'api tests passed\\n'\"\ngenerate_command = \"printf generated > generated.txt\"",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "generate" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "command", command = "generate_command" }
+inputs = ["api/**"]
+
+[[repository.profiles]]"#,
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("generate_command"));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "generate"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "command", "command": "generate_command"},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn add_v6_mutating_effect_action(root: &std::path::Path, action: &str, effect: &str) {
+    let command_key = format!("{}_command", action.replace('-', "_"));
+    let output_path = format!("{action}-mutation.txt");
+    let effects = if effect == "process" {
+        vec![effect]
+    } else {
+        vec![effect, "process"]
+    };
+    let toml_effects = effects
+        .iter()
+        .map(|effect| format!("\"{effect}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let config = config
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            &format!(
+                "api_test_command = \"printf 'api tests passed\\n'\"\n{command_key} = \"printf mutated > {output_path}\""
+            ),
+        )
+        .replace(
+            "[[repository.profiles]]",
+            &format!(
+                r#"[[repository.actions]]
+target = {{ component = "api", action = "{action}" }}
+intent = "operate"
+effects = [{toml_effects}]
+runner = {{ kind = "command", command = "{command_key}" }}
+inputs = ["api/**"]
+
+[[repository.profiles]]"#
+            ),
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(command_key));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": action},
+        "intent": "operate",
+        "effects": effects,
+        "runner": {"kind": "command", "command": command_key},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn add_v6_native_schema_action(root: &std::path::Path, command: &str, timeout_seconds: u64) {
+    let escaped_command = command.replace('\\', "\\\\").replace('"', "\\\"");
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "default_branch = \"main\"",
+            "default_branch = \"main\"\nschema_dump_enabled = true",
+        )
+        .replace(
+            "[commands]",
+            &format!("[commands]\napi_schema_dump_command = \"{escaped_command}\""),
+        )
+        .replace("adapters = [\"go\"]", "adapters = [\"go\", \"sqlx\"]")
+        .replace(
+            "[[repository.profiles]]",
+            &format!(
+                r#"[[repository.actions]]
+target = {{ component = "api", action = "schema" }}
+intent = "check"
+effects = ["worktree", "process"]
+runner = {{ kind = "native", operation = "jig.schema_check" }}
+inputs = ["api/**"]
+timeout_seconds = {timeout_seconds}
+
+[[repository.actions]]
+target = {{ component = "api", action = "schema-dump" }}
+intent = "generate"
+effects = ["worktree", "process"]
+runner = {{ kind = "command", command = "api_schema_dump_command" }}
+inputs = ["api/**"]
+
+[[repository.profiles]]"#
+            ),
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("api_schema_dump_command"));
+    manifest["components"][0]["adapters"] = json!(["go", "sqlx"]);
+    manifest["actions"].as_array_mut().unwrap().extend([
+        json!({
+            "target": {"component": "api", "action": "schema"},
+            "intent": "check",
+            "effects": ["worktree", "process"],
+            "runner": {"kind": "native", "operation": "jig.schema_check"},
+            "inputs": ["api/**"],
+            "timeout_seconds": timeout_seconds
+        }),
+        json!({
+            "target": {"component": "api", "action": "schema-dump"},
+            "intent": "generate",
+            "effects": ["worktree", "process"],
+            "runner": {"kind": "command", "command": "api_schema_dump_command"},
+            "inputs": ["api/**"]
+        }),
+    ]);
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn add_v6_native_migration_action(root: &std::path::Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "default_branch = \"main\"",
+            "default_branch = \"main\"\nmigration_dir = \"migrations\"",
+        )
+        .replace(
+            "adapters = [\"go\"]",
+            "adapters = [\"go\", \"go-postgres\"]",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "migration-add" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "native", operation = "jig.migration_add" }
+inputs = ["migrations/**"]
+
+[[repository.profiles]]"#,
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"][0]["adapters"] = json!(["go", "go-postgres"]);
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "migration-add"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "native", "operation": "jig.migration_add"},
+        "inputs": ["migrations/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
-fn mcp_exposes_read_only_agent_doctor_tool() {
+fn mcp_v6_advertises_bounded_repository_tools_and_v5_keeps_manifest_tools() {
+    let v6 = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(v6.path(), "");
+    let v6_manifest_path = v6.path().join(".agent/jig-contract.json");
+    let mut v6_manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&v6_manifest_path).unwrap()).unwrap();
+    v6_manifest["tools"] = json!([{
+        "name": tool::TEST,
+        "kind": "command",
+        "description": "Compatibility API test alias.",
+        "command": "api_test_command"
+    }]);
+    fs::write(
+        &v6_manifest_path,
+        serde_json::to_string_pretty(&v6_manifest).unwrap(),
+    )
+    .unwrap();
+    let v6_ctx = RepoContext::load_from(v6.path()).unwrap();
+    let v6_descriptors =
+        crate::tool_defs::tool_descriptors(v6_ctx.contract_version(), v6_ctx.tool_specs());
+    let v6_names = v6_descriptors
+        .iter()
+        .filter_map(|descriptor| descriptor["name"].as_str())
+        .collect::<Vec<_>>();
+
+    for name in [
+        tool::INSPECT,
+        tool::PLAN_RUN,
+        tool::EXECUTE_RUN,
+        tool::CANCEL_RUN,
+    ] {
+        let descriptor = v6_descriptors
+            .iter()
+            .find(|descriptor| descriptor["name"] == name)
+            .unwrap();
+        assert!(descriptor.get("inputSchema").is_some());
+        assert!(descriptor.get("outputSchema").is_some());
+    }
+    assert!(!v6_names.contains(&tool::TEST));
+    assert!(
+        call_tool(&v6_ctx, tool::TEST, json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported tool")
+    );
+
+    let v5 = tempdir().unwrap();
+    write_fixture_repo(v5.path());
+    let v5_ctx = RepoContext::load_from(v5.path()).unwrap();
+    let v5_names =
+        crate::tool_defs::tool_descriptors(v5_ctx.contract_version(), v5_ctx.tool_specs())
+            .into_iter()
+            .filter_map(|descriptor| descriptor["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+
+    assert!(v5_names.iter().any(|name| name == "jig.custom_check"));
+    assert!(!v5_names.iter().any(|name| name == tool::PLAN_RUN));
+}
+
+#[test]
+fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let workspace = call_tool(&ctx, tool::INSPECT, json!({"kind": "workspace"})).unwrap();
+    assert_repository_output_schema(&ctx, tool::INSPECT, &workspace);
+    assert_eq!(
+        workspace["result"]["components"].as_array().unwrap().len(),
+        2
+    );
+    let mut invalid_workspace = workspace;
+    invalid_workspace["result"]["unexpected"] = json!(true);
+    let inspect_descriptor =
+        crate::tool_defs::tool_descriptors(ctx.contract_version(), ctx.tool_specs())
+            .into_iter()
+            .find(|descriptor| descriptor["name"] == tool::INSPECT)
+            .unwrap();
+    assert!(
+        !jsonschema::validator_for(&inspect_descriptor["outputSchema"])
+            .unwrap()
+            .is_valid(&invalid_workspace)
+    );
+
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"profile": "verify"})).unwrap();
+    assert_repository_output_schema(&ctx, tool::PLAN_RUN, &planned);
+    assert_eq!(planned["plan"]["targets"].as_array().unwrap().len(), 2);
+
+    let executed = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+    assert_repository_output_schema(&ctx, tool::EXECUTE_RUN, &executed);
+    assert_eq!(executed["accepted"], true);
+    assert_eq!(executed["status"], "queued");
+    let run_id = executed["run_id"].as_str().unwrap();
+
+    let inspected = wait_for_repository_run(&ctx, run_id);
+    assert_repository_output_schema(&ctx, tool::INSPECT, &inspected);
+    assert_eq!(
+        inspected["result"]["run"]["result"]["conclusion"],
+        "success"
+    );
+    assert_eq!(
+        inspected["result"]["run"]["result"]["targets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!crate::runtime::mcp_repository::is_live_run_registered(
+        &ctx, run_id
+    ));
+    let lease_path = temp
+        .path()
+        .join(".agent/.cache/run-leases")
+        .join(format!("{run_id}.lock"));
+    assert!(
+        lease_path.exists(),
+        "terminal worker lease must keep a stable inode"
+    );
+
+    let terminal_cancel = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
+    assert_eq!(terminal_cancel["cancellation_requested"], false);
+    assert_eq!(terminal_cancel["worker_signalled"], false);
+    assert_eq!(terminal_cancel["run"]["conclusion"], "success");
+}
+
+#[test]
+fn mcp_repository_effectful_action_requires_exact_plan_approval() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_generate_action(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:generate"]})).unwrap();
+    assert_eq!(planned["plan"]["effects"], json!(["worktree", "process"]));
+
+    let error = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("approved_effects {Worktree}"), "{error}");
+
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "success",
+        "{terminal:#}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
+        "generated"
+    );
+}
+
+#[test]
+fn mcp_repository_planning_refreshes_catalog_after_server_start() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    add_v6_generate_action(temp.path());
+
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:generate"]})).unwrap();
+
+    assert_eq!(
+        planned["plan"]["targets"][0]["target"]["action"],
+        "generate"
+    );
+}
+
+#[test]
+fn mcp_work_check_refreshes_repository_authority_after_server_start() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "api_test_command = \"printf 'api tests passed\\n'\"",
+        "api_test_command = \"printf 'refreshed authority\\n'\"",
+    );
+    fs::write(config_path, config).unwrap();
+
+    let check = call_tool(&ctx, tool::WORK_CHECK, json!({"plan_id": "plan_1"})).unwrap();
+
+    assert_eq!(check["ok"], true, "{check:#}");
+    assert_eq!(
+        check["results"][0]["response"]["result"]["stdout"],
+        "refreshed authority\n"
+    );
+}
+
+#[test]
+fn mcp_work_check_rejects_repository_lease_contention_without_blocking_the_transport() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let held = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::Worktree],
+    )
+    .unwrap();
+    let root = temp.path().to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let ctx = RepoContext::load_from(&root).unwrap();
+        ready_tx.send(()).unwrap();
+        start_rx.recv().unwrap();
+        let result = call_tool(&ctx, tool::WORK_CHECK, json!({"plan_id": "plan_1"}))
+            .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    });
+
+    ready_rx.recv().unwrap();
+    start_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    drop(held);
+    let result = match timely {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().unwrap();
+            panic!("MCP work check blocked the request loop on repository contention: {error}");
+        }
+    };
+    worker.join().unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("repository execution is busy with an incompatible run"),
+        "{error}"
+    );
+}
+
+#[test]
+fn mcp_explicit_work_check_rejects_repository_lease_contention_without_blocking_the_transport() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replacen(
+        "inputs = [\"api/**\"]",
+        "inputs = [\"api/**\"]\nlegacy_aliases = [\"jig.api_test\"]",
+        1,
+    );
+    fs::write(config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.api_test",
+        "kind": "command",
+        "description": "Run API tests.",
+        "command": "api_test_command"
+    }));
+    manifest["actions"][0]["legacy_aliases"] = json!(["jig.api_test"]);
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let held = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::Worktree],
+    )
+    .unwrap();
+    let root = temp.path().to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let ctx = RepoContext::load_from(&root).unwrap();
+        ready_tx.send(()).unwrap();
+        start_rx.recv().unwrap();
+        let result = call_tool(
+            &ctx,
+            tool::WORK_CHECK,
+            json!({"plan_id": "plan_1", "tools": ["jig.api_test"]}),
+        )
+        .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    });
+
+    ready_rx.recv().unwrap();
+    start_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    drop(held);
+    let result = match timely {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().unwrap();
+            panic!("explicit MCP work check blocked the request loop on contention: {error}");
+        }
+    };
+    worker.join().unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("repository execution is busy with an incompatible run"),
+        "{error}"
+    );
+}
+
+#[test]
+fn mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let codex_home = temp.path().join("codex-home");
-    fs::create_dir_all(&codex_home).unwrap();
-    fs::write(codex_home.join("config.toml"), "").unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "review"
+kind = "codex_review"
+skill = "jig-rust:rust-error-handling-review"
+severity = "high"
+required = true
+
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    init_git_repo(temp.path());
     let codex_path = temp.path().join("codex-stub.sh");
     write_codex_stub(
         &codex_path,
-        "#!/bin/sh\nif [ \"$1 $2 $3 $4\" = \"plugin marketplace add --help\" ]; then exit 0; fi\nexit 2\n",
+        r#"#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+printf '{"summary":"clean","findings":[]}\n' > "$out"
+"#,
     );
-
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
-    let _codex_home = EnvVarGuard::set("CODEX_HOME", &codex_home);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = call_tool(&ctx, tool::AGENT_DOCTOR, json!({})).unwrap();
-
-    assert_eq!(output["command"], "agent doctor");
-    assert_eq!(output["codex"]["available"], true);
-}
-
-#[test]
-fn mcp_does_not_expose_dev_or_proxy_commands() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    for name in [
-        "jig.dev",
-        "jig.proxy",
-        "jig.proxy_start",
-        "jig.proxy_cert_trust",
-    ] {
-        let error = call_tool(&ctx, name, json!({})).unwrap_err().to_string();
-        assert!(error.contains("Unsupported tool"));
-    }
-}
-
-#[test]
-fn mcp_work_tools_deserialize_typed_arguments() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = call_tool(
+    let held = crate::state::acquire_repository_execution_lease(
         &ctx,
-        tool::WORK_START,
-        json!({
-            "title": "Typed MCP request",
-            "body": "Use serde for tool arguments"
-        }),
+        &[jig_contract::ActionEffect::Worktree],
     )
     .unwrap();
+    let root = temp.path().to_owned();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        let ctx = RepoContext::load_from(&root).unwrap();
+        ready_tx.send(()).unwrap();
+        start_rx.recv().unwrap();
+        let result = call_tool(
+            &ctx,
+            tool::WORK_REFINE,
+            json!({"plan_id": "plan_1", "max_iterations": 1}),
+        )
+        .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    });
 
-    assert_eq!(output["ok"], true);
-    assert!(output["plan"]["plan_id"].as_str().is_some());
+    ready_rx.recv().unwrap();
+    start_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    drop(held);
+    let result = match timely {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().unwrap();
+            panic!("MCP work refine blocked on final check contention: {error}");
+        }
+    };
+    worker.join().unwrap();
+
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("repository execution is busy with an incompatible run"),
+        "{error}"
+    );
 }
 
-#[test]
-fn mcp_work_append_rejects_blank_progress_without_mutating_plan() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let plan_path = ctx.plan_body_path("plan_1");
-    let body_before = fs::read_to_string(&plan_path).unwrap();
-    let state_before = crate::state::state_summary(&ctx).unwrap();
+include!("mcp/part_02.rs");
 
-    let error = call_tool(
-        &ctx,
-        tool::WORK_APPEND,
-        json!({
-            "plan_id": "plan_1",
-            "body": " \n\t "
-        }),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Progress text must not be empty"));
-    assert_eq!(fs::read_to_string(plan_path).unwrap(), body_before);
-    assert_eq!(crate::state::state_summary(&ctx).unwrap(), state_before);
-}
-
-#[test]
-fn mcp_work_tools_tolerate_null_optional_defaults() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let check = call_tool(
-        &ctx,
-        tool::WORK_CHECK,
-        json!({
-            "plan_id": "plan_1",
-            "tools": null
-        }),
-    )
-    .unwrap();
-    let receipts = call_tool(
-        &ctx,
-        tool::WORK_RECEIPTS,
-        json!({
-            "failed_only": null,
-            "limit": null
-        }),
-    )
-    .unwrap();
-    let evidence = call_tool(
-        &ctx,
-        tool::WORK_EVIDENCE,
-        json!({
-            "plan_id": null
-        }),
-    )
-    .unwrap();
-
-    assert_eq!(check["ok"], true);
-    assert_eq!(receipts["ok"], true);
-    assert_eq!(evidence["command"], "work evidence");
-    assert!(!receipts["receipts"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn mcp_work_check_rejects_unknown_plan_before_running_tools() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = call_tool(
-        &ctx,
-        tool::WORK_CHECK,
-        json!({
-            "plan_id": "plan_missing",
-            "tools": null
-        }),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Plan not found: plan_missing"));
-    let receipts_path = temp.path().join(".agent/state/receipts.jsonl");
-    let receipts = fs::read_to_string(receipts_path).unwrap_or_default();
-    assert!(!receipts.contains("jig.custom_check"));
-}
-
-#[test]
-fn mcp_work_tools_reject_invalid_typed_arguments() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = call_tool(&ctx, tool::WORK_START, json!({ "body": "missing title" })).unwrap_err();
-    let error = format!("{error:#}");
-
-    assert!(error.contains("Invalid work tool arguments"));
-    assert!(error.contains("missing field `title`"));
-}
+mod repository_execution;

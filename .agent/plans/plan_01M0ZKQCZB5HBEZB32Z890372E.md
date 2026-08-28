@@ -1,0 +1,1 @@
+Characterize lifecycle, source-epoch, scheduling, progress-delivery, and cancellation behavior; refactor ownership in small steps; fix reviewed regressions; run focused and repository gates.

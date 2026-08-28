@@ -1,0 +1,3 @@
+Preserve repository-check policy, isolate schema freshness generation, refresh repository authority for long-lived MCP calls, retain legacy selector compatibility, and bound durable-state read models. Verify focused regressions and configured gates.
+
+Classified review findings with Fowler refactoring principles. Removed the schema policy exception, isolated schema freshness generation in a disposable snapshot, refreshed mutable MCP repository authority per request, restored canonical-shaped legacy aliases, bounded run lookup and incomplete evidence grouping, and added focused regressions.

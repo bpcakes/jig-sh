@@ -43,6 +43,7 @@ pub(super) enum HumanOutput {
     Setup,
     Info,
     Status,
+    RunStatus,
     VaultRun,
     VaultGeneric,
     AgentDoctor,
@@ -63,6 +64,7 @@ pub(super) enum HumanOutput {
     WorkFinish,
     WorkReceipts,
     WorkStatus,
+    Check,
     ToolExecution,
     AgentMapGenerate,
     MigrationAdd,
@@ -99,6 +101,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::Setup => format_setup_summary(value),
         HumanOutput::Info => format_info_summary(value),
         HumanOutput::Status => status::format_summary(value),
+        HumanOutput::RunStatus => format_run_status_summary(value),
         HumanOutput::VaultRun => format_vault_run_summary(value),
         HumanOutput::VaultGeneric => format_vault_generic_summary(value),
         HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
@@ -119,6 +122,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::WorkFinish => format_work_finish_summary(value),
         HumanOutput::WorkReceipts => format_work_receipts_summary(value),
         HumanOutput::WorkStatus => format_work_status_summary(value),
+        HumanOutput::Check => format_check_output(value),
         HumanOutput::ToolExecution => format_tool_execution_summary(value),
         HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
         HumanOutput::MigrationAdd => format_migration_add_summary(value),
@@ -137,6 +141,154 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::DevStop => format_dev_stop_summary(value),
         HumanOutput::Proxy => format_proxy_summary(value),
     })
+}
+
+fn format_check_output(value: &serde_json::Value) -> String {
+    if value.get("plan").is_some() {
+        format_check_summary(value)
+    } else {
+        format_tool_execution_summary(value)
+    }
+}
+
+fn format_check_summary(value: &serde_json::Value) -> String {
+    let plan = &value["plan"];
+    let targets = plan["targets"].as_array().map_or(0, Vec::len);
+    let plan_id = plan["id"].as_str().unwrap_or("<unknown>");
+    if !value["executed"].as_bool().unwrap_or(false) {
+        let mut lines = vec![
+            format!("Check plan: {plan_id}"),
+            format!("  Targets: {targets}"),
+        ];
+        append_planned_targets(&mut lines, plan);
+        lines.push("  No commands executed (--explain).".into());
+        lines.push("  full plan: rerun with --json".into());
+        return lines.join("\n");
+    }
+
+    let ok = value["ok"].as_bool().unwrap_or(false);
+    let results = value["results"].as_array().map_or(0, Vec::len);
+    let mut lines = vec![
+        format!("Jig check: {}", if ok { "passed" } else { "failed" }),
+        format!("  Plan: {plan_id}"),
+        format!("  Targets: {results}/{targets} executed"),
+    ];
+    if let Some(target_results) = value["run"]["targets"].as_array() {
+        for result in target_results {
+            let target = structured_target_text(&result["target"]);
+            let conclusion = result["conclusion"].as_str().unwrap_or("unknown");
+            let label = match conclusion {
+                "success" => "passed",
+                "failure" => "failed",
+                other => other,
+            };
+            let exit = result["exit_code"]
+                .as_i64()
+                .map_or_else(String::new, |exit| format!(" (exit {exit})"));
+            lines.push(format!("  - {target}: {label}{exit}"));
+
+            if let Some(response) = check_response_for_target(value, &result["target"])
+                && let Some(preview) = tool_output_preview(response)
+            {
+                lines.push(format!("      Output: {preview}"));
+            } else if conclusion != "success"
+                && let Some(reason) = result["findings"]
+                    .as_array()
+                    .and_then(|findings| findings.first())
+                    .and_then(|finding| finding["message"].as_str())
+            {
+                lines.push(format!("      Reason: {}", concise_preview(reason, 180)));
+            }
+        }
+    } else if let Some(target_results) = value["results"].as_array() {
+        // Contract-v6 runtimes always include the canonical run result. Keep
+        // this compatibility projection readable for older aggregate values.
+        for result in target_results {
+            let target = structured_target_text(&result["target"]);
+            let exit = result["response"]["result"]["exit_status"]
+                .as_i64()
+                .unwrap_or(1);
+            lines.push(format!(
+                "  - {target}: {} (exit {exit})",
+                if exit == 0 { "passed" } else { "failed" }
+            ));
+        }
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+fn check_response_for_target<'a>(
+    value: &'a serde_json::Value,
+    target: &serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    value["results"]
+        .as_array()?
+        .iter()
+        .find_map(|result| (result["target"] == *target).then_some(&result["response"]))
+}
+
+fn append_planned_targets(lines: &mut Vec<String>, plan: &serde_json::Value) {
+    if let Some(targets) = plan["targets"].as_array() {
+        for target in targets {
+            let address = structured_target_text(&target["target"]);
+            let mut reasons = target["reasons"]
+                .as_array()
+                .map(|reasons| {
+                    reasons
+                        .iter()
+                        .filter_map(|reason| reason["kind"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            if target["selection_reasons_truncated"] == true {
+                let total = target["selection_reason_count"].as_u64().unwrap_or(0);
+                let shown = target["reasons"].as_array().map_or(0, Vec::len);
+                let truncation = format!("showing {shown} of {total}");
+                if reasons.is_empty() {
+                    reasons = truncation;
+                } else {
+                    reasons.push_str(&format!(" ({truncation})"));
+                }
+            }
+            lines.push(format!("  - {address}: {reasons}"));
+        }
+    }
+}
+
+fn structured_target_text(value: &serde_json::Value) -> String {
+    let component = value["component"].as_str().unwrap_or("?");
+    let action = value["action"].as_str().unwrap_or("?");
+    format!("{component}:{action}")
+}
+
+fn format_run_status_summary(value: &serde_json::Value) -> String {
+    let result = &value["result"];
+    let run_id = result["run_id"].as_str().unwrap_or("<unknown>");
+    let plan_id = result["plan_id"].as_str().unwrap_or("<unknown>");
+    let status = result["status"].as_str().unwrap_or("unknown");
+    let conclusion = result["conclusion"].as_str();
+    let state = conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
+    let mut lines = vec![
+        format!("Run {run_id}: {state}"),
+        format!("  Plan: {plan_id}"),
+    ];
+    if let Some(targets) = result["targets"].as_array() {
+        for target in targets {
+            let address = structured_target_text(&target["target"]);
+            let status = target["status"].as_str().unwrap_or("unknown");
+            let conclusion = target["conclusion"].as_str();
+            let state =
+                conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
+            let receipt = target["receipt_id"]
+                .as_str()
+                .map_or_else(String::new, |id| format!(", receipt {id}"));
+            lines.push(format!("  - {address}: {state}{receipt}"));
+        }
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
 }
 
 pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {
@@ -292,7 +444,10 @@ fn tool_output_preview(value: &serde_json::Value) -> Option<String> {
     value_str(result, "stderr")
         .filter(|text| !text.trim().is_empty())
         .or_else(|| value_str(result, "stdout").filter(|text| !text.trim().is_empty()))
-        .map(|text| concise_preview(text, 180))
+        .map(|text| {
+            let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            concise_preview(&one_line, 180)
+        })
 }
 
 pub(super) fn format_agent_map_generate_summary(value: &serde_json::Value) -> String {

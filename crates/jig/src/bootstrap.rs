@@ -68,6 +68,8 @@ use template_source::{
 
 mod adopt_infer;
 mod answers;
+#[cfg(test)]
+pub(crate) use crate::backend::BackendLanguage;
 mod crate_classification;
 mod embedded_templates;
 mod file_copy;
@@ -84,8 +86,11 @@ pub(crate) mod path;
 mod presets;
 mod preview_seed;
 mod renderer;
+mod repository_model;
 mod runtime_config;
 mod scaffold;
+mod source_inputs;
+pub(crate) use scaffold::{default_go_module, validate_go_module};
 mod staged_render;
 mod sync;
 mod template_source;
@@ -140,7 +145,7 @@ const TEMPLATE_MODE_KEY: &str = "_template_mode";
 const TEMPLATE_LOCAL_PATH_KEY: &str = "_template_local_path";
 const GENERATED_NODE_VERSION: &str = "24.19.0";
 const GENERATED_NODE_TYPES_VERSION: &str = "24.13.3";
-pub(crate) const RUST_REACT_BACKEND_DEV_APP_NAME: &str = "api";
+pub(crate) const APPLICATION_BACKEND_DEV_APP_NAME: &str = "api";
 pub(crate) const RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME: &str = "admin-api";
 
 include!("bootstrap_parts/part_01.rs");

@@ -1,0 +1,1 @@
+Characterize queued-target freshness and MCP lease contention, refactor policy ownership, implement fixes, and run focused plus repository gates.

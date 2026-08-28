@@ -280,6 +280,7 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
         seed_repo_path: Some(&destination),
         prior_managed_paths: Some(&prior_managed_paths),
         reconcile_runtime_config,
+        preferred_rendered_commands: BTreeSet::new(),
         // A full update adopts the contract epoch declared by the current
         // template. Only the narrow launcher-only repair preserves a legacy
         // destination epoch while leaving its manifest and answers untouched.

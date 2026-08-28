@@ -28,6 +28,7 @@ define_reason_codes! {
     DevProxyFeatureNotBuilt => "dev_proxy_feature_not_built",
     MigrationAddToolInvalid => "migration_add_tool_invalid",
     MigrationAddToolMissing => "migration_add_tool_missing",
+    MigrationBackendNotConfigured => "migration_backend_not_configured",
     MigrationDirectoryNotConfigured => "migration_directory_not_configured",
     RepoContextUnavailable => "repo_context_unavailable",
     SqlxDisabled => "sqlx_disabled",

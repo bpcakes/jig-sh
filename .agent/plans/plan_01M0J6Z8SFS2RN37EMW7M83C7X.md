@@ -1,0 +1,1 @@
+Centralize the Go toolchain authority, repair Doctor supervision and generated workflow coverage, add PostgreSQL CI execution, and cover staging cleanup and compatibility behavior with regression tests.

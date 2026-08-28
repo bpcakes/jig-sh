@@ -1,4 +1,5 @@
 
+
 #[test]
 fn scaffold_uses_explicit_frontend_role_without_name_inference() {
     let temp = tempdir().unwrap();
@@ -338,6 +339,58 @@ fn scaffold_rejects_frontend_dirs_reserved_for_rust_roots() {
 }
 
 #[test]
+fn go_scaffold_rejects_direct_frontends_under_backend_roots() {
+    let temp = tempdir().unwrap();
+    for dir in ["cmd", "internal"] {
+        let error = scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::GoReact),
+                db: Some(ScaffoldDb::None),
+                frontends: vec![parse_scaffold_frontend(dir).unwrap()],
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                go_module: Some("example.com/example-project".into()),
+                ..AnswerOpts::default()
+            },
+            temp.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains(&format!("uses reserved directory '{dir}'")));
+    }
+}
+
+#[test]
+fn go_scaffold_rejects_answer_frontends_under_backend_roots() {
+    let temp = tempdir().unwrap();
+    let error = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            go_module: Some("example.com/example-project".into()),
+            frontend_apps: vec![FrontendApp {
+                name: "web".into(),
+                dir: "internal/web".into(),
+                coverage_threshold: 80,
+                kind: "vite".into(),
+                role: "spa".into(),
+            }],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("uses reserved directory 'internal/web'"));
+}
+
+#[test]
 fn scaffold_db_rejects_explicit_sqlx_disabled_answer() {
     let temp = tempdir().unwrap();
     let error = scaffold::InitScaffoldPlan::from_opts(
@@ -422,6 +475,32 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
             .unwrap()
             .contains("normalized to 'myapp'")
     );
+}
+
+#[test]
+fn go_scaffold_keeps_names_that_are_only_rust_keywords() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            repo_name: Some("loop".into()),
+            go_module: Some("example.com/loop".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(plan.summary().contains("Go backend for loop"));
+    assert!(plan.sanitized_repo_name_note().is_none());
+    plan.write(temp.path(), false).unwrap();
+    let workspace = fs::read_to_string(temp.path().join("package.json")).unwrap();
+    assert!(workspace.contains(r#""name": "loop-workspace""#));
 }
 
 #[test]
@@ -630,97 +709,4 @@ fn scaffold_sqlite_branch_generates_sqlite_db_helper() {
     assert!(workflow.contains(r#"SQLX_OFFLINE: "true""#));
 }
 
-#[test]
-fn scaffold_output_paths_include_template_collision_candidates() {
-    let temp = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: Vec::new(),
-            frontend_list: vec![
-                parse_scaffold_frontend("web").unwrap(),
-                parse_scaffold_frontend("landing").unwrap(),
-                parse_scaffold_frontend("admin").unwrap(),
-            ],
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    let paths = plan.output_paths();
-    for expected in [
-        ".env.example",
-        "Cargo.toml",
-        "crates/demo-http/Cargo.toml",
-        "crates/demo-http/AGENTS.md",
-        "crates/demo-http/src/lib.rs",
-        "crates/demo-db/Cargo.toml",
-        "crates/demo-db/AGENTS.md",
-        "crates/demo-db/src/lib.rs",
-        "crates/demo/AGENTS.md",
-        "crates/demo-test-support/AGENTS.md",
-        "crates/demo-test-support/src/app.rs",
-        "crates/demo-test-support/src/db.rs",
-        "crates/demo-test-support/tests/http.rs",
-        "migrations/.gitkeep",
-        "package.json",
-        ".node-version",
-        ".github/workflows/e2e.yml",
-        "web/package.json",
-        "web/.gitignore",
-        "web/playwright.config.ts",
-        "web/e2e/app.spec.ts",
-        "web/components.json",
-        "web/src/App.tsx",
-        "web/src/api.ts",
-        "web/src/app/router.ts",
-        "web/src/routeTree.gen.ts",
-        "web/src/routes/index.tsx",
-        "web/src/components/ui/button.tsx",
-        "web/src/lib/utils.ts",
-        "landing/package.json",
-        "landing/src/pages/index.astro",
-        "admin-panel/package.json",
-        "admin-panel/components.json",
-        "admin-panel/src/app/router.ts",
-        "admin-panel/src/routeTree.gen.ts",
-        "admin-panel/src/routes/index.tsx",
-        "admin-panel/src/routes/settings.tsx",
-        "admin-panel/src/components/ui/sidebar.tsx",
-        "admin-panel/src/features/overview/overview-page.tsx",
-    ] {
-        assert!(
-            paths.iter().any(|path| path == Path::new(expected)),
-            "missing output path {expected}"
-        );
-    }
-}
-
-#[test]
-fn scaffold_rejects_unsupported_package_manager_before_scripts_render() {
-    let temp = tempdir().unwrap();
-    let error = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: None,
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            web_package_manager: Some("cargo".into()),
-            ..AnswerOpts::default()
-        },
-        temp.path(),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Unsupported web_package_manager 'cargo'"));
-}
+mod output_paths;

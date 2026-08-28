@@ -77,6 +77,7 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  ui ",
         "  work ",
         "  loop ",
+        "  migration ",
         "  sqlx ",
         "  vault ",
         "  proxy ",
@@ -498,8 +499,9 @@ fn init_help_explains_defaults_strict_input_and_harness_only() {
     );
     assert_help_contains(
         &init_help,
-        "The rust-react preset also requires an explicit --db choice",
+        "Application presets require an explicit --db choice",
     );
+    assert_help_contains(&init_help, "go-react also requires --go-module");
     assert_help_contains(
         &init_help,
         "Non-terminal execution without --defaults follows this strict behavior",
@@ -595,10 +597,13 @@ fn dev_help_describes_launch_and_session_management() {
 
 #[test]
 fn migration_help_includes_examples() {
-    let migration_help = rendered_help(&["sqlx", "migration", "add"]);
+    let migration_help = rendered_help(&["migration", "add"]);
     assert_help_contains(&migration_help, "open structured work plan");
-    assert_help_contains(&migration_help, "jig sqlx migration add create_users");
+    assert_help_contains(&migration_help, "jig migration add create_users");
     assert_help_contains(&migration_help, "--plan-id plan_abc123");
+
+    let sqlx_migration_help = rendered_help(&["sqlx", "migration", "add"]);
+    assert_help_contains(&sqlx_migration_help, "jig migration add create_users");
 
     let sqlx_help = rendered_help(&["sqlx"]);
     assert_help_contains(&sqlx_help, "migration");
@@ -610,5 +615,5 @@ fn migration_help_includes_examples() {
     assert_help_omits(&root_help, "  schema-dump ");
 
     let legacy_help = rendered_help(&["migration-add"]);
-    assert_help_contains(&legacy_help, "remains accepted for compatibility");
+    assert_help_contains(&legacy_help, "accepted for compatibility");
 }

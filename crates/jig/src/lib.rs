@@ -1,4 +1,5 @@
 mod agent_guides;
+mod backend;
 mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
@@ -55,12 +56,15 @@ mod mcp;
 mod policy;
 mod progress;
 mod prompt_registry;
+mod repository;
+mod repository_path;
 mod root_commands;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
 mod serde_helpers;
 mod shell;
+mod source_projection;
 mod state;
 mod status;
 #[cfg(test)]

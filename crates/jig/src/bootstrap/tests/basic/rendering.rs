@@ -55,6 +55,8 @@ coverage_threshold = 80
 
     for (value, expected) in [
         ("bad/name:web:40", "Invalid frontend app name"),
+        ("_web:web:40", "Invalid frontend app name"),
+        ("web-:web:40", "Invalid frontend app name"),
         ("frontend:/outside:40", "must be relative"),
         ("frontend:web:40:unknown", "Invalid frontend app kind"),
         ("frontend:web:40:vite:unknown", "Invalid frontend app role"),
@@ -1025,45 +1027,4 @@ fn rendered_conflicts_detects_blocking_ancestor_file() {
     assert_eq!(conflicts, vec!["scripts"]);
 }
 
-#[test]
-fn preview_workspace_only_copies_agent_guides() {
-    let source = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    fs::create_dir_all(source.path().join("crates/api")).unwrap();
-    fs::create_dir_all(source.path().join("crates/vendor/.git/modules/demo")).unwrap();
-    fs::create_dir_all(source.path().join("target/debug")).unwrap();
-    fs::create_dir_all(source.path().join("target/package/demo")).unwrap();
-    fs::write(source.path().join("AGENTS.md"), "root").unwrap();
-    fs::write(source.path().join("crates/api/AGENTS.md"), "nested").unwrap();
-    fs::write(
-        source
-            .path()
-            .join("crates/vendor/.git/modules/demo/AGENTS.md"),
-        "submodule metadata",
-    )
-    .unwrap();
-    fs::write(source.path().join("target/debug/build.log"), "noise").unwrap();
-    fs::write(
-        source.path().join("target/package/demo/AGENTS.md"),
-        "artifact",
-    )
-    .unwrap();
-
-    seed_preview_workspace(source.path(), destination.path()).unwrap();
-
-    assert!(destination.path().join("AGENTS.md").exists());
-    assert!(destination.path().join("crates/api/AGENTS.md").exists());
-    assert!(
-        !destination
-            .path()
-            .join("crates/vendor/.git/modules/demo/AGENTS.md")
-            .exists()
-    );
-    assert!(!destination.path().join("target/debug/build.log").exists());
-    assert!(
-        !destination
-            .path()
-            .join("target/package/demo/AGENTS.md")
-            .exists()
-    );
-}
+mod guide_preview;

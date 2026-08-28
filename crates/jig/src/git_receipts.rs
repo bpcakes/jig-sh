@@ -1,3 +1,4 @@
+// agentic-loc-exception: receipt validation and append-only persistence remain one auditable boundary.
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -62,32 +63,6 @@ thread_local! {
     static GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
     static WORKTREE_STATUS_ENTRY_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
     static WORKTREE_FINGERPRINT_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_worktree_fingerprint_collection_count() {
-    WORKTREE_FINGERPRINT_COLLECTION_COUNT.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn worktree_fingerprint_collection_count() -> usize {
-    WORKTREE_FINGERPRINT_COLLECTION_COUNT.get()
-}
-
-#[cfg(test)]
-pub(crate) fn reset_gate_scope_collection_counts() {
-    PLAN_CHANGE_COLLECTION_COUNT.set(0);
-    GATE_SCOPE_INPUT_COLLECTION_COUNT.set(0);
-}
-
-#[cfg(test)]
-pub(crate) fn plan_change_collection_count() -> usize {
-    PLAN_CHANGE_COLLECTION_COUNT.get()
-}
-
-#[cfg(test)]
-pub(crate) fn gate_scope_input_collection_count() -> usize {
-    GATE_SCOPE_INPUT_COLLECTION_COUNT.get()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -468,6 +443,261 @@ fn repo_changed_paths_inner(
             })
             .collect()
     })
+}
+
+fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = GitReceiptCollection::Blocking.git_changed_path_stdout(
+        root,
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
+        "git status --porcelain -z for affected selection",
+    )?;
+    parse_porcelain_status_z(&output).map(|entries| {
+        entries
+            .into_iter()
+            .flat_map(|entry| {
+                let mut paths = vec![entry.path];
+                if let Some(original_path) = entry.original_path {
+                    paths.push(original_path);
+                }
+                paths
+            })
+            .collect()
+    })
+}
+
+fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
+    if stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !stdout.ends_with(&[0]) {
+        bail!("Malformed git diff --name-only -z output: missing terminator");
+    }
+    stdout[..stdout.len() - 1]
+        .split(|byte| *byte == 0)
+        .map(|path| {
+            if path.is_empty() {
+                bail!("Malformed git diff --name-only -z output: empty path");
+            }
+            #[cfg(unix)]
+            {
+                Ok(path_buf_from_git_bytes(path))
+            }
+            #[cfg(not(unix))]
+            {
+                path_buf_from_git_bytes(path)
+            }
+        })
+        .collect()
+}
+
+fn strict_git_path(path: PathBuf) -> Result<String> {
+    std::str::from_utf8(path.as_os_str().as_encoded_bytes())
+        .context("Affected selection requires UTF-8 Git paths")
+        .map(str::to_owned)
+}
+
+/// Returns the deterministic union of paths changed from the merge base of an
+/// explicit Git revision to `HEAD` and paths currently changed in the worktree.
+pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
+    let base_commit = resolve_git_commit(root, base)?;
+    let head_commit = resolve_git_commit(root, "HEAD")?;
+    let range = format!("{base_commit}...{head_commit}");
+    let committed = GitReceiptCollection::Blocking.git_changed_path_stdout(
+        root,
+        &[
+            "-c",
+            "diff.ignoreSubmodules=none",
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--no-ext-diff",
+            "--ignore-submodules=none",
+            &range,
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
+        "git diff for affected selection",
+    )?;
+    let mut paths = parse_name_only_z(&committed)?;
+    paths.extend(repo_affected_worktree_changed_path_buffers(root)?);
+    let mut normalized = paths
+        .into_iter()
+        .map(strict_git_path)
+        .collect::<Result<Vec<_>>>()?;
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn ignored_dotenv_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = GitReceiptCollection::Blocking.git_changed_path_stdout(
+        root,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            ":(glob)**/.env",
+            ":(glob)**/.env.*",
+        ],
+        "git ls-files for ignored dotenv files",
+    )?;
+    parse_name_only_z(&output).map(|paths| {
+        paths
+            .into_iter()
+            .filter(|path| !path.as_os_str().as_encoded_bytes().ends_with(b"/"))
+            .collect()
+    })
+}
+
+fn initialized_submodule_paths_for_affected(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.join(".gitmodules").is_file() {
+        return Ok(Vec::new());
+    }
+    let output = git_output(
+        root,
+        &[
+            "config",
+            "-z",
+            "--file",
+            ".gitmodules",
+            "--get-regexp",
+            "^submodule\\..*\\.path$",
+        ],
+        "git config for affected submodules",
+    )?;
+    let mut paths = crate::source_projection::initialized_submodule_paths(root, &output.stdout)?;
+    paths.sort();
+    Ok(paths)
+}
+
+fn affected_ignored_dotenv_paths(root: &Path, submodule_depth: usize) -> Result<Vec<PathBuf>> {
+    if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
+        bail!("affected dotenv inputs exceed the supported submodule nesting depth");
+    }
+    let mut paths = ignored_dotenv_paths(root)?;
+    for submodule in initialized_submodule_paths_for_affected(root)? {
+        for nested in affected_ignored_dotenv_paths(&root.join(&submodule), submodule_depth + 1)? {
+            paths.push(submodule.join(nested));
+        }
+    }
+    Ok(paths)
+}
+
+pub(crate) fn repo_observed_ignored_dotenv_paths(root: &Path) -> Result<Vec<String>> {
+    let mut paths = affected_ignored_dotenv_paths(root, 0)?
+        .into_iter()
+        .map(strict_git_path)
+        .collect::<Result<Vec<_>>>()?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+pub(crate) struct RepositorySourceSnapshot {
+    pub(crate) head_commit: Option<String>,
+    pub(crate) worktree_fingerprint: String,
+}
+
+pub(crate) fn repository_source_snapshot(root: &Path) -> Result<RepositorySourceSnapshot> {
+    repository_source_snapshot_inner(root, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn repository_source_snapshot_with_cancellation(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<RepositorySourceSnapshot> {
+    repository_source_snapshot_inner(root, GitReceiptCollection::Cancellable(cancelled))
+}
+
+fn repository_source_snapshot_inner(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<RepositorySourceSnapshot> {
+    collection.ensure_active()?;
+    let head_commit = match resolve_git_commit(root, "HEAD") {
+        Ok(commit) => Some(commit),
+        Err(error) => match resolve_empty_tree_for_unborn_repository(root)? {
+            Some(_) => None,
+            None => return Err(error),
+        },
+    };
+    collection.ensure_active()?;
+    let committed_tree = if let Some(head_commit) = head_commit.as_deref() {
+        let tree = git_worktree_proof_stdout(
+            root,
+            &["ls-tree", "-z", "--full-tree", head_commit],
+            "git ls-tree HEAD for repository source identity",
+            worktree_diff_output_limit(),
+            collection,
+        )?;
+        committed_source_tree_without_agent_state(&tree, collection)?
+    } else {
+        b"unborn".to_vec()
+    };
+    collection.ensure_active()?;
+    let base = repo_worktree_fingerprint_inner(root, collection)?;
+    let mut digest = Sha256::new();
+    digest.update(b"jig-repository-source-v6\0");
+    hash_field(&mut digest, &committed_tree);
+    digest.update(base.as_bytes());
+    for path in affected_ignored_dotenv_paths(root, 0)? {
+        digest.update(path.as_os_str().as_encoded_bytes());
+        digest.update([0]);
+        let bytes = fs::read(root.join(&path)).with_context(|| {
+            format!(
+                "Failed to read ignored dotenv source input {}",
+                root.join(&path).display()
+            )
+        })?;
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    Ok(RepositorySourceSnapshot {
+        head_commit,
+        worktree_fingerprint: format!("sha256:{:x}", digest.finalize()),
+    })
+}
+
+fn committed_source_tree_without_agent_state(
+    tree: &[u8],
+    collection: GitReceiptCollection<'_>,
+) -> Result<Vec<u8>> {
+    let mut source_tree = Vec::with_capacity(tree.len());
+    for record in tree
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        collection.ensure_active()?;
+        let path_offset = record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .context("Git ls-tree record is missing its path separator")?
+            + 1;
+        let path = &record[path_offset..];
+        if path == b".agent" || path.starts_with(b".agent/") {
+            continue;
+        }
+        source_tree.extend_from_slice(record);
+        source_tree.push(0);
+    }
+    Ok(source_tree)
 }
 
 fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Result<DiffStat> {

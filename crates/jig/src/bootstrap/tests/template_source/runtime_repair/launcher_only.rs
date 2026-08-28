@@ -616,7 +616,7 @@ printf '%s\n' "$BIN_PATH"
     assert!(manifest_path.exists());
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(&contract_path).unwrap()).unwrap()["contract_version"],
-        CURRENT_CONTRACT_VERSION
+        crate::context::CURRENT_CONTRACT_VERSION
     );
     run_update(UpdateOpts {
         path: repo,

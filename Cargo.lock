@@ -1302,9 +1302,17 @@ version = "0.2.0"
 dependencies = [
  "jig-contract",
  "jig-core",
+ "jig-go",
  "jig-rust",
  "jig-sqlx",
  "jig-typescript",
+]
+
+[[package]]
+name = "jig-go"
+version = "0.2.0"
+dependencies = [
+ "jig-contract",
 ]
 
 [[package]]
@@ -1351,6 +1359,7 @@ dependencies = [
  "minijinja",
  "rpassword",
  "rustyline",
+ "schemars",
  "secrecy",
  "serde",
  "serde_json",

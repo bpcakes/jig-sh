@@ -1,10 +1,13 @@
 use super::*;
 
-mod info;
-mod launcher_only;
-
 #[test]
 fn parses_canonical_and_legacy_sqlx_commands() {
+    let canonical = Cli::try_parse_from(["jig", "migration", "add", "create_users"]).unwrap();
+    assert!(matches!(
+        canonical.command,
+        CommandKind::Migration(MigrationCommand::Add(_))
+    ));
+
     let migration = Cli::try_parse_from([
         "jig",
         "sqlx",
@@ -47,15 +50,21 @@ fn parses_canonical_and_legacy_sqlx_commands() {
 fn parses_check_namespace_commands() {
     let fmt = Cli::try_parse_from(["jig", "check", "fmt", "--plan-id", "plan_1"]).unwrap();
     match fmt.command {
-        CommandKind::Check(CheckCommand::Fmt(opts)) => {
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
+        CommandKind::Check(CheckOpts {
+            command: Some(CheckCommand::Fmt(opts)),
+            ..
+        }) => {
+            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
         }
         other => panic!("expected check fmt command, got {other:?}"),
     }
 
     let rust_file_loc = Cli::try_parse_from(["jig", "check", "rust-file-loc", "--all"]).unwrap();
     match rust_file_loc.command {
-        CommandKind::Check(CheckCommand::RustFileLoc(opts)) => {
+        CommandKind::Check(CheckOpts {
+            command: Some(CheckCommand::RustFileLoc(opts)),
+            ..
+        }) => {
             assert!(opts.all);
         }
         other => panic!("expected check rust-file-loc command, got {other:?}"),
@@ -70,8 +79,11 @@ fn parses_check_namespace_commands() {
     ])
     .unwrap();
     match ts_typecheck.command {
-        CommandKind::Check(CheckCommand::TypeScriptTypecheck(opts)) => {
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_2"));
+        CommandKind::Check(CheckOpts {
+            command: Some(CheckCommand::TypeScriptTypecheck(opts)),
+            ..
+        }) => {
+            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_2"));
         }
         other => panic!("expected check typescript-typecheck command, got {other:?}"),
     }
@@ -83,12 +95,105 @@ fn parses_check_namespace_commands() {
     ] {
         let parsed = Cli::try_parse_from(["jig", "check", command]).unwrap();
         match (parsed.command, expected) {
-            (CommandKind::Check(CheckCommand::TypeScriptLint(_)), "lint")
-            | (CommandKind::Check(CheckCommand::TypeScriptBuild(_)), "build")
-            | (CommandKind::Check(CheckCommand::TypeScriptCoverage(_)), "coverage") => {}
+            (
+                CommandKind::Check(CheckOpts {
+                    command: Some(CheckCommand::TypeScriptLint(_)),
+                    ..
+                }),
+                "lint",
+            )
+            | (
+                CommandKind::Check(CheckOpts {
+                    command: Some(CheckCommand::TypeScriptBuild(_)),
+                    ..
+                }),
+                "build",
+            )
+            | (
+                CommandKind::Check(CheckOpts {
+                    command: Some(CheckCommand::TypeScriptCoverage(_)),
+                    ..
+                }),
+                "coverage",
+            ) => {}
             (other, _) => panic!("expected check {command} command, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn parses_agent_native_check_selections() {
+    let bare = Cli::try_parse_from(["jig", "check"]).unwrap();
+    assert!(matches!(
+        bare.command,
+        CommandKind::Check(CheckOpts { command: None, .. })
+    ));
+
+    let exact =
+        Cli::try_parse_from(["jig", "check", "api:test", "web:lint", "--no-receipt"]).unwrap();
+    match exact.command {
+        CommandKind::Check(CheckOpts {
+            tool,
+            command: Some(CheckCommand::Selectors(selectors)),
+            ..
+        }) => {
+            assert!(!tool.no_receipt);
+            assert_eq!(selectors, ["api:test", "web:lint", "--no-receipt"]);
+        }
+        other => panic!("expected target selectors, got {other:?}"),
+    }
+
+    let explained = Cli::try_parse_from(["jig", "check", "test", "--explain"]).unwrap();
+    assert!(matches!(
+        explained.command,
+        CommandKind::Check(CheckOpts {
+            explain: true,
+            command: Some(CheckCommand::Test(_)),
+            ..
+        })
+    ));
+
+    let mixed = Cli::try_parse_from(["jig", "check", "test", "api:lint", "--explain"]).unwrap();
+    match mixed.command {
+        CommandKind::Check(CheckOpts {
+            explain: true,
+            command: Some(CheckCommand::Test(opts)),
+            ..
+        }) => assert_eq!(opts.selectors, ["api:lint"]),
+        other => panic!("expected built-in plus target selectors, got {other:?}"),
+    }
+
+    let profile = Cli::try_parse_from(["jig", "check", "--profile", "ci", "--explain"]).unwrap();
+    assert!(matches!(
+        profile.command,
+        CommandKind::Check(CheckOpts {
+            profile: Some(ref profile),
+            explain: true,
+            command: None,
+            ..
+        }) if profile == "ci"
+    ));
+}
+
+#[test]
+fn parses_repository_info_subjects() {
+    let component = Cli::try_parse_from(["jig", "info", "component", "api"]).unwrap();
+    assert!(matches!(
+        component.command,
+        CommandKind::Info(InfoOpts {
+            subject: Some(InfoCommand::Component { ref id }),
+            ..
+        }) if id == "api"
+    ));
+
+    let target = Cli::try_parse_from(["jig", "info", "target", "api:test"]).unwrap();
+    assert!(matches!(
+        target.command,
+        CommandKind::Info(InfoOpts {
+            subject: Some(InfoCommand::Target { ref id }),
+            ..
+        }) if id == "api:test"
+    ));
 }
 
 #[test]
@@ -474,6 +579,36 @@ fn parses_init_scaffold_preset_frontends_and_db() {
 }
 
 #[test]
+fn parses_go_react_preset_and_module() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "go-react",
+        "--go-module",
+        "github.com/acme/demo",
+        "--db",
+        "postgres",
+        "--frontends",
+        "web,landing",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Init(bootstrap::InitOpts {
+            scaffold, answers, ..
+        }) => {
+            assert_eq!(scaffold.preset, Some(bootstrap::ScaffoldPreset::GoReact));
+            assert_eq!(scaffold.db, Some(bootstrap::ScaffoldDb::Postgres));
+            assert_eq!(answers.go_module.as_deref(), Some("github.com/acme/demo"));
+            assert_eq!(scaffold.frontend_list.len(), 2);
+        }
+        other => panic!("expected init command, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_explicit_harness_only_init_preset() {
     let cli = Cli::try_parse_from([
         "jig",
@@ -575,6 +710,7 @@ fn parses_state_archive_command() {
         "archive",
         "--before",
         "2026-01-01",
+        "--include-runs",
         "--dry-run",
     ])
     .unwrap();
@@ -582,6 +718,7 @@ fn parses_state_archive_command() {
     match cli.command {
         CommandKind::State(StateCommand::Archive(opts)) => {
             assert_eq!(opts.before, "2026-01-01");
+            assert!(opts.include_runs);
             assert!(opts.dry_run);
         }
         other => panic!("expected state archive command, got {other:?}"),
@@ -659,9 +796,12 @@ fn parses_tool_no_receipt_flag() {
     let cli = Cli::try_parse_from(["jig", "check", "contract", "--no-receipt"]).unwrap();
 
     match cli.command {
-        CommandKind::Check(CheckCommand::Contract(opts)) => {
-            assert!(opts.no_receipt);
-            assert_eq!(opts.plan_id, None);
+        CommandKind::Check(CheckOpts {
+            command: Some(CheckCommand::Contract(opts)),
+            ..
+        }) => {
+            assert!(opts.tool.no_receipt);
+            assert_eq!(opts.tool.plan_id, None);
         }
         other => panic!("expected check contract command, got {other:?}"),
     }
@@ -1483,195 +1623,6 @@ fn parses_hidden_proxy_no_http2_runtime_flag() {
     }
 }
 
-#[test]
-fn parses_work_status_command() {
-    let cli = Cli::try_parse_from(["jig", "work", "status"]).unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Status) => {}
-        other => panic!("expected work status command, got {other:?}"),
-    }
-
-    let rejected = Cli::try_parse_from(["jig", "work", "status", "--summary"]);
-    assert!(rejected.is_err());
-}
-
-#[test]
-fn parses_work_start_print_plan_id() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "start",
-        "--title",
-        "DX polish",
-        "--body",
-        "Improve workflow.",
-        "--print-plan-id",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Start(opts)) => {
-            assert_eq!(opts.title, "DX polish");
-            assert_eq!(opts.body.as_deref(), Some("Improve workflow."));
-            assert!(opts.print_plan_id);
-        }
-        other => panic!("expected work start command, got {other:?}"),
-    }
-}
-
-#[test]
-fn work_start_rejects_multiple_body_sources() {
-    let error = Cli::try_parse_from([
-        "jig",
-        "work",
-        "start",
-        "--title",
-        "DX polish",
-        "--body",
-        "inline",
-        "--body-file",
-        "plan.md",
-    ])
-    .unwrap_err();
-
-    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-}
-
-#[test]
-fn work_append_requires_exactly_one_body_source() {
-    let missing =
-        Cli::try_parse_from(["jig", "work", "append", "--plan-id", "plan_1"]).unwrap_err();
-    assert_eq!(
-        missing.kind(),
-        clap::error::ErrorKind::MissingRequiredArgument
-    );
-
-    let conflicting = Cli::try_parse_from([
-        "jig",
-        "work",
-        "append",
-        "--plan-id",
-        "plan_1",
-        "--body",
-        "inline",
-        "--body-file",
-        "plan.md",
-    ])
-    .unwrap_err();
-    assert_eq!(conflicting.kind(), clap::error::ErrorKind::ArgumentConflict);
-}
-
-#[test]
-fn parses_work_check_tools() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "check",
-        "--plan-id",
-        "plan_1",
-        "--tool",
-        tool::CONTRACT_CHECK,
-        "--tool",
-        tool::TEST,
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Check(opts)) => {
-            assert_eq!(opts.plan_id, "plan_1");
-            assert_eq!(opts.tools, vec![tool::CONTRACT_CHECK, tool::TEST]);
-        }
-        other => panic!("expected work check command, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_work_gates_command() {
-    let cli = Cli::try_parse_from(["jig", "work", "gates", "--plan-id", "plan_1"]).unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Gates(opts)) => {
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
-        }
-        other => panic!("expected work gates command, got {other:?}"),
-    }
-
-    let inferred_plan = Cli::try_parse_from(["jig", "work", "gates"]).unwrap();
-
-    match inferred_plan.command {
-        CommandKind::Work(WorkCommand::Gates(opts)) => {
-            assert_eq!(opts.plan_id, None);
-        }
-        other => panic!("expected work gates command, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_work_evidence_command() {
-    let cli = Cli::try_parse_from(["jig", "work", "evidence"]).unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Evidence(opts)) => {
-            assert_eq!(opts.plan_id, None);
-        }
-        other => panic!("expected work evidence command, got {other:?}"),
-    }
-
-    let with_plan =
-        Cli::try_parse_from(["jig", "work", "evidence", "--plan-id", "plan_1"]).unwrap();
-
-    match with_plan.command {
-        CommandKind::Work(WorkCommand::Evidence(opts)) => {
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
-        }
-        other => panic!("expected work evidence command, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_work_review_command() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "review",
-        "--plan-id",
-        "plan_1",
-        "--gate",
-        "rust-error-handling",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Review(opts)) => {
-            assert_eq!(opts.plan_id, "plan_1");
-            assert_eq!(opts.gates, vec!["rust-error-handling"]);
-        }
-        other => panic!("expected work review command, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_work_refine_command() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "refine",
-        "--plan-id",
-        "plan_1",
-        "--gate",
-        "rust-error-handling",
-        "--max-iterations",
-        "2",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Refine(opts)) => {
-            assert_eq!(opts.plan_id, "plan_1");
-            assert_eq!(opts.gates, vec!["rust-error-handling"]);
-            assert_eq!(opts.max_iterations, 2);
-        }
-        other => panic!("expected work refine command, got {other:?}"),
-    }
-}
+mod info;
+mod launcher_only;
+mod work_commands;

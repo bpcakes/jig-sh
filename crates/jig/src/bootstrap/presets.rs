@@ -2,7 +2,10 @@ use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::ScaffoldPreset;
+use super::{
+    APPLICATION_BACKEND_DEV_APP_NAME, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldPreset,
+};
+use crate::backend::BackendLanguage;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct ScaffoldPresetDescriptor {
@@ -56,6 +59,41 @@ pub fn scaffold_presets_report() -> Value {
 }
 
 impl ScaffoldPreset {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::RustReact => "rust-react",
+            Self::GoReact => "go-react",
+            Self::HarnessOnly => "harness-only",
+        }
+    }
+
+    pub(crate) const fn generated_backend_language(self) -> Option<BackendLanguage> {
+        match self {
+            Self::RustReact => Some(BackendLanguage::Rust),
+            Self::GoReact => Some(BackendLanguage::Go),
+            Self::HarnessOnly => None,
+        }
+    }
+
+    pub(crate) const fn reserved_backend_dev_app_names(self) -> &'static [&'static str] {
+        match self {
+            Self::RustReact => &[
+                APPLICATION_BACKEND_DEV_APP_NAME,
+                RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
+            ],
+            Self::GoReact => &[APPLICATION_BACKEND_DEV_APP_NAME],
+            Self::HarnessOnly => &[],
+        }
+    }
+
+    pub(crate) const fn reserved_backend_roots(self) -> &'static [&'static str] {
+        match self {
+            Self::RustReact => &["apps", "crates"],
+            Self::GoReact => &["cmd", "internal"],
+            Self::HarnessOnly => &[],
+        }
+    }
+
     pub(crate) const fn descriptor(self) -> ScaffoldPresetDescriptor {
         match self {
             Self::RustReact => ScaffoldPresetDescriptor {
@@ -101,6 +139,41 @@ impl ScaffoldPreset {
                 non_goals: &[
                     "jig update does not migrate or overwrite scaffolded application source.",
                     "Presets are starter shapes, not long-term application frameworks.",
+                ],
+            },
+            Self::GoReact => ScaffoldPresetDescriptor {
+                name: "go-react",
+                summary: "Go 1.26 chi/Huma API plus a shadcn React product app and optional Astro site.",
+                defaults: &[
+                    "A Go module is required; --defaults derives example.com/<repo>.",
+                    "Frontends default to web when omitted.",
+                    "Database scaffolding defaults to none; PostgreSQL uses pgxpool, sqlc, and Goose.",
+                    "Generated frontend checks default to bun unless --web-package-manager is supplied.",
+                ],
+                layout: &[
+                    "cmd/api and cmd/openapi",
+                    "internal/config and internal/httpapi",
+                    "internal/database (including embedded Goose migrations) and sqlc.yaml with --db postgres",
+                    "web and packages/public-api-client",
+                ],
+                frontend_shorthands: &[
+                    ScaffoldFrontendShorthand {
+                        name: "web",
+                        expands_to: "shadcn Vite React product app in web/",
+                    },
+                    ScaffoldFrontendShorthand {
+                        name: "landing",
+                        expands_to: "Astro site in landing/",
+                    },
+                ],
+                examples: &[
+                    "jig init ./my-app --preset go-react --go-module github.com/acme/my-app --db none --frontends web",
+                    "jig init ./my-app --preset go-react --go-module github.com/acme/my-app --db postgres --frontends web,landing",
+                ],
+                ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
+                non_goals: &[
+                    "The initial Go preset does not support SQLite or the privileged admin API/client boundary.",
+                    "jig update does not migrate or overwrite scaffolded application source.",
                 ],
             },
             Self::HarnessOnly => ScaffoldPresetDescriptor {

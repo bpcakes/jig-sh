@@ -464,8 +464,7 @@ role = "spa"
     .unwrap_err()
     .to_string();
     assert!(
-        error.contains("Rust SQLx metadata directory must not contain '..'")
-            && error.contains("stay inside the repository"),
+        error.contains("SQLx metadata") && error.contains("must not contain '.' or '..'"),
         "{error:?}"
     );
     assert!(!unsafe_metadata_destination.exists());

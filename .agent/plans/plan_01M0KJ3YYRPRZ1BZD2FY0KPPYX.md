@@ -1,0 +1,3 @@
+Run the configured contract and workspace test gates with the filtered source-tree fingerprint, close the work item, commit only append-only Jig state, and prove the closed gate evidence remains fresh after that evidence-only commit.
+
+Validation passed through the fresh binary: contract check, 2,263 primary tests, 436 vault tests, and 2 vault TUI tests. Aggregate receipt: receipt_01M0KJZ7X63WMH9ENHNFH7KPAV; expected source fingerprint: 8eefdf760894c40992ba4d4fc49f0842b9b021a0.

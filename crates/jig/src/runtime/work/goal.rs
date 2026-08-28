@@ -117,6 +117,14 @@ fn goal_body(ctx: &RepoContext, goal: &GoalHarness) -> String {
         .into_iter()
         .map(|gate| match gate {
             WorkGate::Check(gate) => format!("{}: check ({})", gate.id, gate.tool),
+            WorkGate::Evidence(gate) => match gate.selector {
+                crate::context::WorkEvidenceSelector::Target(target) => {
+                    format!("{}: evidence (target {target})", gate.id)
+                }
+                crate::context::WorkEvidenceSelector::Profile(profile) => {
+                    format!("{}: evidence (profile {profile})", gate.id)
+                }
+            },
             WorkGate::CodexReview(gate) => {
                 format!("{}: codex_review ({})", gate.id, gate.skill)
             }

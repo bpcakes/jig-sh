@@ -1,0 +1,128 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+)
+
+[% if db_enabled %]func TestRunRejectsInvalidCommandBeforeLoadingConfig(t *testing.T) {
+	originalArgs := os.Args
+	os.Args = []string{"api", "--invalid"}
+	t.Cleanup(func() { os.Args = originalArgs })
+	t.Setenv("DATABASE_URL", "")
+
+	err := run()
+	if err == nil || err.Error() != "usage: api [--bootstrap-database]" {
+		t.Fatalf("run error = %v, want command usage error", err)
+	}
+}
+
+[% endif %]func TestServeWaitsForInflightRequestsDuringShutdown(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRequest) }) }
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			close(requestStarted)
+			<-releaseRequest
+			response.WriteHeader(http.StatusNoContent)
+		}),
+		ReadHeaderTimeout: time.Second,
+	}
+	t.Cleanup(func() {
+		release()
+		_ = server.Close()
+		_ = listener.Close()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- serve(ctx, server, listener) }()
+	requestDone := make(chan error, 1)
+	go func() {
+		client := &http.Client{Timeout: 2 * time.Second}
+		response, err := client.Get("http://" + listener.Addr().String())
+		if err == nil {
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNoContent {
+				err = fmt.Errorf("status code = %d, want %d", response.StatusCode, http.StatusNoContent)
+			}
+		}
+		requestDone <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach the handler")
+	}
+	cancel()
+	select {
+	case err := <-serverDone:
+		t.Fatalf("serve returned before the in-flight request completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-requestDone:
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not complete")
+	}
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("serve failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve did not finish after the request completed")
+	}
+}
+
+func TestLoadDotEnvLoadsRepositoryLocalConfiguration(t *testing.T) {
+	const key = "JIG_TEST_DOTENV_LOAD"
+	previousValue, wasSet := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(key, previousValue)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("change working directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Clean(".env"), []byte(key+"=loaded\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	loadDotEnv()
+
+	if got := os.Getenv(key); got != "loaded" {
+		t.Fatalf("%s = %q, want %q", key, got, "loaded")
+	}
+}

@@ -51,7 +51,7 @@ For greenfield repositories, `jig init` gives developers an immediate typed cont
 jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
 ```
 
-For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react` or `harness-only`; the app path then asks for `none`, `postgres`, or `sqlite` and accepts a comma-separated multi-selection of `web`, `landing`, and `admin`. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible Rust/minimal shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
+For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, or `harness-only`; the app path then asks for its supported database and frontend selection. Go asks for a module import path and supports `none`/`postgres` plus `web`/`landing`; Rust additionally supports SQLite and `admin`. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
 
 When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
 
@@ -62,6 +62,18 @@ jig init /path/to/new-repo \
   --db postgres \
   --frontends web,landing,admin
 ```
+
+The Go + React preset creates a Go 1.26 module with chi/Huma HTTP boundaries, an offline Huma OpenAPI exporter, and the same generated React/client workspace. PostgreSQL adds pgxpool, embedded Goose migrations, sqlc queries, and checked-in generated code:
+
+```sh
+jig init /path/to/new-repo \
+  --preset go-react \
+  --go-module github.com/acme/new-repo \
+  --db postgres \
+  --frontends web
+```
+
+Generated Go checks are `scripts/jig check fmt`, `lint`, `test`, `test-locked`, and PostgreSQL-only `sqlc`. The public TypeScript client is regenerated transactionally from Huma OpenAPI with Hey API. SQLite and the separate privileged admin boundary remain intentionally unsupported by `go-react` and fail before files are published.
 
 Generated React Node-side typings stay in the same major and at or below the minor version of the generated minimum Node runtime.
 
@@ -101,14 +113,106 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
-- `scripts/jig work ...` opens work against an exact Git baseline, runs required check gates only when their repository-relative path policy applies, records explicit not-applicable or direct opt-in reused evidence, runs review gates, can refine actionable review findings, and refuses to finish work without fresh required evidence. An explicit `--gate` force-runs even when Git classification is unavailable, but that execution cannot turn unknown applicability into closure evidence.
+- `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
 - `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
-- `scripts/jig mcp` exposes the same command contract to MCP clients.
+- `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 
-This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what ran, what was classified not applicable, what reused exact prior evidence, which paths matched, which skill produced findings, and whether each required gate's scoped fingerprint is still fresh. The generated `jig-contract` gate names harness wiring honestly. Rust/React scaffolds separately expose application-contract freshness and public-artifact boundary gates; adopted repos enable those gates only when they already own the checker.
+This is where Jig is most agent-friendly: repository targets, verification profiles, legacy checks, and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh.
+
+### Repository targets and check plans
+
+Jig also presents the repository as components with actions. Their executable
+address is a target such as `api:test`. Contracts through version 5 are adapted
+without changing their files: Jig exposes one synthetic `repo` component and
+maps each declared tool to a `repo:*` target while retaining the original
+`jig.*` name as an alias. Component-native contract records can therefore use
+the same inspection and planning core as existing repositories.
+
+Contract 6 generates component-native records directly. A typical application
+has an `api` component plus one component per configured frontend, so `test`
+selects `api:test`, `web:test`, and any sibling test targets without conflating
+their commands. Stack integrations appear as composable adapters on components;
+the runtime no longer uses one persisted backend-language switch to decide what
+the workspace can do.
+
+Use the static info views to discover the model without running commands:
+
+```sh
+scripts/jig info workspace
+scripts/jig info components
+scripts/jig info component repo
+scripts/jig info targets
+scripts/jig info target repo:test
+scripts/jig info profiles
+```
+
+Bare `scripts/jig check` resolves the default verification profile. For a
+legacy contract that profile comes from configured work checks, falling back to
+its read-only check tools while omitting the duplicate locked-test action. An
+unqualified action selects that action across components, an exact
+`component:action` selects one target, and `*` can replace either side:
+
+```sh
+scripts/jig check
+scripts/jig check test
+scripts/jig check repo:test
+scripts/jig check 'repo:*'
+scripts/jig check test --affected origin/main --explain
+scripts/jig check --profile verify --explain
+```
+
+On contract-v6 repositories, `--affected BASE` narrows those normal candidates
+using committed changes from the Git merge base through `HEAD` plus staged,
+unstaged, untracked, and ignored `.env`/`.env.*` paths beneath directories that
+are not themselves ignored. Wholly ignored directories are pruned so generated
+dependency and build trees do not become source inputs; unignore a containing
+path when a repository intentionally stores an input there. Because observed
+ignored dotenv files have no committed baseline, generated repositories exclude
+their mere presence through reviewed `repository.affected_ignore` policy while
+retaining their contents in evidence fingerprints. An explicit action input
+overrides the affected-ignore policy when a check must be selected for that
+dotenv. The plan explains each direct path and configured
+component-dependent propagation; runtime-owned `.agent/state/` and
+`.agent/.cache/` data are ignored while checked-in contract inputs remain
+eligible. A valid empty
+selection is a no-op. Action dependencies are added only after this filtering,
+and versions 2 through 5 retain their legacy check behavior without affected
+selection.
+
+Contract-v6 work gates name the same target/profile vocabulary. A default
+`scripts/jig work check --plan-id ...` resolves all configured evidence gates
+and executes their target union once, allowing a profile gate to prove that all
+members succeeded in one compatible run. An exact target receipt cannot satisfy
+a different target, and separate partial runs cannot be combined into profile
+evidence. Legacy tool gates remain available for older contracts and explicit
+`work check --tool ...` compatibility.
+
+`--explain` is read-only: it prints the immutable plan, bounded target-reason
+previews (with total-count metadata when truncated), dependency layers, effects,
+configuration digest, source identity, and input
+digests, and executes no command or receipt write. Selectors are normalized and
+targets are sorted before the plan id is derived, so equivalent requests
+against the same repository state have the same plan id. The existing named
+check forms and their receipt controls remain compatible.
+
+Executing one of these plans creates an append-only durable run even when the
+CLI waits for it to finish. Each target reaches its own conclusion and normally
+writes one receipt carrying the run id, structured target, configuration and
+input digests, and normalized findings. A reviewed plan is rejected before a
+run is created if the contract or worktree changed. Query the accepted plan and
+folded target results later with:
+
+```sh
+scripts/jig status run RUN_ID
+```
+
+Checks own their configured process trees, apply target timeouts, and preserve
+every target result on cancellation or explicit fail-fast skips. Receipt flags
+may appear before or after target selectors, for example
+`scripts/jig check api:test --no-receipt`.
 
 ## State Health And Retention
 
@@ -255,7 +359,7 @@ An agent can discover:
 - whether required work gates have fresh receipts
 - whether local Codex-side Jig skills are available
 
-The MCP surface is especially useful because it exposes the same declared tools as the CLI. Agents can call named tools instead of scraping README instructions or hard-coding one repo's check commands.
+The contract v6 MCP surface is deliberately independent of repository size. Agents inspect components, targets, profiles, and durable runs with `jig.inspect`; resolve an exact immutable plan with `jig.plan_run`; submit that plan with `jig.execute_run`; and poll or cancel by run id. Effectful targets require explicit selection, closed plan-bound arguments, and exact worktree/external effect approval at execution. Adding another component or action changes catalog data rather than adding another MCP tool. Contracts v2 through v5 keep their direct manifest tools for compatibility.
 
 ## Update And Maintenance UX
 

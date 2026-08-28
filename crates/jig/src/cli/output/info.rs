@@ -4,6 +4,12 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
     if value["command"].as_str() == Some("info commands") {
         return crate::info::format_commands_summary(value);
     }
+    if value["command"]
+        .as_str()
+        .is_some_and(|command| command.starts_with("info "))
+    {
+        return format_repository_info(value);
+    }
 
     let repo = &value["repo"];
     let mut lines = vec![
@@ -46,6 +52,81 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
         lines.push(format!("MCP command fallback: {error}"));
     }
     lines.join("\n")
+}
+
+fn format_repository_info(value: &serde_json::Value) -> String {
+    let command = value["command"].as_str().unwrap_or("info workspace");
+    let workspace = &value["workspace"];
+    let mut lines = vec![format!(
+        "Jig {}: {} (contract v{})",
+        command.trim_start_matches("info "),
+        workspace["name"].as_str().unwrap_or("<unknown>"),
+        workspace["contract_version"].as_u64().unwrap_or(0)
+    )];
+
+    if let Some(component) = value.get("component") {
+        lines.push(format!(
+            "  Component: {} · root {}",
+            component["id"].as_str().unwrap_or("?"),
+            component["root"].as_str().unwrap_or("?")
+        ));
+    }
+    if let Some(profile) = value.get("profile") {
+        lines.push(format!(
+            "  Profile: {}{}",
+            profile["id"].as_str().unwrap_or("?"),
+            if value["is_default_check_profile"].as_bool().unwrap_or(false) {
+                " (default)"
+            } else {
+                ""
+            }
+        ));
+    }
+    if let Some(components) = value["components"].as_array() {
+        lines.push(format!("  Components: {}", components.len()));
+        for item in components {
+            let component = item.get("component").unwrap_or(item);
+            lines.push(format!(
+                "  - {} · root {}",
+                component["id"].as_str().unwrap_or("?"),
+                component["root"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    if let Some(target) = value.get("target") {
+        lines.push(format!("  Target: {}", target_text(&target["id"])));
+        lines.push(format!(
+            "  Intent: {} · effects {}",
+            target["intent"].as_str().unwrap_or("?"),
+            string_list(target["effects"].as_array()).join(", ")
+        ));
+    }
+    if let Some(targets) = value["targets"].as_array() {
+        lines.push(format!("  Targets: {}", targets.len()));
+        for target in targets {
+            lines.push(format!("  - {}", target_text(&target["id"])));
+        }
+    }
+    if let Some(profiles) = value["profiles"].as_array() {
+        lines.push(format!("  Profiles: {}", profiles.len()));
+        for profile in profiles {
+            lines.push(format!(
+                "  - {} · {} targets",
+                profile["id"].as_str().unwrap_or("?"),
+                profile["targets"].as_array().map_or(0, Vec::len)
+            ));
+        }
+    }
+    lines.push("  full record: rerun with --json".into());
+    lines.join("\n")
+}
+
+fn target_text(value: &serde_json::Value) -> String {
+    format!(
+        "{}:{}",
+        value["component"].as_str().unwrap_or("?"),
+        value["action"].as_str().unwrap_or("?")
+    )
 }
 
 fn enabled_capabilities(value: &serde_json::Value) -> Vec<&'static str> {

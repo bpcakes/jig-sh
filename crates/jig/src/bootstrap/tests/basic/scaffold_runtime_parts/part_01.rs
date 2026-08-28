@@ -514,6 +514,76 @@ fn scaffold_bootstraps_frontend_before_validating_and_migrating_database() {
 }
 
 #[test]
+fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            go_module: Some("github.com/acme/demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    let mut answers = AnswerOpts::default();
+
+    plan.apply_answer_defaults(&mut answers);
+
+    assert_eq!(
+        answers.migration_dir.as_deref(),
+        Some("internal/database/migrations")
+    );
+    let command = answers.bootstrap_command.unwrap();
+    let module_tidy = command.find("go mod tidy").unwrap();
+    let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
+    let database_guard = command.find("Missing DATABASE_URL").unwrap();
+    let sqlc_generate = command.find("go tool sqlc generate").unwrap();
+    let database_bootstrap = command
+        .find("go run ./cmd/api --bootstrap-database")
+        .unwrap();
+    let contract_generate = command.find("node scripts/contracts.mjs generate").unwrap();
+    assert!(module_tidy < frontend_bootstrap);
+    assert!(frontend_bootstrap < database_guard);
+    assert!(database_guard < sqlc_generate);
+    assert!(sqlc_generate < database_bootstrap);
+    assert!(database_bootstrap < contract_generate);
+}
+
+#[test]
+fn go_scaffold_without_postgres_does_not_emit_migration_configuration() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("example-project".into()),
+            go_module: Some("example.com/example-project".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    let mut answers = AnswerOpts::default();
+
+    plan.apply_answer_defaults(&mut answers);
+
+    assert_eq!(answers.go_database, Some(crate::backend::GoDatabase::None));
+    assert_eq!(answers.migration_dir, None);
+}
+
+#[test]
 fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
     for package_manager in ["bun", "npm", "pnpm", "yarn"] {
         let temp = tempdir().unwrap();

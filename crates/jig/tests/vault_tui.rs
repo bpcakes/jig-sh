@@ -11,14 +11,14 @@ use std::{
     io::Write,
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::{CommandExt, ExitStatusExt},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
 
-use pty_support::{read_available, wait_for_child_while_draining};
+use pty_support::{ChildGuard, read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const FULL_CLEAR_MARKER: &str = "\u{1b}[2J";
@@ -27,54 +27,11 @@ const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
 const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
-// Vault interactions perform deliberately expensive key derivation. Allow
-// enough headroom for loaded CI and developer machines. This PTY binary runs
-// serially in its own Nextest invocation so the timeout remains a useful bound.
-const UI_INTERACTION_TIMEOUT: Duration = Duration::from_secs(30);
-
-struct ChildGuard(Child);
-
-impl std::ops::Deref for ChildGuard {
-    type Target = Child;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for ChildGuard {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn make_controlling_terminal(command: &mut Command) {
-    // SAFETY: the closure runs in the forked child before exec. `setsid` and
-    // `ioctl(TIOCSCTTY)` are async-signal-safe platform calls, and Command has
-    // already duplicated the PTY slave onto stdin before invoking `pre_exec`.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            #[cfg(target_vendor = "apple")]
-            let tiocsctty = libc::TIOCSCTTY as libc::c_ulong;
-            #[cfg(not(target_vendor = "apple"))]
-            let tiocsctty = libc::TIOCSCTTY;
-            if libc::ioctl(libc::STDIN_FILENO, tiocsctty, 0) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-}
+// Vault interactions perform deliberately expensive key derivation. This PTY
+// binary runs serially in its own Nextest invocation, so 30 seconds remains a
+// useful bound while allowing headroom on loaded machines.
+const PTY_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
+const PTY_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
@@ -98,7 +55,9 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdin = slave.try_clone().unwrap();
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
-    let original = terminal_attributes(&slave);
+    // Observe termios through the master because Darwin revokes terminal
+    // ioctls on the retained slave descriptor after its controlling session exits.
+    let original = terminal_attributes(&master);
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
     command
         .args(["vault", "tui", "--home"])
@@ -109,18 +68,12 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    make_controlling_terminal(&mut command);
-    let child = command.spawn().unwrap();
-    let mut child = ChildGuard(child);
+    make_stdin_controlling_terminal(&mut command);
+    let mut child = ChildGuard::new(command.spawn().unwrap());
     set_nonblocking(&master);
 
     let mut output = Vec::new();
-    read_until(
-        &mut master,
-        &mut output,
-        "API_TOKEN",
-        UI_INTERACTION_TIMEOUT,
-    );
+    read_until(&mut master, &mut output, "API_TOKEN", PTY_EVENT_TIMEOUT);
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
 
     let create_offset = output.len();
@@ -132,7 +85,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         create_offset,
         "Vault updated.",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
 
@@ -143,7 +96,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         tools_offset,
         "Enter run/open",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     let activity_offset = output.len();
     master.write_all(b"activity\r").unwrap();
@@ -151,23 +104,12 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         activity_offset,
-        "field_batch_apply",
-        UI_INTERACTION_TIMEOUT,
+        "Enter/Esc close",
+        PTY_EVENT_TIMEOUT,
     );
+    assert!(String::from_utf8_lossy(&output[activity_offset..]).contains("field_batch_apply"));
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
-    // The activity rows are rendered before the modal footer. Under a slow
-    // outer output consumer, observing the first row is not proof that the
-    // command-palette Enter has finished transitioning the input state. Wait
-    // for the final footer before sending the Enter that closes the modal, or
-    // that key can still be consumed by the palette transition.
-    read_until_from(
-        &mut master,
-        &mut output,
-        activity_offset,
-        "Enter/Esc close",
-        UI_INTERACTION_TIMEOUT,
-    );
     let browse_offset = output.len();
     master.write_all(b"\r").unwrap();
     read_until_from(
@@ -175,7 +117,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         browse_offset,
         "Value hidden.",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
 
     let confirmation_offset = output.len();
@@ -185,7 +127,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         confirmation_offset,
         "PEEK",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     let peek_offset = output.len();
     master.write_all(b"PEEK\r").unwrap();
@@ -194,7 +136,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         peek_offset,
         PEEK_END_MARKER,
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     assert!(
         String::from_utf8_lossy(&output[peek_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -206,8 +148,8 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         cleared_offset,
-        "Value hidden.",
-        UI_INTERACTION_TIMEOUT,
+        "Controlled preview cleared after",
+        PTY_EVENT_TIMEOUT,
     );
     assert!(
         !String::from_utf8_lossy(&output[cleared_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -227,7 +169,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resize_offset,
         FULL_CLEAR_MARKER,
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     let resized_frame_offset = resize_offset
         + output[resize_offset..]
@@ -240,7 +182,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resized_frame_offset,
         "Production",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     let lock_offset = output.len();
     master.write_all(b"L").unwrap();
@@ -249,7 +191,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         lock_offset,
         "Vault passphrase",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
 
     let resume_offset = output.len();
@@ -260,12 +202,12 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resume_offset,
         "API_TOKEN",
-        UI_INTERACTION_TIMEOUT,
+        PTY_EVENT_TIMEOUT,
     );
     master.write_all(b"\x03").unwrap();
 
     let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, PTY_EXIT_TIMEOUT)
             .unwrap_or_else(|| {
                 panic!(
                     "vault TUI did not exit after Ctrl-C; output: {}",
@@ -273,7 +215,12 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
                 )
             });
     assert!(status.success(), "vault TUI exited with {status}");
-    assert_terminal_flags_restored(&slave, &original, "after Ctrl-C");
+    let restored = terminal_attributes(&master);
+    assert_eq!(
+        restored.c_lflag & (libc::ECHO | libc::ICANON),
+        original.c_lflag & (libc::ECHO | libc::ICANON),
+        "terminal echo/canonical flags were not restored"
+    );
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -324,7 +271,9 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdin = slave.try_clone().unwrap();
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
-    let original = terminal_attributes(&slave);
+    // Observe termios through the master because Darwin revokes terminal
+    // ioctls on the retained slave descriptor after its controlling session exits.
+    let original = terminal_attributes(&master);
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
     command
         .args(["vault", "tui", "--home"])
@@ -334,18 +283,12 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    make_controlling_terminal(&mut command);
-    let child = command.spawn().unwrap();
-    let mut child = ChildGuard(child);
+    make_stdin_controlling_terminal(&mut command);
+    let mut child = ChildGuard::new(command.spawn().unwrap());
     set_nonblocking(&master);
 
     let mut output = Vec::new();
-    read_until(
-        &mut master,
-        &mut output,
-        "API_TOKEN",
-        Duration::from_secs(8),
-    );
+    read_until(&mut master, &mut output, "API_TOKEN", PTY_EVENT_TIMEOUT);
     // SAFETY: the child PID is live and the runtime's signal session owns
     // structured SIGTERM restoration and redelivery.
     assert_eq!(
@@ -353,7 +296,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         0
     );
     let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, PTY_EXIT_TIMEOUT)
             .unwrap_or_else(|| {
                 panic!(
                     "vault TUI did not exit after SIGTERM; output: {}",
@@ -365,7 +308,12 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         "vault TUI exited with {status}; output: {}",
         String::from_utf8_lossy(&output)
     );
-    assert_terminal_flags_restored(&slave, &original, "after SIGTERM");
+    let restored = terminal_attributes(&master);
+    assert_eq!(
+        restored.c_lflag & (libc::ECHO | libc::ICANON),
+        original.c_lflag & (libc::ECHO | libc::ICANON),
+        "terminal echo/canonical flags were not restored after SIGTERM"
+    );
     let output = String::from_utf8_lossy(&output);
     assert!(
         output.contains("\u{1b}[2J"),
@@ -407,28 +355,64 @@ fn assert_only_between_controlled_peek(output: &str, sentinel: &str) {
 }
 
 fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {
-    let mut master = -1;
-    let mut slave = -1;
-    // SAFETY: `openpty` initializes both descriptors on success. They are
-    // immediately wrapped exactly once and the remaining pointers are valid.
-    if unsafe {
-        libc::openpty(
-            &mut master,
-            &mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    } != 0
+    // SAFETY: each successful descriptor is immediately wrapped exactly once.
+    let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+    if master < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `master` is a newly owned descriptor.
+    let master = unsafe { File::from_raw_fd(master) };
+    set_close_on_exec(&master)?;
+    // SAFETY: the descriptor is a live PTY master owned by `master`.
+    if unsafe { libc::grantpt(master.as_raw_fd()) } != 0
+        || unsafe { libc::unlockpt(master.as_raw_fd()) } != 0
     {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: successful `openpty` returned distinct owned descriptors.
-    let master = unsafe { File::from_raw_fd(master) };
-    // SAFETY: successful `openpty` returned distinct owned descriptors.
+    // SAFETY: `ptsname` returns storage managed by libc for this live master.
+    let name = unsafe { libc::ptsname(master.as_raw_fd()) };
+    if name.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `name` is the NUL-terminated slave path returned above.
+    let slave = unsafe { libc::open(name, libc::O_RDWR | libc::O_NOCTTY) };
+    if slave < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `slave` is a newly owned descriptor.
     let slave = unsafe { File::from_raw_fd(slave) };
+    set_close_on_exec(&slave)?;
     resize_terminal(&slave, columns, rows);
     Ok((master, slave))
+}
+
+fn make_stdin_controlling_terminal(command: &mut Command) {
+    // SAFETY: the child closure runs after stdio remapping and invokes only
+    // async-signal-safe session and terminal ioctls before exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as libc::c_ulong, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+fn set_close_on_exec(file: &File) -> std::io::Result<()> {
+    // SAFETY: fcntl reads descriptor flags for this live file.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor remains live and F_SETFD preserves its existing flags.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn required_pseudo_terminal(label: &str) -> Option<(File, File)> {
@@ -483,28 +467,6 @@ fn terminal_attributes(slave: &File) -> libc::termios {
         std::io::Error::last_os_error()
     );
     attributes
-}
-
-fn assert_terminal_flags_restored(slave: &File, original: &libc::termios, context: &str) {
-    // macOS revokes a controlling PTY when its session leader exits. The
-    // retained slave descriptor then reports ENOTTY, so post-exit termios are
-    // no longer inspectable; the caller still verifies the emitted terminal
-    // teardown sequences. Other platforms retain the stronger flag check.
-    // SAFETY: zero is a valid initial representation and tcgetattr fills it.
-    let mut restored = unsafe { std::mem::zeroed::<libc::termios>() };
-    // SAFETY: `slave` is owned by the test and `restored` is writable.
-    if unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut restored) } != 0 {
-        let error = std::io::Error::last_os_error();
-        if cfg!(target_vendor = "apple") && error.raw_os_error() == Some(libc::ENOTTY) {
-            return;
-        }
-        panic!("reading restored PTY attributes {context} failed: {error}");
-    }
-    assert_eq!(
-        restored.c_lflag & (libc::ECHO | libc::ICANON),
-        original.c_lflag & (libc::ECHO | libc::ICANON),
-        "terminal echo/canonical flags were not restored {context}"
-    );
 }
 
 fn set_nonblocking(file: &File) {

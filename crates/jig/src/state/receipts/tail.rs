@@ -13,7 +13,12 @@ fn ensure_receipt_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
 }
 
 pub(crate) fn current_worktree_fingerprint(ctx: &RepoContext) -> CurrentWorktreeFingerprint {
-    current_worktree_fingerprint_from_result(repo_worktree_fingerprint(ctx.root()))
+    let result = if ctx.contract_version() >= 6 {
+        repository_source_snapshot(ctx.root()).map(|snapshot| snapshot.worktree_fingerprint)
+    } else {
+        repo_worktree_fingerprint(ctx.root())
+    };
+    current_worktree_fingerprint_from_result(result)
         .expect("blocking worktree fingerprint collection cannot be cancelled")
 }
 
@@ -21,19 +26,26 @@ pub(crate) fn current_worktree_fingerprint_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CurrentWorktreeFingerprint> {
-    current_worktree_fingerprint_from_result(repo_worktree_fingerprint_with_cancellation(
-        ctx.root(),
-        cancelled,
-    ))
+    let result = if ctx.contract_version() >= 6 {
+        repository_source_snapshot_with_cancellation(ctx.root(), cancelled)
+            .map(|snapshot| snapshot.worktree_fingerprint)
+    } else {
+        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled)
+    };
+    current_worktree_fingerprint_from_result(result)
 }
 
 pub(crate) fn current_worktree_fingerprint_for_receipt_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> CurrentWorktreeFingerprint {
-    current_worktree_fingerprint_from_result_for_receipt(
-        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled),
-    )
+    let result = if ctx.contract_version() >= 6 {
+        repository_source_snapshot_with_cancellation(ctx.root(), cancelled)
+            .map(|snapshot| snapshot.worktree_fingerprint)
+    } else {
+        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled)
+    };
+    current_worktree_fingerprint_from_result_for_receipt(result)
 }
 
 fn current_worktree_fingerprint_from_result(
@@ -70,7 +82,15 @@ fn current_worktree_fingerprint_from_result_for_receipt(
 }
 
 pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
-    record_receipt_inner(ctx, input, None)
+    record_receipt_inner(ctx, input, None, None)
+}
+
+pub(crate) fn record_target_receipt(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    target: TargetReceiptMetadata,
+) -> Result<String> {
+    record_receipt_inner(ctx, input, Some(target), None)
 }
 
 pub(crate) fn record_receipt_with_cancellation(
@@ -78,12 +98,13 @@ pub(crate) fn record_receipt_with_cancellation(
     input: ReceiptInput<'_>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    record_receipt_inner(ctx, input, Some(cancelled))
+    record_receipt_inner(ctx, input, None, Some(cancelled))
 }
 
 fn record_receipt_inner(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
+    target: Option<TargetReceiptMetadata>,
     cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<String> {
     ensure_state_layout(ctx)?;
@@ -105,6 +126,18 @@ fn record_receipt_inner(
             }
         }
     }
+    let (run_id, target_id, config_digest, input_digest, findings) = target.map_or_else(
+        || (None, None, None, None, Vec::new()),
+        |metadata| {
+            (
+                Some(metadata.run_id),
+                Some(metadata.target),
+                Some(metadata.config_digest),
+                Some(metadata.input_digest),
+                metadata.findings,
+            )
+        },
+    );
     let root_spellings = repository_root_spellings(ctx.root());
     let receipt = ReceiptRecord {
         id: new_id("receipt"),
@@ -130,6 +163,11 @@ fn record_receipt_inner(
         evidence: input
             .evidence
             .map(|value| redact_repository_root_in_value(value, &root_spellings)),
+        run_id,
+        target: target_id,
+        config_digest,
+        input_digest,
+        findings,
         changed_paths: git_metadata.changed_paths,
         changed_path_count: git_metadata.changed_path_count,
         changed_paths_truncated: git_metadata.changed_paths_truncated,
@@ -241,6 +279,30 @@ fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
         diff_summary,
         worktree_fingerprint: receipt.worktree_fingerprint.clone(),
         worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
+    }
+}
+
+fn target_receipt_status(
+    receipt: &ReceiptRecord,
+    run_id: &str,
+    target: &TargetId,
+) -> TargetReceiptStatus {
+    let tool = tool_receipt_status(receipt);
+    TargetReceiptStatus {
+        receipt_id: tool.receipt_id,
+        run_id: run_id.to_owned(),
+        target: target.clone(),
+        config_digest: receipt.config_digest.clone(),
+        input_digest: receipt.input_digest.clone(),
+        exit_status: tool.exit_status,
+        ended_at_ms: tool.ended_at_ms,
+        changed_paths: tool.changed_paths,
+        changed_path_count: tool.changed_path_count,
+        changed_paths_truncated: tool.changed_paths_truncated,
+        changed_paths_digest: tool.changed_paths_digest,
+        diff_summary: tool.diff_summary,
+        worktree_fingerprint: tool.worktree_fingerprint,
+        worktree_fingerprint_error: tool.worktree_fingerprint_error,
     }
 }
 

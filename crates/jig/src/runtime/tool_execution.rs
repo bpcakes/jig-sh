@@ -1,7 +1,8 @@
-use std::process::{Command, Stdio};
+// agentic-loc-exception: tool dispatch and execution policy remain one security-sensitive boundary.
+use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use jig_contract::{ManifestTool, NativeToolKind};
+use anyhow::{Result, anyhow, bail};
+use jig_contract::{ActionRunner, ActionSpec, ManifestTool, NativeToolKind, TargetId};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -10,9 +11,10 @@ use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, ExecutionPhase, PhasePosition,
-    run_authoritative_execution_command,
+    SupervisedExecutionError, run_supervised_execution_command,
 };
 use crate::policy::NativeToolOutput;
+use crate::repository::RepositoryCatalog;
 use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
 
@@ -32,7 +34,7 @@ pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
     execute_manifest_tool_with_observer(ctx, tool_name, args, plan_id, record_receipt, observer)
 }
 
-pub(in crate::runtime) fn call_manifest_tool_with_observer(
+pub(super) fn call_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool: &ManifestTool,
     args_obj: &JsonObject,
@@ -46,7 +48,7 @@ pub(in crate::runtime) fn call_manifest_tool_with_observer(
     execute_manifest_tool_with_observer(ctx, &tool.name, args, plan_id, true, observer)
 }
 
-pub(in crate::runtime) fn execute_manifest_tool_with_observer(
+pub(super) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -67,7 +69,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_observer(
 }
 
 #[cfg(test)]
-pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerprint(
+pub(super) fn execute_manifest_tool_result_without_worktree_fingerprint(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -85,7 +87,7 @@ pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerpr
     .into_value()
 }
 
-pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
+pub(super) fn execute_manifest_tool_with_options_for_work_check(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -104,7 +106,26 @@ pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
     )
 }
 
-pub(in crate::runtime) enum ManifestToolExecutionOutcome {
+pub(super) fn execute_manifest_tool_without_lease_wait_for_work_check(
+    ctx: &RepoContext,
+    tool_name: &str,
+    args: Value,
+    plan_id: Option<String>,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ManifestToolExecutionOutcome> {
+    execute_manifest_tool_with_options(
+        ctx,
+        tool_name,
+        args,
+        plan_id,
+        ManifestToolExecutionOptions::collect_result_without_lease_wait(true, false, false),
+        position,
+        observer,
+    )
+}
+
+pub(super) enum ManifestToolExecutionOutcome {
     Completed(Value),
     Cancelled(Value),
 }
@@ -148,6 +169,28 @@ struct ManifestToolExecutionOptions {
     collect_git_metadata: bool,
     collect_worktree_fingerprint: bool,
     failure_mode: ToolFailureMode,
+    lease_contention: LeaseContention,
+}
+
+#[derive(Clone, Copy)]
+enum LeaseContention {
+    Wait,
+    Reject,
+}
+
+impl LeaseContention {
+    fn acquire(
+        self,
+        ctx: &RepoContext,
+        effects: &[jig_contract::ActionEffect],
+    ) -> Result<crate::state::RepositoryExecutionLease> {
+        match self {
+            Self::Wait => crate::state::acquire_repository_execution_lease(ctx, effects),
+            Self::Reject => {
+                crate::state::acquire_repository_execution_lease_without_wait(ctx, effects)
+            }
+        }
+    }
 }
 
 impl ManifestToolExecutionOptions {
@@ -161,6 +204,7 @@ impl ManifestToolExecutionOptions {
             collect_git_metadata,
             collect_worktree_fingerprint,
             failure_mode: ToolFailureMode::FailFast,
+            lease_contention: LeaseContention::Wait,
         }
     }
 
@@ -174,6 +218,21 @@ impl ManifestToolExecutionOptions {
             collect_git_metadata,
             collect_worktree_fingerprint,
             failure_mode: ToolFailureMode::CollectResult,
+            lease_contention: LeaseContention::Wait,
+        }
+    }
+
+    const fn collect_result_without_lease_wait(
+        record_receipt: bool,
+        collect_git_metadata: bool,
+        collect_worktree_fingerprint: bool,
+    ) -> Self {
+        Self {
+            record_receipt,
+            collect_git_metadata,
+            collect_worktree_fingerprint,
+            failure_mode: ToolFailureMode::CollectResult,
+            lease_contention: LeaseContention::Reject,
         }
     }
 }
@@ -187,28 +246,59 @@ fn execute_manifest_tool_with_options(
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    if let Some(error) = jig_features::tool_admission_error(ctx, tool_name) {
+    let current = if ctx.contract_version() >= 6 {
+        super::refreshed_repository_context(ctx)?
+    } else {
+        ctx.clone()
+    };
+    let tool = current
+        .tool_spec(tool_name)
+        .cloned()
+        .ok_or_else(|| anyhow!("{}", undeclared_tool_message(&current, tool_name)))?;
+    if current.contract_version() >= 6 {
+        let catalog = RepositoryCatalog::from_context(&current)?;
+        if catalog.action_for_alias(tool_name).is_none() {
+            bail!(
+                "Contract-v6 tool '{tool_name}' does not resolve to a repository action through legacy_aliases"
+            );
+        }
+        return execute_v6_action_alias(
+            current, tool_name, args, plan_id, options, position, observer,
+        );
+    }
+    if let Some(error) = jig_features::tool_admission_error(&current, tool_name) {
         bail!(error);
     }
-    let tool = ctx
-        .tool_spec(tool_name)
-        .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
     match tool.kind.as_str() {
-        kind::NATIVE => {
-            execute_native_tool(ctx, &tool.name, args, plan_id, options, position, observer)
-        }
+        kind::NATIVE => execute_native_tool(
+            &current,
+            NativeToolInvocation {
+                tool_name: &tool.name,
+                operation: &tool.name,
+                target: None,
+                timeout_seconds: None,
+            },
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+        ),
         kind::COMMAND => {
             let command_key = tool
                 .command
                 .as_deref()
                 .ok_or_else(|| anyhow!("Command-backed tool is missing command: {tool_name}"))?;
-            let command = ctx.command_for_key(command_key)?;
+            let command = current.command_for_key(command_key)?;
             execute_command_tool(
-                ctx,
+                &current,
                 CommandToolInvocation {
                     tool_name: &tool.name,
                     command_key,
                     command_text: command,
+                    working_directory: None,
+                    environment: None,
+                    timeout: current.command_timeout().duration(),
                 },
                 args,
                 plan_id,
@@ -221,6 +311,184 @@ fn execute_manifest_tool_with_options(
     }
 }
 
+fn execute_v6_action_alias(
+    mut current: RepoContext,
+    tool_name: &str,
+    args: Value,
+    plan_id: Option<String>,
+    options: ManifestToolExecutionOptions,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ManifestToolExecutionOutcome> {
+    loop {
+        let action = resolve_action_alias(&current, tool_name)?;
+        validate_action_admission(&current, tool_name, &action)?;
+        // Contract-v6 actions are the authority for both dispatch and checkout
+        // effects. The authority can change while this blocks, so this lease is
+        // only admission to a second resolution below, not permission to run
+        // the action value resolved above.
+        let repository_execution = options
+            .lease_contention
+            .acquire(&current, &action.effects)?;
+
+        let refreshed = super::refreshed_repository_context(&current)?;
+        let tool = refreshed
+            .tool_spec(tool_name)
+            .cloned()
+            .ok_or_else(|| anyhow!("{}", undeclared_tool_message(&refreshed, tool_name)))?;
+        let action = resolve_action_alias(&refreshed, tool_name)?;
+        validate_action_admission(&refreshed, tool_name, &action)?;
+        if !repository_execution.permits(&action.effects) {
+            // Authority became more effectful while a shared lease was being
+            // acquired. Drop it and repeat from that newly refreshed authority
+            // so dispatch never runs beneath a weaker isolation mode.
+            drop(repository_execution);
+            current = refreshed;
+            continue;
+        }
+
+        return execute_action_alias(
+            &refreshed,
+            &tool,
+            action,
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+            repository_execution,
+        );
+    }
+}
+
+fn resolve_action_alias(ctx: &RepoContext, tool_name: &str) -> Result<ActionSpec> {
+    RepositoryCatalog::from_context(ctx)?
+        .action_for_alias(tool_name)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "Contract-v6 compatibility alias '{tool_name}' no longer resolves to a repository action"
+            )
+        })
+}
+
+fn validate_action_admission(
+    ctx: &RepoContext,
+    tool_name: &str,
+    action: &ActionSpec,
+) -> Result<()> {
+    let admission_name = match &action.runner {
+        ActionRunner::Native { operation } => operation.as_str(),
+        ActionRunner::Command { .. } => tool_name,
+    };
+    if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
+        bail!(error);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_action_alias(
+    ctx: &RepoContext,
+    tool: &ManifestTool,
+    action: ActionSpec,
+    args: Value,
+    plan_id: Option<String>,
+    options: ManifestToolExecutionOptions,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
+    repository_execution: crate::state::RepositoryExecutionLease,
+) -> Result<ManifestToolExecutionOutcome> {
+    let outcome = match action.runner {
+        ActionRunner::Native { operation } => execute_native_tool(
+            ctx,
+            NativeToolInvocation {
+                tool_name: &tool.name,
+                operation: &operation,
+                target: Some(&action.target),
+                timeout_seconds: action.timeout_seconds,
+            },
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+        ),
+        ActionRunner::Command {
+            command,
+            working_directory,
+            environment,
+        } => {
+            let command_text = ctx.command_for_key(&command)?;
+            execute_command_tool(
+                ctx,
+                CommandToolInvocation {
+                    tool_name: &tool.name,
+                    command_key: &command,
+                    command_text,
+                    working_directory: working_directory.as_deref(),
+                    environment: Some(&environment),
+                    timeout: action
+                        .timeout_seconds
+                        .map(Duration::from_secs)
+                        .unwrap_or_else(|| ctx.command_timeout().duration()),
+                },
+                args,
+                plan_id,
+                options,
+                position,
+                observer,
+            )
+        }
+    };
+    drop(repository_execution);
+    outcome
+}
+
+pub(super) fn run_native_tool_with_control(
+    ctx: &RepoContext,
+    tool_name: &str,
+    target: Option<&TargetId>,
+    args_value: &Value,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<NativeToolOutput> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or(jig_owned_process::OwnedProcessTreeError::TimedOut)?;
+    check_native_control(deadline, cancelled)?;
+    let output = match jig_features::native_tool_kind(tool_name)
+        .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
+    {
+        NativeToolKind::ContractCheck => Ok(crate::policy::contract_check(ctx)),
+        NativeToolKind::MigrationAdd => {
+            let name = args_value
+                .get(args::NAME)
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
+            crate::policy::migration_add(ctx, name)
+        }
+        NativeToolKind::SchemaCheck => {
+            crate::policy::schema_check_with_control(ctx, target, timeout, cancelled)
+        }
+        _ => bail!("Unsupported native tool kind for {tool_name}"),
+    }?;
+    // Once an in-process tool returns, its effects may already be durable.
+    // Completion is therefore authoritative; a late timeout observation must
+    // not report that a completed mutation did not happen.
+    Ok(bound_native_output(output))
+}
+
+fn check_native_control(deadline: std::time::Instant, cancelled: &dyn Fn() -> bool) -> Result<()> {
+    if cancelled() {
+        return Err(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart.into());
+    }
+    if std::time::Instant::now() >= deadline {
+        return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
+    }
+    Ok(())
+}
+
 enum NativeToolRun {
     Completed(NativeToolOutput),
     CancelledBeforeStart,
@@ -229,12 +497,14 @@ enum NativeToolRun {
 
 fn run_native_tool(
     ctx: &RepoContext,
-    tool_name: &str,
+    operation: &str,
+    target: Option<&TargetId>,
+    timeout: Duration,
     args_value: &Value,
     observer: &mut dyn ExecutionControl,
 ) -> Result<NativeToolRun> {
-    match jig_features::native_tool_kind(tool_name)
-        .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
+    let output = match jig_features::native_tool_kind(operation)
+        .ok_or_else(|| anyhow!("Unsupported native tool: {operation}"))?
     {
         NativeToolKind::ContractCheck => {
             Ok(NativeToolRun::Completed(crate::policy::contract_check(ctx)))
@@ -247,7 +517,9 @@ fn run_native_tool(
             crate::policy::migration_add(ctx, name).map(NativeToolRun::Completed)
         }
         NativeToolKind::SchemaCheck => {
-            match crate::policy::schema_check_with_observer(ctx, observer) {
+            match crate::policy::schema_check_with_observer_and_timeout(
+                ctx, target, timeout, observer,
+            ) {
                 Ok(output) => Ok(NativeToolRun::Completed(output)),
                 Err(ExecutionCommandError::CancelledBeforeStart) => {
                     Ok(NativeToolRun::CancelledBeforeStart)
@@ -256,19 +528,56 @@ fn run_native_tool(
                 Err(ExecutionCommandError::Failed(error)) => Err(error),
             }
         }
-        _ => bail!("Unsupported native tool kind for {tool_name}"),
+        _ => bail!("Unsupported native tool kind for {operation}"),
+    }?;
+    Ok(match output {
+        NativeToolRun::Completed(output) => NativeToolRun::Completed(bound_native_output(output)),
+        NativeToolRun::CancelledBeforeStart => NativeToolRun::CancelledBeforeStart,
+        NativeToolRun::Cancelled => NativeToolRun::Cancelled,
+    })
+}
+
+fn bound_native_output(mut output: NativeToolOutput) -> NativeToolOutput {
+    let limits = jig_owned_process::ProcessOutputLimits::default();
+    truncate_native_stream(&mut output.stdout, limits.stdout);
+    truncate_native_stream(&mut output.stderr, limits.stderr);
+    output
+}
+
+fn truncate_native_stream(value: &mut String, limit: usize) {
+    if value.len() <= limit {
+        return;
     }
+    let mut end = limit;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value.push_str("\n[output truncated by Jig]\n");
+}
+
+struct NativeToolInvocation<'a> {
+    tool_name: &'a str,
+    operation: &'a str,
+    target: Option<&'a TargetId>,
+    timeout_seconds: Option<u64>,
 }
 
 fn execute_native_tool(
     ctx: &RepoContext,
-    tool_name: &str,
+    invocation: NativeToolInvocation<'_>,
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
+    let NativeToolInvocation {
+        tool_name,
+        operation,
+        target,
+        timeout_seconds,
+    } = invocation;
     let started = now_ms();
     if observer.cancelled() {
         return cancelled_native_tool_outcome(
@@ -285,7 +594,10 @@ fn execute_native_tool(
         );
     }
     let phase = ExecutionPhase::start(observer, tool_name, position);
-    let output = run_native_tool(ctx, tool_name, &args, observer);
+    let timeout = timeout_seconds
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| ctx.command_timeout().duration());
+    let output = run_native_tool(ctx, operation, target, timeout, &args, observer);
     phase.finish(
         observer,
         output.as_ref().is_ok_and(
@@ -489,298 +801,8 @@ fn receipt_id_for_failure_mode(
     }
 }
 
-struct CommandToolInvocation<'a> {
-    tool_name: &'a str,
-    command_key: &'a str,
-    command_text: &'a str,
-}
+mod command_tool;
+use command_tool::*;
 
-enum ConfiguredCommandOutcome {
-    Completed(std::process::Output),
-    CancelledBeforeStart,
-    Cancelled,
-}
-
-fn execute_command_tool(
-    ctx: &RepoContext,
-    invocation: CommandToolInvocation<'_>,
-    args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
-    position: PhasePosition,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ManifestToolExecutionOutcome> {
-    let started = now_ms();
-    let run_result = run_configured_command(
-        ctx,
-        invocation.tool_name,
-        invocation.command_text,
-        &args,
-        position,
-        observer,
-    );
-    let ended = now_ms();
-    let output = match run_result {
-        Ok(ConfiguredCommandOutcome::Completed(output)) => output,
-        Ok(ConfiguredCommandOutcome::CancelledBeforeStart) => {
-            let message = format!(
-                "Configured command for {} was cancelled before it started",
-                invocation.tool_name
-            );
-            let response = tool_response_value(ToolExecutionResponse {
-                ok: true,
-                tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
-                args,
-                result: ToolProcessResult {
-                    exit_status: 1,
-                    stdout: String::new(),
-                    stderr: message,
-                },
-                receipt_id: None,
-            })?;
-            return Ok(ManifestToolExecutionOutcome::Cancelled(response));
-        }
-        Ok(ConfiguredCommandOutcome::Cancelled) => {
-            let message = format!(
-                "Configured command for {} was cancelled",
-                invocation.tool_name
-            );
-            let evidence = serde_json::json!({
-                "kind": "supervised_command",
-                "schema_version": 1,
-                "status": "cancelled",
-                "error": message,
-            });
-            let receipt_result = maybe_record_receipt(
-                ctx,
-                options.record_receipt,
-                ReceiptInput {
-                    tool_name: invocation.tool_name,
-                    args: args.clone(),
-                    invoked_command_key: Some(invocation.command_key.to_string()),
-                    plan_id,
-                    started_at_ms: started,
-                    ended_at_ms: ended,
-                    exit_status: 1,
-                    stdout: "",
-                    stderr: &message,
-                    evidence: Some(evidence),
-                    session_override: None,
-                    collect_git_metadata: options.collect_git_metadata,
-                    collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-                    worktree_fingerprint_override: None,
-                },
-                &|| observer.cancelled(),
-            );
-            let receipt_id = match receipt_result {
-                Ok(receipt_id) => receipt_id,
-                Err(receipt_error) => {
-                    bail!("{message}\nreceipt recording also failed:\n{receipt_error:#}")
-                }
-            };
-            let response = tool_response_value(ToolExecutionResponse {
-                ok: true,
-                tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
-                args,
-                result: ToolProcessResult {
-                    exit_status: 1,
-                    stdout: String::new(),
-                    stderr: message,
-                },
-                receipt_id,
-            })?;
-            return Ok(ManifestToolExecutionOutcome::Cancelled(response));
-        }
-        Err(error) => {
-            let message = format!("{error:#}");
-            let evidence = serde_json::json!({
-                "kind": "supervised_command",
-                "schema_version": 1,
-                "status": "error",
-                "error": message,
-            });
-            let receipt_result = maybe_record_receipt(
-                ctx,
-                options.record_receipt,
-                ReceiptInput {
-                    tool_name: invocation.tool_name,
-                    args: args.clone(),
-                    invoked_command_key: Some(invocation.command_key.to_string()),
-                    plan_id,
-                    started_at_ms: started,
-                    ended_at_ms: ended,
-                    exit_status: 1,
-                    stdout: "",
-                    stderr: &message,
-                    evidence: Some(evidence),
-                    session_override: None,
-                    collect_git_metadata: options.collect_git_metadata,
-                    collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-                    worktree_fingerprint_override: None,
-                },
-                &|| observer.cancelled(),
-            );
-            let receipt_id = receipt_id_for_failure_mode(
-                options.failure_mode,
-                Some(message.clone()),
-                receipt_result,
-            )?;
-            return tool_response_value(ToolExecutionResponse {
-                ok: true,
-                tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
-                args,
-                result: ToolProcessResult {
-                    exit_status: 1,
-                    stdout: String::new(),
-                    stderr: message,
-                },
-                receipt_id,
-            })
-            .map(ManifestToolExecutionOutcome::Completed);
-        }
-    };
-    let exit_status = output.status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
-    let receipt_result = maybe_record_receipt(
-        ctx,
-        options.record_receipt,
-        ReceiptInput {
-            tool_name: invocation.tool_name,
-            args: args.clone(),
-            invoked_command_key: Some(invocation.command_key.to_string()),
-            plan_id,
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status,
-            stdout: &stdout,
-            stderr: &stderr,
-            evidence: None,
-            session_override: None,
-            collect_git_metadata: options.collect_git_metadata,
-            collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-            worktree_fingerprint_override: None,
-        },
-        &|| observer.cancelled(),
-    );
-
-    let tool_failure = tool_failure_message(
-        invocation.tool_name,
-        Some(invocation.command_key),
-        exit_status,
-        &stdout,
-        &stderr,
-    );
-    let receipt_id =
-        receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
-
-    tool_response_value(ToolExecutionResponse {
-        ok: true,
-        tool: invocation.tool_name,
-        command_key: Some(invocation.command_key),
-        args,
-        result: ToolProcessResult {
-            exit_status,
-            stdout,
-            stderr,
-        },
-        receipt_id,
-    })
-    .map(ManifestToolExecutionOutcome::Completed)
-}
-
-fn maybe_record_receipt(
-    ctx: &RepoContext,
-    should_record_receipt: bool,
-    input: ReceiptInput<'_>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Option<String>> {
-    if should_record_receipt {
-        record_receipt_with_cancellation(ctx, input, cancelled).map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
-fn run_configured_command(
-    ctx: &RepoContext,
-    tool_name: &str,
-    command_text: &str,
-    args: &Value,
-    position: PhasePosition,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ConfiguredCommandOutcome> {
-    let mut command = Command::new("bash");
-    command
-        .current_dir(ctx.root())
-        .arg("-c")
-        .arg(command_text)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if tool_name == tool::MIGRATION_ADD {
-        let name = args
-            .get(args::NAME)
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
-        command.env("NAME", name);
-    }
-
-    let phase = ExecutionPhase::start(observer, tool_name, position);
-    let label = format!("Configured command for {tool_name}");
-    let result = match run_authoritative_execution_command(
-        &mut command,
-        ctx.command_timeout(),
-        ctx.command_output_limit(),
-        &label,
-        observer,
-    ) {
-        Ok(output) => Ok(ConfiguredCommandOutcome::Completed(std::process::Output {
-            status: output.status,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })),
-        Err(ExecutionCommandError::CancelledBeforeStart) => {
-            Ok(ConfiguredCommandOutcome::CancelledBeforeStart)
-        }
-        Err(ExecutionCommandError::Cancelled) => Ok(ConfiguredCommandOutcome::Cancelled),
-        Err(ExecutionCommandError::Failed(error)) => Err(error),
-    };
-    phase.finish(
-        observer,
-        result.as_ref().is_ok_and(|outcome| {
-            matches!(
-                outcome,
-                ConfiguredCommandOutcome::Completed(output) if output.status.success()
-            )
-        }),
-    );
-    result
-}
-
-#[derive(Serialize)]
-struct ToolExecutionResponse<'a> {
-    ok: bool,
-    tool: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    command_key: Option<&'a str>,
-    args: Value,
-    result: ToolProcessResult,
-    receipt_id: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ToolProcessResult {
-    exit_status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn tool_response_value(response: ToolExecutionResponse<'_>) -> Result<Value> {
-    serde_json::to_value(response).context("Failed to serialize tool execution response")
-}
+#[cfg(test)]
+mod tests;

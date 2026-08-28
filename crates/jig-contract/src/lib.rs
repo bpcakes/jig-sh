@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+pub mod repository;
+pub mod run;
 pub mod status_provider;
+
+pub use repository::{
+    ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
+    FieldProvenance, ProfileId, ProfileSpec, ResultParser, TargetId,
+};
+pub use run::{
+    ActionArguments, EvidenceReference, Finding, FindingLocation, FindingSeverity, PlannedTarget,
+    RunConclusion, RunPlan, RunResult, RunStatus, SelectionReason, SourceIdentity, TargetRunResult,
+};
 
 pub mod kind {
     pub const COMMAND: &str = "command";
@@ -14,7 +25,12 @@ pub mod tool {
     pub const CONTRACT_CHECK: &str = "jig.contract_check";
     pub const DECISIONS_ADD: &str = "jig.decisions_add";
     pub const FMT_CHECK: &str = "jig.fmt_check";
+    pub const LINT: &str = "jig.lint";
     pub const MIGRATION_ADD: &str = "jig.migration_add";
+    pub const INSPECT: &str = "jig.inspect";
+    pub const PLAN_RUN: &str = "jig.plan_run";
+    pub const EXECUTE_RUN: &str = "jig.execute_run";
+    pub const CANCEL_RUN: &str = "jig.cancel_run";
     pub const PLANS_APPEND: &str = "jig.plans_append";
     pub const PLANS_CLOSE: &str = "jig.plans_close";
     pub const PLANS_OPEN: &str = "jig.plans_open";
@@ -23,6 +39,7 @@ pub mod tool {
     pub const SESSION_END: &str = "jig.session_end";
     pub const SESSION_START: &str = "jig.session_start";
     pub const SQLX_CHECK: &str = "jig.sqlx_check";
+    pub const SQLC_CHECK: &str = "jig.sqlc_check";
     pub const TEST: &str = "jig.test";
     pub const TEST_LOCKED: &str = "jig.test_locked";
     pub const TYPESCRIPT_BUILD: &str = "jig.typescript_build";
@@ -89,6 +106,63 @@ pub struct NativeToolDescriptor {
     pub kind: NativeToolKind,
 }
 
+/// The checked-in runner shape contributed by a repository adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AdapterRunnerDescriptor {
+    Command(&'static str),
+    Native(&'static str),
+}
+
+/// One conventional action contributed by a repository adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct AdapterActionDescriptor {
+    pub id: &'static str,
+    pub description: &'static str,
+    pub intent: ActionIntent,
+    pub effects: &'static [ActionEffect],
+    pub runner: AdapterRunnerDescriptor,
+    pub inputs: &'static [&'static str],
+    pub legacy_alias: Option<&'static str>,
+}
+
+impl AdapterActionDescriptor {
+    pub const fn new(
+        id: &'static str,
+        description: &'static str,
+        intent: ActionIntent,
+        effects: &'static [ActionEffect],
+        runner: AdapterRunnerDescriptor,
+        inputs: &'static [&'static str],
+        legacy_alias: Option<&'static str>,
+    ) -> Self {
+        Self {
+            id,
+            description,
+            intent,
+            effects,
+            runner,
+            inputs,
+            legacy_alias,
+        }
+    }
+}
+
+/// Metadata contributed by a stack adapter without coupling it to runtime execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct RepositoryAdapterDescriptor {
+    pub id: &'static str,
+    pub actions: &'static [AdapterActionDescriptor],
+}
+
+impl RepositoryAdapterDescriptor {
+    pub const fn new(id: &'static str, actions: &'static [AdapterActionDescriptor]) -> Self {
+        Self { id, actions }
+    }
+}
+
 impl NativeToolDescriptor {
     pub const fn new(name: &'static str, requires_name: bool, kind: NativeToolKind) -> Self {
         Self {
@@ -103,6 +177,7 @@ impl NativeToolDescriptor {
 pub struct FeatureDescriptor {
     pub command_keys: &'static [&'static str],
     pub native_tools: &'static [NativeToolDescriptor],
+    pub repository_adapters: &'static [RepositoryAdapterDescriptor],
     pub required_tools: fn(&dyn FeatureContext) -> Vec<&'static str>,
     pub unavailable_tool_message: fn(&dyn FeatureContext, &str) -> Option<String>,
     pub tool_admission_error: fn(&dyn FeatureContext, &str) -> Option<String>,
@@ -112,12 +187,14 @@ impl FeatureDescriptor {
     pub const fn new(
         command_keys: &'static [&'static str],
         native_tools: &'static [NativeToolDescriptor],
+        repository_adapters: &'static [RepositoryAdapterDescriptor],
         required_tools: fn(&dyn FeatureContext) -> Vec<&'static str>,
         unavailable_tool_message: fn(&dyn FeatureContext, &str) -> Option<String>,
     ) -> Self {
         Self {
             command_keys,
             native_tools,
+            repository_adapters,
             required_tools,
             unavailable_tool_message,
             tool_admission_error: no_tool_admission_error,
@@ -143,14 +220,106 @@ pub trait FeatureContext {
     fn sqlx_enabled(&self) -> bool;
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
-
+    fn go_backend_enabled(&self) -> bool {
+        false
+    }
+    fn go_postgres_enabled(&self) -> bool {
+        false
+    }
     fn migration_add_enabled(&self) -> bool {
         self.sqlx_enabled()
     }
-
+    fn sqlx_owns_migration_authoring(&self) -> bool {
+        self.sqlx_enabled()
+    }
+    fn migration_authoring_enabled(&self) -> bool {
+        self.migration_add_enabled() || self.go_postgres_enabled()
+    }
+    fn migration_authoring_error(&self) -> Option<String> {
+        None
+    }
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()
             .iter()
             .any(|command| command == command_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FeatureContext, ManifestTool, kind};
+
+    struct LegacySqlxContext;
+
+    struct GoPostgresContext;
+
+    impl FeatureContext for LegacySqlxContext {
+        fn contract_version(&self) -> u32 {
+            4
+        }
+
+        fn required_commands(&self) -> &[String] {
+            &[]
+        }
+
+        fn sqlx_enabled(&self) -> bool {
+            true
+        }
+
+        fn schema_dump_enabled(&self) -> bool {
+            false
+        }
+
+        fn frontend_app_count(&self) -> usize {
+            0
+        }
+    }
+
+    impl FeatureContext for GoPostgresContext {
+        fn contract_version(&self) -> u32 {
+            5
+        }
+
+        fn required_commands(&self) -> &[String] {
+            &[]
+        }
+
+        fn sqlx_enabled(&self) -> bool {
+            false
+        }
+
+        fn schema_dump_enabled(&self) -> bool {
+            false
+        }
+
+        fn frontend_app_count(&self) -> usize {
+            0
+        }
+
+        fn go_postgres_enabled(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn migration_authoring_is_derived_from_the_backend_capabilities() {
+        assert!(LegacySqlxContext.migration_authoring_enabled());
+        assert!(GoPostgresContext.migration_authoring_enabled());
+    }
+
+    #[test]
+    fn repository_dtos_do_not_change_legacy_manifest_tool_json() {
+        let tool = ManifestTool::new("jig.test", kind::COMMAND, "Run tests.")
+            .with_command("rust_test_command");
+
+        assert_eq!(
+            serde_json::to_value(tool).unwrap(),
+            serde_json::json!({
+                "name": "jig.test",
+                "kind": "command",
+                "description": "Run tests.",
+                "command": "rust_test_command"
+            })
+        );
     }
 }

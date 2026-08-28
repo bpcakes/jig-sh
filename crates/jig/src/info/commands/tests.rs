@@ -35,7 +35,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
     );
 
     assert_eq!(output["command"], "info commands");
-    assert_eq!(output["schema_version"], 2);
+    assert_eq!(output["schema_version"], 3);
     assert_eq!(output["repo"]["context_status"], "valid");
     let commands = output["commands"].as_array().unwrap();
     let names = commands
@@ -69,7 +69,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
 }
 
 #[test]
-fn schema_v2_reason_codes_are_stable() {
+fn schema_v3_reason_codes_are_stable() {
     let reason_codes = reason::ALL
         .iter()
         .copied()
@@ -87,6 +87,7 @@ fn schema_v2_reason_codes_are_stable() {
             "dev_proxy_feature_not_built",
             "migration_add_tool_invalid",
             "migration_add_tool_missing",
+            "migration_backend_not_configured",
             "migration_directory_not_configured",
             "repo_context_unavailable",
             "sqlx_disabled",
@@ -495,7 +496,7 @@ fn command_inventory_distinguishes_missing_and_invalid_manifest_tools() {
     );
     assert_command_status(
         &missing_output,
-        "sqlx",
+        "migration",
         "needs_setup",
         "migration_add_tool_missing",
     );
@@ -542,7 +543,7 @@ fn command_inventory_distinguishes_missing_and_invalid_manifest_tools() {
     );
     assert_command_status(
         &invalid_output,
-        "sqlx",
+        "migration",
         "needs_setup",
         "migration_add_tool_invalid",
     );
@@ -583,17 +584,45 @@ marketplaces = []
 
         assert_command_status(
             &output,
-            "sqlx",
+            "migration",
             "needs_setup",
             "migration_directory_not_configured",
         );
         assert!(
-            command_by_name(&output, "sqlx")["next_step"]
+            command_by_name(&output, "migration")["next_step"]
                 .as_str()
                 .unwrap()
-                .contains("--rust-migration-dir migrations")
+                .contains("Set migration_dir in .jig.toml")
         );
     }
+}
+
+#[test]
+fn go_postgres_exposes_generic_migration_authoring_without_sqlx() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "internal/database/migrations"
+
+[agent_tooling.codex]
+marketplaces = []
+"#,
+        )
+        .tool(json!({
+            "name": tool::MIGRATION_ADD,
+            "kind": "native",
+            "description": "Add a migration."
+        }))
+        .write();
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+
+    let output = ready_local_inventory(&ctx);
+
+    assert_eq!(command_by_name(&output, "migration")["status"], "ready");
+    assert_command_status(&output, "sqlx", "not_configured", "sqlx_disabled");
 }
 
 #[cfg(not(feature = "dev-proxy"))]
@@ -708,128 +737,5 @@ fn stripped_build_requires_the_full_executable_launcher_chain() {
     );
 }
 
-#[test]
-fn minimal_footprint_uses_the_installed_jig_even_if_a_launcher_is_present() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path())
-        .config(
-            r#"
-harness_footprint = "minimal"
-sqlx_enabled = false
-
-[agent_tooling.codex]
-marketplaces = []
-"#,
-        )
-        .write();
-    std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    std::fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
-    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-    let output = ready_local_inventory(&ctx);
-
-    assert!(
-        command_by_name(&output, "sqlx")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains("`jig adopt ")
-    );
-    assert!(
-        command_by_name(&output, "sqlx")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains("--minimal")
-    );
-    assert!(
-        command_by_name(&output, "sqlx")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains("--template /tmp/template")
-    );
-    assert!(
-        command_by_name(&output, "sqlx")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains(&temp.path().display().to_string())
-    );
-    assert!(
-        !command_by_name(&output, "sqlx")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains("scripts/jig")
-    );
-}
-
-fn sqlx_command_inventory_config(schema_dump_enabled: bool) -> String {
-    format!(
-        r#"
-sqlx_enabled = true
-rust_migration_dir = "migrations"
-schema_dump_enabled = {schema_dump_enabled}
-bootstrap_command = "printf bootstrap"
-migration_add_command = "printf migration"
-schema_dump_command = "printf schema"
-
-[agent_tooling.codex]
-marketplaces = []
-"#
-    )
-}
-
-fn ready_local_inventory(ctx: &RepoContext) -> Value {
-    info_with_capabilities(
-        ctx,
-        VaultCapability {
-            available: true,
-            initialized: true,
-            home: None,
-            scope: None,
-            scope_id: None,
-            error: None,
-        },
-        &json!({ "ok": true }),
-    )
-}
-
-fn assert_command_status(output: &Value, name: &str, status: &str, reason_code: &str) {
-    let command = command_by_name(output, name);
-    assert_eq!(command["status"], status, "{name}");
-    assert_eq!(command["reason_code"], reason_code, "{name}");
-    assert!(
-        command["reason"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
-    assert!(
-        command["next_step"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
-}
-
-fn command_by_name<'a>(output: &'a Value, name: &str) -> &'a Value {
-    output["commands"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|command| command["name"] == name)
-        .unwrap_or_else(|| panic!("missing command {name}"))
-}
-
-#[cfg(feature = "dev-proxy")]
-fn write_full_launcher(root: &std::path::Path) {
-    fs::create_dir_all(root.join("scripts")).unwrap();
-    for path in [
-        root.join("scripts/jig"),
-        root.join("scripts/install-jig.sh"),
-    ] {
-        fs::write(&path, "#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&path).unwrap().permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&path, permissions).unwrap();
-        }
-    }
-}
+mod launcher_selection;
+use launcher_selection::*;

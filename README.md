@@ -23,7 +23,7 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 **Supported hosts:** Linux and macOS. See [Platform Support](docs/platform-support.md) for feature-specific limits.
 
-**Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
+**Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), Go 1.26 for generated Go backends, and the selected database engine when database support is enabled.
 
 ```sh
 cargo install jig-sh
@@ -61,7 +61,7 @@ scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified
 
 ## The command contract
 
-`.agent/jig-contract.json` records the stable command tools that MCP clients and CI can execute across machines. Runtime-owned commands manage local workflow state, processes, or secrets and are intentionally outside the generated contract.
+`.agent/jig-contract.json` records the stable repository targets and compatibility command tools that CLI and CI clients can execute across machines. Contract v6 MCP clients discover the same repository model through four bounded inspect, plan, execute, and cancel operations; older contracts continue to expose their declared command tools directly. Runtime-owned commands manage local workflow state, processes, or secrets and are intentionally outside the generated contract.
 
 | Surface         | Stable contract? | Records receipts? | Machine-local? |
 | --------------- | ---------------- | ----------------- | -------------- |
@@ -78,15 +78,21 @@ For local validation, call the contract commands directly:
 scripts/jig check fmt
 scripts/jig check clippy
 scripts/jig check test
+scripts/jig check test --affected origin/main --explain
 ```
 
 These append receipts under `.agent/state/`. Pass `--no-receipt` to a one-off command when you don't want evidence recorded. Read existing state with `scripts/jig work status`, `scripts/jig work evidence`, and `scripts/jig work receipts --failed-only`.
+
+In contract-v6 repositories, `--affected BASE` filters the normal target or
+profile selection using Git changes and checked-in component/input policy. The
+plan retains direct-path and dependency reasons, so agents can inspect why each
+target was selected before executing it.
 
 See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
 
 ## Creating and adopting repos
 
-Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choose a Rust + React starter or a harness-only repo, then choose the database and one or more `web`, `landing`, and `admin` frontends when scaffolding an app. `--defaults` skips the project-shape questions and fills omitted choices with `--preset rust-react --db none --frontend web`; initial vault setup can still prompt unless `JIG_VAULT_PASSPHRASE` is set or `--no-vault` is passed. `--no-input` is strict automation: pass a complete Rust React shape or the explicit `--preset harness-only`; redirected/non-terminal init is equally strict unless `--defaults` is present. Explicit CLI and answers-file values always win over defaults.
+Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choose a Rust + React starter, a Go + React starter, or a harness-only repo, then choose the supported database and frontends. `--defaults` skips the project-shape questions and fills omitted choices with `--preset rust-react --db none --frontend web`; initial vault setup can still prompt unless `JIG_VAULT_PASSPHRASE` is set or `--no-vault` is passed. `--no-input` is strict automation: pass a complete application shape (including `--go-module` for Go) or the explicit `--preset harness-only`; redirected/non-terminal init is equally strict unless `--defaults` is present. Explicit CLI and answers-file values always win over defaults.
 
 **Greenfield, harness only:**
 
@@ -102,9 +108,17 @@ jig init /path/to/target-repo --preset rust-react --db postgres --frontends web,
 
 This scaffolds a Cargo workspace (`apps/<repo>-api`, `crates/<repo>-core`, `crates/<repo>`, `crates/<repo>-http`, `crates/<repo>-test-support`, optional `crates/<repo>-db`) plus a shadcn Vite React product app, an Astro site, and a responsive shadcn admin application. Both React apps start with TanStack Router, TanStack Query, Tailwind 4, source-owned shadcn components, and a tested API version/readiness slice; the admin adds theme switching, navigation, and operational routes. Authentication and authorization remain project-owned. Jig records the tested shadcn CLI, preset, primitive library, and style for both React apps instead of running a mutable `shadcn@latest` during init.
 
+**Greenfield Go backend + React frontend.** The first Go increment supports no database or PostgreSQL plus `web` and `landing` frontends:
+
+```sh
+jig init /path/to/target-repo --preset go-react --go-module github.com/acme/my-app --db postgres --frontends web
+```
+
+This scaffolds Go 1.26 with chi, Huma, optional pgxpool/sqlc/Goose database support, and a Huma OpenAPI → Hey API TypeScript client. `cmd/api` and the offline `cmd/openapi` exporter share the same side-effect-free API constructor. SQLite and the privileged `admin` API/client boundary are rejected explicitly in this increment.
+
 Bare frontend names other than `web`, `landing`, `admin` and the compatible `marketing`, `astro`, and `admin-panel` aliases are custom names. Interactive init shows the resolved app kind and directory, then asks for confirmation so a typo such as `amdin` does not silently become a directory; non-interactive init calls the custom name out in the summary. Use an explicit kind such as `dashboard:spa`, `ops:admin`, or `campaign:astro` when a custom name is intentional. The Rust + React preset reserves `api` (case-insensitively) for its backend dev app, so use a name such as `api-client` for an API-facing frontend.
 
-The frontends share a private root JavaScript workspace, pinned Node/package-manager metadata, and one root lockfile; fresh Yarn workspaces use the `node-modules` linker for compatibility with the generated Vite and Astro apps. For a database-backed scaffold, export `DATABASE_URL` or copy `.env.example` to `.env` and configure it before running `scripts/jig setup` (or the narrower `scripts/jig bootstrap`). Bootstrap creates or safely reuses the configured database, applies migrations, installs frontend dependencies once, and records both the selected dependency inputs and installed artifact. `scripts/jig dev` verifies that exact state without installing packages, and frontend `dev` scripts only start their servers. Commit the generated root lockfile. The app crate owns typed `AppConfig`/`AppState`; the API binary optionally loads `.env` with `dotenvy`; the HTTP crate owns the Axum router, handlers, middleware, and health endpoints. Local `.env` files remain ignored. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
+The frontends share a private root JavaScript workspace, pinned Node/package-manager metadata, and one root lockfile; fresh Yarn workspaces use the `node-modules` linker for compatibility with the generated Vite and Astro apps. For a database-backed scaffold, export `DATABASE_URL` or copy `.env.example` to `.env` and configure it before running `scripts/jig setup` (or the narrower `scripts/jig bootstrap`). Bootstrap applies the selected migration/query workflow, installs frontend dependencies once, and records both the selected dependency inputs and installed artifact. `scripts/jig dev` verifies that exact state without installing packages, and frontend `dev` scripts only start their servers. Commit the generated root lockfile. Local `.env` files remain ignored. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
 
 **Adopt an existing repo.** `jig adopt` scans first and previews managed-file changes; re-run with `--write` after reviewing:
 
@@ -138,7 +152,7 @@ See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md) for 
 
 State repair and retention work locally; no hosted service is required. Start with `scripts/jig state diagnose`, adding `--deep` to analyze recursive session summaries and receipt payload growth. Preview a legacy-session repair with `scripts/jig state compact sessions --dry-run`, then run it without `--dry-run` to write an exact compressed backup under ignored `.agent/.cache/` before replacing the working-tree state. Restore that backup with `scripts/jig state restore --backup <backup-directory>`.
 
-`scripts/jig state archive --before <date>` compresses eligible old receipts into ignored local storage, creates an exact pre-rewrite recovery backup, and shrinks the active receipt stream. Restore that backup with the same `state restore` command. `scripts/jig state export receipts --before <date> --output <file.jsonl.gz>` creates a non-mutating export at a caller-selected path. Artifacts under `.agent/.cache/` are local recovery aids, so copy them elsewhere for durable retention. Working-tree compaction and archiving do not remove state blobs already reachable from Git history. See [Runtime State](docs/public-contract.md#runtime-state).
+`scripts/jig state archive --before <date>` compresses eligible old receipts into ignored local storage; add `--include-runs` to also archive completed run histories and shrink both active journals while retaining open-plan evidence. Run archival refuses to rewrite the journal while any known run is nonterminal, preserving live readers' durable byte cursors. Applying mode creates exact per-stream recovery backups. Restore a selected stream backup with the same `state restore` command. `scripts/jig state export receipts --before <date> --output <file.jsonl.gz>` creates a non-mutating receipt export at a caller-selected path. Artifacts under `.agent/.cache/` are local recovery aids, so copy them elsewhere for durable retention. Working-tree compaction and archiving do not remove state blobs already reachable from Git history. See [Runtime State](docs/public-contract.md#runtime-state).
 
 Before applying a compaction, archive rewrite, or restore, stop Jig processes launched with older runtimes; current runtimes share the repository state lock, but a legacy writer waiting on a pre-opened inode cannot follow an atomic replacement. After verifying a rewrite, keep or copy the recovery artifact you need and remove obsolete ignored cache artifacts. `state diagnose` reports that cache usage separately.
 

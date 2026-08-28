@@ -1,0 +1,1 @@
+Capture the durable run-event cursor before queue publication, verify external cancellation behavior, and refresh repository gates.

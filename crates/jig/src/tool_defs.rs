@@ -3,6 +3,14 @@ use jig_contract::ManifestTool;
 pub(crate) use jig_contract::{kind, tool};
 use serde_json::{Map, Value, json};
 
+mod repository;
+
+pub(crate) use repository::{
+    CancelRunArgs, CancelRunOutput, ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput,
+    RepositoryInspectArgs, RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool,
+    RunInspection,
+};
+
 pub(crate) const DEFAULT_RECEIPTS_LIMIT: usize = 20;
 pub(crate) const LOOP_CLEAR_ATTEMPT_TOOL: &str = "jig.loop_clear_attempt";
 pub(crate) const LOOP_TICK_TOOL: &str = "jig.loop_tick";
@@ -52,11 +60,13 @@ pub(crate) mod cli_command {
     pub(crate) const CHECK_CLIPPY: &str = "clippy";
     pub(crate) const CHECK_CONTRACT: &str = "contract";
     pub(crate) const CHECK_FMT: &str = "fmt";
+    pub(crate) const CHECK_LINT: &str = "lint";
     pub(crate) const CHECK_MIGRATION_IMMUTABILITY: &str = "migration-immutability";
     pub(crate) const CHECK_NO_MOD_RS: &str = "no-mod-rs";
     pub(crate) const CHECK_RUST_FILE_LOC: &str = "rust-file-loc";
     pub(crate) const CHECK_SCHEMA: &str = "schema";
     pub(crate) const CHECK_SQLX: &str = "sqlx";
+    pub(crate) const CHECK_SQLC: &str = "sqlc";
     pub(crate) const CHECK_SQLX_UNCHECKED_NON_TEST: &str = "sqlx-unchecked-non-test";
     pub(crate) const CHECK_TEST: &str = "test";
     pub(crate) const CHECK_TEST_LOCKED: &str = "test-locked";
@@ -82,6 +92,8 @@ pub(crate) mod cli_command {
     pub(crate) const LOOP_STATUS: &str = "status";
     pub(crate) const LOOP_TICK: &str = "tick";
     pub(crate) const MCP: &str = "mcp";
+    pub(crate) const MIGRATION: &str = "migration";
+    pub(crate) const MIGRATION_ADD_NESTED: &str = "add";
     pub(crate) const MIGRATION_ADD: &str = "migration-add";
     pub(crate) const PRESETS: &str = "presets";
     pub(crate) const PROMPT: &str = "prompt";
@@ -214,6 +226,22 @@ impl MemoryTool {
             tool::WORK_FINISH => Some(Self::Finish),
             _ => None,
         }
+    }
+
+    pub(crate) const fn uses_repository_authority(self) -> bool {
+        matches!(
+            self,
+            Self::AgentDoctor
+                | Self::Goal
+                | Self::Start
+                | Self::Check
+                | Self::Gates
+                | Self::Evidence
+                | Self::Review
+                | Self::Refine
+                | Self::Status
+                | Self::Finish
+        )
     }
 
     const fn name(self) -> &'static str {
@@ -370,11 +398,25 @@ impl MemoryTool {
     }
 }
 
-pub(crate) fn tool_descriptors(manifest_tools: &[ManifestTool]) -> Vec<Value> {
-    manifest_tools
-        .iter()
-        .filter(|tool| is_execution_tool(tool))
-        .map(manifest_tool_descriptor)
+pub(crate) fn tool_descriptors(
+    contract_version: u32,
+    manifest_tools: &[ManifestTool],
+) -> Vec<Value> {
+    let execution = if contract_version >= 6 {
+        RepositoryTool::ALL
+            .iter()
+            .copied()
+            .map(RepositoryTool::descriptor)
+            .collect::<Vec<_>>()
+    } else {
+        manifest_tools
+            .iter()
+            .filter(|tool| is_execution_tool(tool))
+            .map(manifest_tool_descriptor)
+            .collect()
+    };
+    execution
+        .into_iter()
         .chain(MemoryTool::ALL.iter().copied().map(memory_tool_descriptor))
         .collect()
 }
@@ -422,6 +464,16 @@ pub(crate) fn execution_tool_args(tool: &ManifestTool, args_obj: &JsonObject) ->
 
 pub(crate) fn execution_tool_requires_name(tool: &ManifestTool) -> bool {
     jig_features::native_tool_requires_name(&tool.name)
+}
+
+pub(crate) fn execution_tool_requires_name_for_native_operation(
+    tool: &ManifestTool,
+    native_operation: Option<&str>,
+) -> bool {
+    native_operation.map_or_else(
+        || execution_tool_requires_name(tool),
+        jig_features::native_tool_requires_name,
+    )
 }
 
 fn execution_input_schema(tool: &ManifestTool) -> Value {

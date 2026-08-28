@@ -1,4 +1,5 @@
 
+
 #[test]
 fn run_init_rust_react_scaffold_omits_admin_contract_without_admin_frontend() {
     let _guard = lock_env();
@@ -358,7 +359,7 @@ fn rust_react_reserves_backend_dev_identity_across_frontend_sources() {
 }
 
 #[test]
-fn reserved_backend_dev_identity_is_scoped_to_rust_react() {
+fn reserved_backend_dev_identity_is_scoped_to_application_presets() {
     let api_frontend = FrontendApp {
         name: "api".into(),
         dir: "api".into(),
@@ -380,6 +381,20 @@ fn reserved_backend_dev_identity_is_scoped_to_rust_react() {
         .unwrap();
     }
 
+    let error = ScaffoldOpts {
+        preset: Some(ScaffoldPreset::GoReact),
+        frontends: vec![parse_scaffold_frontend("api:spa").unwrap()],
+        ..ScaffoldOpts::default()
+    }
+    .validate_init_invariants(&AnswerOpts {
+        go_module: Some("example.com/ExampleProject".into()),
+        ..AnswerOpts::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("go-react frontend app name 'api'"));
+    assert!(error.contains("reserved backend dev app 'api'"));
+
     ScaffoldOpts {
         preset: Some(ScaffoldPreset::RustReact),
         frontends: vec![parse_scaffold_frontend("api-client:spa").unwrap()],
@@ -387,6 +402,78 @@ fn reserved_backend_dev_identity_is_scoped_to_rust_react() {
     }
     .validate_init_invariants(&AnswerOpts::default())
     .unwrap();
+}
+
+#[test]
+fn application_presets_reject_conflicting_backend_identity_answers() {
+    for (preset, backend_language, expected_message) in [
+        (
+            ScaffoldPreset::RustReact,
+            BackendLanguage::Go,
+            "--preset rust-react generates a rust backend",
+        ),
+        (
+            ScaffoldPreset::GoReact,
+            BackendLanguage::Rust,
+            "--preset go-react generates a go backend",
+        ),
+    ] {
+        let error = ScaffoldOpts {
+            preset: Some(preset),
+            ..ScaffoldOpts::default()
+        }
+        .validate_init_invariants(&AnswerOpts {
+            backend_language: Some(backend_language),
+            ..AnswerOpts::default()
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(expected_message), "{error}");
+        assert!(error.contains("select a matching preset"), "{error}");
+    }
+
+    ScaffoldOpts {
+        preset: Some(ScaffoldPreset::HarnessOnly),
+        ..ScaffoldOpts::default()
+    }
+    .validate_init_invariants(&AnswerOpts {
+        backend_language: Some(BackendLanguage::Go),
+        ..AnswerOpts::default()
+    })
+    .unwrap();
+}
+
+#[test]
+fn run_init_rejects_conflicting_backend_identity_before_destination_writes() {
+    let temp = tempdir().unwrap();
+    let answers_file = temp.path().join("answers.toml");
+    fs::write(&answers_file, "backend_language = \"go\"\n").unwrap();
+    let destination = temp.path().join("ExampleProject");
+
+    let error = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("--preset rust-react generates a rust backend"));
+    assert!(!destination.exists());
 }
 
 #[test]
@@ -486,6 +573,44 @@ fn run_init_rejects_invalid_frontend_package_names_before_writes() {
     assert!(!destination.exists());
 }
 
+#[test]
+fn run_init_rejects_frontend_names_that_cannot_become_component_ids_before_writes() {
+    for supplied_name in ["_web", "web-"] {
+        let temp = tempdir().unwrap();
+        let destination = temp.path().join("repo");
+
+        let error = run_init(InitOpts {
+            path: destination.clone(),
+            scaffold: ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: vec![ScaffoldFrontend {
+                    name: supplied_name.into(),
+                    kind: ScaffoldFrontendKind::Spa,
+                    custom_default_name: false,
+                }],
+                frontend_list: Vec::new(),
+            },
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("Invalid frontend app name"), "{error}");
+        assert!(!destination.exists());
+    }
+}
+
 #[cfg(unix)]
 fn assert_rendered_scaffold_rust_is_formatted(plan: &scaffold::InitScaffoldPlan, case: &str) {
     let rendered = plan.render_files().unwrap();
@@ -523,88 +648,98 @@ fn assert_rendered_scaffold_rust_is_formatted(plan: &scaffold::InitScaffoldPlan,
 }
 
 #[cfg(unix)]
-#[test]
-fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {
-    let _guard = lock_env();
+fn assert_rendered_scaffold_go_is_formatted_and_config_is_runnable(
+    plan: &scaffold::InitScaffoldPlan,
+    case: &str,
+) {
+    if !test_program_is_available("gofmt", &["-h"])
+        || !test_program_is_available("go", &["version"])
+    {
+        assert_ne!(
+            std::env::var("JIG_REQUIRE_GO_TOOLCHAIN").as_deref(),
+            Ok("1"),
+            "{case}: JIG_REQUIRE_GO_TOOLCHAIN=1 but go/gofmt is unavailable"
+        );
+        return;
+    }
+
+    let rendered = plan.render_files().unwrap();
     let temp = tempdir().unwrap();
+    let mut go_paths = Vec::new();
+    let mut config_source = None;
+    let mut config_test_source = None;
+    for (index, file) in rendered
+        .into_iter()
+        .filter(|file| file.relative.ends_with(".go"))
+        .enumerate()
+    {
+        if file.relative == "internal/config/config.go" {
+            config_source = Some(file.contents.clone());
+        } else if file.relative == "internal/config/config_test.go" {
+            config_test_source = Some(file.contents.clone());
+        }
+        let path = temp.path().join(format!("rendered-{index}.go"));
+        fs::write(&path, file.contents).unwrap();
+        go_paths.push(path);
+    }
 
-    let accepted_name = "r".repeat(216);
-    let accepted_destination = temp.path().join("accepted");
-    fs::create_dir(&accepted_destination).unwrap();
-    let accepted_plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::None),
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-        },
-        &AnswerOpts {
-            repo_name: Some(accepted_name.clone()),
-            ..AnswerOpts::default()
-        },
-        &accepted_destination,
-    )
-    .unwrap()
-    .unwrap();
-    accepted_plan.write(&accepted_destination, false).unwrap();
-
-    assert!(
-        accepted_destination
-            .join(format!("crates/{accepted_name}-test-support/Cargo.toml"))
-            .is_file()
-    );
-    let vite_config = fs::read_to_string(accepted_destination.join("web/vite.config.ts")).unwrap();
-    let repo_label = vite_config
-        .split_once("http://api.")
-        .unwrap()
-        .1
-        .split_once(".localhost:1355")
-        .unwrap()
-        .0;
-    assert_eq!(repo_label.len(), 63);
-    assert_eq!(repo_label, "r".repeat(63));
-
-    let metadata = Command::new("cargo")
-        .args(["metadata", "--no-deps", "--format-version", "1"])
-        .current_dir(&accepted_destination)
+    assert!(!go_paths.is_empty(), "{case}: scaffold rendered no Go");
+    let output = Command::new("gofmt")
+        .arg("-l")
+        .args(&go_paths)
         .output()
         .unwrap();
     assert!(
-        metadata.status.success(),
-        "maximum supported scaffold has invalid Cargo metadata\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&metadata.stdout),
-        String::from_utf8_lossy(&metadata.stderr)
+        output.status.success() && output.stdout.is_empty(),
+        "rendered Go was not gofmt-stable for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    let rejected_destination = temp.path().join("rejected");
-    let error = run_init(InitOpts {
-        path: rejected_destination.clone(),
-        scaffold: ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: Some(ScaffoldDb::None),
-            frontends: Vec::new(),
-            frontend_list: Vec::new(),
-        },
-        template: Some(materialize_template_worktree().path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("r".repeat(217)),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("217-byte Cargo package stem"), "{error}");
-    assert!(error.contains("at most 216 bytes"), "{error}");
+    let config_dir = temp.path().join("config");
+    fs::create_dir(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.go"),
+        config_source.expect("Go scaffold renders internal/config/config.go"),
+    )
+    .unwrap();
+    fs::write(
+        config_dir.join("config_test.go"),
+        config_test_source.expect("Go scaffold renders internal/config/config_test.go"),
+    )
+    .unwrap();
+    let output = Command::new("go")
+        .args(["test", "config.go", "config_test.go"])
+        .current_dir(&config_dir)
+        .output()
+        .unwrap();
     assert!(
-        error.contains("lib<stem>_test_support-<hash>.rmeta"),
-        "{error}"
+        output.status.success(),
+        "rendered Go config did not compile and pass its address cases for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!rejected_destination.exists());
+
+    let output = Command::new("go")
+        .args(["vet", "config.go", "config_test.go"])
+        .current_dir(&config_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "rendered Go config did not pass go vet for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
+
+#[cfg(unix)]
+fn test_program_is_available(program: &str, args: &[&str]) -> bool {
+    match Command::new(program).args(args).output() {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => panic!("failed to probe {program}: {error}"),
+    }
+}
+
+mod limit_validation;

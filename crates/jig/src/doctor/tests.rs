@@ -22,6 +22,23 @@ fn current_generated_launcher() -> String {
     )
 }
 
+#[cfg(unix)]
+#[test]
+fn go_module_requires_a_supervised_doctor_process_session() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config("backend_language = \"go\"")
+        .write();
+    fs::write(
+        temp.path().join("go.mod"),
+        "module example.com/doctor-fixture\n\ngo 1.24\n",
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    assert!(go_runtime_probe_required(&ctx));
+}
+
 include!("tests_parts/part_01.rs");
 include!("tests_parts/part_02.rs");
 include!("tests_parts/part_03.rs");

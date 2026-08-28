@@ -1,0 +1,1 @@
+Research-backed fixes for repository selection, schema isolation, execution evidence, durable-state validation, archive recovery, CLI diagnostics, and frontend validation. Preserve wire formats where practical and verify each behavior with focused regressions.

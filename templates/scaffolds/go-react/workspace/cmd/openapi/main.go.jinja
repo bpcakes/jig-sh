@@ -1,0 +1,33 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"<<[ go_module ]>>/internal/httpapi"
+)
+
+func main() {
+	output := flag.String("output", "openapi/public.json", "OpenAPI output path")
+	flag.Parse()
+	service := httpapi.New(httpapi.Dependencies{})
+	contents, err := json.MarshalIndent(service.API.OpenAPI(), "", "  ")
+	if err != nil {
+		exitf("encode OpenAPI: %v", err)
+	}
+	contents = append(contents, '\n')
+	if err := os.MkdirAll(filepath.Dir(*output), 0o755); err != nil {
+		exitf("create OpenAPI output directory: %v", err)
+	}
+	if err := os.WriteFile(*output, contents, 0o644); err != nil {
+		exitf("write OpenAPI: %v", err)
+	}
+}
+
+func exitf(format string, values ...any) {
+	_, _ = fmt.Fprintf(os.Stderr, format+"\n", values...)
+	os.Exit(1)
+}

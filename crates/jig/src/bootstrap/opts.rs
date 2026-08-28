@@ -21,6 +21,12 @@ pub struct AnswerOpts {
     pub repo_name: Option<String>,
     #[arg(
         long,
+        help_heading = "Project Shape",
+        help = "Go import module for --preset go-react, e.g. github.com/acme/my-app"
+    )]
+    pub go_module: Option<String>,
+    #[arg(
+        long,
         help_heading = "Common Answers",
         help = "Default branch used for generated CI and comparison commands"
     )]
@@ -46,6 +52,18 @@ pub struct AnswerOpts {
     /// Set by `jig adopt --minimal`; not a public answer flag.
     #[arg(skip)]
     pub harness_footprint: Option<super::answers::HarnessFootprint>,
+    /// Set by an application scaffold; persisted so updates retain backend-specific policy.
+    #[arg(skip)]
+    pub(crate) backend_language: Option<crate::backend::BackendLanguage>,
+    /// Set by the Go scaffold to `none` or `postgres`.
+    #[arg(skip)]
+    pub(crate) go_database: Option<crate::backend::GoDatabase>,
+    /// Derived from preserved repository authority for scaffold command/path rendering.
+    #[arg(skip)]
+    pub(crate) scaffold_go_component_roots: Vec<String>,
+    /// Backend-neutral migration policy path loaded from persisted answers.
+    #[arg(skip)]
+    pub(crate) migration_dir: Option<String>,
     #[arg(
         long,
         help_heading = "Common Answers",

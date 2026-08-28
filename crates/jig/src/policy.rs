@@ -1,23 +1,25 @@
+// agentic-loc-exception: policy dispatch and repository-wide check implementations remain co-located for consistent Git boundary handling.
+
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use jig_owned_process::require_success;
+use jig_owned_process::{
+    BoundedProcessOutput, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
+};
 use serde_json::{Value, json};
 
-use crate::bootstrap::scrub_known_repository_git_environment;
-use crate::context::RepoContext;
+use crate::context::{RepoContext, WorkGate};
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
-use crate::execution::{
-    ExecutionCommandError, ExecutionCommandOutput, ExecutionControl,
-    run_authoritative_execution_command,
-};
+use crate::execution::{ExecutionCommandError, ExecutionControl};
+use crate::repository_path::validate_repository_directory_path;
 use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -31,8 +33,11 @@ const SOFT_LIMIT_START: usize = 500;
 const SOFT_LIMIT_END: usize = 600;
 // Files above this emit informational guidance for agent-review ergonomics.
 const TARGET_HIGH: usize = 400;
-mod agent_map;
-mod sqlx;
+// Git output is sometimes repository authority rather than user-facing
+// diagnostics (for example an unborn schema snapshot's complete file list).
+// Keep that capture bounded, but large enough for ordinary repositories and
+// fail closed below if the bound is ever exceeded.
+const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 
 pub(crate) struct AgentMapInput {
     pub(crate) map_path: PathBuf,
@@ -163,8 +168,11 @@ pub(crate) fn validate_contract(
             errors.push("Missing scripts/install-jig.sh installer.".into());
         }
     }
-    if ctx.sqlx_enabled() && ctx.rust_migration_dir().trim().is_empty() {
-        errors.push("sqlx_enabled is true, but rust_migration_dir is empty.".into());
+    if ctx.migration_policy_enabled() && ctx.migration_dir().trim().is_empty() {
+        errors.push(
+            "Migration immutability is enabled, but migration_dir is empty and no legacy rust_migration_dir fallback is configured."
+                .into(),
+        );
     }
     // RepoContext construction has already rejected unsupported contract epochs.
     for command_key in ctx.required_commands() {
@@ -176,6 +184,70 @@ pub(crate) fn validate_contract(
         }
         if let Err(error) = ctx.command_for_key(command_key) {
             errors.push(error.to_string());
+        }
+    }
+    let catalog = if ctx.contract_version() >= 6 {
+        match crate::repository::RepositoryCatalog::from_context(ctx) {
+            Ok(catalog) => {
+                for gate in ctx.work_gates() {
+                    let WorkGate::Evidence(gate) = gate else {
+                        continue;
+                    };
+                    if let Err(error) =
+                        crate::repository::resolve_evidence_targets(&catalog, &gate.selector)
+                    {
+                        errors.push(format!("Work gate '{}': {error}.", gate.id));
+                    }
+                }
+                Some(catalog)
+            }
+            Err(error) => {
+                errors.push(format!("Invalid repository model: {error}."));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if ctx.contract_version() >= 6 {
+        for action in ctx.action_specs() {
+            match &action.runner {
+                jig_contract::ActionRunner::Command { command, .. } => {
+                    if !ctx
+                        .required_commands()
+                        .iter()
+                        .any(|required| required == command)
+                    {
+                        errors.push(format!(
+                            "Target {} references command {command}, but it is not declared in required_commands.",
+                            action.target
+                        ));
+                    } else if let Err(error) = ctx.command_for_key(command) {
+                        errors.push(format!("Target {}: {error}.", action.target));
+                    }
+                }
+                jig_contract::ActionRunner::Native { operation } => {
+                    if !jig_features::is_supported_native_tool(operation) {
+                        errors.push(format!(
+                            "Target {} references unsupported native operation {operation}.",
+                            action.target
+                        ));
+                    } else if operation == jig_contract::tool::SCHEMA_CHECK
+                        && let Err(error) = schema::validate_runner(ctx, &action.target)
+                    {
+                        errors.push(format!("Target {}: {error}.", action.target));
+                    }
+                }
+            }
+        }
+    } else {
+        for gate in ctx.work_gates() {
+            if let WorkGate::Evidence(gate) = gate {
+                errors.push(format!(
+                    "Work gate '{}': evidence gates require jig contract version 6 or later.",
+                    gate.id
+                ));
+            }
         }
     }
 
@@ -190,16 +262,57 @@ pub(crate) fn validate_contract(
         }
     }
     for tool in ctx.tool_specs() {
-        if let Some(error) = jig_features::tool_admission_error(ctx, &tool.name) {
+        let alias_action = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.action_for_alias(&tool.name));
+        if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
+            errors.push(format!(
+                "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
+                tool.name
+            ));
+        }
+        let native_operation = alias_action.and_then(|action| match &action.runner {
+            jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+            jig_contract::ActionRunner::Command { .. } => None,
+        });
+        let admission_name = native_operation.unwrap_or(&tool.name);
+        if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
             errors.push(error);
         }
         match tool.kind.as_str() {
             kind::NATIVE => {
-                if !jig_features::is_supported_native_tool(&tool.name) {
-                    errors.push(format!("Unsupported native tool: {}.", tool.name));
+                if matches!(
+                    alias_action.map(|action| &action.runner),
+                    Some(jig_contract::ActionRunner::Command { .. })
+                ) {
+                    errors.push(format!(
+                        "Native tool {} aliases a command-backed action.",
+                        tool.name
+                    ));
+                    continue;
+                }
+                let operation = native_operation.unwrap_or(&tool.name);
+                if !jig_features::is_supported_native_tool(operation) {
+                    if operation == tool.name {
+                        errors.push(format!("Unsupported native tool: {}.", tool.name));
+                    } else {
+                        errors.push(format!(
+                            "Unsupported native operation {operation} for tool {}.",
+                            tool.name
+                        ));
+                    }
                 }
             }
             kind::COMMAND => {
+                if let Some(jig_contract::ActionRunner::Native { operation }) =
+                    alias_action.map(|action| &action.runner)
+                {
+                    errors.push(format!(
+                        "Command-backed tool {} aliases native operation {operation}.",
+                        tool.name
+                    ));
+                    continue;
+                }
                 let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty())
                 else {
                     errors.push(format!(
@@ -208,6 +321,15 @@ pub(crate) fn validate_contract(
                     ));
                     continue;
                 };
+                if let Some(jig_contract::ActionRunner::Command { command, .. }) =
+                    alias_action.map(|action| &action.runner)
+                    && command != command_key
+                {
+                    errors.push(format!(
+                        "Command-backed tool {} projects command {command_key}, but its owning action uses {command}.",
+                        tool.name
+                    ));
+                }
                 if !ctx
                     .required_commands()
                     .iter()
@@ -234,16 +356,23 @@ pub(crate) fn validate_contract(
             ));
             continue;
         };
-        if !tool_defs::is_no_arg_execution_tool(tool) {
-            if !tool_defs::is_execution_tool(tool) {
-                errors.push(format!(
-                    "Configured work check or gate tool is not an execution tool: {name}."
-                ));
-            } else {
-                errors.push(format!(
-                    "Configured work check or gate tool requires an argument: {name}."
-                ));
-            }
+        if !tool_defs::is_execution_tool(tool) {
+            errors.push(format!(
+                "Configured work check or gate tool is not an execution tool: {name}."
+            ));
+            continue;
+        }
+        let native_operation = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.action_for_alias(&name))
+            .and_then(|action| match &action.runner {
+                jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+                jig_contract::ActionRunner::Command { .. } => None,
+            });
+        if tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation) {
+            errors.push(format!(
+                "Configured work check or gate tool requires an argument: {name}."
+            ));
         }
     }
 
@@ -254,233 +383,214 @@ pub(crate) fn validate_contract(
     }
 }
 
-pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
-    if !ctx.sqlx_enabled() {
-        bail!("sqlx migration add requires sqlx_enabled = true");
+mod migration_add;
+pub(crate) use migration_add::migration_add;
+
+#[cfg(test)]
+pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+    schema_check_with_observer_and_timeout(
+        ctx,
+        None,
+        ctx.command_timeout().duration(),
+        &mut NoopExecutionObserver,
+    )
+    .map_err(ExecutionCommandError::into_anyhow)
+}
+
+pub(crate) fn schema_check_with_observer_and_timeout(
+    ctx: &RepoContext,
+    schema_check_target: Option<&jig_contract::TargetId>,
+    timeout: Duration,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
+    if observer.cancelled() {
+        return Err(ExecutionCommandError::CancelledBeforeStart);
     }
-    if !ctx.migration_add_enabled() {
-        bail!(
-            "sqlx migration add requires rust_migration_layout = \"flat_migrations\"; this repository has rust_migration_layout = \"{}\"",
-            ctx.rust_migration_layout().as_str()
-        );
+    schema::check_with_control(ctx, schema_check_target, timeout, &|| observer.cancelled())
+        .map_err(|error| schema_execution_error(error, timeout.as_secs()))
+}
+
+pub(crate) fn schema_check_with_control(
+    ctx: &RepoContext,
+    schema_check_target: Option<&jig_contract::TargetId>,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<NativeToolOutput> {
+    schema::check_with_control(ctx, schema_check_target, timeout, cancelled)
+}
+
+fn schema_execution_error(error: anyhow::Error, timeout_seconds: u64) -> ExecutionCommandError {
+    match error.downcast_ref::<jig_owned_process::OwnedProcessTreeError>() {
+        Some(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart) => {
+            ExecutionCommandError::CancelledBeforeStart
+        }
+        Some(jig_owned_process::OwnedProcessTreeError::Cancelled) => {
+            ExecutionCommandError::Cancelled
+        }
+        Some(jig_owned_process::OwnedProcessTreeError::TimedOut) => ExecutionCommandError::failed(
+            anyhow::anyhow!("Schema check timed out after {timeout_seconds} seconds"),
+        ),
+        _ => ExecutionCommandError::failed(error),
     }
-    let migration_dir = ctx.rust_migration_dir();
-    if migration_dir.trim().is_empty() {
-        bail!("rust_migration_dir is empty");
+}
+
+struct ControlledOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+struct ControlledBytesOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+fn controlled_output(
+    command: &mut Command,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledOutput> {
+    controlled_output_with_limits(command, deadline, ProcessOutputLimits::default(), cancelled)
+}
+
+fn controlled_output_with_limits(
+    command: &mut Command,
+    deadline: Instant,
+    limits: ProcessOutputLimits,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledOutput> {
+    let output = controlled_output_bytes_with_limits(command, deadline, limits, cancelled)?;
+    Ok(ControlledOutput {
+        status: output.status,
+        stdout: controlled_bytes_text(output.stdout, output.stdout_truncated),
+        stderr: controlled_bytes_text(output.stderr, output.stderr_truncated),
+    })
+}
+
+fn controlled_output_bytes_with_limits(
+    command: &mut Command,
+    deadline: Instant,
+    limits: ProcessOutputLimits,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledBytesOutput> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
     }
-    let slug = slugify(name);
-    if slug.is_empty() {
-        bail!("Migration name {name:?} must contain at least one alphanumeric character.");
-    }
-    let timestamp = utc_timestamp();
-    let base = ctx
-        .root()
-        .join(migration_dir)
-        .join(format!("{timestamp}_{slug}"));
-    let up = base.with_extension("up.sql");
-    let down = base.with_extension("down.sql");
-    if up.exists() || down.exists() {
-        bail!("Migration files already exist for {}.", base.display());
-    }
-    if let Some(parent) = up.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    fs::write(&up, format!("-- forward migration: {slug}\n"))
-        .with_context(|| format!("Failed to write {}", up.display()))?;
-    fs::write(&down, format!("-- rollback migration: {slug}\n"))
-        .with_context(|| format!("Failed to write {}", down.display()))?;
-    Ok(NativeToolOutput {
-        exit_status: 0,
-        stdout: format!("Created:\n  - {}\n  - {}\n", up.display(), down.display()),
-        stderr: String::new(),
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_owned_process_tree_with_output_limits(command, remaining, limits, cancelled)?;
+    let stdout_truncated = output
+        .stdout
+        .as_ref()
+        .is_some_and(|output| output.truncated);
+    let stderr_truncated = output
+        .stderr
+        .as_ref()
+        .is_some_and(|output| output.truncated);
+    let stdout = controlled_output_bytes(output.stdout, "stdout")?;
+    let stderr = controlled_output_bytes(output.stderr, "stderr")?;
+    Ok(ControlledBytesOutput {
+        status: output.status,
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
     })
 }
 
 #[cfg(test)]
-pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
-    schema_check_with_observer(ctx, &mut NoopExecutionObserver)
-        .map_err(ExecutionCommandError::into_anyhow)
+fn controlled_output_text(output: Option<BoundedProcessOutput>, stream: &str) -> Result<String> {
+    let output = output.with_context(|| format!("{stream} was not captured"))?;
+    let truncated = output.truncated;
+    let bytes = controlled_output_bytes(Some(output), stream)?;
+    Ok(controlled_bytes_text(bytes, truncated))
 }
 
-pub(crate) fn schema_check_with_observer(
-    ctx: &RepoContext,
-    observer: &mut dyn ExecutionControl,
-) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
-    let command_text = ctx.schema_dump_command();
-    if command_text.trim().is_empty() {
-        return Err(ExecutionCommandError::failed(anyhow::anyhow!(
-            "schema_dump_command is empty"
-        )));
+fn controlled_output_bytes(output: Option<BoundedProcessOutput>, stream: &str) -> Result<Vec<u8>> {
+    let output = output.with_context(|| format!("{stream} was not captured"))?;
+    if !output.complete {
+        bail!("{stream} capture did not complete");
     }
-    let schema_docs_dir = ctx.schema_docs_dir();
-    let ignored = schema_git_command_inner(
-        ctx,
-        &[
-            "check-ignore",
-            "--no-index",
-            "--quiet",
-            "--",
-            schema_docs_dir,
-        ],
-        "Schema Git ignore check",
-        observer,
-        false,
-    )?;
-    match ignored.status.code() {
-        Some(0) => {
-            return Ok(NativeToolOutput {
-                exit_status: 1,
-                stdout: String::new(),
-                stderr: format!(
-                    "Schema dump destination {schema_docs_dir} is ignored by Git and cannot provide committed freshness evidence. Choose an unignored schema_docs_dir or update the repository ignore policy.\n"
-                ),
-            });
-        }
-        Some(1) => {}
-        _ => {
-            return Err(schema_git_failure(
-                &[
-                    "check-ignore",
-                    "--no-index",
-                    "--quiet",
-                    "--",
-                    schema_docs_dir,
-                ],
-                &ignored,
-            ));
-        }
-    }
-    // A check intentionally reruns the configured dump command, then fails if
-    // the dump output path has uncommitted changes.
-    let mut command = Command::new("bash");
-    command
-        .current_dir(ctx.root())
-        .arg("-c")
-        .arg(command_text)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output = run_authoritative_execution_command(
-        &mut command,
-        ctx.command_timeout(),
-        ctx.command_output_limit(),
-        "Configured schema dump",
-        observer,
-    )?;
-    let output = std::process::Output {
-        status: output.status,
-        stdout: output.stdout,
-        stderr: output.stderr,
-    };
-    require_success(&output, |_| {
-        format!(
-            "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
-            output.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
-    .map_err(ExecutionCommandError::failed)?;
-    if observer.cancelled() {
-        return Err(ExecutionCommandError::Cancelled);
-    }
-    let status = schema_git_text(
-        ctx,
-        &[
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignored=matching",
-            "--",
-            schema_docs_dir,
-        ],
-        "Schema Git status",
-        observer,
-    )?;
-    if !status.trim().is_empty() {
-        let diff = schema_git_text(
-            ctx,
-            &["--no-pager", "diff", "--", schema_docs_dir],
-            "Schema Git diff",
-            observer,
-        )?;
-        return Ok(NativeToolOutput {
-            exit_status: 1,
-            stdout: String::new(),
-            stderr: format!(
-                "Schema dump is stale. Re-run {command_text} and commit {schema_docs_dir} changes.\n{status}{diff}"
-            ),
-        });
-    }
-    Ok(NativeToolOutput {
-        exit_status: 0,
-        stdout: "Schema dump is up to date.\n".into(),
-        stderr: String::new(),
-    })
+    Ok(output.bytes)
 }
 
-fn schema_git_text(
-    ctx: &RepoContext,
+fn controlled_bytes_text(bytes: Vec<u8>, truncated: bool) -> String {
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
+        text.push_str("\n[output truncated by Jig]\n");
+    }
+    text
+}
+
+fn controlled_git_text(
+    root: &Path,
     args: &[&str],
-    label: &str,
-    observer: &mut dyn ExecutionControl,
-) -> std::result::Result<String, ExecutionCommandError> {
-    let output = schema_git_command(ctx, args, label, observer)?;
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    let output = controlled_git_output(root, args, deadline, cancelled)?;
     if !output.status.success() {
-        return Err(schema_git_failure(args, &output));
+        bail!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("git {} returned non-UTF-8 text", args.join(" ")))
 }
 
-fn schema_git_command(
-    ctx: &RepoContext,
+fn controlled_git_bytes(
+    root: &Path,
     args: &[&str],
-    label: &str,
-    observer: &mut dyn ExecutionControl,
-) -> std::result::Result<ExecutionCommandOutput, ExecutionCommandError> {
-    schema_git_command_inner(ctx, args, label, observer, true)
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<u8>> {
+    let output = controlled_git_output(root, args, deadline, cancelled)?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output.stdout)
 }
 
-fn schema_git_command_inner(
-    ctx: &RepoContext,
+fn controlled_git_output(
+    root: &Path,
     args: &[&str],
-    label: &str,
-    observer: &mut dyn ExecutionControl,
-    literal_pathspecs: bool,
-) -> std::result::Result<ExecutionCommandOutput, ExecutionCommandError> {
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledBytesOutput> {
     let mut command = Command::new("git");
-    command.current_dir(ctx.root());
-    configure_known_root_git_environment(&mut command);
-    if literal_pathspecs {
-        command.arg("--literal-pathspecs");
-    }
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    run_authoritative_execution_command(
+    command.current_dir(root).args(args);
+    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
+    let output = controlled_output_bytes_with_limits(
         &mut command,
-        ctx.command_timeout(),
-        ctx.command_output_limit(),
-        label,
-        observer,
-    )
-}
-
-fn configure_known_root_git_environment(command: &mut Command) {
-    scrub_known_repository_git_environment(command);
-    command.env("GIT_OPTIONAL_LOCKS", "0");
-}
-
-fn schema_git_failure(args: &[&str], output: &ExecutionCommandOutput) -> ExecutionCommandError {
-    ExecutionCommandError::failed(anyhow::anyhow!(
-        "git {} failed with status {}\nstderr:\n{}",
-        args.join(" "),
-        output.status.code().unwrap_or(1),
-        String::from_utf8_lossy(&output.stderr)
-    ))
+        deadline,
+        ProcessOutputLimits {
+            stdout: CONTROLLED_GIT_OUTPUT_LIMIT,
+            stderr: CONTROLLED_GIT_OUTPUT_LIMIT,
+        },
+        cancelled,
+    )?;
+    if output.stdout_truncated || output.stderr_truncated {
+        bail!(
+            "git {} output exceeded the {} byte schema-check capture limit",
+            args.join(" "),
+            CONTROLLED_GIT_OUTPUT_LIMIT
+        );
+    }
+    Ok(output)
 }
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
@@ -489,32 +599,6 @@ pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
 
 pub(crate) fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     agent_map::render(root, map_path)
-}
-
-pub(super) fn normalize_repo_relative_path(path: &Path, label: &str) -> Result<PathBuf> {
-    if path.is_absolute() {
-        bail!("{label} must be repository-relative: {}", path.display());
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(part) => normalized.push(part),
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                bail!(
-                    "{label} must stay inside the repository: {}",
-                    path.display()
-                )
-            }
-        }
-    }
-
-    if normalized.as_os_str().is_empty() {
-        bail!("{label} must not be empty");
-    }
-
-    Ok(normalized)
 }
 
 fn check_no_mod_rs(ctx: &RepoContext) -> Result<Value> {
@@ -622,9 +706,9 @@ fn check_migration_immutability(
     ctx: &RepoContext,
     opts: &MigrationImmutabilityInput,
 ) -> Result<Value> {
-    let dir = ctx.rust_migration_dir();
+    let dir = ctx.migration_dir();
     if dir.trim().is_empty() {
-        bail!("rust_migration_dir is empty");
+        bail!("migration_dir is empty and no legacy rust_migration_dir fallback is configured");
     }
     let bytes = git_output(
         ctx.root(),
@@ -705,7 +789,137 @@ fn rust_candidate_files(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<Ve
         .collect())
 }
 
-include!("policy/tail.rs");
+fn rust_renames(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<BTreeMap<String, String>> {
+    let mut args = vec!["diff", "--name-status", "--diff-filter=R", "-z"];
+    if opts.staged {
+        args.push("--cached");
+    } else if let Some(reference) = &opts.changed_against {
+        args.push(reference);
+        args.push("HEAD");
+    }
+    args.push("--");
+    let root_args = ctx
+        .rust_crate_roots()
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    args.extend(root_args);
+    let entries = split_nul(&git_output(ctx.root(), &args)?);
+    let mut renames = BTreeMap::new();
+    let mut index = 0usize;
+    while index + 2 < entries.len() {
+        let _status = &entries[index];
+        let old = entries[index + 1].clone();
+        let new = entries[index + 2].clone();
+        renames.insert(new, old);
+        index += 3;
+    }
+    Ok(renames)
+}
 
+fn previous_line_count(
+    root: &Path,
+    reference: &str,
+    path: &str,
+    renamed_from: Option<&String>,
+) -> Result<usize> {
+    if let Some(contents) = git_blob_optional(root, &format!("{reference}:{path}"))? {
+        return Ok(contents.lines().count());
+    }
+    let Some(old) = renamed_from else {
+        return Ok(0);
+    };
+    Ok(git_blob_optional(root, &format!("{reference}:{old}"))?
+        .map(|contents| contents.lines().count())
+        .unwrap_or(0))
+}
+
+fn git_list_files(root: &Path, roots: &[String]) -> Result<Vec<String>> {
+    let mut args = vec!["ls-files", "-z", "--"];
+    args.extend(roots.iter().map(String::as_str));
+    Ok(split_nul(&git_output(root, &args)?))
+}
+
+fn git_blob(root: &Path, spec: &str) -> Result<String> {
+    git_text(root, &["show", spec])
+}
+
+fn git_blob_optional(root: &Path, spec: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["show", spec])
+        .stderr(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
+    Ok(Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?
+        .success())
+}
+
+fn git_text(root: &Path, args: &[&str]) -> Result<String> {
+    Ok(String::from_utf8_lossy(&git_output(root, args)?).into_owned())
+}
+
+pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = Command::new("git").current_dir(root).args(args).output()?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(output.stdout)
+}
+
+pub(super) fn split_nul(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect()
+}
+
+fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_sep = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_was_sep = false;
+        } else if !last_was_sep && !slug.is_empty() {
+            slug.push('_');
+            last_was_sep = true;
+        }
+    }
+    slug.trim_matches('_').to_string()
+}
+
+fn utc_timestamp_at(now: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}{:02}{:02}{:02}{:02}{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
+}
+
+mod agent_map;
+mod schema;
+mod sqlx;
 #[cfg(test)]
 mod tests;

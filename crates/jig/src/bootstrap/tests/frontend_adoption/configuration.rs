@@ -151,118 +151,7 @@ fn init_rejects_unsafe_frontend_app_values() {
     })
     .unwrap_err()
     .to_string();
-    assert!(
-        env_prefix_collision.contains("conflicts with another app after normalization to gate key")
-    );
-}
-
-#[test]
-fn init_toml_escapes_quoted_rust_and_workspace_gate_paths() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    let destination = temp.path().join("quoted-paths");
-
-    run_init(InitOpts {
-        path: destination.clone(),
-        scaffold: ScaffoldOpts::default(),
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("ExampleProject".into()),
-            sqlx_enabled: Some(false),
-            rust_crate_roots: vec!["crates/\"quoted".into()],
-            frontend_workspace_roots: vec!["packages/\"shared".into()],
-            frontend_apps: vec![FrontendApp {
-                name: "web".into(),
-                dir: "apps/web".into(),
-                coverage_threshold: 80,
-                kind: "vite".into(),
-                role: "spa".into(),
-            }],
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
-    let config = toml::from_str::<toml::Value>(&rendered).unwrap();
-    let gates = config["work"]["gates"].as_array().unwrap();
-    let gate_paths = |id: &str| {
-        gates
-            .iter()
-            .find(|gate| gate["id"].as_str() == Some(id))
-            .unwrap()["paths"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|path| path.as_str().unwrap())
-            .collect::<Vec<_>>()
-    };
-
-    assert!(gate_paths("rust-fmt").contains(&"crates/\"quoted/**"));
-    assert!(gate_paths("typescript-web-lint").contains(&"packages/\"shared/**"));
-}
-
-#[test]
-fn init_rejects_generated_roots_that_are_not_literal_gate_paths() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
-    for (index, root) in ["crates/pkg{1}", "crates/a**b", "crates/\u{1}name"]
-        .into_iter()
-        .enumerate()
-    {
-        let error = run_init(InitOpts {
-            path: temp.path().join(format!("invalid-rust-root-{index}")),
-            scaffold: ScaffoldOpts::default(),
-            template: Some(template.path().display().to_string()),
-            template_mode: None,
-            vcs_ref: None,
-            force: false,
-            defaults: true,
-            no_input: true,
-            no_vault: true,
-            answers: AnswerOpts {
-                repo_name: Some("ExampleProject".into()),
-                sqlx_enabled: Some(false),
-                rust_crate_roots: vec![root.into()],
-                ..AnswerOpts::default()
-            },
-        })
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("cannot be represented safely"), "{error:?}");
-    }
-
-    let workspace_error = run_init(InitOpts {
-        path: temp.path().join("invalid-workspace-root"),
-        scaffold: ScaffoldOpts::default(),
-        template: Some(template.path().display().to_string()),
-        template_mode: None,
-        vcs_ref: None,
-        force: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("ExampleProject".into()),
-            sqlx_enabled: Some(false),
-            frontend_workspace_roots: vec!["packages/pkg?".into()],
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(
-        workspace_error.contains("cannot be represented safely"),
-        "{workspace_error:?}"
-    );
+    assert!(env_prefix_collision.contains("share derived dev environment prefix JIG_DEV_WEB_APP"));
 }
 
 #[test]
@@ -627,7 +516,6 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     "dev": "vite"
   }
 }
-
 "#,
     )
     .unwrap();
@@ -713,23 +601,15 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(answers.contains("web_package_manager = \"npm\""));
     assert!(answers.contains("[[frontend_apps]]"));
     assert!(answers.contains("[commands]"));
-    assert!(answers.contains("typescript_lint_command = \"scripts/check-webapps.sh lint\""));
+    assert!(answers.contains("web_lint_command = \"scripts/check-webapps.sh check-one"));
+    assert!(
+        answers.contains("repo_compat_typescript_lint_command = \"scripts/check-webapps.sh lint\"")
+    );
+    assert!(answers.contains("kind = \"evidence\""));
+    assert!(answers.contains("profile = \"verify\""));
     assert!(!answers.contains("tool = \"jig.typescript_lint\""));
-    assert!(!answers.contains("tool = \"jig.typescript_typecheck\""));
-    assert!(!answers.contains("tool = \"jig.typescript_build\""));
-    assert!(!answers.contains("tool = \"jig.typescript_coverage\""));
-    for (gate, tool) in [
-        ("typescript-web-lint", "jig.typescript_web_lint"),
-        ("typescript-web-typecheck", "jig.typescript_web_typecheck"),
-        ("typescript-web-build", "jig.typescript_web_build"),
-        ("typescript-web-coverage", "jig.typescript_web_coverage"),
-    ] {
-        assert!(answers.contains(&format!("id = \"{gate}\"")), "{answers}");
-        assert!(answers.contains(&format!("tool = \"{tool}\"")), "{answers}");
-    }
-    assert!(answers.contains("paths = [\"apps/web/**\", \"packages/**\""));
-    assert!(answers.contains("id = \"jig-contract\""));
-    assert!(!answers.contains("id = \"contract\""));
+    assert!(!answers.contains("frontend-contract-drift"));
+    assert!(!answers.contains("frontend-public-boundary"));
     assert!(answers.contains("[[dev.apps]]"));
     assert!(answers.contains(
         "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]"
@@ -738,6 +618,44 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
 
     assert!(!repo.join("Makefile").exists());
     let web_check = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    for compatibility_mode in ["app-check)", "application-contracts)", "public-artifacts)"] {
+        assert!(
+            web_check.contains(compatibility_mode),
+            "generated web helper must retain {compatibility_mode} for contract-v5 commands"
+        );
+    }
+    assert!(!repo.join("scripts/contracts.mjs").exists());
+    let missing_contract_runner = std::process::Command::new("bash")
+        .args([
+            "scripts/check-webapps.sh",
+            "contracts-drift-check",
+            "apps/web",
+        ])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!missing_contract_runner.status.success());
+    let missing_contract_stderr = String::from_utf8_lossy(&missing_contract_runner.stderr);
+    assert!(
+        missing_contract_stderr
+            .contains("Required frontend contract runner scripts/contracts.mjs is missing"),
+        "{missing_contract_stderr}"
+    );
+    let unconfigured_contract_app = std::process::Command::new("bash")
+        .args([
+            "scripts/check-webapps.sh",
+            "contracts-drift-check",
+            "apps/not-configured",
+        ])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!unconfigured_contract_app.status.success());
+    let unconfigured_stderr = String::from_utf8_lossy(&unconfigured_contract_app.stderr);
+    assert!(
+        unconfigured_stderr.contains("is not configured in [[frontend_apps]]"),
+        "{unconfigured_stderr}"
+    );
     let web_node = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
     let web_sources = format!("{web_check}\n{web_node}");
     assert!(web_sources.contains("run_managed_npm_command install"));
@@ -753,21 +671,14 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(web_sources.contains("web-dependencies.lock"));
     assert!(web_sources.contains("scripts/check-webapp-scripts.mjs"));
     assert!(web_sources.contains("scripts/enforce-coverage.cjs"));
-    assert!(web_check.contains("app-check <app-dir> <lint|typecheck|build|coverage>"));
-    assert!(web_check.contains("\"apps/web\") run_check \"$app_dir\" \"80\" \"$script_name\""));
     assert!(web_check.contains("scripts/web-node.cjs"));
     assert!(!web_check.contains("--jig-workspace-metadata \"$operation\" \"$@\" <<'NODE'"));
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains("\"typescript_lint_command\""));
+    assert!(contract.contains("\"web_lint_command\""));
     assert!(contract.contains(r#""name": "jig.typescript_lint""#));
     assert!(contract.contains(r#""name": "jig.typescript_typecheck""#));
     assert!(contract.contains(r#""name": "jig.typescript_build""#));
     assert!(contract.contains(r#""name": "jig.typescript_coverage""#));
-    assert!(contract.contains(r#""contract_version": 5"#));
-    assert!(contract.contains(r#""name": "jig.typescript_web_lint""#));
-    assert!(contract.contains(r#""name": "jig.typescript_web_typecheck""#));
-    assert!(contract.contains(r#""name": "jig.typescript_web_build""#));
-    assert!(contract.contains(r#""name": "jig.typescript_web_coverage""#));
     assert!(repo.join("scripts/check-webapp-scripts.mjs").is_file());
     let script_helper = fs::read_to_string(repo.join("scripts/check-webapp-scripts.mjs")).unwrap();
     assert!(script_helper.contains("typeof command !== \"string\""));
@@ -777,6 +688,8 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
 
     let web_workflow =
         fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
+    assert!(!web_workflow.contains("Check generated API clients and public boundary"));
+    assert!(!web_workflow.contains("node scripts/contracts.mjs client-check"));
     assert!(web_workflow.contains("actions/setup-node@v5"));
     assert!(web_workflow.contains("cache: npm"));
     assert_eq!(
@@ -791,7 +704,7 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(!web_workflow.contains("oven-sh/setup-bun"));
 
     let rust_workflow = fs::read_to_string(repo.join(".github/workflows/rust-tests.yml")).unwrap();
-    assert!(rust_workflow.contains("scripts/jig check fmt"));
+    assert!(rust_workflow.contains("scripts/jig check api:fmt"));
     assert_eq!(rust_workflow.matches(r#"- "rust-toolchain""#).count(), 2);
     assert!(!rust_workflow.contains("scripts/jig fmt-check"));
 
@@ -799,109 +712,6 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
         fs::read_to_string(repo.join(".github/workflows/agent-map-check.yml")).unwrap();
     assert!(agent_map_workflow.contains("scripts/jig check agent-map"));
     assert!(!agent_map_workflow.contains("scripts/jig agent-map check"));
-}
-
-#[test]
-fn adoption_persists_non_app_workspace_ownership_and_honors_exclusions() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    fs::create_dir_all(repo.join("apps/web")).unwrap();
-    fs::create_dir_all(repo.join("libs/shared")).unwrap();
-    fs::create_dir_all(repo.join("libs/private")).unwrap();
-    fs::write(
-        repo.join("package.json"),
-        r#"{"private":true,"workspaces":["apps/*","libs/*","!libs/private"]}"#,
-    )
-    .unwrap();
-    fs::write(repo.join("package-lock.json"), "{}").unwrap();
-    fs::write(
-        repo.join("apps/web/package.json"),
-        r#"{
-  "name":"web",
-  "scripts":{
-    "dev":"vite",
-    "lint":"eslint .",
-    "typecheck":"tsc --noEmit",
-    "build:bundle":"vite build",
-    "test:coverage":"vitest run --coverage"
-  }
-}"#,
-    )
-    .unwrap();
-    fs::write(
-        repo.join("libs/shared/package.json"),
-        r#"{"name":"shared","exports":"./index.js"}"#,
-    )
-    .unwrap();
-    fs::write(
-        repo.join("libs/private/package.json"),
-        r#"{"name":"private-fixture"}"#,
-    )
-    .unwrap();
-
-    let output = run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("ExampleProject".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    assert_eq!(
-        output["adoption_profile"]["frontend_workspace_roots"],
-        serde_json::json!(["libs/shared"])
-    );
-    let config = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(
-        config.contains("frontend_workspace_roots = [\"libs/shared\"]"),
-        "{config}"
-    );
-    assert!(config.contains("\"libs/shared/**\""), "{config}");
-    assert!(!config.contains("libs/private/**"), "{config}");
-
-    fs::write(
-        repo.join("package.json"),
-        r#"{"private":true,"workspaces":["apps/*","libs/private"]}"#,
-    )
-    .unwrap();
-    run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: true,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("ExampleProject".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-    let refreshed = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(
-        refreshed.contains("frontend_workspace_roots = [\"libs/private\"]"),
-        "{refreshed}"
-    );
-    assert!(refreshed.contains("\"libs/private/**\""), "{refreshed}");
-    assert!(!refreshed.contains("libs/shared/**"), "{refreshed}");
 }
 
 #[test]
@@ -1070,11 +880,11 @@ fn adopt_with_project_owned_makefile_keeps_file_and_emits_direct_typescript_gate
     assert!(!answers.contains("makefile_enabled"));
     assert!(answers.contains("[[frontend_apps]]"));
     assert!(answers.contains("[commands]"));
-    assert!(answers.contains("typescript_lint_command = \"scripts/check-webapps.sh lint\""));
-    assert!(answers.contains("jig.typescript_web_lint"));
+    assert!(answers.contains("web_lint_command = \"scripts/check-webapps.sh check-one"));
+    assert!(answers.contains("jig.typescript_lint"));
 
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains("typescript_lint_command"));
+    assert!(contract.contains("web_lint_command"));
     assert!(contract.contains("jig.typescript_lint"));
 
     let agent_guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
@@ -1082,4 +892,4 @@ fn adopt_with_project_owned_makefile_keeps_file_and_emits_direct_typescript_gate
     assert!(!agent_guide.contains("make ci-webapps"));
 }
 
-include!("configuration_parts/part_01.rs");
+mod package_managers;

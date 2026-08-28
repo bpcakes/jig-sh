@@ -104,7 +104,7 @@ fn work_refine_reports_failed_checks_without_aborting() {
         .rev()
         .find(|receipt| receipt["tool_name"] == "jig.work_check")
         .unwrap();
-    assert_eq!(batch["exit_status"], 0);
+    assert_eq!(batch["exit_status"], 9);
     assert_eq!(batch["evidence"]["gates"][0]["status"], "failed");
     assert_eq!(batch["evidence"]["gates"][0]["exit_status"], 9);
 }
@@ -114,7 +114,7 @@ fn work_refine_records_unknown_applicability_and_runs_later_gates() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     crate::test_env::TestRepoBuilder::new(temp.path())
-        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .contract_version(5)
         .config(
             r#"
 [commands]

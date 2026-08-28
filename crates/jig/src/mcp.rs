@@ -1,3 +1,4 @@
+// agentic-loc-exception: MCP request dispatch remains centralized to keep protocol behavior consistent.
 use std::io::{self, BufRead, Write};
 
 use anyhow::{Context, Result, anyhow};
@@ -13,6 +14,15 @@ const MCP_PROGRESS_EVENT_LIMIT: usize = 64;
 const MCP_OUTPUT_PREVIEW_LIMIT: usize = 4 * 1024;
 
 pub fn serve(ctx: &RepoContext) -> Result<()> {
+    let result = serve_transport(ctx);
+    // Repository runs are accepted as durable work before their response is
+    // published. Keep the owning process alive after EOF or another transport
+    // failure until every accepted worker for this repository terminalizes.
+    crate::runtime::wait_for_mcp_repository_runs(ctx);
+    result
+}
+
+fn serve_transport(ctx: &RepoContext) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();
@@ -53,13 +63,7 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
                 "id": id,
                 "result": {}
             })),
-            "tools/list" => Some(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "tools": tool_defs::tool_descriptors(ctx.tool_specs())
-                }
-            })),
+            "tools/list" => Some(handle_tools_list(ctx, id)),
             "tools/call" => Some(handle_tool_call(ctx, id, params, &mut writer, framing)),
             other => Some(json!({
                 "jsonrpc": "2.0",
@@ -74,6 +78,29 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
         if let Some(response) = response {
             write_message(&mut writer, &response, framing)?;
         }
+    }
+}
+
+fn handle_tools_list(ctx: &RepoContext, id: Option<Value>) -> Value {
+    match crate::runtime::refreshed_repository_context(ctx) {
+        Ok(current) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": tool_defs::tool_descriptors(
+                    current.contract_version(),
+                    current.tool_specs(),
+                )
+            }
+        }),
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32000,
+                "message": error.to_string()
+            }
+        }),
     }
 }
 
@@ -167,12 +194,14 @@ impl OutputPreview {
         self.truncated |= retained < bytes.len();
     }
 
-    fn message(&self, stream: &str) -> Option<String> {
+    fn take_message(&mut self, stream: &str) -> Option<String> {
         if self.bytes.is_empty() && !self.truncated {
             return None;
         }
-        let preview = String::from_utf8_lossy(&self.bytes);
-        let suffix = if self.truncated {
+        let bytes = std::mem::take(&mut self.bytes);
+        let truncated = std::mem::take(&mut self.truncated);
+        let preview = String::from_utf8_lossy(&bytes);
+        let suffix = if truncated {
             " [preview truncated]"
         } else {
             ""
@@ -229,13 +258,13 @@ impl<'a> McpProgressObserver<'a> {
 
     fn flush(&mut self) -> Result<()> {
         let mut messages = std::mem::take(&mut self.messages);
-        if let Some(message) = self.stdout.message("stdout") {
+        if let Some(message) = self.stdout.take_message("stdout") {
             messages.push(message);
         }
-        if let Some(message) = self.stderr.message("stderr") {
+        if let Some(message) = self.stderr.take_message("stderr") {
             messages.push(message);
         }
-        if self.messages_truncated {
+        if std::mem::take(&mut self.messages_truncated) {
             messages.push("additional progress events omitted".to_string());
         }
         for message in messages {
@@ -275,6 +304,10 @@ impl ExecutionObserver for McpProgressObserver<'_> {
             ),
         };
         self.queue(message);
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        McpProgressObserver::flush(self)
     }
 }
 
@@ -363,6 +396,7 @@ fn write_message(writer: &mut dyn Write, value: &Value, framing: MessageFraming)
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::io::{self, Cursor, Write};
     use std::time::Duration;
 
@@ -371,13 +405,52 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        McpProgressObserver, MessageFraming, combine_tool_and_progress_results, handle_tool_call,
-        read_message, write_message,
+        MCP_PROGRESS_EVENT_LIMIT, McpProgressObserver, MessageFraming,
+        combine_tool_and_progress_results, handle_tool_call, handle_tools_list, read_message,
+        write_message,
     };
     use crate::context::RepoContext;
     use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
     use crate::test_env::TestRepoBuilder;
+    #[test]
+    fn tools_list_refreshes_manifest_tools_after_server_start() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"[commands]
+custom_check_command = "printf 'check\n'"
+"#,
+            )
+            .required_commands(["custom_check_command"])
+            .tool(json!({
+                "name": "jig.old_check",
+                "kind": "command",
+                "description": "Run the old check name.",
+                "command": "custom_check_command"
+            }))
+            .write();
+        let ctx = crate::context::RepoContext::load_from(temp.path()).unwrap();
+        let manifest_path = temp.path().join(".agent/jig-contract.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["tools"][0]["name"] = json!("jig.new_check");
+        fs::write(
+            manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
 
+        let response = handle_tools_list(&ctx, Some(json!(1)));
+        let names = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"jig.new_check"), "{response:#}");
+        assert!(!names.contains(&"jig.old_check"), "{response:#}");
+    }
     #[test]
     fn read_message_accepts_json_line() {
         let input = json!({
@@ -670,5 +743,77 @@ fixture_check_command = "printf 'fixture tool failed\n' >&2; exit 7"
         assert!(output_message.starts_with("stdout: "));
         assert!(output_message.ends_with(" [preview truncated]"));
         assert!(output_message.len() < 4_200);
+    }
+
+    #[test]
+    fn progress_observer_flushes_only_output_queued_since_the_previous_flush() {
+        let mut output = Vec::new();
+        {
+            let mut observer =
+                McpProgressObserver::new(&mut output, MessageFraming::JsonLine, Some(json!(7)));
+            observer.event(ExecutionEvent::Output {
+                stream: ExecutionStream::Stderr,
+                bytes: b"first batch\n",
+            });
+            observer.flush().unwrap();
+            observer.event(ExecutionEvent::Output {
+                stream: ExecutionStream::Stderr,
+                bytes: b"second batch\n",
+            });
+            observer.flush().unwrap();
+        }
+
+        let notifications = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(notifications.len(), 2, "{notifications:#?}");
+        assert_eq!(notifications[0]["params"]["message"], "stderr: first batch");
+        assert_eq!(
+            notifications[1]["params"]["message"],
+            "stderr: second batch"
+        );
+    }
+
+    #[test]
+    fn progress_observer_resets_event_truncation_after_each_flush() {
+        let mut output = Vec::new();
+        {
+            let mut observer =
+                McpProgressObserver::new(&mut output, MessageFraming::JsonLine, Some(json!(7)));
+            for _ in 0..=MCP_PROGRESS_EVENT_LIMIT {
+                observer.event(ExecutionEvent::Heartbeat {
+                    label: "first batch",
+                    elapsed: Duration::ZERO,
+                });
+            }
+            observer.flush().unwrap();
+            observer.event(ExecutionEvent::Heartbeat {
+                label: "second batch",
+                elapsed: Duration::ZERO,
+            });
+            observer.flush().unwrap();
+        }
+
+        let messages = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).unwrap()["params"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| *message == "additional progress events omitted")
+                .count(),
+            1,
+            "{messages:#?}"
+        );
+        assert_eq!(messages.last().unwrap(), "second batch reached 0s");
     }
 }

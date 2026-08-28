@@ -255,6 +255,10 @@ fn rust_runtime_fix(required: NumericVersion) -> String {
     format!("Activate Rust {required} or newer with rustup, then run `scripts/jig doctor`.")
 }
 
+fn go_runtime_fix(required: NumericVersion) -> String {
+    format!("Install or activate Go {required} or newer, then run `scripts/jig doctor`.")
+}
+
 fn sqlx_cli_version_fix(
     ctx: &RepoContext,
     environment: &DoctorEnvironment,
@@ -294,7 +298,7 @@ fn node_runtime_check(
         return None;
     }
     let authority_path = ctx.root().join(".node-version");
-    let required = match node_version_authority(&authority_path) {
+    let required = match numeric_version_authority(&authority_path, "Node", false, "24.19.0") {
         Ok(Some(required)) => required,
         Ok(None) => return None,
         Err(reason) => {
@@ -408,58 +412,6 @@ fn node_runtime_check(
     })
 }
 
-fn node_version_authority(path: &Path) -> std::result::Result<Option<NumericVersion>, String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => {
-            return Err(format!(
-                "Could not inspect the Node version authority at {}",
-                path.display()
-            ));
-        }
-    };
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "Node version authority {} must be a real regular file",
-            path.display()
-        ));
-    }
-    if metadata.len() == 0 || metadata.len() > 128 {
-        return Err(format!(
-            "Node version authority {} must contain exactly one bounded version token",
-            path.display()
-        ));
-    }
-    let contents = fs::read_to_string(path).map_err(|_| {
-        format!(
-            "Node version authority {} must contain valid UTF-8",
-            path.display()
-        )
-    })?;
-    let mut tokens = contents.split_ascii_whitespace();
-    let Some(token) = tokens.next() else {
-        return Err(format!(
-            "Node version authority {} is empty",
-            path.display()
-        ));
-    };
-    if tokens.next().is_some() {
-        return Err(format!(
-            "Node version authority {} must contain exactly one version token",
-            path.display()
-        ));
-    }
-    parse_numeric_version(token, false, false)
-        .map(Some)
-        .ok_or_else(|| {
-            format!(
-                "Node version authority {} must contain an exact numeric version such as 24.19.0",
-                path.display()
-            )
-        })
-}
-
 fn probe_node_version(
     executable: &Path,
     root: &Path,
@@ -506,6 +458,32 @@ fn probe_rust_version(
         .next()
         .and_then(|token| parse_numeric_version(token, false, false))
         .ok_or_else(|| "rustc --version returned an invalid version".to_string())
+}
+
+fn probe_go_version(
+    executable: &Path,
+    root: &Path,
+    environment: &DoctorEnvironment,
+    cancellation: Option<&dyn Fn() -> bool>,
+) -> std::result::Result<NumericVersion, String> {
+    let stdout = version_probe_stdout(
+        executable,
+        &["version"],
+        "go version",
+        root,
+        environment,
+        environment.home.as_deref(),
+        cancellation,
+    )?;
+    let mut tokens = stdout.split_ascii_whitespace();
+    if tokens.next() != Some("go") || tokens.next() != Some("version") {
+        return Err("go version returned an invalid product name".into());
+    }
+    tokens
+        .next()
+        .and_then(|token| token.strip_prefix("go"))
+        .and_then(|token| parse_numeric_version(token, false, false))
+        .ok_or_else(|| "go version returned an invalid version".to_string())
 }
 
 fn probe_sqlx_cli_version(

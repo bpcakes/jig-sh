@@ -300,6 +300,10 @@ impl CliExecutionObserver {
     }
 
     pub(crate) fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
+        self.deliver_pending(outcome)
+    }
+
+    fn deliver_pending<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
         let rendered = self.take_rendered();
         let writer = match independent_stderr_writer() {
             Ok(writer) => writer,
@@ -478,6 +482,10 @@ impl ExecutionObserver for CliExecutionObserver {
                 format_duration(elapsed)
             )),
         }
+    }
+
+    fn flush(&mut self) -> anyhow::Result<()> {
+        self.deliver_pending(Ok(()))
     }
 }
 
