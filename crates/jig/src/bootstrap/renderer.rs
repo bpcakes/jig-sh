@@ -697,6 +697,16 @@ fn render_context(
         "rust_gate_command_authority_paths".into(),
         json!(RUST_GATE_COMMAND_AUTHORITY_PATHS),
     );
+    context.insert(
+        "rust_crate_root_shell_args".into(),
+        JsonValue::Array(
+            answers
+                .rust_crate_roots()
+                .iter()
+                .map(|root| JsonValue::String(crate::shell::quote(root)))
+                .collect(),
+        ),
+    );
     let mut frontend_gate_shared_paths = FRONTEND_GATE_SHARED_PATHS
         .iter()
         .map(|path| (*path).to_string())

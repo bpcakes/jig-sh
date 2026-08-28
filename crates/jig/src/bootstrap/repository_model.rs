@@ -17,9 +17,41 @@ use super::source_inputs::FRONTEND_SHARED_INPUTS;
 
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
+const RUST_FILE_LOC_ACTION: &str = "rust-file-loc";
+const RUST_FILE_LOC_COMMAND_KEY: &str = "repo_rust_file_loc_command";
+const RUST_FILE_LOC_SCRIPT: &str = "scripts/check-rust-file-loc.sh";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
+
+pub(super) fn action_uses_managed_rust_file_loc_checker(
+    action: &ActionSpec,
+    commands: &BTreeMap<String, String>,
+) -> bool {
+    if action.target.component.as_str() != REPO_COMPONENT
+        || action.target.action.as_str() != RUST_FILE_LOC_ACTION
+        || action.runner != ActionRunner::command(RUST_FILE_LOC_COMMAND_KEY)
+    {
+        return false;
+    }
+    commands
+        .get(RUST_FILE_LOC_COMMAND_KEY)
+        .and_then(|command| command.strip_prefix(RUST_FILE_LOC_SCRIPT))
+        .is_some_and(|suffix| {
+            suffix.is_empty()
+                || suffix
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_whitespace)
+        })
+}
+
+fn rust_file_loc_command(default_branch: &str) -> String {
+    format!(
+        "{RUST_FILE_LOC_SCRIPT} {}",
+        crate::shell::quote(default_branch)
+    )
+}
 // Explicit action inputs take precedence; these defaults suppress only
 // repository guidance, docs, and hosted-CI metadata. Unlisted files such as
 // `.gitignore`, `Makefile`, and `justfile` deliberately remain fail-closed.
@@ -440,12 +472,10 @@ impl<'a> ModelBuilder<'a> {
     }
 
     fn add_rust_file_loc_action(&mut self) -> Result<()> {
-        let action_id = "rust-file-loc";
+        let action_id = RUST_FILE_LOC_ACTION;
         let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
-        let command = format!(
-            "scripts/check-rust-file-loc.sh {}",
-            crate::shell::quote(self.answers.default_branch())
-        );
+        debug_assert_eq!(command_key, RUST_FILE_LOC_COMMAND_KEY);
+        let command = rust_file_loc_command(self.answers.default_branch());
         self.insert_command(&command_key, &command)?;
         let mut action = ActionSpec::new(
             target_id(REPO_COMPONENT, action_id)?,

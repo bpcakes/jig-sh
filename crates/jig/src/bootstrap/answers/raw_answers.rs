@@ -468,13 +468,14 @@ impl RawAnswers {
 
     #[cfg(test)]
     pub(super) fn resolve(self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
-        self.resolve_with_authored_repository(default_repo_name, None)
+        self.resolve_with_authored_repository(default_repo_name, None, None)
     }
 
     pub(super) fn resolve_with_authored_repository(
         mut self,
         default_repo_name: Option<String>,
         authored_repository: Option<AuthoredRepositoryModel>,
+        authored_repository_commands: Option<&BTreeMap<String, String>>,
     ) -> Result<RenderAnswers> {
         self.normalize_app_dirs()?;
         let authored_has_rust_backend = authored_repository
@@ -494,6 +495,14 @@ impl RawAnswers {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>()
+        });
+        let authored_uses_managed_loc_checker = authored_repository.as_ref().is_some_and(|model| {
+            authored_repository_commands.is_some_and(|commands| {
+                model
+                    .actions
+                    .iter()
+                    .any(|action| action_uses_managed_rust_file_loc_checker(action, commands))
+            })
         });
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
@@ -613,6 +622,22 @@ impl RawAnswers {
             legacy_rust_migration_dir
         };
 
+        // The generated repo:rust-file-loc action deliberately keeps its
+        // dedicated template roots. Component roots own generic Rust adapter
+        // capabilities; they become authoritative once that exact repository
+        // action is replaced or removed.
+        let rust_crate_roots = match authored_rust_crate_roots {
+            Some(authored_roots) if authored_uses_managed_loc_checker => {
+                self.rust_crate_roots.take().unwrap_or(authored_roots)
+            }
+            Some(authored_roots) => authored_roots,
+            None if backend_language == BackendLanguage::Go => Vec::new(),
+            None => self
+                .rust_crate_roots
+                .take()
+                .unwrap_or_else(|| vec!["crates".into()]),
+        };
+
         Ok(RenderAnswers {
             authored_repository,
             authored_repository_commands: BTreeMap::new(),
@@ -632,14 +657,7 @@ impl RawAnswers {
             go_database,
             go_toolchain_authority_path: GO_TOOLCHAIN_AUTHORITY_PATH,
             sqlx_enabled,
-            rust_crate_roots: authored_rust_crate_roots.unwrap_or_else(|| {
-                if backend_language == BackendLanguage::Go {
-                    Vec::new()
-                } else {
-                    self.rust_crate_roots
-                        .unwrap_or_else(|| vec!["crates".into()])
-                }
-            }),
+            rust_crate_roots,
             rust_migration_dir,
             migration_dir,
             rust_migration_layout,

@@ -271,6 +271,63 @@ fn update_recopy_normalizes_legacy_schema_dump_true_when_sqlx_disabled() {
 }
 
 #[test]
+fn update_recopy_refreshes_the_checker_with_configured_rust_roots() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    write_test_crate_guide(&repo);
+
+    run_adopt(AdoptOpts {
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let checker_path = repo.join("scripts/check-rust-file-loc.sh");
+    let checker = fs::read_to_string(&checker_path).unwrap();
+    assert!(checker.contains("readonly rust_root_count=1"), "{checker}");
+    assert!(checker.contains("rust_roots=(crates)"), "{checker}");
+    assert!(!checker.contains("scripts/jig check rust-file-loc"));
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(
+        answers.contains("rust_crate_roots = [\"crates\"]"),
+        "{answers}"
+    );
+
+    fs::write(&checker_path, "authored stale checker\n").unwrap();
+    run_update(UpdateOpts {
+        path: repo,
+        template: None,
+        template_mode: None,
+        recopy: true,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    let checker = fs::read_to_string(checker_path).unwrap();
+    assert!(checker.contains("readonly rust_root_count=1"), "{checker}");
+    assert!(checker.contains("rust_roots=(crates)"), "{checker}");
+}
+
+#[test]
 fn update_refuses_managed_file_changes_without_force() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

@@ -564,6 +564,12 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     worker_test
         .legacy_aliases
         .push(jig_contract::tool::TEST_LOCKED.into());
+    let mut worker_loc = ActionSpec::new(
+        target_id("worker", "rust-file-loc").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("worker_loc_command"),
+    );
+    worker_loc.effects = vec![jig_contract::ActionEffect::ReadOnly];
     let profile = ProfileSpec::new(
         ProfileId::parse("ci").unwrap(),
         vec![api_test.target.clone(), worker_test.target.clone()],
@@ -571,16 +577,24 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     let authored = RepositoryRenderModel {
         affected_ignore: vec!["docs/**".into()],
         components: vec![api, worker],
-        actions: vec![api_test, worker_test],
+        actions: vec![api_test, worker_test, worker_loc],
         profiles: vec![profile],
         default_check_profile: ProfileId::parse("ci").unwrap(),
-        required_commands: vec!["api_test_command".into(), "worker_test_command".into()],
+        required_commands: vec![
+            "api_test_command".into(),
+            "worker_test_command".into(),
+            "worker_loc_command".into(),
+        ],
         tools: Vec::new(),
         commands: BTreeMap::from([
             ("api_test_command".into(), "go test ./...".into()),
             (
                 "worker_test_command".into(),
                 "cargo test -p example-worker".into(),
+            ),
+            (
+                "worker_loc_command".into(),
+                "scripts/check-worker-loc.sh".into(),
             ),
         ]),
     };
@@ -651,13 +665,88 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
             .iter()
             .map(|action| action.target.to_string())
             .collect::<Vec<_>>(),
-        ["api:test", "worker:test"]
+        ["api:test", "worker:test", "worker:rust-file-loc"]
     );
     assert_eq!(
         rerendered.commands["worker_test_command"],
         "cargo test -p example-worker"
     );
+    assert_eq!(
+        rerendered.commands["worker_loc_command"],
+        "scripts/check-worker-loc.sh"
+    );
     assert_eq!(rerendered.default_check_profile.as_str(), "ci");
+}
+
+#[test]
+fn same_target_custom_loc_runner_returns_root_authority_to_authored_components() {
+    let initial = answers("rust_crate_roots = [\"crates\"]\n");
+    let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
+    let action = authored
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "repo:rust-file-loc")
+        .unwrap();
+    action.runner = ActionRunner::command("custom_loc_command");
+    authored
+        .required_commands
+        .retain(|command| command != "repo_rust_file_loc_command");
+    authored.required_commands.push("custom_loc_command".into());
+    authored.commands.remove("repo_rust_file_loc_command");
+    authored.commands.insert(
+        "custom_loc_command".into(),
+        "scripts/check-authored-loc.sh".into(),
+    );
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\nrust_crate_roots = [\"crates\"]\n{}\n{}",
+            authored.authored_toml().unwrap(),
+            authored.commands_toml().unwrap()
+        ),
+    )
+    .unwrap();
+
+    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
+    assert_eq!(
+        serde_json::to_value(&reloaded).unwrap()["rust_crate_roots"],
+        serde_json::json!(["."])
+    );
+    let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
+    let loc = rerendered
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "repo:rust-file-loc")
+        .unwrap();
+    assert_eq!(loc.runner, ActionRunner::command("custom_loc_command"));
+    assert_eq!(
+        rerendered.commands["custom_loc_command"],
+        "scripts/check-authored-loc.sh"
+    );
+}
+
+#[test]
+fn default_branch_change_does_not_discard_managed_checker_roots() {
+    let initial = answers("rust_crate_roots = [\"crates\"]\n");
+    let authored = RepositoryRenderModel::from_answers(&initial).unwrap();
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\ndefault_branch = \"master\"\nsqlx_enabled = false\nschema_dump_enabled = false\nrust_crate_roots = [\"crates\"]\n{}\n{}",
+            authored.authored_toml().unwrap(),
+            authored.commands_toml().unwrap()
+        ),
+    )
+    .unwrap();
+
+    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
+    assert_eq!(reloaded.default_branch(), "master");
+    assert_eq!(reloaded.rust_crate_roots(), ["crates"]);
 }
 
 #[test]

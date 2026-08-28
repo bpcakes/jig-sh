@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
-use super::repository_model::{AuthoredRepositoryModel, frontend_component_id};
+use super::repository_model::{
+    AuthoredRepositoryModel, action_uses_managed_rust_file_loc_checker, frontend_component_id,
+};
 use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
@@ -512,6 +514,10 @@ impl RenderAnswers {
         &self.frontend_workspace_roots
     }
 
+    pub(super) fn rust_crate_roots(&self) -> &[String] {
+        &self.rust_crate_roots
+    }
+
     pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
         self.harness_footprint
     }
@@ -801,7 +807,8 @@ fn loaded_repository_model_is_custom(
 
     let mut generated_raw = raw.clone();
     generated_raw.repository = None;
-    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None) else {
+    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None, None)
+    else {
         return true;
     };
     let Ok(generated) =
@@ -823,8 +830,11 @@ fn resolve_render_answers(
         .flatten()
         .filter(AuthoredRepositoryModel::is_complete)
         .filter(|_| authored_repository_commands.is_some());
-    let mut answers =
-        raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
+    let mut answers = raw.resolve_with_authored_repository(
+        default_repo_name,
+        authored_repository,
+        authored_repository_commands.as_ref(),
+    )?;
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()
     {
