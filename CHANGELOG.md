@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- Add the contract-v6 agent-native repository model with checked-in components, actions, profiles, affected-selection policy, immutable content-addressed run plans, durable target runs, and target/profile evidence gates.
+- Add `jig check` selectors with `--profile`, `--affected`, `--explain`, and `--fail-fast`, plus repository-aware `jig info` subjects and `jig migration add`.
+- Add the `go-react` scaffold preset, `jig-go` repository adapter, Go test workflow, Huma/Chi API skeleton, optional PostgreSQL/sqlc/Goose integration, and generated React client-contract checks.
 - Add contract-v5 change-aware work gates with exact plan baselines, strict per-gate path and ignore globs, explicit not-applicable evidence, gate-scoped freshness, forceable gate selection, and opt-in exact-input evidence reuse across plans.
 - Generate atomic per-app frontend work tools and path-aware Rust, SQLx, and schema gates while retaining repository-wide checks for explicit full-matrix validation.
 - Generate explicit application-contract freshness and public-artifact boundary gates for Rust/React scaffolds and adopted frontend repositories that already own `scripts/contracts.mjs`; keep Jig harness wiring under the distinct `jig-contract` gate.
@@ -12,6 +15,10 @@
 - Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
 
 ### Changed
+- Breaking: Contract-v6 MCP clients use the stable `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` surface instead of directly invoking per-manifest execution tools; submitted plans are re-derived from current checked-in authority before execution.
+- Keep read-only work-gate, evidence, and status inspection available when a configured tool, repository target, profile, or catalog no longer resolves; report the affected required gate in-band as `unsupported` with a reason while contract validation, execution, and work finish continue to fail closed.
+- Make configured checks non-interactive and uniformly supervised for timeout, cancellation, process-tree cleanup, and bounded stdout/stderr capture.
+- Let `jig work check` finish configured evidence targets after a legacy check fails so one invocation records complete gate evidence, while preserving a failing batch result and collecting each configured tool error in structured output.
 - Rename the generated harness-wiring gate from `contract` to `jig-contract`, clarify that it is not an application API contract check, make optional gates truly optional during contract-v5 default work checks, preserve the all-gate default for older contract epochs, and migrate generated gate policy only through exact identities or the documented `contract`/`tests` aliases.
 - Migration: remove the ambient `SCHEMA_DOCS_DIR` override; repositories that used it must persist the same repository-relative value as `schema_docs_dir` in `.jig.toml`, which is now the single generation and freshness authority.
 - Breaking: Limit the Jig CLI, generated harness, development proxy, Vault, and owned-process supervision to Linux and macOS hosts; native Windows host support is removed in this release.
@@ -24,6 +31,19 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy without imposing scaffold-only CI selectors, reject symlink-redirection in Go component roots, and make generated Go CI resolve nested component module authorities, observe vendored modules and SQL inputs, and reserve Linux for Docker-backed PostgreSQL tests.
+- Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
+- Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
+- Make Vault PTY integration tests own their private controlling terminal so `/dev/tty` sizing and resize-clear assertions stay hermetic under TTY-wrapped gate runners.
+- Make run cancellation cursors atomic with queued-event persistence, preserve prior target failures during abandoned-run recovery, reject unsafe run identifiers and live-journal restores, and retain bounded stdout/stderr evidence for configured-command and schema-generator overflow failures.
+- Preserve non-UTF-8 untracked paths in schema snapshots, reject truncated Git authority output, and keep receipt-overflow uncertainty anchored to the exact boundary record.
+- Preserve both bounded output streams in overflow diagnostics, route native pre-start stops through the shared target finalizer, track Go workspace/module inputs in every generated policy workflow, avoid duplicate frontend artifact scans, and omit database configuration from database-free Go scaffolds.
+- Preserve project-owned legacy Go/PostgreSQL `sqlc_check_command` overrides across init and update, validate frontend contract-check app arguments and action working directories before execution, bound archive evidence indexing and fail closed when exact protection cannot be computed, keep superseded duplicate receipt groups closed, terminalize accepted foreground runs after infrastructure errors, and reconcile lease-abandoned runs before applying run-history archival.
+- Keep source-epoch trust anchored when a declared worktree-mutating target never executes, and pass schema output directories to Git as literal pathspecs.
+- Resolve contract-v6 schema freshness checks through the owning schema-dump action's complete command runner, omit the obsolete duplicate top-level generator from new v6 renders, and preserve executed generator exits as target failures with their child status and output.
+- Keep native contract checks behind complete execution authority, require native migration actions to declare their mutating semantics, delegate contract-v6 compatibility aliases to their owning action runners and arity, validate schema action environments and output paths consistently, keep active plan-linked repository runs from racing work-plan closure, and accept built-in action names in multi-selector `jig check` requests regardless of selector order.
+- Restore live target phases, stdout/stderr, and heartbeats for foreground contract-v6 checks; preserve feature-specific unavailable-check diagnostics when repository flags are present; expose the bounded count and elapsed time of source observations; revalidate queued parallel targets before they start; and reject synchronous MCP work-check contention without blocking the transport.
+- Keep affected frontend public-boundary checks sensitive to their ignored-by-default documentation artifact roots, and reject cyclic component or action dependency graphs when the repository catalog loads.
 - Make the changed-file Rust source-size policy a required work gate, and route both local work checks and repository-policy CI through the same merge-base-aware script so work cannot finish with an untested LOC violation.
 - Fail closed when a staged deletion is recreated at the same ignored worktree path, preserve non-UTF-8 temporary order-file paths in canonical Git proofs, and omit child exit statuses from unknown gate evidence.
 - Frame untracked whole-worktree entries and gate-signature path lists unambiguously; probe only changed Gitlink candidates with byte-preserving literal pathspecs; treat malformed selected batches as reuse tombstones while keeping reused records inert; reject nonliteral generated policy roots while preserving the optional empty migration-directory sentinel; and derive adoption previews from the staged closure gates instead of repository utilities.

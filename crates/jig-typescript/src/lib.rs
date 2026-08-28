@@ -1,4 +1,7 @@
-use jig_contract::{FeatureContext, FeatureDescriptor, tool};
+use jig_contract::{
+    ActionEffect, ActionIntent, AdapterActionDescriptor, AdapterRunnerDescriptor, FeatureContext,
+    FeatureDescriptor, RepositoryAdapterDescriptor, tool,
+};
 
 const LINT_COMMAND: &str = "typescript_lint_command";
 const TYPECHECK_COMMAND: &str = "typescript_typecheck_command";
@@ -11,9 +14,57 @@ const COMMAND_KEYS: &[&str] = &[
     BUILD_COMMAND,
     COVERAGE_COMMAND,
 ];
+const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
+const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
+    AdapterActionDescriptor::new(
+        "lint",
+        "Lint this TypeScript component.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(LINT_COMMAND),
+        &["package.json", "**/*"],
+        Some(tool::TYPESCRIPT_LINT),
+    ),
+    AdapterActionDescriptor::new(
+        "typecheck",
+        "Type-check this TypeScript component.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(TYPECHECK_COMMAND),
+        &["package.json", "**/*"],
+        Some(tool::TYPESCRIPT_TYPECHECK),
+    ),
+    AdapterActionDescriptor::new(
+        "build",
+        "Build this TypeScript component.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(BUILD_COMMAND),
+        &["package.json", "**/*"],
+        Some(tool::TYPESCRIPT_BUILD),
+    ),
+    AdapterActionDescriptor::new(
+        "test",
+        "Run this TypeScript component's coverage tests.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(COVERAGE_COMMAND),
+        &["package.json", "**/*"],
+        Some(tool::TYPESCRIPT_COVERAGE),
+    ),
+];
+const REPOSITORY_ADAPTERS: &[RepositoryAdapterDescriptor] = &[RepositoryAdapterDescriptor::new(
+    "typescript",
+    ADAPTER_ACTIONS,
+)];
 
-pub const FEATURE: FeatureDescriptor =
-    FeatureDescriptor::new(COMMAND_KEYS, &[], required_tools, unavailable_tool_message);
+pub const FEATURE: FeatureDescriptor = FeatureDescriptor::new(
+    COMMAND_KEYS,
+    &[],
+    REPOSITORY_ADAPTERS,
+    required_tools,
+    unavailable_tool_message,
+);
 
 fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     let generated_typescript_gates = ctx.contract_version() >= 3 && ctx.frontend_app_count() > 0;

@@ -54,11 +54,18 @@ fn inferred_sqlx_enabled_predicate_respects_explicit_shapes() {
     answers.rust_migration_dir = Some("migrations".into());
     assert!(!empty_shape.should_apply_inferred_sqlx_enabled(&answers));
     answers.rust_migration_dir = None;
+    answers.migration_dir = Some("database/migrations".into());
+    assert!(!empty_shape.should_apply_inferred_sqlx_enabled(&answers));
+    answers.migration_dir = None;
 
     let shape = answer_shape_from_keys(["sqlx_check_command"]);
     assert!(!shape.should_apply_inferred_sqlx_enabled(&answers));
     let shape = answer_shape_from_keys(["schema_dump_command"]);
     assert!(!shape.should_apply_inferred_sqlx_enabled(&answers));
+    let canonical_migration_shape = AnswerInputShape::from_table(
+        &toml::from_str("migration_dir = \"database/migrations\"").unwrap(),
+    );
+    assert!(!canonical_migration_shape.should_apply_inferred_sqlx_enabled(&answers));
     answers.migration_add_command = Some("scripts/new-migration.sh".into());
     assert!(!empty_shape.should_apply_inferred_sqlx_enabled(&answers));
     answers.migration_add_command = None;

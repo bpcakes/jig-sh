@@ -1,3 +1,5 @@
+// agentic-loc-exception: doctor redaction and dependency diagnostics share security-sensitive process fixtures.
+
 #[cfg(unix)]
 #[test]
 fn required_tools_redacts_every_command_body_and_generic_credential_token() {
@@ -117,7 +119,10 @@ fn doctor_reports_unified_readiness_checks() {
     assert_eq!(output["checks"].as_array().unwrap().len(), 8);
     assert!(check_by_id(&output, "runtime")["ok"].as_bool().unwrap());
     assert!(check_by_id(&output, "config")["ok"].as_bool().unwrap());
-    assert!(check_by_id(&output, "contract")["ok"].as_bool().unwrap());
+    assert!(
+        check_by_id(&output, "contract")["ok"].as_bool().unwrap(),
+        "{output:#}"
+    );
     assert!(
         check_by_id(&output, "required_tools")["ok"]
             .as_bool()
@@ -318,6 +323,421 @@ fn rust_runtime_check_accepts_an_active_version_at_or_above_the_cargo_authority(
 
 #[cfg(unix)]
 #[test]
+fn go_runtime_check_uses_the_go_module_authority() {
+    for (actual, compatible) in [("1.27.2", false), ("1.27.4", true)] {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        write_doctor_fixture(&root);
+        configure_doctor_fixture_go_adapter(&root);
+        fs::write(
+            root.join("go.mod"),
+            "module example.com/ExampleProject\n\ngo 1.27.3\n",
+        )
+        .unwrap();
+        write_test_executable(
+            &bin.join("go"),
+            &format!("#!/bin/sh\nprintf 'go version go{actual} linux/amd64\\n'\n"),
+        );
+        let ctx = RepoContext::load_from_root(root.clone()).unwrap();
+
+        let check = go_runtime_check(
+            &ctx,
+            &doctor_environment(&bin, None),
+            DoctorProcessControl::allowed_without_signal_session(),
+        )
+        .unwrap();
+
+        assert_eq!(check.ok, compatible, "{check:?}");
+        assert_eq!(check.data["required"], "1.27.3");
+        assert_eq!(check.data["actual"], actual);
+        assert_eq!(
+            check.data["authority"],
+            root.join("go.mod").display().to_string()
+        );
+        assert_eq!(
+            check.status,
+            if compatible {
+                "compatible"
+            } else {
+                "incompatible"
+            }
+        );
+        if compatible {
+            assert!(check.fix.is_none());
+        } else {
+            assert_eq!(
+                check.fix.as_deref(),
+                Some("Install or activate Go 1.27.3 or newer, then run `scripts/jig doctor`.")
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn go_runtime_check_uses_a_nested_v6_component_module() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_doctor_fixture(&root);
+    configure_doctor_fixture_go_adapter_at(&root, "services/api");
+    fs::create_dir_all(root.join("services/api")).unwrap();
+    fs::write(
+        root.join("services/api/go.mod"),
+        "module example.com/ExampleProject/api\n\ngo 1.27.3\n",
+    )
+    .unwrap();
+    write_test_executable(
+        &bin.join("go"),
+        "#!/bin/sh\nprintf 'go version go1.27.4 linux/amd64\\n'\n",
+    );
+    let ctx = RepoContext::load_from_root(root.clone()).unwrap();
+    crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+
+    let check = go_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(check.ok, "{check:?}");
+    assert_eq!(check.data["required"], "1.27.3");
+    assert_eq!(
+        check.data["authority"],
+        root.join("services/api/go.mod").display().to_string()
+    );
+    assert_eq!(
+        check.data["authorities"],
+        json!([root.join("services/api/go.mod").display().to_string()])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn go_runtime_check_uses_the_nearest_parent_module_for_a_nested_component() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_doctor_fixture(&root);
+    configure_doctor_fixture_go_adapter_at(&root, "cmd/api");
+    fs::write(
+        root.join("go.mod"),
+        "module example.com/ExampleProject\n\ngo 1.27.3\n",
+    )
+    .unwrap();
+    write_test_executable(
+        &bin.join("go"),
+        "#!/bin/sh\nprintf 'go version go1.27.4 linux/amd64\\n'\n",
+    );
+    let ctx = RepoContext::load_from_root(root.clone()).unwrap();
+    crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+
+    let check = go_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(check.ok, "{check:?}");
+    assert_eq!(
+        check.data["authority"],
+        root.join("go.mod").display().to_string()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn go_runtime_check_rejects_a_symlinked_component_root_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let outside = temp.path().join("outside");
+    write_doctor_fixture(&root);
+    configure_doctor_fixture_go_adapter_at(&root, "services/api");
+    fs::create_dir_all(outside.join("api")).unwrap();
+    fs::write(
+        outside.join("api/go.mod"),
+        "module example.com/Outside\n\ngo 9.99.0\n",
+    )
+    .unwrap();
+    symlink(&outside, root.join("services")).unwrap();
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let error = ctx.go_module_authority_paths().unwrap_err().to_string();
+
+    assert!(error.contains("Go component 'api' root"), "{error}");
+    assert!(error.contains("is a symlink"), "{error}");
+    assert!(!error.contains(&outside.display().to_string()), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn go_runtime_check_reports_a_missing_module_at_the_nested_component_root() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    write_doctor_fixture(&root);
+    configure_doctor_fixture_go_adapter_at(&root, "services/api");
+    let ctx = RepoContext::load_from_root(root.clone()).unwrap();
+    crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+
+    let check = go_runtime_check(
+        &ctx,
+        &doctor_environment(&temp.path().join("empty-bin"), None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    let authority = root.join("services/api/go.mod").display().to_string();
+    assert!(!check.ok);
+    assert_eq!(check.status, "invalid authority");
+    assert_eq!(check.data["authority"], authority);
+    assert!(check.fix.as_deref().unwrap().contains(&authority));
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_go_runtime_fix_uses_the_go_module_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let empty_bin = temp.path().join("bin");
+    fs::create_dir_all(&empty_bin).unwrap();
+    write_doctor_fixture(&root);
+    configure_doctor_fixture_go_adapter(&root);
+    fs::write(
+        root.join("go.mod"),
+        "module example.com/ExampleProject\n\ngo 1.28.1\n",
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = go_runtime_check(
+        &ctx,
+        &doctor_environment(&empty_bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(!check.ok);
+    assert_eq!(check.status, "missing");
+    assert_eq!(
+        check.fix.as_deref(),
+        Some("Install or activate Go 1.28.1 or newer, then run `scripts/jig doctor`.")
+    );
+}
+
+fn configure_doctor_fixture_go_adapter(root: &Path) {
+    configure_doctor_fixture_go_adapter_at(root, ".");
+}
+
+fn configure_doctor_fixture_go_adapter_at(root: &Path, component_root: &str) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let mut go_config = config
+        .replacen("root = \".\"", &format!("root = {component_root:?}"), 1)
+        .replacen("adapters = [\"rust\"]", "adapters = [\"go\"]", 1);
+    if component_root != "." {
+        go_config = go_config
+            .replacen("id = \"repo\"", "id = \"api\"", 1)
+            .replace("component = \"repo\"", "component = \"api\"");
+    }
+    assert_ne!(config, go_config);
+    fs::write(config_path, go_config).unwrap();
+
+    let contract_path = root.join(".agent/jig-contract.json");
+    let mut contract: Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"][0]["root"] = json!(component_root);
+    contract["components"][0]["adapters"] = json!(["go"]);
+    if component_root != "." {
+        contract["components"][0]["id"] = json!("api");
+        for action in contract["actions"].as_array_mut().unwrap() {
+            action["target"]["component"] = json!("api");
+        }
+        for profile in contract["profiles"].as_array_mut().unwrap() {
+            for target in profile["targets"].as_array_mut().unwrap() {
+                target["component"] = json!("api");
+            }
+        }
+    }
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn numeric_version_authority_bounds_and_validates_single_token_files() {
+    for (contents, expected) in [
+        (Vec::new(), "bounded version token"),
+        (vec![b'1'; 129], "bounded version token"),
+        (vec![0xff], "valid UTF-8"),
+        (b"1.27.0 1.28.0\n".to_vec(), "exactly one version token"),
+    ] {
+        let temp = tempdir().unwrap();
+        let authority = temp.path().join("version");
+        fs::write(&authority, contents).unwrap();
+
+        let error = numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap_err();
+
+        assert!(error.contains(expected), "{error:?}");
+    }
+
+    let temp = tempdir().unwrap();
+    let authority = temp.path().join("version");
+    fs::write(&authority, "1.27\n").unwrap();
+    assert_eq!(
+        numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap(),
+        Some(NumericVersion {
+            major: 1,
+            minor: 27,
+            patch: 0,
+        })
+    );
+}
+
+#[test]
+fn go_module_authority_prefers_a_newer_toolchain_and_accepts_default() {
+    let temp = tempdir().unwrap();
+    let authority = temp.path().join("go.mod");
+    fs::write(
+        &authority,
+        "module example.com/ExampleProject\n\ngo \"1.27\"\ntoolchain go1.28.2 // local floor\n",
+    )
+    .unwrap();
+    assert_eq!(
+        go_module_version_authority(&authority).unwrap(),
+        Some(NumericVersion {
+            major: 1,
+            minor: 28,
+            patch: 2,
+        })
+    );
+
+    fs::write(
+        &authority,
+        "module example.com/ExampleProject\n\ngo 1.27\ntoolchain default\n",
+    )
+    .unwrap();
+    assert_eq!(
+        go_module_version_authority(&authority).unwrap(),
+        Some(NumericVersion {
+            major: 1,
+            minor: 27,
+            patch: 0,
+        })
+    );
+}
+
+#[test]
+fn go_module_selector_uses_the_highest_authority_and_preserves_partial_patch_semantics() {
+    let temp = tempdir().unwrap();
+    let api = temp.path().join("api.mod");
+    let worker = temp.path().join("worker.mod");
+    fs::write(&api, "module example.com/Api\n\ngo 1.26\n").unwrap();
+    fs::write(
+        &worker,
+        "module example.com/Worker\n\ngo 1.26.1\ntoolchain go1.27.3\n",
+    )
+    .unwrap();
+
+    let (_, selected) = select_go_module_version_requirement(&[api.clone(), worker.clone()])
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.selector, "1.27.3");
+
+    fs::write(&api, "module example.com/Api\n\ngo 1.27\n").unwrap();
+    fs::write(&worker, "module example.com/Worker\n\ngo 1.27.0\n").unwrap();
+    let (_, selected) = select_go_module_version_requirement(&[worker, api])
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.selector, "1.27");
+}
+
+#[test]
+fn go_module_authority_rejects_ambiguous_and_malformed_directives() {
+    for (contents, expected) in [
+        (
+            "module example.com/ExampleProject\n",
+            "must declare one numeric go version",
+        ),
+        ("go 1.27\ngo 1.28\n", "go version more than once"),
+        (
+            "go 1.27\ntoolchain go1.28\ntoolchain go1.29\n",
+            "toolchain more than once",
+        ),
+        ("go 1.28\ntoolchain go1.27\n", "below required go version"),
+        ("go stable\n", "exact numeric version"),
+        ("go 1.27 extra\n", "invalid go directive"),
+    ] {
+        let temp = tempdir().unwrap();
+        let authority = temp.path().join("go.mod");
+        fs::write(&authority, contents).unwrap();
+
+        let error = go_module_version_authority(&authority).unwrap_err();
+        assert!(error.contains(expected), "{contents:?}: {error}");
+    }
+}
+
+#[test]
+fn go_module_authority_bounds_and_validates_the_file() {
+    for (contents, expected) in [
+        (Vec::new(), "non-empty bounded go.mod"),
+        (
+            vec![b'x'; GO_MODULE_AUTHORITY_MAX_BYTES as usize + 1],
+            "non-empty bounded go.mod",
+        ),
+        (vec![0xff], "valid UTF-8"),
+    ] {
+        let temp = tempdir().unwrap();
+        let authority = temp.path().join("go.mod");
+        fs::write(&authority, contents).unwrap();
+
+        let error = go_module_version_authority(&authority).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn go_module_authority_rejects_symlinks_without_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target.mod");
+    let authority = temp.path().join("go.mod");
+    fs::write(&target, "module example.com/ExampleProject\n\ngo 1.27.0\n").unwrap();
+    symlink(&target, &authority).unwrap();
+
+    let error = go_module_version_authority(&authority).unwrap_err();
+    assert!(error.contains("real regular file"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn numeric_version_authority_rejects_symlinks_without_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target-version");
+    let authority = temp.path().join("version");
+    fs::write(&target, "1.27.0\n").unwrap();
+    symlink(&target, &authority).unwrap();
+
+    let error = numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap_err();
+
+    assert!(error.contains("real regular file"), "{error:?}");
+}
+
+#[cfg(unix)]
+#[test]
 fn sqlx_cli_version_check_requires_the_dependency_minor_line() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("repo");
@@ -494,17 +914,19 @@ fn write_sqlx_doctor_fixture_with_command(root: &Path, command: &str) {
     write_doctor_fixture(root);
     let config_path = root.join(".jig.toml");
     let sqlx_config = format!(
-        "sqlx_enabled = true\nrust_crate_roots = [\"crates\"]\nrust_migration_dir = \"migrations\"\nrust_sqlx_metadata_dir = \".sqlx\"\nschema_dump_enabled = false\nsqlx_check_command = {command:?}\n\n[agent_tooling.codex]"
+        "sqlx_enabled = true\nrust_crate_roots = [\"crates\"]\nrust_migration_dir = \"migrations\"\nrust_sqlx_metadata_dir = \".sqlx\"\nschema_dump_enabled = false\nsqlx_check_command = {command:?}\n\n[repository]"
     );
     let config = fs::read_to_string(&config_path)
         .unwrap()
-        .replace("[agent_tooling.codex]", &sqlx_config);
+        .replace("adapters = [\"rust\"]", "adapters = [\"rust\", \"sqlx\"]")
+        .replace("[repository]", &sqlx_config);
     fs::write(config_path, config).unwrap();
     fs::create_dir(root.join("migrations")).unwrap();
 
     let contract_path = root.join(".agent/jig-contract.json");
     let mut contract: Value =
         serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"][0]["adapters"] = json!(["rust", "sqlx"]);
     contract["required_commands"]
         .as_array_mut()
         .unwrap()

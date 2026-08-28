@@ -497,27 +497,91 @@ impl ScaffoldOpts {
     }
 
     pub(crate) fn validate_init_invariants(&self, answers: &AnswerOpts) -> Result<()> {
-        if answers.harness_footprint == Some(HarnessFootprint::Minimal)
-            && (self.preset == Some(ScaffoldPreset::RustReact)
-                || self.db.is_some()
-                || self.has_frontends())
+        if let Some(preset) = self.preset
+            && let Some(expected) = preset.generated_backend_language()
+            && let Some(actual) = answers.backend_language
+            && actual != expected
         {
             bail!(
-                "Init cannot combine harness_footprint = \"minimal\" with a Rust React scaffold; remove --preset rust-react and its database/frontend options, or use harness_footprint = \"full\""
+                "--preset {} generates a {} backend but the effective answers select backend_language = \"{}\"; remove the conflicting answer or select a matching preset",
+                preset.as_str(),
+                expected.as_str(),
+                actual.as_str()
+            );
+        }
+        if answers.harness_footprint == Some(HarnessFootprint::Minimal)
+            && (matches!(
+                self.preset,
+                Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
+            )
+                || self.db.is_some()
+                || self.has_frontends()
+                || answers.go_module.is_some())
+        {
+            let scaffold = if self.preset == Some(ScaffoldPreset::GoReact) {
+                "Go React"
+            } else {
+                "Rust React"
+            };
+            bail!(
+                "Init cannot combine harness_footprint = \"minimal\" with a {scaffold} scaffold; remove the preset and its backend/frontend options, or use harness_footprint = \"full\""
             );
         }
         if self.preset == Some(ScaffoldPreset::HarnessOnly)
-            && (self.db.is_some() || self.has_frontends())
+            && (self.db.is_some() || self.has_frontends() || answers.go_module.is_some())
         {
             bail!(
-                "--preset harness-only cannot be combined with --db, --frontend, or --frontends; remove the scaffold flags or use --preset rust-react"
+                "--preset harness-only cannot be combined with --db, --go-module, --frontend, or --frontends; remove the scaffold flags or use an application preset"
             );
         }
-        if self.preset == Some(ScaffoldPreset::RustReact) {
-            let reserved_backends = [
-                RUST_REACT_BACKEND_DEV_APP_NAME,
-                RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
-            ];
+        if self.preset != Some(ScaffoldPreset::GoReact) && answers.go_module.is_some() {
+            bail!("--go-module requires --preset go-react");
+        }
+        if self.preset == Some(ScaffoldPreset::GoReact) {
+            if let Some(go_module) = answers.go_module.as_deref() {
+                scaffold::validate_go_module(go_module)?;
+            }
+            let go_component_root = scaffold::go_component_root(answers)?;
+            scaffold::validate_go_component_root(go_component_root)?;
+            let initial_migration_dir = scaffold::go_component_path(
+                go_component_root,
+                crate::backend::GO_POSTGRES_MIGRATION_DIR,
+            );
+            if self.db == Some(ScaffoldDb::None) && answers.migration_dir.is_some() {
+                bail!(
+                    "migration_dir requires --preset go-react --db postgres; remove the answer or select PostgreSQL"
+                );
+            }
+            if self.db == Some(ScaffoldDb::Postgres)
+                && let Some(migration_dir) = answers.migration_dir.as_deref()
+                && migration_dir != initial_migration_dir
+            {
+                bail!(
+                    "--preset go-react owns its initial migration layout at {}; remove migration_dir from the answers file and customize the project-owned scaffold after init",
+                    initial_migration_dir
+                );
+            }
+            if self.db == Some(ScaffoldDb::Sqlite) {
+                bail!(
+                    "--preset go-react does not support --db sqlite; use --db none or --db postgres"
+                );
+            }
+            if self
+                .frontends
+                .iter()
+                .chain(self.frontend_list.iter())
+                .any(|frontend| frontend.kind == ScaffoldFrontendKind::Admin)
+                || answers
+                    .frontend_apps
+                    .iter()
+                    .any(|frontend| frontend.role == "admin")
+            {
+                bail!(
+                    "--preset go-react does not yet support the admin frontend because it requires a separate privileged API and client boundary; use web and/or landing"
+                );
+            }
+        }
+        if let Some(preset) = self.preset {
             for frontend_name in self
                 .frontends
                 .iter()
@@ -530,11 +594,12 @@ impl ScaffoldOpts {
                         .map(|frontend| frontend.name.as_str()),
                 )
             {
-                for backend_name in reserved_backends {
+                for backend_name in preset.reserved_backend_dev_app_names() {
                     let backend_prefix = jig_core::dev_app_env_prefix(backend_name);
                     if jig_core::dev_app_env_prefix(frontend_name) == backend_prefix {
                         bail!(
-                            "Rust React frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{backend_name}' because both derive dev environment prefix {backend_prefix}; choose another frontend name"
+                            "{} frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{backend_name}' because both derive dev environment prefix {backend_prefix}; choose another frontend name",
+                            preset.as_str()
                         );
                     }
                 }
@@ -547,6 +612,15 @@ impl ScaffoldOpts {
         if self.preset == Some(ScaffoldPreset::HarnessOnly)
             && should_default_init_sqlx_disabled(answers)
         {
+            answers.sqlx_enabled = Some(false);
+        }
+        if let Some(backend_language) = self
+            .preset
+            .and_then(ScaffoldPreset::generated_backend_language)
+        {
+            answers.backend_language = Some(backend_language);
+        }
+        if self.preset == Some(ScaffoldPreset::GoReact) {
             answers.sqlx_enabled = Some(false);
         }
     }

@@ -1,0 +1,37 @@
+package config
+
+import (
+[% if db_enabled %]	"errors"
+[% endif %]	"net"
+	"os"
+)
+
+type Config struct {
+[% if db_enabled %]	Address     string
+	DatabaseURL string
+[% else %]	Address string
+[% endif %]
+}
+
+func Load() (Config, error) {
+	host := envOrDefault("HOST", "127.0.0.1")
+	port := envOrDefault("PORT", "3000")
+[% if db_enabled %]	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return Config{}, errors.New("DATABASE_URL is required")
+	}
+[% endif %]
+	return Config{
+[% if db_enabled %]		Address:     net.JoinHostPort(host, port),
+		DatabaseURL: databaseURL,
+[% else %]		Address: net.JoinHostPort(host, port),
+[% endif %]
+	}, nil
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}

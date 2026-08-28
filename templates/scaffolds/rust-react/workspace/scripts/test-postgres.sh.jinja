@@ -36,7 +36,8 @@ docker run \
 container_started=1
 
 ready=0
-for _ in $(seq 1 60); do
+attempt=1
+while [ "$attempt" -le 60 ]; do
   if docker exec "$container_name" \
     psql \
     --no-psqlrc \
@@ -49,6 +50,7 @@ for _ in $(seq 1 60); do
     break
   fi
   sleep 1
+  attempt=$((attempt + 1))
 done
 if [ "$ready" -ne 1 ]; then
   echo "PostgreSQL database '$database_name' did not become queryable within 60 seconds." >&2
@@ -56,7 +58,7 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-published_address="$(docker port "$container_name" 5432/tcp)"
+published_address="$(docker port "$container_name" 5432/tcp | head -n 1)"
 host_port="${published_address##*:}"
 case "$host_port" in
   ''|*[!0-9]*)

@@ -130,17 +130,83 @@ fn footprint_adopt_opts(repo: &Path, template: &Path, minimal: bool, force: bool
     }
 }
 
+fn authored_mixed_repository_config() -> toml::Value {
+    toml::from_str(
+        r#"[commands]
+repo_bootstrap_command = "true"
+api_verify_command = "go test ./..."
+worker_verify_command = "cargo test -p worker"
+release_command = "just release"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "repo"
+root = "."
+adapters = ["jig"]
+
+[[repository.components]]
+id = "api"
+root = "services/api"
+adapters = ["go"]
+
+[[repository.components]]
+id = "worker"
+root = "services/worker"
+adapters = ["rust"]
+
+[[repository.actions]]
+target = { component = "repo", action = "contract" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "native", operation = "jig.contract_check" }
+legacy_aliases = ["jig.contract_check"]
+
+[[repository.actions]]
+target = { component = "repo", action = "bootstrap" }
+intent = "operate"
+effects = ["worktree", "process", "external"]
+runner = { kind = "command", command = "repo_bootstrap_command" }
+legacy_aliases = ["jig.bootstrap"]
+
+[[repository.actions]]
+target = { component = "api", action = "verify-custom" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_verify_command" }
+
+[[repository.actions]]
+target = { component = "worker", action = "verify-custom" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "worker_verify_command" }
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  { component = "repo", action = "contract" },
+  { component = "api", action = "verify-custom" },
+  { component = "worker", action = "verify-custom" },
+]
+"#,
+    )
+    .unwrap()
+}
+
 fn add_project_runtime_tables(repo: &Path) {
     let path = repo.join(".jig.toml");
     let mut config = toml::from_str::<toml::Value>(&fs::read_to_string(&path).unwrap()).unwrap();
     let root = config.as_table_mut().unwrap();
 
-    let mut commands = toml::Table::new();
-    commands.insert(
-        "release_command".into(),
-        toml::Value::String("just release".into()),
-    );
-    root.insert("commands".into(), toml::Value::Table(commands));
+    root.entry("commands")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .unwrap()
+        .insert(
+            "release_command".into(),
+            toml::Value::String("just release".into()),
+        );
 
     root.get_mut("work")
         .unwrap()

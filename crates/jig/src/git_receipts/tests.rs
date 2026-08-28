@@ -23,3 +23,57 @@ include!("tests_parts/part_01.rs");
 include!("tests_parts/part_02.rs");
 include!("tests_parts/part_03.rs");
 include!("tests_parts/part_04.rs");
+
+#[test]
+fn repository_source_identity_ignores_agent_only_commits() {
+    let temp = tempdir().unwrap();
+    run_git(temp.path(), &["init", "-q"]);
+    run_git(temp.path(), &["config", "user.name", "Jig Test"]);
+    run_git(
+        temp.path(),
+        &["config", "user.email", "jig@example.invalid"],
+    );
+    std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
+    std::fs::write(temp.path().join("source.txt"), "source\n").unwrap();
+    std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "first\n").unwrap();
+    run_git(temp.path(), &["add", "."]);
+    run_git(temp.path(), &["commit", "-m", "initial", "-q"]);
+    let first = repository_source_snapshot(temp.path())
+        .unwrap()
+        .worktree_fingerprint;
+
+    std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "second\n").unwrap();
+    run_git(temp.path(), &["add", ".agent/state/receipts.jsonl"]);
+    run_git(temp.path(), &["commit", "-m", "state", "-q"]);
+    let second = repository_source_snapshot(temp.path())
+        .unwrap()
+        .worktree_fingerprint;
+
+    assert_eq!(first, second);
+}
+
+#[test]
+fn repository_source_identity_changes_with_committed_source() {
+    let temp = tempdir().unwrap();
+    run_git(temp.path(), &["init", "-q"]);
+    run_git(temp.path(), &["config", "user.name", "Jig Test"]);
+    run_git(
+        temp.path(),
+        &["config", "user.email", "jig@example.invalid"],
+    );
+    std::fs::write(temp.path().join("source.txt"), "first\n").unwrap();
+    run_git(temp.path(), &["add", "."]);
+    run_git(temp.path(), &["commit", "-m", "first", "-q"]);
+    let first = repository_source_snapshot(temp.path())
+        .unwrap()
+        .worktree_fingerprint;
+
+    std::fs::write(temp.path().join("source.txt"), "second\n").unwrap();
+    run_git(temp.path(), &["add", "source.txt"]);
+    run_git(temp.path(), &["commit", "-m", "second", "-q"]);
+    let second = repository_source_snapshot(temp.path())
+        .unwrap()
+        .worktree_fingerprint;
+
+    assert_ne!(first, second);
+}

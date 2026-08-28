@@ -244,7 +244,7 @@ pub(super) fn create_dir_all_synced(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn remove_invalid_gzip(path: &Path) -> Result<()> {
+pub(super) fn remove_invalid_gzip(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => {
             sync_directory(path.parent().unwrap_or_else(|| Path::new(".")))?;

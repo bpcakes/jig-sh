@@ -46,4 +46,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn legacy_go_postgres_template_renders_the_project_sqlc_command() {
+        let config = EMBEDDED_TEMPLATE_FILES
+            .iter()
+            .find(|template| template.relative_path == ".jig.toml.jinja")
+            .unwrap();
+
+        assert!(config.contents.contains(
+            r#"sqlc_check_command = "<<[ sqlc_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>""#
+        ));
+        assert!(
+            !config
+                .contents
+                .contains("sqlc_check_command = \"go tool sqlc vet && go tool sqlc diff\"")
+        );
+    }
 }

@@ -15,7 +15,7 @@ This matrix captures what was extracted from the source application workflow and
 | `.mcp.json` | Templated | Repo-local MCP entrypoint that launches `scripts/jig mcp`. |
 | `crates/jig` | Added | Publishable runtime that exposes the typed CLI/MCP surface over the generated command contract and runtime-owned state. |
 | Agent map, guide, Rust LOC, `mod.rs`, migration immutability, and SQLx unchecked-query checks | Runtime-owned | Implemented natively in `crates/jig`; generated repos call `scripts/jig ...` instead of rendered helper scripts. |
-| `scripts/jig sqlx migration add` | Runtime-owned | Adds timestamped forward-only migration stubs when `sqlx_enabled` is `true` and `rust_migration_layout` is `flat_migrations`; versioned artifact layouts reject it before mutation, and the legacy `scripts/jig migration-add` path follows the same rule. |
+| `scripts/jig migration add` | Runtime-owned | Adds a timestamped migration stub in the configured Go/Goose backend or a SQLx backend using `rust_migration_layout = "flat_migrations"`; versioned artifact layouts reject it before mutation, and the SQLx-namespaced and flattened compatibility paths follow the same rule. |
 | `scripts/jig check contract` | Runtime-owned | Validates runtime wiring and manifest drift. |
 | `scripts/install-jig.sh` + `scripts/jig` | Templated | Contract/profile-compatible runtime launcher and installer for generated repos. |
 | `scripts/enforce-coverage.cjs` | Extracted | Kept generic and CommonJS so it runs inside ESM frontend packages. |

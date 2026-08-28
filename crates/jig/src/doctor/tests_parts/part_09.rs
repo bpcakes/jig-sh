@@ -7,6 +7,34 @@ fn write_doctor_fixture(root: &Path) {
             r#"
 bootstrap_command = "printf bootstrap"
 
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "repo"
+root = "."
+adapters = ["rust"]
+
+[[repository.actions]]
+target = { component = "repo", action = "bootstrap" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "bootstrap_command" }
+inputs = ["**"]
+legacy_aliases = ["jig.bootstrap"]
+
+[[repository.actions]]
+target = { component = "repo", action = "contract" }
+intent = "check"
+effects = ["read_only"]
+runner = { kind = "native", operation = "jig.contract_check" }
+inputs = [".jig.toml"]
+legacy_aliases = ["jig.contract_check"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [{ component = "repo", action = "bootstrap" }]
+
 [agent_tooling.codex]
 marketplaces = []
 "#,
@@ -24,6 +52,42 @@ marketplaces = []
             "command": "bootstrap_command"
         }))
         .write();
+    let contract_path = root.join(".agent/jig-contract.json");
+    let mut contract: Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"] = json!([{
+        "id": "repo",
+        "root": ".",
+        "adapters": ["rust"]
+    }]);
+    contract["actions"] = json!([
+        {
+            "target": {"component": "repo", "action": "bootstrap"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": "bootstrap_command"},
+            "inputs": ["**"],
+            "legacy_aliases": ["jig.bootstrap"]
+        },
+        {
+            "target": {"component": "repo", "action": "contract"},
+            "intent": "check",
+            "effects": ["read_only"],
+            "runner": {"kind": "native", "operation": "jig.contract_check"},
+            "inputs": [".jig.toml"],
+            "legacy_aliases": ["jig.contract_check"]
+        }
+    ]);
+    contract["profiles"] = json!([{
+        "id": "verify",
+        "targets": [{"component": "repo", "action": "bootstrap"}]
+    }]);
+    contract["default_check_profile"] = json!("verify");
+    fs::write(
+        &contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
     fs::write(root.join(".mcp.json"), "{}").unwrap();
     fs::write(
         root.join("scripts/install-jig.sh"),

@@ -30,6 +30,15 @@ fn parses_top_level_info_command_and_explain_alias() {
         other => panic!("expected info commands view, got {other:?}"),
     }
 
+    let go_version = Cli::try_parse_from(["jig", "info", "go-version"]).unwrap();
+    assert!(matches!(
+        go_version.command,
+        CommandKind::Info(InfoOpts {
+            subject: Some(InfoCommand::GoVersion),
+            ..
+        })
+    ));
+
     let rejected = Cli::try_parse_from(["jig", "info", "--summary"]);
     assert!(rejected.is_err());
 }

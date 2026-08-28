@@ -1,6 +1,6 @@
 use std::fmt;
 use std::num::NonZeroUsize;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
@@ -14,16 +14,34 @@ use crate::context::{CommandOutputLimit, CommandTimeout};
 
 pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 pub(crate) const EXECUTION_OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+const MAX_OVERFLOW_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 
 pub(crate) fn internal_execution_output_limit() -> CommandOutputLimit {
     CommandOutputLimit::from_bytes(EXECUTION_OUTPUT_CAPTURE_LIMIT as u64)
         .expect("internal execution output limit is valid")
 }
 
+#[derive(Debug)]
 pub(crate) struct ExecutionCommandOutput {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub(crate) enum SupervisedExecutionError {
+    CancelledBeforeStart,
+    Cancelled,
+    TimedOut,
+    OutputLimitExceeded {
+        stream: OwnedProcessOutputStream,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    Failed {
+        error: anyhow::Error,
+        process_started: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -81,73 +99,202 @@ pub(crate) fn run_authoritative_execution_command(
     label: &str,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ExecutionCommandOutput, ExecutionCommandError> {
+    run_supervised_execution_command(command, timeout.duration(), output_limit, label, observer)
+        .map_err(|error| execution_command_error(error, timeout, output_limit, label))
+}
+
+/// Runs a repository-owned command under the complete non-interactive process
+/// policy. Callers cannot accidentally inherit stdin, skip capture, or choose a
+/// truncating overflow policy by partially configuring `command` themselves.
+pub(crate) fn run_supervised_execution_command(
+    command: &mut Command,
+    timeout: Duration,
+    output_limit: CommandOutputLimit,
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ExecutionCommandOutput, SupervisedExecutionError> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut process_observer = CapturingProcessExecutionObserver::new(
+        observer,
+        label,
+        output_limit.bytes().min(MAX_OVERFLOW_DIAGNOSTIC_BYTES),
+    );
     let output = run_owned_process_tree_with_output_policy_and_observer(
         command,
-        timeout.duration(),
+        timeout,
         ProcessOutputLimits {
             stdout: output_limit.bytes(),
             stderr: output_limit.bytes(),
         },
         ProcessOutputOverflowPolicy::Error,
-        &mut ProcessExecutionObserver::new(observer, label),
-    )
-    .map_err(|error| execution_command_error(error, timeout, output_limit, label))?;
+        &mut process_observer,
+    );
+    let captured = process_observer.into_capture();
+    let output = output.map_err(|error| supervised_execution_error(error, label, captured))?;
 
+    let (stdout, stderr) = complete_supervised_captures(output.stdout, output.stderr, label)?;
     Ok(ExecutionCommandOutput {
         status: output.status,
-        stdout: complete_execution_capture(output.stdout, output_limit, label, "stdout")?,
-        stderr: complete_execution_capture(output.stderr, output_limit, label, "stderr")?,
+        stdout,
+        stderr,
     })
 }
 
 fn execution_command_error(
-    error: OwnedProcessTreeError,
+    error: SupervisedExecutionError,
     timeout: CommandTimeout,
     output_limit: CommandOutputLimit,
     label: &str,
 ) -> ExecutionCommandError {
     let error = match error {
-        OwnedProcessTreeError::CancelledBeforeStart => {
+        SupervisedExecutionError::CancelledBeforeStart => {
             return ExecutionCommandError::CancelledBeforeStart;
         }
-        OwnedProcessTreeError::Cancelled => return ExecutionCommandError::Cancelled,
-        OwnedProcessTreeError::Start(error) => anyhow!("{label} could not start: {error}"),
-        OwnedProcessTreeError::TimedOut => {
+        SupervisedExecutionError::Cancelled => return ExecutionCommandError::Cancelled,
+        SupervisedExecutionError::TimedOut => {
             anyhow!("{label} timed out after {} seconds", timeout.as_secs())
         }
-        OwnedProcessTreeError::OutputLimitExceeded(stream) => anyhow!(
+        SupervisedExecutionError::OutputLimitExceeded { stream, .. } => anyhow!(
             "{label} exceeded the {} byte {stream} capture limit",
             output_limit.bytes()
         ),
-        OwnedProcessTreeError::Await => anyhow!("{label} could not be awaited"),
-        OwnedProcessTreeError::Cleanup => {
-            anyhow!("{label} process tree could not be cleaned up safely")
-        }
+        SupervisedExecutionError::Failed { error, .. } => error,
     };
     ExecutionCommandError::Failed(error)
 }
 
-fn complete_execution_capture(
-    output: Option<BoundedProcessOutput>,
-    output_limit: CommandOutputLimit,
+fn supervised_execution_error(
+    error: OwnedProcessTreeError,
     label: &str,
-    stream: &str,
-) -> Result<Vec<u8>, ExecutionCommandError> {
-    let output = output.ok_or_else(|| {
-        ExecutionCommandError::failed(anyhow!("{label} did not capture {stream}"))
+    captured: SupervisedCapture,
+) -> SupervisedExecutionError {
+    match error {
+        OwnedProcessTreeError::CancelledBeforeStart => {
+            SupervisedExecutionError::CancelledBeforeStart
+        }
+        OwnedProcessTreeError::Cancelled => SupervisedExecutionError::Cancelled,
+        OwnedProcessTreeError::TimedOut => SupervisedExecutionError::TimedOut,
+        OwnedProcessTreeError::OutputLimitExceeded(stream) => {
+            SupervisedExecutionError::OutputLimitExceeded {
+                stream,
+                stdout: captured.stdout,
+                stderr: captured.stderr,
+            }
+        }
+        OwnedProcessTreeError::Start(error) => SupervisedExecutionError::Failed {
+            error: anyhow!("{label} could not start: {error}"),
+            process_started: false,
+        },
+        OwnedProcessTreeError::Await => SupervisedExecutionError::Failed {
+            error: anyhow!("{label} could not be awaited"),
+            process_started: true,
+        },
+        OwnedProcessTreeError::Cleanup => SupervisedExecutionError::Failed {
+            error: anyhow!("{label} process tree could not be cleaned up safely"),
+            process_started: true,
+        },
+    }
+}
+
+fn complete_supervised_captures(
+    stdout: Option<BoundedProcessOutput>,
+    stderr: Option<BoundedProcessOutput>,
+    label: &str,
+) -> Result<(Vec<u8>, Vec<u8>), SupervisedExecutionError> {
+    let stdout = stdout.ok_or_else(|| SupervisedExecutionError::Failed {
+        error: anyhow!("{label} did not capture stdout"),
+        process_started: true,
     })?;
-    if output.truncated {
-        return Err(ExecutionCommandError::failed(anyhow!(
-            "{label} exceeded the {} byte {stream} capture limit",
-            output_limit.bytes()
-        )));
+    let stderr = stderr.ok_or_else(|| SupervisedExecutionError::Failed {
+        error: anyhow!("{label} did not capture stderr"),
+        process_started: true,
+    })?;
+    if stdout.truncated || stderr.truncated {
+        let stream = if stdout.truncated {
+            OwnedProcessOutputStream::Stdout
+        } else {
+            OwnedProcessOutputStream::Stderr
+        };
+        let mut stdout = stdout.bytes;
+        let mut stderr = stderr.bytes;
+        stdout.truncate(MAX_OVERFLOW_DIAGNOSTIC_BYTES);
+        stderr.truncate(MAX_OVERFLOW_DIAGNOSTIC_BYTES);
+        return Err(SupervisedExecutionError::OutputLimitExceeded {
+            stream,
+            stdout,
+            stderr,
+        });
     }
-    if !output.complete {
-        return Err(ExecutionCommandError::failed(anyhow!(
-            "{label} did not finish capturing {stream}"
-        )));
+    if !stdout.complete || !stderr.complete {
+        let stream = if !stdout.complete { "stdout" } else { "stderr" };
+        return Err(SupervisedExecutionError::Failed {
+            error: anyhow!("{label} did not finish capturing {stream}"),
+            process_started: true,
+        });
     }
-    Ok(output.bytes)
+    Ok((stdout.bytes, stderr.bytes))
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn supervised_failures_distinguish_spawn_from_post_spawn_errors() {
+        let capture = || SupervisedCapture {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let spawn = supervised_execution_error(
+            OwnedProcessTreeError::Start(std::io::Error::other("spawn failed")),
+            "test command",
+            capture(),
+        );
+        let await_error =
+            supervised_execution_error(OwnedProcessTreeError::Await, "test command", capture());
+
+        assert!(matches!(
+            spawn,
+            SupervisedExecutionError::Failed {
+                process_started: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            await_error,
+            SupervisedExecutionError::Failed {
+                process_started: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn overflow_diagnostics_are_bounded_even_when_the_drain_returns_more() {
+        let error = complete_supervised_captures(
+            Some(BoundedProcessOutput {
+                bytes: vec![b'x'; MAX_OVERFLOW_DIAGNOSTIC_BYTES * 2],
+                truncated: true,
+                complete: true,
+            }),
+            Some(BoundedProcessOutput {
+                bytes: b"sibling diagnostic".to_vec(),
+                truncated: false,
+                complete: true,
+            }),
+            "test command",
+        )
+        .unwrap_err();
+
+        let SupervisedExecutionError::OutputLimitExceeded { stdout, stderr, .. } = error else {
+            panic!("expected output-limit error");
+        };
+        assert_eq!(stdout.len(), MAX_OVERFLOW_DIAGNOSTIC_BYTES);
+        assert_eq!(stderr, b"sibling diagnostic");
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -208,6 +355,13 @@ pub(crate) enum ExecutionEvent<'a> {
 
 pub(crate) trait ExecutionObserver {
     fn event(&mut self, _event: ExecutionEvent<'_>) {}
+
+    /// Delivers events buffered since the previous successful flush.
+    ///
+    /// A later flush must not redeliver events that this call delivered.
+    fn flush(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) trait ExecutionCancellation {
@@ -259,6 +413,11 @@ pub(crate) struct ExecutionPhase<'a> {
     started: Instant,
 }
 
+pub(crate) struct CompletedExecutionPhase {
+    label: String,
+    elapsed: Duration,
+}
+
 impl<'a> ExecutionPhase<'a> {
     pub(crate) fn start<O: ExecutionObserver + ?Sized>(
         observer: &mut O,
@@ -275,6 +434,23 @@ impl<'a> ExecutionPhase<'a> {
             label: self.label,
             success,
             elapsed: self.started.elapsed(),
+        });
+    }
+
+    pub(crate) fn complete_owned(self) -> CompletedExecutionPhase {
+        CompletedExecutionPhase {
+            label: self.label.to_owned(),
+            elapsed: self.started.elapsed(),
+        }
+    }
+}
+
+impl CompletedExecutionPhase {
+    pub(crate) fn finish<O: ExecutionObserver + ?Sized>(self, observer: &mut O, success: bool) {
+        observer.event(ExecutionEvent::PhaseFinished {
+            label: &self.label,
+            success,
+            elapsed: self.elapsed,
         });
     }
 }
@@ -313,6 +489,59 @@ pub(crate) struct ProcessExecutionObserver<'a> {
     control: &'a mut dyn ExecutionControl,
     label: &'a str,
     heartbeat: HeartbeatSchedule,
+}
+
+struct SupervisedCapture {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+struct CapturingProcessExecutionObserver<'a> {
+    inner: ProcessExecutionObserver<'a>,
+    limit: usize,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl<'a> CapturingProcessExecutionObserver<'a> {
+    fn new(control: &'a mut dyn ExecutionControl, label: &'a str, limit: usize) -> Self {
+        Self {
+            inner: ProcessExecutionObserver::new(control, label),
+            limit,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }
+    }
+
+    fn into_capture(self) -> SupervisedCapture {
+        SupervisedCapture {
+            stdout: self.stdout,
+            stderr: self.stderr,
+        }
+    }
+}
+
+impl OwnedProcessObserver for CapturingProcessExecutionObserver<'_> {
+    fn cancelled(&mut self) -> bool {
+        self.inner.cancelled()
+    }
+
+    fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
+        let destination = match stream {
+            OwnedProcessOutputStream::Stdout => &mut self.stdout,
+            OwnedProcessOutputStream::Stderr => &mut self.stderr,
+        };
+        let retained = self
+            .limit
+            .saturating_sub(destination.len())
+            .min(bytes.len());
+        destination.extend_from_slice(&bytes[..retained]);
+        self.inner.output(stream, bytes);
+    }
+
+    fn poll(&mut self, elapsed: Duration) {
+        self.inner.poll(elapsed);
+    }
 }
 
 impl<'a> ProcessExecutionObserver<'a> {
@@ -388,5 +617,54 @@ mod tests {
         let mut observer = ProcessExecutionObserver::new(&mut control, "test");
 
         assert!(OwnedProcessObserver::cancelled(&mut observer));
+    }
+
+    #[test]
+    fn supervised_commands_override_inherited_stdin_and_capture_policy() {
+        let mut command = Command::new("bash");
+        command
+            .args(["-c", "read -r ignored || true; printf supervised"])
+            .stdin(Stdio::piped());
+        let mut observer = NoopExecutionObserver;
+
+        let output = run_supervised_execution_command(
+            &mut command,
+            Duration::from_secs(1),
+            CommandOutputLimit::from_bytes(1024).unwrap(),
+            "stdin policy test",
+            &mut observer,
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"supervised");
+    }
+
+    #[test]
+    fn supervised_commands_fail_when_output_exceeds_the_limit() {
+        let mut command = Command::new("bash");
+        command.args(["-c", "printf 12345"]);
+        let mut observer = NoopExecutionObserver;
+
+        let error = run_supervised_execution_command(
+            &mut command,
+            Duration::from_secs(1),
+            CommandOutputLimit::from_bytes(4).unwrap(),
+            "output policy test",
+            &mut observer,
+        )
+        .unwrap_err();
+
+        let SupervisedExecutionError::OutputLimitExceeded {
+            stream,
+            stdout,
+            stderr,
+        } = error
+        else {
+            panic!("expected output overflow");
+        };
+        assert_eq!(stream, OwnedProcessOutputStream::Stdout);
+        assert_eq!(stdout, b"1234");
+        assert!(stderr.is_empty());
     }
 }

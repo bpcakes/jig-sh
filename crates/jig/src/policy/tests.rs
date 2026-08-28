@@ -1,3 +1,5 @@
+// agentic-loc-exception: repository policy tests share Git-backed fixtures and cross-check the public policy dispatch boundary.
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -65,20 +67,215 @@ rust_test_command = "cargo test"
         .write();
 }
 
-fn write_schema_policy_repo(
+fn write_go_postgres_policy_repo(root: &Path) {
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "internal/database/migrations"
+"#,
+        )
+        .contract_version(2)
+        .write();
+}
+
+fn write_v6_mixed_migration_policy_repo(root: &Path, owner: &str) {
+    TestRepoBuilder::new(root)
+        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .config(format!(
+            r#"
+migration_dir = "database/migrations"
+
+[repository]
+default_check_profile = "operate"
+
+[[repository.components]]
+id = "api"
+root = "services/api"
+adapters = ["go", "go-postgres"]
+
+[[repository.components]]
+id = "worker"
+root = "services/worker"
+adapters = ["rust", "sqlx"]
+
+[[repository.actions]]
+target = {{ component = "{owner}", action = "migration-add" }}
+intent = "generate"
+effects = ["worktree", "process"]
+runner = {{ kind = "native", operation = "jig.migration_add" }}
+inputs = ["database/migrations/**"]
+legacy_aliases = ["jig.migration_add"]
+
+[[repository.profiles]]
+id = "operate"
+targets = [{{ component = "{owner}", action = "migration-add" }}]
+"#,
+        ))
+        .required_commands(std::iter::empty::<&str>())
+        .tool(json!({
+            "name": tool::MIGRATION_ADD,
+            "kind": kind::NATIVE,
+            "description": "Create a migration."
+        }))
+        .write();
+    let contract_path = root.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"] = json!([
+        {"id": "api", "root": "services/api", "adapters": ["go", "go-postgres"]},
+        {"id": "worker", "root": "services/worker", "adapters": ["rust", "sqlx"]}
+    ]);
+    contract["actions"] = json!([{
+        "target": {"component": owner, "action": "migration-add"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "native", "operation": "jig.migration_add"},
+        "inputs": ["database/migrations/**"],
+        "legacy_aliases": ["jig.migration_add"]
+    }]);
+    contract["profiles"] = json!([{
+        "id": "operate",
+        "targets": [{"component": owner, "action": "migration-add"}]
+    }]);
+    contract["default_check_profile"] = json!("operate");
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_schema_policy_repo(root: &Path, schema_dump_command: &str) {
+    write_schema_policy_repo_with_execution(root, schema_dump_command, None, None);
+}
+
+fn write_v6_schema_policy_repo(root: &Path, legacy_command: &str, action_command: &str) {
+    fs::create_dir_all(root.join("api")).unwrap();
+    fs::write(root.join("api/.keep"), "").unwrap();
+    TestRepoBuilder::new(root)
+        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .config(format!(
+            r#"
+schema_dump_enabled = true
+schema_dump_command = {legacy_command:?}
+
+[commands]
+api_schema_dump_command = {action_command:?}
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "."
+adapters = ["sqlx"]
+
+[[repository.actions]]
+target = {{ component = "api", action = "schema" }}
+intent = "check"
+effects = ["read_only", "process"]
+runner = {{ kind = "native", operation = "jig.schema_check" }}
+legacy_aliases = ["jig.schema_check"]
+
+[[repository.actions]]
+target = {{ component = "api", action = "schema-dump" }}
+intent = "generate"
+effects = ["worktree", "process"]
+runner = {{ kind = "command", command = "api_schema_dump_command", working_directory = "api", environment = {{ SCHEMA_VALUE = "changed" }} }}
+legacy_aliases = ["jig.schema_dump"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [{{ component = "api", action = "schema" }}]
+"#,
+        ))
+        .required_commands(["api_schema_dump_command"])
+        .tool(json!({
+            "name": tool::SCHEMA_CHECK,
+            "kind": kind::NATIVE,
+            "description": "Check committed schema output for drift."
+        }))
+        .tool(json!({
+            "name": tool::SCHEMA_DUMP,
+            "kind": kind::COMMAND,
+            "description": "Refresh committed schema output.",
+            "command": "api_schema_dump_command"
+        }))
+        .write();
+
+    let contract_path = root.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"] = json!([{
+        "id": "api",
+        "root": ".",
+        "adapters": ["sqlx"]
+    }]);
+    contract["actions"] = json!([
+        {
+            "target": {"component": "api", "action": "schema"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "native", "operation": tool::SCHEMA_CHECK},
+            "legacy_aliases": [tool::SCHEMA_CHECK]
+        },
+        {
+            "target": {"component": "api", "action": "schema-dump"},
+            "intent": "generate",
+            "effects": ["worktree", "process"],
+            "runner": {
+                "kind": "command",
+                "command": "api_schema_dump_command",
+                "working_directory": "api",
+                "environment": {"SCHEMA_VALUE": "changed"}
+            },
+            "legacy_aliases": [tool::SCHEMA_DUMP]
+        }
+    ]);
+    contract["profiles"] = json!([{
+        "id": "verify",
+        "targets": [{"component": "api", "action": "schema"}]
+    }]);
+    contract["default_check_profile"] = json!("verify");
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_schema_policy_repo_with_timeout(
     root: &Path,
     schema_dump_command: &str,
     command_timeout_seconds: Option<u64>,
 ) {
+    write_schema_policy_repo_with_execution(
+        root,
+        schema_dump_command,
+        command_timeout_seconds,
+        None,
+    );
+}
+
+fn write_schema_policy_repo_with_execution(
+    root: &Path,
+    schema_dump_command: &str,
+    command_timeout_seconds: Option<u64>,
+    command_output_limit_bytes: Option<u64>,
+) {
     fs::create_dir_all(root.join("crates/app/src")).unwrap();
-    let execution_config = command_timeout_seconds.map_or_else(String::new, |seconds| {
-        format!(
-            r#"
-[execution]
-command_timeout_seconds = {seconds}
-"#
-        )
-    });
+    let mut execution_config = String::new();
+    if command_timeout_seconds.is_some() || command_output_limit_bytes.is_some() {
+        execution_config.push_str("\n[execution]\n");
+    }
+    if let Some(seconds) = command_timeout_seconds {
+        execution_config.push_str(&format!("command_timeout_seconds = {seconds}\n"));
+    }
+    if let Some(bytes) = command_output_limit_bytes {
+        execution_config.push_str(&format!("command_output_limit_bytes = {bytes}\n"));
+    }
     TestRepoBuilder::new(root)
         .config(format!(
             r#"
@@ -119,6 +316,28 @@ fn init_git(root: &Path) {
 }
 
 #[test]
+fn controlled_output_text_rejects_missing_and_incomplete_captures() {
+    assert!(
+        controlled_output_text(None, "stdout")
+            .unwrap_err()
+            .to_string()
+            .contains("not captured")
+    );
+    let incomplete = BoundedProcessOutput {
+        bytes: b"partial".to_vec(),
+        truncated: false,
+        complete: false,
+    };
+
+    assert!(
+        controlled_output_text(Some(incomplete), "stderr")
+            .unwrap_err()
+            .to_string()
+            .contains("did not complete")
+    );
+}
+
+#[test]
 fn contract_check_allows_minimal_footprint_to_omit_launcher_files() {
     let temp = tempdir().unwrap();
     write_footprint_contract_repo(temp.path(), "minimal");
@@ -148,7 +367,7 @@ rust_migration_dir = "   "
     assert!(
         error
             .to_string()
-            .contains("sqlx_enabled is true, but rust_migration_dir is empty")
+            .contains("migration_dir is empty and no legacy rust_migration_dir fallback")
     );
 }
 
@@ -473,6 +692,32 @@ rust_test_command = "true"
 }
 
 #[test]
+fn contract_check_rejects_evidence_gates_before_contract_six() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+harness_footprint = "minimal"
+
+[[work.gates]]
+id = "native-evidence"
+kind = "evidence"
+target = "api:test"
+"#,
+        )
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = contract_check(&ctx);
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains(
+        "Work gate 'native-evidence': evidence gates require jig contract version 6 or later."
+    ));
+}
+
+#[test]
 fn migration_immutability_parses_nul_name_status_entries() {
     let bytes = b"A\0migrations/002_added.up.sql\0M\0migrations/001_changed.up.sql\0R100\0migrations/001_old.up.sql\0migrations/001_new.up.sql\0D\0migrations/001_deleted.down.sql\0T\0migrations/001_type.sql\0";
 
@@ -511,6 +756,52 @@ fn migration_immutability_ignores_truncated_rename_entry() {
 }
 
 #[test]
+fn migration_immutability_prefers_the_backend_neutral_directory() {
+    let temp = tempdir().unwrap();
+    let migration_dir = temp.path().join("internal/database/migrations");
+    let legacy_dir = temp.path().join("legacy-migrations");
+    fs::create_dir_all(&migration_dir).unwrap();
+    fs::create_dir_all(&legacy_dir).unwrap();
+    fs::write(migration_dir.join("00001_app.sql"), "-- initial\n").unwrap();
+    fs::write(legacy_dir.join("00001_legacy.sql"), "-- initial\n").unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "internal/database/migrations"
+rust_migration_dir = "legacy-migrations"
+"#,
+        )
+        .write();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-qm", "initial"]);
+    fs::write(migration_dir.join("00001_app.sql"), "-- changed\n").unwrap();
+    fs::write(legacy_dir.join("00001_legacy.sql"), "-- changed\n").unwrap();
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-qm", "change migrations"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = check_migration_immutability(
+        &ctx,
+        &MigrationImmutabilityInput {
+            changed_against: "HEAD^".into(),
+        },
+    )
+    .unwrap();
+    let violations = output["violations"].as_array().unwrap();
+
+    assert_eq!(violations.len(), 1);
+    assert!(
+        violations[0]
+            .as_str()
+            .unwrap()
+            .contains("internal/database/migrations/00001_app.sql")
+    );
+}
+
+#[test]
 fn migration_add_creates_slugged_migration_files() {
     let temp = tempdir().unwrap();
     write_sqlx_policy_repo(temp.path());
@@ -538,129 +829,124 @@ fn migration_add_creates_slugged_migration_files() {
 }
 
 #[test]
-fn migration_add_rejects_when_sqlx_is_disabled() {
+fn migration_add_uses_a_neutral_only_sqlx_directory() {
     let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    init_git(temp.path());
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = true
+migration_dir = "database/migrations"
+"#,
+        )
+        .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let error = migration_add(&ctx, "create users").unwrap_err();
+    migration_add(&ctx, "Create Users").unwrap();
 
-    assert!(error.to_string().contains("sqlx_enabled = true"));
+    assert_eq!(
+        fs::read_dir(temp.path().join("database/migrations"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_add_rejects_a_symlinked_migration_directory() {
+    use std::os::unix::fs::symlink;
+
+    let repository = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    TestRepoBuilder::new(repository.path())
+        .config(
+            r#"
+sqlx_enabled = true
+migration_dir = "database/migrations"
+"#,
+        )
+        .write();
+    fs::create_dir(repository.path().join("database")).unwrap();
+    symlink(
+        outside.path(),
+        repository.path().join("database/migrations"),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(repository.path()).unwrap();
+
+    let error = migration_add(&ctx, "Create Users").unwrap_err().to_string();
+
+    assert!(error.contains("is a symlink"), "{error}");
+    assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
 }
 
 #[test]
-fn migration_add_rejects_names_without_slug_content() {
+fn migration_add_creates_a_goose_migration_for_go_postgres() {
     let temp = tempdir().unwrap();
-    write_sqlx_policy_repo(temp.path());
+    write_go_postgres_policy_repo(temp.path());
     init_git(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let error = migration_add(&ctx, "!!!").unwrap_err();
+    let output = migration_add(&ctx, "Create Users!").unwrap();
 
+    assert_eq!(output.exit_status, 0);
+    let entries = fs::read_dir(temp.path().join("internal/database/migrations"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
     assert!(
-        error
-            .to_string()
-            .contains("must contain at least one alphanumeric")
+        entries[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("_create_users.sql")
+    );
+    assert_eq!(
+        fs::read_to_string(&entries[0]).unwrap(),
+        "-- +goose Up\n-- forward migration: create_users\n\n-- +goose Down\n-- rollback migration: create_users\n"
     );
 }
 
 #[test]
-fn schema_check_reports_stale_schema_dump() {
+fn v6_migration_add_uses_the_declared_sqlx_owner_in_a_mixed_repository() {
     let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "mkdir -p docs/schema && printf 'changed\\n' > docs/schema/tables.sql",
-        None,
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    write_v6_mixed_migration_policy_repo(temp.path(), "worker");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let output = schema_check(&ctx).unwrap();
+    migration_add(&ctx, "Create Users").unwrap();
 
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("Schema dump is stale"));
-    assert!(output.stderr.contains("docs/schema"));
+    let entries = fs::read_dir(temp.path().join("database/migrations"))
+        .unwrap()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .ends_with("_create_users.up.sql")
+    }));
 }
 
 #[test]
-fn schema_check_uses_the_committed_schema_docs_directory() {
+fn v6_migration_add_uses_the_declared_goose_owner_in_a_mixed_repository() {
     let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "mkdir -p artifacts/schema && printf 'changed\\n' > artifacts/schema/tables.sql",
-        None,
-    );
-    let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replace(
-        "schema_dump_enabled = true",
-        "schema_dump_enabled = true\nschema_docs_dir = \"artifacts/schema\"",
-    );
-    fs::write(&config_path, config).unwrap();
-    fs::create_dir_all(temp.path().join("artifacts/schema")).unwrap();
-    fs::write(temp.path().join("artifacts/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    write_v6_mixed_migration_policy_repo(temp.path(), "api");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let output = schema_check(&ctx).unwrap();
+    migration_add(&ctx, "Create Users").unwrap();
 
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("artifacts/schema"));
+    let entries = fs::read_dir(temp.path().join("database/migrations"))
+        .unwrap()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(
+        fs::read_to_string(entries[0].path())
+            .unwrap()
+            .starts_with("-- +goose Up")
+    );
 }
 
-#[test]
-fn schema_check_rejects_an_ignored_output_destination() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "mkdir -p target/schema && printf 'generated\\n' > target/schema/tables.sql",
-        None,
-    );
-    let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replace(
-        "schema_dump_enabled = true",
-        "schema_dump_enabled = true\nschema_docs_dir = \"target/schema\"",
-    );
-    fs::write(&config_path, config).unwrap();
-    fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("target/schema"));
-    assert!(output.stderr.contains("ignored by Git"));
-    assert!(!temp.path().join("target/schema/tables.sql").exists());
-}
-
-#[test]
-fn schema_check_explicitly_reports_untracked_output_hidden_by_git_config() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "mkdir -p docs/schema && printf 'generated\\n' > docs/schema/new.sql",
-        None,
-    );
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    git(temp.path(), &["config", "status.showUntrackedFiles", "no"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("Schema dump is stale"));
-    assert!(output.stderr.contains("docs/schema/new.sql"));
-}
-
-include!("tests/loc_parts.rs");
+mod migration_schema;

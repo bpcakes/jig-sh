@@ -9,6 +9,7 @@
 mod agent;
 mod check;
 mod loops;
+mod migration;
 mod prompt;
 mod proxy;
 mod sqlx;
@@ -19,12 +20,13 @@ mod work;
 pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
     AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest,
-    RustFileLocRequest, SqlxTodoRequest,
+    RepositoryCheckRequest, RustFileLocRequest, SqlxTodoRequest,
 };
 pub(crate) use loops::{
     LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest,
     LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
+pub(crate) use migration::MigrationAddRequest;
 pub(crate) use prompt::{
     PROMPT_BODY_KEY, PromptAddRequest, PromptCommand, PromptEditRequest, PromptExportRequest,
     PromptImportRequest, PromptListRequest, PromptNameRequest, PromptRenderRequest,
@@ -37,7 +39,7 @@ pub(crate) use proxy::{
     ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
     ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
 };
-pub(crate) use sqlx::{MigrationAddRequest, SqlxCommand};
+pub(crate) use sqlx::SqlxCommand;
 pub(crate) use state::{
     StateArchiveRequest, StateCommand, StateCompactSessionsRequest, StateDiagnoseRequest,
     StateExportReceiptsRequest, StateRestoreRequest,
@@ -64,6 +66,7 @@ pub(crate) use work::{
 pub(crate) enum RuntimeCommand {
     Bootstrap(ToolRequest),
     Check(CheckCommand),
+    MigrationAdd(MigrationAddRequest),
     Sqlx(SqlxCommand),
     AgentMap(AgentMapCommand),
     GenerateSqlxUncheckedQueriesTodo(SqlxTodoRequest),
@@ -92,9 +95,13 @@ impl RuntimeCommand {
         use RuntimeSignalPolicy::{Cooperative, Native};
 
         match self {
-            Self::Bootstrap(_) | Self::Sqlx(_) | Self::Agent(_) => Cooperative,
+            Self::Bootstrap(_) | Self::MigrationAdd(_) | Self::Sqlx(_) | Self::Agent(_) => {
+                Cooperative
+            }
             Self::Check(command) => match command {
-                CheckCommand::Fmt(_)
+                CheckCommand::Repository(_)
+                | CheckCommand::Fmt(_)
+                | CheckCommand::Lint(_)
                 | CheckCommand::Clippy(_)
                 | CheckCommand::Test(_)
                 | CheckCommand::TestLocked(_)
@@ -103,6 +110,7 @@ impl RuntimeCommand {
                 | CheckCommand::TypeScriptBuild(_)
                 | CheckCommand::TypeScriptCoverage(_)
                 | CheckCommand::Sqlx(_)
+                | CheckCommand::Sqlc(_)
                 | CheckCommand::Schema(_)
                 | CheckCommand::Contract(_) => Cooperative,
                 CheckCommand::AgentMap(_)
@@ -207,6 +215,7 @@ mod tests {
             })),
             RuntimeCommand::State(StateCommand::Archive(StateArchiveRequest {
                 before: "2026-01-01".into(),
+                include_runs: true,
                 dry_run: true,
             })),
         ];

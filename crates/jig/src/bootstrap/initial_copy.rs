@@ -9,7 +9,10 @@ use toml::{Table, Value as TomlValue};
 
 use super::AnswerOpts;
 use super::InitMutationTransaction;
-use super::answers::{AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers};
+use super::answers::{
+    AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers,
+    has_go_postgres_integration_script,
+};
 use super::gate_preview::generated_gates;
 use super::renderer::{RenderStageRequest, stage_render};
 use super::sync::ApplyRenderReport;
@@ -42,6 +45,8 @@ pub(super) struct BootstrapCopyRequest<'a> {
     pub(super) allow_answers_overwrite: bool,
     pub(super) allow_contract_overwrite: bool,
     pub(super) reserved_output_paths: Vec<PathBuf>,
+    pub(super) scaffolded_frontend_contracts: bool,
+    pub(super) scaffolded_go_postgres_integration: bool,
     pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
     pub(super) progress: CliProgress,
 }
@@ -71,6 +76,11 @@ pub(super) fn render_and_copy_bootstrap_template(
     mut request: BootstrapCopyRequest<'_>,
 ) -> Result<BootstrapCopyResult> {
     request.progress.step("resolve answers", ANSWERS_DETAIL);
+    let preferred_rendered_commands = request
+        .answer_input
+        .as_ref()
+        .map(|input| input.preferred_rendered_command_keys(request.answers))
+        .unwrap_or_default();
     let answer_resolution = request
         .progress
         .log_blocked_on_err(match request.answer_input {
@@ -86,7 +96,19 @@ pub(super) fn render_and_copy_bootstrap_template(
                 request.use_defaults,
             ),
         })?;
-    let (answers, mut notes) = answer_resolution.into_parts();
+    let (mut answers, mut notes) = answer_resolution.into_parts();
+    if request.scaffolded_frontend_contracts {
+        answers.enable_scaffolded_frontend_contracts();
+    }
+    if request.scaffolded_go_postgres_integration {
+        answers.enable_go_postgres_integration_script();
+    }
+    if request
+        .seed_repo_path
+        .is_some_and(has_go_postgres_integration_script)
+    {
+        answers.enable_go_postgres_integration_script();
+    }
     let full_to_minimal_transition = request.prior_harness_footprint
         == Some(HarnessFootprint::Full)
         && answers.is_minimal_footprint();
@@ -104,6 +126,7 @@ pub(super) fn render_and_copy_bootstrap_template(
         seed_repo_path: request.seed_repo_path,
         prior_managed_paths: request.prior_managed_paths,
         reconcile_runtime_config: request.reconcile_runtime_config,
+        preferred_rendered_commands,
         contract_version: None,
         progress: request.progress,
     })?;

@@ -7,11 +7,20 @@ on:
   # otherwise remove pull_request.paths before making its job a required check.
   pull_request:
     paths:
+[% if go_backend_enabled %]
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
+[% endif %]
+      - "openapi/**"
+      - "packages/public-api-client/**"
+      - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
       - <<[ (app.dir ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
+      - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
       - "package.json"
       - "**/package.json"
@@ -59,11 +68,20 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
+[% if go_backend_enabled %]
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
+[% endif %]
+      - "openapi/**"
+      - "packages/public-api-client/**"
+      - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
       - <<[ (app.dir ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
+      - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
       - "package.json"
       - "**/package.json"
@@ -246,6 +264,10 @@ jobs:
         run: scripts/check-webapps.sh run-script "$APP_DIR" typecheck
       - name: Run build
         run: scripts/check-webapps.sh run-script "$APP_DIR" build:bundle
+[% if frontend_contracts_enabled %]
+      - name: Check generated API clients and public boundary
+        run: node scripts/contracts.mjs client-check
+[% endif %]
       - name: Run tests with coverage
         run: scripts/check-webapps.sh run-script "$APP_DIR" test:coverage
       - name: Enforce coverage threshold

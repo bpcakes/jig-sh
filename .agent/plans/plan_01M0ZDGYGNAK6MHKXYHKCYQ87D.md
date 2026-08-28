@@ -1,0 +1,1 @@
+Characterize and repair target lifecycle timing, parallel source observation ownership, event draining, and cancellable lease waiting; verify focused and repository gates.

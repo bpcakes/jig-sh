@@ -19,6 +19,7 @@ on:
       - "scripts/validate-fixtures.sh"
       - "scripts/fixtures/**"
       - "templates/project/**"
+      - "templates/scaffolds/**"
       - "examples/**"
       - "tests/fixtures/**"
       - ".cargo/**"
@@ -43,6 +44,7 @@ on:
       - "scripts/validate-fixtures.sh"
       - "scripts/fixtures/**"
       - "templates/project/**"
+      - "templates/scaffolds/**"
       - "examples/**"
       - "tests/fixtures/**"
       - ".cargo/**"
@@ -169,6 +171,11 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Install Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.x"
+          cache: false
       - name: Install cargo-nextest
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
@@ -182,6 +189,7 @@ jobs:
       - name: Run locked Rust tests
         env:
           JIG_DEV_BIN: target/debug/jig
+          JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
 
   test-macos:
@@ -196,6 +204,11 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Install Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.x"
+          cache: false
       - name: Install cargo-nextest
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
         with:
@@ -209,6 +222,7 @@ jobs:
       - name: Run locked Rust tests
         env:
           JIG_DEV_BIN: target/debug/jig
+          JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
 
   msrv:

@@ -1,0 +1,1 @@
+Apply the synchronous MCP contention policy to explicit tool checks, add regression coverage, and rerun required gates.

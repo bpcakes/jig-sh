@@ -67,7 +67,7 @@ function AppFrame({ children }: { children: ReactNode }) {
           <div className="space-y-3">
             <h1 className="text-4xl font-semibold tracking-tight sm:text-6xl"><<[ title ]>></h1>
             <p className="max-w-2xl text-lg text-muted-foreground">
-              A shadcn product surface with a working browser-to-Rust API slice, ready for the first feature.
+              A shadcn product surface with a working browser-to-[% if backend_language == "go" %]Go[% else %]Rust[% endif %] API slice, ready for the first feature.
             </p>
           </div>
         </section>
@@ -109,7 +109,7 @@ function StatusCards({ status }: { status: AppStatus }) {
       <Card role="group" aria-labelledby="service-status-card-label">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <div>
-            <CardDescription id="service-status-card-label">Rust API</CardDescription>
+            <CardDescription id="service-status-card-label">[% if backend_language == "go" %]Go[% else %]Rust[% endif %] API</CardDescription>
             <CardTitle>Service status</CardTitle>
           </div>
           <ServerIcon className="size-5 text-muted-foreground" />

@@ -10,7 +10,10 @@ use crate::state::{
 };
 use crate::tool_defs::tool;
 
-use super::checks::check_required_collect_failures_with_observer;
+use super::checks::{
+    check_configured_collect_failures_from_mcp_with_observer,
+    check_configured_collect_failures_with_observer,
+};
 
 mod evidence;
 mod process;
@@ -37,6 +40,29 @@ pub(super) fn review_with_observer(
 pub(super) fn refine_with_observer(
     ctx: &RepoContext,
     opts: WorkRefineRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    refine_with_final_checks(ctx, opts, FinalCheckExecution::WaitForLease, observer)
+}
+
+pub(super) fn refine_from_mcp_with_observer(
+    ctx: &RepoContext,
+    opts: WorkRefineRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    refine_with_final_checks(ctx, opts, FinalCheckExecution::RejectContention, observer)
+}
+
+#[derive(Clone, Copy)]
+enum FinalCheckExecution {
+    WaitForLease,
+    RejectContention,
+}
+
+fn refine_with_final_checks(
+    ctx: &RepoContext,
+    opts: WorkRefineRequest,
+    check_execution: FinalCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
@@ -86,9 +112,28 @@ pub(super) fn refine_with_observer(
     }
 
     let remaining_findings = actionable_findings(&review_result)?;
-    // Refinement verifies every required applicable check gate, even when the
-    // review gate subset was narrowed with --gate. Optional gates remain explicit.
-    let check_result = check_required_collect_failures_with_observer(ctx, &opts.plan_id, observer)?;
+    let has_check_gates = ctx
+        .work_gates()
+        .iter()
+        .any(|gate| matches!(gate, WorkGate::Check(_) | WorkGate::Evidence(_)));
+    let check_result = if !has_check_gates {
+        None
+    } else {
+        // Refinement verifies the full configured check gate set, even when the
+        // review gate subset was narrowed with --gate.
+        Some(match check_execution {
+            FinalCheckExecution::WaitForLease => {
+                check_configured_collect_failures_with_observer(ctx, &opts.plan_id, observer)
+            }
+            FinalCheckExecution::RejectContention => {
+                check_configured_collect_failures_from_mcp_with_observer(
+                    ctx,
+                    &opts.plan_id,
+                    observer,
+                )
+            }
+        }?)
+    };
     let failed_review_gates = review_failed_gates(&review_result)?;
     let checks_ok = check_result
         .as_ref()
@@ -508,6 +553,7 @@ fn selected_review_gates(
         .into_iter()
         .filter_map(|gate| match gate {
             WorkGate::CodexReview(gate) => Some(gate),
+            WorkGate::Evidence(_) => None,
             _ => None,
         })
         .collect::<Vec<_>>();

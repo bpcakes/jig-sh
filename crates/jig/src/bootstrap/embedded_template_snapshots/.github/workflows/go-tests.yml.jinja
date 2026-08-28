@@ -1,0 +1,121 @@
+name: Go Tests
+
+on:
+  pull_request:
+    paths:
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
+[% if go_sqlc_ci_enabled %]
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
+[% endif %]
+      - "openapi/**"
+[% if go_postgres_integration_ci_enabled %]
+      - "scripts/test-postgres.sh"
+[% endif %]
+      - ".jig.toml"
+      - ".agent/jig-contract.json"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".github/workflows/go-tests.yml"
+  push:
+    branches:
+      - <<[ default_branch | tojson ]>>
+    paths:
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
+[% if go_sqlc_ci_enabled %]
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
+[% endif %]
+      - "openapi/**"
+[% if go_postgres_integration_ci_enabled %]
+      - "scripts/test-postgres.sh"
+[% endif %]
+      - ".jig.toml"
+      - ".agent/jig-contract.json"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".github/workflows/go-tests.yml"
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Resolve Go toolchain version
+        id: go-version
+        run: |
+          version="$(scripts/jig info go-version)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work
+            go.work.sum
+            **/go.mod
+            **/go.sum
+            **/go.work
+            **/go.work.sum
+            vendor/modules.txt
+            **/vendor/modules.txt
+      - run: scripts/jig check <<[ go_fmt_ci_target ]>>
+      - run: scripts/jig check <<[ go_lint_ci_target ]>>
+      - run: scripts/jig check <<[ go_test_locked_ci_target ]>>
+[% if go_sqlc_ci_enabled %]      - run: scripts/jig check <<[ go_sqlc_ci_target ]>>
+[% endif %]
+[% if go_postgres_integration_ci_enabled %]
+  postgres-integration:
+    # GitHub-hosted macOS runners do not provide the Docker daemon required by
+    # scripts/test-postgres.sh.
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Resolve Go toolchain version
+        id: go-version
+        run: |
+          version="$(scripts/jig info go-version)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work
+            go.work.sum
+            **/go.mod
+            **/go.sum
+            **/go.work
+            **/go.work.sum
+            vendor/modules.txt
+            **/vendor/modules.txt
+      - run: bash scripts/test-postgres.sh
+[% endif %]

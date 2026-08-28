@@ -1,4 +1,5 @@
 use super::*;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
 
@@ -93,6 +94,239 @@ tool = "jig.mutating_check"
         }))
         .write();
     write_open_plan(root);
+}
+
+pub(super) fn write_v6_evidence_fixture_repo(root: &Path, gates: &str) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::create_dir_all(root.join("api")).unwrap();
+    fs::create_dir_all(root.join("web")).unwrap();
+    fs::write(root.join("api/example.go"), "package example\n").unwrap();
+    fs::write(
+        root.join("web/example.ts"),
+        "export const example = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+api_test_command = "printf 'api tests passed\n'"
+web_test_command = "printf 'web tests passed\n'"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "api"
+adapters = ["go"]
+
+[[repository.components]]
+id = "web"
+root = "web"
+adapters = ["typescript"]
+
+[[repository.actions]]
+target = {{ component = "api", action = "test" }}
+intent = "check"
+effects = ["read_only", "process"]
+runner = {{ kind = "command", command = "api_test_command" }}
+inputs = ["api/**"]
+
+[[repository.actions]]
+target = {{ component = "web", action = "test" }}
+intent = "check"
+effects = ["read_only", "process"]
+runner = {{ kind = "command", command = "web_test_command" }}
+inputs = ["web/**"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  {{ component = "api", action = "test" }},
+  {{ component = "web", action = "test" }},
+]
+
+{gates}
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": ["api_test_command", "web_test_command"],
+            "tools": [],
+            "components": [
+                {"id": "api", "root": "api", "adapters": ["go"]},
+                {"id": "web", "root": "web", "adapters": ["typescript"]}
+            ],
+            "actions": [
+                {
+                    "target": {"component": "api", "action": "test"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "api_test_command"},
+                    "inputs": ["api/**"]
+                },
+                {
+                    "target": {"component": "web", "action": "test"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "web_test_command"},
+                    "inputs": ["web/**"]
+                }
+            ],
+            "profiles": [{
+                "id": "verify",
+                "targets": [
+                    {"component": "api", "action": "test"},
+                    {"component": "web", "action": "test"}
+                ]
+            }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_open_plan(root);
+}
+
+pub(super) fn write_wide_v6_evidence_fixture_repo(root: &Path, commands: &[String]) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    let mut config = String::from(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+"#,
+    );
+    for (index, command) in commands.iter().enumerate() {
+        writeln!(
+            config,
+            "example_{index}_test_command = {}",
+            serde_json::to_string(command).unwrap()
+        )
+        .unwrap();
+    }
+    config.push_str("\n[repository]\ndefault_check_profile = \"verify\"\n");
+
+    let mut components = Vec::new();
+    let mut actions = Vec::new();
+    let mut targets = Vec::new();
+    let mut required_commands = Vec::new();
+    for index in 0..commands.len() {
+        let component = format!("example{index}");
+        let command = format!("example_{index}_test_command");
+        fs::create_dir_all(root.join(&component)).unwrap();
+        fs::write(root.join(&component).join("example.txt"), "example\n").unwrap();
+        writeln!(
+            config,
+            "\n[[repository.components]]\nid = \"{component}\"\nroot = \"{component}\""
+        )
+        .unwrap();
+        writeln!(
+            config,
+            "\n[[repository.actions]]\ntarget = {{ component = \"{component}\", action = \"test\" }}\nintent = \"check\"\neffects = [\"read_only\", \"process\"]\nrunner = {{ kind = \"command\", command = \"{command}\" }}\ninputs = [\"{component}/**\"]"
+        )
+        .unwrap();
+        components.push(json!({"id": component, "root": component}));
+        actions.push(json!({
+            "target": {"component": component, "action": "test"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": command},
+            "inputs": [format!("{component}/**")]
+        }));
+        targets.push(json!({"component": component, "action": "test"}));
+        required_commands.push(command);
+    }
+    config.push_str("\n[[repository.profiles]]\nid = \"verify\"\ntargets = [\n");
+    for target in &targets {
+        writeln!(
+            config,
+            "  {{ component = {:?}, action = \"test\" }},",
+            target["component"].as_str().unwrap()
+        )
+        .unwrap();
+    }
+    config.push_str("]\n");
+    fs::write(root.join(".jig.toml"), config).unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": required_commands,
+            "tools": [],
+            "components": components,
+            "actions": actions,
+            "profiles": [{"id": "verify", "targets": targets}],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_open_plan(root);
+}
+
+pub(super) fn add_v6_effectful_evidence_actions(root: &Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "[[repository.profiles]]",
+        r#"[[repository.actions]]
+target = { component = "api", action = "generate" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+
+[[repository.actions]]
+target = { component = "api", action = "verify-generated" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+depends_on = [{ component = "api", action = "generate" }]
+
+[[repository.profiles]]"#,
+    );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"].as_array_mut().unwrap().extend([
+        json!({
+            "target": {"component": "api", "action": "generate"},
+            "intent": "generate",
+            "effects": ["worktree", "process"],
+            "runner": {"kind": "command", "command": "api_test_command"},
+            "inputs": ["api/**"]
+        }),
+        json!({
+            "target": {"component": "api", "action": "verify-generated"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": "api_test_command"},
+            "inputs": ["api/**"],
+            "depends_on": [{"component": "api", "action": "generate"}]
+        }),
+    ]);
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 }
 
 pub(super) fn write_failing_check_fixture_repo(root: &Path) {
@@ -205,7 +439,7 @@ skill = "jig-rust:rust-simplify"
         ""
     };
     TestRepoBuilder::new(root)
-        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .contract_version(5)
         .config(format!(
             r#"
 [commands]

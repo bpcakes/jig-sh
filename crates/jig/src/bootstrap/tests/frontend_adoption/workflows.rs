@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn generated_frontend_ignores_never_mask_nested_owned_scopes() {
+fn generated_frontend_inputs_never_mask_nested_owned_scopes() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -50,13 +50,16 @@ fn generated_frontend_ignores_never_mask_nested_owned_scopes() {
 
     let config: toml::Value =
         toml::from_str(&fs::read_to_string(repo.join(".jig.toml")).unwrap()).unwrap();
-    let gates = config["work"]["gates"].as_array().unwrap();
-    let ignores = |id: &str| {
-        gates
+    let actions = config["repository"]["actions"].as_array().unwrap();
+    let inputs = |component: &str, action: &str| {
+        actions
             .iter()
-            .find(|gate| gate["id"].as_str() == Some(id))
+            .find(|target| {
+                target["target"]["component"].as_str() == Some(component)
+                    && target["target"]["action"].as_str() == Some(action)
+            })
             .unwrap()
-            .get("paths_ignore")
+            .get("inputs")
             .and_then(toml::Value::as_array)
             .map(|paths| {
                 paths
@@ -67,12 +70,11 @@ fn generated_frontend_ignores_never_mask_nested_owned_scopes() {
             .unwrap_or_default()
     };
 
-    assert_eq!(ignores("typescript-suite-lint"), ["apps/other/**"]);
-    assert_eq!(ignores("typescript-admin-lint"), ["apps/other/**"]);
-    assert!(
-        !ignores("typescript-other-lint").contains(&"apps/suite/**"),
-        "an ignored parent app would mask apps/suite/shared/**"
-    );
+    assert!(inputs("suite", "lint").contains(&"apps/suite/**/*"));
+    assert!(inputs("admin", "lint").contains(&"apps/suite/admin/**/*"));
+    assert!(inputs("other", "lint").contains(&"apps/other/**/*"));
+    assert!(inputs("other", "lint").contains(&"apps/suite/shared/**"));
+    assert!(!inputs("other", "lint").contains(&"apps/suite/**/*"));
 }
 
 #[cfg(unix)]
@@ -121,20 +123,26 @@ fn generated_npm_run_script_selects_exact_app_without_installing() {
     .unwrap();
 
     let jig_config = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert_eq!(
-        jig_config
-            .matches("paths_ignore = [\"standalone/**\", ]")
-            .count(),
-        4,
-        "{jig_config}"
-    );
-    assert_eq!(
-        jig_config
-            .matches("paths_ignore = [\"apps/web/**\", ]")
-            .count(),
-        4,
-        "{jig_config}"
-    );
+    let config: toml::Value = toml::from_str(&jig_config).unwrap();
+    let actions = config["repository"]["actions"].as_array().unwrap();
+    let action_inputs = |component: &str| {
+        actions
+            .iter()
+            .find(|target| {
+                target["target"]["component"].as_str() == Some(component)
+                    && target["target"]["action"].as_str() == Some("lint")
+            })
+            .unwrap()["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert!(action_inputs("web").contains(&"apps/web/**/*"));
+    assert!(!action_inputs("web").contains(&"standalone/**/*"));
+    assert!(action_inputs("standalone").contains(&"standalone/**/*"));
+    assert!(!action_inputs("standalone").contains(&"apps/web/**/*"));
 
     fs::create_dir_all(repo.join("apps/web")).unwrap();
     fs::create_dir_all(repo.join("standalone")).unwrap();
@@ -392,7 +400,7 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
                 dir: "null".into(),
                 coverage_threshold: 80,
                 kind: "vite".into(),
-                role: "spa".into(),
+                role: "admin".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -420,6 +428,10 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
     let app = &webapp["jobs"]["checks"]["strategy"]["matrix"]["app"][0];
     assert_eq!(app["name"], "null");
     assert_eq!(app["dir"], "null");
+
+    let checker = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    assert!(checker.contains(r#""null") printf '%s\n' "admin" ;;"#));
+    assert!(checker.contains(r#"[ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]"#));
 
     let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
     assert!(policy.contains("JIG_DEFAULT_BRANCH:"));

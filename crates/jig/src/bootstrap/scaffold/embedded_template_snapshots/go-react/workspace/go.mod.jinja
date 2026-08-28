@@ -1,0 +1,17 @@
+module <<[ go_module ]>>
+
+go 1.26.0
+
+require (
+	github.com/danielgtaylor/huma/v2 v2.39.1
+	github.com/go-chi/chi/v5 v5.3.0
+[% if db_enabled %]	github.com/jackc/pgx/v5 v5.10.0
+[% endif %]	github.com/joho/godotenv v1.5.1
+[% if db_enabled %]	github.com/pressly/goose/v3 v3.27.3
+	github.com/sqlc-dev/sqlc v1.31.1
+[% endif %])
+
+[% if db_enabled %]tool (
+	github.com/sqlc-dev/sqlc/cmd/sqlc
+)
+[% endif %]

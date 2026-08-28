@@ -6,6 +6,7 @@ members = [
     "crates/jig-core",
     "crates/jig-dev-proxy",
     "crates/jig-features",
+    "crates/jig-go",
     "crates/jig-owned-process",
     "crates/jig-rust",
     "crates/jig-sqlx",
@@ -61,6 +62,7 @@ jig-contract = { path = "crates/jig-contract", version = "=0.2.0" }
 jig-codex-tui = { path = "crates/jig-codex-tui", version = "=0.2.0" }
 jig-core = { path = "crates/jig-core", version = "=0.2.0" }
 jig-features = { path = "crates/jig-features", version = "=0.2.0" }
+jig-go = { path = "crates/jig-go", version = "=0.2.0" }
 jig-owned-process = { path = "crates/jig-owned-process", version = "=0.2.0" }
 jig-rust = { path = "crates/jig-rust", version = "=0.2.0" }
 jig-sqlx = { path = "crates/jig-sqlx", version = "=0.2.0" }

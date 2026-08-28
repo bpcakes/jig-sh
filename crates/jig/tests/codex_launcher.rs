@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
 
-use pty_support::{read_available, wait_for_child_while_draining};
+use pty_support::{ChildGuard, read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 
@@ -197,19 +197,21 @@ sleep 30
     let Some((mut master, stdin, stdout)) = required_pseudo_terminal("picker interaction") else {
         return;
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["codex", "launch"])
-        .env("HOME", temp.path())
-        .env("CODEX_HOME", &default)
-        .env("JIG_CODEX_BIN", &stub)
-        .env("JIG_TEST_LAUNCHED", &launched)
-        .env("JIG_TEST_INVOCATIONS", &invocations)
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .args(["codex", "launch"])
+            .env("HOME", temp.path())
+            .env("CODEX_HOME", &default)
+            .env("JIG_CODEX_BIN", &stub)
+            .env("JIG_TEST_LAUNCHED", &launched)
+            .env("JIG_TEST_INVOCATIONS", &invocations)
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -282,17 +284,19 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
     else {
         return;
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["codex", "launch"])
-        .env("HOME", temp.path())
-        .env("CODEX_HOME", &default)
-        .env("JIG_CODEX_BIN", &stub)
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .args(["codex", "launch"])
+            .env("HOME", temp.path())
+            .env("CODEX_HOME", &default)
+            .env("JIG_CODEX_BIN", &stub)
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -340,18 +344,20 @@ sleep 30
     let Some((mut master, stdout, stderr)) = required_pseudo_terminal("homes progress") else {
         return;
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["codex", "homes"])
-        .env("HOME", temp.path())
-        .env("CODEX_HOME", &default)
-        .env("JIG_CODEX_BIN", &stub)
-        .env("NO_COLOR", "1")
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .args(["codex", "homes"])
+            .env("HOME", temp.path())
+            .env("CODEX_HOME", &default)
+            .env("JIG_CODEX_BIN", &stub)
+            .env("NO_COLOR", "1")
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -417,18 +423,20 @@ sleep 30
     let Some((mut master, stdout, stderr)) = required_pseudo_terminal("resume progress") else {
         return;
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["codex", "resume", session_id, "--dry-run"])
-        .env("HOME", temp.path())
-        .env("CODEX_HOME", &default)
-        .env("JIG_CODEX_BIN", &stub)
-        .env("NO_COLOR", "1")
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .args(["codex", "resume", session_id, "--dry-run"])
+            .env("HOME", temp.path())
+            .env("CODEX_HOME", &default)
+            .env("JIG_CODEX_BIN", &stub)
+            .env("NO_COLOR", "1")
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -483,18 +491,20 @@ sleep 30
     let Some((mut master, stdin, stdout)) = required_pseudo_terminal("picker signal") else {
         return;
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .process_group(0)
-        .args(["codex", "launch"])
-        .env("HOME", temp.path())
-        .env("CODEX_HOME", &default)
-        .env("JIG_CODEX_BIN", &stub)
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .process_group(0)
+            .args(["codex", "launch"])
+            .env("HOME", temp.path())
+            .env("CODEX_HOME", &default)
+            .env("JIG_CODEX_BIN", &stub)
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -558,17 +568,19 @@ printf '%s\n' "$$" > "$CODEX_HOME/app-server.pid"
 sleep 30
 "#,
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .process_group(0)
-        .args(["codex", "homes", "--usage"])
-        .env("HOME", temp.path())
-        .env("CODEX_HOME", &default)
-        .env("JIG_CODEX_BIN", &stub)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .process_group(0)
+            .args(["codex", "homes", "--usage"])
+            .env("HOME", temp.path())
+            .env("CODEX_HOME", &default)
+            .env("JIG_CODEX_BIN", &stub)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let pid_paths = [default.join("app-server.pid"), work.join("app-server.pid")];
     for path in &pid_paths {
         wait_for_path(path, Duration::from_secs(3));

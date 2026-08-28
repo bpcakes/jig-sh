@@ -32,6 +32,7 @@ const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
 pub(super) fn reconcile_runtime_config(
     seed_repo_path: Option<&Path>,
     destination: &Path,
+    preferred_rendered_commands: &BTreeSet<String>,
 ) -> Result<()> {
     let Some(seed_repo_path) = seed_repo_path else {
         return Ok(());
@@ -66,6 +67,7 @@ pub(super) fn reconcile_runtime_config(
         rendered_table,
         &staged_context,
         &existing_path,
+        preferred_rendered_commands,
     )?;
     reconcile_work(existing_table, rendered_table, &staged_context)?;
     if let Some(existing_loop) = existing_table.get("loop") {
@@ -86,6 +88,7 @@ fn reconcile_commands(
     rendered: &mut toml::Table,
     staged_context: &RepoContext,
     existing_path: &Path,
+    preferred_rendered_commands: &BTreeSet<String>,
 ) -> Result<()> {
     let Some(existing_commands) = existing.get("commands") else {
         return Ok(());
@@ -101,19 +104,61 @@ fn reconcile_commands(
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("Rendered [commands] is not a TOML table"))?;
+    let retired_repository_commands = existing_repository_command_keys(existing);
     let prior_generated_per_app_commands = prior_generated_per_app_command_defaults(existing);
 
     for (key, value) in existing_commands {
-        let is_retired_fixed_default =
-            GENERATED_FRONTEND_COMMAND_DEFAULTS
-                .iter()
-                .any(|(generated_key, generated_value)| {
-                    key == generated_key && value.as_str() == Some(generated_value)
-                });
+        if preferred_rendered_commands.contains(key) && rendered_commands.contains_key(key) {
+            continue;
+        }
         let is_retired_per_app_default = prior_generated_per_app_commands
             .get(key)
             .is_some_and(|generated_value| value.as_str() == Some(generated_value.as_str()));
-        if (is_retired_fixed_default || is_retired_per_app_default)
+        if is_retired_per_app_default
+            && !staged_context
+                .required_commands()
+                .iter()
+                .any(|required| required == key)
+        {
+            continue;
+        }
+        if staged_context.contract_version() >= 6 {
+            if let Some(replacement) = v6_command_replacement(key) {
+                if preferred_rendered_commands.contains(replacement)
+                    && rendered_commands.contains_key(replacement)
+                {
+                    continue;
+                }
+                let replacement_is_required = staged_context
+                    .required_commands()
+                    .iter()
+                    .any(|required| required == replacement);
+                if replacement_is_required
+                    && value
+                        .as_str()
+                        .is_some_and(|command| !command.trim().is_empty())
+                {
+                    rendered_commands.insert(replacement.into(), value.clone());
+                } else if !replacement_is_required
+                    && value
+                        .as_str()
+                        .is_some_and(|command| !command.trim().is_empty())
+                    && !is_generated_frontend_default(key, value)
+                {
+                    rendered_commands.insert(key.clone(), value.clone());
+                }
+                continue;
+            }
+            if retired_repository_commands.contains(key)
+                && !staged_context
+                    .required_commands()
+                    .iter()
+                    .any(|required| required == key)
+            {
+                continue;
+            }
+        }
+        if is_generated_frontend_default(key, value)
             && !staged_context
                 .required_commands()
                 .iter()
@@ -135,6 +180,24 @@ fn reconcile_commands(
         rendered_commands.insert(key.clone(), value.clone());
     }
     Ok(())
+}
+
+fn existing_repository_command_keys(existing: &toml::Table) -> BTreeSet<String> {
+    existing
+        .get("repository")
+        .and_then(toml::Value::as_table)
+        .and_then(|repository| repository.get("actions"))
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+        .filter_map(|action| action.get("runner"))
+        .filter_map(toml::Value::as_table)
+        .filter(|runner| runner.get("kind").and_then(toml::Value::as_str) == Some("command"))
+        .filter_map(|runner| runner.get("command"))
+        .filter_map(toml::Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn prior_generated_per_app_command_defaults(existing: &toml::Table) -> BTreeMap<String, String> {
@@ -172,6 +235,32 @@ fn prior_generated_per_app_command_defaults(existing: &toml::Table) -> BTreeMap<
         }
     }
     commands
+}
+
+fn v6_command_replacement(legacy: &str) -> Option<&'static str> {
+    match legacy {
+        "rust_fmt_check_command" | "go_fmt_check_command" => Some("api_fmt_command"),
+        "rust_clippy_command" => Some("api_clippy_command"),
+        "go_lint_command" => Some("api_lint_command"),
+        "rust_test_command" | "go_test_command" => Some("api_test_command"),
+        "rust_test_locked_command" | "go_test_locked_command" => Some("api_test_locked_command"),
+        "sqlx_check_command" => Some("api_sqlx_command"),
+        "schema_dump_command" => Some("api_schema_dump_command"),
+        "sqlc_check_command" => Some("api_sqlc_command"),
+        "typescript_lint_command" => Some("repo_compat_typescript_lint_command"),
+        "typescript_typecheck_command" => Some("repo_compat_typescript_typecheck_command"),
+        "typescript_build_command" => Some("repo_compat_typescript_build_command"),
+        "typescript_coverage_command" => Some("repo_compat_typescript_coverage_command"),
+        _ => None,
+    }
+}
+
+fn is_generated_frontend_default(key: &str, value: &toml::Value) -> bool {
+    GENERATED_FRONTEND_COMMAND_DEFAULTS
+        .iter()
+        .any(|(generated_key, generated_value)| {
+            key == *generated_key && value.as_str() == Some(generated_value)
+        })
 }
 
 fn reconcile_work(
@@ -239,16 +328,14 @@ fn reconcile_work_gates(
     let mut consumed_existing_ids = BTreeSet::new();
 
     for mut generated in rendered_gates {
+        let generated_gate =
+            crate::context::parse_work_gate(&generated).context("Rendered work gate is invalid")?;
         let generated_table = generated
             .as_table_mut()
             .ok_or_else(|| anyhow::anyhow!("Rendered work gate is not a TOML table"))?;
-        let generated_id = work_gate_string(generated_table, "id", "rendered")?.to_string();
-        let generated_kind = work_gate_string(generated_table, "kind", "rendered")?;
-        let generated_tool = generated_table.get("tool").and_then(toml::Value::as_str);
+        let generated_id = generated_gate.id().to_string();
 
-        if generated_kind == "check"
-            && let Some(generated_tool) = generated_tool
-        {
+        if let crate::context::WorkGate::Check(check) = &generated_gate {
             if let Some(collision) = existing_gates
                 .iter()
                 .filter_map(toml::Value::as_table)
@@ -264,38 +351,43 @@ fn reconcile_work_gates(
                     .get("tool")
                     .and_then(toml::Value::as_str)
                     .unwrap_or("<missing>");
-                if existing_kind != "check" || existing_tool != generated_tool {
+                if existing_kind != "check" || existing_tool != check.tool {
                     bail!(
-                        "Cannot reconcile generated work gate '{generated_id}' ({generated_tool}): the existing gate with that id is kind '{existing_kind}' and tool '{existing_tool}'. Rename the project-owned gate or restore the generated identity before readoption."
+                        "Cannot reconcile generated work gate '{generated_id}' ({}): the existing gate with that id is kind '{existing_kind}' and tool '{existing_tool}'. Rename the project-owned gate or restore the generated identity before readoption.",
+                        check.tool
                     );
                 }
             }
             let exact_match = existing_gates
                 .iter()
                 .filter_map(toml::Value::as_table)
-                .find(|gate| generated_gate_is_exact(&generated_id, generated_tool, gate));
+                .find(|gate| generated_gate_is_exact(&generated_id, &check.tool, gate));
             let existing_match = exact_match.or_else(|| {
                 existing_gates
                     .iter()
                     .filter_map(toml::Value::as_table)
-                    .find(|gate| {
-                        generated_gate_is_legacy_alias(&generated_id, generated_tool, gate)
-                    })
+                    .find(|gate| generated_gate_is_legacy_alias(&generated_id, &check.tool, gate))
             });
             if let Some(existing) = existing_match {
                 if let Some(existing_id) = existing.get("id").and_then(toml::Value::as_str) {
                     consumed_existing_ids.insert(existing_id.to_string());
                 }
-                // Generated applicability scopes are migration-owned contract
-                // policy. Projects may retain whether a generated gate is
-                // required and whether stable evidence can be reused; custom
-                // scopes belong on a distinct project-owned gate id.
                 for field in ["required", "reuse"] {
                     if let Some(value) = existing.get(field) {
                         generated_table.insert(field.into(), value.clone());
                     }
                 }
             }
+        } else if let Some(existing) = existing_gates.iter().find(|value| {
+            crate::context::parse_work_gate(value).is_ok_and(|gate| {
+                gate.id() == generated_id && gate.same_definition(&generated_gate)
+            })
+        }) && let Some(required) = existing
+            .as_table()
+            .and_then(|table| table.get("required"))
+            .and_then(toml::Value::as_bool)
+        {
+            generated_table.insert("required".into(), toml::Value::Boolean(required));
         }
 
         seen_ids.insert(generated_id);
@@ -303,30 +395,30 @@ fn reconcile_work_gates(
     }
 
     for existing_gate in existing_gates {
-        let Some(table) = existing_gate.as_table() else {
+        let Ok(gate) = crate::context::parse_work_gate(&existing_gate) else {
             continue;
         };
-        let Some(id) = table.get("id").and_then(toml::Value::as_str) else {
-            continue;
-        };
-        if consumed_existing_ids.contains(id)
-            || seen_ids.contains(id)
+        let table = existing_gate
+            .as_table()
+            .expect("parsed work gates are TOML tables");
+        if consumed_existing_ids.contains(gate.id())
+            || seen_ids.contains(gate.id())
             || is_retired_generated_check_gate(table)
             || !schema_valid_work_entry("gates", &existing_gate)
         {
             continue;
         }
-        let keep = match table.get("kind").and_then(toml::Value::as_str) {
-            Some("check") => table
-                .get("tool")
-                .and_then(toml::Value::as_str)
-                .and_then(|tool| staged_context.tool_spec(tool))
+        let keep = match &gate {
+            crate::context::WorkGate::Check(check) => staged_context
+                .tool_spec(&check.tool)
                 .is_some_and(tool_defs::is_no_arg_execution_tool),
-            Some("codex_review") => true,
-            _ => false,
+            crate::context::WorkGate::Evidence(_) | crate::context::WorkGate::CodexReview(_) => {
+                true
+            }
+            crate::context::WorkGate::Unsupported(_) => false,
         };
         if keep {
-            seen_ids.insert(id.to_string());
+            seen_ids.insert(gate.id().to_string());
             reconciled.push(existing_gate);
         }
     }
@@ -389,13 +481,6 @@ fn is_retired_generated_check_gate(table: &toml::Table) -> bool {
     )
 }
 
-fn work_gate_string<'a>(table: &'a toml::Table, key: &str, label: &str) -> Result<&'a str> {
-    table
-        .get(key)
-        .and_then(toml::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("{label} work gate is missing string {key}"))
-}
-
 fn reconcile_work_refinements(existing: &toml::Table, rendered: &mut toml::Table) {
     let Some(existing_refinements) = existing.get("refinements").and_then(toml::Value::as_array)
     else {
@@ -416,45 +501,4 @@ fn schema_valid_work_entry(field: &str, entry: &toml::Value) -> bool {
     toml::Value::Table(work)
         .try_into::<crate::context::WorkConfig>()
         .is_ok_and(|config| config.validate().is_ok())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use tempfile::tempdir;
-
-    use super::reconcile_runtime_config;
-    use crate::test_env::TestRepoBuilder;
-
-    #[test]
-    fn removed_frontend_app_retires_only_unchanged_generated_commands() {
-        let temp = tempdir().unwrap();
-        let seed = temp.path().join("seed");
-        let destination = temp.path().join("destination");
-        fs::create_dir_all(&seed).unwrap();
-        fs::create_dir_all(&destination).unwrap();
-        fs::write(
-            seed.join(".jig.toml"),
-            r#"
-[[frontend_apps]]
-name = "ExampleApp"
-dir = "web"
-
-[commands]
-typescript_exampleapp_lint_command = "scripts/check-webapps.sh app-check web lint"
-typescript_exampleapp_typecheck_command = "scripts/check-webapps.sh app-check web project-typecheck"
-project_release_command = "just release"
-"#,
-        )
-        .unwrap();
-        TestRepoBuilder::new(&destination).write();
-
-        reconcile_runtime_config(Some(&seed), &destination).unwrap();
-
-        let reconciled = fs::read_to_string(destination.join(".jig.toml")).unwrap();
-        assert!(!reconciled.contains("typescript_exampleapp_lint_command"));
-        assert!(reconciled.contains("typescript_exampleapp_typecheck_command"));
-        assert!(reconciled.contains("project_release_command"));
-    }
 }

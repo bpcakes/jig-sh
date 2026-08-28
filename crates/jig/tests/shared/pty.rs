@@ -3,9 +3,43 @@
 use std::{
     fs::File,
     io::Read,
+    ops::{Deref, DerefMut},
     process::{Child, ExitStatus},
     time::{Duration, Instant},
 };
+
+pub struct ChildGuard {
+    child: Child,
+}
+
+impl ChildGuard {
+    pub fn new(child: Child) -> Self {
+        Self { child }
+    }
+}
+
+impl Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+}
 
 pub fn read_available(file: &mut File, output: &mut Vec<u8>) {
     let mut buffer = [0_u8; 4096];

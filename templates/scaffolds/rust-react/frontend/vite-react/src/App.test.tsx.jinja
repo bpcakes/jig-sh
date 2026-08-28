@@ -42,14 +42,14 @@ function statusResponse(version = "0.1.0", ready = true) {
   );
 }
 
-it("renders application status from the Rust API", async () => {
+it("renders application status from the [% if backend_language == "go" %]Go[% else %]Rust[% endif %] API", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(statusResponse()));
 
   renderApp();
   expect(await screen.findByRole("heading", { name: "<<[ title ]>>" })).toBeDefined();
   expect(await screen.findByText("<<[ repo_name ]>>")).toBeDefined();
   expect(screen.getByText("0.1.0")).toBeDefined();
-  const serviceStatusCard = screen.getByRole("group", { name: "Rust API" });
+  const serviceStatusCard = screen.getByRole("group", { name: "[% if backend_language == "go" %]Go[% else %]Rust[% endif %] API" });
   expect(within(serviceStatusCard).getByText("Ready")).toBeDefined();
 });
 
@@ -80,9 +80,14 @@ it("reports an unsuccessful API status response", async () => {
     vi.fn().mockResolvedValueOnce(
       new Response(
         JSON.stringify({
+[% if backend_language == "go" %]          title: "Service Unavailable",
+          status: 503,
+          detail: "A required dependency is unavailable",
+[% else %]
           code: "dependency_unavailable",
           message: "A required dependency is unavailable",
           request_id: "request-public-503",
+[% endif %]
         }),
         { status: 503, headers: { "Content-Type": "application/json" } },
       ),
@@ -92,7 +97,7 @@ it("reports an unsuccessful API status response", async () => {
   renderApp();
 
   expect(
-    await screen.findByText(/A required dependency is unavailable \(request request-public-503\)/i),
+    await screen.findByText(/A required dependency is unavailable[% if backend_language == "rust" %] \(request request-public-503\)[% endif %]/i),
   ).toBeDefined();
 });
 

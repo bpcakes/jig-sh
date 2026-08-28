@@ -1,30 +1,81 @@
-use jig_contract::{FeatureContext, FeatureDescriptor, NativeToolDescriptor, NativeToolKind, tool};
+use jig_contract::{
+    ActionEffect, ActionIntent, AdapterActionDescriptor, AdapterRunnerDescriptor, FeatureContext,
+    FeatureDescriptor, NativeToolDescriptor, NativeToolKind, RepositoryAdapterDescriptor, tool,
+};
 
 const BOOTSTRAP_COMMAND: &str = "bootstrap_command";
 const COMMAND_KEYS: &[&str] = &[BOOTSTRAP_COMMAND, "contract_check_command"];
-const NATIVE_TOOLS: &[NativeToolDescriptor] = &[NativeToolDescriptor::new(
-    tool::CONTRACT_CHECK,
-    false,
-    NativeToolKind::ContractCheck,
-)];
+const NATIVE_TOOLS: &[NativeToolDescriptor] = &[
+    NativeToolDescriptor::new(tool::CONTRACT_CHECK, false, NativeToolKind::ContractCheck),
+    NativeToolDescriptor::new(tool::MIGRATION_ADD, true, NativeToolKind::MigrationAdd),
+];
+const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
+const OPERATE_EFFECTS: &[ActionEffect] = &[
+    ActionEffect::Worktree,
+    ActionEffect::Process,
+    ActionEffect::External,
+];
+const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
+    AdapterActionDescriptor::new(
+        "contract",
+        "Validate the checked-in Jig repository contract.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Native(tool::CONTRACT_CHECK),
+        &[".jig.toml", "scripts/jig"],
+        Some(tool::CONTRACT_CHECK),
+    ),
+    AdapterActionDescriptor::new(
+        "bootstrap",
+        "Prepare repository dependencies and local tooling.",
+        ActionIntent::Operate,
+        OPERATE_EFFECTS,
+        AdapterRunnerDescriptor::Command(BOOTSTRAP_COMMAND),
+        &[],
+        Some(tool::BOOTSTRAP),
+    ),
+];
+const REPOSITORY_ADAPTERS: &[RepositoryAdapterDescriptor] =
+    &[RepositoryAdapterDescriptor::new("jig", ADAPTER_ACTIONS)];
 
 pub const FEATURE: FeatureDescriptor = FeatureDescriptor::new(
     COMMAND_KEYS,
     NATIVE_TOOLS,
+    REPOSITORY_ADAPTERS,
     required_tools,
     no_unavailable_tool_message,
-);
+)
+.with_tool_admission_error(tool_admission_error);
 
 fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     let mut required = vec![tool::CONTRACT_CHECK];
     if ctx.contract_version() >= 2 || ctx.has_required_command(BOOTSTRAP_COMMAND) {
         required.push(tool::BOOTSTRAP);
     }
+    if ctx.migration_authoring_enabled() {
+        required.push(tool::MIGRATION_ADD);
+    }
     required
 }
 
-fn no_unavailable_tool_message(_ctx: &dyn FeatureContext, _tool_name: &str) -> Option<String> {
-    None
+fn no_unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    if tool_name != tool::MIGRATION_ADD || ctx.migration_authoring_enabled() {
+        return None;
+    }
+    if let Some(error) = ctx.migration_authoring_error() {
+        return Some(error);
+    }
+    (!ctx.sqlx_enabled()).then(|| {
+        format!(
+            "{tool_name} is not available because this repository has no configured migration backend. Enable SQLx or Go/PostgreSQL migrations, then run `jig update --recopy`, or remove this command/gate."
+        )
+    })
+}
+
+fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    (tool_name == tool::MIGRATION_ADD)
+        .then(|| ctx.migration_authoring_error())
+        .flatten()
 }
 
 pub fn dev_app_env_prefix(name: &str) -> String {
@@ -56,6 +107,10 @@ mod tests {
 
         fn required_commands(&self) -> &[String] {
             &self.required_commands
+        }
+
+        fn migration_authoring_enabled(&self) -> bool {
+            false
         }
 
         fn sqlx_enabled(&self) -> bool {
@@ -104,6 +159,42 @@ mod tests {
         assert_eq!(
             (FEATURE.required_tools)(&ctx),
             vec![tool::CONTRACT_CHECK, tool::BOOTSTRAP]
+        );
+    }
+
+    #[test]
+    fn core_migration_tool_is_required_for_any_migration_backend() {
+        struct MigrationContext(StubContext);
+
+        impl FeatureContext for MigrationContext {
+            fn contract_version(&self) -> u32 {
+                self.0.contract_version()
+            }
+
+            fn required_commands(&self) -> &[String] {
+                self.0.required_commands()
+            }
+
+            fn migration_authoring_enabled(&self) -> bool {
+                true
+            }
+
+            fn sqlx_enabled(&self) -> bool {
+                self.0.sqlx_enabled()
+            }
+
+            fn schema_dump_enabled(&self) -> bool {
+                self.0.schema_dump_enabled()
+            }
+
+            fn frontend_app_count(&self) -> usize {
+                self.0.frontend_app_count()
+            }
+        }
+
+        assert_eq!(
+            (FEATURE.required_tools)(&MigrationContext(StubContext::default())),
+            vec![tool::CONTRACT_CHECK, tool::MIGRATION_ADD]
         );
     }
 

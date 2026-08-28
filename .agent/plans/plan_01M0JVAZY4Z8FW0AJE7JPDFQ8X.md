@@ -1,0 +1,1 @@
+Extract bounded authority reads, encode backend-specific scaffold state, preserve generated output, and verify each slice independently.

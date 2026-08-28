@@ -3,6 +3,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -43,6 +44,8 @@ use runtime::{
 const COMMAND: &str = "doctor";
 const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const VERSION_AUTHORITY_MAX_BYTES: u64 = 128;
+const GO_MODULE_AUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 const CARGO_MANIFEST_AUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 const SQLX_DRIVER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,6 +83,16 @@ include!("doctor_parts/part_08.rs");
 include!("doctor_parts/part_09.rs");
 include!("doctor_parts/part_10.rs");
 include!("doctor_parts/part_11.rs");
+
+pub(crate) fn go_version_selector(ctx: &RepoContext) -> Result<String> {
+    let authority_paths = ctx
+        .go_module_authority_paths()
+        .context("Could not resolve Go module authority")?;
+    let (_, requirement) = select_go_module_version_requirement(&authority_paths)
+        .map_err(|error| anyhow!(error.reason))?
+        .context("This repository does not declare a Go module authority")?;
+    Ok(requirement.selector)
+}
 
 #[cfg(test)]
 mod tests;

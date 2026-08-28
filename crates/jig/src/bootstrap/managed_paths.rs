@@ -10,7 +10,6 @@ use super::answers::{HarnessFootprint, RenderAnswers};
 use super::path::{
     validate_no_reserved_git_metadata_components, validate_repository_relative_ancestors,
 };
-
 pub(super) const ROOT_AGENTS_PATH: &str = "AGENTS.md";
 pub(super) const ROOT_AGENTS_BLOCK_BEGIN: &str = "<!-- BEGIN JIG MANAGED BLOCK -->";
 pub(super) const ROOT_AGENTS_BLOCK_END: &str = "<!-- END JIG MANAGED BLOCK -->";
@@ -245,6 +244,15 @@ pub(super) fn should_omit_unmanaged_rendered_path(
 ) -> bool {
     if relative == Path::new("Makefile")
         || (answers.frontend_apps().is_empty() && is_web_managed_path(relative))
+        || (!answers.rust_ci_workflow_enabled()
+            && relative == Path::new(".github/workflows/rust-tests.yml"))
+        || (!answers.go_ci_workflow_enabled()
+            && relative == Path::new(".github/workflows/go-tests.yml"))
+        || (!(answers.go_ci_workflow_enabled()
+            || answers.rust_backend_enabled()
+            || answers.sqlx_enabled()
+            || answers.go_postgres_enabled())
+            && relative == Path::new(".github/workflows/repo-policy.yml"))
     {
         return true;
     }

@@ -31,15 +31,15 @@ fn schema_dump_is_an_explicit_utility_and_only_schema_check_is_a_work_gate() {
     .unwrap();
 
     let config = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(config.contains("id = \"schema\""), "{config}");
-    assert!(!config.contains("id = \"schema-dump\""), "{config}");
+    assert!(config.contains("action = \"schema\""), "{config}");
+    assert!(config.contains("action = \"schema-dump\""), "{config}");
     assert!(
         config.contains("schema_docs_dir = \"artifacts/schema\""),
         "{config}"
     );
     assert!(config.contains("\"artifacts/schema/**\""), "{config}");
     assert!(!config.contains("\"docs/schema/**\""), "{config}");
-    assert!(config.contains("\"crates/**\""), "{config}");
+    assert!(config.contains("\"**/*.rs\""), "{config}");
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
     assert!(contract.contains("jig.schema_check"));
     assert!(contract.contains("jig.schema_dump"));

@@ -4,6 +4,106 @@
 pub(super) const EMBEDDED_SCAFFOLD_TEMPLATE_FILES_FROM_SNAPSHOT: bool = true;
 pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFile] = &[
     EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/frontend/api-client-public/src/generated/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/frontend/api-client-public/src/generated/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/.env.example.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/.env.example.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/cmd/api/database_command.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/cmd/api/database_command.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/cmd/api/main.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/cmd/api/main.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/cmd/api/main_test.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/cmd/api/main_test.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/cmd/openapi/main.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/cmd/openapi/main.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/go.mod.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/go.mod.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/config/config.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/config/config.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/config/config_test.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/config/config_test.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/database.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/database.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/database_test.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/database_test.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/migrations/00001_app_metadata.sql.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/migrations/00001_app_metadata.sql.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/queries/metadata.sql.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/queries/metadata.sql.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/sqlc/db.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/sqlc/db.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/sqlc/metadata.sql.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/sqlc/metadata.sql.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/database/sqlc/models.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/sqlc/models.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/httpapi/httpapi.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/httpapi/httpapi.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/httpapi/httpapi_test.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/httpapi/httpapi_test.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/openapi/public.json.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/openapi/public.json.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/scripts/test-postgres.sh.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/scripts/test-postgres.sh.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/sqlc.yaml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/sqlc.yaml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/frontend/admin-shadcn/.prettierignore.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/admin-shadcn/.prettierignore.jinja")),
     },

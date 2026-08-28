@@ -105,6 +105,14 @@ fn evaluate_gate(
     match gate {
         WorkGate::Check(gate) => {
             let tool_name = gate.tool.as_str();
+            if let Err(error) = validate_check_tool(ctx, tool_name, "Work gate") {
+                return Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+                    id: gate.id.clone(),
+                    required: gate.required,
+                    kind: "check".into(),
+                    reason: Some(format!("{error:#}")),
+                }));
+            }
             let current_scope = match collection {
                 GateCollection::Blocking => plan_scope.evaluate(ctx, gate),
                 GateCollection::Cancellable(cancelled) => {
@@ -199,6 +207,29 @@ fn evaluate_gate(
                 current_scope,
             })))
         }
+        WorkGate::Evidence(gate) => match RepositoryCatalog::from_context(ctx) {
+            Ok(catalog) => match EvidenceGateEvaluation::evaluate(
+                gate,
+                &catalog,
+                current_fingerprint,
+                receipt_index,
+                collection,
+            ) {
+                Ok(evaluation) => Ok(GateEvaluation::Evidence(evaluation)),
+                Err(error) => Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+                    id: gate.id.clone(),
+                    required: gate.required,
+                    kind: "evidence".into(),
+                    reason: Some(format!("{error:#}")),
+                })),
+            },
+            Err(error) => Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+                id: gate.id.clone(),
+                required: gate.required,
+                kind: "evidence".into(),
+                reason: Some(format!("repository catalog is invalid: {error:#}")),
+            })),
+        },
         WorkGate::CodexReview(gate) => {
             let skill = gate.skill.as_str();
             collection.ensure_active()?;
@@ -231,6 +262,7 @@ fn evaluate_gate(
             id: gate.id.clone(),
             required: gate.required,
             kind: gate.kind.clone(),
+            reason: None,
         })),
     }
 }

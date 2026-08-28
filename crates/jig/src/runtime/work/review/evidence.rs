@@ -105,6 +105,7 @@ pub(super) fn review_failed_gates(review_result: &Value) -> Result<Vec<Value>> {
 }
 
 pub(super) fn checks_passed(check_result: &Value) -> Result<bool> {
+    let batch_passed = check_result.get("ok").and_then(Value::as_bool) == Some(true);
     let gate_evidence_ok = check_result
         .get("gate_evidence")
         .and_then(Value::as_array)
@@ -120,14 +121,17 @@ pub(super) fn checks_passed(check_result: &Value) -> Result<bool> {
         .get("checks")
         .and_then(Value::as_array)
         .context("work check result is missing checks array")?;
-    Ok(gate_evidence_ok
-        && checks.iter().all(|check| {
-            check
-                .get("result")
-                .and_then(|result| result.get("exit_status"))
-                .and_then(Value::as_i64)
-                == Some(0)
-        }))
+    let legacy_passed = checks.iter().all(|check| {
+        check
+            .get("result")
+            .and_then(|result| result.get("exit_status"))
+            .and_then(Value::as_i64)
+            == Some(0)
+    });
+    let target_passed = check_result
+        .get("run")
+        .is_none_or(|run| run["conclusion"].as_str() == Some("success"));
+    Ok(batch_passed && gate_evidence_ok && legacy_passed && target_passed)
 }
 
 pub(super) fn finding_meets_threshold(finding: &Value, threshold: &str) -> bool {

@@ -1,3 +1,5 @@
+// agentic-loc-exception: status-provider concurrency and validation tests share process fixtures and report builders.
+
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::fs;
@@ -225,6 +227,48 @@ timeout_seconds = 3
     assert_eq!(runs[0].id, "example.provider-a");
     assert_eq!(runs[1].id, "example.provider-b");
     assert!(runs.iter().all(|run| run.report.is_some()));
+}
+
+#[cfg(unix)]
+#[test]
+fn aggregate_refreshes_status_provider_authority_after_startup() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[[status.providers]]
+id = "factorish.old-status"
+argv = ["cat", "old-report.json"]
+timeout_seconds = 2
+"#,
+        )
+        .write();
+    let mut old_report = report_value("complete", None);
+    old_report["provider"]["id"] = json!("factorish.old-status");
+    fs::write(
+        temp.path().join("old-report.json"),
+        serde_json::to_vec(&old_report).unwrap(),
+    )
+    .unwrap();
+    let mut new_report = report_value("complete", None);
+    new_report["provider"]["id"] = json!("factorish.new-status");
+    fs::write(
+        temp.path().join("new-report.json"),
+        serde_json::to_vec(&new_report).unwrap(),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("factorish.old-status", "factorish.new-status")
+        .replace("old-report.json", "new-report.json");
+    fs::write(config_path, config).unwrap();
+
+    let snapshot = snapshot(&ctx).unwrap();
+
+    assert_eq!(snapshot["providers"][0]["id"], "factorish.new-status");
+    assert_eq!(snapshot["providers"][0]["status"], "complete");
 }
 
 #[derive(Default)]

@@ -16,6 +16,7 @@ mod codex;
 mod codex_run;
 mod init_wizard;
 mod loops;
+mod migration;
 mod prompt;
 mod proxy;
 mod setup_run;
@@ -26,12 +27,16 @@ mod vault;
 mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
-pub(crate) use check::{CheckCommand, CheckMigrationImmutabilityOpts, CheckRustFileLocOpts};
+pub(crate) use check::{
+    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts,
+    CheckRustFileLocOpts, CheckTargetOpts,
+};
 pub(crate) use codex::CodexCommand;
 pub(crate) use loops::{
     LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
     LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
+pub(crate) use migration::{MigrationAddOpts, MigrationCommand};
 pub(crate) use prompt::PromptCommand;
 pub(crate) use proxy::{
     DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, ProxyAliasOpts,
@@ -40,12 +45,12 @@ pub(crate) use proxy::{
     ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
     ProxyStartOpts, ProxyStopOpts,
 };
-pub(crate) use sqlx::{MigrationAddOpts, SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
+pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{
     StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts,
 };
-pub(crate) use status_opts::StatusOpts;
+pub(crate) use status_opts::{StatusCommand, StatusOpts};
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyOpts, VaultBackupCommand, VaultBackupCreateOpts,
     VaultBackupRestoreOpts, VaultCommand, VaultExecOpts, VaultFieldCommand, VaultFieldListOpts,
@@ -89,9 +94,9 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
-const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test";
+const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test";
 
 const ROOT_COMMON_WORKFLOWS: &str = "\
 Common workflows:
@@ -153,6 +158,8 @@ Human-readable output is the default. Pass --json for structured automation outp
 Examples:
   jig info
   jig info --json
+  jig info components
+  jig info target api:test --json
   jig info --commands
   jig info --commands --json  # also works before adoption
   jig explain --json";
@@ -169,6 +176,7 @@ versioned aggregate or --tui for the interactive dashboard.
 
 Examples:
   jig status
+  jig status run RUN_ID
   jig status --json
   jig status --tui";
 
@@ -288,10 +296,9 @@ pub(crate) enum CommandKind {
     #[command(
         name = root_commands::CHECK.name,
         display_order = root_commands::CHECK.display_order,
-        subcommand,
         after_help = check::CHECK_AFTER_HELP
     )]
-    Check(CheckCommand),
+    Check(CheckOpts),
     /// Aggregate local repo, work, loop, and configured status-provider observations.
     #[command(
         name = root_commands::STATUS.name,
@@ -321,6 +328,14 @@ pub(crate) enum CommandKind {
         after_help = loops::LOOP_AFTER_HELP
     )]
     Loop(LoopCommand),
+    /// Create migrations in the configured backend format.
+    #[command(
+        name = root_commands::MIGRATION.name,
+        display_order = root_commands::MIGRATION.display_order,
+        subcommand,
+        after_help = migration::MIGRATION_AFTER_HELP
+    )]
+    Migration(MigrationCommand),
     /// Manage SQLx migrations and schema documentation.
     #[command(
         name = root_commands::SQLX.name,
@@ -329,7 +344,7 @@ pub(crate) enum CommandKind {
         after_help = sqlx::SQLX_AFTER_HELP
     )]
     Sqlx(SqlxCommand),
-    /// Add a forward-only SQLx migration file when SQLx is enabled.
+    /// Add a forward-only migration through the legacy flattened command.
     #[command(name = tool_defs::cli_command::MIGRATION_ADD, hide = true)]
     MigrationAdd(MigrationAddOpts),
     /// Regenerate schema documentation when schema dumps are enabled.
@@ -468,6 +483,29 @@ pub(crate) struct InfoOpts {
         help = "Show root commands with repository-specific availability and remediation"
     )]
     pub(crate) commands: bool,
+    #[command(subcommand)]
+    pub(crate) subject: Option<InfoCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum InfoCommand {
+    /// Print the highest Go module toolchain selector used by managed CI.
+    #[command(name = "go-version", hide = true)]
+    GoVersion,
+    /// Inspect the normalized workspace catalog.
+    Workspace,
+    /// List addressable repository components.
+    Components,
+    /// Inspect one component and its targets.
+    Component { id: String },
+    /// List executable component/action targets.
+    Targets,
+    /// Inspect one target by its component:action address.
+    Target { id: String },
+    /// List checked-in target profiles.
+    Profiles,
+    /// Inspect one checked-in profile.
+    Profile { id: String },
 }
 
 #[derive(Args, Debug)]

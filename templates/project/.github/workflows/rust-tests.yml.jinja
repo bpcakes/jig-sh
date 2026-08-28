@@ -3,47 +3,33 @@ name: Rust Tests
 on:
   pull_request:
     paths:
-[% for root in rust_crate_roots %]
-      - <<[ (root ~ "/**") | tojson ]>>
+[% for path in rust_ci_input_paths %]
+      - <<[ path | tojson ]>>
 [% endfor %]
 [% if sqlx_enabled %]
-      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
-      - "clippy.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
-      - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   push:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-[% for root in rust_crate_roots %]
-      - <<[ (root ~ "/**") | tojson ]>>
+[% for path in rust_ci_input_paths %]
+      - <<[ path | tojson ]>>
 [% endfor %]
 [% if sqlx_enabled %]
-      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
-      - "clippy.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
-      - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   merge_group:
     types:
@@ -59,7 +45,7 @@ concurrency:
 
 jobs:
   fmt:
-    name: scripts/jig check fmt
+    name: scripts/jig check <<[ rust_fmt_ci_target ]>>
     runs-on: <<[ ci_github_runner | tojson ]>>
     defaults:
       run:
@@ -74,10 +60,10 @@ jobs:
           rustflags: ""
           components: rustfmt
       - name: Run rustfmt check
-        run: scripts/jig check fmt
+        run: scripts/jig check <<[ rust_fmt_ci_target ]>>
 
   clippy:
-    name: scripts/jig check clippy
+    name: scripts/jig check <<[ rust_clippy_ci_target ]>>
     runs-on: <<[ ci_github_runner | tojson ]>>
     defaults:
       run:
@@ -99,10 +85,10 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: scripts/jig check clippy
+        run: scripts/jig check <<[ rust_clippy_ci_target ]>>
 
   test:
-    name: scripts/jig check test-locked
+    name: scripts/jig check <<[ rust_test_locked_ci_target ]>>
     runs-on: <<[ ci_github_runner | tojson ]>>
     defaults:
       run:
@@ -123,4 +109,4 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
       - name: Run locked Rust tests
-        run: scripts/jig check test-locked
+        run: scripts/jig check <<[ rust_test_locked_ci_target ]>>

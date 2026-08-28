@@ -2,9 +2,9 @@
 set -eu
 # jig-generated-runtime-launcher:v1
 # jig-runtime-repository-scope:v1
-# jig-check-subcommands:fmt,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test
+# jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test
 # jig-capability-only-subcommands:adopt,codex,doctor,init,presets,update
-# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work
+# jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work
 # jig-global-flags:--json
 
 # Keep launcher behavior synchronized with templates/project/scripts/jig.jinja;
@@ -126,7 +126,7 @@ jig_capability_only_requested() {
           check)
             ;;
           # jig-repository-scope-subcommands-begin
-          agent | agent-map | bootstrap | dev | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration-add | prompt | proxy | schema-dump | setup | sqlx | state | status | ui | vault | work)
+          agent | agent-map | bootstrap | dev | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration | migration-add | prompt | proxy | schema-dump | setup | sqlx | state | status | ui | vault | work)
             # jig-repository-scope-subcommands-end
             return 1
             ;;
@@ -139,28 +139,62 @@ jig_capability_only_requested() {
         ;;
       check)
         case "$arg" in
-          -*)
-            return 1
-            ;;
-          contract)
+          -h | --help | -V | --version)
             return 0
             ;;
+          --plan-id)
+            capability_command=check-plan-id
+            ;;
+          --plan-id=*)
+            ;;
+          --no-receipt)
+            ;;
+          contract)
+            capability_command=check-contract
+            ;;
           # jig-strict-check-subcommands-begin
-          fmt | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
+          fmt | lint | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | sqlc | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
             # jig-strict-check-subcommands-end
             return 1
             ;;
           *)
-            return 0
+            # Bare check, selectors, and unknown check-shaped input must be
+            # pinned to this repository. Clap can still diagnose a typo after
+            # the launcher validates the repository boundary.
+            return 1
             ;;
         esac
         ;;
+      check-plan-id)
+        capability_command=check
+        ;;
+      check-contract)
+        case "$arg" in
+          -h | --help | -V | --version)
+            return 0
+            ;;
+          --plan-id)
+            capability_command=check-contract-plan-id
+            ;;
+          --plan-id=*)
+            ;;
+          --no-receipt)
+            ;;
+          *)
+            return 1
+            ;;
+        esac
+        ;;
+      check-contract-plan-id)
+        capability_command=check-contract
+        ;;
     esac
   done
-  # A global-only invocation behaves like bare help, while a syntactically
-  # incomplete bare `check` reaches Clap's specific subcommand diagnostic even
-  # when the repository contract is broken.
-  [ -z "$capability_command" ] || [ "$capability_command" = check ]
+  # A global-only invocation behaves like bare help. Bare `check` is a valid
+  # repository operation and therefore stays repository-scoped.
+  [ -z "$capability_command" ] \
+    || [ "$capability_command" = check-contract ] \
+    || [ "$capability_command" = check-contract-plan-id ]
 }
 
 resolve_cached_binary() {

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use jig_ui::{TimelineItem, TimelineShow, UiQuery};
+use jig_ui::{SnapshotProvider, TimelineItem, TimelineShow, UiQuery};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -172,6 +172,22 @@ fn snapshot_joins_plans_gates_loops_and_timeline() {
             .any(|entry| entry["kind"] == "plan" && entry["event"] == "open"),
         "timeline should include the plan open event"
     );
+}
+
+#[test]
+fn server_snapshot_refreshes_repository_metadata_after_startup() {
+    let temp = tempdir().unwrap();
+    write_ui_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("repo_name = \"demo\"", "repo_name = \"ExampleProject\"");
+    fs::write(config_path, config).unwrap();
+
+    let snapshot = ctx.dashboard_snapshot(UiQuery::default()).unwrap();
+
+    assert_eq!(snapshot.repo.name, "ExampleProject");
 }
 
 #[test]

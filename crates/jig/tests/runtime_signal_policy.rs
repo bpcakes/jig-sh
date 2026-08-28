@@ -118,7 +118,7 @@ jig_version = "0.2.0-beta.1"
 sqlx_enabled = true
 schema_dump_enabled = true
 rust_migration_dir = "migrations"
-schema_dump_command = "touch .schema-dump-finished"
+schema_dump_command = 'touch "$JIG_TEST_SCHEMA_DUMP_FINISHED"'
 rust_test_command = "true"
 
 [execution]
@@ -144,6 +144,37 @@ command_timeout_seconds = 30
     )
     .unwrap();
 
+    for args in [
+        &["init", "-q"][..],
+        &["add", "."][..],
+        &[
+            "-c",
+            "user.name=Jig Test",
+            "-c",
+            "user.email=jig@example.invalid",
+            "commit",
+            "-m",
+            "baseline",
+            "-q",
+        ][..],
+    ] {
+        assert!(
+            Command::new("git")
+                .current_dir(temp.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let real_git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    assert!(real_git.status.success());
+    let real_git = String::from_utf8(real_git.stdout).unwrap();
+    let real_git = real_git.trim();
+
     let fake_bin = temp.path().join("bin");
     fs::create_dir(&fake_bin).unwrap();
     let git = fake_bin.join("git");
@@ -151,9 +182,10 @@ command_timeout_seconds = 30
         &git,
         r#"#!/bin/sh
 set -eu
-test "${1:-}" = "--literal-pathspecs"
-test "${2:-}" = "status"
-test -f "$JIG_TEST_SCHEMA_DUMP_FINISHED"
+if ! test -f "$JIG_TEST_SCHEMA_DUMP_FINISHED"; then
+  exec "$JIG_TEST_REAL_GIT" "$@"
+fi
+test "${1:-}" = "status"
 printf '%s' "$$" > "$JIG_TEST_GIT_PID"
 : > "$JIG_TEST_GIT_STARTED"
 (sleep 1; : > "$JIG_TEST_GIT_DESCENDANT_SURVIVED") &
@@ -177,6 +209,7 @@ wait
         .env_remove("JIG_REPO_ROOT")
         .env_remove("JIG_INVOKE_CWD")
         .env("PATH", path)
+        .env("JIG_TEST_REAL_GIT", real_git)
         .env("JIG_TEST_SCHEMA_DUMP_FINISHED", &dump_marker)
         .env("JIG_TEST_GIT_STARTED", &started_marker)
         .env("JIG_TEST_GIT_PID", &git_pid_path)

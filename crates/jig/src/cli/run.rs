@@ -1,4 +1,5 @@
-// agentic-loc-exception: CLI dispatch remains centralized while contract-v4 compatibility settles.
+// agentic-loc-exception: CLI dispatch remains centralized while contract-v5 compatibility settles.
+
 use std::ffi::OsString;
 use std::io::Write;
 use std::process;
@@ -127,7 +128,7 @@ impl LauncherCommandDescriptor {
 }
 
 impl CommandKind {
-    const fn launcher_descriptor(&self) -> LauncherCommandDescriptor {
+    fn launcher_descriptor(&self) -> LauncherCommandDescriptor {
         use LauncherCommandScope::{CapabilityOnly, Repository};
 
         let (name, scope) = match self {
@@ -140,7 +141,7 @@ impl CommandKind {
             Self::Doctor => (tool_defs::cli_command::DOCTOR, CapabilityOnly),
             Self::Info(_) => (tool_defs::cli_command::INFO, Repository),
             Self::Dev(_) => (tool_defs::cli_command::DEV, Repository),
-            Self::Check(CheckCommand::Contract(_)) => {
+            Self::Check(opts) if opts.is_contract_only() => {
                 (tool_defs::cli_command::CHECK, CapabilityOnly)
             }
             Self::Check(_) => (tool_defs::cli_command::CHECK, Repository),
@@ -148,6 +149,7 @@ impl CommandKind {
             Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
             Self::Work(_) => (tool_defs::cli_command::WORK, Repository),
             Self::Loop(_) => (tool_defs::cli_command::LOOP, Repository),
+            Self::Migration(_) => (root_commands::MIGRATION.name, Repository),
             Self::Sqlx(_) => (root_commands::SQLX.name, Repository),
             Self::MigrationAdd(_) => (tool_defs::cli_command::MIGRATION_ADD, Repository),
             Self::SchemaDump(_) => (tool_defs::cli_command::SCHEMA_DUMP, Repository),
@@ -215,12 +217,47 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
-            let output = info::run(opts.commands, json_output)?;
+            if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
+                if opts.commands {
+                    bail!("--commands cannot be combined with an info subject");
+                }
+                let ctx = RepoContext::load()?;
+                let selector = doctor::go_version_selector(&ctx)?;
+                if json_output {
+                    print_json(&serde_json::json!({
+                        "ok": true,
+                        "command": "info go-version",
+                        "version": selector,
+                    }))?;
+                } else {
+                    writeln!(std::io::stdout().lock(), "{selector}")?;
+                }
+                return Ok(());
+            }
+            let request = opts.subject.map(|subject| match subject {
+                super::InfoCommand::GoVersion => unreachable!("handled above"),
+                super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
+                super::InfoCommand::Components => crate::repository::InspectRequest::Components,
+                super::InfoCommand::Component { id } => {
+                    crate::repository::InspectRequest::Component(id)
+                }
+                super::InfoCommand::Targets => crate::repository::InspectRequest::Targets,
+                super::InfoCommand::Target { id } => crate::repository::InspectRequest::Target(id),
+                super::InfoCommand::Profiles => crate::repository::InspectRequest::Profiles,
+                super::InfoCommand::Profile { id } => {
+                    crate::repository::InspectRequest::Profile(id)
+                }
+            });
+            let output = info::run(opts.commands, json_output, request)?;
             emit(json_output, HumanOutput::Info, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Status(opts) => {
             let ctx = RepoContext::load()?;
+            if let Some(StatusCommand::Run { run_id }) = &opts.command {
+                let output = status_run_output(&ctx, run_id)?;
+                return emit(json_output, HumanOutput::RunStatus, &output);
+            }
             if opts.tui {
                 return status::tui::run(
                     ctx,
@@ -309,15 +346,15 @@ fn run_command(cli: Cli) -> Result<()> {
         ),
         CommandKind::Setup => run_setup_command(json_output),
         CommandKind::Check(command) => {
-            let require_ok = check_command_reports_failure_with_ok(&command);
-            let human_output = check_human_output(&command);
+            let command: crate::command::CheckCommand = command.try_into()?;
             dispatch_runtime_command(
-                crate::command::RuntimeCommand::Check(command.into()),
-                require_ok,
+                crate::command::RuntimeCommand::Check(command),
+                true,
                 json_output,
-                human_output,
+                HumanOutput::Check,
             )
         }
+        CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
         CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
         CommandKind::SchemaDump(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
@@ -327,14 +364,7 @@ fn run_command(cli: Cli) -> Result<()> {
             json_output,
             HumanOutput::ToolExecution,
         ),
-        CommandKind::MigrationAdd(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(
-                opts.into(),
-            )),
-            false,
-            json_output,
-            HumanOutput::MigrationAdd,
-        ),
+        CommandKind::MigrationAdd(opts) => run_migration_add(opts, json_output),
         CommandKind::AgentMap(command) => dispatch_runtime_command(
             crate::command::RuntimeCommand::AgentMap(command.into()),
             false,
@@ -391,16 +421,36 @@ fn run_command(cli: Cli) -> Result<()> {
     }
 }
 
+fn status_run_output(ctx: &RepoContext, run_id: &str) -> Result<serde_json::Value> {
+    let run = crate::state::reconcile_run_for_inspection(ctx, run_id)?;
+    let mut output = serde_json::to_value(run)?;
+    output["ok"] = serde_json::json!(true);
+    output["command"] = serde_json::json!("status run");
+    Ok(output)
+}
+
 fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
-    let human_output = match &command {
-        SqlxCommand::Migration(SqlxMigrationCommand::Add(_)) => HumanOutput::MigrationAdd,
-        SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)) => HumanOutput::ToolExecution,
-    };
+    match command {
+        SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => {
+            run_migration_add(opts, json_output)
+        }
+        SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts)) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
+                opts.into(),
+            )),
+            false,
+            json_output,
+            HumanOutput::ToolExecution,
+        ),
+    }
+}
+
+fn run_migration_add(opts: MigrationAddOpts, json_output: bool) -> Result<()> {
     dispatch_runtime_command(
-        crate::command::RuntimeCommand::Sqlx(command.into()),
+        crate::command::RuntimeCommand::MigrationAdd(opts.into()),
         false,
         json_output,
-        human_output,
+        HumanOutput::MigrationAdd,
     )
 }
 
@@ -604,8 +654,8 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
-        CommandKind::Check(command) => check_command_reports_failure_with_ok(command),
         CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
+        CommandKind::Check(_) => true,
         _ => false,
     }
 }
@@ -614,29 +664,12 @@ const fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
     matches!(command, AgentCommand::Doctor)
 }
 
-const fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
-    matches!(
-        command,
-        CheckCommand::AgentMap(_)
-            | CheckCommand::AgentGuides
-            | CheckCommand::RustFileLoc(_)
-            | CheckCommand::NoModRs
-            | CheckCommand::MigrationImmutability(_)
-            | CheckCommand::SqlxUncheckedNonTest,
-    )
-}
-
 const fn loop_command_reports_failure_with_ok(command: &LoopCommand) -> bool {
     matches!(
         command,
         LoopCommand::Tick(_) | LoopCommand::Dispatch(_) | LoopCommand::Run(_)
     )
 }
-
-const fn check_human_output(_command: &CheckCommand) -> HumanOutput {
-    HumanOutput::ToolExecution
-}
-
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {
         AgentCommand::Doctor => HumanOutput::AgentDoctor,
@@ -723,224 +756,8 @@ fn dispatch_runtime_command(
     finish_after_json_output(require_json_ok(require_ok, &output), json_output)
 }
 
-fn parse_cli() -> Cli {
-    let args = std::env::args_os().collect::<Vec<_>>();
-    let command_args = || args.iter().skip(1).cloned();
-    let report_json_errors = args_request_json(command_args()) && !args_target_mcp(command_args());
-
-    match Cli::try_parse_from(args) {
-        Ok(cli) => {
-            if let Some(error) = post_parse_usage_error(&cli) {
-                exit_with_cli_error(error, report_json_errors);
-            }
-            cli
-        }
-        Err(error) => exit_with_cli_error(error, report_json_errors),
-    }
-}
-
-fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {
-    let message = match &cli.command {
-        CommandKind::Status(opts) if cli.json && opts.tui => {
-            "`--tui` cannot be combined with `--json`"
-        }
-        CommandKind::Work(WorkCommand::Start(opts)) if cli.json && opts.print_plan_id => {
-            "`--print-plan-id` cannot be combined with `--json`"
-        }
-        _ => return None,
-    };
-    Some(clap::Error::raw(ErrorKind::ArgumentConflict, message))
-}
-
-fn exit_with_cli_error(error: clap::Error, json_output: bool) -> ! {
-    if json_output
-        && !matches!(
-            error.kind(),
-            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-        )
-    {
-        let exit_status = error.exit_code();
-        let message = augmented_cli_error_message(&error);
-        let _ = print_json(&json_error_payload("usage", &message, exit_status));
-        process::exit(exit_status);
-    }
-
-    if should_add_template_hint(&error) {
-        let message = error.to_string();
-        // If stderr is closed, there is nowhere useful to report the parse hint.
-        let _ = writeln!(std::io::stderr(), "{message}\n{TEMPLATE_ERROR_HINT}");
-        process::exit(error.exit_code());
-    }
-
-    if let Some(hint) = moved_check_command_hint(&error) {
-        let message = error.to_string();
-        // If stderr is closed, there is nowhere useful to report the parse hint.
-        let _ = writeln!(std::io::stderr(), "{message}\n{hint}");
-        process::exit(error.exit_code());
-    }
-
-    if let Some(hint) = missing_init_path_hint(&error) {
-        let message = error.to_string();
-        // If stderr is closed, there is nowhere useful to report the parse hint.
-        let _ = writeln!(std::io::stderr(), "{message}\n{hint}");
-        process::exit(error.exit_code());
-    }
-
-    error.exit();
-}
-
-fn args_request_json(args: impl IntoIterator<Item = OsString>) -> bool {
-    args.into_iter()
-        .take_while(|arg| arg != "--")
-        .any(|arg| arg == "--json")
-}
-
-fn args_target_mcp(args: impl IntoIterator<Item = OsString>) -> bool {
-    args.into_iter()
-        .take_while(|arg| arg != "--")
-        .filter(|arg| arg != "--json")
-        .find(|arg| !arg.to_string_lossy().starts_with('-'))
-        .is_some_and(|arg| arg == tool_defs::cli_command::MCP)
-}
-
-fn augmented_cli_error_message(error: &clap::Error) -> String {
-    let mut message = error.to_string();
-    let hint = if should_add_template_hint(error) {
-        Some(TEMPLATE_ERROR_HINT.to_string())
-    } else if let Some(hint) = moved_check_command_hint(error) {
-        Some(hint)
-    } else {
-        missing_init_path_hint(error).map(str::to_string)
-    };
-    if let Some(hint) = hint {
-        message.push('\n');
-        message.push_str(&hint);
-    }
-    message
-}
-
-fn missing_init_path_hint(error: &clap::Error) -> Option<&'static str> {
-    if error.kind() != ErrorKind::MissingRequiredArgument {
-        return None;
-    }
-
-    if !error.context().any(|(kind, value)| {
-        kind == ContextKind::Usage && context_contains(value, "jig init <PATH>")
-    }) {
-        return None;
-    }
-
-    Some(
-        "\
-`jig init` creates a new Jig-managed repository.
-Use `jig adopt .` for an existing repository.
-
-Use one of:
-  jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
-  jig init /path/to/new-repo --preset rust-react
-  jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
-  jig adopt .              # preview Jig adoption for this existing repo
-  jig adopt . --write      # apply Jig adoption to this existing repo
-  jig presets              # list available project scaffolds",
-    )
-}
-
-pub(super) fn moved_check_command_hint(error: &clap::Error) -> Option<String> {
-    if error.kind() != ErrorKind::InvalidSubcommand {
-        return None;
-    }
-
-    let message = error.to_string();
-    let moved = [
-        ("fmt-check", "jig check fmt"),
-        ("clippy", "jig check clippy"),
-        ("test", "jig check test"),
-        ("test-locked", "jig check test-locked"),
-        ("sqlx-check", "jig check sqlx"),
-        ("schema-check", "jig check schema"),
-        ("contract-check", "jig check contract"),
-        ("check-agent-guides", "jig check agent-guides"),
-        ("check-rust-file-loc", "jig check rust-file-loc"),
-        ("check-no-mod-rs", "jig check no-mod-rs"),
-        (
-            "check-migration-immutability",
-            "jig check migration-immutability",
-        ),
-        (
-            "check-sqlx-unchecked-non-test",
-            "jig check sqlx-unchecked-non-test",
-        ),
-    ];
-
-    // Like the nested agent-map case below, this depends on Clap 4.6.1 formatted
-    // usage text and is only a best-effort migration hint. Global options such as
-    // --json make the top-level usage line include [OPTIONS]; recheck this matcher
-    // on Clap upgrades or when adding more global flags.
-    if message.contains("Usage: jig [OPTIONS] <COMMAND>")
-        && let Some((_, replacement)) = moved
-            .iter()
-            .find(|(legacy, _)| message.contains(&format!("'{legacy}'")))
-    {
-        return Some(moved_check_hint_for(replacement));
-    }
-
-    // Clap 4.6.1 reports nested invalid subcommands through formatted usage text;
-    // this hint is best-effort and may disappear if that formatting changes.
-    if message.contains("unrecognized subcommand 'check'")
-        && message.contains("Usage: jig agent-map [OPTIONS] <COMMAND>")
-    {
-        return Some(moved_check_hint_for("jig check agent-map"));
-    }
-
-    None
-}
-
-fn moved_check_hint_for(replacement: &str) -> String {
-    format!("This check command moved. Use:\n  {replacement}")
-}
-
-pub(super) fn should_add_template_hint(error: &clap::Error) -> bool {
-    if !matches!(
-        error.kind(),
-        ErrorKind::InvalidValue | ErrorKind::TooFewValues
-    ) {
-        return false;
-    }
-    error
-        .context()
-        .any(|(kind, value)| kind == ContextKind::InvalidArg && context_mentions_template(value))
-}
-
-fn context_contains(value: &ContextValue, needle: &str) -> bool {
-    match value {
-        ContextValue::String(value) => value.contains(needle),
-        ContextValue::Strings(values) => values.iter().any(|value| value.contains(needle)),
-        ContextValue::StyledStr(value) => value.to_string().contains(needle),
-        ContextValue::StyledStrs(values) => values
-            .iter()
-            .any(|value| value.to_string().contains(needle)),
-        _ => false,
-    }
-}
-
-fn context_mentions_template(value: &ContextValue) -> bool {
-    match value {
-        ContextValue::String(value) => is_template_arg(value),
-        ContextValue::Strings(values) => values.iter().any(|value| is_template_arg(value)),
-        ContextValue::StyledStr(value) => is_template_arg(&value.to_string()),
-        ContextValue::StyledStrs(values) => values
-            .iter()
-            .any(|value| is_template_arg(&value.to_string())),
-        _ => false,
-    }
-}
-
-fn is_template_arg(value: &str) -> bool {
-    value
-        .split_whitespace()
-        .next()
-        .is_some_and(|arg| arg == "--template")
-}
+mod argument_parsing;
+pub(super) use argument_parsing::*;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]

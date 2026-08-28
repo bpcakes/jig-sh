@@ -2,7 +2,9 @@ import {
   client as publicApiClient,
   getAppStatusOptions,
   type AppStatusResponse,
+[% if backend_language == "rust" %]
   zApiErrorResponse,
+[% endif %]
 } from "<<[ public_api_client_package ]>>";
 
 publicApiClient.interceptors.error.use(normalizeApiError);
@@ -14,10 +16,19 @@ export const appStatusQueryOptions = getAppStatusOptions({
 
 function normalizeApiError(error: unknown): Error {
   if (error instanceof Error) return error;
-  const parsed = zApiErrorResponse.safeParse(error);
+[% if backend_language == "rust" %]  const parsed = zApiErrorResponse.safeParse(error);
   if (parsed.success) {
     return new Error(`${parsed.data.message} (request ${parsed.data.request_id})`);
   }
+[% else %]  if (typeof error === "object" && error !== null) {
+    if ("detail" in error && typeof error.detail === "string" && error.detail.length > 0) {
+      return new Error(error.detail);
+    }
+    if ("title" in error && typeof error.title === "string" && error.title.length > 0) {
+      return new Error(error.title);
+    }
+  }
+[% endif %]
   if (typeof error === "string" && error.length > 0) return new Error(error);
   return new Error("API request failed");
 }

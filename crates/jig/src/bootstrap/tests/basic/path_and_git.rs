@@ -1,3 +1,5 @@
+// agentic-loc-exception: bootstrap path and Git isolation cases share process-environment guards and transactional fixtures.
+
 use super::*;
 
 #[test]
@@ -198,6 +200,68 @@ marketplaces = []
     assert!(rendered.contains("marketplaces = []"));
     let ctx = crate::context::RepoContext::load_from(&destination).unwrap();
     assert!(ctx.codex_marketplaces().is_empty());
+}
+
+#[test]
+fn run_init_preserves_an_authored_repository_from_its_answers_file() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let answers_file = temp.path().join("answers.toml");
+    let mut authored = authored_mixed_repository_config();
+    let table = authored.as_table_mut().unwrap();
+    table.insert("repo_name".into(), toml::Value::String("demo".into()));
+    table.insert("sqlx_enabled".into(), toml::Value::Boolean(false));
+    table.insert("schema_dump_enabled".into(), toml::Value::Boolean(false));
+    fs::write(&answers_file, toml::to_string_pretty(&authored).unwrap()).unwrap();
+    let destination = temp.path().join("repo");
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let rendered =
+        toml::from_str::<toml::Value>(&fs::read_to_string(destination.join(".jig.toml")).unwrap())
+            .unwrap();
+    let targets = rendered["repository"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| {
+            format!(
+                "{}:{}",
+                action["target"]["component"].as_str().unwrap(),
+                action["target"]["action"].as_str().unwrap()
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(targets.contains(&"api:verify-custom".to_owned()));
+    assert!(targets.contains(&"worker:verify-custom".to_owned()));
+    assert_eq!(
+        rendered["commands"]["api_verify_command"].as_str(),
+        Some("go test ./...")
+    );
+    assert_eq!(
+        rendered["commands"]["worker_verify_command"].as_str(),
+        Some("cargo test -p worker")
+    );
+    assert_eq!(
+        rendered["commands"]["release_command"].as_str(),
+        Some("just release")
+    );
 }
 
 #[test]
@@ -705,8 +769,8 @@ fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() 
     assert!(!contract.contains(r#""name": "jig.migration_add""#));
     let guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
     assert!(guide.contains("complete versioned schema artifacts"));
-    assert!(guide.contains("do not use `scripts/jig sqlx migration add`"));
-    assert!(!guide.contains("- `scripts/jig sqlx migration add NAME`"));
+    assert!(guide.contains("do not use `scripts/jig migration add`"));
+    assert!(!guide.contains("- `scripts/jig migration add NAME`"));
 }
 
 #[test]

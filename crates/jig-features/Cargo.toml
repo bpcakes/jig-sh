@@ -12,6 +12,7 @@ documentation.workspace = true
 [dependencies]
 jig-contract.workspace = true
 jig-core.workspace = true
+jig-go.workspace = true
 jig-rust.workspace = true
 jig-sqlx.workspace = true
 jig-typescript.workspace = true

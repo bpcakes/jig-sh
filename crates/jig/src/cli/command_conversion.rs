@@ -1,22 +1,22 @@
+use anyhow::{Result, bail};
+
 use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts, DevStatusOpts,
-    DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts,
-    LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
-    LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand,
-    ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
-    ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
-    ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
-    ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
-    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
-    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
-    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
-    WorkStartOpts,
+    CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts, CheckTargetOpts,
+    DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
+    GenerateSqlxUncheckedQueriesTodoOpts, LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts,
+    LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
+    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
+    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
+    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
+    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
+    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
+    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
+    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
+    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
-
-mod vault;
 
 impl From<ToolOpts> for command::ToolRequest {
     fn from(opts: ToolOpts) -> Self {
@@ -40,28 +40,267 @@ impl From<AgentMapOpts> for command::AgentMapRequest {
     }
 }
 
-impl From<CheckCommand> for command::CheckCommand {
-    fn from(command: CheckCommand) -> Self {
+impl TryFrom<CheckOpts> for command::CheckCommand {
+    type Error = anyhow::Error;
+
+    fn try_from(opts: CheckOpts) -> Result<Self> {
+        let CheckOpts {
+            mut tool,
+            mut profile,
+            mut affected,
+            mut explain,
+            mut fail_fast,
+            command,
+        } = opts;
+
         match command {
-            CheckCommand::Fmt(opts) => Self::Fmt(opts.into()),
-            CheckCommand::Clippy(opts) => Self::Clippy(opts.into()),
-            CheckCommand::Test(opts) => Self::Test(opts.into()),
-            CheckCommand::TestLocked(opts) => Self::TestLocked(opts.into()),
-            CheckCommand::TypeScriptLint(opts) => Self::TypeScriptLint(opts.into()),
-            CheckCommand::TypeScriptTypecheck(opts) => Self::TypeScriptTypecheck(opts.into()),
-            CheckCommand::TypeScriptBuild(opts) => Self::TypeScriptBuild(opts.into()),
-            CheckCommand::TypeScriptCoverage(opts) => Self::TypeScriptCoverage(opts.into()),
-            CheckCommand::Sqlx(opts) => Self::Sqlx(opts.into()),
-            CheckCommand::Schema(opts) => Self::Schema(opts.into()),
-            CheckCommand::Contract(opts) => Self::Contract(opts.into()),
-            CheckCommand::AgentMap(opts) => Self::AgentMap(opts.into()),
-            CheckCommand::AgentGuides => Self::AgentGuides,
-            CheckCommand::RustFileLoc(opts) => Self::RustFileLoc(opts.into()),
-            CheckCommand::NoModRs => Self::NoModRs,
-            CheckCommand::MigrationImmutability(opts) => Self::MigrationImmutability(opts.into()),
-            CheckCommand::SqlxUncheckedNonTest => Self::SqlxUncheckedNonTest,
+            None => Ok(Self::Repository(command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile,
+                affected_base: affected,
+                explain,
+                fail_fast,
+                tool: tool.into(),
+            })),
+            Some(CheckCommand::Selectors(selectors)) => {
+                let selectors = normalize_external_check_args(
+                    selectors,
+                    &mut tool,
+                    &mut profile,
+                    &mut affected,
+                    &mut explain,
+                    &mut fail_fast,
+                )?;
+                Ok(Self::Repository(command::RepositoryCheckRequest {
+                    selectors,
+                    profile,
+                    affected_base: affected,
+                    explain,
+                    fail_fast,
+                    tool: tool.into(),
+                }))
+            }
+            Some(command)
+                if profile.is_some()
+                    || affected.is_some()
+                    || explain
+                    || fail_fast
+                    || command.has_additional_selectors() =>
+            {
+                let (selector, child) = repository_selector(command)?;
+                let mut selectors = Vec::with_capacity(child.selectors.len() + 1);
+                selectors.push(selector.into());
+                selectors.extend(child.selectors);
+                Ok(Self::Repository(command::RepositoryCheckRequest {
+                    selectors,
+                    profile,
+                    affected_base: affected,
+                    explain,
+                    fail_fast,
+                    tool: merge_tool_opts(tool, child.tool)?.into(),
+                }))
+            }
+            // Preserve the named command DTO until runtime has loaded the
+            // repository contract. `dispatch_named_check` executes the legacy
+            // manifest tool only for v2-v5; v6 resolves this name as a
+            // repository selector so every component action is included.
+            Some(command) => direct_check_command(command, tool),
         }
     }
+}
+
+fn normalize_external_check_args(
+    raw: Vec<String>,
+    tool: &mut ToolOpts,
+    profile: &mut Option<String>,
+    affected: &mut Option<String>,
+    explain: &mut bool,
+    fail_fast: &mut bool,
+) -> Result<Vec<String>> {
+    let mut selectors = Vec::new();
+    let mut args = raw.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--no-receipt" => tool.no_receipt = true,
+            "--explain" => *explain = true,
+            "--fail-fast" => *fail_fast = true,
+            "--plan-id" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--plan-id requires a value"))?;
+                set_external_value(&mut tool.plan_id, value, "--plan-id")?;
+            }
+            "--profile" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--profile requires a value"))?;
+                set_external_value(profile, value, "--profile")?;
+            }
+            "--affected" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--affected requires a value"))?;
+                set_external_value(affected, value, "--affected")?;
+            }
+            _ if arg.starts_with("--plan-id=") => set_external_value(
+                &mut tool.plan_id,
+                arg["--plan-id=".len()..].to_owned(),
+                "--plan-id",
+            )?,
+            _ if arg.starts_with("--profile=") => {
+                set_external_value(profile, arg["--profile=".len()..].to_owned(), "--profile")?
+            }
+            _ if arg.starts_with("--affected=") => set_external_value(
+                affected,
+                arg["--affected=".len()..].to_owned(),
+                "--affected",
+            )?,
+            _ if arg.starts_with('-') => anyhow::bail!("unknown check option '{arg}'"),
+            _ => selectors.push(arg),
+        }
+    }
+    if tool.no_receipt && tool.plan_id.is_some() {
+        anyhow::bail!("--no-receipt cannot be combined with --plan-id");
+    }
+    Ok(selectors)
+}
+
+fn set_external_value(target: &mut Option<String>, value: String, option: &str) -> Result<()> {
+    if value.is_empty() {
+        anyhow::bail!("{option} requires a non-empty value");
+    }
+    if target.replace(value).is_some() {
+        anyhow::bail!("{option} cannot be used more than once");
+    }
+    Ok(())
+}
+
+fn direct_check_command(
+    command: CheckCommand,
+    parent_tool: ToolOpts,
+) -> Result<command::CheckCommand> {
+    let command = match command {
+        CheckCommand::Fmt(opts) => {
+            command::CheckCommand::Fmt(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::Lint(opts) => {
+            command::CheckCommand::Lint(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::Clippy(opts) => {
+            command::CheckCommand::Clippy(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::Test(opts) => {
+            command::CheckCommand::Test(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::TestLocked(opts) => {
+            command::CheckCommand::TestLocked(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::TypeScriptLint(opts) => {
+            command::CheckCommand::TypeScriptLint(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::TypeScriptTypecheck(opts) => command::CheckCommand::TypeScriptTypecheck(
+            merge_tool_opts(parent_tool, opts.tool)?.into(),
+        ),
+        CheckCommand::TypeScriptBuild(opts) => {
+            command::CheckCommand::TypeScriptBuild(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::TypeScriptCoverage(opts) => command::CheckCommand::TypeScriptCoverage(
+            merge_tool_opts(parent_tool, opts.tool)?.into(),
+        ),
+        CheckCommand::Sqlx(opts) => {
+            command::CheckCommand::Sqlx(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::Sqlc(opts) => {
+            command::CheckCommand::Sqlc(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::Schema(opts) => {
+            command::CheckCommand::Schema(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::Contract(opts) => {
+            command::CheckCommand::Contract(merge_tool_opts(parent_tool, opts.tool)?.into())
+        }
+        CheckCommand::AgentMap(opts) => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::AgentMap(opts.into())
+        }
+        CheckCommand::AgentGuides => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::AgentGuides
+        }
+        CheckCommand::RustFileLoc(opts) => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::RustFileLoc(opts.into())
+        }
+        CheckCommand::NoModRs => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::NoModRs
+        }
+        CheckCommand::MigrationImmutability(opts) => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::MigrationImmutability(opts.into())
+        }
+        CheckCommand::SqlxUncheckedNonTest => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::SqlxUncheckedNonTest
+        }
+        CheckCommand::Selectors(_) => {
+            unreachable!("external selectors are handled before direct commands")
+        }
+    };
+    Ok(command)
+}
+
+fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTargetOpts)> {
+    match command {
+        CheckCommand::Fmt(opts) => Ok(("fmt", opts)),
+        CheckCommand::Lint(opts) => Ok(("lint", opts)),
+        CheckCommand::Clippy(opts) => Ok(("clippy", opts)),
+        CheckCommand::Test(opts) => Ok(("test", opts)),
+        CheckCommand::TestLocked(opts) => Ok(("test-locked", opts)),
+        CheckCommand::TypeScriptLint(opts) => Ok(("typescript-lint", opts)),
+        CheckCommand::TypeScriptTypecheck(opts) => Ok(("typescript-typecheck", opts)),
+        CheckCommand::TypeScriptBuild(opts) => Ok(("typescript-build", opts)),
+        CheckCommand::TypeScriptCoverage(opts) => Ok(("typescript-coverage", opts)),
+        CheckCommand::Sqlx(opts) => Ok(("sqlx", opts)),
+        CheckCommand::Sqlc(opts) => Ok(("sqlc", opts)),
+        CheckCommand::Schema(opts) => Ok(("schema", opts)),
+        CheckCommand::Contract(opts) => Ok(("contract", opts)),
+        CheckCommand::AgentMap(_)
+        | CheckCommand::AgentGuides
+        | CheckCommand::RustFileLoc(_)
+        | CheckCommand::NoModRs
+        | CheckCommand::MigrationImmutability(_)
+        | CheckCommand::SqlxUncheckedNonTest => {
+            bail!(
+                "profiles, affected selection, --explain, and --fail-fast apply to repository targets, not Jig-owned policy subcommands"
+            )
+        }
+        CheckCommand::Selectors(_) => unreachable!("external selectors are handled separately"),
+    }
+}
+
+fn merge_tool_opts(parent: ToolOpts, child: ToolOpts) -> Result<ToolOpts> {
+    if parent.plan_id.is_some() && child.plan_id.is_some() {
+        bail!("--plan-id may be supplied before or after the check name, not both");
+    }
+    let plan_id = parent.plan_id.or(child.plan_id);
+    let no_receipt = parent.no_receipt || child.no_receipt;
+    if plan_id.is_some() && no_receipt {
+        bail!("--plan-id cannot be combined with --no-receipt");
+    }
+    Ok(ToolOpts {
+        plan_id,
+        no_receipt,
+    })
+}
+
+fn reject_repository_options(tool: &ToolOpts) -> Result<()> {
+    if tool.plan_id.is_some() || tool.no_receipt {
+        bail!(
+            "--plan-id and --no-receipt apply to repository target checks, not Jig-owned policy subcommands"
+        );
+    }
+    Ok(())
 }
 
 impl From<CheckRustFileLocOpts> for command::RustFileLocRequest {
@@ -362,6 +601,7 @@ impl From<StateArchiveOpts> for command::StateArchiveRequest {
     fn from(opts: StateArchiveOpts) -> Self {
         Self {
             before: opts.before,
+            include_runs: opts.include_runs,
             dry_run: opts.dry_run,
         }
     }
@@ -572,172 +812,6 @@ impl From<ProxyServiceRuntimeOpts> for command::ProxyServiceRuntimeRequest {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn dev_conversion_preserves_default_launch_and_replace() {
-        let request: command::DevCommand = DevOpts {
-            command: None,
-            launch: DevLaunchOpts {
-                jig_project: Some("demo@/tmp/demo".into()),
-                apps: vec!["web".into(), "api".into()],
-                discover_workspace: true,
-                no_proxy: false,
-                replace: true,
-                proxy: ProxyRuntimeOpts {
-                    state_dir: Some("/tmp/proxy".into()),
-                    https: true,
-                    ..Default::default()
-                },
-            },
-        }
-        .into();
-
-        match request {
-            command::DevCommand::Launch(request) => {
-                assert_eq!(request.apps, vec!["web", "api"]);
-                assert!(request.discover_workspace);
-                assert!(!request.no_proxy);
-                assert!(request.replace);
-                assert_eq!(request.proxy.state_dir, Some("/tmp/proxy".into()));
-                assert!(request.proxy.https);
-            }
-            other => panic!("expected dev launch request, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn dev_conversion_preserves_management_action_state_dirs() {
-        let status: command::DevCommand = DevOpts {
-            command: Some(DevSubcommand::Status(DevStatusOpts {
-                state_dir: Some("/tmp/status".into()),
-            })),
-            launch: DevLaunchOpts::default(),
-        }
-        .into();
-        match status {
-            command::DevCommand::Status(request) => {
-                assert_eq!(request.state_dir, Some("/tmp/status".into()));
-            }
-            other => panic!("expected dev status request, got {other:?}"),
-        }
-
-        let stop: command::DevCommand = DevOpts {
-            command: Some(DevSubcommand::Stop(DevStopOpts {
-                state_dir: Some("/tmp/stop".into()),
-                forget_ambiguous_orphans: true,
-            })),
-            launch: DevLaunchOpts::default(),
-        }
-        .into();
-        match stop {
-            command::DevCommand::Stop(request) => {
-                assert_eq!(request.state_dir, Some("/tmp/stop".into()));
-                assert!(request.forget_ambiguous_orphans);
-            }
-            other => panic!("expected dev stop request, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn work_receipts_conversion_preserves_filters() {
-        let request: command::WorkReceiptsRequest = WorkReceiptsOpts {
-            session_id: Some("session_1".to_string()),
-            plan_id: Some("plan_1".to_string()),
-            tool_name: Some(crate::tool_defs::tool::TEST.to_string()),
-            failed_only: true,
-            limit: 7,
-        }
-        .into();
-
-        assert_eq!(request.session_id.as_deref(), Some("session_1"));
-        assert_eq!(request.plan_id.as_deref(), Some("plan_1"));
-        assert_eq!(
-            request.tool_name.as_deref(),
-            Some(crate::tool_defs::tool::TEST)
-        );
-        assert!(request.failed_only);
-        assert_eq!(request.limit, 7);
-    }
-
-    #[test]
-    fn work_evidence_conversion_preserves_plan_id() {
-        let request: command::WorkEvidenceRequest = WorkEvidenceOpts {
-            plan_id: Some("plan_1".to_string()),
-        }
-        .into();
-
-        assert_eq!(request.plan_id.as_deref(), Some("plan_1"));
-    }
-
-    #[test]
-    fn state_archive_conversion_preserves_cutoff_and_dry_run() {
-        let request: command::StateCommand = StateCommand::Archive(StateArchiveOpts {
-            before: "2026-01-01".into(),
-            dry_run: true,
-        })
-        .into();
-
-        match request {
-            command::StateCommand::Archive(request) => {
-                assert_eq!(request.before, "2026-01-01");
-                assert!(request.dry_run);
-            }
-            other => panic!("expected state archive request, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn state_maintenance_conversion_preserves_arguments() {
-        let request: command::StateCommand =
-            StateCommand::Diagnose(StateDiagnoseOpts { deep: true }).into();
-        match request {
-            command::StateCommand::Diagnose(request) => assert!(request.deep),
-            other => panic!("expected state diagnose request, got {other:?}"),
-        }
-
-        let request: command::StateCommand = StateCommand::Compact {
-            command: StateCompactCommand::Sessions(StateCompactSessionsOpts { dry_run: true }),
-        }
-        .into();
-        match request {
-            command::StateCommand::CompactSessions(request) => {
-                assert!(request.dry_run);
-            }
-            other => {
-                panic!("expected state compact sessions request, got {other:?}")
-            }
-        }
-
-        let backup = std::path::PathBuf::from("backup/manifest.json");
-        let request: command::StateCommand = StateCommand::Restore(StateRestoreOpts {
-            backup: backup.clone(),
-        })
-        .into();
-        match request {
-            command::StateCommand::Restore(request) => {
-                assert_eq!(request.backup, backup);
-            }
-            other => panic!("expected state restore request, got {other:?}"),
-        }
-
-        let output = std::path::PathBuf::from("receipts.jsonl.gz");
-        let request: command::StateCommand = StateCommand::Export {
-            command: StateExportCommand::Receipts(StateExportReceiptsOpts {
-                before: "2026-01-01".into(),
-                output: output.clone(),
-            }),
-        }
-        .into();
-        match request {
-            command::StateCommand::ExportReceipts(request) => {
-                assert_eq!(request.before, "2026-01-01");
-                assert_eq!(request.output, output);
-            }
-            other => {
-                panic!("expected state export receipts request, got {other:?}")
-            }
-        }
-    }
-}
+mod vault;

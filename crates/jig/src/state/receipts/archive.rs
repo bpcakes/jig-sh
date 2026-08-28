@@ -12,6 +12,7 @@ use time::{Date, Month};
 use ulid::Ulid;
 
 use crate::context::{RepoContext, WorkGate};
+use crate::repository::{RepositoryCatalog, resolve_evidence_targets};
 use crate::tool_defs::tool;
 
 use super::super::MAINTENANCE_WRITER_COORDINATION_NOTE;
@@ -24,8 +25,9 @@ use super::super::maintenance::create_receipts_backup;
 use super::super::records::{PlanEvent, ReceiptRecord};
 use super::super::support::ensure_state_layout;
 use super::{
-    WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, parse_raw_receipt, receipt_arg_strings,
-    receipt_args_has_receipt_ids, validate_receipt_stream,
+    IndexedTargetReceipts, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, parse_raw_receipt,
+    receipt_arg_strings, receipt_args_has_receipt_ids, target_receipt_status,
+    validate_receipt_stream,
 };
 
 #[derive(Debug)]
@@ -39,7 +41,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
     let before_ms = parse_archive_before_ms(&request.before)?;
     let open_plan_ids =
         current_open_plan_ids(&read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?);
-    let (check_gate_tools, check_gate_ids, review_gate_ids) = configured_gate_evidence_keys(ctx);
+    let configured_evidence = configured_gate_evidence_keys(ctx)?;
     let receipts_path = ctx.state_file("receipts.jsonl");
     let source_path = receipts_path
         .strip_prefix(ctx.root())
@@ -49,15 +51,16 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
     let mut recovery_hint = None;
     let mut archive_hint = None;
     let result = with_jsonl_write_lock(&receipts_path, |guard| {
-        let mut protection_index = ReceiptProtectionIndex::default();
+        let mut protection_index =
+            ReceiptProtectionIndex::with_evidence(&open_plan_ids, &configured_evidence.targets);
         let protection_scan = scan_jsonl_raw_locked(guard, &receipts_path, &|| false, |record| {
             let receipt = parse_raw_receipt(record, &receipts_path)?;
             protection_index.observe(
                 &receipt,
                 &open_plan_ids,
-                &check_gate_tools,
-                &check_gate_ids,
-                &review_gate_ids,
+                &configured_evidence.check_tools,
+                &configured_evidence.check_gate_ids,
+                &configured_evidence.review_gate_ids,
             );
             Ok(())
         })?;
@@ -67,7 +70,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
                 receipts_path.display()
             );
         }
-        let protected = protection_index.protected_receipt_ids();
+        let protected = protection_index.protected_receipt_ids()?;
         let mut receipt_count_before = 0usize;
         let mut receipts_archived = 0usize;
         let mut protected_retained = 0usize;
@@ -464,25 +467,47 @@ fn current_open_plan_ids(events: &[PlanEvent]) -> BTreeSet<String> {
         .collect()
 }
 
-fn configured_gate_evidence_keys(
-    ctx: &RepoContext,
-) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
-    let mut check_tools = BTreeSet::new();
-    let mut check_gate_ids = BTreeSet::new();
-    let mut review_gate_ids = BTreeSet::new();
-    for gate in ctx.work_gates() {
+struct ConfiguredGateEvidence {
+    check_tools: BTreeSet<String>,
+    check_gate_ids: BTreeSet<String>,
+    review_gate_ids: BTreeSet<String>,
+    targets: BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
+}
+
+fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvidence> {
+    let mut configured = ConfiguredGateEvidence {
+        check_tools: BTreeSet::new(),
+        check_gate_ids: BTreeSet::new(),
+        review_gate_ids: BTreeSet::new(),
+        targets: BTreeMap::new(),
+    };
+    let gates = ctx.work_gates();
+    let repository = gates
+        .iter()
+        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
+        .then(|| RepositoryCatalog::from_context(ctx))
+        .transpose()?;
+    for gate in gates {
         match gate {
             WorkGate::Check(gate) => {
-                check_gate_ids.insert(gate.id);
-                check_tools.insert(gate.tool);
+                configured.check_gate_ids.insert(gate.id);
+                configured.check_tools.insert(gate.tool);
             }
             WorkGate::CodexReview(gate) => {
-                review_gate_ids.insert(gate.id);
+                configured.review_gate_ids.insert(gate.id);
+            }
+            WorkGate::Evidence(gate) => {
+                let catalog = repository
+                    .as_ref()
+                    .expect("evidence gates initialize the repository catalog");
+                configured
+                    .targets
+                    .insert(gate.id, resolve_evidence_targets(catalog, &gate.selector)?);
             }
             WorkGate::Unsupported(_) => {}
         }
     }
-    (check_tools, check_gate_ids, review_gate_ids)
+    Ok(configured)
 }
 
 #[derive(Clone, Debug)]
@@ -509,9 +534,31 @@ pub(super) struct ReceiptProtectionIndex {
     checks: BTreeMap<(String, String), ProtectedCheckReceipts>,
     latest_check_by_plan_gate: BTreeMap<(String, String), ProtectedWorkCheck>,
     latest_review_by_plan_gate: BTreeMap<(String, String), LatestReceipt>,
+    target_evidence: BTreeMap<(String, String), IndexedTargetReceipts>,
 }
 
 impl ReceiptProtectionIndex {
+    pub(super) fn with_evidence(
+        open_plan_ids: &BTreeSet<String>,
+        evidence_targets: &BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
+    ) -> Self {
+        let target_evidence = open_plan_ids
+            .iter()
+            .flat_map(|plan_id| {
+                evidence_targets.iter().map(move |(gate_id, targets)| {
+                    (
+                        (plan_id.clone(), gate_id.clone()),
+                        IndexedTargetReceipts::for_archive(targets.clone()),
+                    )
+                })
+            })
+            .collect();
+        Self {
+            target_evidence,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn observe(
         &mut self,
         receipt: &ReceiptRecord,
@@ -527,6 +574,14 @@ impl ReceiptProtectionIndex {
         else {
             return;
         };
+        if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
+            let status = target_receipt_status(receipt, run_id, target);
+            for ((evidence_plan_id, _), receipts) in &mut self.target_evidence {
+                if evidence_plan_id == plan_id {
+                    receipts.observe(&status);
+                }
+            }
+        }
         if check_gate_tools.contains(&receipt.tool_name) {
             self.checks.insert(
                 (plan_id.clone(), receipt.tool_name.clone()),
@@ -646,7 +701,7 @@ impl ReceiptProtectionIndex {
         }
     }
 
-    pub(super) fn protected_receipt_ids(&self) -> BTreeSet<String> {
+    pub(super) fn protected_receipt_ids(&self) -> Result<BTreeSet<String>> {
         let mut protected = BTreeSet::new();
         for check in self.checks.values() {
             let Some(direct_receipt_id) = &check.direct_receipt_id else {
@@ -672,11 +727,26 @@ impl ReceiptProtectionIndex {
                 protected.insert(worker_receipt_id.clone());
             }
         }
-        protected
+        for ((plan_id, gate_id), receipts) in &self.target_evidence {
+            if let Some(error) = receipts.error() {
+                bail!(
+                    "cannot safely archive target evidence for plan '{plan_id}' gate '{gate_id}': {error}"
+                );
+            }
+            if let Some(group) = receipts.selected() {
+                protected.extend(
+                    group
+                        .receipts
+                        .values()
+                        .map(|receipt| receipt.receipt_id.clone()),
+                );
+            }
+        }
+        Ok(protected)
     }
 }
 
-fn parse_archive_before_ms(value: &str) -> Result<u64> {
+pub(in crate::state) fn parse_archive_before_ms(value: &str) -> Result<u64> {
     let value = value.trim();
     if value.is_empty() {
         bail!("--before must not be empty");

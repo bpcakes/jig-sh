@@ -40,6 +40,7 @@ Examples:
   jig init /path/to/new-repo --preset harness-only --no-input --no-vault
   jig init /path/to/new-repo --preset rust-react
   jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
+  jig init /path/to/new-repo --preset go-react --db postgres --frontends web --go-module github.com/acme/new-repo
   jig presets
   jig init /path/to/new-repo --preset harness-only --template /path/to/jig-sh --template-mode committed --repo-name new-repo --sqlx-enabled false --no-input --no-vault")]
 pub struct InitOpts {
@@ -87,7 +88,7 @@ pub struct InitOpts {
         long,
         help_heading = "Automation",
         help = "Skip the init wizard and require an explicit, complete project shape instead of prompting",
-        long_help = "Skip the init wizard and require --preset. The rust-react preset also requires an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file. The harness-only preset rejects database and scaffold frontend flags. Non-terminal execution without --defaults follows this strict behavior."
+        long_help = "Skip the init wizard and require --preset. Application presets require an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file; go-react also requires --go-module. The harness-only preset rejects database and scaffold frontend flags. Non-terminal execution without --defaults follows this strict behavior."
     )]
     pub no_input: bool,
     #[arg(
@@ -296,7 +297,7 @@ pub struct ScaffoldOpts {
         long,
         value_enum,
         help_heading = "Project Shape",
-        help = "Database scaffold for presets that support a Rust backend"
+        help = "Database scaffold for presets that support a backend"
     )]
     pub db: Option<ScaffoldDb>,
     #[arg(
@@ -319,6 +320,7 @@ pub struct ScaffoldOpts {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ScaffoldPreset {
     RustReact,
+    GoReact,
     HarnessOnly,
 }
 
@@ -631,6 +633,8 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         allow_answers_overwrite: expands_minimal_harness || establishes_manifest,
         allow_contract_overwrite: expands_minimal_harness,
         reserved_output_paths: Vec::new(),
+        scaffolded_frontend_contracts: false,
+        scaffolded_go_postgres_integration: false,
         init_transaction: None,
         progress,
     })?;

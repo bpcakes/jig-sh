@@ -1,9 +1,14 @@
+// agentic-loc-exception: work-check orchestration stays cohesive with its receipt and status transitions.
+use std::collections::BTreeSet;
+
 use anyhow::{Result, anyhow, bail};
+use jig_contract::RunConclusion;
 use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
 use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, PhasePosition};
+use crate::repository::{PlanRunRequest, RepositoryCatalog, plan_run, resolve_evidence_targets};
 use crate::state::{
     ReceiptInput, ReusableWorkCheckEvidence, ReusableWorkCheckQuery, WORK_CHECK_EVIDENCE_SCHEMA,
     WorkCheckBatchEvidence, WorkCheckGateEvidence,
@@ -13,6 +18,10 @@ use crate::state::{
 };
 use crate::tool_defs::tool;
 
+use super::super::run_execution::{
+    CheckRunExecution, ExecuteCheckRunRequest, execute_freshly_planned_check_run,
+    execute_freshly_planned_check_run_without_lease_wait,
+};
 use super::super::tool_execution::{ManifestToolExecutionOutcome, manifest_tool_result_failure};
 use super::scope::{GateScopeEvaluation, PlanGateContext};
 use super::tools::{SelectedCheck, selected_checks, validate_check_tool};
@@ -24,13 +33,40 @@ pub(super) fn check_with_observer(
     opts: WorkCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
+    check_with_execution(ctx, opts, WorkCheckExecution::WaitForLease, observer)
+}
+
+pub(super) fn check_from_mcp_with_observer(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_with_execution(ctx, opts, WorkCheckExecution::RejectContention, observer)
+}
+
+fn check_with_execution(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
+    if opts.gates.is_empty() && opts.tools.is_empty() {
+        return check_configured_with_execution(
+            ctx,
+            &opts.plan_id,
+            FailureMode::Abort,
+            execution,
+            observer,
+        );
+    }
     check_selected_with_observer(
         ctx,
         &opts.plan_id,
         selected_checks(ctx, &opts.gates, &opts.tools)?,
+        execution,
         observer,
     )
 }
@@ -49,30 +85,61 @@ pub(in crate::runtime) fn check_tools_collect_failures_with_observer(
         plan_id,
         tools.into_iter().map(SelectedCheck::Tool).collect(),
         FailureMode::Collect,
+        WorkCheckExecution::WaitForLease,
         observer,
     )
 }
 
-pub(in crate::runtime) fn check_required_collect_failures_with_observer(
+pub(super) fn check_configured_collect_failures_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     observer: &mut dyn ExecutionControl,
-) -> Result<Option<Value>> {
-    let selected = selected_checks(ctx, &[], &[])?;
-    if selected.is_empty() {
-        return Ok(None);
-    }
-    check_selected_with_failure_mode(ctx, plan_id, selected, FailureMode::Collect, observer)
-        .map(Some)
+) -> Result<Value> {
+    check_required_collect_failures_with_execution(
+        ctx,
+        plan_id,
+        WorkCheckExecution::WaitForLease,
+        observer,
+    )
+}
+
+pub(super) fn check_configured_collect_failures_from_mcp_with_observer(
+    ctx: &RepoContext,
+    plan_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_required_collect_failures_with_execution(
+        ctx,
+        plan_id,
+        WorkCheckExecution::RejectContention,
+        observer,
+    )
+}
+
+fn check_required_collect_failures_with_execution(
+    ctx: &RepoContext,
+    plan_id: &str,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_configured_with_execution(ctx, plan_id, FailureMode::Collect, execution, observer)
 }
 
 fn check_selected_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     selected: Vec<SelectedCheck>,
+    execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_selected_with_failure_mode(ctx, plan_id, selected, FailureMode::Abort, observer)
+    check_selected_with_failure_mode(
+        ctx,
+        plan_id,
+        selected,
+        FailureMode::Abort,
+        execution,
+        observer,
+    )
 }
 
 fn check_selected_with_failure_mode(
@@ -80,6 +147,7 @@ fn check_selected_with_failure_mode(
     plan_id: &str,
     selected: Vec<SelectedCheck>,
     failure_mode: FailureMode,
+    execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if selected.is_empty() {
@@ -87,13 +155,15 @@ fn check_selected_with_failure_mode(
     }
     let started = now_ms();
     let batch = prepare_check_batch(ctx, plan_id, selected, observer)?;
-    let outcome = execute_check_batch(ctx, plan_id, &batch, failure_mode, observer)?;
+    let outcome = execute_check_batch(ctx, plan_id, &batch, failure_mode, execution, observer)?;
     let receipt_result =
         record_check_batch_receipt(ctx, plan_id, started, &batch, &outcome, observer);
 
-    if let Some(failure) = outcome.failure {
+    if (failure_mode.aborts() || observer.cancelled())
+        && let Some(failure) = outcome.failure.as_ref()
+    {
         return match receipt_result {
-            Ok(_) => Err(failure.error),
+            Ok(_) => Err(anyhow!("{:#}", failure.error)),
             Err(receipt_error) => {
                 bail!(
                     "{:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}",
@@ -103,13 +173,18 @@ fn check_selected_with_failure_mode(
         };
     }
     let receipt_id = receipt_result?;
+    let failure_message = outcome
+        .failure
+        .as_ref()
+        .map(|failure| format!("{:#}", failure.error));
 
     Ok(json!({
-        "ok": true,
+        "ok": outcome.failure.is_none(),
         "plan_id": plan_id,
         "checks": outcome.results,
         "change_evidence": batch.changes.to_value(),
         "gate_evidence": outcome.gate_evidence,
+        "error": failure_message,
         "receipt_id": receipt_id,
     }))
 }
@@ -118,6 +193,195 @@ fn check_selected_with_failure_mode(
 enum FailureMode {
     Abort,
     Collect,
+}
+
+#[derive(Clone, Copy)]
+enum WorkCheckExecution {
+    WaitForLease,
+    RejectContention,
+}
+
+impl WorkCheckExecution {
+    fn execute_evidence(
+        self,
+        ctx: &RepoContext,
+        catalog: &RepositoryCatalog,
+        plan: jig_contract::RunPlan,
+        request: ExecuteCheckRunRequest,
+        observer: &mut dyn ExecutionControl,
+    ) -> Result<CheckRunExecution> {
+        match self {
+            Self::WaitForLease => {
+                execute_freshly_planned_check_run(ctx, catalog, plan, request, observer)
+            }
+            Self::RejectContention => execute_freshly_planned_check_run_without_lease_wait(
+                ctx, catalog, plan, request, observer,
+            ),
+        }
+    }
+}
+
+fn check_configured_with_execution(
+    ctx: &RepoContext,
+    plan_id: &str,
+    failure_mode: FailureMode,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    let selected = selected_checks(ctx, &[], &[])?;
+    let targets = configured_evidence_targets_if_any(ctx)?;
+    if selected.is_empty() && targets.is_empty() {
+        bail!(EMPTY_CHECK_SELECTION_MESSAGE);
+    }
+
+    let mut result = if selected.is_empty() {
+        json!({
+            "ok": true,
+            "plan_id": plan_id,
+            "checks": [],
+            "change_evidence": null,
+            "gate_evidence": [],
+            "receipt_id": null,
+        })
+    } else {
+        // Run the full configured set before reporting aggregate failures so
+        // repository evidence is still refreshed when a command-backed check
+        // fails.
+        check_selected_with_failure_mode(
+            ctx,
+            plan_id,
+            selected,
+            FailureMode::Collect,
+            execution,
+            observer,
+        )?
+    };
+    let mut check_failures = result["checks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|check| manifest_tool_result_failure(check).transpose())
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect::<Vec<_>>();
+    if let Some(error) = result["error"].as_str()
+        && !check_failures.iter().any(|failure| failure == error)
+    {
+        check_failures.push(error.to_string());
+    }
+
+    if targets.is_empty() {
+        if failure_mode.aborts() && !check_failures.is_empty() {
+            bail!("{}", check_failures.join("\n"));
+        }
+        if let Some(object) = result.as_object_mut() {
+            object.insert("ok".into(), json!(check_failures.is_empty()));
+        }
+        return Ok(result);
+    }
+
+    let catalog = RepositoryCatalog::from_context(ctx)?;
+    let plan = plan_run(
+        ctx,
+        &catalog,
+        PlanRunRequest {
+            selectors: targets.iter().map(ToString::to_string).collect(),
+            profile: None,
+            affected_base: None,
+        },
+    )?;
+    let evidence = execution.execute_evidence(
+        ctx,
+        &catalog,
+        plan.clone(),
+        ExecuteCheckRunRequest {
+            work_plan_id: Some(plan_id.to_owned()),
+            record_receipts: true,
+            fail_fast: false,
+        },
+        observer,
+    )?;
+    let evidence_ok = evidence.run.result.conclusion == Some(RunConclusion::Success);
+    let evidence_failure = evidence_failure_message(&evidence.run.result);
+    let checks_ok = check_failures.is_empty();
+    let object = result
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
+    object.insert("ok".into(), json!(checks_ok && evidence_ok));
+    object.insert("plan".into(), json!(plan));
+    object.insert("run".into(), json!(evidence.run.result));
+    object.insert("results".into(), json!(evidence.results));
+    object.insert("failed_targets".into(), json!(evidence.failed_targets));
+    object.insert(
+        "source_observations".into(),
+        json!(evidence.source_observations),
+    );
+
+    if failure_mode.aborts() {
+        let check_failure = (!checks_ok).then(|| check_failures.join("\n"));
+        match (check_failure, evidence_ok) {
+            (Some(failure), false) => bail!("{failure}\n{evidence_failure}"),
+            (Some(failure), true) => bail!("{failure}"),
+            (None, false) => bail!("{evidence_failure}"),
+            (None, true) => {}
+        }
+    }
+    Ok(result)
+}
+
+fn configured_evidence_targets_if_any(
+    ctx: &RepoContext,
+) -> Result<BTreeSet<jig_contract::TargetId>> {
+    let evidence_gates = ctx
+        .work_gates()
+        .into_iter()
+        .filter_map(|gate| match gate {
+            crate::context::WorkGate::Evidence(gate) if gate.required => Some(gate),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if evidence_gates.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let catalog = RepositoryCatalog::from_context(ctx)?;
+    let mut targets = BTreeSet::new();
+    for gate in evidence_gates {
+        targets.extend(resolve_evidence_targets(&catalog, &gate.selector)?);
+    }
+    Ok(targets)
+}
+
+fn evidence_failure_message(result: &jig_contract::RunResult) -> String {
+    let conclusion = result
+        .conclusion
+        .map(run_conclusion_name)
+        .unwrap_or("unknown");
+    let targets = result
+        .targets
+        .iter()
+        .filter(|target| target.conclusion != Some(RunConclusion::Success))
+        .map(|target| {
+            let conclusion = target
+                .conclusion
+                .map(run_conclusion_name)
+                .unwrap_or("unknown");
+            format!("{} ({conclusion})", target.target)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Work evidence run concluded {conclusion}; unsuccessful targets: [{targets}]")
+}
+
+const fn run_conclusion_name(conclusion: RunConclusion) -> &'static str {
+    match conclusion {
+        RunConclusion::Success => "success",
+        RunConclusion::Failure => "failure",
+        RunConclusion::Cancelled => "cancelled",
+        RunConclusion::TimedOut => "timed_out",
+        RunConclusion::Blocked => "blocked",
+        RunConclusion::Skipped => "skipped",
+    }
 }
 
 impl FailureMode {
@@ -318,6 +582,7 @@ fn execute_check_batch(
     plan_id: &str,
     batch: &PreparedCheckBatch,
     failure_mode: FailureMode,
+    execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<BatchExecutionOutcome> {
     let mut results = Vec::with_capacity(batch.runnable_count);
@@ -327,6 +592,12 @@ fn execute_check_batch(
     for check in &batch.checks {
         let runnable = match classify_prepared_check(check, failure_mode) {
             PreparedCheckAction::Evidence(evidence) => {
+                if evidence.status == "unknown" && failure.is_none() {
+                    failure = Some(CheckFailure {
+                        exit_status: 1,
+                        error: anyhow!("Work gate '{}' applicability is unknown", evidence.gate_id),
+                    });
+                }
                 gate_evidence.push(evidence);
                 continue;
             }
@@ -350,16 +621,28 @@ fn execute_check_batch(
         runnable_index += 1;
         let position = PhasePosition::new(runnable_index, batch.runnable_count)
             .expect("work checks are enumerated within a nonempty tool list");
-        let check_outcome = run_check(ctx, plan_id, runnable, position, failure_mode, observer)?;
+        let check_outcome = run_check(
+            ctx,
+            plan_id,
+            runnable,
+            position,
+            failure_mode,
+            execution,
+            observer,
+        )?;
         if let Some(evidence) = check_outcome.gate_evidence {
             gate_evidence.push(evidence);
         }
         if let Some(result) = check_outcome.result {
             results.push(result);
         }
-        if check_outcome.failure.is_some() {
-            failure = check_outcome.failure;
-            break;
+        if let Some(check_failure) = check_outcome.failure {
+            if failure.is_none() {
+                failure = Some(check_failure);
+            }
+            if failure_mode.aborts() {
+                break;
+            }
         }
     }
     if let Some(failure) = failure.as_ref() {
@@ -475,17 +758,32 @@ fn run_check(
     plan_id: &str,
     runnable: RunnableCheck<'_>,
     position: PhasePosition,
-    failure_mode: FailureMode,
+    _failure_mode: FailureMode,
+    work_check_execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CheckRunOutcome> {
-    let execution = super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
-        ctx,
-        runnable.name,
-        json!({}),
-        Some(plan_id.to_string()),
-        position,
-        observer,
-    );
+    let execution = match work_check_execution {
+        WorkCheckExecution::WaitForLease => {
+            super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
+                ctx,
+                runnable.name,
+                json!({}),
+                Some(plan_id.to_string()),
+                position,
+                observer,
+            )
+        }
+        WorkCheckExecution::RejectContention => {
+            super::super::tool_execution::execute_manifest_tool_without_lease_wait_for_work_check(
+                ctx,
+                runnable.name,
+                json!({}),
+                Some(plan_id.to_string()),
+                position,
+                observer,
+            )
+        }
+    };
     let (mut result, was_cancelled) = match execution {
         Ok(ManifestToolExecutionOutcome::Completed(result)) => (result, false),
         Ok(ManifestToolExecutionOutcome::Cancelled(result)) => (result, true),
@@ -566,13 +864,11 @@ fn run_check(
             exit_status,
             error: anyhow!(message),
         })
-    } else if failure_mode.aborts() {
+    } else {
         manifest_failure.map(|(exit_status, message)| CheckFailure {
             exit_status,
             error: anyhow!(message),
         })
-    } else {
-        None
     };
 
     Ok(CheckRunOutcome {
