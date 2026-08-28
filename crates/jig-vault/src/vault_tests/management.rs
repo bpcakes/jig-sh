@@ -99,7 +99,7 @@ fn snapshot_revision_is_opaque_and_tracks_encrypted_state_generation() {
 #[test]
 fn version_one_snapshot_remains_readable_and_reports_its_format() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&vault.store);
 
     let snapshot = vault
@@ -541,7 +541,7 @@ fn legacy_conversion_rejects_canonical_sources_and_destination_collisions() {
 #[test]
 fn management_mutations_require_version_two_without_writing() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&vault.store);
     let passphrase = cli_generated_v1_fixture_passphrase();
     let before_vault = vault.store.read_vault_text().unwrap().unwrap();

@@ -33,7 +33,7 @@ fn private_tempdir() -> tempfile::TempDir {
 
 fn initialized_vault(root: &Path) -> (std::path::PathBuf, Vault) {
     let home = root.join("vault-home");
-    let vault = Vault::resolve(Some(home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
     let passphrase = SecretString::from(OLD_PASSPHRASE.to_owned());
     vault.init(&passphrase).unwrap();
     vault
@@ -378,7 +378,7 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
         assert_eq!(restored_json["format_version"], 2);
         assert_contains_no_lifecycle_secrets(&restored_output);
 
-        let restored_vault = Vault::resolve(Some(restored_home)).unwrap();
+        let restored_vault = Vault::resolve_for_test(Some(restored_home)).unwrap();
         assert_eq!(
             restored_vault.list_fields(&backup_passphrase).unwrap(),
             fields_before
@@ -423,7 +423,7 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
         assert_eq!(legacy_json["vault_scope"], "legacy");
         assert_eq!(legacy_json["vault_home"], legacy_home.display().to_string());
         assert_contains_no_lifecycle_secrets(&legacy_output);
-        Vault::resolve(Some(legacy_home))
+        Vault::resolve_for_test(Some(legacy_home))
             .unwrap()
             .verify_audit(&backup_passphrase)
             .unwrap();
