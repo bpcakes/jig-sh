@@ -296,6 +296,20 @@ fn invocation_modes_are_exclusive_and_missing_refs_fail_closed() {
 }
 
 #[test]
+fn configured_roots_are_literal_git_pathspecs() {
+    let fixture = Fixture::new(&[":(exclude)crates"]);
+    fixture.write_lines(":(exclude)crates/src/checked.rs", 1);
+    fixture.write_lines("other/src/oversized.rs", 801);
+    fixture.commit_all("fixture");
+
+    let output = fixture.run(&["--all"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Rust LOC policy passed."));
+    assert!(!stderr(&output).contains("other/src/oversized.rs"));
+}
+
+#[test]
 fn changed_staged_all_and_default_branch_modes_enforce_candidates() {
     let changed = Fixture::new(&["src"]);
     changed.write_lines("src/base.rs", 1);

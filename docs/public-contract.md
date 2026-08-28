@@ -271,7 +271,10 @@ handling, and direct modes such as `--staged` or `--all` belong to
 `scripts/check-rust-file-loc.sh`. Repositories may replace or remove the action,
 its optional `jig.rust_file_loc` compatibility alias, or profile membership;
 non-Rust repositories can declare an equivalent action without extending Jig's
-contract or runtime.
+contract or runtime. This cutover also replaces the former native
+`errors`/`warnings`/`infos` JSON fields with the generic action result and its
+captured stdout/stderr; consumers should use target conclusions and receipts
+rather than parse LOC-specific result keys.
 
 Every planned execution appends lifecycle events to `runs.jsonl`: one queued
 event owns the accepted immutable plan, followed by running/target events and

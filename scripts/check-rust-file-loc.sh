@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export GIT_LITERAL_PATHSPECS=1
+
 readonly EMPTY_TREE_HASH="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 readonly TARGET_HIGH=400
 readonly SOFT_LIMIT_START=500

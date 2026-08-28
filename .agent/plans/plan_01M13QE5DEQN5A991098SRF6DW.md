@@ -18,6 +18,7 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 - [x] (2026-08-28 16:08Z) Implement slice `.7.2`: removed native LOC CLI/DTO/runtime/policy/tool-definition surfaces; routed launchers, CI, release validation, rendered fixtures, compatibility coverage, and documentation through ordinary command actions; added generic non-Rust action/evidence and authored-authority recopy proofs.
 - [x] (2026-08-28) Verify slice `.7.2` and complete all three allowed fingerprint-verified working-tree comprehensive-review rounds, addressing every actionable finding. The clean configured test rerun passed 2,665 core, 440 vault, and 2 serialized vault-TUI tests; rendered backend/full/tooling fixture repositories and configured LOC, fmt, clippy, and contract actions pass.
 - [x] (2026-08-28) Record that bead `.7.2` cannot be closed safely with the schema-incompatible installed `br`, preserve Beads files unchanged, and commit the reviewed slice in this commit.
+- [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 1 with Claude and Codex. Fix literal Git pathspec handling, document the generic output-shape cutover, and strengthen exact-target legacy compatibility coverage; retain intentional moved-hint deletion and fail-closed unmatched-root behavior.
 - [ ] Run full configured gates and a clean branch-scope comprehensive review against the pinned `origin/master` baseline, addressing findings for up to three rounds.
 - [ ] Audit every epic acceptance criterion against current files and command evidence, close/sync epic `.7`, finish the Jig work plan, and record outcomes.
 
@@ -49,6 +50,12 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Evidence: reconciliation now prefers the refreshed rendering only when both old and new values match the narrow generated single-positional-branch form. The integration test changes `main` to `master` and observes the on-disk command refresh, then changes to authored `--all` and proves a later recopy preserves it.
 - Observation: the first configured full test run passed 2,664 of 2,665 core tests before an existing work-evidence assertion saw a transient null tool identity; the exact test passed immediately in isolation.
   Evidence: an independent full configured rerun passed all 2,665 core tests, followed by all 440 vault tests and both serialized vault-TUI tests. No implementation change was needed for the transient.
+- Observation: branch comprehensive-review round 1 found that shell-quoting configured roots did not neutralize Git's `:(...)` pathspec magic.
+  Evidence: portable repository paths permit a leading colon, so a root such as `:(exclude)crates` could broaden or narrow candidate discovery. The checker now exports `GIT_LITERAL_PATHSPECS=1`, and a regression proves an oversized Rust file outside that literal root is ignored.
+- Observation: the same review suggested that default adoption of a top-level single-crate repository would retain the fallback `crates` root, but current adoption inference already prevents that case.
+  Evidence: `infer_rust_crate_roots_with_metadata` returns `["."]` for a root `[package]` manifest, `AdoptInference::apply_to_answers` supplies it before rendering, and existing inference coverage asserts the value. No policy relaxation was made.
+- Observation: running the generic LOC action after committing `.7.2` exposed a candidate-selection blind spot in pre-commit validation and one newly oversized test module.
+  Evidence: changed mode compares the pinned baseline to committed `HEAD`, so its earlier uncommitted invocation did not select `.7.2` edits. After commit, `runtime/tests.rs` was 864 lines and failed policy. The cohesive legacy compatibility test now lives in `runtime/tests/legacy_loc.rs`, the parent is exactly 800 lines, and the same exact-target action passes.
 
 ## Decision Log
 
@@ -78,6 +85,9 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Date/Author: 2026-08-28 / Codex
 - Decision: Generated CI selects `repo:rust-file-loc` exactly while documentation and fixture coverage retain action-wide `rust-file-loc` examples.
   Rationale: CI is rendered only for the repository target and must not accidentally execute a second component's same-named action; action-wide selection remains an intentional generic CLI capability tested elsewhere.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Export `GIT_LITERAL_PATHSPECS=1` for the standalone checker rather than prefixing individual configured roots with Git magic.
+  Rationale: Rust roots are portable literal repository directories, not Git query expressions. A process-wide setting covers root validation and every candidate-discovery mode consistently while leaving revision parsing unchanged.
   Date/Author: 2026-08-28 / Codex
 
 ## Outcomes & Retrospective
