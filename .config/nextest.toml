@@ -13,11 +13,29 @@ slow-timeout = { period = "60s" }
 # Local checks optimize for the first actionable failure. CI intentionally uses
 # the comprehensive default profile above.
 fail-fast = true
+test-threads = "num-cpus"
 
 [test-groups]
 frontend-node = { max-threads = 2 }
+frontend-node-local = { max-threads = 16 }
 process-signals = { max-threads = 1 }
 vault-crypto = { max-threads = 4 }
+vault-tui-local = { max-threads = 64 }
+
+[[profile.local.overrides]]
+# Keep the PTY/browser deadline tests globally exclusive even when the local
+# worker count scales beyond the default profile's four threads.
+filter = 'package(jig-sh) & binary(vault_tui)'
+test-group = 'vault-tui-local'
+threads-required = "num-test-threads"
+
+[[profile.local.overrides]]
+# Scale isolated generated-frontend fixtures with the machine up to an
+# evidence-backed 16-process ceiling. Beyond that, nested shell/Node process
+# trees contend with timing-sensitive core tests even on a 64-thread host.
+# The default profile retains its conservative CI limit below.
+filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
+test-group = 'frontend-node-local'
 
 [[profile.default.overrides]]
 # Keep this group at a uniform weight. cargo-nextest 0.9.130 can strand
