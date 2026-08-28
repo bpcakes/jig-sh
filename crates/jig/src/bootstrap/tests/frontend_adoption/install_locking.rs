@@ -674,19 +674,10 @@ mv() {
         let mut interrupted = command(Some(&paused_bash_env));
         interrupted.env("PAUSE_AFTER_LINK", kind);
         let mut interrupted = interrupted.spawn().unwrap();
-        for _ in 0..500 {
-            if claim_ready.exists() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert!(
-            claim_ready.exists(),
-            "interrupted {kind} transition never reached its pause point"
-        );
         assert_eq!(
-            fs::read_to_string(&claim_ready).unwrap().trim(),
-            interrupted.id().to_string()
+            wait_for_positive_pid_file(&claim_ready, std::time::Duration::from_secs(5)),
+            interrupted.id(),
+            "interrupted {kind} transition published the wrong owner PID"
         );
         interrupted.kill().unwrap();
         let interrupted = interrupted.wait_with_output().unwrap();
