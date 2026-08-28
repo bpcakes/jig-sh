@@ -6,6 +6,8 @@
 *.db-wal*
 # fsqlite multi-process namespace sidecars (-fsqlite-ns-gate / -fsqlite-ns-use)
 *.db-fsqlite-*
+# fsqlite one-time migration metadata
+*.db.fsqlite-migration-state
 
 # Lock files
 .write.lock

@@ -8,7 +8,7 @@ fn generated_web_dependency_scope_requires_workspace_membership_and_honors_app_l
 
     let _guard = lock_env();
     let temp = tempdir().unwrap();
-    let template = materialize_template_worktree();
+    let generated_scripts = generated_web_check_scripts();
 
     for (case_name, package_manager, lockfile) in [
         ("bun", "bun", "bun.lock"),
@@ -24,31 +24,7 @@ fn generated_web_dependency_scope_requires_workspace_membership_and_honors_app_l
                 "standalone"
             };
             let repo = temp.path().join(format!("{case_name}-{case}"));
-            run_init(InitOpts {
-                path: repo.clone(),
-                scaffold: ScaffoldOpts::default(),
-                template: Some(template.path().display().to_string()),
-                template_mode: None,
-                vcs_ref: None,
-                force: false,
-                defaults: true,
-                no_input: true,
-                no_vault: true,
-                answers: AnswerOpts {
-                    repo_name: Some(format!("scope-{case_name}-{case}")),
-                    sqlx_enabled: Some(false),
-                    web_package_manager: Some(package_manager.into()),
-                    frontend_apps: vec![FrontendApp {
-                        name: "web".into(),
-                        dir: "apps/web".into(),
-                        coverage_threshold: 80,
-                        kind: "vite".into(),
-                        role: "spa".into(),
-                    }],
-                    ..AnswerOpts::default()
-                },
-            })
-            .unwrap();
+            generated_scripts[package_manager].install(&repo);
 
             fs::create_dir_all(repo.join("apps/web")).unwrap();
             fs::write(

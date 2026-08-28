@@ -748,6 +748,113 @@ fn materialize_template_worktree() -> TempDir {
     temp
 }
 
+#[cfg(unix)]
+struct GeneratedWebCheckScripts {
+    check_webapps: Vec<u8>,
+    check_webapps_mode: u32,
+    web_node: Vec<u8>,
+    web_node_mode: u32,
+}
+
+#[cfg(unix)]
+impl GeneratedWebCheckScripts {
+    fn render(template: &Path, fixture_root: &Path, package_manager: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = fixture_root.join(format!("generated-web-check-{package_manager}"));
+        run_init(InitOpts {
+            path: repo.clone(),
+            scaffold: ScaffoldOpts::default(),
+            template: Some(template.display().to_string()),
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some(format!("generated-{package_manager}-fixture")),
+                sqlx_enabled: Some(false),
+                web_package_manager: Some(package_manager.into()),
+                frontend_apps: vec![FrontendApp {
+                    name: "web".into(),
+                    dir: "apps/web".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                }],
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap();
+
+        let check_webapps_path = repo.join("scripts/check-webapps.sh");
+        let web_node_path = repo.join("scripts/web-node.cjs");
+        Self {
+            check_webapps: fs::read(&check_webapps_path).unwrap(),
+            check_webapps_mode: fs::metadata(&check_webapps_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            web_node: fs::read(&web_node_path).unwrap(),
+            web_node_mode: fs::metadata(&web_node_path).unwrap().permissions().mode() & 0o777,
+        }
+    }
+
+    fn install(&self, repo: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scripts = repo.join("scripts");
+        fs::create_dir_all(&scripts).unwrap();
+        let check_webapps_path = scripts.join("check-webapps.sh");
+        fs::write(&check_webapps_path, &self.check_webapps).unwrap();
+        fs::set_permissions(
+            &check_webapps_path,
+            fs::Permissions::from_mode(self.check_webapps_mode),
+        )
+        .unwrap();
+        let web_node_path = scripts.join("web-node.cjs");
+        fs::write(&web_node_path, &self.web_node).unwrap();
+        fs::set_permissions(
+            &web_node_path,
+            fs::Permissions::from_mode(self.web_node_mode),
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn generated_web_check_scripts()
+-> &'static std::collections::BTreeMap<&'static str, GeneratedWebCheckScripts> {
+    use std::collections::BTreeMap;
+    use std::sync::OnceLock;
+
+    static SCRIPTS: OnceLock<BTreeMap<&'static str, GeneratedWebCheckScripts>> = OnceLock::new();
+    SCRIPTS.get_or_init(|| {
+        let fixture_root = tempdir().unwrap();
+        let template = materialize_template_worktree();
+        BTreeMap::from([
+            (
+                "bun",
+                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "bun"),
+            ),
+            (
+                "npm",
+                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "npm"),
+            ),
+            (
+                "pnpm",
+                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "pnpm"),
+            ),
+            (
+                "yarn",
+                GeneratedWebCheckScripts::render(template.path(), fixture_root.path(), "yarn"),
+            ),
+        ])
+    })
+}
+
 fn materialize_template_git_worktree() -> TempDir {
     let temp = materialize_template_worktree();
     init_git_repo_for_test(temp.path());

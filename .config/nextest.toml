@@ -9,6 +9,11 @@ test-threads = 4
 # Surface stalled supported-host tests promptly; CI jobs retain their hard timeout.
 slow-timeout = { period = "60s" }
 
+[profile.local]
+# Local checks optimize for the first actionable failure. CI intentionally uses
+# the comprehensive default profile above.
+fail-fast = true
+
 [test-groups]
 frontend-node = { max-threads = 2 }
 process-signals = { max-threads = 1 }
