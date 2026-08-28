@@ -21,8 +21,8 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 - [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 1 with Claude and Codex. Fix literal Git pathspec handling, document the generic output-shape cutover, and strengthen exact-target legacy compatibility coverage; retain intentional moved-hint deletion and fail-closed unmatched-root behavior.
 - [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 2 with Claude and Codex. Permit genuinely Rust-empty future-root repositories while retaining fail-closed detection when tracked Rust exists elsewhere, unify rendered root-count authority, and remove avoidable per-file checker work.
 - [x] (2026-08-28) Complete the third and final fingerprint-verified branch comprehensive-review round with Claude and Codex. Preserve authored shell commands containing operators, include uncommitted tracked files in changed-mode selection, correct generic gate-preview syntax, and exercise both action and direct checker paths in rendered fixtures.
-- [ ] Run final configured gates against the reviewed implementation.
-- [ ] Audit every epic acceptance criterion against current files and command evidence, close/sync epic `.7`, finish the Jig work plan, and record outcomes.
+- [x] (2026-08-28) Run final configured gates against the reviewed implementation. Fresh structured receipts pass contract, exact LOC, format, Clippy, and 3,108 tests (2,666 core, 440 vault, 2 serialized vault-TUI); rendered backend/full/tooling repositories pass independently.
+- [x] (2026-08-28) Audit every epic acceptance criterion against current files and command evidence and finish the Jig work plan. A final `br show`/close attempt remains blocked by `br 0.5.2`'s incompatible runtime schema, so Beads data remains unchanged rather than being hand-edited.
 
 ## Surprises & Discoveries
 
@@ -118,7 +118,15 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. No epic outcome is claimed until both slices, their review loops, the branch review, configured gates, and the requirement-by-requirement audit are complete.
+Epic `.7` is implemented. Rust LOC policy now lives entirely in the repository-owned Bash checker and generated template, while Jig contributes only ordinary action selection, supervision, receipts, and evidence. The native CLI/request/runtime/policy implementation was removed; supported older contracts bind the compatibility alias directly to the checker; and a TypeScript/Markdown fixture proves identical generic behavior for non-Rust `file-loc` actions, including exact/action-wide/affected selection, supervised failure, receipt identity, and work evidence.
+
+The checker has focused coverage for all four invocation modes, physical-line boundaries and endings, annotation bands, rename/non-growth behavior, unusual NUL-delimited paths, literal configured roots, first-Rust-file repositories, uncommitted tracked edits, and Bash 3.2 portability guards. Recopy coverage proves that generated branch commands refresh while authored direct modes, shell operators, action replacement/removal, alias removal, profile removal, and configured roots retain authored authority. Source and embedded templates are byte-identical, and rendered backend/full/tooling fixtures pass both generic action and direct checker paths.
+
+Every requested review loop reached its three-round cap: three comprehensive rounds after `.7.1`, three after `.7.2`, and three branch-scope rounds with fingerprint agreement between Claude and Codex. All actionable findings were addressed; explicitly rejected suggestions are recorded in the decision log where they would have restored native compatibility behavior or overridden configured repository scope.
+
+Final verification passed three times: the direct configured suite and two structured `work check` runs each passed 2,666 core, 440 vault, and 2 serialized vault-TUI tests. Final structured receipts `receipt_01M14AMG8YH33J8RT22ZVN52KS`, `receipt_01M14AMGK037C4MJQK08HHKRPR`, `receipt_01M14AMK2A2VR7ATGH77BFFT9Q`, `receipt_01M14AMKMKD9F6MJ8M9T3WB2MB`, and `receipt_01M14BF2MA1BT0XVXF2RW0VDDS` cover contract, LOC, format, Clippy, and tests. Generated fixture validation, template comparison, Bash syntax, removed-symbol searches, and append-only state-prefix comparison also pass.
+
+The only unresolved administrative item is Beads status mutation: installed `br 0.5.2` returns `CONFIG_ERROR: runtime schema remains incompatible after repair` even for `br show`, while `bv` remains read-only usable. No issue JSONL was hand-edited; `.7`, `.7.1`, and `.7.2` therefore still need status reconciliation with a compatible `br` installation.
 
 ## Context and Orientation
 
