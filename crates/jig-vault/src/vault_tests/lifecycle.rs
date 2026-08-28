@@ -26,7 +26,7 @@ fn status_distinguishes_vault_home_lifecycle_without_creating_it() {
 #[test]
 fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let old = passphrase();
     let new = SecretString::from("new correct horse battery staple".to_owned());
     store.init(&old).unwrap();
@@ -271,7 +271,7 @@ fn vault_bound_private_output_precondition_rechecks_namespace_ownership() {
 
     let temp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
 
     let reserved = vault.root().join("vault.json");
@@ -300,7 +300,7 @@ fn direct_file_output_cannot_replace_vault_owned_paths() {
 
     let temp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
     let value = b"reserved-path-secret-sentinel";

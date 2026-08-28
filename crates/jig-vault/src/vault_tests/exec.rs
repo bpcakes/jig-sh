@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let concealed = VaultReference::parse("jig://Production/TOKEN").unwrap();
     let text = VaultReference::parse("jig://Production/FEATURE_FLAG").unwrap();
@@ -104,7 +104,7 @@ fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
 #[test]
 fn exec_preparation_missing_field_records_value_free_failed_event() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let request = VaultExec::new(
         vec!["missing-field-command-sentinel".into()],
@@ -148,7 +148,7 @@ fn exec_preparation_invalid_field_bytes_record_resolve_failure() {
         ("NUL", b"sec\0ret".to_vec(), "NUL"),
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+        let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         vault.init(&passphrase()).unwrap();
         let reference = VaultReference::parse(&format!("jig://Production/{field}")).unwrap();
         vault
@@ -187,7 +187,7 @@ fn exec_preparation_invalid_field_bytes_record_resolve_failure() {
 #[test]
 fn exec_preparation_redaction_bound_records_redaction_failure() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let reference = VaultReference::parse("jig://Production/LARGE_TOKEN").unwrap();
     vault
@@ -224,7 +224,7 @@ fn exec_preparation_redaction_bound_records_redaction_failure() {
 #[test]
 fn exec_spawn_failure_records_value_free_terminal_event() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let command_sentinel = "jig-vault-missing-command-secret-sentinel";
     let request = VaultExec::new(vec![command_sentinel.into()], Vec::new()).unwrap();

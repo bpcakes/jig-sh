@@ -37,7 +37,7 @@ fn initialized_vault() -> (tempfile::TempDir, PathBuf, Vault) {
         std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     let home = temp.path().join("vault-home");
-    let vault = Vault::resolve(Some(home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
     let passphrase = SecretString::from(PASSPHRASE.to_owned());
     vault.init(&passphrase).unwrap();
     vault

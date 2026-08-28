@@ -30,7 +30,7 @@ fn private_tempdir() -> tempfile::TempDir {
 
 fn initialized_vault(root: &Path) -> (PathBuf, Vault) {
     let home = root.join("vault-home");
-    let vault = Vault::resolve(Some(home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
     vault
         .init(&SecretString::from(PASSPHRASE.to_owned()))
         .unwrap();
@@ -479,7 +479,7 @@ fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
         let non_utf8_home = temp
             .path()
             .join(std::ffi::OsString::from_vec(b"vault-\xff-home".to_vec()));
-        let non_utf8_vault = Vault::resolve(Some(non_utf8_home.clone())).unwrap();
+        let non_utf8_vault = Vault::resolve_for_test(Some(non_utf8_home.clone())).unwrap();
         non_utf8_vault
             .init(&SecretString::from(PASSPHRASE.to_owned()))
             .unwrap();

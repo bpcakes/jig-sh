@@ -14,7 +14,7 @@ schema_docs_dir = "docs/schema"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "scripts/check-rust-format.sh"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
-rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' --status-level fail --final-status-level fail && cargo nextest run --workspace -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' --status-level fail --final-status-level fail && cargo nextest run -p jig-sh --test vault_tui -j 1 --status-level fail --final-status-level fail"
+rust_test_command = "cargo nextest run --workspace -P local --status-level fail --final-status-level fail"
 rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' --status-level fail --final-status-level fail && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' --status-level fail --final-status-level fail && cargo nextest run -p jig-sh --test vault_tui --locked -j 1 --status-level fail --final-status-level fail"
 web_package_manager = "bun"
 application_contracts_enabled = false
@@ -23,6 +23,10 @@ frontend_apps = []
 
 [commands]
 rust_file_loc_command = "scripts/check-rust-file-loc.sh master"
+rust_core_test_command = "scripts/test-rust-partition.sh core"
+rust_frontend_test_command = "scripts/test-rust-partition.sh frontend"
+rust_vault_test_command = "scripts/test-rust-partition.sh vault"
+rust_process_test_command = "scripts/test-rust-partition.sh process"
 
 [execution]
 # Applies to configured checks and Codex-backed work/loop workers.
@@ -61,18 +65,42 @@ id = "source-rust-fmt"
 kind = "check"
 tool = "jig.source_fmt_check"
 paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "rustfmt.toml", ".rustfmt.toml", "scripts/check-rust-format.sh"]
+reuse = true
 
 [[work.gates]]
 id = "rust-clippy"
 kind = "check"
 tool = "jig.clippy"
 paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "clippy.toml", ".clippy.toml"]
+reuse = true
 
 [[work.gates]]
-id = "source-rust-tests"
+id = "source-rust-core-tests"
 kind = "check"
-tool = "jig.source_test"
-paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", "templates/**", "scripts/**", "examples/**", "tests/**"]
+tool = "jig.source_core_test"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/**", "examples/**", "tests/**"]
+reuse = true
+
+[[work.gates]]
+id = "source-rust-frontend-tests"
+kind = "check"
+tool = "jig.source_frontend_test"
+paths = ["crates/jig/src/bootstrap.rs", "crates/jig/src/bootstrap/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/test-rust-partition.sh", "tests/fixtures/**"]
+reuse = true
+
+[[work.gates]]
+id = "source-rust-vault-tests"
+kind = "check"
+tool = "jig.source_vault_test"
+paths = ["crates/jig-vault/**", "crates/jig-vault-tui/**", "crates/jig-tui/**", "crates/jig/src/cli.rs", "crates/jig/src/**/vault*.rs", "crates/jig/src/**/vault/**", "crates/jig/src/command/vault.rs", "crates/jig/src/runtime.rs", "crates/jig/tests/vault_*.rs", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "templates/**", "scripts/test-rust-partition.sh"]
+reuse = true
+
+[[work.gates]]
+id = "source-rust-process-tests"
+kind = "check"
+tool = "jig.source_process_test"
+paths = ["crates/jig-owned-process/**", "crates/jig-dev-proxy/**", "crates/jig/src/main.rs", "crates/jig/src/cli.rs", "crates/jig/src/runtime.rs", "crates/jig/src/codex.rs", "crates/jig/src/codex/**", "crates/jig/src/dev_proxy.rs", "crates/jig/src/dev_proxy/**", "crates/jig/src/cli/codex*.rs", "crates/jig/src/cli/dev*.rs", "crates/jig/src/doctor/signal_session.rs", "crates/jig/tests/codex_launcher.rs", "crates/jig/tests/dev_lifecycle.rs", "crates/jig/tests/dev_sigint.rs", "crates/jig/tests/dev_sigint_parts/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", ".jig.toml", "scripts/test-rust-partition.sh"]
+reuse = true
 
 [[agent_tooling.codex.marketplaces]]
 id = "jig-skills"
