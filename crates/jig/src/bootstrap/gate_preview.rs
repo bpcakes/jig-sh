@@ -36,7 +36,7 @@ pub(super) fn generated_gates(ctx: &RepoContext, answers: &RenderAnswers) -> Res
                 format!("{launcher} check test"),
             ]);
             if ctx.action_specs().iter().any(is_rust_file_loc_action) {
-                gates.push(format!("{launcher} run repo:rust-file-loc"));
+                gates.push(format!("{launcher} check repo:rust-file-loc"));
             }
         }
         if answers.sqlx_enabled() {

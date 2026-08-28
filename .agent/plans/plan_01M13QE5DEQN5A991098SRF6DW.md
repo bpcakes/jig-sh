@@ -20,7 +20,8 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 - [x] (2026-08-28) Record that bead `.7.2` cannot be closed safely with the schema-incompatible installed `br`, preserve Beads files unchanged, and commit the reviewed slice in this commit.
 - [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 1 with Claude and Codex. Fix literal Git pathspec handling, document the generic output-shape cutover, and strengthen exact-target legacy compatibility coverage; retain intentional moved-hint deletion and fail-closed unmatched-root behavior.
 - [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 2 with Claude and Codex. Permit genuinely Rust-empty future-root repositories while retaining fail-closed detection when tracked Rust exists elsewhere, unify rendered root-count authority, and remove avoidable per-file checker work.
-- [ ] Run full configured gates and a clean branch-scope comprehensive review against the pinned `origin/master` baseline, addressing findings for up to three rounds.
+- [x] (2026-08-28) Complete the third and final fingerprint-verified branch comprehensive-review round with Claude and Codex. Preserve authored shell commands containing operators, include uncommitted tracked files in changed-mode selection, correct generic gate-preview syntax, and exercise both action and direct checker paths in rendered fixtures.
+- [ ] Run final configured gates against the reviewed implementation.
 - [ ] Audit every epic acceptance criterion against current files and command evidence, close/sync epic `.7`, finish the Jig work plan, and record outcomes.
 
 ## Surprises & Discoveries
@@ -61,6 +62,14 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Evidence: when no configured root matches, the checker now inspects all current and baseline tracked paths. It still exits operationally if any tracked `.rs` file lies outside the roots, while a repository containing no tracked Rust succeeds with an empty candidate set; focused tests prove both cases.
 - Observation: a historical pre-cutover contract-v5 checker delegates recursively to the retired native CLI, whereas supported old-contract execution after this cutover binds the compatibility tool directly to the standalone checker.
   Evidence: the branch review identified the historical wrapper boundary. Public-contract documentation now states that those older repositories retain their source-pinned runtime until checker and launcher recopy together; the exact-target v5 fixture proves the supported direct-command boundary.
+- Observation: branch round 3 found that the generated-command recognizer treated shell operators as part of an unquoted branch argument, so recopy could overwrite authored same-key commands such as output redirection or command sequencing.
+  Evidence: generated command refresh now accepts only a canonical shell literal, model tests cover `--all`, redirection, and sequencing, and the full recopy integration test proves the redirection form survives a default-branch change.
+- Observation: changed-mode candidate discovery compared the baseline only with committed `HEAD`, which omitted tracked working-tree edits from pre-commit enforcement.
+  Evidence: the standalone checker now diffs the comparison ref against the working tree, and a focused regression commits a one-line Rust file, expands it uncommitted beyond 800 lines, and observes the violation.
+- Observation: the generated gate preview used the removed generic verb `run` even though repository actions are invoked through `check`.
+  Evidence: the preview and its template-mode assertion now emit `scripts/jig check repo:rust-file-loc`; rendered backend and full-stack fixtures exercise both that action path and direct `--all` checker execution.
+- Observation: structured `work check` cannot attest a file whose index contains an earlier slice commit while its worktree contains a later review fix, because both differ from the plan baseline.
+  Evidence: the first final `work check` reported unknown applicability for all five gates and named the embedded checker snapshot as partially staged relative to baseline `68856a0`. The reviewed final fixes must be committed before retrying so index and worktree describe one attestable state.
 
 ## Decision Log
 
@@ -99,6 +108,12 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Date/Author: 2026-08-28 / Codex
 - Decision: Do not restore checker-specific flag parsing for historical recursive wrappers.
   Rationale: that would recreate a native LOC compatibility branch inside Jig and violate the epic's boundary. Historical wrappers and their native runtime remain source-pinned; recopy is the atomic cutover to the standalone checker plus generic selector.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Compare changed-mode baselines directly with the working tree rather than committed `HEAD`.
+  Rationale: repository checks are pre-commit enforcement and must select tracked local edits as well as committed branch changes; staged mode remains available when index-only semantics are desired.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Treat configured Rust roots as the intentional policy scope after at least one root matches.
+  Rationale: the unmatched-root guard prevents vacuous success and drift, but scanning Rust files outside a valid configured scope would override repository-owned policy. The reviewer suggestion to enforce every tracked Rust file was therefore not adopted.
   Date/Author: 2026-08-28 / Codex
 
 ## Outcomes & Retrospective

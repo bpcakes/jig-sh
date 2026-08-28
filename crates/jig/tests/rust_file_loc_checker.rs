@@ -334,6 +334,15 @@ fn changed_staged_all_and_default_branch_modes_enforce_candidates() {
     assert_failed_for(&default_branch, "src/changed.rs is 801 LOC");
     assert!(stdout(&default_branch).contains("Using Rust LOC base ref:"));
 
+    let working_tree = Fixture::new(&["src"]);
+    working_tree.write_lines("src/working.rs", 1);
+    let working_base = working_tree.commit_all("base");
+    working_tree.write_lines("src/working.rs", 801);
+    assert_failed_for(
+        &working_tree.run(&["--changed-against", &working_base]),
+        "src/working.rs is 801 LOC",
+    );
+
     let staged = Fixture::new(&["src"]);
     staged.write_lines("src/base.rs", 1);
     staged.commit_all("base");

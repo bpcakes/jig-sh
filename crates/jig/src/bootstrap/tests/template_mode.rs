@@ -347,6 +347,44 @@ fn update_recopy_refreshes_the_checker_with_configured_rust_roots() {
         );
     write_answers_toml(&answers_path, &answers).unwrap();
     run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: true,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    let mut answers = read_answers_toml(&answers_path).unwrap();
+    assert_eq!(
+        answers["commands"]["repo_rust_file_loc_command"].as_str(),
+        Some("scripts/check-rust-file-loc.sh --all")
+    );
+    assert_eq!(
+        answers["rust_crate_roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|root| root.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["crates"]
+    );
+
+    answers.insert("default_branch".into(), TomlValue::String("release".into()));
+    answers
+        .get_mut("commands")
+        .and_then(TomlValue::as_table_mut)
+        .unwrap()
+        .insert(
+            "repo_rust_file_loc_command".into(),
+            TomlValue::String("scripts/check-rust-file-loc.sh main>/tmp/loc.log".into()),
+        );
+    write_answers_toml(&answers_path, &answers).unwrap();
+    run_update(UpdateOpts {
         path: repo,
         template: None,
         template_mode: None,
@@ -362,16 +400,7 @@ fn update_recopy_refreshes_the_checker_with_configured_rust_roots() {
     let answers = read_answers_toml(&answers_path).unwrap();
     assert_eq!(
         answers["commands"]["repo_rust_file_loc_command"].as_str(),
-        Some("scripts/check-rust-file-loc.sh --all")
-    );
-    assert_eq!(
-        answers["rust_crate_roots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|root| root.as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["crates"]
+        Some("scripts/check-rust-file-loc.sh main>/tmp/loc.log")
     );
 }
 
@@ -483,7 +512,7 @@ fn update_recopy_preserves_authored_loc_action_alias_and_profile_removals() {
         assert_eq!(
             generated_gates
                 .iter()
-                .any(|gate| gate == "scripts/jig run repo:rust-file-loc"),
+                .any(|gate| gate == "scripts/jig check repo:rust-file-loc"),
             choice != "action"
         );
         let model = RepositoryRenderModel::from_answers(&reloaded).unwrap();

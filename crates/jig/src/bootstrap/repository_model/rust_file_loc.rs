@@ -42,11 +42,24 @@ pub(in crate::bootstrap) fn is_generated_rust_file_loc_command(command: &str) ->
     command
         .strip_prefix(RUST_FILE_LOC_SCRIPT)
         .and_then(|suffix| suffix.strip_prefix(' '))
+        .and_then(canonical_shell_literal)
         .is_some_and(|argument| {
             !argument.is_empty()
                 && !argument.starts_with('-')
                 && !argument.bytes().any(|byte| byte.is_ascii_whitespace())
         })
+}
+
+fn canonical_shell_literal(argument: &str) -> Option<String> {
+    let value = if let Some(inner) = argument
+        .strip_prefix('\'')
+        .and_then(|inner| inner.strip_suffix('\''))
+    {
+        inner.replace("'\\''", "'")
+    } else {
+        argument.to_owned()
+    };
+    (crate::shell::quote(&value) == argument).then_some(value)
 }
 
 pub(super) fn refresh_managed_rust_file_loc_command(

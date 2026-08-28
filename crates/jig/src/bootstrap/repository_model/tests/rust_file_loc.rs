@@ -72,21 +72,23 @@ fn same_target_custom_loc_runner_returns_root_authority_to_authored_components()
 
 #[test]
 fn same_key_authored_checker_mode_survives_model_round_trip() {
-    let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
-    authored.commands.insert(
-        RUST_FILE_LOC_COMMAND_KEY.into(),
-        "scripts/check-rust-file-loc.sh --all".into(),
-    );
+    for command in [
+        "scripts/check-rust-file-loc.sh --all",
+        "scripts/check-rust-file-loc.sh main>/tmp/loc.log",
+        "scripts/check-rust-file-loc.sh main;notify",
+    ] {
+        let initial = answers("rust_crate_roots = [\"crates\"]\n");
+        let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
+        authored
+            .commands
+            .insert(RUST_FILE_LOC_COMMAND_KEY.into(), command.into());
 
-    let reloaded_answers = reload_authored_answers(&authored);
-    assert_eq!(reloaded_answers.rust_crate_roots(), ["crates"]);
-    let reloaded = RepositoryRenderModel::from_answers(&reloaded_answers).unwrap();
+        let reloaded_answers = reload_authored_answers(&authored);
+        assert_eq!(reloaded_answers.rust_crate_roots(), ["crates"]);
+        let reloaded = RepositoryRenderModel::from_answers(&reloaded_answers).unwrap();
 
-    assert_eq!(
-        reloaded.commands[RUST_FILE_LOC_COMMAND_KEY],
-        "scripts/check-rust-file-loc.sh --all"
-    );
+        assert_eq!(reloaded.commands[RUST_FILE_LOC_COMMAND_KEY], command);
+    }
 }
 
 #[test]

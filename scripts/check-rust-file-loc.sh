@@ -178,7 +178,7 @@ write_raw_changes() {
       ;;
     changed)
       git_with_roots diff --no-ext-diff --find-renames --name-status --diff-filter=ACMRT -z \
-        "$comparison_ref" HEAD
+        "$comparison_ref"
       ;;
   esac
 }
