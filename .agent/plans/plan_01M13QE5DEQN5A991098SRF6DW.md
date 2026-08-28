@@ -19,6 +19,7 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
 - [x] (2026-08-28) Verify slice `.7.2` and complete all three allowed fingerprint-verified working-tree comprehensive-review rounds, addressing every actionable finding. The clean configured test rerun passed 2,665 core, 440 vault, and 2 serialized vault-TUI tests; rendered backend/full/tooling fixture repositories and configured LOC, fmt, clippy, and contract actions pass.
 - [x] (2026-08-28) Record that bead `.7.2` cannot be closed safely with the schema-incompatible installed `br`, preserve Beads files unchanged, and commit the reviewed slice in this commit.
 - [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 1 with Claude and Codex. Fix literal Git pathspec handling, document the generic output-shape cutover, and strengthen exact-target legacy compatibility coverage; retain intentional moved-hint deletion and fail-closed unmatched-root behavior.
+- [x] (2026-08-28) Complete fingerprint-verified branch comprehensive-review round 2 with Claude and Codex. Permit genuinely Rust-empty future-root repositories while retaining fail-closed detection when tracked Rust exists elsewhere, unify rendered root-count authority, and remove avoidable per-file checker work.
 - [ ] Run full configured gates and a clean branch-scope comprehensive review against the pinned `origin/master` baseline, addressing findings for up to three rounds.
 - [ ] Audit every epic acceptance criterion against current files and command evidence, close/sync epic `.7`, finish the Jig work plan, and record outcomes.
 
@@ -56,6 +57,10 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Evidence: `infer_rust_crate_roots_with_metadata` returns `["."]` for a root `[package]` manifest, `AdoptInference::apply_to_answers` supplies it before rendering, and existing inference coverage asserts the value. No policy relaxation was made.
 - Observation: running the generic LOC action after committing `.7.2` exposed a candidate-selection blind spot in pre-commit validation and one newly oversized test module.
   Evidence: changed mode compares the pinned baseline to committed `HEAD`, so its earlier uncommitted invocation did not select `.7.2` edits. After commit, `runtime/tests.rs` was 864 lines and failed policy. The cohesive legacy compatibility test now lives in `runtime/tests/legacy_loc.rs`, the parent is exactly 800 lines, and the same exact-target action passes.
+- Observation: branch round 2 distinguished a mistyped/drifted root from a repository that has not added its first Rust file yet.
+  Evidence: when no configured root matches, the checker now inspects all current and baseline tracked paths. It still exits operationally if any tracked `.rs` file lies outside the roots, while a repository containing no tracked Rust succeeds with an empty candidate set; focused tests prove both cases.
+- Observation: a historical pre-cutover contract-v5 checker delegates recursively to the retired native CLI, whereas supported old-contract execution after this cutover binds the compatibility tool directly to the standalone checker.
+  Evidence: the branch review identified the historical wrapper boundary. Public-contract documentation now states that those older repositories retain their source-pinned runtime until checker and launcher recopy together; the exact-target v5 fixture proves the supported direct-command boundary.
 
 ## Decision Log
 
@@ -88,6 +93,12 @@ The visible proof is twofold. First, `scripts/check-rust-file-loc.sh` will indep
   Date/Author: 2026-08-28 / Codex
 - Decision: Export `GIT_LITERAL_PATHSPECS=1` for the standalone checker rather than prefixing individual configured roots with Git magic.
   Rationale: Rust roots are portable literal repository directories, not Git query expressions. A process-wide setting covers root validation and every candidate-discovery mode consistently while leaving revision parsing unchanged.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Validate unmatched roots against the presence of any tracked Rust rather than requiring every future root to exist immediately.
+  Rationale: tracked Rust outside all configured roots indicates policy drift and must fail closed; no tracked Rust means there is nothing to enforce yet and is a valid freshly generated/adopted state.
+  Date/Author: 2026-08-28 / Codex
+- Decision: Do not restore checker-specific flag parsing for historical recursive wrappers.
+  Rationale: that would recreate a native LOC compatibility branch inside Jig and violate the epic's boundary. Historical wrappers and their native runtime remain source-pinned; recopy is the atomic cutover to the standalone checker plus generic selector.
   Date/Author: 2026-08-28 / Codex
 
 ## Outcomes & Retrospective

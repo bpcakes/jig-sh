@@ -276,6 +276,12 @@ contract or runtime. This cutover also replaces the former native
 captured stdout/stderr; consumers should use target conclusions and receipts
 rather than parse LOC-specific result keys.
 
+Contracts 2–5 remain executable when `jig.rust_file_loc` is bound directly to
+the self-contained checker. Repositories whose older checker still delegates
+back into the native `jig check rust-file-loc` implementation must keep their
+source-pinned runtime until recopy refreshes the checker and launcher together;
+the generic selector does not emulate the retired checker-specific flags.
+
 Every planned execution appends lifecycle events to `runs.jsonl`: one queued
 event owns the accepted immutable plan, followed by running/target events and
 exactly one terminal conclusion. `jig status run RUN_ID` returns that plan and

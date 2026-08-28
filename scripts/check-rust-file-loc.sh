@@ -115,6 +115,16 @@ git_with_roots() {
   fi
 }
 
+tracked_paths_contain_rust() {
+  local path
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      *.rs) return 0 ;;
+    esac
+  done <"$1"
+  return 1
+}
+
 if [[ "$rust_root_count" -ne 0 ]]; then
   root_probe="$work_dir/root-probe"
   configured_root_matches=false
@@ -137,7 +147,24 @@ if [[ "$rust_root_count" -ne 0 ]]; then
     fi
   done
   if [[ "$configured_root_matches" != true ]]; then
-    operational_error "configured Rust roots match no tracked files"
+    all_tracked_probe="$work_dir/all-tracked-probe"
+    if ! git ls-files -z >"$all_tracked_probe"; then
+      operational_error "Git repository validation failed"
+    fi
+    tracked_rust_exists=false
+    if tracked_paths_contain_rust "$all_tracked_probe"; then
+      tracked_rust_exists=true
+    elif [[ "$previous_ref" != "$EMPTY_TREE_HASH" ]]; then
+      if ! git ls-tree -r -z --name-only "$previous_ref" >"$all_tracked_probe"; then
+        operational_error "Git baseline repository validation failed"
+      fi
+      if tracked_paths_contain_rust "$all_tracked_probe"; then
+        tracked_rust_exists=true
+      fi
+    fi
+    if [[ "$tracked_rust_exists" == true ]]; then
+      operational_error "configured Rust roots match no tracked files"
+    fi
   fi
 fi
 
@@ -202,6 +229,7 @@ line_count() {
 
 has_exception_marker() {
   LC_ALL=C awk '
+    NR > 40 { exit }
     NR <= 40 && (index($0, "agentic-loc-exception:") || index($0, "@generated")) {
       found = 1
       exit
@@ -251,12 +279,12 @@ while IFS= read -r -d '' previous_path; do
     fi
   else
     [[ -f "$repo_root/$file" ]] || continue
-    if ! cat "$repo_root/$file" >"$current_file"; then
-      operational_error "cannot read Rust source: $(display_path "$file")"
-    fi
+    current_file="$repo_root/$file"
   fi
 
-  current_count="$(line_count "$current_file")"
+  if ! current_count="$(line_count "$current_file")"; then
+    operational_error "cannot read Rust source: $(display_path "$file")"
+  fi
   previous_count=0
   if [[ "$current_count" -gt "$HARD_LIMIT" && "$previous_ref" != "$EMPTY_TREE_HASH" ]]; then
     previous_file="$work_dir/previous"
@@ -278,7 +306,10 @@ while IFS= read -r -d '' previous_path; do
     fi
   fi
 
-  display_file="$(display_path "$file")"
+  display_file=""
+  if [[ "$current_count" -gt "$TARGET_HIGH" ]]; then
+    display_file="$(display_path "$file")"
+  fi
   if [[ "$current_count" -gt "$ABSOLUTE_MAX" ]]; then
     if [[ "$current_count" -le "$previous_count" && "$previous_count" -gt "$ABSOLUTE_MAX" ]]; then
       printf 'WARNING: %s remains above the absolute max at %s LOC but did not increase.\n' "$display_file" "$current_count"

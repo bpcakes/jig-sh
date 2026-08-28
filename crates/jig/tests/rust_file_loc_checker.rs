@@ -293,6 +293,13 @@ fn invocation_modes_are_exclusive_and_missing_refs_fail_closed() {
     let output = unmatched_root.run(&["--all"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("configured Rust roots match no tracked files"));
+
+    let rust_empty = Fixture::new(&["future-crates"]);
+    rust_empty.write_contents("README.md", "# Example\n");
+    rust_empty.commit_all("fixture");
+    let output = rust_empty.run(&["--all"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Rust LOC policy passed."));
 }
 
 #[test]
