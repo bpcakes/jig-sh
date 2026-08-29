@@ -8,7 +8,7 @@ Continuation pull request: `#18`
 
 Continuation baseline: `8d6c4e5180c6131c062ab326c033ecce8cce35a2`
 
-Parent initiative: `feat-codex-resume-generic-monorepo-zac`
+Parent initiative: `jig-sh-generic-monorepo-zac`
 
 Document kind: project-level architecture and delivery plan, not a task-local ExecPlan
 
@@ -3546,7 +3546,7 @@ Structural steady state has been reached.
 ## 29. Beads conversion and graph polish
 
 The reviewed delivery architecture is represented by feature
-`feat-codex-resume-generic-monorepo-zac.8` and its six concrete delivery tasks.
+`jig-sh-generic-monorepo-zac.8` and its six concrete delivery tasks.
 
 The dependency graph preserves both parallel foundation work and the guarded
 cutover sequence:
