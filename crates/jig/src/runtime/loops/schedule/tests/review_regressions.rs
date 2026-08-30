@@ -10,7 +10,7 @@ use super::super::super::engine::{status_at_with_cancellation, tick_with_observe
 use super::super::super::occurrence::{
     OccurrenceAttentionScope, OccurrenceFinish, OccurrenceOutcome,
 };
-use super::super::super::state::AttemptStore;
+use super::super::super::state::{AttemptStore, LOOP_RUNTIME_DIR};
 use super::super::{NoopExecutionObserver, OccurrenceStore, dispatch_workflow, list_workflows};
 use crate::command::{LoopStatusRequest, LoopTickRequest};
 use crate::context::RepoContext;
@@ -510,6 +510,90 @@ checkout = "repo"
         "the worker receipt is runtime evidence, not a task-authored checkout change"
     );
     assert!(temp.path().join(".agent/state/receipts.jsonl").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn repo_checkout_reports_the_managed_ignore_upgrade_before_dirty_preflight() {
+    let _env_lock = lock_env();
+    let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    fs::write(temp.path().join(".gitignore"), ".agent/.cache/\n").unwrap();
+    fs::create_dir_all(temp.path().join(".agent/tasks")).unwrap();
+    fs::write(temp.path().join(".agent/tasks/nightly.md"), "Review it.\n").unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "nightly-task"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = ".agent/tasks/nightly.md"
+checkout = "repo"
+"#
+        ),
+    )
+    .unwrap();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "fixture@example.com"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["add", "."],
+        vec!["commit", "-m", "fixture"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(temp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let marker = bin.path().join("codex-started");
+    let codex = bin.path().join("codex-stub.sh");
+    fs::write(&codex, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = list_workflows(&ctx)
+        .unwrap()
+        .into_iter()
+        .find(|workflow| workflow.id == "nightly-task")
+        .unwrap();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+
+    let failed = dispatch_workflow(
+        &ctx,
+        &mut occurrences,
+        &workflow,
+        super::timestamp("2026-08-21T08:42:30Z"),
+        &mut NoopExecutionObserver,
+    );
+
+    assert_eq!(failed.executed_count, 0, "{:#?}", failed.action);
+    assert_eq!(
+        failed.action.as_ref().unwrap()["reason"],
+        "pre_execution_error"
+    );
+    let error = failed.action.as_ref().unwrap()["error"].as_str().unwrap();
+    assert!(
+        error.contains("Codex task runtime path is not ignored"),
+        "{error}"
+    );
+    assert!(error.contains("scripts/jig update --recopy"), "{error}");
+    assert!(occurrences.snapshot().unwrap().is_empty());
+    assert!(
+        temp.path()
+            .join(LOOP_RUNTIME_DIR)
+            .join("schedule.json")
+            .exists()
+    );
+    assert!(
+        !marker.exists(),
+        "Codex must not start before the ignore upgrade"
+    );
 }
 
 #[cfg(unix)]

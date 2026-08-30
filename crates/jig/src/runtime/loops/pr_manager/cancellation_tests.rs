@@ -65,29 +65,26 @@ mod cancellation_tests {
             reasons: vec!["failing_checks".into()],
         };
         let mut attempt_store = AttemptStore::new(&ctx);
+        let lease = json!({"owner": "test"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
 
         let mut observer = CancelledControl;
-        let action_result = run_pr_repair(
-            &ctx,
-            &workflow,
-            &item,
-            &json!({}),
-            &json!({"owner": "test"}),
-            None,
-            &mut observer,
-        )
-        .unwrap();
-        let PrRepairOutcome::Cancelled(detail) = &action_result else {
+        let action_result = run_pr_repair(&repair, &json!({}), &mut observer).unwrap();
+        let PrRepairOutcome::Cancelled { detail, worktree } = &action_result else {
             panic!("pre-start Git cancellation must cancel the repair");
         };
         assert!(detail.contains("git fetch was cancelled before it started"));
+        assert!(worktree.is_none());
 
         let error = record_pr_repair_outcome(
-            &workflow,
+            &repair,
             &mut attempt_store,
-            &item,
-            &json!({"owner": "test"}),
-            None,
             Ok(action_result),
             None,
         )
@@ -126,13 +123,18 @@ mod cancellation_tests {
             reasons: vec!["failing_checks".into()],
         };
         let mut attempt_store = AttemptStore::new(&ctx);
+        let lease = json!({"owner": "test"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
 
         let action = record_pr_repair_outcome(
-            &workflow,
+            &repair,
             &mut attempt_store,
-            &item,
-            &json!({"owner": "test"}),
-            None,
             Ok(PrRepairOutcome::Completed(json!({
                 "kind": "pr_manager_worker",
                 "status": "cancelled_after_commit",

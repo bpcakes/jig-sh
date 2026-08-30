@@ -449,6 +449,13 @@ fn prepare_checkout(
                 "Scheduled Codex task was cancelled before shared-checkout preflight"
             )));
         }
+        require_ignored_runtime_path(
+            ctx,
+            Path::new(LOOP_RUNTIME_DIR),
+            "Codex task runtime path",
+            "repo",
+            observer,
+        )?;
         match repo_task_has_changes(ctx, ctx.root(), observer) {
             Ok(false) => {}
             Ok(true) => {
@@ -537,6 +544,22 @@ fn require_ignored_task_worktree_root(
     observer: &mut dyn ExecutionControl,
 ) -> Result<()> {
     let worktree_root = Path::new(LOOP_RUNTIME_DIR).join("worktrees/tasks");
+    require_ignored_runtime_path(
+        ctx,
+        &worktree_root,
+        "Codex task worktree path",
+        "worktree",
+        observer,
+    )
+}
+
+fn require_ignored_runtime_path(
+    ctx: &RepoContext,
+    path: &Path,
+    description: &str,
+    checkout: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<()> {
     let output = git_output(
         ctx,
         ctx.root(),
@@ -544,18 +567,18 @@ fn require_ignored_task_worktree_root(
             OsString::from("check-ignore"),
             OsString::from("--quiet"),
             OsString::from("--"),
-            worktree_root.as_os_str().to_os_string(),
+            path.as_os_str().to_os_string(),
         ],
         observer,
     )?;
     match output.status.code() {
         Some(0) => Ok(()),
         Some(1) => bail!(
-            "Codex task worktree path is not ignored by Git: {}; refresh the managed .gitignore with `scripts/jig update --recopy` before using worktree checkout",
-            worktree_root.display()
+            "{description} is not ignored by Git: {}; refresh the managed .gitignore with `scripts/jig update --recopy` before using {checkout} checkout",
+            path.display()
         ),
         _ => Err(git_error(
-            "Failed to verify that the Codex task worktree path is ignored",
+            &format!("Failed to verify that the {description} is ignored"),
             output,
         )),
     }

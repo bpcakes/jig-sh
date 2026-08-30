@@ -62,13 +62,18 @@ mod review_round4_tests {
         let item = item();
         let worktree = temp.path().join("retained-pr-worktree");
         let mut attempts = AttemptStore::new(&ctx);
+        let lease = json!({"owner": "test"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
 
         let action = record_pr_repair_outcome(
-            &workflow,
+            &repair,
             &mut attempts,
-            &item,
-            &json!({"owner": "test"}),
-            None,
             Ok(PrRepairOutcome::WorkerCancelled {
                 before_start: false,
                 worker_receipt_id: "receipt-worker".into(),

@@ -106,6 +106,9 @@ fn repo_checkout_refuses_preexisting_repository_changes() {
     TestRepoBuilder::new(repo.path())
         .required_commands(Vec::<String>::new())
         .write();
+    let gitignore = repo.path().join(".gitignore");
+    let managed_ignores = fs::read_to_string(&gitignore).unwrap_or_default();
+    fs::write(gitignore, format!("{managed_ignores}.agent/runtime/\n")).unwrap();
     for args in [
         vec!["init"],
         vec!["config", "user.email", "fixture@example.com"],

@@ -76,11 +76,79 @@ mod tests {
         assert_eq!(action["status"], "needs_attention");
         assert_eq!(action["attention_kind"], "exhausted_attempt");
         assert_eq!(action["attempt"]["exhausted"], true);
+        assert!(!pr_manager_action_consumed_tick(&action));
         assert_eq!(
             completion.outcome,
             super::super::workflow::WorkflowOutcome::Succeeded
         );
         assert!(!pr_manager_action_consumed_tick(&action));
+    }
+
+    #[test]
+    fn side_effectful_attention_consumes_the_pr_manager_tick() {
+        for attention_kind in [
+            "cancelled_after_start",
+            "ambiguous_push",
+            "branch_lease_lost_after_start",
+            "worktree_cleanup_failed",
+        ] {
+            assert!(pr_manager_action_consumed_tick(&json!({
+                "status": "needs_attention",
+                "attention_kind": attention_kind,
+            })));
+        }
+    }
+
+    #[test]
+    fn failed_pr_worktree_cleanup_preserves_attention_evidence() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "fixture@example.com"],
+            vec!["config", "user.name", "Fixture"],
+            vec!["add", "."],
+            vec!["commit", "-m", "fixture"],
+        ] {
+            let output = Command::new("git")
+                .current_dir(temp.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        let worktree = temp.path().join("repair-worktree");
+        let output = Command::new("git")
+            .current_dir(temp.path())
+            .args(["worktree", "add", "--detach", worktree.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        fs::write(worktree.join("partial.txt"), "preserve me\n").unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let action = finalize_pr_worktree(
+            &ctx,
+            json!({
+                "kind": "pr_manager_worker",
+                "status": "attempted",
+                "worktree": worktree,
+                "worker_receipt_id": "receipt-worker",
+                "error": null,
+            }),
+            false,
+        );
+
+        assert_eq!(action["status"], "needs_attention");
+        assert_eq!(action["attention_kind"], "worktree_cleanup_failed");
+        assert_eq!(action["completed_status"], "attempted");
+        assert_eq!(action["worktree_retained"], true);
+        assert!(action["cleanup_error"].is_string());
+        assert!(worktree.exists());
     }
 
     #[test]

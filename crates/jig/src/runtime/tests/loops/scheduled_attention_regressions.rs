@@ -178,7 +178,7 @@ case "$1 $2" in
     ;;
   "pr list")
     cat <<JSON
-[{"number":7,"title":"Repair checks","url":"https://example.invalid/project/pull/7","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"}]
+[{"number":7,"title":"Repair checks","url":"https://example.invalid/project/pull/7","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"},{"number":8,"title":"Do not start after ambiguity","url":"https://example.invalid/project/pull/8","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"}]
 JSON
     ;;
   "pr checks")
@@ -239,6 +239,7 @@ esac
         .expect("ambiguous push must retain its diagnostic worktree");
     assert!(Path::new(worktree).exists());
     assert_eq!(action["tick"]["actions"][0]["attention_kind"], "ambiguous_push");
+    assert_eq!(action["tick"]["actions"][0]["worktree_retained"], true);
     assert_eq!(action["tick"]["actions"][0]["push"]["status"], "unconfirmed");
     assert!(
         action["occurrence"]["error"]
@@ -284,7 +285,7 @@ case "$1 $2" in
     ;;
   "pr list")
     cat <<JSON
-[{"number":7,"title":"Repair checks","url":"https://example.invalid/project/pull/7","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"}]
+[{"number":7,"title":"Repair checks","url":"https://example.invalid/project/pull/7","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"},{"number":8,"title":"Do not start after lease loss","url":"https://example.invalid/project/pull/8","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"}]
 JSON
     ;;
   "pr checks")
@@ -321,11 +322,13 @@ while :; do sleep 1; done
     assert_eq!(first["status"], "failed", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(dispatch_action["occurrence"]["status"], "needs_attention");
+    assert_eq!(dispatch_action["tick"]["actions"].as_array().unwrap().len(), 1);
     assert_eq!(
         worker_action["attention_kind"],
         "branch_lease_lost_after_start"
     );
     assert_eq!(worker_action["completed_status"], "needs_attention");
+    assert_eq!(worker_action["worktree_retained"], true);
     assert!(worker_action["worker_receipt_id"].is_string());
     let worktree = worker_action["worktree"]
         .as_str()

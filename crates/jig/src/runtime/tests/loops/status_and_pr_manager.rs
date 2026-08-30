@@ -336,6 +336,12 @@ exit 2
     assert_eq!(output["workflow"]["codex_home_configured"], "./.codex-loop");
     assert_eq!(output["status"], "waiting");
     assert_eq!(output["actions"][0]["status"], "attempted", "{output:#}");
+    assert_eq!(output["actions"][0]["worktree_retained"], false);
+    let repair_worktree = output["actions"][0]["worktree"].as_str().unwrap();
+    assert!(
+        !Path::new(repair_worktree).exists(),
+        "completed PR repair worktree was not removed: {repair_worktree}"
+    );
     assert_eq!(
         output["actions"][0]["codex_home_resolved"],
         codex_home.canonicalize().unwrap().display().to_string()

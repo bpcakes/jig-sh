@@ -161,6 +161,14 @@ struct PrManagerExecution<'a> {
     observer: &'a mut dyn ExecutionControl,
 }
 
+struct PrRepairContext<'a, L: serde::Serialize> {
+    repo: &'a RepoContext,
+    workflow: &'a ResolvedWorkflow,
+    item: &'a PrWorkItem,
+    lease: &'a L,
+    codex_home: Option<&'a Path>,
+}
+
 struct PrWorkItem {
     pr_number: u64,
     item_key: String,
@@ -373,10 +381,13 @@ fn pending_checks_action(item: &PrPendingItem) -> Value {
 }
 
 fn pr_manager_action_consumed_tick(action: &Value) -> bool {
-    !matches!(
-        action.get("status").and_then(Value::as_str),
-        Some("skipped" | "waiting" | "exhausted" | "needs_attention")
-    )
+    match action.get("status").and_then(Value::as_str) {
+        Some("skipped" | "waiting" | "exhausted") => false,
+        Some("needs_attention") => {
+            action.get("attention_kind").and_then(Value::as_str) != Some("exhausted_attempt")
+        }
+        _ => true,
+    }
 }
 
 fn handle_actionable_pr(
@@ -416,26 +427,22 @@ fn handle_actionable_pr(
         workflow.lease_ttl_seconds,
     )?;
     let branch_lease_cancelled = || lease_guard.renewal_failed();
+    let repair = PrRepairContext {
+        repo: ctx,
+        workflow,
+        item,
+        lease: &lease,
+        codex_home: execution.codex_home,
+    };
     let action_result = {
         let mut branch_control =
             AdditionalCancellationControl::new(execution.observer, &branch_lease_cancelled);
-        run_pr_repair(
-            ctx,
-            workflow,
-            item,
-            pull_request,
-            &lease,
-            execution.codex_home,
-            &mut branch_control,
-        )
+        run_pr_repair(&repair, pull_request, &mut branch_control)
     };
     let release_error = lease_guard.finish().err();
     record_pr_repair_outcome(
-        workflow,
+        &repair,
         attempt_store,
-        item,
-        &lease,
-        execution.codex_home,
         action_result,
         release_error.as_ref(),
     )
@@ -491,53 +498,60 @@ fn attempt_version_is_stale(attempt: &AttemptRecord, item: &PrWorkItem) -> bool 
         && attempt.observed_item_version.as_deref() != Some(item.head_sha.as_str())
 }
 
-fn run_pr_repair(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
-    item: &PrWorkItem,
+fn run_pr_repair<L: serde::Serialize>(
+    repair: &PrRepairContext<'_, L>,
     pull_request: &Value,
-    lease: &impl serde::Serialize,
-    codex_home: Option<&Path>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<PrRepairOutcome> {
-    match run_pr_repair_steps(
-        ctx,
-        workflow,
-        item,
-        pull_request,
-        lease,
-        codex_home,
-        observer,
-    ) {
+    let worktree = match prepare_worktree(repair.repo, repair.workflow, repair.item, observer) {
+        Ok(worktree) => worktree,
+        Err(PrRepairStepError::Cancelled(detail)) => {
+            return Ok(PrRepairOutcome::Cancelled {
+                detail,
+                worktree: None,
+            });
+        }
+        Err(PrRepairStepError::Failed(error)) => return Err(error),
+    };
+    match run_pr_repair_in_worktree(repair, pull_request, &worktree, observer) {
         Ok(outcome) => Ok(outcome),
-        Err(PrRepairStepError::Cancelled(detail)) => Ok(PrRepairOutcome::Cancelled(detail)),
-        Err(PrRepairStepError::Failed(error)) => Err(error),
+        Err(PrRepairStepError::Cancelled(detail)) => Ok(PrRepairOutcome::Cancelled {
+            detail,
+            worktree: Some(worktree),
+        }),
+        Err(PrRepairStepError::Failed(error)) => Ok(PrRepairOutcome::Failed { error, worktree }),
     }
 }
 
-fn run_pr_repair_steps(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
-    item: &PrWorkItem,
+fn run_pr_repair_in_worktree<L: serde::Serialize>(
+    repair: &PrRepairContext<'_, L>,
     pull_request: &Value,
-    lease: &impl serde::Serialize,
-    codex_home: Option<&Path>,
+    worktree: &Path,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<PrRepairOutcome> {
-    let worktree = prepare_worktree(ctx, workflow, item, observer)?;
-    let base_head = git_stdout(ctx, &worktree, ["rev-parse", "HEAD"], observer)?;
-    let merge = if item.reasons.iter().any(|reason| reason == "merge_conflict") {
-        Some(start_base_merge(ctx, &worktree, &item.base_ref, observer)?)
+    let base_head = git_stdout(repair.repo, worktree, ["rev-parse", "HEAD"], observer)?;
+    let merge = if repair
+        .item
+        .reasons
+        .iter()
+        .any(|reason| reason == "merge_conflict")
+    {
+        Some(start_base_merge(
+            repair.repo,
+            worktree,
+            &repair.item.base_ref,
+            observer,
+        )?)
     } else {
         None
     };
-    let prompt = pr_worker_prompt(ctx, item, pull_request, merge.as_ref());
+    let prompt = pr_worker_prompt(repair.repo, repair.item, pull_request, merge.as_ref());
     let output_schema = pr_worker_output_schema();
     let worker = match run_codex_exec(
-        ctx,
+        repair.repo,
         CodexExecRequest {
-            root: &worktree,
-            codex_home,
+            root: worktree,
+            codex_home: repair.codex_home,
             mode: CodexExecMode::Exec,
             model: None,
             approval_policy: Some("never"),
@@ -550,8 +564,8 @@ fn run_pr_repair_steps(
             receipt: WorkerReceiptRequest {
                 purpose: "pr_manager",
                 plan_id: None,
-                workflow_id: Some(&workflow.id),
-                item_key: Some(&item.item_key),
+                workflow_id: Some(&repair.workflow.id),
+                item_key: Some(&repair.item.item_key),
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
             },
@@ -567,7 +581,7 @@ fn run_pr_repair_steps(
             return Ok(PrRepairOutcome::WorkerCancelled {
                 before_start,
                 worker_receipt_id,
-                worktree,
+                worktree: worktree.to_path_buf(),
             });
         }
     };
@@ -579,22 +593,28 @@ fn run_pr_repair_steps(
     }
 
     let worker_output = parse_pr_worker_output(worker.authoritative_stdout())?;
-    let push = match commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer) {
+    let push = match commit_and_push(
+        repair.repo,
+        worktree,
+        &repair.item.head_ref,
+        &base_head,
+        observer,
+    ) {
         Ok(push) => push,
         Err(PrPushError::Ambiguous { error, final_head }) => {
             return Ok(PrRepairOutcome::Completed(json!({
                 "kind": "pr_manager_worker",
                 "status": "needs_attention",
                 "attention_kind": "ambiguous_push",
-                "pr_number": item.pr_number,
-                "item_key": item.item_key,
-                "title": item.title,
-                "branch": item.head_ref,
-                "head_sha": item.head_sha,
-                "reasons": item.reasons,
+                "pr_number": repair.item.pr_number,
+                "item_key": repair.item.item_key,
+                "title": repair.item.title,
+                "branch": repair.item.head_ref,
+                "head_sha": repair.item.head_sha,
+                "reasons": repair.item.reasons,
                 "worktree": worktree,
-                "lease": lease,
-                "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
+                "lease": repair.lease,
+                "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                 "merge": merge,
                 "worker_output": worker_output,
                 "worker_receipt_id": worker.worker_receipt_id(),
@@ -611,9 +631,14 @@ fn run_pr_repair_steps(
         }
         Err(PrPushError::Step(error)) => return Err(error),
     };
-    let repair_version = push["final_head"].as_str().unwrap_or(&item.head_sha);
-    let review_thread_posts =
-        post_review_thread_updates(ctx, pull_request, &worker_output, repair_version, observer);
+    let repair_version = push["final_head"].as_str().unwrap_or(&repair.item.head_sha);
+    let review_thread_posts = post_review_thread_updates(
+        repair.repo,
+        pull_request,
+        &worker_output,
+        repair_version,
+        observer,
+    );
     let status = if review_thread_posts.cancelled {
         "cancelled_after_commit"
     } else if review_thread_posts.failed {
@@ -631,15 +656,15 @@ fn run_pr_repair_steps(
     Ok(PrRepairOutcome::Completed(json!({
         "kind": "pr_manager_worker",
         "status": status,
-        "pr_number": item.pr_number,
-        "item_key": item.item_key,
-        "title": item.title,
-        "branch": item.head_ref,
-        "head_sha": item.head_sha,
-        "reasons": item.reasons,
+        "pr_number": repair.item.pr_number,
+        "item_key": repair.item.item_key,
+        "title": repair.item.title,
+        "branch": repair.item.head_ref,
+        "head_sha": repair.item.head_sha,
+        "reasons": repair.item.reasons,
         "worktree": worktree,
-        "lease": lease,
-        "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
+        "lease": repair.lease,
+        "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
         "merge": merge,
         "worker_output": worker_output,
         "worker_receipt_id": worker.worker_receipt_id(),

@@ -101,6 +101,21 @@ fn clean_reused_worktree(
     Ok(())
 }
 
+fn remove_pr_worktree(ctx: &RepoContext, worktree: &Path, force: bool) -> Result<()> {
+    let mut args = vec![OsString::from("worktree"), OsString::from("remove")];
+    if force {
+        args.push(OsString::from("--force"));
+    }
+    args.push(worktree.as_os_str().to_os_string());
+    let mut observer = NoopExecutionObserver;
+    match git_output(ctx, ctx.root(), args, &mut observer) {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(git_error("Failed to remove PR repair worktree", output)),
+        Err(PrRepairStepError::Cancelled(detail)) => Err(anyhow!(detail)),
+        Err(PrRepairStepError::Failed(error)) => Err(error),
+    }
+}
+
 fn start_base_merge(
     ctx: &RepoContext,
     worktree: &Path,
