@@ -2,13 +2,18 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::super::engine::ScheduledTick;
+#[cfg(test)]
+use super::super::engine::WorkflowLeaseDisposition;
 use super::super::occurrence::OccurrenceOutcome;
+use super::super::workflow::WorkflowOutcome;
 
 #[derive(Default)]
 pub(super) struct DispatchStep {
     pub(super) action: Option<Value>,
+    pub(super) state_errors: Vec<Value>,
     pub(super) due_count: u64,
     pub(super) executed_count: u64,
+    pub(super) deferred_count: u64,
     pub(super) skipped_count: u64,
     pub(super) failed_count: u64,
 }
@@ -17,30 +22,51 @@ pub(super) struct DispatchStep {
 pub(super) struct DispatchSummary {
     pub(super) due_count: u64,
     pub(super) executed_count: u64,
+    pub(super) deferred_count: u64,
     pub(super) skipped_count: u64,
     pub(super) failed_count: u64,
     pub(super) needs_attention_count: u64,
+    pub(super) exhausted_attempt_count: u64,
+    pub(super) state_error_count: u64,
+    pub(super) state_errors: Vec<Value>,
 }
 
 impl DispatchSummary {
     pub(super) fn include(&mut self, step: &DispatchStep) {
         self.due_count += step.due_count;
         self.executed_count += step.executed_count;
+        self.deferred_count += step.deferred_count;
         self.skipped_count += step.skipped_count;
         self.failed_count += step.failed_count;
+        self.include_state_errors(step.state_errors.iter().cloned());
     }
 
-    pub(super) fn requires_attention(&self) -> bool {
-        self.failed_count > 0 || self.needs_attention_count > 0
+    pub(super) fn include_state_errors(&mut self, errors: impl IntoIterator<Item = Value>) {
+        for error in errors {
+            if !self.state_errors.contains(&error) {
+                self.state_errors.push(error);
+            }
+        }
+        self.state_error_count = u64::try_from(self.state_errors.len()).unwrap_or(u64::MAX);
+    }
+
+    pub(super) fn state_error_text(&self) -> String {
+        self.state_errors
+            .iter()
+            .filter_map(|error| error["error"].as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     pub(super) fn status(&self) -> &'static str {
-        if self.failed_count > 0 {
+        if self.failed_count > 0 || self.state_error_count > 0 {
             "failed"
-        } else if self.needs_attention_count > 0 {
+        } else if self.needs_attention_count > 0 || self.exhausted_attempt_count > 0 {
             "needs_attention"
         } else if self.executed_count > 0 {
             "acted"
+        } else if self.deferred_count > 0 {
+            "deferred"
         } else {
             "idle"
         }
@@ -139,19 +165,16 @@ impl TerminalDetails {
         match tick {
             Ok(tick) => {
                 let completion = tick.completion();
-                let status = tick.value().and_then(|value| value["status"].as_str());
-                let outcome = if tick.error().is_some() || status == Some("failed") {
-                    OccurrenceOutcome::Failed
-                } else if status == Some("needs_attention") {
-                    OccurrenceOutcome::NeedsAttention
-                } else {
-                    OccurrenceOutcome::Succeeded
+                let outcome = match completion.outcome {
+                    WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
+                    WorkflowOutcome::Succeeded => OccurrenceOutcome::Succeeded,
+                    WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
                 };
                 Self {
                     outcome,
                     worker_receipt_id: completion.worker_receipt_id.clone(),
                     worktree: completion.worktree.clone(),
-                    error: combined_error(tick.error(), completion.error.as_deref()),
+                    error: completion.error.clone(),
                 }
             }
             Err(error) => Self {
@@ -164,13 +187,127 @@ impl TerminalDetails {
     }
 }
 
-fn combined_error(primary: Option<&str>, completion: Option<&str>) -> Option<String> {
-    match (primary, completion) {
-        (Some(primary), Some(completion)) if !primary.contains(completion) => {
-            Some(format!("{primary}; workflow completion: {completion}"))
-        }
-        (Some(primary), _) => Some(primary.to_string()),
-        (None, Some(completion)) => Some(completion.to_string()),
-        (None, None) => None,
+#[cfg(test)]
+mod tests {
+    use super::super::super::workflow::WorkflowCompletion;
+    use super::*;
+
+    #[test]
+    fn dispatch_summary_preserves_distinct_state_error_events_of_the_same_kind() {
+        let first = json!({
+            "kind": "tick",
+            "error": "first failure",
+            "workflow_id": "first-workflow",
+        });
+        let second = json!({
+            "kind": "tick",
+            "error": "second failure",
+            "workflow_id": "second-workflow",
+        });
+        let mut summary = DispatchSummary::default();
+
+        summary.include_state_errors([first.clone(), second.clone(), first]);
+
+        assert_eq!(summary.state_error_count, 2);
+        assert_eq!(
+            summary.state_errors,
+            vec![
+                json!({
+                    "kind": "tick",
+                    "error": "first failure",
+                    "workflow_id": "first-workflow",
+                }),
+                second,
+            ]
+        );
+    }
+
+    #[test]
+    fn scheduled_tick_preserves_needs_attention_as_an_occurrence_outcome() {
+        let tick = Ok(ScheduledTick::Reported {
+            value: json!({"status": "acted"}),
+            completion: WorkflowCompletion {
+                outcome: WorkflowOutcome::NeedsAttention,
+                ..WorkflowCompletion::default()
+            },
+            lease_disposition: WorkflowLeaseDisposition::Acquired,
+            state_errors: Vec::new(),
+        });
+
+        let details = TerminalDetails::from_tick(&tick);
+
+        assert_eq!(details.outcome, OccurrenceOutcome::NeedsAttention);
+    }
+
+    #[test]
+    fn scheduled_tick_error_keeps_worker_completion_evidence() {
+        let tick = Ok(ScheduledTick::Errored {
+            value: Some(json!({"status": "failed"})),
+            completion: WorkflowCompletion {
+                outcome: WorkflowOutcome::Failed,
+                worker_receipt_id: Some("receipt-worker".into()),
+                worktree: Some("/tmp/retained-worktree".into()),
+                error: Some("worker failed".into()),
+            },
+            lease_disposition: WorkflowLeaseDisposition::Acquired,
+            state_errors: Vec::new(),
+            error: "tick receipt failed".into(),
+            post_work_error: Some("tick receipt failed".into()),
+        });
+
+        let details = TerminalDetails::from_tick(&tick);
+
+        assert_eq!(details.outcome, OccurrenceOutcome::Failed);
+        assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
+        assert_eq!(details.error.as_deref(), Some("worker failed"));
+    }
+
+    #[test]
+    fn scheduled_tick_error_cannot_downgrade_ambiguous_worker_completion() {
+        let tick = Ok(ScheduledTick::Errored {
+            value: Some(json!({"status": "failed"})),
+            completion: WorkflowCompletion {
+                outcome: WorkflowOutcome::NeedsAttention,
+                error: Some("worker push may have completed".into()),
+                ..WorkflowCompletion::default()
+            },
+            lease_disposition: WorkflowLeaseDisposition::Acquired,
+            state_errors: Vec::new(),
+            error: "tick receipt failed".into(),
+            post_work_error: Some("tick receipt failed".into()),
+        });
+
+        let details = TerminalDetails::from_tick(&tick);
+
+        assert_eq!(details.outcome, OccurrenceOutcome::NeedsAttention);
+        assert_eq!(
+            details.error.as_deref(),
+            Some("worker push may have completed")
+        );
+    }
+
+    #[test]
+    fn post_work_tick_error_cannot_override_successful_worker_completion() {
+        let tick = Ok(ScheduledTick::Errored {
+            value: Some(json!({"status": "failed"})),
+            completion: WorkflowCompletion {
+                outcome: WorkflowOutcome::Succeeded,
+                worker_receipt_id: Some("receipt-worker".into()),
+                worktree: Some("/tmp/retained-worktree".into()),
+                error: None,
+            },
+            lease_disposition: WorkflowLeaseDisposition::Acquired,
+            state_errors: Vec::new(),
+            error: "attempt state could not be observed".into(),
+            post_work_error: Some("attempt state could not be observed".into()),
+        });
+
+        let details = TerminalDetails::from_tick(&tick);
+
+        assert_eq!(details.outcome, OccurrenceOutcome::Succeeded);
+        assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
+        assert_eq!(details.error, None);
     }
 }

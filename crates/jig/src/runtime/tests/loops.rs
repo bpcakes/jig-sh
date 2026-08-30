@@ -24,6 +24,7 @@ use crate::tool_defs::WORKER_RUN_TOOL;
 use super::*;
 
 include!("loops/task_and_engine.rs");
+include!("loops/checkout_regressions.rs");
 include!("loops/scheduled_failures.rs");
 include!("loops/attempt_lifecycle.rs");
 include!("loops/status_and_pr_manager.rs");

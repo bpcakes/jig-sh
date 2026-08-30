@@ -258,7 +258,7 @@ JSON
     case "$*" in
       *ReviewThreadState*)
         cat <<'JSON'
-{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"nodes":[]}}}}}}}}
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[]}}}}}}}}
 JSON
         ;;
       *addPullRequestReviewThreadReply*)
@@ -515,7 +515,7 @@ JSON
           *threadId=PRRT_2*) thread_id="PRRT_2" ;;
           *threadId=PRRT_3*) thread_id="PRRT_3" ;;
         esac
-        printf '{"data":{"node":{"id":"%s","isResolved":false,"comments":{"nodes":[]}}}}\n' "$thread_id"
+        printf '{"data":{"node":{"id":"%s","isResolved":false,"comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}\n' "$thread_id"
         ;;
       *addPullRequestReviewThreadReply*)
         case "$*" in

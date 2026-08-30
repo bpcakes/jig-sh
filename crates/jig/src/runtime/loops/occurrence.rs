@@ -6,6 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -20,10 +21,12 @@ mod persistence;
 
 use persistence::SchedulePersistence;
 
-const SCHEDULE_SCHEMA_VERSION: u32 = 2;
+const SCHEDULE_SCHEMA_VERSION: u32 = 3;
+const PREVIOUS_SCHEDULE_SCHEMA_VERSION: u32 = 2;
 const LEGACY_SCHEDULE_SCHEMA_VERSION: u32 = 1;
 const OCCURRENCE_HISTORY_PER_WORKFLOW: usize = 20;
 const MAX_ERROR_CHARS: usize = 4_000;
+const STALE_RECONCILIATION_ERROR: &str = "scheduled task stopped without a terminal result";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct ScheduleOccurrence {
@@ -155,6 +158,11 @@ pub(super) struct OccurrenceGuard {
     renewal_failed: Arc<AtomicBool>,
 }
 
+pub(super) struct OccurrenceFinalization {
+    pub(super) occurrence: ScheduleOccurrence,
+    pub(super) renewal_error: Option<String>,
+}
+
 impl OccurrenceGuard {
     pub(super) fn start(
         store: OccurrenceStore,
@@ -170,24 +178,22 @@ impl OccurrenceGuard {
         let interval = renewal_interval(ttl_seconds);
         let renewal_failed = Arc::new(AtomicBool::new(false));
         let renewal_failed_in_thread = Arc::clone(&renewal_failed);
+        let claim_expires_at_ms = occurrence.claim_expires_at_ms;
         let renewal = thread::Builder::new()
             .name(format!("jig-loop-occurrence-{owner}"))
             .spawn(move || {
-                loop {
-                    match receiver.recv_timeout(interval) {
-                        Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
-                        Err(RecvTimeoutError::Timeout) => {
-                            if let Err(error) = renewal_store.renew(
-                                &renewal_occurrence_id,
-                                &renewal_owner,
-                                ttl_seconds,
-                            ) {
-                                renewal_failed_in_thread.store(true, Ordering::Release);
-                                return Err(error);
-                            }
-                        }
-                    }
-                }
+                run_occurrence_renewal(
+                    &receiver,
+                    interval,
+                    claim_expires_at_ms,
+                    &renewal_failed_in_thread,
+                    || {
+                        renewal_store
+                            .renew(&renewal_occurrence_id, &renewal_owner, ttl_seconds)
+                            .map(|renewed| renewed.claim_expires_at_ms)
+                    },
+                    now_ms,
+                )
             })
             .map_err(|error| {
                 anyhow::anyhow!("Failed to start occurrence renewal thread: {error}")
@@ -206,14 +212,38 @@ impl OccurrenceGuard {
         self.renewal_failed.load(Ordering::Acquire)
     }
 
-    pub(super) fn finish(mut self, finish: OccurrenceFinish<'_>) -> Result<ScheduleOccurrence> {
-        self.stop_renewal()?;
-        self.store.finish(&self.occurrence_id, &self.owner, finish)
+    pub(super) fn finish(self, finish: OccurrenceFinish<'_>) -> Result<OccurrenceFinalization> {
+        self.finalize(|store, occurrence_id, owner| store.finish(occurrence_id, owner, finish))
     }
 
-    pub(super) fn abandon(mut self) -> Result<ScheduleOccurrence> {
-        self.stop_renewal()?;
-        self.store.abandon(&self.occurrence_id, &self.owner)
+    #[cfg(test)]
+    pub(super) fn abandon(self) -> Result<OccurrenceFinalization> {
+        self.finalize(OccurrenceStore::abandon)
+    }
+
+    pub(super) fn abandon_unexecuted(self) -> Result<OccurrenceFinalization> {
+        self.finalize(OccurrenceStore::abandon_unexecuted)
+    }
+
+    fn finalize(
+        mut self,
+        transition: impl FnOnce(&mut OccurrenceStore, &str, &str) -> Result<ScheduleOccurrence>,
+    ) -> Result<OccurrenceFinalization> {
+        let renewal_error = self.stop_renewal().err().map(|error| format!("{error:#}"));
+        let transition = transition(&mut self.store, &self.occurrence_id, &self.owner);
+        match (transition, renewal_error) {
+            (Ok(occurrence), renewal_error) => Ok(OccurrenceFinalization {
+                occurrence,
+                renewal_error,
+            }),
+            (Err(error), Some(renewal_error)) if format!("{error:#}") == renewal_error => {
+                Err(error)
+            }
+            (Err(error), Some(renewal_error)) => Err(error.context(format!(
+                "Occurrence renewal shutdown also failed: {renewal_error}"
+            ))),
+            (Err(error), None) => Err(error),
+        }
     }
 
     fn stop_renewal(&mut self) -> Result<()> {
@@ -227,6 +257,101 @@ impl OccurrenceGuard {
         }
         Ok(())
     }
+}
+
+fn run_occurrence_renewal(
+    receiver: &mpsc::Receiver<()>,
+    interval: Duration,
+    claim_expires_at_ms: u64,
+    renewal_failed: &AtomicBool,
+    renew: impl FnMut() -> Result<u64>,
+    now: impl Fn() -> u64,
+) -> Result<()> {
+    run_occurrence_renewal_with_wait(
+        interval,
+        claim_expires_at_ms,
+        renewal_failed,
+        renew,
+        now,
+        |wait| receiver.recv_timeout(wait),
+    )
+}
+
+fn run_occurrence_renewal_with_wait(
+    interval: Duration,
+    mut claim_expires_at_ms: u64,
+    renewal_failed: &AtomicBool,
+    mut renew: impl FnMut() -> Result<u64>,
+    now: impl Fn() -> u64,
+    mut wait_for_stop: impl FnMut(Duration) -> std::result::Result<(), RecvTimeoutError>,
+) -> Result<()> {
+    let mut wait = interval;
+    let mut pending_error = None;
+    loop {
+        match wait_for_stop(wait) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => {
+                if claim_expires_at_ms <= now() {
+                    renewal_failed.store(true, Ordering::Release);
+                }
+                return Ok(());
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(error) = pending_error.take()
+                    && renewal_failure_window_reached(now(), claim_expires_at_ms, interval)
+                {
+                    renewal_failed.store(true, Ordering::Release);
+                    return Err(error);
+                }
+                match renew() {
+                    Ok(renewed_expires_at_ms) => {
+                        claim_expires_at_ms = renewed_expires_at_ms;
+                        pending_error = None;
+                        wait = interval;
+                    }
+                    Err(error) => {
+                        let Some(retry_delay) =
+                            renewal_retry_delay(now(), claim_expires_at_ms, interval)
+                        else {
+                            renewal_failed.store(true, Ordering::Release);
+                            return Err(error);
+                        };
+                        pending_error = Some(error);
+                        wait = retry_delay;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn renewal_retry_delay(
+    now_ms: u64,
+    claim_expires_at_ms: u64,
+    interval: Duration,
+) -> Option<Duration> {
+    let cancellation_window_ms = renewal_cancellation_window_ms(interval);
+    let remaining_ms = claim_expires_at_ms.saturating_sub(now_ms);
+    let retry_budget_ms = remaining_ms.checked_sub(cancellation_window_ms)?;
+    if retry_budget_ms == 0 {
+        return None;
+    }
+    let normal_retry_ms = (cancellation_window_ms / 4).max(1);
+    Some(Duration::from_millis(normal_retry_ms.min(retry_budget_ms)))
+}
+
+fn renewal_failure_window_reached(
+    now_ms: u64,
+    claim_expires_at_ms: u64,
+    interval: Duration,
+) -> bool {
+    let cancellation_window_ms = renewal_cancellation_window_ms(interval);
+    claim_expires_at_ms.saturating_sub(now_ms) <= cancellation_window_ms
+}
+
+fn renewal_cancellation_window_ms(interval: Duration) -> u64 {
+    u64::try_from(interval.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1)
 }
 
 impl Drop for OccurrenceGuard {
@@ -266,13 +391,41 @@ impl OccurrenceStore {
         owner: &str,
         finish: OccurrenceFinish<'_>,
     ) -> Result<ScheduleOccurrence> {
+        self.finish_with_clock(occurrence_id, owner, finish, now_ms)
+    }
+
+    #[cfg(test)]
+    fn finish_at(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        finish: OccurrenceFinish<'_>,
+        now: u64,
+    ) -> Result<ScheduleOccurrence> {
+        self.finish_with_clock(occurrence_id, owner, finish, || now)
+    }
+
+    fn finish_with_clock(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        finish: OccurrenceFinish<'_>,
+        now: impl FnOnce() -> u64,
+    ) -> Result<ScheduleOccurrence> {
         self.with_locked(|store| {
+            let now = now();
             let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
             require_running_owner(record, owner)?;
+            if record.claim_expires_at_ms <= now {
+                mark_expired_claim(record, now, Some(&finish));
+                let finished = record.clone();
+                prune_history(store);
+                return Ok(finished);
+            }
             record.status = finish.outcome.status();
-            record.finished_at_ms = Some(now_ms());
+            record.finished_at_ms = Some(now);
             record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
             record.worktree = finish.worktree.map(str::to_string);
             record.error = finish.error.map(bounded_error);
@@ -305,12 +458,38 @@ impl OccurrenceStore {
         })
     }
 
+    #[cfg(test)]
     fn abandon(&mut self, occurrence_id: &str, owner: &str) -> Result<ScheduleOccurrence> {
+        self.abandon_with_clock(occurrence_id, owner, now_ms)
+    }
+
+    #[cfg(test)]
+    fn abandon_at(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        now: u64,
+    ) -> Result<ScheduleOccurrence> {
+        self.abandon_with_clock(occurrence_id, owner, || now)
+    }
+
+    #[cfg(test)]
+    fn abandon_with_clock(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        now: impl FnOnce() -> u64,
+    ) -> Result<ScheduleOccurrence> {
         self.with_locked(|store| {
-            let record = store.occurrences.get(occurrence_id).ok_or_else(|| {
+            let now = now();
+            let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
             require_running_owner(record, owner)?;
+            if record.claim_expires_at_ms <= now {
+                mark_expired_claim(record, now, None);
+                return Ok(record.clone());
+            }
             store
                 .occurrences
                 .remove(occurrence_id)
@@ -318,12 +497,39 @@ impl OccurrenceStore {
         })
     }
 
+    fn abandon_unexecuted(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+    ) -> Result<ScheduleOccurrence> {
+        self.with_locked(|store| {
+            let record = store.occurrences.get(occurrence_id).ok_or_else(|| {
+                anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
+            })?;
+            let claim_state = require_unexecuted_owner(record, owner)?;
+            let mut removed = store.occurrences.remove(occurrence_id).ok_or_else(|| {
+                anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
+            })?;
+            if claim_state == UnexecutedClaimState::StaleReconciled {
+                removed.status = OccurrenceStatus::Running;
+                removed.finished_at_ms = None;
+                removed.error = None;
+            }
+            Ok(removed)
+        })
+    }
+
     pub(super) fn reconcile_stale(&mut self) -> Result<Vec<ScheduleOccurrence>> {
         self.reconcile_stale_at(now_ms())
     }
 
-    pub(super) fn snapshot(&mut self) -> Result<Vec<ScheduleOccurrence>> {
-        self.with_locked(|store| {
+    #[cfg(test)]
+    pub(super) fn reconcile_stale_for_test(&mut self, now: u64) -> Result<Vec<ScheduleOccurrence>> {
+        self.reconcile_stale_at(now)
+    }
+
+    pub(super) fn snapshot(&self) -> Result<Vec<ScheduleOccurrence>> {
+        self.persistence.read_locked(|store| {
             validate_schema(store)?;
             Ok(sorted_occurrences(store))
         })
@@ -437,17 +643,71 @@ fn require_running_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()>
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnexecutedClaimState {
+    Running,
+    StaleReconciled,
+}
+
+fn require_unexecuted_owner(
+    record: &ScheduleOccurrence,
+    owner: &str,
+) -> Result<UnexecutedClaimState> {
+    if record.owner != owner {
+        bail!(
+            "Scheduled occurrence '{}' is owned by another dispatcher",
+            record.occurrence_id
+        );
+    }
+    let reconciled_without_worker_evidence = record.status == OccurrenceStatus::NeedsAttention
+        && record.finished_at_ms.is_some()
+        && record.acknowledged_at_ms.is_none()
+        && record.worker_receipt_id.is_none()
+        && record.worktree.is_none()
+        && record.error.as_deref() == Some(STALE_RECONCILIATION_ERROR);
+    match record.status {
+        OccurrenceStatus::Running => Ok(UnexecutedClaimState::Running),
+        OccurrenceStatus::NeedsAttention if reconciled_without_worker_evidence => {
+            Ok(UnexecutedClaimState::StaleReconciled)
+        }
+        _ => bail!(
+            "Scheduled occurrence '{}' is already {}",
+            record.occurrence_id,
+            record.status
+        ),
+    }
+}
+
 fn reconcile_stale_file(store: &mut ScheduleFile, now: u64) -> Vec<ScheduleOccurrence> {
     let mut reconciled = Vec::new();
     for record in store.occurrences.values_mut() {
         if record.status == OccurrenceStatus::Running && record.claim_expires_at_ms <= now {
-            record.status = OccurrenceStatus::NeedsAttention;
-            record.finished_at_ms = Some(now);
-            record.error = Some("scheduled task stopped without a terminal result".into());
+            mark_expired_claim(record, now, None);
             reconciled.push(record.clone());
         }
     }
     reconciled
+}
+
+fn mark_expired_claim(
+    record: &mut ScheduleOccurrence,
+    now: u64,
+    finish: Option<&OccurrenceFinish<'_>>,
+) {
+    record.status = OccurrenceStatus::NeedsAttention;
+    record.finished_at_ms = Some(now);
+    if let Some(finish) = finish {
+        record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
+        record.worktree = finish.worktree.map(str::to_string);
+        record.error = Some(bounded_error(&match finish.error {
+            Some(error) => format!(
+                "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous: {error}"
+            ),
+            None => "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous".into(),
+        }));
+    } else {
+        record.error = Some(STALE_RECONCILIATION_ERROR.into());
+    }
 }
 
 fn sorted_occurrences(store: &ScheduleFile) -> Vec<ScheduleOccurrence> {
@@ -457,11 +717,15 @@ fn sorted_occurrences(store: &ScheduleFile) -> Vec<ScheduleOccurrence> {
 }
 
 fn validate_schema(store: &ScheduleFile) -> Result<()> {
-    if store.schema_version != SCHEDULE_SCHEMA_VERSION {
+    validate_schema_version(store.schema_version, SCHEDULE_SCHEMA_VERSION)
+}
+
+fn validate_schema_version(actual: u32, expected: u32) -> Result<()> {
+    if actual != expected {
         bail!(
             "Unsupported loop schedule state schema version {}; expected {}",
-            store.schema_version,
-            SCHEDULE_SCHEMA_VERSION
+            actual,
+            expected
         );
     }
     Ok(())
@@ -470,7 +734,7 @@ fn validate_schema(store: &ScheduleFile) -> Result<()> {
 fn migrate_schedule_schema(store: &mut ScheduleFile) -> Result<()> {
     match store.schema_version {
         SCHEDULE_SCHEMA_VERSION => Ok(()),
-        LEGACY_SCHEDULE_SCHEMA_VERSION => {
+        LEGACY_SCHEDULE_SCHEMA_VERSION | PREVIOUS_SCHEDULE_SCHEMA_VERSION => {
             store.schema_version = SCHEDULE_SCHEMA_VERSION;
             Ok(())
         }
@@ -511,279 +775,5 @@ fn bounded_error(error: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::runtime::loops::state::{LOOP_CACHE_DIR, LOOP_RUNTIME_DIR};
-
-    #[test]
-    fn occurrence_claim_is_single_use_and_owner_checked() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut store = OccurrenceStore::new(&ctx);
-
-        let OccurrenceClaim::Acquired(claim) = store.claim_at("nightly", 100, 60, 1_000).unwrap()
-        else {
-            panic!("expected occurrence claim");
-        };
-        let OccurrenceClaim::AlreadyRecorded(existing) =
-            store.claim_at("nightly", 100, 60, 1_001).unwrap()
-        else {
-            panic!("expected duplicate occurrence");
-        };
-        assert_eq!(existing.owner, claim.owner);
-        assert!(
-            store
-                .finish(
-                    &claim.occurrence_id,
-                    "another-owner",
-                    OccurrenceFinish {
-                        outcome: OccurrenceOutcome::Succeeded,
-                        worker_receipt_id: None,
-                        worktree: None,
-                        error: None,
-                    },
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("owned by another dispatcher")
-        );
-    }
-
-    #[test]
-    fn occurrence_renewal_and_stale_reconciliation_are_terminal() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut store = OccurrenceStore::new(&ctx);
-        let OccurrenceClaim::Acquired(claim) = store.claim_at("nightly", 100, 2, 1_000).unwrap()
-        else {
-            panic!("expected occurrence claim");
-        };
-
-        let renewed = store
-            .renew_at(&claim.occurrence_id, &claim.owner, 2, 2_000)
-            .unwrap();
-        assert_eq!(renewed.claim_expires_at_ms, 4_000);
-        assert!(store.reconcile_stale_at(3_999).unwrap().is_empty());
-        let reconciled = store.reconcile_stale_at(4_000).unwrap();
-        assert_eq!(reconciled.len(), 1);
-        assert_eq!(reconciled[0].status, OccurrenceStatus::NeedsAttention);
-
-        let OccurrenceClaim::AlreadyRecorded(existing) =
-            store.claim_at("nightly", 100, 2, 5_000).unwrap()
-        else {
-            panic!("stale occurrence must not be reclaimed");
-        };
-        assert_eq!(existing.status, OccurrenceStatus::NeedsAttention);
-    }
-
-    #[test]
-    fn acknowledging_attention_is_idempotent_and_preserves_the_claim() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut store = OccurrenceStore::new(&ctx);
-        let OccurrenceClaim::Acquired(claim) = store.claim_at("nightly", 100, 2, 1_000).unwrap()
-        else {
-            panic!("expected occurrence claim");
-        };
-        store.reconcile_stale_at(3_000).unwrap();
-
-        let OccurrenceAcknowledgement::Acknowledged(acknowledged) =
-            store.acknowledge(&claim.occurrence_id).unwrap()
-        else {
-            panic!("expected first acknowledgement to change state");
-        };
-        assert_eq!(acknowledged.status, OccurrenceStatus::Acknowledged);
-        assert!(acknowledged.acknowledged_at_ms.is_some());
-
-        let OccurrenceAcknowledgement::AlreadyAcknowledged(existing) =
-            store.acknowledge(&claim.occurrence_id).unwrap()
-        else {
-            panic!("expected repeated acknowledgement to be idempotent");
-        };
-        assert_eq!(existing.acknowledged_at_ms, acknowledged.acknowledged_at_ms);
-
-        let OccurrenceClaim::AlreadyRecorded(existing) =
-            store.claim_at("nightly", 100, 2, 4_000).unwrap()
-        else {
-            panic!("acknowledgement must not make the occurrence runnable again");
-        };
-        assert_eq!(existing.status, OccurrenceStatus::Acknowledged);
-    }
-
-    #[test]
-    fn schedule_state_migrates_out_of_disposable_cache_and_survives_cache_removal() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let legacy_dir = temp.path().join(LOOP_CACHE_DIR);
-        std::fs::create_dir_all(&legacy_dir).unwrap();
-        std::fs::write(
-            legacy_dir.join("schedule.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": LEGACY_SCHEDULE_SCHEMA_VERSION,
-                "occurrences": {
-                    "nightly@100": {
-                        "occurrence_id": "nightly@100",
-                        "workflow_id": "nightly",
-                        "scheduled_at_ms": 100,
-                        "owner": "owner",
-                        "claim_expires_at_ms": 200,
-                        "started_at_ms": 100,
-                        "finished_at_ms": 150,
-                        "status": "succeeded"
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-        let migrated = OccurrenceStore::new(&ctx).snapshot().unwrap();
-        assert_eq!(migrated.len(), 1);
-        assert_eq!(migrated[0].status, OccurrenceStatus::Succeeded);
-        let durable_path = temp.path().join(LOOP_RUNTIME_DIR).join("schedule.json");
-        assert!(durable_path.is_file());
-        let marker: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(legacy_dir.join("schedule.json")).unwrap())
-                .unwrap();
-        assert_eq!(marker["schema_version"], SCHEDULE_SCHEMA_VERSION);
-        assert_eq!(marker["migrated_to"], ".agent/runtime/loop/schedule.json");
-
-        std::fs::remove_dir_all(&legacy_dir).unwrap();
-        let after_cache_removal = OccurrenceStore::new(&ctx).snapshot().unwrap();
-        assert_eq!(after_cache_removal, migrated);
-    }
-
-    #[test]
-    fn read_only_snapshot_can_inspect_legacy_state_without_migrating_it() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let legacy_dir = temp.path().join(LOOP_CACHE_DIR);
-        std::fs::create_dir_all(&legacy_dir).unwrap();
-        std::fs::write(
-            legacy_dir.join("schedule.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": LEGACY_SCHEDULE_SCHEMA_VERSION,
-                "occurrences": {}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-        let snapshot = OccurrenceStore::new(&ctx)
-            .snapshot_read_only_with_cancellation(&|| false)
-            .unwrap();
-
-        assert!(snapshot.is_empty());
-        assert!(!temp.path().join(LOOP_RUNTIME_DIR).exists());
-    }
-
-    #[test]
-    fn one_second_occurrence_claim_renews_before_expiry() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut store = OccurrenceStore::new(&ctx);
-        let OccurrenceClaim::Acquired(claim) = store.claim("nightly", 100, 1).unwrap() else {
-            panic!("expected occurrence claim");
-        };
-        let guard = OccurrenceGuard::start(store.clone(), &claim, 1).unwrap();
-
-        std::thread::sleep(std::time::Duration::from_millis(1_200));
-        let finished = guard
-            .finish(OccurrenceFinish {
-                outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: None,
-                worktree: None,
-                error: None,
-            })
-            .unwrap();
-        assert_eq!(finished.status, OccurrenceStatus::Succeeded);
-    }
-
-    #[test]
-    fn pruning_preserves_discoverability_until_retained_worktree_is_removed() {
-        let temp = tempdir().unwrap();
-        let retained = temp.path().join("retained-worktree");
-        std::fs::create_dir(&retained).unwrap();
-        let mut store = ScheduleFile::default();
-        for scheduled_at_ms in 0..=21 {
-            let occurrence_id = occurrence_id("nightly", scheduled_at_ms);
-            store.occurrences.insert(
-                occurrence_id.clone(),
-                ScheduleOccurrence {
-                    occurrence_id,
-                    workflow_id: "nightly".into(),
-                    scheduled_at_ms,
-                    owner: "owner".into(),
-                    claim_expires_at_ms: 0,
-                    started_at_ms: 0,
-                    finished_at_ms: Some(1),
-                    acknowledged_at_ms: None,
-                    status: OccurrenceStatus::Succeeded,
-                    worker_receipt_id: None,
-                    worktree: (scheduled_at_ms == 0).then(|| retained.display().to_string()),
-                    error: None,
-                },
-            );
-        }
-
-        prune_history(&mut store);
-
-        assert_eq!(store.occurrences.len(), 21);
-        assert!(store.occurrences.contains_key("nightly@0"));
-        assert!(!store.occurrences.contains_key("nightly@1"));
-
-        std::fs::remove_dir(&retained).unwrap();
-        prune_history(&mut store);
-
-        assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW);
-        assert!(!store.occurrences.contains_key("nightly@0"));
-    }
-
-    #[test]
-    fn pruning_never_discards_occurrences_that_need_attention() {
-        let mut store = ScheduleFile::default();
-        for scheduled_at_ms in 0..=OCCURRENCE_HISTORY_PER_WORKFLOW as u64 {
-            let occurrence_id = occurrence_id("nightly", scheduled_at_ms);
-            store.occurrences.insert(
-                occurrence_id.clone(),
-                ScheduleOccurrence {
-                    occurrence_id,
-                    workflow_id: "nightly".into(),
-                    scheduled_at_ms,
-                    owner: "owner".into(),
-                    claim_expires_at_ms: 0,
-                    started_at_ms: 0,
-                    finished_at_ms: Some(1),
-                    acknowledged_at_ms: None,
-                    status: if scheduled_at_ms == 0 {
-                        OccurrenceStatus::NeedsAttention
-                    } else {
-                        OccurrenceStatus::Succeeded
-                    },
-                    worker_receipt_id: None,
-                    worktree: None,
-                    error: None,
-                },
-            );
-        }
-
-        prune_history(&mut store);
-
-        assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW + 1);
-        assert!(store.occurrences.contains_key("nightly@0"));
-    }
-
-    fn write_loop_fixture_repo(root: &std::path::Path) {
-        crate::test_env::TestRepoBuilder::new(root)
-            .required_commands(Vec::<String>::new())
-            .write();
-    }
-}
+#[path = "occurrence/tests.rs"]
+mod tests;

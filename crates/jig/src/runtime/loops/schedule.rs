@@ -17,12 +17,15 @@ use super::occurrence::{
     OccurrenceStore, ScheduleOccurrence,
 };
 use super::workflow::{
-    ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, resolve_workflow,
+    ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, loop_status_is_success,
+    resolve_workflow,
 };
 
+mod attention;
 mod cron;
 mod policy;
 
+use attention::DispatchAttention;
 pub(super) use cron::ScheduleSpec;
 use policy::{
     DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails, begin_execution,
@@ -69,16 +72,13 @@ fn dispatch_due_at_with_observer(
         }
     }
 
-    summary.needs_attention_count = u64::try_from(
-        occurrences
-            .snapshot()?
-            .iter()
-            .filter(|occurrence| occurrence.status == OccurrenceStatus::NeedsAttention)
-            .count(),
-    )
-    .unwrap_or(u64::MAX);
+    let attention = DispatchAttention::collect(ctx, &occurrences, &|| observer.cancelled());
+    summary.needs_attention_count = attention.scheduled_occurrence_count;
+    summary.exhausted_attempt_count = attention.exhausted_attempt_count;
+    summary.include_state_errors(attention.state_errors);
+    let state_error_text = summary.state_error_text();
     let status = summary.status();
-    let ok = !summary.requires_attention();
+    let ok = loop_status_is_success(status);
     let ended = now_ms();
     let evidence = json!({
         "kind": "loop_dispatch",
@@ -87,9 +87,13 @@ fn dispatch_due_at_with_observer(
         "status": status,
         "due_count": summary.due_count,
         "executed_count": summary.executed_count,
+        "deferred_count": summary.deferred_count,
         "skipped_count": summary.skipped_count,
         "failed_count": summary.failed_count,
         "needs_attention_count": summary.needs_attention_count,
+        "exhausted_attempt_count": summary.exhausted_attempt_count,
+        "state_error_count": summary.state_error_count,
+        "state_errors": summary.state_errors,
         "reconciled_occurrences": reconciled,
         "actions": actions,
     });
@@ -104,7 +108,7 @@ fn dispatch_due_at_with_observer(
             ended_at_ms: ended,
             exit_status: i32::from(!ok),
             stdout: "",
-            stderr: "",
+            stderr: &state_error_text,
             evidence: Some(evidence.clone()),
             session_override: None,
             collect_git_metadata: true,
@@ -121,9 +125,13 @@ fn dispatch_due_at_with_observer(
         "dispatch_at_ms": dispatch_at_ms,
         "due_count": summary.due_count,
         "executed_count": summary.executed_count,
+        "deferred_count": summary.deferred_count,
         "skipped_count": summary.skipped_count,
         "failed_count": summary.failed_count,
         "needs_attention_count": summary.needs_attention_count,
+        "exhausted_attempt_count": summary.exhausted_attempt_count,
+        "state_error_count": summary.state_error_count,
+        "state_errors": evidence["state_errors"],
         "reconciled_occurrences": evidence["reconciled_occurrences"],
         "actions": evidence["actions"],
     }))
@@ -227,14 +235,20 @@ fn dispatch_workflow(
         &claim.occurrence_id,
         &mut occurrence_control,
     );
-    if tick.as_ref().is_ok_and(|tick| {
-        tick.value()
-            .is_some_and(|value| value["lease_acquired"].as_bool() == Some(false))
-    }) {
-        return match guard.abandon() {
-            Ok(abandoned) => {
+    step.state_errors = scheduled_tick_state_errors(&tick, &workflow.id, &claim.occurrence_id);
+    if tick.as_ref().is_ok_and(ScheduledTick::lease_was_held) {
+        return match guard.abandon_unexecuted() {
+            Ok(finalization) => {
+                include_occurrence_renewal_error(
+                    &mut step,
+                    &workflow.id,
+                    &claim.occurrence_id,
+                    finalization.renewal_error,
+                );
+                let abandoned = finalization.occurrence;
                 step.executed_count = 0;
                 step.skipped_count = 1;
+                step.deferred_count = 1;
                 step.action = Some(json!({
                     "workflow_id": workflow.id,
                     "occurrence": abandoned,
@@ -265,11 +279,18 @@ fn dispatch_workflow(
         worktree: details.worktree.as_deref(),
         error: details.error.as_deref(),
     }) {
-        Ok(record) => {
-            step.failed_count = u64::from(details.outcome == OccurrenceOutcome::Failed);
+        Ok(finalization) => {
+            include_occurrence_renewal_error(
+                &mut step,
+                &workflow.id,
+                &claim.occurrence_id,
+                finalization.renewal_error,
+            );
+            let record = finalization.occurrence;
+            step.failed_count = u64::from(record.status == OccurrenceStatus::Failed);
             step.action = Some(dispatch_action(
                 &record,
-                details.outcome.status().as_str(),
+                record.status.as_str(),
                 window.next_at_ms,
                 tick_value(&tick),
             ));
@@ -286,6 +307,57 @@ fn dispatch_workflow(
         }
     }
     step
+}
+
+fn include_occurrence_renewal_error(
+    step: &mut DispatchStep,
+    workflow_id: &str,
+    occurrence_id: &str,
+    renewal_error: Option<String>,
+) {
+    if let Some(error) = renewal_error {
+        step.state_errors.push(json!({
+            "kind": "occurrence_renewal",
+            "error": format!("Occurrence renewal failed before terminal state was recorded: {error}"),
+            "workflow_id": workflow_id,
+            "occurrence_id": occurrence_id,
+        }));
+    }
+}
+
+fn scheduled_tick_state_errors(
+    tick: &Result<ScheduledTick>,
+    workflow_id: &str,
+    occurrence_id: &str,
+) -> Vec<Value> {
+    let Ok(tick) = tick else {
+        return Vec::new();
+    };
+    let mut state_errors = tick.state_errors().to_vec();
+    for error in &mut state_errors {
+        scope_state_error(error, workflow_id, occurrence_id);
+    }
+    if let Some(error) = tick.post_work_error()
+        && !state_errors
+            .iter()
+            .any(|existing| existing["error"].as_str() == Some(error))
+    {
+        state_errors.push(json!({
+            "kind": "tick",
+            "error": error,
+            "workflow_id": workflow_id,
+            "occurrence_id": occurrence_id,
+        }));
+    }
+    state_errors
+}
+
+fn scope_state_error(error: &mut Value, workflow_id: &str, occurrence_id: &str) {
+    let Some(error) = error.as_object_mut() else {
+        return;
+    };
+    error.insert("workflow_id".into(), workflow_id.into());
+    error.insert("occurrence_id".into(), occurrence_id.into());
 }
 
 fn dispatch_state_failure(
@@ -387,7 +459,7 @@ pub(super) fn run_until_with_observer(
     let status = summary.status();
 
     Ok(json!({
-        "ok": status != "failed",
+        "ok": loop_status_is_success(status),
         "command": "loop run",
         "until": request.until,
         "status": status,
@@ -397,351 +469,4 @@ pub(super) fn run_until_with_observer(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use chrono::DateTime;
-    use serde_json::json;
-    use tempfile::tempdir;
-
-    use super::super::state::{LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
-    use super::super::workflow::WorkflowCompletion;
-    use super::{
-        DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, ScheduleSpec,
-        TerminalDetails, begin_execution, dispatch_due_at,
-    };
-    use crate::command::LoopStatusRequest;
-    use crate::context::RepoContext;
-    use crate::runtime::loops::engine::ScheduledTick;
-    use crate::test_env::TestRepoBuilder;
-
-    #[test]
-    fn schedule_window_coalesces_missed_occurrences() {
-        let schedule = ScheduleSpec::parse("0 2 * * *", Some("UTC")).unwrap();
-        let now = timestamp("2026-08-21T02:30:00Z");
-        let window = schedule
-            .window(now, Some(timestamp("2026-08-18T02:00:00Z")))
-            .unwrap();
-
-        assert_eq!(window.due_at_ms, Some(timestamp("2026-08-21T02:00:00Z")));
-        assert_eq!(window.next_at_ms, timestamp("2026-08-22T02:00:00Z"));
-        assert_eq!(
-            schedule.window(now, window.due_at_ms).unwrap().due_at_ms,
-            None
-        );
-    }
-
-    #[test]
-    fn run_tick_disposition_preserves_terminal_status_policy() {
-        assert_eq!(
-            RunTickDisposition::from_tick(&json!({"status": "failed", "idle": false})),
-            RunTickDisposition::Failed
-        );
-        assert_eq!(
-            RunTickDisposition::from_tick(&json!({"status": "waiting", "idle": false})),
-            RunTickDisposition::Stop("waiting")
-        );
-        assert_eq!(
-            RunTickDisposition::from_tick(&json!({"status": "acted", "idle": true})),
-            RunTickDisposition::Stop("idle")
-        );
-        assert_eq!(
-            RunTickDisposition::from_tick(&json!({"status": "acted", "idle": false})),
-            RunTickDisposition::Continue
-        );
-    }
-
-    #[test]
-    fn failed_run_ticks_continue_but_determine_the_final_status() {
-        let mut summary = RunSummary::default();
-
-        assert!(!summary.observe(RunTickDisposition::Failed));
-        assert!(summary.observe(RunTickDisposition::Stop("waiting")));
-        assert_eq!(summary.status(), "failed");
-    }
-
-    #[test]
-    fn dispatch_summary_uses_one_attention_policy_for_status_and_success() {
-        let mut summary = DispatchSummary {
-            executed_count: 1,
-            needs_attention_count: 1,
-            ..DispatchSummary::default()
-        };
-
-        assert_eq!(summary.status(), "needs_attention");
-        assert!(summary.requires_attention());
-
-        summary.failed_count = 1;
-        assert_eq!(summary.status(), "failed");
-        assert!(summary.requires_attention());
-    }
-
-    #[test]
-    fn execution_count_starts_only_after_guard_start_succeeds() {
-        let mut step = DispatchStep::default();
-
-        assert!(
-            begin_execution::<()>(&mut step, || anyhow::bail!("injected start failure")).is_err()
-        );
-        assert_eq!(step.executed_count, 0);
-
-        begin_execution(&mut step, || Ok(())).unwrap();
-        assert_eq!(step.executed_count, 1);
-    }
-
-    #[test]
-    fn scheduled_tick_preserves_needs_attention_as_an_occurrence_outcome() {
-        let tick = Ok(ScheduledTick::Reported {
-            value: json!({"status": "needs_attention"}),
-            completion: WorkflowCompletion::default(),
-        });
-
-        let details = TerminalDetails::from_tick(&tick);
-
-        assert_eq!(
-            details.outcome,
-            super::super::occurrence::OccurrenceOutcome::NeedsAttention
-        );
-    }
-
-    #[test]
-    fn scheduled_tick_error_keeps_worker_completion_evidence() {
-        let tick = Ok(ScheduledTick::Errored {
-            value: Some(json!({"status": "failed"})),
-            completion: WorkflowCompletion {
-                worker_receipt_id: Some("receipt-worker".into()),
-                worktree: Some("/tmp/retained-worktree".into()),
-                error: Some("worker failed".into()),
-            },
-            error: "tick receipt failed".into(),
-        });
-
-        let details = TerminalDetails::from_tick(&tick);
-
-        assert_eq!(
-            details.outcome,
-            super::super::occurrence::OccurrenceOutcome::Failed
-        );
-        assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
-        assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
-        assert_eq!(
-            details.error.as_deref(),
-            Some("tick receipt failed; workflow completion: worker failed")
-        );
-    }
-
-    #[test]
-    fn schedule_window_uses_explicit_timezone() {
-        let schedule = ScheduleSpec::parse("0 9 * * MON-FRI", Some("Europe/Prague")).unwrap();
-        let window = schedule
-            .window(timestamp("2026-08-21T08:00:00Z"), None)
-            .unwrap();
-
-        assert_eq!(window.due_at_ms, Some(timestamp("2026-08-21T07:00:00Z")));
-        assert_eq!(window.next_at_ms, timestamp("2026-08-24T07:00:00Z"));
-        assert_eq!(schedule.expression(), "0 9 * * MON-FRI");
-        assert_eq!(schedule.timezone_name(), "Europe/Prague");
-    }
-
-    #[test]
-    fn schedule_window_skips_nonexistent_spring_forward_time() {
-        let schedule = ScheduleSpec::parse("30 2 * * *", Some("Europe/Prague")).unwrap();
-        let window = schedule
-            .window(timestamp("2026-03-29T02:00:00Z"), None)
-            .unwrap();
-
-        assert_eq!(window.due_at_ms, Some(timestamp("2026-03-28T01:30:00Z")));
-        assert_eq!(window.next_at_ms, timestamp("2026-03-30T00:30:00Z"));
-    }
-
-    #[test]
-    fn schedule_window_runs_repeated_fall_back_wall_time_once() {
-        let schedule = ScheduleSpec::parse("30 2 * * *", Some("Europe/Prague")).unwrap();
-        let first = timestamp("2026-10-25T00:30:00Z");
-        let window = schedule
-            .window(timestamp("2026-10-25T01:45:00Z"), Some(first))
-            .unwrap();
-
-        assert_eq!(window.due_at_ms, None);
-        assert_eq!(window.next_at_ms, timestamp("2026-10-26T01:30:00Z"));
-    }
-
-    #[test]
-    fn dispatcher_claims_each_due_occurrence_once() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path()).write();
-        let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
-        fs::write(
-            temp.path().join(".jig.toml"),
-            format!(
-                r#"{config}
-[[loop.workflows]]
-id = "scheduled-noop"
-kind = "noop_status"
-schedule = "* * * * *"
-timezone = "UTC"
-"#
-            ),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let dispatch_at = timestamp("2026-08-21T08:42:30Z");
-
-        let first = dispatch_due_at(&ctx, dispatch_at).unwrap();
-        fs::remove_dir_all(temp.path().join(LOOP_CACHE_DIR)).unwrap();
-        let second = dispatch_due_at(&ctx, dispatch_at).unwrap();
-
-        assert_eq!(first["status"], "acted", "{first:#}");
-        assert_eq!(first["due_count"], 1);
-        assert_eq!(first["executed_count"], 1);
-        assert_eq!(
-            first["actions"][0]["occurrence"]["scheduled_at_ms"],
-            timestamp("2026-08-21T08:42:00Z")
-        );
-        assert_eq!(second["status"], "idle", "{second:#}");
-        assert_eq!(second["due_count"], 0);
-        assert_eq!(second["executed_count"], 0);
-        assert!(
-            temp.path()
-                .join(super::super::state::LOOP_RUNTIME_DIR)
-                .join("schedule.json")
-                .is_file()
-        );
-
-        let status = super::super::engine::status(
-            &ctx,
-            LoopStatusRequest {
-                workflow: Some("scheduled-noop".into()),
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            status["workflows"][0]["schedule_state"]["last_status"],
-            "succeeded"
-        );
-        assert!(
-            status["workflows"][0]["schedule_state"]["next_at_ms"]
-                .as_u64()
-                .is_some()
-        );
-        assert_eq!(status["scheduled_occurrences"].as_array().unwrap().len(), 1);
-        serde_json::from_value::<jig_ui::LoopsView>(status).unwrap();
-    }
-
-    #[test]
-    fn dispatcher_persistently_fails_while_occurrence_needs_attention() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path()).write();
-        let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
-        fs::write(
-            temp.path().join(".jig.toml"),
-            format!(
-                r#"{config}
-[[loop.workflows]]
-id = "scheduled-noop"
-kind = "noop_status"
-schedule = "* * * * *"
-timezone = "UTC"
-"#
-            ),
-        )
-        .unwrap();
-        let cache = temp.path().join(LOOP_CACHE_DIR);
-        fs::create_dir_all(&cache).unwrap();
-        fs::write(
-            cache.join("schedule.json"),
-            serde_json::to_vec_pretty(&json!({
-                "schema_version": 1,
-                "occurrences": {
-                    "scheduled-noop@1787301600000": {
-                        "occurrence_id": "scheduled-noop@1787301600000",
-                        "workflow_id": "scheduled-noop",
-                        "scheduled_at_ms": 1_787_301_600_000_u64,
-                        "owner": "crashed-dispatcher",
-                        "claim_expires_at_ms": 1,
-                        "started_at_ms": 1,
-                        "status": "running"
-                    }
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let dispatch_at = timestamp("2026-08-21T08:42:30Z");
-
-        let first = dispatch_due_at(&ctx, dispatch_at).unwrap();
-        let second = dispatch_due_at(&ctx, dispatch_at).unwrap();
-
-        assert_eq!(first["status"], "needs_attention", "{first:#}");
-        assert_eq!(first["ok"], false);
-        assert_eq!(first["needs_attention_count"], 1);
-        assert_eq!(first["reconciled_occurrences"].as_array().unwrap().len(), 1);
-        assert_eq!(second["status"], "needs_attention", "{second:#}");
-        assert_eq!(second["ok"], false);
-        assert_eq!(second["needs_attention_count"], 1);
-        assert!(
-            second["reconciled_occurrences"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-
-        let mut occurrences = super::super::occurrence::OccurrenceStore::new(&ctx);
-        occurrences
-            .acknowledge("scheduled-noop@1787301600000")
-            .unwrap();
-        let acknowledged = dispatch_due_at(&ctx, dispatch_at).unwrap();
-        assert_eq!(acknowledged["status"], "idle", "{acknowledged:#}");
-        assert_eq!(acknowledged["due_count"], 0);
-        assert_eq!(acknowledged["needs_attention_count"], 0);
-    }
-
-    #[test]
-    fn dispatcher_defers_without_consuming_occurrence_when_workflow_lease_is_held() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path()).write();
-        let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
-        fs::write(
-            temp.path().join(".jig.toml"),
-            format!(
-                r#"{config}
-[[loop.workflows]]
-id = "scheduled-noop"
-kind = "noop_status"
-schedule = "* * * * *"
-"#
-            ),
-        )
-        .unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut leases = LeaseStore::new(&ctx);
-        let LeaseAcquire::Acquired(lease) = leases.acquire("workflow:scheduled-noop", 60).unwrap()
-        else {
-            panic!("expected workflow lease");
-        };
-        let dispatch_at = timestamp("2026-08-21T08:42:30Z");
-
-        let deferred = dispatch_due_at(&ctx, dispatch_at).unwrap();
-        assert_eq!(deferred["status"], "idle", "{deferred:#}");
-        assert_eq!(deferred["actions"][0]["status"], "deferred");
-        assert_eq!(deferred["executed_count"], 0);
-        assert_eq!(deferred["skipped_count"], 1);
-        leases
-            .release("workflow:scheduled-noop", &lease.owner)
-            .unwrap();
-
-        let retried = dispatch_due_at(&ctx, dispatch_at).unwrap();
-        assert_eq!(retried["status"], "acted", "{retried:#}");
-        assert_eq!(retried["executed_count"], 1);
-    }
-
-    fn timestamp(value: &str) -> u64 {
-        u64::try_from(
-            DateTime::parse_from_rfc3339(value)
-                .unwrap()
-                .timestamp_millis(),
-        )
-        .unwrap()
-    }
-}
+mod tests;

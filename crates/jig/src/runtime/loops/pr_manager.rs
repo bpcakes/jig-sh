@@ -3,6 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_owned_process::ProcessOutputOverflowPolicy;
@@ -315,7 +316,7 @@ fn pending_checks_action(item: &PrPendingItem) -> Value {
 fn pr_manager_action_consumed_tick(action: &Value) -> bool {
     !matches!(
         action.get("status").and_then(Value::as_str),
-        Some("skipped" | "waiting" | "needs_attention")
+        Some("skipped" | "waiting" | "exhausted" | "needs_attention")
     )
 }
 
@@ -488,6 +489,7 @@ fn attempt_blocking_action(
         return Ok(Some(json!({
             "kind": "pr_manager_worker",
             "status": "needs_attention",
+            "attention_kind": "exhausted_attempt",
             "pr_number": item.pr_number,
             "item_key": item.item_key,
             "branch": item.head_ref,

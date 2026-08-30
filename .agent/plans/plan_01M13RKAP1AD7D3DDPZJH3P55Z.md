@@ -10,7 +10,7 @@ This living plan continues the earlier loop-policy work after a comprehensive re
 - [x] Add characterization tests for workflow-local outcomes, durable-state loss, deferred dispatch, review-marker ownership, prompt validation, checkout-process supervision, and retained worktree placement.
 - [x] Refactor completion and persistence policies behind typed/internal owners without changing serialized occurrence schema.
 - [x] Apply the behavior fixes and update operator documentation.
-- [ ] Build the development Jig binary and run focused tests, configured format, Clippy, contract, and full test gates through `JIG_DEV_BIN=target/debug/jig`.
+- [x] Build the development Jig binary and run focused tests, configured format, Clippy, contract, and full test gates through `JIG_DEV_BIN=target/debug/jig`.
 
 ## Surprises & Discoveries
 
@@ -41,7 +41,7 @@ This living plan continues the earlier loop-policy work after a comprehensive re
 
 ## Outcomes & Retrospective
 
-The earlier slice replaced duplicated run/dispatch conditionals with explicit summaries, restricted scheduled Codex tasks to one tick, preserved unresolved occurrence attention, and hardened worker waiting. This extension now gives durable schedule publication and workflow-local outcome classification explicit owners; the focused unit, integration, and cross-process claim tests pass. It remains incomplete until the configured repository gates pass.
+The earlier slice replaced duplicated run/dispatch conditionals with explicit summaries, restricted scheduled Codex tasks to one tick, preserved unresolved occurrence attention, and hardened worker waiting. This extension gives durable schedule publication and workflow-local outcome classification explicit owners. All 60 focused loop unit tests, all 40 loop integration tests, the two-process claim regression, formatting, Clippy, contract, source-size policy, and the complete configured source-test matrix pass. No serialized occurrence schema was changed; dispatch adds only `deferred_count` and the `deferred` aggregate status.
 
 ## Context and Orientation
 
@@ -80,6 +80,3 @@ If a behavior step cannot be proven, stop at the preceding green structural stat
 ## Interfaces and Dependencies
 
 No new dependency is planned. Use the existing `run_authoritative_execution_command` boundary for Git and the standard library `File::sync_all` plus a parent-directory sync for durable persistence. Keep all new types crate-internal and preserve Rust 1.88, edition 2024, Linux/macOS owned-process behavior, and current serde schemas.
-
-
-Validation moved to a baseline-aware successor plan because this legacy open event predates exact Git baseline capture; this plan remains as historical context.

@@ -403,8 +403,16 @@ impl AttemptStore {
     }
 
     pub(super) fn clear_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<bool> {
+        Ok(self.take_attempt(workflow_id, item_key)?.is_some())
+    }
+
+    pub(super) fn take_attempt(
+        &mut self,
+        workflow_id: &str,
+        item_key: &str,
+    ) -> Result<Option<AttemptRecord>> {
         let key = format!("{workflow_id}:{item_key}");
-        self.with_locked(|store| Ok(store.attempts.remove(&key).is_some()))
+        self.with_locked(|store| Ok(store.attempts.remove(&key)))
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
@@ -464,6 +472,16 @@ pub(super) fn read_json_or_default_with_cancellation<T>(
 where
     T: Default + DeserializeOwned,
 {
+    Ok(read_json_if_exists_with_cancellation(path, cancelled)?.unwrap_or_default())
+}
+
+pub(super) fn read_json_if_exists_with_cancellation<T>(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
     ensure_status_active(cancelled)?;
     match File::open(path) {
         Ok(mut file) => {
@@ -482,8 +500,9 @@ where
             ensure_status_active(cancelled)?;
             serde_json::from_slice(&bytes)
                 .with_context(|| format!("Failed to parse {}", path.display()))
+                .map(Some)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("Failed to read {}", path.display())),
     }
 }

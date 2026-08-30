@@ -177,6 +177,41 @@ mod cancellation_tests {
     }
 
     #[test]
+    fn lease_cleanup_failure_preserves_post_commit_attention_diagnostic() {
+        let action = json!({
+            "status": "cancelled_after_commit",
+            "worker_receipt_id": "receipt-worker",
+            "error": "follow-up review thread updates are incomplete",
+        });
+        let error = anyhow!("injected lease renewal failure");
+
+        let action = with_branch_lease_result(action, Some(&error));
+
+        assert_eq!(action["status"], "failed");
+        assert_eq!(action["completed_status"], "cancelled_after_commit");
+        assert_eq!(
+            action["completed_error"],
+            "follow-up review thread updates are incomplete"
+        );
+        assert!(
+            action["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("follow-up review thread updates are incomplete")),
+            "{action:#}"
+        );
+        let completion =
+            super::super::workflow::WorkflowCompletion::from_actions(std::slice::from_ref(&action));
+        assert_eq!(
+            completion.outcome,
+            super::super::workflow::WorkflowOutcome::NeedsAttention
+        );
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt-worker")
+        );
+    }
+
+    #[test]
     fn review_mutations_require_the_expected_success_payload() {
         let reply_error = validate_reply_mutation_response(json!({"data": {}})).unwrap_err();
         assert!(reply_error.to_string().contains("invalid payload"));
@@ -186,6 +221,31 @@ mod cancellation_tests {
         }))
         .unwrap_err();
         assert!(resolve_error.to_string().contains("did not report"));
+
+        let state_error = validate_review_thread_reply_state(
+            json!({
+                "data": {
+                    "node": {
+                        "id": "PRRT_1",
+                        "comments": {"nodes": []}
+                    }
+                }
+            }),
+            "PRRT_1",
+        )
+        .unwrap_err();
+        assert!(state_error.to_string().contains("invalid payload"));
+
+        let resolution = validate_review_thread_resolution_state(
+            json!({
+                "data": {
+                    "node": {"id": "PRRT_1", "isResolved": false}
+                }
+            }),
+            "PRRT_1",
+        )
+        .unwrap();
+        assert_eq!(resolution["data"]["node"]["isResolved"], false);
     }
 
     #[cfg(unix)]
@@ -209,11 +269,11 @@ case "$*" in
   *ReviewThreadState*)
     if [ -f remote-reply ]; then
       cat <<'JSON'
-{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"nodes":[{"id":"PRRC_REMOTE","url":"https://example.invalid/reply","body":"<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->"}]}}}}
+{"data":{"node":{"id":"PRRT_1","comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":"cursor-1"},"nodes":[{"id":"PRRC_REMOTE","url":"https://example.invalid/reply","body":"<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->","viewerDidAuthor":true}]}}}}
 JSON
     else
       cat <<'JSON'
-{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"nodes":[]}}}}
+{"data":{"node":{"id":"PRRT_1","comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}
 JSON
     fi
     ;;
@@ -256,6 +316,267 @@ esac
         );
     }
 
+    #[test]
+    fn review_reply_marker_uses_githubs_direct_viewer_authorship_fact() {
+        let marker = "<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->";
+        let spoofed = json!({
+            "data": {
+                "node": {
+                    "comments": {"nodes": [{
+                        "id": "PRRC_SPOOFED",
+                        "url": "https://example.invalid/spoofed",
+                        "body": marker,
+                        "author": null,
+                        "viewerDidAuthor": false,
+                    }]}
+                }
+            }
+        });
+        let owned = json!({
+            "data": {
+                "node": {
+                    "comments": {"nodes": [{
+                        "id": "PRRC_OWNED",
+                        "url": "https://example.invalid/owned",
+                        "body": marker,
+                        "author": null,
+                        "viewerDidAuthor": true,
+                    }]}
+                }
+            }
+        });
+
+        assert!(review_thread_comment_with_marker(&spoofed, marker).is_none());
+        assert_eq!(
+            review_thread_comment_with_marker(&owned, marker)
+                .and_then(|comment| comment["id"].as_str()),
+            Some("PRRC_OWNED")
+        );
+    }
+
+    #[test]
+    fn review_thread_reply_search_stops_on_the_newest_matching_page() {
+        let marker = "<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->";
+        let mut calls = Vec::new();
+
+        let comment = fetch_review_thread_reply_comment("PRRT_1", marker, |cursor| {
+            calls.push(cursor.map(str::to_string));
+            Ok(json!({
+                "data": {"node": {
+                    "id": "PRRT_1",
+                    "comments": {
+                        "pageInfo": {
+                            "hasPreviousPage": true,
+                            "startCursor": "cursor-newest",
+                        },
+                        "nodes": [{
+                            "id": "PRRC_NEWEST",
+                            "url": "https://example.invalid/newest",
+                            "body": marker,
+                            "viewerDidAuthor": true,
+                        }],
+                    }
+                }}
+            }))
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(calls, [None]);
+        assert_eq!(comment["id"], "PRRC_NEWEST");
+    }
+
+    #[test]
+    fn review_thread_reply_search_pages_backward_until_it_finds_the_marker() {
+        let marker = "<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->";
+        let mut calls = Vec::new();
+
+        let comment = fetch_review_thread_reply_comment("PRRT_1", marker, |cursor| {
+            calls.push(cursor.map(str::to_string));
+            Ok(if cursor.is_none() {
+                json!({
+                    "data": {"node": {
+                        "id": "PRRT_1",
+                        "comments": {
+                            "pageInfo": {
+                                "hasPreviousPage": true,
+                                "startCursor": "cursor-100",
+                            },
+                            "nodes": [{
+                                "id": "PRRC_NEWER",
+                                "url": "https://example.invalid/newer",
+                                "body": "newer comment",
+                                "viewerDidAuthor": false,
+                            }],
+                        }
+                    }}
+                })
+            } else {
+                json!({
+                    "data": {"node": {
+                        "id": "PRRT_1",
+                        "comments": {
+                            "pageInfo": {
+                                "hasPreviousPage": false,
+                                "startCursor": "cursor-oldest",
+                            },
+                            "nodes": [{
+                                "id": "PRRC_MATCH",
+                                "url": "https://example.invalid/match",
+                                "body": marker,
+                                "viewerDidAuthor": true,
+                            }],
+                        }
+                    }}
+                })
+            })
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(calls, [None, Some("cursor-100".into())]);
+        assert_eq!(comment["id"], "PRRC_MATCH");
+    }
+
+    #[test]
+    fn review_thread_reply_search_rejects_missing_backward_cursor() {
+        let error = fetch_review_thread_reply_comment("PRRT_1", "marker", |_| {
+            Ok(json!({
+                "data": {"node": {
+                    "id": "PRRT_1",
+                    "comments": {
+                        "pageInfo": {"hasPreviousPage": true, "startCursor": null},
+                        "nodes": [],
+                    }
+                }}
+            }))
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("without a start cursor"), "{error}");
+    }
+
+    #[test]
+    fn review_thread_reply_search_enforces_the_page_safety_limit() {
+        let mut calls = 0;
+        let error = fetch_review_thread_reply_comment("PRRT_1", "marker", |_| {
+            calls += 1;
+            Ok(json!({
+                "data": {"node": {
+                    "id": "PRRT_1",
+                    "comments": {
+                        "pageInfo": {
+                            "hasPreviousPage": true,
+                            "startCursor": format!("cursor-{calls}"),
+                        },
+                        "nodes": [],
+                    }
+                }}
+            }))
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(calls, REVIEW_THREAD_COMMENT_PAGE_LIMIT);
+        assert!(error.contains("page safety limit"), "{error}");
+    }
+
+    #[test]
+    fn review_thread_reply_search_stops_when_total_deadline_expires() {
+        let total_timeout = Duration::from_secs(60);
+        let live_deadline = Instant::now() + total_timeout;
+        let mut requests = 0;
+
+        let error = fetch_review_thread_reply_comment("PRRT_1", "marker", |_| {
+            let deadline = if requests == 0 {
+                live_deadline
+            } else {
+                Instant::now()
+            };
+            let _timeout = remaining_operation_timeout(
+                deadline,
+                total_timeout,
+                "GitHub review thread reply lookup",
+            )?;
+            requests += 1;
+            Ok(json!({
+                "data": {"node": {
+                    "id": "PRRT_1",
+                    "comments": {
+                        "pageInfo": {
+                            "hasPreviousPage": true,
+                            "startCursor": format!("cursor-{requests}"),
+                        },
+                        "nodes": [],
+                    }
+                }}
+            }))
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(requests, 1, "no second GitHub request should start");
+        assert!(error.contains("reply lookup exceeded its 60 second total timeout"));
+    }
+
+    #[test]
+    fn review_thread_cursor_is_always_passed_as_a_raw_string() {
+        let args = review_thread_reply_state_args("PRRT_1", Some("123"));
+        let args = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-f", "commentsBefore=123"]),
+            "{args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "-F"), "{args:?}");
+    }
+
+    #[test]
+    fn mutation_reconciliation_uses_one_total_deadline() {
+        let timeout = remaining_reconciliation_timeout(
+            Instant::now() + Duration::from_millis(1_500),
+        )
+        .unwrap();
+        assert!(timeout.as_secs() <= 2);
+
+        let expired = remaining_reconciliation_timeout(Instant::now())
+            .unwrap_err()
+            .to_string();
+        assert!(expired.contains("total timeout"), "{expired}");
+    }
+
+    #[test]
+    fn cancellation_before_mutation_skips_remote_reconciliation() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        assert!(matches!(
+            reconcile_reply_mutation(
+                &ctx,
+                "PRRT_1",
+                "marker",
+                Err(ExecutionCommandError::CancelledBeforeStart),
+            ),
+            Err(ExecutionCommandError::CancelledBeforeStart)
+        ));
+        assert!(matches!(
+            reconcile_resolve_mutation(
+                &ctx,
+                "PRRT_1",
+                Err(ExecutionCommandError::CancelledBeforeStart),
+            ),
+            Err(ExecutionCommandError::CancelledBeforeStart)
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn cancelled_review_resolution_reconciles_the_remote_thread() {
@@ -276,7 +597,7 @@ set -eu
 case "$*" in
   *ReviewThreadState*)
     if [ -f remote-resolved ]; then resolved=true; else resolved=false; fi
-    printf '{"data":{"node":{"id":"PRRT_1","isResolved":%s,"comments":{"nodes":[]}}}}\n' "$resolved"
+    printf '{"data":{"viewer":{"login":"jig-bot"},"node":{"id":"PRRT_1","isResolved":%s,"comments":{"totalCount":0,"nodes":[]}}}}\n' "$resolved"
     ;;
   *resolveReviewThread*)
     printf 'mutation\n' >> mutation.log

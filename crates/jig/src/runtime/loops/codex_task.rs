@@ -1,23 +1,36 @@
 use std::ffi::{OsStr, OsString};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_owned_process::ProcessOutputOverflowPolicy;
+#[cfg(unix)]
+use cap_std::fs::OpenOptionsExt as _;
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, OpenOptions as CapabilityOpenOptions},
+};
+use jig_owned_process::{OwnedProcessOutputStream, ProcessOutputOverflowPolicy};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
-use crate::execution::ExecutionControl;
+use crate::execution::{
+    ExecutionCommandOutput, ExecutionControl, NoopExecutionObserver, SupervisedExecutionError,
+    execution_command_error, internal_execution_output_limit, run_authoritative_execution_command,
+    run_supervised_execution_command,
+};
 use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
     run_codex_exec,
 };
 
-use super::state::LOOP_CACHE_DIR;
-use super::workflow::{CodexTaskCheckout, ResolvedWorkflow, WorkflowCompletion, WorkflowTick};
+use super::state::LOOP_RUNTIME_DIR;
+use super::workflow::{
+    CodexTaskCheckout, ResolvedWorkflow, WorkflowCompletion, WorkflowOutcome, WorkflowTick,
+};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
@@ -42,7 +55,13 @@ pub(super) fn codex_task_tick(
         .as_deref()
         .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
         .transpose()?;
-    let checkout = prepare_checkout(ctx, workflow, execution.item_key, settings.checkout)?;
+    let checkout = prepare_checkout(
+        ctx,
+        workflow,
+        execution.item_key,
+        settings.checkout,
+        observer,
+    )?;
     let worker = run_codex_exec(
         ctx,
         CodexExecRequest {
@@ -73,11 +92,14 @@ pub(super) fn codex_task_tick(
     let (action, completion) = match worker {
         Ok(CodexExecOutcome::Completed(worker)) => {
             let worker_succeeded = worker.output.status.success();
-            let checkout = checkout.finish(if worker_succeeded {
-                TaskOutcome::Succeeded
-            } else {
-                TaskOutcome::Failed
-            });
+            let checkout = checkout.finish(
+                if worker_succeeded {
+                    TaskOutcome::Succeeded
+                } else {
+                    TaskOutcome::Failed
+                },
+                ctx,
+            );
             let worker_error = (!worker_succeeded).then(|| {
                 format!(
                     "Codex task worker exited with status {}",
@@ -86,6 +108,11 @@ pub(super) fn codex_task_tick(
             });
             let error = combine_task_errors(worker_error, checkout.error);
             let completion = WorkflowCompletion {
+                outcome: if error.is_none() {
+                    WorkflowOutcome::Succeeded
+                } else {
+                    WorkflowOutcome::Failed
+                },
                 worker_receipt_id: Some(worker.worker_receipt_id.clone()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -106,7 +133,7 @@ pub(super) fn codex_task_tick(
             before_start,
             worker_receipt_id,
         }) => {
-            let checkout = checkout.finish(TaskOutcome::Failed);
+            let checkout = checkout.finish(TaskOutcome::Failed, ctx);
             let timing = if before_start {
                 " before the worker started"
             } else {
@@ -117,6 +144,7 @@ pub(super) fn codex_task_tick(
                 checkout.error,
             );
             let completion = WorkflowCompletion {
+                outcome: WorkflowOutcome::Failed,
                 worker_receipt_id: Some(worker_receipt_id.clone()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -138,9 +166,10 @@ pub(super) fn codex_task_tick(
                 .downcast_ref::<crate::runtime::worker_runner::CodexExecFailure>()
                 .and_then(|error| error.worker_receipt_id())
                 .map(str::to_string);
-            let checkout = checkout.finish(TaskOutcome::Failed);
+            let checkout = checkout.finish(TaskOutcome::Failed, ctx);
             let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
             let completion = WorkflowCompletion {
+                outcome: WorkflowOutcome::Failed,
                 worker_receipt_id: worker_receipt_id.clone(),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -172,18 +201,14 @@ pub(super) fn codex_task_tick(
 }
 
 fn read_prompt(ctx: &RepoContext, configured: &Path) -> Result<String> {
-    let canonical_root = fs::canonicalize(ctx.root())
-        .with_context(|| format!("Failed to resolve repository root {}", ctx.root().display()))?;
     let path = ctx.root().join(configured);
-    let canonical_path = fs::canonicalize(&path)
-        .with_context(|| format!("Failed to resolve Codex task prompt {}", path.display()))?;
-    if !canonical_path.starts_with(&canonical_root) {
-        bail!(
-            "Codex task prompt escapes the repository: {}",
-            configured.display()
-        );
-    }
-    let metadata = canonical_path
+    let mut file = open_prompt_file(ctx.root(), configured).with_context(|| {
+        format!(
+            "Codex task prompt must resolve inside the repository: {}",
+            path.display()
+        )
+    })?;
+    let metadata = file
         .metadata()
         .with_context(|| format!("Failed to inspect Codex task prompt {}", path.display()))?;
     if !metadata.is_file() {
@@ -198,7 +223,49 @@ fn read_prompt(ctx: &RepoContext, configured: &Path) -> Result<String> {
             path.display()
         );
     }
-    fs::read_to_string(&canonical_path)
+    let mut prompt = Vec::new();
+    file.by_ref()
+        .take(MAX_PROMPT_BYTES + 1)
+        .read_to_end(&mut prompt)
+        .with_context(|| format!("Failed to read Codex task prompt {}", path.display()))?;
+    decode_prompt(prompt, &path)
+}
+
+fn open_prompt_file(root: &Path, configured: &Path) -> Result<File> {
+    open_prompt_file_with_observer(root, configured, || Ok(()))
+}
+
+fn open_prompt_file_with_observer(
+    root: &Path,
+    configured: &Path,
+    after_root_opened: impl FnOnce() -> Result<()>,
+) -> Result<File> {
+    let repository = Dir::open_ambient_dir(root, ambient_authority())
+        .with_context(|| format!("Failed to open repository root {}", root.display()))?;
+    after_root_opened()?;
+    let mut options = CapabilityOpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    repository
+        .open_with(configured, &options)
+        .map(cap_std::fs::File::into_std)
+        .map_err(|error| {
+            anyhow!(
+                "Codex task prompt must resolve inside the repository: {}: {error}",
+                configured.display()
+            )
+        })
+}
+
+fn decode_prompt(prompt: Vec<u8>, path: &Path) -> Result<String> {
+    if prompt.len() as u64 > MAX_PROMPT_BYTES {
+        bail!(
+            "Codex task prompt exceeds {MAX_PROMPT_BYTES} bytes: {}",
+            path.display()
+        );
+    }
+    String::from_utf8(prompt)
         .with_context(|| format!("Failed to read UTF-8 Codex task prompt {}", path.display()))
 }
 
@@ -280,9 +347,10 @@ impl PreparedCheckout {
         }
     }
 
-    fn finish(self, outcome: TaskOutcome) -> CheckoutCompletion {
+    fn finish(self, outcome: TaskOutcome, ctx: &RepoContext) -> CheckoutCompletion {
+        let mut cleanup_observer = NoopExecutionObserver;
         match self {
-            Self::Repo { path } => match git_is_dirty(&path) {
+            Self::Repo { path } => match git_is_dirty(ctx, &path, &mut cleanup_observer) {
                 Ok(dirty) => CheckoutCompletion {
                     report: CheckoutReport::Repository {
                         path,
@@ -302,8 +370,9 @@ impl PreparedCheckout {
                 path,
                 initial_head,
             } => {
-                let dirty = git_is_dirty(&path);
-                let final_head = git_stdout(&path, ["rev-parse", "HEAD"]);
+                let dirty = git_is_dirty(ctx, &path, &mut cleanup_observer);
+                let final_head =
+                    git_stdout(ctx, &path, ["rev-parse", "HEAD"], &mut cleanup_observer);
                 let mut errors = Vec::new();
                 if let Err(error) = &dirty {
                     errors.push(format!("Failed to inspect task worktree status: {error:#}"));
@@ -316,7 +385,10 @@ impl PreparedCheckout {
                 let mut retained = outcome == TaskOutcome::Failed
                     || dirty.unwrap_or(true)
                     || head_changed.unwrap_or(true);
-                if !retained && let Err(error) = remove_worktree(&repo_root, &path, false) {
+                if !retained
+                    && let Err(error) =
+                        remove_worktree(ctx, &repo_root, &path, false, &mut cleanup_observer)
+                {
                     retained = true;
                     errors.push(format!("Failed to remove clean task worktree: {error:#}"));
                 }
@@ -350,6 +422,7 @@ fn prepare_checkout(
     workflow: &ResolvedWorkflow,
     item_key: &str,
     checkout: CodexTaskCheckout,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<PreparedCheckout> {
     if checkout == CodexTaskCheckout::Repo {
         return Ok(PreparedCheckout::Repo {
@@ -364,7 +437,7 @@ fn prepare_checkout(
         .collect::<String>();
     let path = ctx
         .root()
-        .join(LOOP_CACHE_DIR)
+        .join(LOOP_RUNTIME_DIR)
         .join("worktrees")
         .join("tasks")
         .join(name);
@@ -379,8 +452,9 @@ fn prepare_checkout(
             )
         })?;
     }
-    let initial_head = git_stdout(ctx.root(), ["rev-parse", "HEAD"])?;
-    let output = git_output(
+    let initial_head = git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer)?;
+    let output = match git_output(
+        ctx,
         ctx.root(),
         [
             OsString::from("worktree"),
@@ -389,11 +463,20 @@ fn prepare_checkout(
             path.as_os_str().to_os_string(),
             OsString::from(&initial_head),
         ],
-    )?;
+        observer,
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            let mut cleanup_observer = NoopExecutionObserver;
+            let cleanup = remove_worktree(ctx, ctx.root(), &path, true, &mut cleanup_observer);
+            return Err(checkout_preparation_error(&path, error, cleanup.err()));
+        }
+    };
     if !output.status.success() {
         let error = git_error("Failed to create Codex task worktree", output);
-        let _ = remove_worktree(ctx.root(), &path, true);
-        return Err(error);
+        let mut cleanup_observer = NoopExecutionObserver;
+        let cleanup = remove_worktree(ctx, ctx.root(), &path, true, &mut cleanup_observer);
+        return Err(checkout_preparation_error(&path, error, cleanup.err()));
     }
     Ok(PreparedCheckout::Worktree {
         repo_root: ctx.root().to_path_buf(),
@@ -402,23 +485,52 @@ fn prepare_checkout(
     })
 }
 
-fn git_is_dirty(worktree: &Path) -> Result<bool> {
-    let output = git_output(
+fn git_is_dirty(
+    ctx: &RepoContext,
+    worktree: &Path,
+    observer: &mut dyn ExecutionControl,
+) -> Result<bool> {
+    let (mut command, label) = git_command(
         worktree,
-        ["status", "--porcelain=v1", "--untracked-files=all"],
-    )?;
+        ["status", "--porcelain=v1", "--untracked-files=normal"],
+    );
+    let timeout = ctx.command_timeout();
+    let output_limit = internal_execution_output_limit();
+    let output = match run_supervised_execution_command(
+        &mut command,
+        timeout.duration(),
+        output_limit,
+        &label,
+        observer,
+    ) {
+        Ok(output) => output,
+        Err(SupervisedExecutionError::OutputLimitExceeded {
+            stream: OwnedProcessOutputStream::Stdout,
+            ..
+        }) => return Ok(true),
+        Err(error) => {
+            return Err(
+                execution_command_error(error, timeout, output_limit, &label).into_anyhow(),
+            );
+        }
+    };
     if !output.status.success() {
         return Err(git_error("Failed to inspect Codex task worktree", output));
     }
     Ok(!output.stdout.is_empty())
 }
 
-fn git_stdout<I, S>(cwd: &Path, args: I) -> Result<String>
+fn git_stdout<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = git_output(cwd, args)?;
+    let output = git_output(ctx, cwd, args, observer)?;
     if !output.status.success() {
         return Err(git_error("Git command failed", output));
     }
@@ -427,13 +539,19 @@ where
         .map(|output| output.trim().to_string())
 }
 
-fn remove_worktree(repo_root: &Path, worktree: &Path, force: bool) -> Result<()> {
+fn remove_worktree(
+    ctx: &RepoContext,
+    repo_root: &Path,
+    worktree: &Path,
+    force: bool,
+    observer: &mut dyn ExecutionControl,
+) -> Result<()> {
     let mut args = vec![OsString::from("worktree"), OsString::from("remove")];
     if force {
         args.push(OsString::from("--force"));
     }
     args.push(worktree.as_os_str().to_os_string());
-    let output = git_output(repo_root, args)?;
+    let output = git_output(ctx, repo_root, args, observer)?;
     if output.status.success() {
         Ok(())
     } else {
@@ -441,23 +559,54 @@ fn remove_worktree(repo_root: &Path, worktree: &Path, force: bool) -> Result<()>
     }
 }
 
-fn git_output<I, S>(cwd: &Path, args: I) -> Result<std::process::Output>
+fn git_output<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ExecutionCommandOutput>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let (mut command, label) = git_command(cwd, args);
+    run_authoritative_execution_command(
+        &mut command,
+        ctx.command_timeout(),
+        internal_execution_output_limit(),
+        &label,
+        observer,
+    )
+    .map_err(|error| error.into_anyhow())
+}
+
+fn git_command<I, S>(cwd: &Path, args: I) -> (Command, String)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect::<Vec<_>>();
+    let operation = args
+        .first()
+        .map(|arg| arg.to_string_lossy())
+        .unwrap_or_else(|| "command".into());
+    let label = format!("Codex task git {operation}");
     let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
     command
         .current_dir(cwd)
         .arg("--no-replace-objects")
-        .args(args);
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     scrub_known_repository_git_environment(&mut command);
-    command
-        .output()
-        .with_context(|| format!("Failed to start git in {}", cwd.display()))
+    (command, label)
 }
 
-fn git_error(label: &str, output: std::process::Output) -> anyhow::Error {
+fn git_error(label: &str, output: ExecutionCommandOutput) -> anyhow::Error {
     anyhow!(
         "{} with status {}. stdout: {} stderr: {}",
         label,
@@ -471,6 +620,34 @@ fn git_error(label: &str, output: std::process::Output) -> anyhow::Error {
     )
 }
 
+fn checkout_preparation_error(
+    path: &Path,
+    error: anyhow::Error,
+    cleanup_error: Option<anyhow::Error>,
+) -> anyhow::Error {
+    match cleanup_error {
+        Some(cleanup_error) => match fs::symlink_metadata(path) {
+            Ok(_) => anyhow!(
+                "{error:#}; partial Codex task worktree may remain at {}; cleanup failed: {cleanup_error:#}",
+                path.display()
+            ),
+            Err(inspect_error) if inspect_error.kind() == std::io::ErrorKind::NotFound => error,
+            Err(inspect_error) => anyhow!(
+                "{error:#}; cleanup failed and Jig could not inspect the possible partial Codex task worktree at {}: {cleanup_error:#}; inspection failed: {inspect_error}",
+                path.display()
+            ),
+        },
+        None => error,
+    }
+}
+
 fn bounded_text(text: &str) -> String {
     text.chars().take(MAX_OUTPUT_CHARS).collect()
 }
+
+#[cfg(test)]
+#[path = "codex_task/tests.rs"]
+mod tests;
+
+#[cfg(test)]
+mod regression_tests;

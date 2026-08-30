@@ -44,8 +44,17 @@ impl WorkflowTick {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum WorkflowOutcome {
+    #[default]
+    Succeeded,
+    Failed,
+    NeedsAttention,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct WorkflowCompletion {
+    pub(super) outcome: WorkflowOutcome,
     pub(super) worker_receipt_id: Option<String>,
     pub(super) worktree: Option<String>,
     pub(super) error: Option<String>,
@@ -53,29 +62,109 @@ pub(super) struct WorkflowCompletion {
 
 impl WorkflowCompletion {
     pub(super) fn from_actions(actions: &[Value]) -> Self {
-        actions
+        let outcome = if actions.iter().any(action_requires_attention) {
+            WorkflowOutcome::NeedsAttention
+        } else if actions
             .iter()
-            .find(|action| action["status"].as_str() == Some("failed"))
-            .or_else(|| {
-                actions.iter().find(|action| {
-                    action["worker_receipt_id"].is_string()
-                        || action["checkout"]["retained"].as_bool() == Some(true)
-                })
-            })
-            .or_else(|| actions.first())
-            .map_or_else(Self::default, Self::from_action)
-    }
-
-    fn from_action(action: &Value) -> Self {
+            .any(|action| action_status(action) == Some("failed"))
+        {
+            WorkflowOutcome::Failed
+        } else {
+            WorkflowOutcome::Succeeded
+        };
+        let evidence = completion_evidence_action(actions, outcome);
         Self {
-            worker_receipt_id: action["worker_receipt_id"].as_str().map(str::to_string),
-            worktree: (action["checkout"]["mode"].as_str() == Some("worktree")
-                && action["checkout"]["retained"].as_bool() == Some(true))
-            .then(|| action["checkout"]["path"].as_str().map(str::to_string))
-            .flatten(),
-            error: action["error"].as_str().map(str::to_string),
+            outcome,
+            worker_receipt_id: evidence
+                .and_then(|action| action["worker_receipt_id"].as_str())
+                .map(str::to_string),
+            worktree: evidence.and_then(retained_worktree).map(str::to_string),
+            error: completion_error(actions, outcome),
         }
     }
+}
+
+pub(super) fn loop_status_is_success(status: &str) -> bool {
+    !matches!(status, "failed" | "needs_attention")
+}
+
+fn action_status(action: &Value) -> Option<&str> {
+    action.get("status").and_then(Value::as_str)
+}
+
+fn action_is_exhausted_attempt(action: &Value) -> bool {
+    action["kind"].as_str() == Some("pr_manager_worker")
+        && action["attention_kind"].as_str() == Some("exhausted_attempt")
+        && action["attempt"]["exhausted"].as_bool() == Some(true)
+}
+
+fn action_requires_attention(action: &Value) -> bool {
+    if action_is_exhausted_attempt(action) {
+        return false;
+    }
+    [action_status(action), action["completed_status"].as_str()]
+        .into_iter()
+        .flatten()
+        .any(|status| matches!(status, "needs_attention" | "cancelled_after_commit"))
+}
+
+fn action_matches_outcome(action: &Value, outcome: WorkflowOutcome) -> bool {
+    match outcome {
+        WorkflowOutcome::Failed => action_status(action) == Some("failed"),
+        WorkflowOutcome::NeedsAttention => action_requires_attention(action),
+        WorkflowOutcome::Succeeded => {
+            action_status(action) != Some("failed") && !action_requires_attention(action)
+        }
+    }
+}
+
+fn completion_evidence_action(actions: &[Value], outcome: WorkflowOutcome) -> Option<&Value> {
+    actions
+        .iter()
+        .filter(|action| action_matches_outcome(action, outcome))
+        .find(|action| action_has_completion_evidence(action))
+        .or_else(|| {
+            actions
+                .iter()
+                .find(|action| action_has_completion_evidence(action))
+        })
+}
+
+fn completion_error(actions: &[Value], outcome: WorkflowOutcome) -> Option<String> {
+    let mut errors = Vec::new();
+    for action in actions
+        .iter()
+        .filter(|action| action_matches_outcome(action, outcome))
+    {
+        push_action_error(&mut errors, action);
+    }
+    if outcome == WorkflowOutcome::NeedsAttention {
+        for action in actions.iter().filter(|action| {
+            action_status(action) == Some("failed") && !action_requires_attention(action)
+        }) {
+            push_action_error(&mut errors, action);
+        }
+    }
+    (!errors.is_empty()).then(|| errors.join("; additionally: "))
+}
+
+fn push_action_error(errors: &mut Vec<String>, action: &Value) {
+    if let Some(error) = action["error"].as_str()
+        && !errors.iter().any(|existing| existing == error)
+    {
+        errors.push(error.to_string());
+    }
+}
+
+fn action_has_completion_evidence(action: &Value) -> bool {
+    action["worker_receipt_id"].is_string() || retained_worktree(action).is_some()
+}
+
+fn retained_worktree(action: &Value) -> Option<&str> {
+    (action["checkout"]["mode"].as_str() == Some("worktree")
+        && action["checkout"]["retained"].as_bool() == Some(true))
+    .then(|| action["checkout"]["path"].as_str())
+    .flatten()
 }
 
 #[derive(Clone, Copy)]
@@ -359,11 +448,218 @@ mod tests {
         assert_eq!(
             completion,
             WorkflowCompletion {
+                outcome: WorkflowOutcome::Failed,
                 worker_receipt_id: Some("receipt_failed".into()),
                 worktree: None,
                 error: Some("worker failed".into()),
             }
         );
+    }
+
+    #[test]
+    fn workflow_completion_classifies_post_commit_cancellation_as_attention() {
+        let completion = WorkflowCompletion::from_actions(&[json!({
+            "status": "cancelled_after_commit",
+            "worker_receipt_id": "receipt_worker",
+            "error": "follow-up review thread updates are incomplete",
+        })]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt_worker")
+        );
+        assert_eq!(
+            completion.error.as_deref(),
+            Some("follow-up review thread updates are incomplete")
+        );
+    }
+
+    #[test]
+    fn workflow_completion_preserves_exhausted_attempt_status_without_escalating_occurrence() {
+        let completion = WorkflowCompletion::from_actions(&[json!({
+            "kind": "pr_manager_worker",
+            "status": "needs_attention",
+            "attention_kind": "exhausted_attempt",
+            "attempt": { "exhausted": true },
+        })]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::Succeeded);
+    }
+
+    #[test]
+    fn workflow_completion_requires_complete_exhausted_attempt_metadata() {
+        for action in [
+            json!({
+                "kind": "pr_manager_worker",
+                "status": "needs_attention",
+                "attention_kind": "exhausted_attempt",
+            }),
+            json!({
+                "kind": "other",
+                "status": "needs_attention",
+                "attention_kind": "exhausted_attempt",
+                "attempt": { "exhausted": true },
+            }),
+        ] {
+            assert_eq!(
+                WorkflowCompletion::from_actions(&[action]).outcome,
+                WorkflowOutcome::NeedsAttention
+            );
+        }
+    }
+
+    #[test]
+    fn workflow_completion_preserves_attention_through_lease_cleanup_failure() {
+        let completion = WorkflowCompletion::from_actions(&[json!({
+            "status": "failed",
+            "completed_status": "cancelled_after_commit",
+            "worker_receipt_id": "receipt_worker",
+            "error": "lease cleanup failed after post-push cancellation",
+        })]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt_worker")
+        );
+        assert_eq!(
+            completion.error.as_deref(),
+            Some("lease cleanup failed after post-push cancellation")
+        );
+    }
+
+    #[test]
+    fn workflow_completion_keeps_post_commit_cancellation_evidence() {
+        let completion = WorkflowCompletion::from_actions(&[
+            json!({
+                "status": "needs_attention",
+            }),
+            json!({
+                "status": "cancelled_after_commit",
+                "worker_receipt_id": "receipt_worker",
+                "error": "follow-up review thread updates are incomplete",
+            }),
+        ]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt_worker")
+        );
+        assert_eq!(
+            completion.error.as_deref(),
+            Some("follow-up review thread updates are incomplete")
+        );
+    }
+
+    #[test]
+    fn workflow_completion_keeps_failure_diagnostic_when_attention_dominates() {
+        let completion = WorkflowCompletion::from_actions(&[
+            json!({
+                "status": "failed",
+                "error": "first PR failed",
+            }),
+            json!({
+                "status": "cancelled_after_commit",
+                "error": "second PR push may have completed",
+            }),
+        ]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
+        assert_eq!(
+            completion.error.as_deref(),
+            Some("second PR push may have completed; additionally: first PR failed")
+        );
+    }
+
+    #[test]
+    fn workflow_completion_keeps_receipt_from_later_successful_action() {
+        let completion = WorkflowCompletion::from_actions(&[
+            json!({
+                "status": "needs_attention",
+                "error": "attempt budget is exhausted",
+            }),
+            json!({
+                "status": "succeeded",
+                "worker_receipt_id": "receipt_worker",
+            }),
+        ]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt_worker")
+        );
+        assert_eq!(
+            completion.error.as_deref(),
+            Some("attempt budget is exhausted")
+        );
+    }
+
+    #[test]
+    fn workflow_completion_keeps_workflow_evidence_but_not_unrelated_diagnostics() {
+        let completion = WorkflowCompletion::from_actions(&[
+            json!({
+                "status": "failed",
+                "error": "first PR failed",
+            }),
+            json!({
+                "status": "succeeded",
+                "worker_receipt_id": "receipt_second_pr",
+                "checkout": {
+                    "mode": "worktree",
+                    "retained": true,
+                    "path": "/tmp/second-pr",
+                },
+            }),
+        ]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::Failed);
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt_second_pr")
+        );
+        assert_eq!(completion.worktree.as_deref(), Some("/tmp/second-pr"));
+        assert_eq!(completion.error.as_deref(), Some("first PR failed"));
+    }
+
+    #[test]
+    fn workflow_completion_takes_receipt_and_worktree_from_one_action() {
+        let completion = WorkflowCompletion::from_actions(&[
+            json!({
+                "status": "failed",
+                "error": "first PR failed",
+            }),
+            json!({
+                "status": "succeeded",
+                "worker_receipt_id": "receipt_second_pr",
+            }),
+            json!({
+                "status": "succeeded",
+                "checkout": {
+                    "mode": "worktree",
+                    "retained": true,
+                    "path": "/tmp/third-pr",
+                },
+            }),
+        ]);
+
+        assert_eq!(completion.outcome, WorkflowOutcome::Failed);
+        assert_eq!(
+            completion.worker_receipt_id.as_deref(),
+            Some("receipt_second_pr")
+        );
+        assert_eq!(completion.worktree, None);
+        assert_eq!(completion.error.as_deref(), Some("first PR failed"));
+    }
+
+    #[test]
+    fn needs_attention_is_not_a_successful_loop_status() {
+        assert!(!loop_status_is_success("failed"));
+        assert!(!loop_status_is_success("needs_attention"));
+        assert!(loop_status_is_success("acted"));
+        assert!(loop_status_is_success("idle"));
     }
 
     #[test]

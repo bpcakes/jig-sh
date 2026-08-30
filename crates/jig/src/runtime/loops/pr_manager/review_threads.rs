@@ -3,6 +3,9 @@ struct ReviewThreadPostResult {
     failed: bool,
     cancelled: bool,
 }
+
+const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 100;
+const MUTATION_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
 fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
@@ -182,9 +185,8 @@ fn post_review_thread_reply(
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let marker = review_thread_reply_marker(thread_id, repair_version);
-    let state = review_thread_state(ctx, thread_id, observer)?;
-    if let Some(comment) = review_thread_comment_with_marker(&state, &marker) {
-        return Ok(reconciled_reply_response(comment));
+    if let Some(comment) = review_thread_reply_comment(ctx, thread_id, &marker, observer)? {
+        return Ok(reconciled_reply_response(&comment));
     }
     let body = format!("{body}\n\n{marker}");
     let result = github::gh_json(
@@ -211,7 +213,7 @@ fn resolve_review_thread(
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    let state = review_thread_state(ctx, thread_id, observer)?;
+    let state = review_thread_resolution_state(ctx, thread_id, observer)?;
     if state
         .pointer("/data/node/isResolved")
         .and_then(Value::as_bool)
@@ -240,43 +242,201 @@ fn review_thread_reply_marker(thread_id: &str, repair_version: &str) -> String {
     format!("<!-- jig-pr-manager:review-reply:{thread_id}:{repair_version} -->")
 }
 
-fn review_thread_state(
+fn review_thread_reply_comment(
+    ctx: &RepoContext,
+    thread_id: &str,
+    marker: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Option<Value>, ExecutionCommandError> {
+    let total_timeout = ctx.command_timeout().duration();
+    let deadline = Instant::now() + total_timeout;
+    fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
+        github::gh_json_with_timeout(
+            ctx,
+            review_thread_reply_state_args(thread_id, cursor),
+            &[0],
+            remaining_operation_timeout(
+                deadline,
+                total_timeout,
+                "GitHub review thread reply lookup",
+            )?,
+            observer,
+        )
+    })
+}
+
+fn review_thread_reply_comment_for_reconciliation(
+    ctx: &RepoContext,
+    thread_id: &str,
+    marker: &str,
+) -> std::result::Result<Option<Value>, ExecutionCommandError> {
+    let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
+    fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
+        let mut observer = NoopExecutionObserver;
+        github::gh_json_with_timeout(
+            ctx,
+            review_thread_reply_state_args(thread_id, cursor),
+            &[0],
+            remaining_reconciliation_timeout(deadline)?,
+            &mut observer,
+        )
+    })
+}
+
+fn review_thread_reply_state_args(thread_id: &str, cursor: Option<&str>) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("api"),
+        OsString::from("graphql"),
+        OsString::from("-f"),
+        OsString::from(format!("query={}", review_thread_reply_state_query())),
+        OsString::from("-f"),
+        OsString::from(format!("threadId={thread_id}")),
+    ];
+    if let Some(cursor) = cursor {
+        args.push(OsString::from("-f"));
+        args.push(OsString::from(format!("commentsBefore={cursor}")));
+    }
+    args
+}
+
+fn review_thread_resolution_state(
     ctx: &RepoContext,
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    let value = github::gh_json(ctx, review_thread_state_args(thread_id), &[0], observer)?;
-    validate_review_thread_state(value, thread_id)
+    github::gh_json(
+        ctx,
+        review_thread_resolution_state_args(thread_id),
+        &[0],
+        observer,
+    )
+    .and_then(|value| validate_review_thread_resolution_state(value, thread_id))
 }
 
-fn review_thread_state_for_reconciliation(
+fn review_thread_resolution_state_for_reconciliation(
     ctx: &RepoContext,
     thread_id: &str,
 ) -> std::result::Result<Value, ExecutionCommandError> {
+    let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
     let mut observer = NoopExecutionObserver;
-    let timeout = CommandTimeout::from_seconds(30).expect("reconciliation timeout is valid");
-    let value = github::gh_json_with_timeout(
+    github::gh_json_with_timeout(
         ctx,
-        review_thread_state_args(thread_id),
+        review_thread_resolution_state_args(thread_id),
         &[0],
-        timeout,
+        remaining_reconciliation_timeout(deadline)?,
         &mut observer,
-    )?;
-    validate_review_thread_state(value, thread_id)
+    )
+    .and_then(|value| validate_review_thread_resolution_state(value, thread_id))
 }
 
-fn review_thread_state_args(thread_id: &str) -> Vec<OsString> {
+fn remaining_reconciliation_timeout(
+    deadline: Instant,
+) -> std::result::Result<CommandTimeout, ExecutionCommandError> {
+    remaining_operation_timeout(
+        deadline,
+        MUTATION_RECONCILIATION_TIMEOUT,
+        "GitHub mutation reconciliation",
+    )
+}
+
+fn remaining_operation_timeout(
+    deadline: Instant,
+    total_timeout: Duration,
+    operation: &str,
+) -> std::result::Result<CommandTimeout, ExecutionCommandError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "{operation} exceeded its {} second total timeout",
+            total_timeout.as_secs()
+        )));
+    }
+    let seconds = remaining
+        .as_secs()
+        .saturating_add(u64::from(remaining.subsec_nanos() != 0));
+    CommandTimeout::from_seconds(seconds).ok_or_else(|| {
+        ExecutionCommandError::failed(anyhow!(
+            "{operation} has an invalid remaining timeout"
+        ))
+    })
+}
+
+fn review_thread_resolution_state_args(thread_id: &str) -> Vec<OsString> {
     vec![
         OsString::from("api"),
         OsString::from("graphql"),
         OsString::from("-f"),
-        OsString::from(format!("query={}", review_thread_state_query())),
+        OsString::from(format!(
+            "query={}",
+            review_thread_resolution_state_query()
+        )),
         OsString::from("-f"),
         OsString::from(format!("threadId={thread_id}")),
     ]
 }
 
-fn validate_review_thread_state(
+fn fetch_review_thread_reply_comment(
+    thread_id: &str,
+    marker: &str,
+    mut fetch: impl FnMut(Option<&str>) -> std::result::Result<Value, ExecutionCommandError>,
+) -> std::result::Result<Option<Value>, ExecutionCommandError> {
+    let mut cursor = None;
+    for _ in 0..REVIEW_THREAD_COMMENT_PAGE_LIMIT {
+        let state = validate_review_thread_reply_state(fetch(cursor.as_deref())?, thread_id)?;
+        if let Some(comment) = review_thread_comment_with_marker(&state, marker) {
+            return Ok(Some(comment.clone()));
+        }
+        if !review_thread_comments_have_previous_page(&state) {
+            return Ok(None);
+        }
+        cursor = Some(
+            state
+                .pointer("/data/node/comments/pageInfo/startCursor")
+                .and_then(Value::as_str)
+                .filter(|cursor| !cursor.is_empty())
+                .ok_or_else(|| {
+                    ExecutionCommandError::failed(anyhow!(
+                        "GitHub review thread comment page reported earlier results without a start cursor for {thread_id}"
+                    ))
+                })?
+                .to_string(),
+        );
+    }
+    Err(ExecutionCommandError::failed(anyhow!(
+        "GitHub review thread comment history exceeded the {REVIEW_THREAD_COMMENT_PAGE_LIMIT}-page safety limit for {thread_id}"
+    )))
+}
+
+fn review_thread_comments_have_previous_page(state: &Value) -> bool {
+    state
+        .pointer("/data/node/comments/pageInfo/hasPreviousPage")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn validate_review_thread_reply_state(
+    value: Value,
+    thread_id: &str,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let observed_id = value.pointer("/data/node/id").and_then(Value::as_str);
+    let comments = value
+        .pointer("/data/node/comments/nodes")
+        .and_then(Value::as_array);
+    let has_previous_page = value
+        .pointer("/data/node/comments/pageInfo/hasPreviousPage")
+        .and_then(Value::as_bool);
+    if observed_id != Some(thread_id)
+        || comments.is_none()
+        || has_previous_page.is_none()
+    {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread state query returned an invalid payload for {thread_id}"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_review_thread_resolution_state(
     value: Value,
     thread_id: &str,
 ) -> std::result::Result<Value, ExecutionCommandError> {
@@ -284,12 +444,9 @@ fn validate_review_thread_state(
     let is_resolved = value
         .pointer("/data/node/isResolved")
         .and_then(Value::as_bool);
-    let comments = value
-        .pointer("/data/node/comments/nodes")
-        .and_then(Value::as_array);
-    if observed_id != Some(thread_id) || is_resolved.is_none() || comments.is_none() {
+    if observed_id != Some(thread_id) || is_resolved.is_none() {
         return Err(ExecutionCommandError::failed(anyhow!(
-            "GitHub review thread state query returned an invalid payload for {thread_id}"
+            "GitHub review thread resolution query returned an invalid payload for {thread_id}"
         )));
     }
     Ok(value)
@@ -337,12 +494,13 @@ fn reconcile_reply_mutation(
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let error = match result {
         Ok(value) => return Ok(value),
+        Err(error @ ExecutionCommandError::CancelledBeforeStart) => return Err(error),
         Err(error) => error,
     };
-    if let Ok(state) = review_thread_state_for_reconciliation(ctx, thread_id)
-        && let Some(comment) = review_thread_comment_with_marker(&state, marker)
+    if let Ok(Some(comment)) =
+        review_thread_reply_comment_for_reconciliation(ctx, thread_id, marker)
     {
-        return Ok(reconciled_reply_response(comment));
+        return Ok(reconciled_reply_response(&comment));
     }
     Err(error)
 }
@@ -354,9 +512,10 @@ fn reconcile_resolve_mutation(
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let error = match result {
         Ok(value) => return Ok(value),
+        Err(error @ ExecutionCommandError::CancelledBeforeStart) => return Err(error),
         Err(error) => error,
     };
-    if let Ok(state) = review_thread_state_for_reconciliation(ctx, thread_id)
+    if let Ok(state) = review_thread_resolution_state_for_reconciliation(ctx, thread_id)
         && state
             .pointer("/data/node/isResolved")
             .and_then(Value::as_bool)
@@ -385,7 +544,8 @@ fn review_thread_comment_with_marker<'a>(state: &'a Value, marker: &str) -> Opti
                 .get("url")
                 .and_then(Value::as_str)
                 .is_some_and(|url| !url.is_empty());
-            has_marker && has_id && has_url
+            let owned_by_viewer = comment["viewerDidAuthor"].as_bool() == Some(true);
+            has_marker && has_id && has_url && owned_by_viewer
         })
 }
 
@@ -440,20 +600,37 @@ mutation($threadId: ID!) {
 "
 }
 
-const fn review_thread_state_query() -> &'static str {
+const fn review_thread_reply_state_query() -> &'static str {
+    r"
+query ReviewThreadState($threadId: ID!, $commentsBefore: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      id
+      comments(last: 100, before: $commentsBefore) {
+        pageInfo {
+          hasPreviousPage
+          startCursor
+        }
+        nodes {
+          id
+          url
+          body
+          viewerDidAuthor
+        }
+      }
+    }
+  }
+}
+"
+}
+
+const fn review_thread_resolution_state_query() -> &'static str {
     r"
 query ReviewThreadState($threadId: ID!) {
   node(id: $threadId) {
     ... on PullRequestReviewThread {
       id
       isResolved
-      comments(last: 100) {
-        nodes {
-          id
-          url
-          body
-        }
-      }
     }
   }
 }

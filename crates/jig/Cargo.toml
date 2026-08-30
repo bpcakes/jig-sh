@@ -37,6 +37,7 @@ dev-proxy = ["dep:jig-dev-proxy"]
 
 [dependencies]
 anyhow.workspace = true
+cap-std.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 clap.workspace = true

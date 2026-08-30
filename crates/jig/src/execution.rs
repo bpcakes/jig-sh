@@ -143,7 +143,7 @@ pub(crate) fn run_supervised_execution_command(
     })
 }
 
-fn execution_command_error(
+pub(crate) fn execution_command_error(
     error: SupervisedExecutionError,
     timeout: CommandTimeout,
     output_limit: CommandOutputLimit,

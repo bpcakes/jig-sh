@@ -56,11 +56,190 @@ fn loop_status_surfaces_exhausted_attempts_as_needs_attention() {
     )
     .unwrap();
     assert_eq!(tick["status"], "needs_attention");
+    assert_eq!(tick["ok"], false);
     assert_eq!(tick["idle"], false);
+
+    let receipts = crate::state::receipts_list(
+        &ctx,
+        crate::state::ReceiptListFilter {
+            session_id: None,
+            plan_id: None,
+            tool_name: Some(LOOP_TICK_TOOL.into()),
+            failed_only: false,
+            limit: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(receipts["receipts"][0]["exit_status"], 1);
 }
 
 #[test]
-fn loop_clear_attempt_removes_attempt_record_and_records_receipt() {
+fn dispatch_surfaces_machine_global_exhausted_attempt_without_poisoning_occurrence() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+"#
+        ),
+    )
+    .unwrap();
+    write_attempt_for_workflow(&temp, "pr-manager", 3, u64::MAX, true);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap();
+
+    assert_eq!(output["status"], "needs_attention", "{output:#}");
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["needs_attention_count"], 0, "{output:#}");
+    assert_eq!(output["exhausted_attempt_count"], 1, "{output:#}");
+    assert_eq!(output["actions"][0]["occurrence"]["status"], "succeeded");
+    assert_eq!(
+        output["actions"][0]["tick"]["status"],
+        "needs_attention",
+        "machine-global attention remains visible in tick evidence"
+    );
+}
+
+#[test]
+fn dispatch_records_a_failed_receipt_when_attempt_state_is_unreadable_after_work() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+"#
+        ),
+    )
+    .unwrap();
+    let cache = temp.path().join(".agent/.cache/loop");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("attempts.json"), b"not JSON").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap();
+
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(output["state_error_count"], 2, "{output:#}");
+    assert_eq!(output["state_errors"][0]["kind"], "attempts");
+    assert_eq!(
+        output["state_errors"][0]["workflow_id"],
+        "scheduled-noop"
+    );
+    assert_eq!(output["state_errors"][1]["kind"], "attempts");
+    assert!(output["state_errors"][1]["workflow_id"].is_null());
+    assert!(output["receipt_id"].as_str().is_some(), "{output:#}");
+    assert_eq!(output["actions"][0]["status"], "succeeded", "{output:#}");
+    assert_eq!(
+        output["actions"][0]["tick"]["state_errors"][0]["kind"],
+        "attempts",
+        "{output:#}"
+    );
+}
+
+#[test]
+fn dispatch_preserves_same_kind_state_errors_from_distinct_workflows() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "first-scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+
+[[loop.workflows]]
+id = "second-scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+"#
+        ),
+    )
+    .unwrap();
+    let cache = temp.path().join(".agent/.cache/loop");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("attempts.json"), b"not JSON").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap();
+
+    assert_eq!(output["state_error_count"], 3, "{output:#}");
+    let workflow_ids = output["state_errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|error| error["workflow_id"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        workflow_ids,
+        vec!["first-scheduled-noop", "second-scheduled-noop"]
+    );
+    assert!(
+        output["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|action| action["status"] == "succeeded"),
+        "{output:#}"
+    );
+}
+
+#[test]
+fn dispatch_state_error_alone_is_sufficient_to_fail_finalization() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let cache = temp.path().join(".agent/.cache/loop");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("attempts.json"), b"not JSON").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap();
+
+    assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(output["failed_count"], 0, "{output:#}");
+    assert_eq!(output["state_error_count"], 1, "{output:#}");
+    assert!(output["actions"].as_array().unwrap().is_empty(), "{output:#}");
+    assert!(output["receipt_id"].is_string(), "{output:#}");
+}
+
+#[test]
+fn loop_clear_attempt_preserves_removed_alias_identity_and_records_receipt() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     write_attempt(&temp, 3, u64::MAX, true);
@@ -76,6 +255,10 @@ fn loop_clear_attempt_removes_attempt_record_and_records_receipt() {
     .unwrap();
     assert_eq!(output["ok"], true);
     assert_eq!(output["cleared"], true);
+    assert_eq!(output["workflow"]["id"], "noop-status");
+    assert_eq!(output["workflow"]["configured"], false);
+    assert_eq!(output["workflow"]["removed"], true);
+    assert_eq!(output["workflow_id"], "noop-status");
     assert!(output["receipt_id"].as_str().is_some());
 
     let status = crate::runtime::dispatch(
@@ -111,16 +294,51 @@ fn loop_clear_attempt_rejects_empty_item_key() {
     assert!(error.contains("--item must not be empty"));
 }
 
+#[test]
+fn loop_clear_attempt_rejects_empty_workflow_key() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
+            workflow: " ".into(),
+            item: "item-1".into(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("--workflow must not be empty"));
+}
+
 fn write_attempt(temp: &tempfile::TempDir, attempts: u32, next_eligible_ms: u64, exhausted: bool) {
+    write_attempt_for_workflow(
+        temp,
+        "noop-status",
+        attempts,
+        next_eligible_ms,
+        exhausted,
+    );
+}
+
+fn write_attempt_for_workflow(
+    temp: &tempfile::TempDir,
+    workflow_id: &str,
+    attempts: u32,
+    next_eligible_ms: u64,
+    exhausted: bool,
+) {
     let cache = temp.path().join(".agent/.cache/loop");
     fs::create_dir_all(&cache).unwrap();
     fs::write(
         cache.join("attempts.json"),
         serde_json::to_vec_pretty(&json!({
             "attempts": {
-                "noop-status:item-1": {
-                    "key": "noop-status:item-1",
-                    "workflow_id": "noop-status",
+                format!("{workflow_id}:item-1"): {
+                    "key": format!("{workflow_id}:item-1"),
+                    "workflow_id": workflow_id,
                     "item_key": "item-1",
                     "attempts": attempts,
                     "max_attempts": 3,

@@ -1,7 +1,63 @@
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
-    use crate::test_env::{EnvVarGuard, lock_env};
+    use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
+
+    #[test]
+    fn exhausted_attempt_is_not_an_occurrence_attention_action() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-status".into(),
+            kind: super::super::workflow::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 1,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+            schedule: None,
+            codex_task: None,
+        };
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Repair example".into(),
+            base_ref: "main".into(),
+            head_ref: "example/repair".into(),
+            head_sha: "abc123".into(),
+            reasons: vec!["failing_checks".into()],
+        };
+        let mut attempts = AttemptStore::new(&ctx);
+        let attempt = attempts
+            .record_attempt_for_version(
+                &workflow,
+                &item.item_key,
+                Some(&item.head_sha),
+                "failed",
+            )
+            .unwrap();
+        assert!(attempt.exhausted);
+
+        let action = attempt_blocking_action(&workflow, &mut attempts, &item)
+            .unwrap()
+            .unwrap();
+        let completion = WorkflowTick::from_actions(Value::Null, vec![action.clone()]).completion;
+
+        assert_eq!(action["status"], "needs_attention");
+        assert_eq!(action["attention_kind"], "exhausted_attempt");
+        assert_eq!(action["attempt"]["exhausted"], true);
+        assert_eq!(
+            completion.outcome,
+            super::super::workflow::WorkflowOutcome::Succeeded
+        );
+        assert!(!pr_manager_action_consumed_tick(&action));
+    }
 
     #[test]
     fn git_command_uses_configured_program_and_scrubs_repository_redirects() {

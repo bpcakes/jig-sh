@@ -1,5 +1,35 @@
 #[cfg(unix)]
 #[test]
+fn scheduled_worker_observes_its_published_running_claim_before_start() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "nightly-review", "checkout = \"repo\"", false);
+    let marker = temp.path().join("worker-observed-durable-claim");
+    let codex_path = temp.path().join("codex-check-claim.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+grep -q '"status": "running"' "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json"
+touch "$JIG_TEST_TASK_COMPLETION_MARKER"
+cat >/dev/null
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let _marker = EnvVarGuard::set("JIG_TEST_TASK_COMPLETION_MARKER", marker.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = dispatch_loop(&ctx);
+
+    assert_eq!(output["ok"], true, "{output:#}");
+    assert!(marker.exists(), "worker must start after claim publication");
+}
+
+#[cfg(unix)]
+#[test]
 fn scheduled_lease_failure_preserves_worker_receipt_and_retained_worktree() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -31,7 +61,13 @@ printf 'task complete\n'
     assert!(
         occurrence["error"]
             .as_str()
-            .is_some_and(|error| error.contains("lease renewal or release failed")),
+            .is_some_and(|error| error.contains("cancelled while the worker was running")),
+        "{output:#}"
+    );
+    assert!(
+        output["actions"][0]["tick"]["release_warning"]
+            .as_str()
+            .is_some_and(|error| error.contains("Loop lease is no longer held")),
         "{output:#}"
     );
 }
@@ -69,7 +105,46 @@ fn scheduled_codex_invocation_failure_links_worker_receipt() {
 
 #[cfg(unix)]
 #[test]
-fn scheduled_dispatch_continues_after_occurrence_renewal_failure() {
+fn post_work_state_failure_preserves_successful_worker_evidence() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "nightly-review", "", false);
+    let codex_path = temp.path().join("codex-task-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf 'retained worker change\n' > worker-result.txt
+mkdir -p "$JIG_TEST_TASK_REPO/.agent/.cache/loop"
+printf 'not JSON\n' > "$JIG_TEST_TASK_REPO/.agent/.cache/loop/attempts.json"
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = dispatch_loop(&ctx);
+
+    let action = &output["actions"][0];
+    let occurrence = &action["occurrence"];
+    assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(output["state_errors"][0]["kind"], "attempts", "{output:#}");
+    assert_eq!(action["status"], "succeeded", "{output:#}");
+    assert_eq!(occurrence["status"], "succeeded", "{output:#}");
+    assert!(occurrence["worker_receipt_id"].is_string(), "{output:#}");
+    let worktree = occurrence["worktree"]
+        .as_str()
+        .expect("successful dirty worker must retain its worktree");
+    assert!(Path::new(worktree).join("worker-result.txt").is_file());
+    assert_eq!(action["tick"]["state_errors"][0]["kind"], "attempts");
+}
+
+#[cfg(unix)]
+#[test]
+fn scheduled_dispatch_fails_closed_after_durable_ledger_loss() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -107,8 +182,8 @@ printf 'task complete\n'
     let output = dispatch_loop(&ctx);
 
     assert_eq!(output["ok"], false, "{output:#}");
-    assert_eq!(output["failed_count"], 1, "{output:#}");
-    assert_eq!(output["executed_count"], 2, "{output:#}");
+    assert_eq!(output["failed_count"], 2, "{output:#}");
+    assert_eq!(output["executed_count"], 1, "{output:#}");
     assert_eq!(output["actions"][0]["workflow_id"], "broken-state");
     assert_eq!(output["actions"][0]["status"], "failed");
     assert_eq!(output["actions"][0]["occurrence_state_persisted"], false);
@@ -124,11 +199,60 @@ printf 'task complete\n'
         "{output:#}"
     );
     assert_eq!(output["actions"][1]["workflow_id"], "healthy-noop");
-    assert_eq!(output["actions"][1]["status"], "succeeded");
+    assert_eq!(output["actions"][1]["status"], "failed");
+    assert!(
+        output["actions"][1]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Initialized loop schedule state is missing")),
+        "{output:#}"
+    );
     assert!(
         !completion_marker.exists(),
         "worker should be terminated as soon as occurrence renewal fails"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_durable_ledger_behind_migration_marker_blocks_worker_launch() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "nightly-review", "", false);
+    let legacy_dir = temp.path().join(".agent/.cache/loop");
+    fs::create_dir_all(&legacy_dir).unwrap();
+    fs::write(
+        legacy_dir.join("schedule.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 3,
+            "migrated_to": ".agent/runtime/loop/schedule.json",
+            "occurrences": {}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let marker = temp.path().join("worker-invoked");
+    let codex_path = temp.path().join("codex-must-not-run.sh");
+    write_codex_stub(
+        &codex_path,
+        "#!/bin/sh\ntouch \"$JIG_TEST_TASK_COMPLETION_MARKER\"\n",
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _marker = EnvVarGuard::set("JIG_TEST_TASK_COMPLETION_MARKER", marker.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("migration marker exists without durable state"),
+        "{error}"
+    );
+    assert!(!marker.exists(), "worker must not start without a durable claim");
 }
 
 #[cfg(unix)]

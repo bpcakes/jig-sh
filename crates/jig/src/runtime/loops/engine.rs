@@ -11,10 +11,13 @@ use crate::state::{ReceiptInput, now_ms, record_receipt, record_receipt_with_can
 use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
 use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStatus, OccurrenceStore};
-use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
+use super::state::{
+    AttemptRecord, AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseRecord, LeaseStore,
+};
 use super::workflow::{
-    CODEX_TASK_KIND, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND, ResolvedWorkflow,
-    TuningOverrides, WorkflowCompletion, WorkflowTick, list_workflows, resolve_workflow,
+    CODEX_TASK_KIND, DEFAULT_WORKFLOW_ID, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND,
+    ResolvedWorkflow, TuningOverrides, WorkflowCompletion, WorkflowOutcome, WorkflowTick,
+    list_workflows, loop_status_is_success, resolve_workflow,
 };
 use super::{codex_task, github, noop, pr_manager};
 
@@ -22,15 +25,81 @@ struct TickExecution {
     item_key: String,
 }
 
+struct TickRuntimeState {
+    live_leases: Vec<LeaseRecord>,
+    attempts: Vec<AttemptRecord>,
+    state_errors: Vec<Value>,
+}
+
+impl TickRuntimeState {
+    fn collect(lease_store: &mut LeaseStore, attempt_store: &mut AttemptStore) -> Self {
+        let mut state_errors = Vec::new();
+        let live_leases = match lease_store.active_leases() {
+            Ok(leases) => leases,
+            Err(error) => {
+                state_errors.push(runtime_state_error("leases", error));
+                Vec::new()
+            }
+        };
+        let attempts = match attempt_store.snapshot() {
+            Ok(attempts) => attempts,
+            Err(error) => {
+                state_errors.push(runtime_state_error("attempts", error));
+                Vec::new()
+            }
+        };
+        Self {
+            live_leases,
+            attempts,
+            state_errors,
+        }
+    }
+
+    fn error_text(&self) -> Option<String> {
+        let errors = self
+            .state_errors
+            .iter()
+            .filter_map(|error| error["error"].as_str())
+            .collect::<Vec<_>>();
+        (!errors.is_empty()).then(|| errors.join("; "))
+    }
+}
+
+fn runtime_state_error(kind: &str, error: anyhow::Error) -> Value {
+    json!({
+        "kind": kind,
+        "error": format!("Failed to inspect post-work loop {kind} state: {error:#}"),
+    })
+}
+
+fn append_tick_error(tick_error: &mut Option<String>, error: String) {
+    match tick_error {
+        Some(existing) => existing.push_str(&format!("; {error}")),
+        None => *tick_error = Some(error),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WorkflowLeaseDisposition {
+    NotAttempted,
+    Acquired,
+    Held,
+}
+
 pub(super) enum ScheduledTick {
     Reported {
         value: Value,
         completion: WorkflowCompletion,
+        lease_disposition: WorkflowLeaseDisposition,
+        state_errors: Vec<Value>,
     },
     Errored {
         value: Option<Value>,
         completion: WorkflowCompletion,
+        lease_disposition: WorkflowLeaseDisposition,
+        state_errors: Vec<Value>,
         error: String,
+        post_work_error: Option<String>,
     },
 }
 
@@ -48,10 +117,33 @@ impl ScheduledTick {
         }
     }
 
-    pub(super) fn error(&self) -> Option<&str> {
+    pub(super) fn post_work_error(&self) -> Option<&str> {
         match self {
             Self::Reported { .. } => None,
-            Self::Errored { error, .. } => Some(error),
+            Self::Errored {
+                post_work_error, ..
+            } => post_work_error.as_deref(),
+        }
+    }
+
+    pub(super) fn lease_was_held(&self) -> bool {
+        matches!(
+            self,
+            Self::Reported {
+                lease_disposition: WorkflowLeaseDisposition::Held,
+                ..
+            } | Self::Errored {
+                lease_disposition: WorkflowLeaseDisposition::Held,
+                ..
+            }
+        )
+    }
+
+    pub(super) fn state_errors(&self) -> &[Value] {
+        match self {
+            Self::Reported { state_errors, .. } | Self::Errored { state_errors, .. } => {
+                state_errors
+            }
         }
     }
 
@@ -126,6 +218,7 @@ fn tick_with_execution(
     let mut idle = true;
     let mut lease = None;
     let mut lease_acquired = false;
+    let mut lease_disposition = WorkflowLeaseDisposition::NotAttempted;
     let mut release_warning = None;
     let mut observed = Value::Null;
     let mut actions = Vec::new();
@@ -139,6 +232,7 @@ fn tick_with_execution(
         match lease_store.acquire(&lease_key, workflow.lease_ttl_seconds)? {
             LeaseAcquire::Acquired(acquired) => {
                 lease_acquired = true;
+                lease_disposition = WorkflowLeaseDisposition::Acquired;
                 lease = Some(acquired.clone());
                 let lease_guard = LeaseGuard::start(
                     lease_store.clone(),
@@ -163,7 +257,13 @@ fn tick_with_execution(
                         completion = tick.completion;
                     }
                     Err(error) => {
-                        tick_error = Some(format!("{error:#}"));
+                        let error = format!("{error:#}");
+                        completion = WorkflowCompletion {
+                            outcome: WorkflowOutcome::Failed,
+                            error: Some(error.clone()),
+                            ..WorkflowCompletion::default()
+                        };
+                        tick_error = Some(error);
                     }
                 }
                 let released = lease_guard.finish();
@@ -178,13 +278,21 @@ fn tick_with_execution(
                 }
             }
             LeaseAcquire::Held(existing) => {
+                lease_disposition = WorkflowLeaseDisposition::Held;
                 lease = Some(existing);
             }
         }
     }
 
-    let live_leases = lease_store.active_leases()?;
-    let attempts = attempt_store.snapshot()?;
+    let runtime_state = TickRuntimeState::collect(&mut lease_store, &mut attempt_store);
+    if let Some(error) = runtime_state.error_text() {
+        append_tick_error(&mut tick_error, error);
+    }
+    let TickRuntimeState {
+        live_leases,
+        attempts,
+        state_errors,
+    } = runtime_state;
     let attempt_check_at_ms = now_ms();
     let attempt_sections = AttemptSections::new(&attempts, attempt_check_at_ms);
 
@@ -193,10 +301,12 @@ fn tick_with_execution(
 
     // Idleness is machine-global for now: `loop run --until idle` should not
     // claim quiescence while any workflow lease or attempt backoff is live.
-    if tick_error.is_some() || actions_include_failed(&actions) {
+    if tick_error.is_some() || completion.outcome == WorkflowOutcome::Failed {
         idle = false;
         status = "failed";
-    } else if !attempt_sections.needs_attention.is_empty() {
+    } else if completion.outcome == WorkflowOutcome::NeedsAttention
+        || !attempt_sections.needs_attention.is_empty()
+    {
         idle = false;
         status = "needs_attention";
     } else if !workflow.enabled {
@@ -230,10 +340,15 @@ fn tick_with_execution(
         "needs_attention": {
             "exhausted_attempts": attempt_sections.needs_attention,
         },
+        "state_error_count": state_errors.len(),
+        "state_errors": state_errors,
         "release_warning": release_warning,
         "error": tick_error,
         "item_key": execution.item_key,
     });
+    let mut post_work_error = release_warning
+        .as_ref()
+        .map(|error| format!("Loop workflow lease renewal or release failed: {error}"));
     let receipt_id = match record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
@@ -246,7 +361,7 @@ fn tick_with_execution(
             plan_id: None,
             started_at_ms: started,
             ended_at_ms: ended,
-            exit_status: if evidence["error"].is_null() && status != "failed" {
+            exit_status: if evidence["error"].is_null() && loop_status_is_success(status) {
                 0
             } else {
                 1
@@ -266,16 +381,21 @@ fn tick_with_execution(
     ) {
         Ok(receipt_id) => receipt_id,
         Err(error) => {
+            let error = format!("Failed to record loop tick receipt: {error:#}");
+            append_tick_error(&mut post_work_error, error.clone());
             return Ok(ScheduledTick::Errored {
                 value: None,
                 completion,
-                error: format!("Failed to record loop tick receipt: {error:#}"),
+                lease_disposition,
+                state_errors,
+                post_work_error,
+                error,
             });
         }
     };
 
     let value = json!({
-        "ok": status != "failed",
+        "ok": loop_status_is_success(status),
         "command": "loop tick",
         "receipt_id": receipt_id,
         "workflow": evidence["workflow"],
@@ -289,6 +409,8 @@ fn tick_with_execution(
         "attempts": evidence["attempts"],
         "waiting_attempts": evidence["waiting_attempts"],
         "needs_attention": evidence["needs_attention"],
+        "state_error_count": evidence["state_error_count"],
+        "state_errors": evidence["state_errors"],
         "release_warning": release_warning,
         "item_key": evidence["item_key"],
     });
@@ -296,6 +418,9 @@ fn tick_with_execution(
         return Ok(ScheduledTick::Errored {
             value: Some(value),
             completion,
+            lease_disposition,
+            state_errors,
+            post_work_error,
             error: format!(
                 "Loop workflow '{}' failed; receipt {}: {}",
                 workflow.id, receipt_id, error
@@ -303,7 +428,12 @@ fn tick_with_execution(
         });
     }
 
-    Ok(ScheduledTick::Reported { value, completion })
+    Ok(ScheduledTick::Reported {
+        value,
+        completion,
+        lease_disposition,
+        state_errors,
+    })
 }
 
 #[cfg(test)]
@@ -424,17 +554,11 @@ fn run_workflow_tick(
     }
 }
 
-fn actions_include_failed(actions: &[Value]) -> bool {
-    actions
-        .iter()
-        .any(|action| matches!(action.get("status").and_then(Value::as_str), Some("failed")))
-}
-
 fn actions_include_work(actions: &[Value]) -> bool {
     actions.iter().any(|action| {
         !matches!(
             action.get("status").and_then(Value::as_str),
-            Some("skipped" | "waiting" | "needs_attention")
+            Some("skipped" | "waiting" | "exhausted" | "needs_attention")
         )
     })
 }
@@ -450,26 +574,50 @@ fn actions_include_waiting(actions: &[Value]) -> bool {
 
 pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest) -> Result<Value> {
     let started = now_ms();
-    if request.item.trim().is_empty() {
+    let workflow_id = request.workflow.trim();
+    let item_key = request.item.trim();
+    if workflow_id.is_empty() {
+        bail!("--workflow must not be empty");
+    }
+    if item_key.is_empty() {
         bail!("--item must not be empty");
     }
-    let workflow = resolve_workflow(
-        ctx,
-        Some(&request.workflow),
-        TuningOverrides {
-            lease_ttl_seconds: None,
-            max_attempts: None,
-            backoff_seconds: None,
-        },
-    )?;
+    let workflow_configured = ctx
+        .loop_workflows()
+        .iter()
+        .any(|workflow| workflow.id == workflow_id);
+    let builtin_alias = matches!(workflow_id, DEFAULT_WORKFLOW_ID | NOOP_STATUS_KIND);
+    let resolved_workflow = if workflow_configured || builtin_alias {
+        Some(
+            resolve_workflow(
+                ctx,
+                Some(workflow_id),
+                TuningOverrides {
+                    lease_ttl_seconds: None,
+                    max_attempts: None,
+                    backoff_seconds: None,
+                },
+            )?
+            .value(),
+        )
+    } else {
+        None
+    };
     let mut attempt_store = AttemptStore::new(ctx);
-    let cleared = attempt_store.clear_attempt(&workflow.id, &request.item)?;
+    let cleared_attempt = attempt_store.take_attempt(workflow_id, item_key)?;
+    let cleared = cleared_attempt.is_some();
+    let workflow = if workflow_configured || (!cleared && builtin_alias) {
+        resolved_workflow.expect("configured workflows and built-in aliases are resolved above")
+    } else {
+        removed_workflow_value(workflow_id)
+    };
     let ended = now_ms();
     let evidence = json!({
         "kind": "loop_clear_attempt",
         "schema_version": 1,
-        "workflow": workflow.value(),
-        "item_key": request.item,
+        "workflow": workflow,
+        "workflow_id": workflow_id,
+        "item_key": item_key,
         "cleared": cleared,
     });
     let receipt_id = record_receipt(
@@ -477,7 +625,7 @@ pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest)
         ReceiptInput {
             tool_name: LOOP_CLEAR_ATTEMPT_TOOL,
             args: json!({
-                "workflow": &workflow.id,
+                "workflow": workflow_id,
                 "item": evidence["item_key"],
             }),
             invoked_command_key: None,
@@ -500,9 +648,18 @@ pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest)
         "command": "loop clear-attempt",
         "receipt_id": receipt_id,
         "workflow": evidence["workflow"],
+        "workflow_id": evidence["workflow_id"],
         "item_key": evidence["item_key"],
         "cleared": cleared,
     }))
+}
+
+fn removed_workflow_value(workflow_id: &str) -> Value {
+    json!({
+        "id": workflow_id,
+        "configured": false,
+        "removed": true,
+    })
 }
 
 pub(super) fn acknowledge_occurrence(

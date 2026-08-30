@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use croner::Cron;
 
@@ -50,7 +50,13 @@ impl ScheduleSpec {
         now_ms: u64,
         last_scheduled_at_ms: Option<u64>,
     ) -> Result<ScheduleWindow> {
-        let now = datetime_from_ms(now_ms)?.with_timezone(&self.timezone);
+        // Croner preserves the input's subsecond component when it adjusts the
+        // calendar fields. Normalize at the cron boundary so every dispatcher
+        // derives the same identity for a given five-field cron occurrence.
+        let now = datetime_from_ms(now_ms)?
+            .with_nanosecond(0)
+            .ok_or_else(|| anyhow::anyhow!("Failed to normalize schedule timestamp"))?
+            .with_timezone(&self.timezone);
         let most_recent = previous_matching(&self.cron, &now)?;
         let next = next_matching(&self.cron, &now)?;
         let most_recent_ms = timestamp_ms(most_recent)?;

@@ -294,12 +294,21 @@ fn with_attempt(mut action: Value, attempt: AttemptRecord) -> Value {
 
 fn with_branch_lease_result(mut action: Value, release_error: Option<&anyhow::Error>) -> Value {
     if let Some(release_error) = release_error {
+        let completed_error = action["error"].as_str().map(str::to_string);
         action["completed_status"] = action["status"].clone();
+        if let Some(completed_error) = completed_error.as_deref() {
+            action["completed_error"] = json!(completed_error);
+        }
         action["status"] = json!("failed");
         action["lease_error"] = json!(format!("{release_error:#}"));
-        action["error"] = json!(format!(
-            "Branch repair completed, but lease renewal or release failed: {release_error:#}"
-        ));
+        action["error"] = json!(match completed_error {
+            Some(completed_error) => format!(
+                "Branch repair completed, but lease renewal or release failed: {release_error:#}; completed action: {completed_error}"
+            ),
+            None => format!(
+                "Branch repair completed, but lease renewal or release failed: {release_error:#}"
+            ),
+        });
     }
     action
 }

@@ -194,67 +194,6 @@ printf 'task complete\n'
 
 #[cfg(unix)]
 #[test]
-fn scheduled_repo_checkout_is_serialized_and_not_reported_as_worktree() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    fs::create_dir_all(temp.path().join("tasks")).unwrap();
-    fs::write(temp.path().join("tasks/nightly.md"), "Inspect the repo.\n").unwrap();
-    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        format!(
-            r#"{config}
-[[loop.workflows]]
-id = "repo-task"
-kind = "codex_task"
-schedule = "* * * * *"
-timezone = "UTC"
-prompt_file = "tasks/nightly.md"
-checkout = "repo"
-"#
-        ),
-    )
-    .unwrap();
-    git_ok(temp.path(), ["init"]);
-    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
-    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
-    git_ok(temp.path(), ["add", "."]);
-    git_ok(temp.path(), ["commit", "-m", "fixture"]);
-    let codex_path = temp.path().join("codex-task-stub.sh");
-    write_codex_stub(
-        &codex_path,
-        r#"#!/bin/sh
-cat >/dev/null
-printf 'repo task complete\n'
-"#,
-    );
-    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], true, "{output:#}");
-    assert_eq!(
-        output["actions"][0]["tick"]["lease"]["key"],
-        "checkout:repo"
-    );
-    assert_eq!(
-        output["actions"][0]["tick"]["actions"][0]["checkout"]["mode"],
-        "repo"
-    );
-    assert!(
-        output["actions"][0]["occurrence"]["worktree"].is_null(),
-        "the repository root is not a retained worktree: {output:#}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn codex_task_rejects_prompt_symlink_that_escapes_repository() {
     use std::os::unix::fs::symlink;
 
@@ -296,7 +235,10 @@ prompt_file = "tasks/nightly.md"
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("prompt escapes the repository"), "{error}");
+    assert!(
+        error.contains("prompt must resolve inside the repository"),
+        "{error}"
+    );
 }
 
 #[cfg(unix)]
@@ -415,6 +357,19 @@ git commit -m 'scheduled task change' >/dev/null
     assert_eq!(output["actions"][0]["checkout"]["head_changed"], true);
     let worktree = Path::new(output["actions"][0]["checkout"]["path"].as_str().unwrap());
     assert!(worktree.exists());
+    assert!(
+        worktree.starts_with(temp.path().join(".agent/runtime/loop/worktrees/tasks")),
+        "retained worktree must not live under disposable cache: {}",
+        worktree.display()
+    );
+    let cache = temp.path().join(".agent/.cache");
+    if cache.exists() {
+        fs::remove_dir_all(cache).unwrap();
+    }
+    assert!(
+        worktree.exists(),
+        "discarding cache must not remove retained task work"
+    );
     assert_ne!(git_stdout(worktree, ["rev-parse", "HEAD"]), initial_head);
 }
 
@@ -455,7 +410,7 @@ prompt_file = "tasks/nightly.md"
         &git_path,
         r#"#!/bin/sh
 case "$PWD" in
-  */.agent/.cache/loop/worktrees/tasks/*)
+  */.agent/runtime/loop/worktrees/tasks/*)
     if [ -f "$JIG_TEST_GIT_FAILURE_FLAG" ]; then
       echo 'injected worktree git failure' >&2
       exit 93
