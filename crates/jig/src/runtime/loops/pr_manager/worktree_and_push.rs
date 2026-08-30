@@ -119,7 +119,7 @@ fn commit_and_push(
     head_ref: &str,
     base_head: &str,
     observer: &mut dyn ExecutionControl,
-) -> PrRepairStepResult<Value> {
+) -> PrPushResult<Value> {
     let dirty_before_commit = git_stdout(ctx, worktree, ["status", "--porcelain"], observer)?;
     if !dirty_before_commit.trim().is_empty() {
         git_checked(ctx, worktree, ["add", "-A"], observer)?;
@@ -150,11 +150,11 @@ fn commit_and_push(
     let push_result = git_execution_output(worktree, push_args, ctx.command_timeout(), observer);
     let push_error = match push_result {
         Ok(push) if push.status.success() => None,
-        Ok(push) => Some(PrRepairStepError::failed(git_error(
-            "git push failed without force",
-            push,
-        ))),
-        Err(error) => Some(pr_git_execution_error("git push", error)),
+        Ok(push) => Some(PrPushError::Ambiguous {
+            error: git_error("git push failed without force", push),
+            final_head: final_head.clone(),
+        }),
+        Err(error) => Some(pr_push_execution_error(error, &final_head)),
     };
     if let Some(push_error) = push_error {
         let reconciliation = reconcile_remote_push(ctx, worktree, head_ref, final_head.trim());
@@ -166,18 +166,56 @@ fn commit_and_push(
             ));
         }
         return Err(match push_error {
-            PrRepairStepError::Cancelled(detail) => PrRepairStepError::Cancelled(format!(
-                "{detail}; push outcome was not confirmed: {}",
-                reconciliation.detail
-            )),
-            PrRepairStepError::Failed(error) => PrRepairStepError::Failed(error.context(format!(
-                "push outcome was not confirmed: {}",
-                reconciliation.detail
-            ))),
+            PrPushError::Step(PrRepairStepError::Cancelled(detail)) => {
+                PrPushError::Step(PrRepairStepError::Cancelled(format!(
+                    "{detail}; push outcome was not confirmed: {}",
+                    reconciliation.detail
+                )))
+            }
+            PrPushError::Step(PrRepairStepError::Failed(error)) => {
+                PrPushError::Step(PrRepairStepError::Failed(error.context(format!(
+                    "push outcome was not confirmed: {}",
+                    reconciliation.detail
+                ))))
+            }
+            PrPushError::Ambiguous { error, final_head } => {
+                PrPushError::Ambiguous {
+                    error: error.context(format!(
+                        "push outcome was not confirmed: {}",
+                        reconciliation.detail
+                    )),
+                    final_head,
+                }
+            }
         });
     }
 
     Ok(push_result_value(base_head, &final_head, None))
+}
+
+fn pr_push_execution_error(error: ExecutionCommandError, final_head: &str) -> PrPushError {
+    match error {
+        ExecutionCommandError::CancelledBeforeStart => {
+            PrPushError::Step(PrRepairStepError::Cancelled(
+                "git push was cancelled before it started".into(),
+            ))
+        }
+        ExecutionCommandError::Cancelled => PrPushError::Ambiguous {
+            error: anyhow!("git push was cancelled while it was running"),
+            final_head: final_head.to_string(),
+        },
+        ExecutionCommandError::Failed {
+            error,
+            process_started: true,
+        } => PrPushError::Ambiguous {
+            error,
+            final_head: final_head.to_string(),
+        },
+        ExecutionCommandError::Failed {
+            error,
+            process_started: false,
+        } => PrPushError::Step(PrRepairStepError::Failed(error)),
+    }
 }
 
 fn push_result_value(base_head: &str, final_head: &str, reconciliation: Option<String>) -> Value {

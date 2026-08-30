@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -19,15 +19,11 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
+use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval, run_with_wait};
 use super::workflow::ResolvedWorkflow;
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
 pub(super) const LOOP_RUNTIME_DIR: &str = ".agent/runtime/loop";
-
-pub(super) fn renewal_interval(ttl_seconds: u64) -> Duration {
-    let ttl_ms = ttl_seconds.saturating_mul(1_000);
-    Duration::from_millis((ttl_ms / 3).max(1))
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct LeaseRecord {
@@ -124,6 +120,21 @@ impl LeaseStore {
         self.renew_at(key, owner, ttl_seconds, now_ms())
     }
 
+    fn renew_for_guard(
+        &mut self,
+        key: &str,
+        owner: &str,
+        ttl_seconds: u64,
+    ) -> std::result::Result<LeaseRecord, RenewalAttemptError> {
+        self.renew(key, owner, ttl_seconds).map_err(|error| {
+            if error.downcast_ref::<RenewalOwnershipLost>().is_some() {
+                RenewalAttemptError::Terminal(error)
+            } else {
+                RenewalAttemptError::Retryable(error)
+            }
+        })
+    }
+
     pub(super) fn active_leases(&mut self) -> Result<Vec<LeaseRecord>> {
         self.with_locked(|store| {
             store.prune_expired(now_ms());
@@ -159,15 +170,20 @@ impl LeaseStore {
         now: u64,
     ) -> Result<LeaseRecord> {
         self.with_locked(|store| {
-            let lease = store
-                .leases
-                .get_mut(key)
-                .ok_or_else(|| anyhow!("Loop lease is no longer held: {key}"))?;
+            let lease = store.leases.get_mut(key).ok_or_else(|| {
+                RenewalOwnershipLost::new(format!("Loop lease is no longer held: {key}"))
+            })?;
             if lease.owner != owner {
-                return Err(anyhow!("Loop lease '{key}' is owned by another worker"));
+                return Err(RenewalOwnershipLost::new(format!(
+                    "Loop lease '{key}' is owned by another worker"
+                ))
+                .into());
             }
             if lease.expires_at_ms <= now {
-                return Err(anyhow!("Loop lease expired before renewal: {key}"));
+                return Err(RenewalOwnershipLost::new(format!(
+                    "Loop lease expired before renewal: {key}"
+                ))
+                .into());
             }
             lease.expires_at_ms = now.saturating_add(ttl_seconds.saturating_mul(1_000));
             Ok(lease.clone())
@@ -224,22 +240,22 @@ impl LeaseGuard {
         let renewal_owner = lease.owner.clone();
         let renewal_failed = Arc::new(AtomicBool::new(false));
         let renewal_failed_in_thread = Arc::clone(&renewal_failed);
+        let lease_expires_at_ms = lease.expires_at_ms;
         let renewal = thread::Builder::new()
             .name(format!("jig-loop-lease-{}", lease.owner))
             .spawn(move || {
-                loop {
-                    match receiver.recv_timeout(interval) {
-                        Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
-                        Err(RecvTimeoutError::Timeout) => {
-                            if let Err(error) =
-                                renewal_store.renew(&renewal_key, &renewal_owner, ttl_seconds)
-                            {
-                                renewal_failed_in_thread.store(true, Ordering::Release);
-                                return Err(error);
-                            }
-                        }
-                    }
-                }
+                run_with_wait(
+                    interval,
+                    lease_expires_at_ms,
+                    &renewal_failed_in_thread,
+                    || {
+                        renewal_store
+                            .renew_for_guard(&renewal_key, &renewal_owner, ttl_seconds)
+                            .map(|lease| lease.expires_at_ms)
+                    },
+                    now_ms,
+                    |wait| receiver.recv_timeout(wait),
+                )
             });
         let renewal = match renewal {
             Ok(renewal) => renewal,

@@ -473,6 +473,23 @@ impl From<anyhow::Error> for PrRepairStepError {
 
 type PrRepairStepResult<T> = std::result::Result<T, PrRepairStepError>;
 
+#[derive(Debug)]
+enum PrPushError {
+    Step(PrRepairStepError),
+    Ambiguous {
+        error: anyhow::Error,
+        final_head: String,
+    },
+}
+
+impl From<PrRepairStepError> for PrPushError {
+    fn from(error: PrRepairStepError) -> Self {
+        Self::Step(error)
+    }
+}
+
+type PrPushResult<T> = std::result::Result<T, PrPushError>;
+
 fn attempt_blocking_action(
     workflow: &ResolvedWorkflow,
     attempt_store: &mut AttemptStore,
@@ -610,7 +627,38 @@ fn run_pr_repair_steps(
     }
 
     let worker_output = parse_pr_worker_output(worker.authoritative_stdout())?;
-    let push = commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer)?;
+    let push = match commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer) {
+        Ok(push) => push,
+        Err(PrPushError::Ambiguous { error, final_head }) => {
+            return Ok(PrRepairOutcome::Completed(json!({
+                "kind": "pr_manager_worker",
+                "status": "needs_attention",
+                "attention_kind": "ambiguous_push",
+                "pr_number": item.pr_number,
+                "item_key": item.item_key,
+                "title": item.title,
+                "branch": item.head_ref,
+                "head_sha": item.head_sha,
+                "reasons": item.reasons,
+                "worktree": worktree,
+                "lease": lease,
+                "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
+                "merge": merge,
+                "worker_output": worker_output,
+                "worker_receipt_id": worker.worker_receipt_id(),
+                "push": {
+                    "status": "unconfirmed",
+                    "pushed": Value::Null,
+                    "base_head": base_head,
+                    "final_head": final_head,
+                    "force": false,
+                },
+                "review_thread_posts": [],
+                "error": format!("{error:#}"),
+            })));
+        }
+        Err(PrPushError::Step(error)) => return Err(error),
+    };
     let repair_version = push["final_head"].as_str().unwrap_or(&item.head_sha);
     let review_thread_posts =
         post_review_thread_updates(ctx, pull_request, &worker_output, repair_version, observer);
@@ -729,6 +777,7 @@ fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
 
 include!("pr_manager/review_threads.rs");
 include!("pr_manager/worktree_and_push.rs");
+include!("pr_manager/push_error_tests.rs");
 include!("pr_manager/cancellation_tests.rs");
 include!("pr_manager/git.rs");
 include!("pr_manager/tests.rs");

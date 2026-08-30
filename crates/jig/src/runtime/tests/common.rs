@@ -29,7 +29,7 @@ tool = "jig.custom_check"
             "command": "custom_check_command"
         }))
         .write();
-    std::fs::write(root.join(".gitignore"), ".agent/runtime/\n").unwrap();
+    std::fs::write(root.join(".gitignore"), ".agent/.cache/\n.agent/runtime/\n").unwrap();
     write_open_plan(root);
 }
 

@@ -3,10 +3,11 @@
 fn scheduled_worker_observes_its_published_running_claim_before_start() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
     write_fixture_repo(temp.path());
     configure_scheduled_task(&temp, "nightly-review", "checkout = \"repo\"", false);
-    let marker = temp.path().join("worker-observed-durable-claim");
-    let codex_path = temp.path().join("codex-check-claim.sh");
+    let marker = bin.path().join("worker-observed-durable-claim");
+    let codex_path = bin.path().join("codex-check-claim.sh");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh

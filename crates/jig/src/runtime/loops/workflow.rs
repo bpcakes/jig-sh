@@ -194,10 +194,15 @@ fn action_has_completion_evidence(action: &Value) -> bool {
 }
 
 fn retained_worktree(action: &Value) -> Option<&str> {
-    (action["checkout"]["mode"].as_str() == Some("worktree")
+    let codex_worktree = (action["checkout"]["mode"].as_str() == Some("worktree")
         && action["checkout"]["retained"].as_bool() == Some(true))
     .then(|| action["checkout"]["path"].as_str())
-    .flatten()
+    .flatten();
+    codex_worktree.or_else(|| {
+        let pr_attention = action["kind"].as_str() == Some("pr_manager_worker")
+            && action_requires_attention(action);
+        pr_attention.then(|| action["worktree"].as_str()).flatten()
+    })
 }
 
 #[derive(Clone, Copy)]

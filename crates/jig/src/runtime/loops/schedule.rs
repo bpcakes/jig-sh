@@ -31,7 +31,7 @@ pub(super) use cron::ScheduleSpec;
 use policy::{DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails};
 
 #[cfg(test)]
-pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<Value> {
+pub(in crate::runtime) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<Value> {
     dispatch_due_at_with_observer(ctx, dispatch_at_ms, &mut NoopExecutionObserver)
 }
 

@@ -3,6 +3,7 @@
 fn scheduled_repo_checkouts_are_serialized_and_not_reported_as_worktrees() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
     write_fixture_repo(temp.path());
     fs::create_dir_all(temp.path().join("tasks")).unwrap();
     fs::write(temp.path().join("tasks/nightly.md"), "Inspect the repo.\n").unwrap();
@@ -35,7 +36,7 @@ checkout = "repo"
     git_ok(temp.path(), ["config", "user.name", "Fixture"]);
     git_ok(temp.path(), ["add", "."]);
     git_ok(temp.path(), ["commit", "-m", "fixture"]);
-    let codex_path = temp.path().join("codex-task-stub.sh");
+    let codex_path = bin.path().join("codex-task-stub.sh");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh

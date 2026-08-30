@@ -15,7 +15,9 @@ use ulid::Ulid;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::state::renewal_interval;
+#[cfg(test)]
+use super::renewal::retry_delay as renewal_retry_delay;
+use super::renewal::{RenewalAttemptError, renewal_interval, run_with_wait};
 
 mod attention;
 mod claim;
@@ -306,81 +308,20 @@ fn run_occurrence_renewal(
 
 fn run_occurrence_renewal_with_wait(
     interval: Duration,
-    mut claim_expires_at_ms: u64,
+    claim_expires_at_ms: u64,
     renewal_failed: &AtomicBool,
     mut renew: impl FnMut() -> Result<u64>,
     now: impl Fn() -> u64,
-    mut wait_for_stop: impl FnMut(Duration) -> std::result::Result<(), RecvTimeoutError>,
+    wait_for_stop: impl FnMut(Duration) -> std::result::Result<(), RecvTimeoutError>,
 ) -> Result<()> {
-    let mut wait = interval;
-    let mut pending_error = None;
-    loop {
-        match wait_for_stop(wait) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => {
-                if claim_expires_at_ms <= now() {
-                    renewal_failed.store(true, Ordering::Release);
-                }
-                return Ok(());
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                if pending_error.is_some()
-                    && renewal_failure_window_reached(now(), claim_expires_at_ms, interval)
-                {
-                    renewal_failed.store(true, Ordering::Release);
-                    return Err(pending_error
-                        .take()
-                        .expect("a pending renewal error was checked above"));
-                }
-                match renew() {
-                    Ok(renewed_expires_at_ms) => {
-                        claim_expires_at_ms = renewed_expires_at_ms;
-                        pending_error = None;
-                        wait = interval;
-                    }
-                    Err(error) => {
-                        let Some(retry_delay) =
-                            renewal_retry_delay(now(), claim_expires_at_ms, interval)
-                        else {
-                            renewal_failed.store(true, Ordering::Release);
-                            return Err(error);
-                        };
-                        pending_error.get_or_insert(error);
-                        wait = retry_delay;
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn renewal_retry_delay(
-    now_ms: u64,
-    claim_expires_at_ms: u64,
-    interval: Duration,
-) -> Option<Duration> {
-    let cancellation_window_ms = renewal_cancellation_window_ms(interval);
-    let remaining_ms = claim_expires_at_ms.saturating_sub(now_ms);
-    let retry_budget_ms = remaining_ms.checked_sub(cancellation_window_ms)?;
-    if retry_budget_ms == 0 {
-        return None;
-    }
-    let normal_retry_ms = (cancellation_window_ms / 4).max(1);
-    Some(Duration::from_millis(normal_retry_ms.min(retry_budget_ms)))
-}
-
-fn renewal_failure_window_reached(
-    now_ms: u64,
-    claim_expires_at_ms: u64,
-    interval: Duration,
-) -> bool {
-    let cancellation_window_ms = renewal_cancellation_window_ms(interval);
-    claim_expires_at_ms.saturating_sub(now_ms) <= cancellation_window_ms
-}
-
-fn renewal_cancellation_window_ms(interval: Duration) -> u64 {
-    u64::try_from(interval.as_millis())
-        .unwrap_or(u64::MAX)
-        .max(1)
+    run_with_wait(
+        interval,
+        claim_expires_at_ms,
+        renewal_failed,
+        || renew().map_err(RenewalAttemptError::Retryable),
+        now,
+        wait_for_stop,
+    )
 }
 
 impl Drop for OccurrenceGuard {

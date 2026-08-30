@@ -293,7 +293,13 @@ checkout = "repo"
 fn codex_setup_failure_retries_the_same_scheduled_occurrence() {
     let _env_lock = lock_env();
     let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
+    fs::write(
+        temp.path().join(".gitignore"),
+        ".agent/.cache/\n.agent/runtime/\n",
+    )
+    .unwrap();
     for args in [
         vec!["init"],
         vec!["config", "user.email", "fixture@example.com"],
@@ -324,7 +330,18 @@ checkout = "repo"
         ),
     )
     .unwrap();
-    let codex = temp.path().join("codex-stub.sh");
+    for args in [
+        vec!["add", ".jig.toml"],
+        vec!["commit", "-m", "configure scheduled task"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(temp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let codex = bin.path().join("codex-stub.sh");
     fs::write(&codex, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex.as_os_str());
@@ -354,6 +371,17 @@ checkout = "repo"
     assert!(occurrences.snapshot().unwrap().is_empty());
 
     fs::write(temp.path().join(".agent/tasks/nightly.md"), "Review it.\n").unwrap();
+    for args in [
+        vec!["add", ".agent/tasks/nightly.md"],
+        vec!["commit", "-m", "add scheduled task prompt"],
+    ] {
+        let output = std::process::Command::new("git")
+            .current_dir(temp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
     let retried = dispatch_workflow(
         &ctx,
         &mut occurrences,
@@ -362,12 +390,34 @@ checkout = "repo"
         &mut NoopExecutionObserver,
     );
     assert_eq!(retried.executed_count, 1, "{:#?}", retried.action);
+    let task_changes = std::process::Command::new("git")
+        .current_dir(temp.path())
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=normal",
+            "--",
+            ".",
+            ":(exclude).agent/state/receipts.jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        task_changes.status.success() && task_changes.stdout.is_empty(),
+        "unexpected task-authored changes: {task_changes:?}"
+    );
     assert_eq!(
         retried.action.as_ref().unwrap()["status"],
         "succeeded",
         "{:#?}",
         retried.action
     );
+    assert_eq!(
+        retried.action.as_ref().unwrap()["tick"]["actions"][0]["checkout"]["dirty"],
+        false,
+        "the worker receipt is runtime evidence, not a task-authored checkout change"
+    );
+    assert!(temp.path().join(".agent/state/receipts.jsonl").exists());
 }
 
 #[cfg(unix)]

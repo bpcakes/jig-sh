@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use std::fs::OpenOptions;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tempfile::tempdir;

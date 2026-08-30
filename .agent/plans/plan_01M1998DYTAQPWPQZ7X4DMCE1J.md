@@ -24,6 +24,11 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
 - [x] (2026-08-30 18:50Z) Complete a fresh structured work check: contract, LOC, format, Clippy, 2,485 core tests, and 107 frontend tests pass under batch receipt `receipt_01M19HAKRWJYQN319QQ5JHKS9G`.
 - [x] (2026-08-30 19:15Z) Complete the second independent Claude/Codex review against verified fingerprint `b8255ceffff53d8a96e0e8b73c60b141aca5f3ccd83230873717989dbc20c6eb` and research all three open questions before adjudicating findings.
 - [x] (2026-08-30 20:00Z) Repair the valid second-round stale-claim, pre-worker phase, retained-cleanup, attention-growth, receipt-failure, and mixed-clock findings with 140 passing focused loop tests.
+- [x] (2026-08-30) Complete the third independent Claude/Codex review against verified fingerprint `85e97f2d1431953c5c96da0ed8d838bc949edf2dae4425dbd34c942190af30ba`; record that the Claude adapter could inspect only the current changed files after its branch diff exceeded the adapter limit.
+- [x] (2026-08-30) Research all four third-round open questions before adjudication, then repair the valid workflow-renewal, dirty-repository, and ambiguous-started-push findings with focused unit and scheduled-dispatch regressions.
+- [x] (2026-08-30) Correct three repo-mode test fixtures exposed by the full core gate: ignore managed runtime/cache paths and keep test-only Codex executables and observation markers outside the repository whose cleanliness they assert.
+- [x] (2026-08-30) Replace a fixed-delay authority-corruption test race with condition-based synchronization after a loaded core run allowed the queued target to start first; the focused regression passes three consecutive runs.
+- [x] (2026-08-30) Complete fresh structured gates for the third repair: contract, LOC, format, Clippy, 2,495 core tests, and 107 frontend tests all pass under batch receipt `receipt_01M19SXVWVVFX71ZREYCCE16NF`; the final rebuilt-binary contract receipt is `receipt_01M19SZ5VMBQ6B2PK0MN7PN5CC`.
 - [ ] Repeat full gates and fresh comprehensive Claude/Codex branch reviews until no actionable in-scope findings remain; record unrelated findings in Beads and exclude them from the loop.
 
 ## Surprises & Discoveries
@@ -54,6 +59,16 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
   Evidence: another dispatcher can still terminalize a newer occurrence between the refresh and claim. The durable claim lock must reject newer chronology, unresolved attention, and retained-worktree evidence in the same transaction that inserts a claim.
 - Observation: a boolean `unexecuted` flag could not distinguish cancellation from setup failure and allowed retained cleanup evidence to conflict with retry.
   Evidence: prompt/home/checkout failures and cancellation-receipt failures reached different error paths, while both could precede worker start. Replacing the flag with `WorkflowExecution::Unexecuted(UnexecutedReason)` makes the retry reason explicit; a retained path changes finalization to `needs_attention` instead of deleting the only durable evidence.
+- Observation: all third-round open questions were answerable without product input.
+  Evidence: Git documents that deleting a linked-worktree directory leaves administrative metadata for `git worktree prune`, and ordinary reuse can remain blocked until that metadata is removed; the cache ignore predates the PR worktree while the durable runtime ignore was added later; the valid-calendar cron scan starts at leap year 2000 and short-circuits rather than walking 400 years for the cited February 29 case; and the public loop guide explicitly classifies cancellation during post-work aggregation as a state error so completed evidence survives.
+- Observation: the third-round symptoms are lifecycle design gaps, not three unrelated omitted conditionals.
+  Evidence: workflow and occurrence renewers had separately evolved error policies, task orchestration owned checkout reporting and completion classification together, and a started push was flattened into the same error type as a pre-start failure. Shared renewal policy, extracted checkout completion reporting, and a phase-specific push error make the unsafe states representable once at their owning boundaries.
+- Observation: repository dirtiness cannot include Jig's own worker receipt.
+  Evidence: `run_codex_exec` appends `.agent/state/receipts.jsonl` before checkout finalization. The first broad loop run therefore classified an otherwise clean repo task as attention. The final check excludes exactly that runtime-owned receipt path for shared-repository tasks, while isolated worktrees still inspect every path and a regression proves all other untracked changes remain visible.
+- Observation: three existing repo-mode tests encoded cleanliness while placing their own machinery inside the checkout or omitting a managed ignore.
+  Evidence: the first full core gate after round three reported two `needs_attention` results. One fixture created a Codex stub and completion marker under the repository; another created its stub there; the shared fixture ignored `.agent/runtime/` but not the managed `.agent/.cache/`. Moving test machinery to a separate temporary directory and matching the generated ignore policy made both focused tests pass without weakening production dirtiness detection.
+- Observation: a branch-added parallel authority test synchronized on elapsed time instead of the state whose ordering it asserted.
+  Evidence: seven initial workers slept 500 ms after observing all start markers, while worker zero was merely eligible to corrupt the contract. Under loaded nextest scheduling, a sleeping worker finished and claimed the queued target before worker zero resumed. Making those workers wait until the contract actually contains the corruption makes pre-start authority failure deterministic; three consecutive focused runs pass.
 
 ## Decision Log
 
@@ -87,10 +102,19 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
 - Decision: replace the workflow's unexecuted boolean with a typed execution disposition and preserve process-start facts through worker receipt errors.
   Rationale: cancellation and setup failures share retry policy but require distinct evidence, while a retained checkout makes automatic retry unsafe. The typed disposition prevents invalid flag/reason combinations and lets finalization keep the occurrence discoverable when cleanup fails.
   Date/Author: 2026-08-30 / Codex
+- Decision: use one bounded renewal policy for workflow leases and occurrence claims, with typed ownership loss as an immediately terminal cause.
+  Rationale: filesystem and cache failures may recover while TTL headroom remains; treating every error as ownership loss cancels healthy work, while retrying actual ownership loss delays the only safe response. A shared runner also prevents the two renewal loops from drifting again.
+  Date/Author: 2026-08-30 / Codex
+- Decision: make a dirty or unverifiable shared repository checkout a durable scheduled occurrence requiring acknowledgement.
+  Rationale: the repository root cannot be retained as a diagnostic linked worktree, and automatically running another occurrence compounds unknown state. Backpressure is the same safety contract already used for retained isolated worktrees and other ambiguous occurrences. The runtime-generated worker receipt is excluded exactly because it is evidence about the task, not a task-authored change.
+  Date/Author: 2026-08-30 / Codex
+- Decision: preserve an unconfirmed started PR push as `needs_attention` with the worker receipt, candidate SHA, and worktree.
+  Rationale: a nonzero, cancelled, or transport-failed process that started may still have changed the remote. Converting it to an ordinary failed attempt discards the side-effect phase and allows unsafe recurrence; the typed `PrPushError` prevents that collapse.
+  Date/Author: 2026-08-30 / Codex
 
 ## Outcomes & Retrospective
 
-The initial implementation slices and two review repair rounds are complete. The focused runtime-loop suite now passes 140 tests. Round-one regressions prove strict lease ownership at finalization, retryable cancellation before workflow and worker start, fail-closed lease corruption, auditable attempt recovery, retained-worktree backpressure, per-workflow status degradation, unchanged-marker no-op writes, and first-error renewal diagnostics. Round-two regressions add transactional stale-claim rejection, attention backpressure, typed setup retry, cancellation receipt phase preservation, retained cleanup evidence, and one-clock status classification. The preceding structured work check passed contract, Rust file-size policy, formatting, workspace Clippy with warnings denied, 2,485 core tests, and 107 frontend tests; fresh gates for the second repair and another comprehensive review remain.
+The initial implementation slices and three review repair rounds are complete. The focused runtime-loop suite now passes 142 tests. Round-one regressions prove strict lease ownership at finalization, retryable cancellation before workflow and worker start, fail-closed lease corruption, auditable attempt recovery, retained-worktree backpressure, per-workflow status degradation, unchanged-marker no-op writes, and first-error renewal diagnostics. Round-two regressions add transactional stale-claim rejection, attention backpressure, typed setup retry, cancellation receipt phase preservation, retained cleanup evidence, and one-clock status classification. Round three adds transient workflow-lease retry, dirty shared-checkout backpressure, worker-receipt self-exclusion, and durable ambiguity for a started but unreconciled PR push. Fresh structured gates pass contract, Rust file-size policy, formatting, workspace Clippy with warnings denied, 2,495 core tests, and 107 frontend tests. Another comprehensive branch review remains.
 
 ## Context and Orientation
 
@@ -187,6 +211,13 @@ Focused implementation evidence:
     cargo check -p jig-sh --all-targets --locked      # passed after phase extractions
     cargo clippy --workspace --all-targets --locked -- -D warnings # passed after round two
     scripts/jig check rust-file-loc --changed-against 73075be... # passed
+    cargo test -p jig-sh --lib runtime::loops         # 142 passed after round three
+    scheduled_repo_task_blocks_after_leaving_the_shared_checkout_dirty # passed
+    scheduled_pr_manager_preserves_unconfirmed_push_as_attention       # passed
+    push_execution_error_distinguishes_started_and_unstarted_failures   # passed
+    scheduled_worker_observes_its_published_running_claim_before_start  # passed after fixture repair
+    scheduled_repo_checkouts_are_serialized_and_not_reported_as_worktrees # passed after fixture repair
+    parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evidence # 3 consecutive passes
 
 Final structured evidence:
 
@@ -216,3 +247,5 @@ Plan revision note (2026-08-30): narrowed disposable-cache recovery from every m
 Plan revision note (2026-08-30): after the second review, extracted pre-execution failure construction, transactional occurrence claiming, and unexecuted tick errors into focused child modules. This keeps the typed phase boundaries explicit and all changed Rust files within the repository's absolute line-count limit without changing behavior.
 
 Plan revision note (2026-08-30): the first post-round-two structured check exposed a direct-CLI adapter regression: a worker start failure had already produced a diagnostic receipt and structured failed tick, but `into_manual_result` discarded it because execution never began. Preserve the structured result when a worker receipt exists while continuing to return raw configuration/setup errors before any worker receipt is available.
+
+Plan revision note (2026-08-30): after the third review, extracted checkout completion reporting and the shared renewal policy, added typed ambiguous-push evidence, and narrowed repository dirtiness to task-authored changes by excluding only Jig's own worker receipt. This preserves the repository's LOC boundary and prevents the safety fix from backpressuring every otherwise-clean repo-mode task.

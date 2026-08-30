@@ -1,4 +1,6 @@
 use std::fs;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -114,6 +116,51 @@ fn lease_renewal_is_owner_checked_and_cannot_revive_expired_lease() {
             .to_string()
             .contains("expired before renewal")
     );
+}
+
+#[test]
+fn lease_renewal_retries_transient_state_failure_before_expiry() {
+    use std::cell::{Cell, RefCell};
+
+    let failed = AtomicBool::new(false);
+    let calls = AtomicUsize::new(0);
+    let now_ms = Cell::new(0_u64);
+    let waits = RefCell::new(Vec::new());
+
+    super::super::renewal::run_with_wait(
+        Duration::from_millis(300),
+        900,
+        &failed,
+        || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(super::super::renewal::RenewalAttemptError::Retryable(
+                    anyhow!("injected transient lease state failure"),
+                ));
+            }
+            Ok(1_800)
+        },
+        || now_ms.get(),
+        |wait| {
+            if calls.load(Ordering::SeqCst) >= 2 {
+                return Err(RecvTimeoutError::Disconnected);
+            }
+            waits.borrow_mut().push(wait);
+            now_ms.set(
+                now_ms
+                    .get()
+                    .saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+            );
+            Err(RecvTimeoutError::Timeout)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        waits.into_inner(),
+        [Duration::from_millis(300), Duration::from_millis(75)]
+    );
+    assert!(!failed.load(Ordering::Acquire));
 }
 
 fn write_loop_fixture_repo(root: &Path) {

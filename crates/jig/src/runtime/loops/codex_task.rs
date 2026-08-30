@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -33,12 +33,15 @@ use super::workflow::{
     WorkflowExecution, WorkflowOutcome, WorkflowTick,
 };
 
+mod checkout;
 mod pre_execution;
 
+use checkout::{PreparedCheckout, TaskOutcome};
 use pre_execution::{CheckoutPreparationFailure, unexecuted_task_failure};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
+const WORKER_RECEIPT_EXCLUDE: &str = ":(exclude).agent/state/receipts.jsonl";
 
 pub(super) struct CodexTaskExecution<'a> {
     pub(super) item_key: &'a str,
@@ -145,13 +148,24 @@ pub(super) fn codex_task_tick(
                     worker.status().code().unwrap_or(1)
                 )
             });
+            let repository_requires_attention = checkout.report.repository_requires_attention();
             let error = combine_task_errors(worker_error, checkout.error);
+            let error = combine_task_errors(
+                error,
+                repository_requires_attention.then(|| {
+                    "Codex task left the shared repository checkout dirty or its state could not be verified"
+                        .to_string()
+                }),
+            );
+            let outcome = if repository_requires_attention {
+                WorkflowOutcome::NeedsAttention
+            } else if error.is_some() {
+                WorkflowOutcome::Failed
+            } else {
+                WorkflowOutcome::Succeeded
+            };
             let completion = WorkflowCompletion {
-                outcome: if error.is_none() {
-                    WorkflowOutcome::Succeeded
-                } else {
-                    WorkflowOutcome::Failed
-                },
+                outcome,
                 execution: WorkflowExecution::Executed,
                 worker_receipt_id: Some(worker.worker_receipt_id().to_owned()),
                 worktree: checkout.report.retained_worktree(),
@@ -159,7 +173,11 @@ pub(super) fn codex_task_tick(
             };
             let action = json!({
                 "kind": "codex_task_worker",
-                "status": if error.is_none() { "succeeded" } else { "failed" },
+                "status": match outcome {
+                    WorkflowOutcome::Succeeded => "succeeded",
+                    WorkflowOutcome::Failed => "failed",
+                    WorkflowOutcome::NeedsAttention => "needs_attention",
+                },
                 "item_key": execution.item_key,
                 "worker_receipt_id": worker.worker_receipt_id(),
                 "checkout": checkout.report.value(),
@@ -352,143 +370,6 @@ fn decode_prompt(prompt: Vec<u8>, path: &Path) -> Result<String> {
         .with_context(|| format!("Failed to read UTF-8 Codex task prompt {}", path.display()))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TaskOutcome {
-    Succeeded,
-    Failed,
-}
-
-enum PreparedCheckout {
-    Repo {
-        path: PathBuf,
-    },
-    Worktree {
-        repo_root: PathBuf,
-        path: PathBuf,
-        initial_head: String,
-    },
-}
-
-struct CheckoutCompletion {
-    report: CheckoutReport,
-    error: Option<String>,
-}
-
-enum CheckoutReport {
-    Repository {
-        path: PathBuf,
-        dirty: Option<bool>,
-    },
-    Worktree {
-        path: PathBuf,
-        retained: bool,
-        dirty: Option<bool>,
-        head_changed: Option<bool>,
-    },
-}
-
-impl CheckoutReport {
-    fn retained_worktree(&self) -> Option<String> {
-        match self {
-            Self::Worktree {
-                path,
-                retained: true,
-                ..
-            } => Some(path.display().to_string()),
-            Self::Repository { .. } | Self::Worktree { .. } => None,
-        }
-    }
-
-    fn value(&self) -> Value {
-        match self {
-            Self::Repository { path, dirty } => json!({
-                "mode": "repo",
-                "path": path,
-                "retained": true,
-                "dirty": dirty,
-            }),
-            Self::Worktree {
-                path,
-                retained,
-                dirty,
-                head_changed,
-            } => json!({
-                "mode": "worktree",
-                "path": path,
-                "retained": retained,
-                "dirty": dirty,
-                "head_changed": head_changed,
-            }),
-        }
-    }
-}
-
-impl PreparedCheckout {
-    fn path(&self) -> &Path {
-        match self {
-            Self::Repo { path } | Self::Worktree { path, .. } => path,
-        }
-    }
-
-    fn finish(self, outcome: TaskOutcome, ctx: &RepoContext) -> CheckoutCompletion {
-        let mut cleanup_observer = NoopExecutionObserver;
-        match self {
-            Self::Repo { path } => match git_is_dirty(ctx, &path, &mut cleanup_observer) {
-                Ok(dirty) => CheckoutCompletion {
-                    report: CheckoutReport::Repository {
-                        path,
-                        dirty: Some(dirty),
-                    },
-                    error: None,
-                },
-                Err(error) => CheckoutCompletion {
-                    report: CheckoutReport::Repository { path, dirty: None },
-                    error: Some(format!(
-                        "Failed to inspect retained task checkout: {error:#}"
-                    )),
-                },
-            },
-            Self::Worktree {
-                repo_root,
-                path,
-                initial_head,
-            } => {
-                let dirty = git_is_dirty(ctx, &path, &mut cleanup_observer);
-                let final_head =
-                    git_stdout(ctx, &path, ["rev-parse", "HEAD"], &mut cleanup_observer);
-                let mut errors = Vec::new();
-                if let Err(error) = &dirty {
-                    errors.push(format!("Failed to inspect task worktree status: {error:#}"));
-                }
-                if let Err(error) = &final_head {
-                    errors.push(format!("Failed to inspect task worktree HEAD: {error:#}"));
-                }
-                let dirty = dirty.ok();
-                let head_changed = final_head.ok().map(|head| head != initial_head);
-                let mut retained = outcome == TaskOutcome::Failed
-                    || dirty.unwrap_or(true)
-                    || head_changed.unwrap_or(true);
-                if !retained
-                    && let Err(error) =
-                        remove_worktree(ctx, &repo_root, &path, false, &mut cleanup_observer)
-                {
-                    retained = true;
-                    errors.push(format!("Failed to remove clean task worktree: {error:#}"));
-                }
-                CheckoutCompletion {
-                    report: CheckoutReport::Worktree {
-                        path,
-                        retained,
-                        dirty,
-                        head_changed,
-                    },
-                    error: (!errors.is_empty()).then(|| errors.join("; ")),
-                }
-            }
-        }
-    }
-}
-
 fn combine_task_errors(primary: Option<String>, cleanup: Option<String>) -> Option<String> {
     match (primary, cleanup) {
         (Some(primary), Some(cleanup)) => Some(format!(
@@ -606,10 +487,34 @@ fn git_is_dirty(
     worktree: &Path,
     observer: &mut dyn ExecutionControl,
 ) -> Result<bool> {
-    let (mut command, label) = git_command(
-        worktree,
-        ["status", "--porcelain=v1", "--untracked-files=normal"],
-    );
+    git_status_has_changes(ctx, worktree, false, observer)
+}
+
+fn repo_task_has_changes(
+    ctx: &RepoContext,
+    worktree: &Path,
+    observer: &mut dyn ExecutionControl,
+) -> Result<bool> {
+    git_status_has_changes(ctx, worktree, true, observer)
+}
+
+fn git_status_has_changes(
+    ctx: &RepoContext,
+    worktree: &Path,
+    exclude_worker_receipt: bool,
+    observer: &mut dyn ExecutionControl,
+) -> Result<bool> {
+    let mut args = vec![
+        OsString::from("status"),
+        OsString::from("--porcelain=v1"),
+        OsString::from("--untracked-files=normal"),
+        OsString::from("--"),
+        OsString::from("."),
+    ];
+    if exclude_worker_receipt {
+        args.push(OsString::from(WORKER_RECEIPT_EXCLUDE));
+    }
+    let (mut command, label) = git_command(worktree, args);
     let timeout = ctx.command_timeout();
     let output_limit = internal_execution_output_limit();
     let output = match run_supervised_execution_command(

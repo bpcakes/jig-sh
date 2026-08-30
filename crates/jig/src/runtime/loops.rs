@@ -11,9 +11,13 @@ mod github;
 mod noop;
 mod occurrence;
 mod pr_manager;
+mod renewal;
 mod schedule;
 mod state;
 mod workflow;
+
+#[cfg(test)]
+pub(in crate::runtime) use schedule::dispatch_due_at;
 
 pub(super) fn dispatch_with_observer(
     ctx: &RepoContext,
