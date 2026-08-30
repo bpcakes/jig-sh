@@ -25,6 +25,8 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 **Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), Go 1.26 for generated Go backends, and the selected database engine when database support is enabled.
 
+The checked-in `rust-toolchain.toml` pins contributor and default CI tooling to Rust 1.98.0; `Cargo.toml` keeps Rust 1.88 as the workspace MSRV.
+
 ```sh
 cargo install jig-sh
 ```
