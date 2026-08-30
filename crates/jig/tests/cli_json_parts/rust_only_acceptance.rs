@@ -171,7 +171,13 @@ fn rust_only_init_process_reports_are_exact_and_generated_jig_checks_pass() {
         assert_eq!(report["ok"], true);
         assert_eq!(report["command"], "init");
         assert_eq!(report["render_mode"], "copy");
-        assert_eq!(report["destination"], destination.display().to_string());
+        assert_eq!(
+            report["destination"],
+            fs::canonicalize(&destination)
+                .unwrap()
+                .display()
+                .to_string()
+        );
         assert_eq!(report["answers_file"], ".jig.toml");
         assert_eq!(report["git_initialized"], true);
         assert_eq!(
