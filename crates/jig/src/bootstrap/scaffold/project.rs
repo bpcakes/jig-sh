@@ -7,8 +7,6 @@ use super::frontend::FrontendScaffold;
 pub(super) enum ScaffoldProjectPlan {
     RustReact(RustReactScaffoldPlan),
     GoReact(GoReactScaffoldPlan),
-    // B02 supplies the private renderer; B03/B04 add public construction paths.
-    #[allow(dead_code)]
     RustOnly(RustOnlyScaffoldPlan),
 }
 
@@ -122,9 +120,9 @@ pub(super) struct RustOnlyScaffoldPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(in crate::bootstrap) enum RustOnlyArtifact {
     Library,
+    #[allow(dead_code)]
     Cli,
 }
 
@@ -241,5 +239,25 @@ mod tests {
         )
         .unwrap();
         assert!(harness.is_none());
+
+        let library = InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustLibrary),
+                ..ScaffoldOpts::default()
+            },
+            &AnswerOpts::default(),
+            destination.path(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            &library.project,
+            ScaffoldProjectPlan::RustOnly(RustOnlyScaffoldPlan {
+                artifact: RustOnlyArtifact::Library
+            })
+        ));
+        assert_eq!(library.identity(), ScaffoldIdentity::RustLibrary);
+        assert_eq!(library.database(), ScaffoldDb::None);
+        assert!(library.frontends().is_empty());
     }
 }

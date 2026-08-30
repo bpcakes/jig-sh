@@ -12,8 +12,8 @@ use super::repository_model::{
     AuthoredRepositoryModel, RepositoryProjectionHint, frontend_component_id,
 };
 use super::{
-    AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
-    generated_package_manager_version,
+    AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, ScaffoldOpts, ScaffoldPreset,
+    generated_package_manager_spec, generated_package_manager_version,
 };
 use crate::backend::{
     BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase,
@@ -126,6 +126,7 @@ pub(super) struct AnswerResolution {
     notes: Vec<String>,
 }
 
+#[derive(Debug)]
 pub(super) struct AnswerInput {
     raw: RawAnswers,
     shape: AnswerInputShape,
@@ -133,8 +134,15 @@ pub(super) struct AnswerInput {
     preserve_repository_model: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedInitAnswers {
+    input: AnswerInput,
+    effective: AnswerOpts,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct AnswerInputShape {
+    top_level_keys: BTreeSet<String>,
     keys: BTreeSet<String>,
     sqlx_enabled: Option<bool>,
     schema_dump_enabled: Option<bool>,
@@ -150,6 +158,86 @@ const SQLX_SHAPED_ANSWER_KEYS: &[&str] = &[
     "sqlx_check_command",
     "migration_add_command",
 ];
+
+const KNOWN_INIT_ANSWER_KEYS: &[&str] = &[
+    "agent_tooling",
+    "application_contracts_enabled",
+    "backend_language",
+    "bootstrap_command",
+    "ci_github_runner",
+    "commands",
+    "contract_check_command",
+    "default_branch",
+    "dev",
+    "dev_command",
+    "execution",
+    "frontend_apps",
+    "frontend_workspace_roots",
+    "go_database",
+    "go_fmt_check_command",
+    "go_lint_command",
+    "go_module",
+    "go_test_command",
+    "go_test_locked_command",
+    "harness_footprint",
+    "jig_version",
+    "loop",
+    "migration_add_command",
+    "migration_dir",
+    "repo_name",
+    "repository",
+    "rust_clippy_command",
+    "rust_crate_roots",
+    "rust_fmt_check_command",
+    "rust_migration_dir",
+    "rust_migration_layout",
+    "rust_sqlx_metadata_dir",
+    "rust_test_command",
+    "rust_test_locked_command",
+    "schema_check_command",
+    "schema_docs_dir",
+    "schema_dump_command",
+    "schema_dump_enabled",
+    "sqlc_check_command",
+    "sqlx_check_command",
+    "sqlx_enabled",
+    "status",
+    "template_source_url",
+    "typescript_build_command",
+    "typescript_coverage_command",
+    "typescript_lint_command",
+    "typescript_typecheck_command",
+    "vault",
+    "web_package_manager",
+    "work",
+];
+
+impl PreparedInitAnswers {
+    pub(crate) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
+        let input = AnswerInput::from_init_opts_at(opts, path_base)?;
+        let effective = input.effective_opts(opts)?;
+        Ok(Self { input, effective })
+    }
+
+    pub(crate) fn copy_effective_to(&self, answers: &mut AnswerOpts) {
+        answers.clone_from(&self.effective);
+    }
+
+    pub(crate) fn retain_effective(&mut self, answers: &AnswerOpts) {
+        self.effective.clone_from(answers);
+    }
+
+    pub(crate) fn validate_selected_preset(&self, scaffold: &ScaffoldOpts) -> Result<()> {
+        if scaffold.preset == Some(ScaffoldPreset::RustLibrary) {
+            return self.input.validate_rust_library(scaffold, &self.effective);
+        }
+        self.input.validate_explicit_file_semantics()
+    }
+
+    pub(super) fn into_parts(self) -> (AnswerInput, AnswerOpts) {
+        (self.input, self.effective)
+    }
+}
 
 impl AnswerInput {
     pub(super) fn from_opts(opts: &AnswerOpts) -> Result<Self> {
@@ -181,6 +269,25 @@ impl AnswerInput {
         Self::from_explicit_file(&path)
     }
 
+    fn from_init_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
+        let Some(path) = opts.answers_file.as_deref() else {
+            return Ok(Self {
+                raw: RawAnswers::default(),
+                shape: AnswerInputShape::default(),
+                authored_repository_commands: Some(BTreeMap::new()),
+                preserve_repository_model: false,
+            });
+        };
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            path_base.join(path)
+        };
+        let mut input = Self::from_file(&path)?;
+        input.preserve_repository_model = true;
+        Ok(input)
+    }
+
     pub(super) fn from_file(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -209,19 +316,145 @@ impl AnswerInput {
 
     fn from_explicit_file(path: &Path) -> Result<Self> {
         let mut input = Self::from_file(path)?;
-        if input
+        input.validate_explicit_file_semantics()?;
+        input.preserve_repository_model = true;
+        Ok(input)
+    }
+
+    fn validate_explicit_file_semantics(&self) -> Result<()> {
+        if self
             .raw
             .repository
             .as_ref()
             .is_some_and(AuthoredRepositoryModel::is_complete)
-            && input.authored_repository_commands.is_none()
+            && self.authored_repository_commands.is_none()
         {
             bail!(
                 "A complete authored [repository] model requires [commands] to be a table of string values"
             );
         }
-        input.preserve_repository_model = true;
-        Ok(input)
+        Ok(())
+    }
+
+    fn validate_rust_library(&self, scaffold: &ScaffoldOpts, answers: &AnswerOpts) -> Result<()> {
+        let mut raw = self.raw.clone();
+        raw.merge_opts(answers);
+
+        for key in ["repository", "commands", "work", "loop"] {
+            if self.shape.contains_top_level_key(key) {
+                return reject_rust_library_input(key);
+            }
+        }
+        if let Some(key) = self.shape.first_unknown_top_level_key() {
+            return reject_rust_library_input(&format!("unknown top-level answer key `{key}`"));
+        }
+        if !scaffold.frontends.is_empty() {
+            return reject_rust_library_input("--frontend");
+        }
+        if !scaffold.frontend_list.is_empty() {
+            return reject_rust_library_input("--frontends");
+        }
+        if scaffold.db.is_some() {
+            return reject_rust_library_input("--db");
+        }
+        if raw.go_module.as_deref().is_some_and(nonempty_answer_string) {
+            return reject_rust_library_input("--go-module / go_module");
+        }
+        if self.shape.contains_key("go_database") {
+            return reject_rust_library_input("go_database");
+        }
+        if raw.backend_language == Some(BackendLanguage::Go) {
+            return reject_rust_library_input("backend_language = \"go\"");
+        }
+        if raw.harness_footprint == Some(HarnessFootprint::Minimal) {
+            return reject_rust_library_input("harness_footprint = \"minimal\"");
+        }
+        if let Some(roots) = raw.rust_crate_roots.as_deref()
+            && (roots.len() != 1 || roots[0] != "crates")
+        {
+            return reject_rust_library_input("rust_crate_roots");
+        }
+        if raw.sqlx_enabled == Some(true) {
+            return reject_rust_library_input("sqlx_enabled = true");
+        }
+        if raw.schema_dump_enabled == Some(true) {
+            return reject_rust_library_input("schema_dump_enabled = true");
+        }
+        if raw.rust_migration_layout.is_some() || self.shape.contains_key("rust_migration_layout") {
+            return reject_rust_library_input("rust_migration_layout");
+        }
+
+        for (key, value) in [
+            ("rust_migration_dir", raw.rust_migration_dir.as_deref()),
+            ("migration_dir", raw.migration_dir.as_deref()),
+            (
+                "rust_sqlx_metadata_dir",
+                raw.rust_sqlx_metadata_dir.as_deref(),
+            ),
+            ("schema_dump_command", raw.schema_dump_command.as_deref()),
+            ("schema_docs_dir", raw.schema_docs_dir.as_deref()),
+            ("schema_check_command", raw.schema_check_command.as_deref()),
+            ("sqlx_check_command", raw.sqlx_check_command.as_deref()),
+            (
+                "migration_add_command",
+                raw.migration_add_command.as_deref(),
+            ),
+            ("go_fmt_check_command", raw.go_fmt_check_command.as_deref()),
+            ("go_lint_command", raw.go_lint_command.as_deref()),
+            ("go_test_command", raw.go_test_command.as_deref()),
+            (
+                "go_test_locked_command",
+                raw.go_test_locked_command.as_deref(),
+            ),
+            ("sqlc_check_command", raw.sqlc_check_command.as_deref()),
+            (
+                "typescript_lint_command",
+                raw.typescript_lint_command.as_deref(),
+            ),
+            (
+                "typescript_typecheck_command",
+                raw.typescript_typecheck_command.as_deref(),
+            ),
+            (
+                "typescript_build_command",
+                raw.typescript_build_command.as_deref(),
+            ),
+            (
+                "typescript_coverage_command",
+                raw.typescript_coverage_command.as_deref(),
+            ),
+            ("dev_command", raw.dev_command.as_deref()),
+        ] {
+            if value.is_some_and(nonempty_answer_string) {
+                return reject_rust_library_input(key);
+            }
+        }
+        if raw
+            .frontend_apps
+            .as_ref()
+            .is_some_and(|apps| !apps.is_empty())
+        {
+            return reject_rust_library_input("frontend_apps");
+        }
+        if raw
+            .frontend_workspace_roots
+            .as_ref()
+            .is_some_and(|roots| !roots.is_empty())
+        {
+            return reject_rust_library_input("frontend_workspace_roots");
+        }
+        if raw
+            .dev
+            .as_ref()
+            .and_then(|dev| dev.apps.as_ref())
+            .is_some_and(|apps| !apps.is_empty())
+        {
+            return reject_rust_library_input("dev.apps");
+        }
+        if raw.application_contracts_enabled == Some(true) {
+            return reject_rust_library_input("application_contracts_enabled = true");
+        }
+        Ok(())
     }
 
     pub(super) const fn shape(&self) -> &AnswerInputShape {
@@ -314,9 +547,20 @@ impl AnswerInput {
     }
 }
 
+fn nonempty_answer_string(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+fn reject_rust_library_input(input: &str) -> Result<()> {
+    bail!(
+        "--preset rust-library cannot be combined with incompatible input `{input}`; remove that input or select a matching preset"
+    )
+}
+
 impl AnswerInputShape {
     pub(super) fn from_table(table: &toml::Table) -> Self {
-        let mut keys = table.keys().cloned().collect::<BTreeSet<_>>();
+        let top_level_keys = table.keys().cloned().collect::<BTreeSet<_>>();
+        let mut keys = top_level_keys.clone();
         if let Some(repository) = table.get("repository").and_then(toml::Value::as_table) {
             keys.insert("backend_language".into());
             let has_adapter = |expected: &str| {
@@ -390,6 +634,7 @@ impl AnswerInputShape {
             }
         }
         Self {
+            top_level_keys,
             sqlx_enabled: table.get("sqlx_enabled").and_then(toml::Value::as_bool),
             schema_dump_enabled: table
                 .get("schema_dump_enabled")
@@ -400,6 +645,17 @@ impl AnswerInputShape {
 
     pub(super) fn contains_key(&self, key: &str) -> bool {
         self.keys.contains(key)
+    }
+
+    fn contains_top_level_key(&self, key: &str) -> bool {
+        self.top_level_keys.contains(key)
+    }
+
+    fn first_unknown_top_level_key(&self) -> Option<&str> {
+        self.top_level_keys
+            .iter()
+            .map(String::as_str)
+            .find(|key| !KNOWN_INIT_ANSWER_KEYS.contains(key))
     }
 
     pub(super) fn explicit_sqlx_enabled(&self, answers: &AnswerOpts) -> Option<bool> {

@@ -114,7 +114,10 @@ use launcher_repair_cache::{
 use launcher_repair_cache::{is_root_owned_nonwritable_path, root_owned_nonwritable_component};
 
 pub use answers::HarnessFootprint;
+pub(crate) use answers::PreparedInitAnswers;
+#[cfg(test)]
 pub(crate) use init::run_init;
+pub(crate) use init::run_prepared_init;
 pub use opts::AnswerOpts;
 pub use presets::scaffold_presets_report;
 pub use update::run_update;

@@ -78,13 +78,16 @@ impl InitScaffoldPlan {
         }
         let Some(preset) = opts.preset else {
             bail!(
-                "Scaffold options require --preset rust-react, --preset go-react, or --preset harness-only"
+                "Scaffold options require --preset rust-react, --preset go-react, --preset harness-only, or --preset rust-library"
             );
         };
         match preset {
             ScaffoldPreset::RustReact => Self::rust_react(opts, answers, destination).map(Some),
             ScaffoldPreset::GoReact => Self::go_react(opts, answers, destination).map(Some),
             ScaffoldPreset::HarnessOnly => Ok(None),
+            ScaffoldPreset::RustLibrary => {
+                Self::rust_only(RustOnlyArtifact::Library, answers, destination).map(Some)
+            }
         }
     }
 
@@ -574,7 +577,6 @@ impl InitScaffoldPlan {
         })
     }
 
-    #[allow(dead_code)]
     pub(super) fn rust_only(
         artifact: RustOnlyArtifact,
         answers: &AnswerOpts,

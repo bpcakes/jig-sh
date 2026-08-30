@@ -38,6 +38,7 @@ Examples:
   jig init /path/to/new-repo
   jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
   jig init /path/to/new-repo --preset harness-only --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-library --no-input --no-vault
   jig init /path/to/new-repo --preset rust-react
   jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
   jig init /path/to/new-repo --preset go-react --db postgres --frontends web --go-module github.com/acme/new-repo
@@ -322,6 +323,7 @@ pub enum ScaffoldPreset {
     RustReact,
     GoReact,
     HarnessOnly,
+    RustLibrary,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -353,11 +355,11 @@ impl TemplateMode {
     }
 }
 
-pub(crate) fn merge_init_answer_file_for_interaction(answers: &mut AnswerOpts) -> Result<()> {
+pub(crate) fn prepare_init_answers_for_interaction(
+    answers: &AnswerOpts,
+) -> Result<PreparedInitAnswers> {
     let invocation_cwd = bootstrap_invocation_cwd()?;
-    let input = AnswerInput::from_opts_at(answers, &invocation_cwd)?;
-    *answers = input.effective_opts(answers)?;
-    Ok(())
+    PreparedInitAnswers::from_opts_at(answers, &invocation_cwd)
 }
 
 pub(crate) fn should_default_init_sqlx_disabled(answers: &AnswerOpts) -> bool {

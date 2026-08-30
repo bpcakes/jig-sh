@@ -634,6 +634,42 @@ fn parses_explicit_harness_only_init_preset() {
 }
 
 #[test]
+fn parses_exact_rust_library_preset_and_rejects_invalid_spelling() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "init",
+        "ExampleLibrary",
+        "--preset",
+        "rust-library",
+        "--no-input",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Init(bootstrap::InitOpts { scaffold, .. }) => {
+            assert_eq!(
+                scaffold.preset,
+                Some(bootstrap::ScaffoldPreset::RustLibrary)
+            );
+        }
+        other => panic!("expected init command, got {other:?}"),
+    }
+
+    let error = Cli::try_parse_from([
+        "jig",
+        "init",
+        "ExampleLibrary",
+        "--preset",
+        "rust_library",
+        "--no-input",
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("rust-library"), "{error}");
+    assert!(error.contains("rust_library"), "{error}");
+}
+
+#[test]
 fn init_parser_allows_defaults_and_no_input_for_defaults_precedence() {
     let cli = Cli::try_parse_from([
         "jig",

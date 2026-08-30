@@ -7,15 +7,19 @@ use crate::bootstrap::{
     self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldPreset, parse_scaffold_frontend,
 };
 
-pub(super) fn prepare_init_interaction(opts: &mut InitOpts) -> Result<()> {
-    bootstrap::merge_init_answer_file_for_interaction(&mut opts.answers)?;
+pub(super) fn prepare_init_interaction(
+    opts: &mut InitOpts,
+) -> Result<bootstrap::PreparedInitAnswers> {
+    let mut prepared = prepare_init_answers(opts)?;
+    prepared.copy_effective_to(&mut opts.answers);
     let terminals_available = io::stdin().is_terminal() && io::stderr().is_terminal();
     let stdin = io::stdin();
     let stderr = io::stderr();
     let mut input = stdin.lock();
     let mut output = stderr.lock();
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
-    prepare_merged_init_interaction(opts, policy, &mut input, &mut output)
+    prepare_merged_init_interaction(opts, &mut prepared, policy, &mut input, &mut output)?;
+    Ok(prepared)
 }
 
 pub(super) fn preflight_init_package_manager(opts: &InitOpts) -> Result<()> {
@@ -47,10 +51,12 @@ fn prepare_init_interaction_with_io<R: BufRead, W: Write>(
     opts: &mut InitOpts,
     input: &mut R,
     output: &mut W,
-) -> Result<()> {
-    bootstrap::merge_init_answer_file_for_interaction(&mut opts.answers)?;
+) -> Result<bootstrap::PreparedInitAnswers> {
+    let mut prepared = prepare_init_answers(opts)?;
+    prepared.copy_effective_to(&mut opts.answers);
     let policy = InitInteractionPolicy::resolve(opts, true);
-    prepare_merged_init_interaction(opts, policy, input, output)
+    prepare_merged_init_interaction(opts, &mut prepared, policy, input, output)?;
+    Ok(prepared)
 }
 
 #[cfg(test)]
@@ -59,10 +65,22 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     terminals_available: bool,
     input: &mut R,
     output: &mut W,
-) -> Result<()> {
-    bootstrap::merge_init_answer_file_for_interaction(&mut opts.answers)?;
+) -> Result<bootstrap::PreparedInitAnswers> {
+    let mut prepared = prepare_init_answers(opts)?;
+    prepared.copy_effective_to(&mut opts.answers);
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
-    prepare_merged_init_interaction(opts, policy, input, output)
+    prepare_merged_init_interaction(opts, &mut prepared, policy, input, output)?;
+    Ok(prepared)
+}
+
+fn prepare_init_answers(opts: &InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
+    bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
+        if opts.scaffold.preset == Some(ScaffoldPreset::RustLibrary) {
+            anyhow::anyhow!("Failed to prepare --preset rust-library answers: {error:#}")
+        } else {
+            error
+        }
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,11 +108,13 @@ impl InitInteractionPolicy {
 
 fn prepare_merged_init_interaction<R: BufRead, W: Write>(
     opts: &mut InitOpts,
+    prepared: &mut bootstrap::PreparedInitAnswers,
     policy: InitInteractionPolicy,
     input: &mut R,
     output: &mut W,
 ) -> Result<()> {
     opts.scaffold.normalize_minimal_harness_shape(&opts.answers);
+    prepared.validate_selected_preset(&opts.scaffold)?;
     opts.scaffold.validate_init_invariants(&opts.answers)?;
     match policy {
         InitInteractionPolicy::Interactive => {
@@ -107,7 +127,10 @@ fn prepare_merged_init_interaction<R: BufRead, W: Write>(
             validate_project_shape_resolved(opts, non_terminal)?;
         }
     }
+    prepared.retain_effective(&opts.answers);
+    prepared.validate_selected_preset(&opts.scaffold)?;
     opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
+    prepared.retain_effective(&opts.answers);
     opts.scaffold.validate_init_invariants(&opts.answers)
 }
 
@@ -495,3 +518,7 @@ impl InitPresetMetadata {
 #[cfg(test)]
 #[path = "init_wizard_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "init_wizard_rust_library_tests.rs"]
+mod rust_library_tests;

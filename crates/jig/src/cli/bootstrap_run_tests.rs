@@ -284,6 +284,15 @@ fn presets_summary_explains_defaults_and_ownership() {
         output["presets"].as_array().unwrap().len(),
         bootstrap::ScaffoldPreset::value_variants().len()
     );
+    assert_eq!(
+        output["presets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|preset| preset["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["rust-react", "go-react", "harness-only", "rust-library"]
+    );
 
     let summary = format_presets_human_summary(&output);
 
@@ -301,6 +310,15 @@ fn presets_summary_explains_defaults_and_ownership() {
     assert!(summary.contains("does not create Rust crates, databases, or frontend applications"));
     assert!(summary.contains("project-owned after creation"));
     assert!(summary.contains("Presets are starter shapes, not long-term application frameworks."));
+    assert!(summary.contains("rust-library"));
+    assert!(summary.contains("Expandable Rust workspace with one library crate."));
+    assert!(summary.contains("Cargo.toml virtual workspace"));
+    assert!(summary.contains("crates/<repo> library crate"));
+    assert!(
+        summary.contains("jig init ./example-library --preset rust-library --no-input --no-vault")
+    );
+    assert!(summary.contains("does not create a database, frontend, API, dev app"));
+    assert!(summary.contains("does not select a license or enable package publication"));
 }
 
 #[test]

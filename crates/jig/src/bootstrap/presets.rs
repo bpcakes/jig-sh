@@ -117,6 +117,12 @@ impl ScaffoldPreset {
                 frontends: ScaffoldChoiceCapability::UNSUPPORTED,
                 go_module: ScaffoldChoiceCapability::UNSUPPORTED,
             },
+            Self::RustLibrary => ScaffoldPresetCapabilities {
+                has_project_scaffold: true,
+                database: ScaffoldChoiceCapability::UNSUPPORTED,
+                frontends: ScaffoldChoiceCapability::UNSUPPORTED,
+                go_module: ScaffoldChoiceCapability::UNSUPPORTED,
+            },
         }
     }
 
@@ -157,6 +163,7 @@ impl ScaffoldPreset {
             Self::RustReact => Some("Rust React"),
             Self::GoReact => Some("Go React"),
             Self::HarnessOnly => None,
+            Self::RustLibrary => Some("Rust library"),
         }
     }
 
@@ -165,6 +172,7 @@ impl ScaffoldPreset {
             Self::RustReact => "rust-react",
             Self::GoReact => "go-react",
             Self::HarnessOnly => "harness-only",
+            Self::RustLibrary => "rust-library",
         }
     }
 
@@ -173,6 +181,7 @@ impl ScaffoldPreset {
             Self::RustReact => Some(BackendLanguage::Rust),
             Self::GoReact => Some(BackendLanguage::Go),
             Self::HarnessOnly => None,
+            Self::RustLibrary => Some(BackendLanguage::Rust),
         }
     }
 
@@ -183,7 +192,7 @@ impl ScaffoldPreset {
                 RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
             ],
             Self::GoReact => &[APPLICATION_BACKEND_DEV_APP_NAME],
-            Self::HarnessOnly => &[],
+            Self::HarnessOnly | Self::RustLibrary => &[],
         }
     }
 
@@ -191,7 +200,7 @@ impl ScaffoldPreset {
         match self {
             Self::RustReact => &["apps", "crates"],
             Self::GoReact => &["cmd", "internal"],
-            Self::HarnessOnly => &[],
+            Self::HarnessOnly | Self::RustLibrary => &[],
         }
     }
 
@@ -292,6 +301,28 @@ impl ScaffoldPreset {
                     "The harness-only preset does not create Rust crates, databases, or frontend applications.",
                 ],
             },
+            Self::RustLibrary => ScaffoldPresetDescriptor {
+                name: "rust-library",
+                summary: "Expandable Rust workspace with one library crate.",
+                defaults: &[
+                    "The virtual workspace uses crates/<repo> as its only initial member.",
+                    "Rust 2024 uses the top-level Jig workspace Rust baseline.",
+                    "SQLx, schema dumps, application contracts, frontends, and dev apps are disabled.",
+                ],
+                layout: &[
+                    "Cargo.toml virtual workspace",
+                    "crates/<repo> library crate",
+                ],
+                frontend_shorthands: &[],
+                examples: &[
+                    "jig init ./example-library --preset rust-library --no-input --no-vault",
+                ],
+                ownership: "The generated Cargo manifests, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
+                non_goals: &[
+                    "The rust-library preset does not create a database, frontend, API, dev app, release workflow, or additional crate layers.",
+                    "The scaffold does not select a license or enable package publication.",
+                ],
+            },
         }
     }
 }
@@ -308,6 +339,7 @@ mod tests {
                 ScaffoldPreset::RustReact,
                 ScaffoldPreset::GoReact,
                 ScaffoldPreset::HarnessOnly,
+                ScaffoldPreset::RustLibrary,
             ]
         );
 
@@ -335,6 +367,14 @@ mod tests {
                 (false, false),
                 (false, false),
                 None,
+            ),
+            (
+                ScaffoldPreset::RustLibrary,
+                true,
+                (false, false),
+                (false, false),
+                (false, false),
+                Some("Rust library"),
             ),
         ];
         for (preset, project, database, frontends, go_module, label) in expected {
