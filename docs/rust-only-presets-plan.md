@@ -1,6 +1,7 @@
 # Rust-only `jig init` presets
 
-Status: delivery plan, reviewed to steady state before Beads conversion.
+Status: delivery plan, converted to Beads and reviewed to evidenced steady state;
+implementation has not begun.
 
 This document defines the product behavior, architecture, compatibility rules,
 validation strategy, and delivery graph for adding first-class greenfield Rust
@@ -140,6 +141,8 @@ The generated repository has:
 - no JavaScript workspace;
 - no frontend applications;
 - no dev proxy application;
+- root agent guidance that describes a Rust workspace rather than an application
+  backend and does not recommend `scripts/jig dev`;
 - Rust format, Clippy, test, locked-test, policy, contract, and agent-map checks;
 - a root README that explains the generated shape and project-owned boundary;
 - a crate-level `AGENTS.md` and refreshed root `agent-map.md`;
@@ -781,7 +784,35 @@ The README includes:
 The README uses generic generated names and contains no Jig source-repository
 paths or private fixture identifiers.
 
-### 12.2 Crate-level `AGENTS.md`
+### 12.2 Root `AGENTS.md` neutrality
+
+The full Jig harness still renders the managed root `AGENTS.md`, but Rust-only
+repositories must not inherit guidance that calls every Rust crate a backend or
+recommends a dev-service command that has no configured app. For the neutral
+authored `workspace` component, the generated managed block therefore:
+
+- says repository and crate guidance rather than backend-level guidance;
+- uses `## Rust Defaults` rather than `## Backend Defaults`;
+- retains the crate-root and crate-guide rules;
+- omits the transport-layer rule because a library or CLI need not have a
+  transport boundary;
+- omits `scripts/jig dev` from preferred commands;
+- says “For Rust changes” rather than “For backend changes” in done criteria;
+- uses `## Crate Guide Conventions` and refers to Rust crates, not backend
+  packages.
+
+This is selected from the ordinary authored repository model, not from stored
+preset history. Initial rendering already contains the neutral `workspace`
+component described in section 16.4. Update and recopy can derive the same
+guidance mode from that checked-in component and its Rust adapter, so no new
+answer key or contract field is needed.
+
+The existing managed-block bytes remain unchanged for Rust React, Go React,
+harness-only, and compatibility answer shapes. A broad global terminology
+rewrite would violate the release's compatibility boundary; the template uses
+an exact semantic branch for a neutral authored Rust workspace instead.
+
+### 12.3 Crate-level `AGENTS.md`
 
 The seed crate guide follows the repository convention:
 
@@ -798,7 +829,7 @@ updated when real behavior exists.
 The guide must not claim invented domain ownership. It can state only artifact
 kind, entrypoint, and repository policy.
 
-### 12.3 Agent map refresh
+### 12.4 Agent map refresh
 
 The existing init flow refreshes `agent-map.md` after scaffold publication.
 Acceptance tests require the new crate-level guide to appear exactly once and
@@ -1053,6 +1084,16 @@ The generated complete repository model then becomes checked-in authority.
 `jig update` and recopy preserve it through the existing authored-model path and
 do not need to rediscover the historical preset.
 
+The same authored model also drives managed root guidance. Add a render-only
+predicate such as `rust_workspace_guidance_enabled()` that is true when the
+authored repository has the neutral root `workspace` component with a Rust
+adapter and has no API/backend component identity. The exact method name may
+vary, but it must derive from existing component and adapter records rather than
+from a new persisted preset or artifact-kind key. This lets initial render,
+update, and recopy select the same root `AGENTS.md` wording. It also keeps an
+authored neutral Rust workspace truthful if it was produced by adoption rather
+than by a historical preset.
+
 The implementation must:
 
 - keep the current `api` projection unchanged for `rust-react` and existing
@@ -1063,6 +1104,8 @@ The implementation must:
 - preserve compatibility aliases for fmt, Clippy, test, and locked test;
 - avoid tags or fields that make library/CLI artifact kind runtime semantics;
 - produce deterministic component/action/profile ordering;
+- render neutral root agent guidance and omit the dev-service recommendation
+  for the neutral workspace projection;
 - add no schema field, adapter kind, runner kind, or contract epoch.
 
 This authoring distinction is compatible with the separate stack-neutral
@@ -1151,6 +1194,13 @@ The strict MiniJinja context includes only values templates consume:
 - `rust_version` if centralized as a value rather than literal template policy.
 
 Undefined values remain hard errors through the existing strict environment.
+
+The project-template context additionally exposes the derived neutral-workspace
+guidance predicate. It is computed from the authored repository model already
+available to `RenderAnswers`; it is not accepted from CLI input, answers files,
+or persisted configuration. `templates/project/AGENTS.md.jinja` uses that
+predicate only to select the neutral terminology and command list specified in
+section 12.2. All existing branches retain their current rendered bytes.
 
 ### 17.4 Embedded snapshots
 
@@ -1257,6 +1307,12 @@ before/after fixture comparisons for representative:
 No current scaffold file, report field, next step, answer, or prompt choice may
 change unintentionally.
 
+The neutral root-guidance branch is covered in both directions: Rust-only
+fixtures assert its workspace terminology and missing dev recommendation, while
+representative Rust React, Go React, and harness-only fixtures assert their
+existing managed `AGENTS.md` bytes. The new predicate must not become a global
+template wording change.
+
 ### 19.2 CLI compatibility
 
 Clap exposes new enum values additively. Existing flags retain meanings.
@@ -1337,6 +1393,8 @@ For each preset, initialize a temporary generic fixture and assert:
 - no web workflow is rendered;
 - no database workflow or gate is rendered;
 - agent map links to the seed crate guide;
+- root `AGENTS.md` uses neutral Rust-workspace/crate terminology, contains no
+  backend-only transport rule, and does not recommend `scripts/jig dev`;
 - scaffold report file classifications are exact.
 
 ### 20.3 Generated runtime tests
@@ -1423,6 +1481,8 @@ Update all user-facing places that currently imply only three preset choices:
   and ownership boundary;
 - `docs/configuration.md` answer behavior, preset compatibility, setup, Cargo
   lock policy, and scaffold snapshot notes where relevant;
+- generated root `AGENTS.md` terminology and preferred-command behavior for a
+  neutral authored Rust workspace;
 - CLI long help in `crates/jig/src/bootstrap_parts/part_01.rs`;
 - `jig presets` descriptors;
 - wizard menu and strict-mode diagnostics;
@@ -1544,11 +1604,12 @@ Epic: First-class Rust-only init presets
 B04 depends on B03 rather than running in parallel because both add exhaustive
 matches to the same preset enum, plan dispatcher, report code, and central tests.
 The sequence lets the CLI reuse the public library pattern and avoids resolving
-the same central conflicts twice. B06 follows B05 because both own preset JSON,
-report, and integration-test surfaces. Their earlier parallel shape advertised
-concurrency while still requiring conditional file-ownership coordination; the
-explicit edge is cheaper and more truthful than making two agents negotiate the
-same central tests.
+the same central conflicts twice. B06 follows B05 because adversarial
+end-to-end acceptance must run against the settled explicit and guided CLI
+surface. B03 and B04 own finalized descriptor/report behavior, B05 owns only
+interaction/help/diagnostics, and B06 composes those positive oracles rather
+than redefining them. The explicit edge is cheaper and more truthful than
+making two agents negotiate the same central integration tests.
 
 The features are organizational parents, not blocking implementation gates.
 Blocking edges are attached directly between concrete tasks.
@@ -1607,7 +1668,9 @@ publishable before the repository owner supplies deliberate release metadata.
 - Both explicit noninteractive commands create buildable repositories.
 - Interactive discovery lists them without changing existing defaults or
   numeric meanings.
-- The library and CLI layouts match section 9.
+- Both layouts have a root virtual Cargo workspace and one package beneath
+  `crates/<package>` with its manifest and crate guide; the library owns only
+  `src/lib.rs`, the CLI owns only `src/main.rs`, and both own a root README.
 - Generated contracts contain ordinary Rust checks and no SQLx/frontend/dev
   authority.
 - Existing presets remain behaviorally compatible.
@@ -1739,6 +1802,9 @@ API, database, frontend, DNS, and dev state.
 - Add the crate-private, non-serialized render hint for a neutral Rust workspace
   component and teach `RepositoryRenderModel` to author it through the existing
   component/action/profile schema as part of this first consuming feature.
+- Derive neutral root-guidance mode from that authored `workspace` component and
+  Rust adapter, and condition the managed root `AGENTS.md` without persisting
+  preset or artifact identity.
 - Reuse relevant package normalization and Cargo path-budget checks.
 - Render generic README and crate guides with artifact-specific content.
 - Refresh embedded scaffold snapshots.
@@ -1759,6 +1825,9 @@ API, database, frontend, DNS, and dev state.
 - No DB/frontend/dev files or context.
 - A Rust-only projection produces `workspace` Rust actions and no `api`/backend
   description, while the existing Rust React projection remains unchanged.
+- Root guidance uses Rust workspace/crate terminology, omits the transport rule
+  and `scripts/jig dev`, and re-renders identically during update/recopy; existing
+  preset managed-block bytes remain unchanged.
 
 #### Acceptance criteria
 
@@ -1769,6 +1838,8 @@ API, database, frontend, DNS, and dev state.
 - The neutral projection uses only ordinary existing component/action records;
   no contract field, adapter kind, runner kind, persisted answer, or epoch is
   added.
+- Neutral root guidance is recoverable from authored repository semantics and
+  does not depend on historical preset identity.
 - No public preset is exposed until its end-to-end answer/report path exists.
 
 #### Execution workflow
@@ -1834,11 +1905,34 @@ the established passphrase environment authority instead of `--no-vault`.
 - Add descriptor metadata at the end of current preset order.
 - Derive Rust backend compatibility, SQLx false, crate root `crates`, no
   frontend/application contracts, no dev apps, and ordinary Rust commands.
-- Validate the full matrix in section 13.
+- Validate the complete task-local input contract below.
 - Report `preset = rust-library`, `db = none`, empty frontends, and exact files.
 - Add explicit noninteractive init and generated contract tests.
 - Update only the minimum help text needed for an explicit user to discover the
   value; B05 owns the full guided UX pass.
+
+#### Complete task-local contract
+
+The scaffold-owned file set is exactly root `README.md`, root `Cargo.toml`,
+`crates/<package>/AGENTS.md`, `crates/<package>/Cargo.toml`, and
+`crates/<package>/src/lib.rs`. It contains no license file, environment example,
+migration or SQLx metadata tree, database crate, `apps/`, OpenAPI tree,
+JavaScript manifest or lockfile, frontend contract script, dev-app entry, or
+release workflow.
+
+Accept existing common init authority: `--repo-name`, `--default-branch`,
+`--ci-github-runner`, `--template`, `--template-mode`, `--vcs-ref`, `--force`,
+`--defaults`, `--no-input`, and `--no-vault`. Accept explicit Rust check-command
+overrides and an effective `rust_crate_roots = ["crates"]`.
+
+Reject `--db`, `--frontend`, `--frontends`, `--frontend-app`, `--go-module`,
+`backend_language = "go"`, `sqlx_enabled = true`, nonempty
+`rust_migration_dir`, nonempty `rust_sqlx_metadata_dir`,
+`schema_dump_enabled = true`, any effective Rust crate root other than
+`crates`, and `harness_footprint = "minimal"`. Empty optional migration values
+that the existing parser normalizes away are not conflicts. Every rejection
+names `rust-library` and the incompatible input and occurs before vault capture
+or destination publication.
 
 #### Required tests
 
@@ -1849,6 +1943,8 @@ the established passphrase environment authority instead of `--no-vault`.
 - Exact library files and absence list.
 - Generated `.jig.toml` and contract semantics.
 - Neutral `workspace` component identity and Rust action aliases.
+- Neutral root `AGENTS.md` guidance with no backend-only transport rule or
+  `scripts/jig dev` recommendation.
 - Cargo fmt, Clippy, test, locked test, and docs.
 - Update/recopy does not own scaffold files.
 - JSON and human init summary.
@@ -1903,10 +1999,41 @@ the existing passphrase environment authority.
 - Add the public `RustCli` enum value after `RustLibrary`.
 - Connect it to the shared Rust-only renderer's CLI branch.
 - Add exact descriptor, validation, answer, report, and summary behavior.
-- Generate the explicit binary target and `src/main.rs` contract from section
-  11.2.
+- Generate the explicit binary target and task-local `src/main.rs` contract
+  below.
 - Add run guidance and hermetic binary execution acceptance.
 - Preserve the absence of dev-app authority.
+
+#### Complete task-local contract
+
+The scaffold-owned file set is exactly root `README.md`, root `Cargo.toml`,
+`crates/<package>/AGENTS.md`, `crates/<package>/Cargo.toml`, and
+`crates/<package>/src/main.rs`. It contains no `lib.rs`, license file,
+environment example, migration or SQLx metadata tree, database crate, `apps/`,
+OpenAPI tree, JavaScript manifest or lockfile, frontend contract script,
+dev-app entry, or release workflow.
+
+The package manifest has `publish = false`, no `license` or `license-file`, and
+an explicit `[[bin]]` whose name is the normalized package and whose path is
+`src/main.rs`. The binary uses only `std`; with no arguments it exits zero,
+writes exactly one newline-terminated UTF-8 stdout line containing
+`env!("CARGO_PKG_NAME")` and `env!("CARGO_PKG_VERSION")`, and writes empty
+stderr. It defines no argument or option behavior and adds no generated test
+that merely reasserts this replaceable smoke output.
+
+Accept existing common init authority: `--repo-name`, `--default-branch`,
+`--ci-github-runner`, `--template`, `--template-mode`, `--vcs-ref`, `--force`,
+`--defaults`, `--no-input`, and `--no-vault`. Accept explicit Rust check-command
+overrides and an effective `rust_crate_roots = ["crates"]`.
+
+Reject `--db`, `--frontend`, `--frontends`, `--frontend-app`, `--go-module`,
+`backend_language = "go"`, `sqlx_enabled = true`, nonempty
+`rust_migration_dir`, nonempty `rust_sqlx_metadata_dir`,
+`schema_dump_enabled = true`, any effective Rust crate root other than
+`crates`, and `harness_footprint = "minimal"`. Empty optional migration values
+that the existing parser normalizes away are not conflicts. Every rejection
+names `rust-cli` and the incompatible input and occurs before vault capture or
+destination publication.
 
 #### Required tests
 
@@ -1919,6 +2046,8 @@ the existing passphrase environment authority.
 - Generated contract excludes dev, SQLx, Go, and frontend actions.
 - Generated contract contains the neutral `workspace` component and no API or
   backend identity.
+- Neutral root `AGENTS.md` guidance contains no backend-only transport rule or
+  `scripts/jig dev` recommendation.
 - JSON and human summaries.
 - Update/recopy ownership boundary.
 
@@ -1967,8 +2096,8 @@ breaking existing default or numeric interaction behavior.
 
 #### Context
 
-Explicit enum values alone are insufficient. The wizard, `--defaults`, strict
-errors, package-manager preflight, long help, `jig presets`, and human summaries
+Explicit enum values and their finalized descriptors alone are insufficient.
+The wizard, `--defaults`, strict errors, package-manager preflight, and long help
 currently describe a three-shape world and sometimes equate application presets
 with database/frontend requirements.
 
@@ -1979,10 +2108,11 @@ with database/frontend requirements.
 - Make database/frontend prompts capability-driven.
 - Make strict mode accept each Rust-only preset without more shape flags.
 - Preserve bare `--defaults` as Rust React/web/no DB.
-- Update preset human/JSON report text and ordering.
 - Update usage diagnostics and CLI help comprehensively.
 - Ensure package-manager availability is not checked for Rust-only presets.
 - Add interaction matrix tests.
+- Treat B03/B04 descriptor, init-report, and human-summary output as finalized;
+  regression-check it but do not redefine it in this task.
 
 #### Required tests
 
@@ -1994,7 +2124,8 @@ with database/frontend requirements.
 - Strict and implicit non-terminal error/success matrix.
 - `--defaults` explicit/implicit matrix.
 - Missing package manager does not block Rust-only init.
-- Preset human/JSON order and descriptor content.
+- B03/B04 preset human/JSON order, descriptors, and init summaries remain exact
+  while interaction code changes around them.
 
 #### Acceptance criteria
 
@@ -2062,10 +2193,9 @@ transaction failure tests.
 
 #### Scope
 
-- Add exact generated file/absence assertions.
-- Run Cargo and generated Jig checks in generic fixtures.
-- Add CLI binary execution oracle.
-- Add output-path/report classification tests.
+- Compose the finalized B03/B04 generated-file, Cargo/Jig, CLI-process, and
+  report oracles into one cross-preset acceptance harness; reuse their helpers
+  instead of adding competing positive-behavior assertions.
 - Add template/scaffold collision and snapshot-only tests.
 - Add representative symlink, force, rollback, and budget tests.
 - Add before/after compatibility proofs for existing presets.
@@ -2079,6 +2209,13 @@ parseable Cargo manifests, resolvable workspace member, SQLx-disabled
 configuration, neutral authored `workspace` component, Rust action/profile
 aliases, conservative CI inputs, no web/database workflow, crate guide in the
 agent map, and exact scaffold report classifications.
+
+The deliberate absence oracle covers license files, `.env.example`, migrations,
+`.sqlx`, database crates, `apps/`, OpenAPI output, JavaScript manifests and
+lockfiles, frontend directories and contract scripts, generated dev-app entries,
+and release workflows. The CLI additionally lacks `lib.rs`; the library lacks
+`main.rs`. Root guidance uses neutral workspace/crate terminology, omits the
+backend-only transport rule, and does not recommend `scripts/jig dev`.
 
 With Cargo forced offline, run setup or generate the lock file and then run
 rustfmt, strict all-target Clippy, locked workspace tests, rustdoc with warnings
@@ -2129,9 +2266,9 @@ scripts/jig work finish --plan-id "$plan_id" \
 
 #### Dependencies and unblocks
 
-Depends on B05. B05 already carries the transitive B04 dependency and owns the
-final preset descriptor/report integration that these end-to-end assertions
-consume.
+Depends on B05. B05 already carries the transitive B04 dependency and settles
+the interaction/help surface around the finalized B03/B04 descriptors and
+reports that these end-to-end assertions consume.
 
 Unblocks B07.
 
@@ -2145,7 +2282,20 @@ family.
 
 #### Scope
 
-- Update every documentation surface in section 21.
+- Update `README.md` quick start and examples; `docs/developer-ux.md` init/adopt
+  distinction, guided flow, layouts, and ownership boundary;
+  `docs/configuration.md` answers, compatibility, setup, lock policy, and
+  snapshot notes; CLI long help in
+  `crates/jig/src/bootstrap_parts/part_01.rs`; wizard and strict diagnostics;
+  doctor recovery text that enumerates complete shapes; and snapshots/assertions
+  for those messages.
+- Ensure those surfaces say that `init` is for a new destination, `adopt` is for
+  an existing Rust repository, `rust-library` creates a one-library virtual
+  workspace, `rust-cli` creates a one-binary virtual workspace, neither adds a
+  database or frontend, `rust-workspace` is not public, scaffold source is
+  project-owned, and `Cargo.lock` should be committed after setup.
+- Verify generated root guidance uses neutral Rust-workspace/crate terminology
+  and does not recommend `scripts/jig dev` for either Rust-only preset.
 - Use only generic open-source fixture names.
 - Build a fresh Jig binary and force the launcher to use it.
 - Run focused tests and configured relevant gates.
@@ -2215,7 +2365,8 @@ Closes the epic.
 2. Complete B02 internally and prove live/snapshot parity before public values.
 3. Expose and validate `rust-library` through B03.
 4. Reuse that path for `rust-cli` through B04.
-5. Complete B05 interaction and descriptor/report ownership.
+5. Complete B05 interaction, help, and diagnostic integration without reopening
+   B03/B04 descriptor or report ownership.
 6. Run B06 hardening against that settled public surface.
 7. Finish docs and full dogfood evidence in B07.
 
@@ -2253,6 +2404,30 @@ remain project-owned.
 
 This section records planning review rounds. Review activities are not delivery
 beads.
+
+### Review provenance and evidence policy
+
+A counted review round records its date, reviewer/model, input baseline or
+content digest, review focus, structural-versus-marginal result, and durable
+resolution. Model diversity is useful but is not claimed where it did not
+occur. Historical authoring passes without retained provenance remain useful
+design history but do not count toward the four evidenced strong-model rounds.
+
+Rounds 1–4 below are historical authoring passes from before commit `f282726`.
+Their exact reviewer, model, intermediate drafts, and dates were not retained,
+so they are explicitly excluded from the evidenced-round count rather than
+being retroactively presented as auditable model reviews.
+
+Rounds 5–8 were four topic-specific Codex GPT-5 review passes on 2026-08-29 in
+the planning session that produced `f282726`. Their integrated durable evidence
+is the complete plan in that commit, the synchronized Beads descriptions, and
+epic comment 27, which summarizes the audit remediation. Per-pass intermediate
+drafts were not retained, so their resolutions are evidence of the decisions
+but not evidence of round-to-round steady state.
+
+Rounds 9 onward use explicit baselines and content digests. Round 9 begins at
+commit `f282726`; later rounds record the SHA-256 digest of the reviewed plan so
+the exact input can be recovered from this worktree or its resulting commit.
 
 ### Round 1 — Product taxonomy and user contract
 
@@ -2391,6 +2566,129 @@ Resolution:
 - treat further revisions as marginal unless implementation changes a grounded
   source fact.
 
+### Round 9 — Planning-workflow audit with source grounding
+
+Provenance:
+
+- date: 2026-08-30;
+- reviewer/model: Codex, GPT-5;
+- input baseline: commit `f282726`;
+- evidence: complete-plan read, live Beads graph and descriptions, current
+  bootstrap plan/answer code, root `AGENTS.md` template, and Git history.
+
+Review focus:
+
+- whether generated harness guidance is truthful for a library or CLI;
+- whether delivery beads can execute without consulting numbered plan sections;
+- whether descriptor/report/test ownership is singular;
+- whether review history and feature statuses are auditable and honest.
+
+Resolution:
+
+- derive neutral root guidance from the authored `workspace` component so
+  initial render, update, and recopy agree without stored preset identity;
+- embed complete layouts, input contracts, source behavior, absence oracles,
+  and documentation inventory in their owning beads;
+- keep descriptors and positive reports in B03/B04, guided interaction in B05,
+  and adversarial integrated acceptance in B06;
+- add this provenance policy and correct organizational feature statuses to
+  open while the epic remains in progress.
+
+Result: structural revision required. The plan was not steady state at this
+round and made no contrary claim.
+
+### Round 10 — Standalone-task and ownership validation
+
+Provenance:
+
+- date: 2026-08-30;
+- reviewer/model: Codex, GPT-5;
+- input plan SHA-256:
+  `45ab2ff45f47b54bd5d5ce21bbbfd7fbd602096d22c708430fc222878a4afd21`;
+- evidence: standalone scan of every B01–B07 specification for numbered-section
+  dependencies, exact contract content, ownership terms, and stale markers.
+
+Review focus:
+
+- whether an agent receiving only one task description has its normative inputs
+  and observable acceptance oracles;
+- whether B03–B06 still assign the same report or test artifact to multiple
+  owners.
+
+Resolution:
+
+- no delivery task retains a numbered-section dependency;
+- the scan found one stale sequence sentence assigning descriptor/report
+  ownership to B05; it was corrected to interaction/help/diagnostics only;
+- no task split, product behavior, or dependency edge changed.
+
+Result: marginal wording correction only, providing the first explicit
+post-remediation steady-state signal.
+
+### Round 11 — Dependency and justification validation
+
+Provenance:
+
+- date: 2026-08-30;
+- reviewer/model: Codex, GPT-5;
+- input plan SHA-256:
+  `1bb919efad447a840beb435d7ab3175e052377e7f44f9dee1ac005b301517419`;
+- evidence: `br ready --epic jig-sh-rust-only-init-presets-zc7 --type task
+  --json`, `bv --robot-insights --format json`, live feature rollups, and a
+  source read of five load-bearing decision rationales.
+
+Review focus:
+
+- cycles, orphans, readiness, and the complete blocking path;
+- truthful epic/feature/task statuses;
+- rationale for public names, virtual workspace layout, shared CLI layout,
+  license neutrality, and authored-model-derived root guidance.
+
+Resolution:
+
+- the graph has zero cycles, the seven-task path is intact, and B01 is the only
+  ready concrete task;
+- the epic is in progress while all three unclaimed feature containers are open;
+- all five sampled decisions contain explicit tradeoff rationale grounded in
+  current Cargo/Jig behavior;
+- no plan or graph revision was required.
+
+Result: no change, confirming steady state after round 10.
+
+### Round 12 — Final plan/Beads steady-state audit
+
+Provenance:
+
+- date: 2026-08-30;
+- reviewer/model: Codex, GPT-5;
+- input plan SHA-256:
+  `1f6cde68f570034db5d37f17018b68b89098ccf82d31633d88d486d439155a9a`;
+- evidence: byte comparison of all 11 plan-node descriptions with live Beads,
+  canonical-versus-branch epic-record digests, JSONL parsing, `git diff
+  --check`, private-fixture scans, task-scoped readiness, graph insights, and
+  canonical Beads sync status.
+
+Review focus:
+
+- exact plan/Beads equivalence after status and description mutations;
+- residual external section references or stale ownership language;
+- graph health, ready-task cardinality, open-source fixture hygiene, and branch
+  baseline compatibility.
+
+Resolution:
+
+- all 11 descriptions match byte-for-byte after newline normalization;
+- branch and canonical epic records have the same digest, JSONL is valid, and
+  canonical Beads reports no dirty issue or sync drift;
+- the graph has zero cycles and B01 remains the only ready concrete task;
+- no private fixture name, stale B05 ownership statement, numbered-section task
+  dependency, or formatting defect remains;
+- no plan, product, task, or graph revision was required.
+
+Result: no change for a second consecutive round. The plan is at evidenced
+steady state and further revision is deferred until implementation discovers a
+new grounded fact.
+
 ## 28. Final acceptance checklist
 
 Product:
@@ -2481,22 +2779,24 @@ public behavior or dependency structure.
 
 ## 30. Delivery Beads created from this plan
 
-The planning pass created the following delivery graph. The epic and feature
-containers are in progress to keep them out of the ready queue; concrete tasks
-remain open until claimed. These records are implementation work, not planning
+The planning pass created the following delivery graph. The epic is in progress
+because its product outcome is active. Feature containers remain open until
+their concrete work is actually active; status is not used as a queue-filtering
+hack. Concrete tasks remain open until claimed. Agents use `--type task` for
+implementation readiness. These records are implementation work, not planning
 or review ceremony.
 
 | Plan node | Beads ID | Status | Title |
 | --- | --- | --- | --- |
 | Epic | `jig-sh-rust-only-init-presets-zc7` | in progress | First-class Rust-only jig init presets |
-| F1 | `jig-sh-rust-only-init-presets-zc7.1` | in progress | Generalize scaffold planning for Rust-only artifacts |
+| F1 | `jig-sh-rust-only-init-presets-zc7.1` | open/organizational | Generalize scaffold planning for Rust-only artifacts |
 | B01 | `jig-sh-rust-only-init-presets-zc7.1.1` | open/ready | Refactor preset capabilities and backend-only scaffold planning |
 | B02 | `jig-sh-rust-only-init-presets-zc7.1.2` | open/blocked | Add the shared Rust-only workspace renderer and templates |
-| F2 | `jig-sh-rust-only-init-presets-zc7.2` | in progress | Deliver public Rust library and CLI init workflows |
+| F2 | `jig-sh-rust-only-init-presets-zc7.2` | open/organizational | Deliver public Rust library and CLI init workflows |
 | B03 | `jig-sh-rust-only-init-presets-zc7.2.1` | open/blocked | Ship explicit rust-library init |
 | B04 | `jig-sh-rust-only-init-presets-zc7.2.2` | open/blocked | Ship explicit rust-cli init |
 | B05 | `jig-sh-rust-only-init-presets-zc7.2.3` | open/blocked | Integrate guided discovery and strict/default preset interaction |
-| F3 | `jig-sh-rust-only-init-presets-zc7.3` | in progress | Harden and document the Rust-only preset family |
+| F3 | `jig-sh-rust-only-init-presets-zc7.3` | open/organizational | Harden and document the Rust-only preset family |
 | B06 | `jig-sh-rust-only-init-presets-zc7.3.1` | open/blocked | Prove Rust-only preset transaction, snapshot, report, and generated-repo quality |
 | B07 | `jig-sh-rust-only-init-presets-zc7.3.2` | open/blocked | Complete Rust-only preset docs, dogfood gates, and release acceptance |
 
@@ -2506,7 +2806,7 @@ The blocking path is:
 B01 -> B02 -> B03 -> B04 -> B05 -> B06 -> B07
 ```
 
-The graph-aware validation reported 11 scoped active records, seven delivery
+The graph-aware validation reported 11 scoped open records, seven delivery
 tasks, zero dependency cycles, and B01 as the only ready delivery task. The epic
-and feature records organize active work; they are not substitutes for claiming
-and completing the task records. Agents scope readiness with `--type task`.
+and feature records organize work; they are not substitutes for claiming and
+completing the task records. Agents scope readiness with `--type task`.
