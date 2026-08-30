@@ -53,6 +53,12 @@ jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-ena
 
 For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, or `harness-only`; the app path then asks for its supported database and frontend selection. Go asks for a module import path and supports `none`/`postgres` plus `web`/`landing`; Rust additionally supports SQLite and `admin`. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
 
+For an unattended Rust library workspace, select the explicit `rust-library` preset. It creates one documented, non-publishable crate under `crates/`, uses the top-level Rust 1.88 baseline, and does not add database, frontend, API, dev-app, parser-dependency, or license state:
+
+```sh
+jig init /path/to/new-library --preset rust-library --no-input --no-vault
+```
+
 When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
 
 ```sh

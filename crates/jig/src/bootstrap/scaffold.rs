@@ -12,7 +12,7 @@ use super::{
     ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldOpts, ScaffoldPreset,
 };
 use frontend::{
-    FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold,
+    FrontendBackendContext, FrontendDatabaseContext, FrontendDevProxyContext, FrontendScaffold,
     frontend_workspace_relative_paths_for_backend, render_frontend_workspace_files_for_backend,
     scaffold_bootstrap_command,
 };
@@ -362,7 +362,11 @@ impl InitScaffoldPlan {
             files.extend(frontend.render_files_for_backend(
                 &react.package_manager,
                 &self.repo_name,
-                &react.repo_dns_label,
+                FrontendDevProxyContext {
+                    repo_dns_label: &react.repo_dns_label,
+                    port: react.dev_proxy_port,
+                    tld: &react.dev_tld,
+                },
                 &self.module_name,
                 frontend_backend,
             )?);
@@ -378,6 +382,7 @@ impl InitScaffoldPlan {
         let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
+        let (dev_proxy_port, dev_tld) = scaffold_dev_proxy_answers(answers)?;
         // Rust package normalization validates the underscore form before this replacement.
         let module_name = package_name.replace('-', "_");
         let db = opts.db.unwrap_or(ScaffoldDb::None);
@@ -459,6 +464,8 @@ impl InitScaffoldPlan {
                 },
                 react: ReactScaffoldPlan {
                     repo_dns_label,
+                    dev_proxy_port,
+                    dev_tld,
                     package_manager,
                     frontends,
                     custom_frontend_notices,
@@ -481,6 +488,7 @@ impl InitScaffoldPlan {
         let package_name = normalize_package_name(&requested_repo_name)?;
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
+        let (dev_proxy_port, dev_tld) = scaffold_dev_proxy_answers(answers)?;
         let module_name = package_name.replace('-', "_");
         let go_module = answers
             .go_module
@@ -563,6 +571,8 @@ impl InitScaffoldPlan {
                 },
                 react: ReactScaffoldPlan {
                     repo_dns_label,
+                    dev_proxy_port,
+                    dev_tld,
                     package_manager,
                     frontends,
                     custom_frontend_notices,
@@ -686,6 +696,11 @@ fn collect_frontend_specs(opts: &ScaffoldOpts) -> Vec<ScaffoldFrontend> {
         .chain(opts.frontend_list.iter())
         .cloned()
         .collect()
+}
+
+fn scaffold_dev_proxy_answers(answers: &AnswerOpts) -> Result<(u16, String)> {
+    let settings = super::answers::resolve_dev_settings(answers.dev_settings.as_ref())?;
+    Ok((settings.proxy_port, settings.tld))
 }
 
 fn validate_unique_frontends(

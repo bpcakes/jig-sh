@@ -53,6 +53,8 @@ pub(super) struct RawAnswers {
     pub(super) status: Option<StatusConfig>,
     pub(super) execution: Option<ExecutionConfig>,
     pub(super) agent_tooling: Option<AgentToolingAnswers>,
+    #[serde(flatten)]
+    pub(super) extra_top_level: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -84,6 +86,10 @@ pub(super) struct CodexMarketplaceAnswers {
 }
 
 impl RawAnswers {
+    pub(super) fn first_extra_top_level_key(&self) -> Option<&str> {
+        self.extra_top_level.keys().next().map(String::as_str)
+    }
+
     pub(super) fn normalize_repository_model(&mut self, table: &toml::Table) {
         let Some(repository) = table.get("repository").and_then(toml::Value::as_table) else {
             return;
@@ -337,6 +343,11 @@ impl RawAnswers {
                 .get_or_insert_with(dev::RawDevAnswers::default)
                 .apps = Some(opts.dev_apps.clone());
         }
+        if let Some(settings) = &opts.dev_settings {
+            self.dev
+                .get_or_insert_with(dev::RawDevAnswers::default)
+                .merge_settings(settings);
+        }
         merge_option(&mut self.status, opts.status.clone());
         merge_option(&mut self.execution, opts.execution.clone());
     }
@@ -373,7 +384,13 @@ impl RawAnswers {
     }
 
     pub(super) fn into_answer_opts(self, answers_file: Option<PathBuf>) -> AnswerOpts {
-        let dev_apps = self.dev.and_then(|dev| dev.apps).unwrap_or_default();
+        let (dev_settings, dev_apps) = self.dev.map_or_else(
+            || (None, Vec::new()),
+            |dev| {
+                let (settings, apps) = dev.into_parts();
+                (Some(settings), apps)
+            },
+        );
         AnswerOpts {
             answers_file,
             repo_name: self.repo_name.filter(|value| !value.is_empty()),
@@ -411,6 +428,7 @@ impl RawAnswers {
             frontend_apps: self.frontend_apps.unwrap_or_default(),
             frontend_workspace_roots: self.frontend_workspace_roots.unwrap_or_default(),
             dev_apps,
+            dev_settings,
             status: self.status,
             execution: self.execution,
         }
@@ -569,6 +587,7 @@ impl RawAnswers {
         frontend_workspace_roots.sort();
         frontend_workspace_roots.dedup();
         let dev::ResolvedDevApps {
+            settings: dev,
             dev_apps,
             generated_frontend_dev_apps,
         } = dev::resolve(frontend_apps.as_slice(), self.dev)?;
@@ -713,6 +732,7 @@ impl RawAnswers {
             typescript_coverage_command: self
                 .typescript_coverage_command
                 .unwrap_or_else(|| "scripts/check-webapps.sh coverage".into()),
+            dev,
             dev_apps,
             generated_frontend_dev_apps,
             frontend_apps,

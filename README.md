@@ -102,6 +102,14 @@ Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choo
 jig init /path/to/target-repo --preset harness-only --no-input --no-vault
 ```
 
+**Greenfield Rust library:**
+
+```sh
+jig init /path/to/target-repo --preset rust-library --no-input --no-vault
+```
+
+This creates a virtual Rust 2024 workspace with one documented library crate under `crates/`, using the repository's Rust 1.88 baseline. The crate is non-publishable and the preset adds no database, frontend, API, dev app, parser dependency, or license grant.
+
 **Greenfield Rust backend + React frontends.** Run `jig presets` to see available presets and their generated layout, then:
 
 ```sh

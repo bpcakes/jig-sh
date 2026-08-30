@@ -26,7 +26,7 @@ Templates:
   Unreleased local builds use templates embedded in the jig binary unless --vcs-ref is supplied.
 
 Scaffold ownership:
-  Presets create starter application code once. After creation, that app code is project-owned.
+  Presets create starter project code once. After creation, that project code is project-owned.
   `jig update` keeps the Jig harness current; it does not rewrite scaffolded app code.
 
 Interaction modes:

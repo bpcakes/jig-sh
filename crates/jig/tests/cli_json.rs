@@ -818,6 +818,40 @@ fn rust_library_init_has_exact_json_and_human_process_summaries() {
             .iter()
             .all(|step| step.as_str() != Some("scripts/jig dev"))
     );
+    let notes = json_report["notes"].as_array().unwrap();
+    assert!(notes.iter().any(|note| {
+        note.as_str()
+            .is_some_and(|note| note.contains("Scaffolded project code is project-owned"))
+    }));
+    assert!(notes.iter().all(|note| {
+        !note
+            .as_str()
+            .is_some_and(|note| note.contains("Scaffolded application code"))
+    }));
+    let config = fs::read_to_string(json_destination.join(".jig.toml")).unwrap();
+    let config = toml::from_str::<toml::Value>(&config).unwrap();
+    assert_eq!(config["dev"]["proxy_port"].as_integer(), Some(1355));
+    assert_eq!(config["dev"]["https_port"].as_integer(), Some(1443));
+    assert_eq!(config["dev"]["https"].as_bool(), Some(false));
+    assert_eq!(config["dev"]["http2"].as_bool(), Some(true));
+    assert_eq!(config["dev"]["lan"].as_bool(), Some(false));
+    assert_eq!(config["dev"]["tld"].as_str(), Some("localhost"));
+    assert_eq!(config["dev"]["workspace_discovery"].as_bool(), Some(false));
+
+    for check in ["contract", "agent-map", "agent-guides"] {
+        let output = jig()
+            .current_dir(&json_destination)
+            .args(["check", check])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "jig check {check} failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     let human_destination = destinations.path().join("ExampleLibraryHuman");
     let human_output = jig()
@@ -845,6 +879,8 @@ fn rust_library_init_has_exact_json_and_human_process_summaries() {
     let human = String::from_utf8(human_output.stdout).unwrap();
     assert!(human.contains("scaffold: rust-library for examplelibraryhuman (db: none)"));
     assert!(human.contains("scaffold files: 5 created, 0 modified, 0 unchanged"));
+    assert!(human.contains("Scaffolded project code is project-owned"));
+    assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));
     assert!(!human.contains("scripts/jig dev"));
 }

@@ -11,7 +11,7 @@ pub(super) fn prepare_init_interaction(
     opts: &mut InitOpts,
 ) -> Result<bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
-    prepared.copy_effective_to(&mut opts.answers);
+    prepared.move_effective_to(&mut opts.answers)?;
     let terminals_available = io::stdin().is_terminal() && io::stderr().is_terminal();
     let stdin = io::stdin();
     let stderr = io::stderr();
@@ -53,7 +53,7 @@ fn prepare_init_interaction_with_io<R: BufRead, W: Write>(
     output: &mut W,
 ) -> Result<bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
-    prepared.copy_effective_to(&mut opts.answers);
+    prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, true);
     prepare_merged_init_interaction(opts, &mut prepared, policy, input, output)?;
     Ok(prepared)
@@ -67,7 +67,7 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     output: &mut W,
 ) -> Result<bootstrap::PreparedInitAnswers> {
     let mut prepared = prepare_init_answers(opts)?;
-    prepared.copy_effective_to(&mut opts.answers);
+    prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
     prepare_merged_init_interaction(opts, &mut prepared, policy, input, output)?;
     Ok(prepared)
@@ -114,7 +114,7 @@ fn prepare_merged_init_interaction<R: BufRead, W: Write>(
     output: &mut W,
 ) -> Result<()> {
     opts.scaffold.normalize_minimal_harness_shape(&opts.answers);
-    prepared.validate_selected_preset(&opts.scaffold)?;
+    prepared.validate_selected_preset(&opts.scaffold, &opts.answers)?;
     opts.scaffold.validate_init_invariants(&opts.answers)?;
     match policy {
         InitInteractionPolicy::Interactive => {
@@ -127,10 +127,8 @@ fn prepare_merged_init_interaction<R: BufRead, W: Write>(
             validate_project_shape_resolved(opts, non_terminal)?;
         }
     }
-    prepared.retain_effective(&opts.answers);
-    prepared.validate_selected_preset(&opts.scaffold)?;
+    prepared.validate_selected_preset(&opts.scaffold, &opts.answers)?;
     opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
-    prepared.retain_effective(&opts.answers);
     opts.scaffold.validate_init_invariants(&opts.answers)
 }
 

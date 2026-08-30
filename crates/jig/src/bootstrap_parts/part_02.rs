@@ -89,7 +89,7 @@ fn initial_notes(
     };
     if scaffold_plan.is_some() {
         notes.push(
-            "Scaffolded application code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite app code."
+            "Scaffolded project code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite project code."
                 .into(),
         );
     }

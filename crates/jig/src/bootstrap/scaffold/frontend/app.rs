@@ -39,6 +39,13 @@ pub(in crate::bootstrap::scaffold) struct FrontendBackendContext<'a> {
     pub(in crate::bootstrap::scaffold) database: FrontendDatabaseContext<'a>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(in crate::bootstrap::scaffold) struct FrontendDevProxyContext<'a> {
+    pub(in crate::bootstrap::scaffold) repo_dns_label: &'a str,
+    pub(in crate::bootstrap::scaffold) port: u16,
+    pub(in crate::bootstrap::scaffold) tld: &'a str,
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::bootstrap::scaffold) struct FrontendScaffold {
     pub(in crate::bootstrap::scaffold) name: String,
@@ -101,24 +108,18 @@ impl FrontendScaffold {
         &self,
         package_manager: &str,
         repo_name: &str,
-        repo_dns_label: &str,
+        dev_proxy: FrontendDevProxyContext<'_>,
         module_name: &str,
         backend: FrontendBackendContext<'_>,
     ) -> Result<Vec<ScaffoldFile>> {
-        self.render_template_files(
-            package_manager,
-            repo_name,
-            repo_dns_label,
-            module_name,
-            backend,
-        )
+        self.render_template_files(package_manager, repo_name, dev_proxy, module_name, backend)
     }
 
     pub(super) fn render_template_files(
         &self,
         package_manager: &str,
         repo_name: &str,
-        repo_dns_label: &str,
+        dev_proxy: FrontendDevProxyContext<'_>,
         module_name: &str,
         backend: FrontendBackendContext<'_>,
     ) -> Result<Vec<ScaffoldFile>> {
@@ -134,7 +135,9 @@ impl FrontendScaffold {
             "repo_name": repo_name,
             "public_api_client_package": format!("{repo_name}-public-api-client"),
             "admin_api_client_package": format!("{repo_name}-admin-api-client"),
-            "repo_dns_label": repo_dns_label,
+            "repo_dns_label": dev_proxy.repo_dns_label,
+            "dev_proxy_port": dev_proxy.port,
+            "dev_tld": dev_proxy.tld,
             "module_name": module_name,
             "e2e_database_name": e2e_database_name,
             "repo_root_relative": repo_root_relative(&self.dir),

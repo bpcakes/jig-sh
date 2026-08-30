@@ -336,12 +336,12 @@ mod tests {
                 .iter()
                 .map(|preset| preset.as_str())
                 .collect::<Vec<_>>(),
-            ["rust-react", "go-react", "harness-only"]
+            ["rust-react", "go-react", "harness-only", "rust-library"]
         );
     }
 
     #[test]
-    fn reports_use_private_identity_strings_without_public_preset_variants() {
+    fn reports_use_rust_only_identity_strings_for_both_artifacts() {
         for (artifact, identity) in [
             (RustOnlyArtifact::Library, "rust-library"),
             (RustOnlyArtifact::Cli, "rust-cli"),

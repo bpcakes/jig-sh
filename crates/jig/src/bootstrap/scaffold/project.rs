@@ -153,6 +153,8 @@ impl RustOnlyArtifact {
 pub(super) struct ReactScaffoldPlan {
     /// The DNS-safe repo label used by Jig's development proxy.
     pub(super) repo_dns_label: String,
+    pub(super) dev_proxy_port: u16,
+    pub(super) dev_tld: String,
     pub(super) package_manager: String,
     pub(super) frontends: Vec<FrontendScaffold>,
     pub(super) custom_frontend_notices: Vec<String>,

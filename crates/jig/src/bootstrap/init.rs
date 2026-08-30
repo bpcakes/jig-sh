@@ -55,25 +55,34 @@ fn prepare_init(
     progress.step("validate destination", "empty directory or --force");
     progress.log_blocked_on_err(validate_init_destination(&destination, opts.force))?;
     progress.step("read init answers", "--answers-file and CLI precedence");
-    let mut prepared_answers = match prepared_answers {
+    let prepared_answers = match prepared_answers {
         Some(prepared) => prepared,
-        None => progress.log_blocked_on_err(
-            PreparedInitAnswers::from_opts_at(&opts.answers, &invocation_cwd).map_err(|error| {
-                if opts.scaffold.preset == Some(super::ScaffoldPreset::RustLibrary) {
-                    anyhow::anyhow!("Failed to prepare --preset rust-library answers: {error:#}")
-                } else {
-                    error
-                }
-            }),
-        )?,
+        None => {
+            let mut prepared = progress.log_blocked_on_err(
+                PreparedInitAnswers::from_opts_at(&opts.answers, &invocation_cwd).map_err(
+                    |error| {
+                        if opts.scaffold.preset == Some(super::ScaffoldPreset::RustLibrary) {
+                            anyhow::anyhow!(
+                                "Failed to prepare --preset rust-library answers: {error:#}"
+                            )
+                        } else {
+                            error
+                        }
+                    },
+                ),
+            )?;
+            progress.log_blocked_on_err(prepared.move_effective_to(&mut opts.answers))?;
+            prepared
+        }
     };
-    prepared_answers.copy_effective_to(&mut opts.answers);
     opts.scaffold.normalize_minimal_harness_shape(&opts.answers);
-    progress.log_blocked_on_err(prepared_answers.validate_selected_preset(&opts.scaffold))?;
+    progress.log_blocked_on_err(
+        prepared_answers.validate_selected_preset(&opts.scaffold, &opts.answers),
+    )?;
     progress.log_blocked_on_err(opts.scaffold.validate_init_invariants(&opts.answers))?;
     opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
-    prepared_answers.retain_effective(&opts.answers);
-    let (answer_input, mut answers) = prepared_answers.into_parts();
+    let answer_input = progress.log_blocked_on_err(prepared_answers.into_input())?;
+    let mut answers = opts.answers;
     let scaffold_plan = progress.log_blocked_on_err(scaffold::InitScaffoldPlan::from_opts(
         &opts.scaffold,
         &answers,

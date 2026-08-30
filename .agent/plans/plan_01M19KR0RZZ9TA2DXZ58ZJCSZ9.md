@@ -17,7 +17,9 @@ This task also closes the init answer-file time-of-check/time-of-use gap. Init m
 - [x] (2026-08-30 15:56Z) Added public Rust-library parsing, capabilities, descriptor metadata, private identity conversion, strict/default/no-terminal behavior, and renderer dispatch.
 - [x] (2026-08-30 15:56Z) Added the frozen single-parse init-answer handoff and exhaustive Rust-library answer-policy validation before package-manager, template, vault, and publication effects.
 - [x] (2026-08-30 15:56Z) Added exact CLI, answer-policy, generated-file, contract, report, update/recopy, build, lint, test, locked-test, and docs coverage; focused Rust-library and process tests plus all-target Clippy pass.
-- [ ] Run focused and broad checks, review the complete diff, pass structured gates, audit every B03 requirement, finish structured work, and close/sync B03.
+- [x] (2026-08-30 18:30Z) Completed three independent Claude/Codex review loops, fixed every actionable init/dev finding, and verified each review against an unchanged complete scope fingerprint.
+- [x] (2026-08-30 18:55Z) Passed focused Rust-library, process, custom dev-authority, legacy proxy, default-feature, no-default-feature, formatting, and all-target Clippy checks. The full `jig-sh` run passed 2,084 tests plus two intentional ignores; one unrelated MCP lifecycle timing test failed in the highly parallel run and passed immediately in isolation.
+- [x] (2026-08-30 19:09Z) Audited the complete B03 contract, split four oversized Rust sources without behavior changes, and passed all eight fresh structured gates. The frontend partition's one install-lock timing failure passed alone and all 110 partition tests passed on rerun.
 
 ## Surprises & Discoveries
 
@@ -26,6 +28,12 @@ This task also closes the init answer-file time-of-check/time-of-use gap. Init m
 
 - Observation: init currently calls `AnswerInput::from_opts_at` in bootstrap after the CLI interaction path has already loaded answer-derived options, so the selected-preset policy cannot prove that validated raw shape and rendered values came from one file read.
   Evidence: `crates/jig/src/bootstrap/init.rs`, `crates/jig/src/cli/init_wizard.rs`, and sections 5.4, 13, and 16.7 of `docs/rust-only-presets-plan.md`.
+
+- Observation: accepted scalar `[dev]` answers were previously dropped during template resolution, and the generated React direct-Vite fallback had an independent hard-coded proxy authority.
+  Evidence: the review findings against `bootstrap/answers/dev.rs`, `.jig.toml.jinja`, and the Vite scaffold templates; the final implementation resolves one typed settings value for both outputs and tests the end-to-end answer-file path.
+
+- Observation: dev-proxy port/TLD validation belongs at init answer resolution and proxy startup, not global repository loading, because existing repositories may intentionally use the documented `--http-port 0` runtime override.
+  Evidence: `dev_proxy::tests::configured_zero_proxy_ports_are_rejected_but_explicit_zero_is_ephemeral` and the third comprehensive review pass.
 
 ## Decision Log
 
@@ -37,9 +45,15 @@ This task also closes the init answer-file time-of-check/time-of-use gap. Init m
   Rationale: this preserves the user's explicit baseline decision and the committed renderer authority.
   Date/Author: 2026-08-30, user and Codex.
 
+- Decision: preserve accepted scalar `[dev]` answers, reject misspelled nested keys, validate them before rendering, and use the identical resolved proxy authority in generated Vite fallbacks.
+  Rationale: accepted answer authority must not be silently discarded or create internally inconsistent generated repositories.
+  Date/Author: 2026-08-30, Codex after three-pass review.
+
 ## Outcomes & Retrospective
 
-Implementation is in progress. Completion requires current-state evidence for every acceptance item; a compiling enum variant or successful scaffold render alone is insufficient.
+B03 is complete. The explicit `rust-library` preset now creates the exact five-file, non-publishable Rust 2024 library scaffold on the workspace's Rust 1.88 baseline and projects it as a neutral Jig workspace without database, frontend, API, dev-app, or parser authority. Init reads answer authority once, validates the complete preset policy before side effects, and renders from that frozen input. Accepted `[dev]` scalar settings flow through one resolved value into both `.jig.toml` and generated Vite fallback authority, while invalid and misspelled settings fail at the owning boundary without making older repositories unloadable.
+
+Three independent Claude/Codex review loops found and drove fixes for global dev-config validation compatibility, duplicated setting resolution, nested typo acceptance, no-default-feature validation parity, and end-to-end custom-authority coverage. The Rust source-reorganization pass then moved existing items into include fragments so every changed file satisfies the repository's absolute LOC policy without changing item order or behavior. All eight configured gates are fresh and passing; focused Rust-library, repository-model, CLI, dev-authority, legacy-proxy, default/no-default-feature, process, format, Clippy, and generated-workspace checks also pass. A broad `jig-sh` run passed 2,084 tests with two intentional ignores apart from one unrelated MCP lifecycle timing failure that passed immediately in isolation; a later frontend partition likewise had one unrelated install-lock timing failure that passed alone and then passed all 110 tests on rerun.
 
 ## Context and Orientation
 

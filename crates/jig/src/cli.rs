@@ -180,12 +180,13 @@ Examples:
   jig status --tui";
 
 const PRESETS_AFTER_HELP: &str = "\
-Use presets with `jig init` when you want Jig to create starter application code
+Use presets with `jig init` when you want Jig to create starter project code
 and the repo harness together.
 
 Examples:
   jig presets
   jig init ./my-repo --preset harness-only --no-input --no-vault
+  jig init ./my-library --preset rust-library --no-input --no-vault
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
 
