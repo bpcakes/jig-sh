@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
-use super::repository_model::{AuthoredRepositoryModel, frontend_component_id};
+use super::repository_model::{
+    AuthoredRepositoryModel, RepositoryProjectionHint, frontend_component_id,
+};
 use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
@@ -54,6 +56,8 @@ pub(super) struct RenderAnswers {
     scaffolded_frontend_contracts: bool,
     #[serde(skip)]
     go_postgres_integration_script: bool,
+    #[serde(skip)]
+    repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,
     default_branch: String,
     ci_github_runner: String,
@@ -520,6 +524,10 @@ impl RenderAnswers {
         self.backend_language
     }
 
+    pub(super) const fn repository_projection_hint(&self) -> RepositoryProjectionHint {
+        self.repository_projection_hint
+    }
+
     fn authored_repository_has_adapter(&self, expected: &str) -> Option<bool> {
         self.authored_repository.as_ref().map(|repository| {
             repository
@@ -595,15 +603,27 @@ impl RenderAnswers {
     }
 
     pub(super) fn rust_fmt_ci_target(&self) -> Option<String> {
-        self.managed_ci_target(tool::FMT_CHECK, &["rust", "sqlx"], "api:fmt")
+        let generated = format!(
+            "{}:fmt",
+            self.repository_projection_hint.rust_component_id()
+        );
+        self.managed_ci_target(tool::FMT_CHECK, &["rust", "sqlx"], &generated)
     }
 
     pub(super) fn rust_clippy_ci_target(&self) -> Option<String> {
-        self.managed_ci_target(tool::CLIPPY, &["rust", "sqlx"], "api:clippy")
+        let generated = format!(
+            "{}:clippy",
+            self.repository_projection_hint.rust_component_id()
+        );
+        self.managed_ci_target(tool::CLIPPY, &["rust", "sqlx"], &generated)
     }
 
     pub(super) fn rust_test_locked_ci_target(&self) -> Option<String> {
-        self.managed_ci_target(tool::TEST_LOCKED, &["rust", "sqlx"], "api:test-locked")
+        let generated = format!(
+            "{}:test-locked",
+            self.repository_projection_hint.rust_component_id()
+        );
+        self.managed_ci_target(tool::TEST_LOCKED, &["rust", "sqlx"], &generated)
     }
 
     pub(super) fn go_sqlc_ci_target(&self) -> Option<String> {

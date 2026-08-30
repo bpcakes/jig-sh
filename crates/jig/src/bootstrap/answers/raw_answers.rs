@@ -12,6 +12,8 @@ pub(super) struct RawAnswers {
     #[serde(default)]
     pub(super) harness_footprint: Option<HarnessFootprint>,
     pub(super) backend_language: Option<BackendLanguage>,
+    #[serde(skip)]
+    pub(super) repository_projection_hint: RepositoryProjectionHint,
     pub(super) go_database: Option<GoDatabase>,
     pub(super) sqlx_enabled: Option<bool>,
     pub(super) rust_crate_roots: Option<Vec<String>>,
@@ -263,6 +265,7 @@ impl RawAnswers {
         );
         merge_option(&mut self.harness_footprint, opts.harness_footprint);
         merge_option(&mut self.backend_language, opts.backend_language);
+        self.repository_projection_hint = opts.repository_projection_hint;
         merge_option(&mut self.go_database, opts.go_database);
         merge_option(&mut self.sqlx_enabled, opts.sqlx_enabled);
         if !opts.rust_crate_roots.is_empty() {
@@ -381,6 +384,7 @@ impl RawAnswers {
             template_source_url: self.template_source_url,
             harness_footprint: self.harness_footprint,
             backend_language: self.backend_language,
+            repository_projection_hint: self.repository_projection_hint,
             go_database: self.go_database,
             scaffold_go_component_roots: Vec::new(),
             sqlx_enabled: self.sqlx_enabled,
@@ -481,19 +485,25 @@ impl RawAnswers {
             .as_ref()
             .is_some_and(|model| model.has_adapter("rust") || model.has_adapter("sqlx"));
         let authored_rust_crate_roots = authored_repository.as_ref().map(|model| {
-            model
-                .components
-                .iter()
-                .filter(|component| {
-                    component
-                        .adapters
-                        .iter()
-                        .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
-                })
-                .map(|component| component.root.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
+            if model.rust_workspace_guidance_enabled() {
+                self.rust_crate_roots
+                    .clone()
+                    .unwrap_or_else(|| vec!["crates".into()])
+            } else {
+                model
+                    .components
+                    .iter()
+                    .filter(|component| {
+                        component
+                            .adapters
+                            .iter()
+                            .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
+                    })
+                    .map(|component| component.root.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            }
         });
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
@@ -618,6 +628,7 @@ impl RawAnswers {
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
             go_postgres_integration_script: false,
+            repository_projection_hint: self.repository_projection_hint,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),
             ci_github_runner: self

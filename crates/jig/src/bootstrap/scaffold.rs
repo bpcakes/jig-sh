@@ -4,14 +4,40 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
-use crate::backend::{BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GoDatabase};
+use crate::backend::{GO_POSTGRES_MIGRATION_DIR, GoDatabase};
 use crate::context::validate_web_package_manager;
 
 use super::{
-    APPLICATION_BACKEND_DEV_APP_NAME, AnswerOpts, DevApp, FrontendApp,
-    RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind,
-    ScaffoldOpts, ScaffoldPreset,
+    AnswerOpts, DevApp, FrontendApp, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldDb,
+    ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldOpts, ScaffoldPreset,
 };
+use frontend::{
+    FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold,
+    frontend_workspace_relative_paths_for_backend, render_frontend_workspace_files_for_backend,
+    scaffold_bootstrap_command,
+};
+use names::{
+    default_repo_name, normalize_package_name, normalize_rust_react_package_name,
+    rust_react_repo_dns_label, validate_scaffold_relative_path,
+};
+pub(super) use project::RustOnlyArtifact;
+use project::{
+    GoReactScaffoldPlan, GoScaffoldPlan, ReactBackendRenderContext, ReactScaffoldPlan,
+    RustOnlyScaffoldPlan, RustReactScaffoldPlan, RustScaffoldPlan, ScaffoldIdentity,
+    ScaffoldProjectPlan,
+};
+pub(super) use write::ScaffoldFile;
+use write::ScaffoldReport;
+
+mod embedded_templates;
+mod frontend;
+mod go_workspace;
+mod names;
+mod project;
+mod rust_only_workspace;
+mod rust_workspace;
+mod templates;
+mod write;
 
 #[derive(Clone, Debug)]
 pub(super) struct InitScaffoldPlan {
@@ -27,110 +53,6 @@ pub(super) struct InitScaffoldPlan {
     default_branch: String,
     ci_github_runner: String,
 }
-
-#[derive(Clone, Debug)]
-enum ScaffoldProjectPlan {
-    RustReact(RustReactScaffoldPlan),
-    GoReact(GoReactScaffoldPlan),
-}
-
-#[derive(Clone, Debug)]
-struct RustReactScaffoldPlan {
-    backend: RustScaffoldPlan,
-    react: ReactScaffoldPlan,
-}
-
-#[derive(Clone, Debug)]
-struct GoReactScaffoldPlan {
-    backend: GoScaffoldPlan,
-    react: ReactScaffoldPlan,
-}
-
-#[derive(Clone, Debug)]
-struct ReactScaffoldPlan {
-    /// The DNS-safe repo label used by Jig's development proxy.
-    repo_dns_label: String,
-    package_manager: String,
-    frontends: Vec<FrontendScaffold>,
-    custom_frontend_notices: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ReactBackendRenderContext<'a> {
-    preset: ScaffoldPreset,
-    database: ScaffoldDb,
-    root: &'a str,
-    migration_dir: &'a str,
-    sqlx_metadata_dir: &'a str,
-}
-
-#[derive(Clone, Debug)]
-struct RustScaffoldPlan {
-    database: ScaffoldDb,
-    migration_dir: String,
-    sqlx_metadata_dir: String,
-}
-
-#[derive(Clone, Debug)]
-struct GoScaffoldPlan {
-    database: GoDatabase,
-    module: String,
-    component_root: String,
-    migration_dir: String,
-}
-
-impl ScaffoldProjectPlan {
-    const fn preset(&self) -> ScaffoldPreset {
-        match self {
-            Self::RustReact(_) => ScaffoldPreset::RustReact,
-            Self::GoReact(_) => ScaffoldPreset::GoReact,
-        }
-    }
-
-    const fn database(&self) -> ScaffoldDb {
-        match self {
-            Self::RustReact(project) => project.backend.database,
-            Self::GoReact(project) => match project.backend.database {
-                GoDatabase::None => ScaffoldDb::None,
-                GoDatabase::Postgres => ScaffoldDb::Postgres,
-            },
-        }
-    }
-
-    const fn backend_label(&self) -> &'static str {
-        match self {
-            Self::RustReact(_) => "Rust",
-            Self::GoReact(_) => "Go",
-        }
-    }
-
-    fn react(&self) -> Option<&ReactScaffoldPlan> {
-        match self {
-            Self::RustReact(project) => Some(&project.react),
-            Self::GoReact(project) => Some(&project.react),
-        }
-    }
-}
-
-mod embedded_templates;
-mod frontend;
-mod go_workspace;
-mod names;
-mod rust_workspace;
-mod templates;
-mod write;
-
-use frontend::{
-    FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold,
-    frontend_workspace_relative_paths_for_backend, render_frontend_workspace_files_for_backend,
-    scaffold_bootstrap_command,
-};
-use names::{
-    default_repo_name, normalize_package_name, normalize_rust_react_package_name,
-    rust_react_repo_dns_label, validate_scaffold_relative_path,
-};
-pub(super) use write::ScaffoldFile;
-use write::ScaffoldReport;
 
 pub(crate) fn validate_go_module(value: &str) -> Result<()> {
     names::validate_go_module(value)
@@ -170,10 +92,10 @@ impl InitScaffoldPlan {
         if answers.repo_name.as_deref() != Some(self.repo_name.as_str()) {
             answers.repo_name = Some(self.repo_name.clone());
         }
+        answers.backend_language = Some(self.project.backend_language());
         match &self.project {
             ScaffoldProjectPlan::RustReact(project) => {
                 let backend = &project.backend;
-                answers.backend_language = Some(BackendLanguage::Rust);
                 if answers.sqlx_enabled.is_none() {
                     answers.sqlx_enabled = Some(backend.database != ScaffoldDb::None);
                 }
@@ -194,7 +116,6 @@ impl InitScaffoldPlan {
             }
             ScaffoldProjectPlan::GoReact(project) => {
                 let backend = &project.backend;
-                answers.backend_language = Some(BackendLanguage::Go);
                 answers.go_database = Some(backend.database);
                 answers.sqlx_enabled = Some(false);
                 answers.rust_crate_roots.clear();
@@ -208,6 +129,18 @@ impl InitScaffoldPlan {
                 answers.rust_sqlx_metadata_dir = None;
                 answers.schema_dump_enabled = Some(false);
             }
+            ScaffoldProjectPlan::RustOnly(_) => {
+                answers.go_database = None;
+                answers.sqlx_enabled = Some(false);
+                answers.rust_crate_roots = vec!["crates".into()];
+                answers.rust_migration_dir = None;
+                answers.migration_dir = None;
+                answers.rust_sqlx_metadata_dir = None;
+                answers.schema_dump_enabled = Some(false);
+                answers.application_contracts_enabled = Some(false);
+                answers.repository_projection_hint =
+                    super::repository_model::RepositoryProjectionHint::RustWorkspace;
+            }
         }
         if answers.bootstrap_command.is_none() {
             answers.bootstrap_command = Some(match &self.project {
@@ -218,6 +151,9 @@ impl InitScaffoldPlan {
                 ),
                 ScaffoldProjectPlan::GoReact(project) => {
                     self.go_scaffold_bootstrap_command(&project.backend)
+                }
+                ScaffoldProjectPlan::RustOnly(_) => {
+                    optional_cargo_command("cargo fetch", "bootstrap")
                 }
             });
         }
@@ -241,30 +177,11 @@ impl InitScaffoldPlan {
                     })
                     .collect();
             }
-            if answers.dev_apps.is_empty() {
-                answers.dev_apps = vec![DevApp {
-                    name: APPLICATION_BACKEND_DEV_APP_NAME.into(),
-                    dir: Some(".".into()),
-                    kind: "env-port".into(),
-                    command: None,
-                    argv: match &self.project {
-                        ScaffoldProjectPlan::RustReact(_) => vec![
-                            "cargo".into(),
-                            "run".into(),
-                            "-p".into(),
-                            format!("{}-api", self.package_name),
-                        ],
-                        ScaffoldProjectPlan::GoReact(_) => {
-                            vec!["go".into(), "run".into(), "./cmd/api".into()]
-                        }
-                    },
-                    port: None,
-                    host: None,
-                    proxy: true,
-                }];
-                if let ScaffoldProjectPlan::GoReact(project) = &self.project {
-                    answers.dev_apps[0].dir = Some(project.backend.component_root.clone());
-                }
+            if answers.dev_apps.is_empty()
+                && let Some(backend_app) =
+                    self.project.application_backend_dev_app(&self.package_name)
+            {
+                answers.dev_apps.push(backend_app);
                 if matches!(&self.project, ScaffoldProjectPlan::RustReact(_))
                     && self.has_admin_frontend()
                 {
@@ -290,8 +207,8 @@ impl InitScaffoldPlan {
 
     pub(super) fn summary(&self) -> String {
         let mut parts = vec![format!(
-            "{} backend for {}",
-            self.project.backend_label(),
+            "{} for {}",
+            self.project.summary_label(),
             self.repo_name
         )];
         match self.database() {
@@ -317,8 +234,8 @@ impl InitScaffoldPlan {
         })
     }
 
-    pub(super) const fn preset(&self) -> ScaffoldPreset {
-        self.project.preset()
+    const fn identity(&self) -> ScaffoldIdentity {
+        self.project.identity()
     }
 
     pub(super) const fn database(&self) -> ScaffoldDb {
@@ -408,6 +325,9 @@ impl InitScaffoldPlan {
                     },
                     &project.react,
                 )
+            }
+            ScaffoldProjectPlan::RustOnly(project) => {
+                self.render_rust_only_workspace_files(project)
             }
         }
     }
@@ -654,19 +574,54 @@ impl InitScaffoldPlan {
         })
     }
 
+    #[allow(dead_code)]
+    pub(super) fn rust_only(
+        artifact: RustOnlyArtifact,
+        answers: &AnswerOpts,
+        destination: &Path,
+    ) -> Result<Self> {
+        let requested_repo_name = answers
+            .repo_name
+            .clone()
+            .unwrap_or_else(|| default_repo_name(destination));
+        let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
+        let repo_name = package_name.clone();
+        let module_name = package_name.replace('-', "_");
+        Ok(Self {
+            project: ScaffoldProjectPlan::RustOnly(RustOnlyScaffoldPlan { artifact }),
+            requested_repo_name,
+            repo_name,
+            package_name,
+            module_name,
+            default_branch: answers
+                .default_branch
+                .clone()
+                .unwrap_or_else(|| "main".into()),
+            ci_github_runner: answers
+                .ci_github_runner
+                .clone()
+                .unwrap_or_else(|| "ubuntu-latest".into()),
+        })
+    }
+
     pub(super) fn output_paths(&self) -> Vec<PathBuf> {
-        let (mut paths, react) = match &self.project {
+        let (mut paths, react, preset) = match &self.project {
             ScaffoldProjectPlan::RustReact(project) => (
                 self.rust_workspace_relative_paths(&project.backend),
                 &project.react,
+                ScaffoldPreset::RustReact,
             ),
             ScaffoldProjectPlan::GoReact(project) => (
                 self.go_workspace_relative_paths(&project.backend),
                 &project.react,
+                ScaffoldPreset::GoReact,
             ),
+            ScaffoldProjectPlan::RustOnly(project) => {
+                return self.rust_only_workspace_relative_paths(project);
+            }
         };
         paths.extend(frontend_workspace_relative_paths_for_backend(
-            self.preset(),
+            preset,
             &react.package_manager,
             &react.frontends,
         ));
@@ -678,6 +633,12 @@ impl InitScaffoldPlan {
         );
         paths
     }
+}
+
+fn optional_cargo_command(command: &str, action: &str) -> String {
+    format!(
+        "if [ -f Cargo.toml ]; then {command}; else printf '%s\\n' 'No Cargo.toml found; skipping cargo {action}.'; fi"
+    )
 }
 
 pub(super) fn validate_go_component_root(component_root: &str) -> Result<()> {
@@ -768,61 +729,4 @@ fn validate_unique_frontends(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod project_plan_tests {
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn existing_presets_dispatch_through_typed_project_variants() {
-        let destination = tempdir().unwrap();
-        let rust = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustReact),
-                db: Some(ScaffoldDb::None),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts::default(),
-            destination.path(),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(matches!(&rust.project, ScaffoldProjectPlan::RustReact(_)));
-        assert_eq!(rust.preset(), ScaffoldPreset::RustReact);
-        assert_eq!(rust.database(), ScaffoldDb::None);
-        assert_eq!(rust.frontends().len(), 1);
-
-        let go = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::GoReact),
-                db: Some(ScaffoldDb::Postgres),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts {
-                go_module: Some("example.com/ExampleProject".into()),
-                ..AnswerOpts::default()
-            },
-            destination.path(),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(matches!(&go.project, ScaffoldProjectPlan::GoReact(_)));
-        assert_eq!(go.preset(), ScaffoldPreset::GoReact);
-        assert_eq!(go.database(), ScaffoldDb::Postgres);
-        assert_eq!(go.frontends().len(), 1);
-
-        let harness = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::HarnessOnly),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts::default(),
-            destination.path(),
-        )
-        .unwrap();
-        assert!(harness.is_none());
-    }
 }

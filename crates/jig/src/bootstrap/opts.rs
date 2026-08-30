@@ -55,6 +55,9 @@ pub struct AnswerOpts {
     /// Set by an application scaffold; persisted so updates retain backend-specific policy.
     #[arg(skip)]
     pub(crate) backend_language: Option<crate::backend::BackendLanguage>,
+    /// Initial-render-only selection for authoring ordinary repository records.
+    #[arg(skip)]
+    pub(crate) repository_projection_hint: super::repository_model::RepositoryProjectionHint,
     /// Set by the Go scaffold to `none` or `postgres`.
     #[arg(skip)]
     pub(crate) go_database: Option<crate::backend::GoDatabase>,

@@ -130,8 +130,8 @@ The generated repository has:
 
 - a root virtual Cargo workspace;
 - one seed crate with a normalized package name;
-- Rust 2024 edition and the same supported Rust floor as current generated Rust
-  scaffolds;
+- Rust 2024 edition and the same supported Rust floor as the top-level Jig
+  workspace;
 - no default software-license grant and `publish = false` on the seed package
   until the repository owner chooses publication metadata deliberately;
 - a full Jig harness unless the product later adds an explicitly compatible
@@ -625,15 +625,15 @@ members = [
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
-rust-version = "1.94"
+rust-version = "1.88"
 ```
 
-The exact Rust floor must come from one scaffold-owned constant or shared
-template authority used by generated Rust presets. If implementation discovers
-that the current supported floor changed before this bead starts, it must use
-the then-current generated Rust floor everywhere and update documentation and
-tests together. It must not leave `rust-react` and Rust-only presets claiming
-different floors accidentally.
+The exact Rust floor must come from Cargo's package Rust-version metadata, which
+inherits the top-level Jig workspace authority in `Cargo.toml` and is 1.88 at
+this plan revision. If that top-level authority changes, Rust-only templates,
+documentation, and tests must move together. Rust React retains its separately
+owned 1.94 floor; the Rust-only choice is intentionally the source workspace
+baseline rather than an accidental copy of the full-stack scaffold floor.
 
 The root manifest has no `[workspace.dependencies]` table initially because the
 library seed has no dependency and the CLI uses only `std`. Empty dependency

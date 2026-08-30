@@ -248,7 +248,7 @@ impl InitScaffoldPlan {
             .chain(postgres_templates)
     }
 
-    fn template_output_path(&self, file: &ScaffoldTemplateFile) -> String {
+    pub(super) fn template_output_path(&self, file: &ScaffoldTemplateFile) -> String {
         file.output.replace("{package}", &self.package_name)
     }
 

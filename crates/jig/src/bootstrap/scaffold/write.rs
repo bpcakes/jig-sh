@@ -12,7 +12,7 @@ use crate::bootstrap::path::{
 
 use crate::bootstrap::InitMutationTransaction;
 
-use super::{InitScaffoldPlan, ScaffoldDb, ScaffoldPreset};
+use super::{InitScaffoldPlan, ScaffoldDb};
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct ScaffoldReport {
@@ -111,11 +111,7 @@ impl ScaffoldReport {
 
     pub(super) fn into_json(self, plan: &InitScaffoldPlan) -> Value {
         json!({
-            "preset": match plan.preset() {
-                ScaffoldPreset::RustReact => "rust-react",
-                ScaffoldPreset::GoReact => "go-react",
-                ScaffoldPreset::HarnessOnly => unreachable!("harness-only has no scaffold report"),
-            },
+            "preset": plan.identity().as_str(),
             "repo_name": &plan.repo_name,
             "repo_name_sanitized_from": (plan.requested_repo_name != plan.repo_name).then_some(&plan.requested_repo_name),
             "db": match plan.database() {
