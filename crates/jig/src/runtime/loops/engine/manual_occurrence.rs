@@ -20,6 +20,10 @@ pub(super) enum ManualOccurrenceStart {
         occurrence: ScheduleOccurrence,
         error: String,
     },
+    Waiting {
+        occurrence: ScheduleOccurrence,
+        error: String,
+    },
 }
 
 impl ManualOccurrenceStart {
@@ -41,6 +45,23 @@ impl ManualOccurrenceStart {
                 *completion = WorkflowCompletion {
                     outcome: WorkflowOutcome::NeedsAttention,
                     execution: WorkflowExecution::Unexecuted(UnexecutedReason::BlockedByAttention),
+                    error: Some(error),
+                    ..WorkflowCompletion::default()
+                };
+                (None, Some(occurrence))
+            }
+            Self::Waiting { occurrence, error } => {
+                actions.push(json!({
+                    "kind": "manual_occurrence",
+                    "status": "waiting",
+                    "reason": "manual_occurrence_running",
+                    "occurrence": &occurrence,
+                    "error": &error,
+                }));
+                *completion = WorkflowCompletion {
+                    execution: WorkflowExecution::Unexecuted(
+                        UnexecutedReason::BlockedByActiveOccurrence,
+                    ),
                     error: Some(error),
                     ..WorkflowCompletion::default()
                 };
@@ -88,6 +109,15 @@ impl ManualOccurrenceGuard {
                 return Ok(ManualOccurrenceStart::Blocked {
                     error: format!(
                         "Loop occurrence '{}' requires acknowledgement before workflow '{}' can run manually",
+                        occurrence.occurrence_id, workflow.id
+                    ),
+                    occurrence,
+                });
+            }
+            OccurrenceClaim::BlockedByRunning(occurrence) => {
+                return Ok(ManualOccurrenceStart::Waiting {
+                    error: format!(
+                        "Loop occurrence '{}' is still running and blocks workflow '{}'",
                         occurrence.occurrence_id, workflow.id
                     ),
                     occurrence,

@@ -104,6 +104,61 @@ fn previous_durable_schedule_schema_migrates_forward() {
 }
 
 #[test]
+fn markerless_legacy_attention_conservatively_blocks_shared_repository_work() {
+    for schema_version in LEGACY_SCHEDULE_SCHEMA_VERSION..=PREVIOUS_SCHEDULE_SCHEMA_VERSION {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let runtime_dir = temp.path().join(LOOP_RUNTIME_DIR);
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::write(
+            runtime_dir.join("schedule.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": schema_version,
+                "occurrences": {
+                    "legacy-task@100": {
+                        "occurrence_id": "legacy-task@100",
+                        "workflow_id": "legacy-task",
+                        "scheduled_at_ms": 100,
+                        "owner": "owner",
+                        "claim_expires_at_ms": 200,
+                        "started_at_ms": 100,
+                        "finished_at_ms": 150,
+                        "status": "needs_attention"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            runtime_dir.join("schedule.initialized"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "state_path": ".agent/runtime/loop/schedule.json"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = OccurrenceStore::new(&ctx);
+
+        let OccurrenceClaim::BlockedByAttention(blocker) = store
+            .claim_scheduled(
+                "new-repo-task",
+                200,
+                60,
+                OccurrenceAttentionScope::SharedRepository,
+                false,
+            )
+            .unwrap()
+        else {
+            panic!("schema {schema_version} attention must fail closed across shared scope");
+        };
+        assert_eq!(blocker.uses_shared_checkout, None);
+    }
+}
+
+#[test]
 fn fresh_schedule_initialization_publishes_the_legacy_downgrade_marker() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());

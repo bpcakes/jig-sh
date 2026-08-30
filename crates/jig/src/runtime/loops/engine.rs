@@ -112,8 +112,13 @@ impl ScheduledTick {
         match self {
             Self::Reported {
                 value, completion, ..
-            } if completion.execution.unexecuted_reason()
-                == Some(UnexecutedReason::BlockedByAttention) =>
+            } if matches!(
+                completion.execution.unexecuted_reason(),
+                Some(
+                    UnexecutedReason::BlockedByActiveOccurrence
+                        | UnexecutedReason::BlockedByAttention
+                )
+            ) =>
             {
                 Ok(value)
             }

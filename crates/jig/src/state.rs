@@ -12,7 +12,6 @@ pub(crate) use execution_leases::{
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
-pub(crate) use jsonl::with_stable_jsonl_file;
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,
@@ -34,7 +33,10 @@ pub(crate) use receipts::{
 };
 pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
-    record_receipt_with_cancellation,
+    record_receipt_with_cancellation, record_receipt_with_journal_writer,
+};
+pub(crate) use receipts::{
+    ReceiptJournalWriter, validate_receipt_record_id, with_receipt_journal_writer,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};

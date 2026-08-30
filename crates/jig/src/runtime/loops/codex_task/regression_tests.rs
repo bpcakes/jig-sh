@@ -129,6 +129,7 @@ fn repo_checkout_refuses_preexisting_repository_changes() {
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Repo,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -189,6 +190,7 @@ esac
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -234,6 +236,7 @@ esac
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -289,6 +292,7 @@ esac
         &workflow,
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut observer,
     )
     .err()
@@ -306,6 +310,7 @@ esac
         &workflow,
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -358,6 +363,7 @@ fn worktree_checkout_refuses_a_stale_repository_before_creating_runtime_paths() 
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()

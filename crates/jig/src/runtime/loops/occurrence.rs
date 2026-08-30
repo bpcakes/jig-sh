@@ -28,8 +28,8 @@ pub(super) use claim::OccurrenceAttentionScope;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
 
-const SCHEDULE_SCHEMA_VERSION: u32 = 3;
-const PREVIOUS_SCHEDULE_SCHEMA_VERSION: u32 = 2;
+const SCHEDULE_SCHEMA_VERSION: u32 = 4;
+const PREVIOUS_SCHEDULE_SCHEMA_VERSION: u32 = 3;
 const LEGACY_SCHEDULE_SCHEMA_VERSION: u32 = 1;
 const OCCURRENCE_HISTORY_PER_WORKFLOW: usize = 20;
 const MAX_ERROR_CHARS: usize = 4_000;
@@ -43,8 +43,8 @@ pub(super) struct ScheduleOccurrence {
     pub(super) owner: String,
     pub(super) claim_expires_at_ms: u64,
     pub(super) started_at_ms: u64,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub(super) uses_shared_checkout: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) uses_shared_checkout: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) finished_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,12 +69,8 @@ impl ScheduleOccurrence {
     pub(super) fn has_retained_worktree(&self) -> bool {
         self.worktree
             .as_deref()
-            .is_some_and(|worktree| Path::new(worktree).exists())
+            .is_some_and(|worktree| Path::new(worktree).try_exists().unwrap_or(true))
     }
-}
-
-const fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -144,6 +140,7 @@ pub(super) enum OccurrenceClaim {
     Acquired(ScheduleOccurrence),
     AlreadyRecorded(ScheduleOccurrence),
     BlockedByAttention(ScheduleOccurrence),
+    BlockedByRunning(ScheduleOccurrence),
     BlockedByRetainedWorktree(ScheduleOccurrence),
 }
 
@@ -729,7 +726,10 @@ fn validate_schema_version(actual: u32, expected: u32) -> Result<()> {
 fn migrate_schedule_schema(store: &mut ScheduleFile) -> Result<()> {
     match store.schema_version {
         SCHEDULE_SCHEMA_VERSION => Ok(()),
-        LEGACY_SCHEDULE_SCHEMA_VERSION | PREVIOUS_SCHEDULE_SCHEMA_VERSION => {
+        version
+            if (LEGACY_SCHEDULE_SCHEMA_VERSION..=PREVIOUS_SCHEDULE_SCHEMA_VERSION)
+                .contains(&version) =>
+        {
             store.schema_version = SCHEDULE_SCHEMA_VERSION;
             Ok(())
         }

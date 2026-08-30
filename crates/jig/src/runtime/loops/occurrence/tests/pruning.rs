@@ -22,7 +22,7 @@ fn pruning_preserves_discoverability_until_retained_worktree_is_removed() {
                 owner: "owner".into(),
                 claim_expires_at_ms: 0,
                 started_at_ms: 0,
-                uses_shared_checkout: false,
+                uses_shared_checkout: Some(false),
                 finished_at_ms: Some(1),
                 acknowledged_at_ms: None,
                 status: OccurrenceStatus::Succeeded,
@@ -60,7 +60,7 @@ fn pruning_never_discards_occurrences_that_need_attention() {
                 owner: "owner".into(),
                 claim_expires_at_ms: 0,
                 started_at_ms: 0,
-                uses_shared_checkout: false,
+                uses_shared_checkout: Some(false),
                 finished_at_ms: Some(1),
                 acknowledged_at_ms: None,
                 status: if scheduled_at_ms == 0 {
@@ -79,4 +79,32 @@ fn pruning_never_discards_occurrences_that_need_attention() {
 
     assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW + 1);
     assert!(store.occurrences.contains_key("nightly@0"));
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_worktree_inspection_errors_fail_closed() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let retained = temp.path().join("retained-worktree");
+    symlink("retained-worktree", &retained).unwrap();
+    assert!(retained.try_exists().is_err());
+    let occurrence = ScheduleOccurrence {
+        occurrence_id: "nightly@0".into(),
+        workflow_id: "nightly".into(),
+        scheduled_at_ms: 0,
+        owner: "owner".into(),
+        claim_expires_at_ms: 0,
+        started_at_ms: 0,
+        uses_shared_checkout: Some(false),
+        finished_at_ms: Some(1),
+        acknowledged_at_ms: None,
+        status: OccurrenceStatus::Succeeded,
+        worker_receipt_id: None,
+        worktree: Some(retained.display().to_string()),
+        error: None,
+    };
+
+    assert!(occurrence.has_retained_worktree());
 }

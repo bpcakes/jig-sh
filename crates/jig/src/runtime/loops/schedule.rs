@@ -230,6 +230,20 @@ fn dispatch_workflow(
             }));
             return step;
         }
+        OccurrenceClaim::BlockedByRunning(record) => {
+            step.skipped_count = 1;
+            step.deferred_count = 1;
+            step.action = Some(json!({
+                "workflow_id": workflow.id,
+                "occurrence": record,
+                "status": "deferred",
+                "reason": "occurrence_in_progress",
+                "retryable": true,
+                "next_at_ms": window.next_at_ms,
+                "error": "A live occurrence still owns the workflow or shared repository execution scope",
+            }));
+            return step;
+        }
         OccurrenceClaim::BlockedByRetainedWorktree(record) => {
             step.skipped_count = 1;
             step.failed_count = 1;

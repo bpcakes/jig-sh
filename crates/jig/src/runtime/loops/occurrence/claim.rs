@@ -53,10 +53,21 @@ impl OccurrenceStore {
             if let Some(existing) = store.occurrences.get(&occurrence_id) {
                 return Ok(OccurrenceClaim::AlreadyRecorded(existing.clone()));
             }
-            if let Some(attention) =
-                latest_attention_for_scope(store, workflow_id, constraints.attention_scope)
-            {
+            if let Some(attention) = latest_status_for_scope(
+                store,
+                workflow_id,
+                constraints.attention_scope,
+                OccurrenceStatus::NeedsAttention,
+            ) {
                 return Ok(OccurrenceClaim::BlockedByAttention(attention));
+            }
+            if let Some(running) = latest_status_for_scope(
+                store,
+                workflow_id,
+                constraints.attention_scope,
+                OccurrenceStatus::Running,
+            ) {
+                return Ok(OccurrenceClaim::BlockedByRunning(running));
             }
             if constraints.block_retained_worktree
                 && let Some(retained) = latest_workflow_occurrence(
@@ -80,8 +91,9 @@ impl OccurrenceStore {
                 owner: format!("{}-{}", std::process::id(), Ulid::new()),
                 claim_expires_at_ms: expiry(now, ttl_seconds),
                 started_at_ms: now,
-                uses_shared_checkout: constraints.attention_scope
-                    == OccurrenceAttentionScope::SharedRepository,
+                uses_shared_checkout: Some(
+                    constraints.attention_scope == OccurrenceAttentionScope::SharedRepository,
+                ),
                 finished_at_ms: None,
                 acknowledged_at_ms: None,
                 status: OccurrenceStatus::Running,
@@ -96,20 +108,21 @@ impl OccurrenceStore {
     }
 }
 
-fn latest_attention_for_scope(
+fn latest_status_for_scope(
     store: &ScheduleFile,
     workflow_id: &str,
     scope: OccurrenceAttentionScope,
+    status: OccurrenceStatus,
 ) -> Option<ScheduleOccurrence> {
     store
         .occurrences
         .values()
-        .filter(|record| record.status == OccurrenceStatus::NeedsAttention)
+        .filter(|record| record.status == status)
         .filter(|record| match scope {
             OccurrenceAttentionScope::None => false,
             OccurrenceAttentionScope::Workflow => record.workflow_id == workflow_id,
             OccurrenceAttentionScope::SharedRepository => {
-                record.workflow_id == workflow_id || record.uses_shared_checkout
+                record.workflow_id == workflow_id || record.uses_shared_checkout.unwrap_or(true)
             }
         })
         .max_by_key(|record| record.scheduled_at_ms)

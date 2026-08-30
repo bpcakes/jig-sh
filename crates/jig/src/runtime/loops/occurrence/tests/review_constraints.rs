@@ -151,7 +151,89 @@ fn shared_repository_attention_blocks_other_shared_repository_workflows() {
     else {
         panic!("shared-repository attention must not block an isolated workflow");
     };
-    assert!(!isolated.uses_shared_checkout);
+    assert_eq!(isolated.uses_shared_checkout, Some(false));
+}
+
+#[test]
+fn live_shared_repository_occurrence_blocks_only_overlapping_scope() {
+    let temp = tempdir().unwrap();
+    super::write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(first) = store
+        .claim_scheduled(
+            "repo-task-a",
+            100,
+            60,
+            OccurrenceAttentionScope::SharedRepository,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected first shared-repository occurrence claim");
+    };
+
+    let OccurrenceClaim::BlockedByRunning(blocker) = store
+        .claim_scheduled(
+            "repo-task-b",
+            100,
+            60,
+            OccurrenceAttentionScope::SharedRepository,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("live shared-repository work must retain admission authority");
+    };
+    assert_eq!(blocker.occurrence_id, first.occurrence_id);
+
+    let OccurrenceClaim::Acquired(isolated) = store
+        .claim_scheduled(
+            "isolated-task",
+            100,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("unrelated isolated work must remain admissible");
+    };
+    assert_eq!(isolated.uses_shared_checkout, Some(false));
+}
+
+#[test]
+fn live_workflow_occurrence_blocks_a_newer_claim_for_the_same_workflow() {
+    let temp = tempdir().unwrap();
+    super::write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(first) = store
+        .claim_scheduled(
+            "nightly",
+            100,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected first workflow occurrence claim");
+    };
+
+    let OccurrenceClaim::BlockedByRunning(blocker) = store
+        .claim_scheduled(
+            "nightly",
+            200,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("live workflow work must block a newer claim");
+    };
+    assert_eq!(blocker.occurrence_id, first.occurrence_id);
 }
 
 #[test]

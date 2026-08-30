@@ -178,7 +178,7 @@ fn successful_worktree_cleanup_is_a_separate_finalization_phase() {
         path: checkout_path.clone(),
         initial_head,
     }
-    .finish(TaskOutcome::Succeeded, &ctx, None);
+    .finish(TaskOutcome::Succeeded, &ctx, None, None);
 
     assert!(completion.error.is_none(), "{:#?}", completion.error);
     assert_eq!(completion.report.retained_worktree(), None);

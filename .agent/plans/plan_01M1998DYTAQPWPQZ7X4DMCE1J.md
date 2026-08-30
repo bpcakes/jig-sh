@@ -277,6 +277,17 @@ Focused implementation evidence:
     jig.source_frontend_test                          # 107 passed
     receipt_01M1A2BDG0X0KH5F506ATF1KSR               # final rebuilt-binary contract refresh passed
     jig.contract_check / rust_file_loc / fmt / clippy # fresh and passed
+    cargo test -p jig-sh --lib runtime::loops         # 166 passed after round six
+    cargo test -p jig-sh --lib 'runtime::tests::loops::' # 53 passed after round six
+    cargo test -p jig-sh --test cli_json loop_        # 5 passed after round six
+    exclusive_journal_authority_accepts_one_runtime_receipt # passed
+    unrelated_runtime_receipt_waits_for_repo_worker_verification # passed
+    worker_injection_before_the_runtime_receipt_is_rejected # passed
+    live_shared_occurrence_defers_dispatch_and_manual_tick # passed
+    receipt_01M1A5PHAWXJNVWYJXGNV6195S               # round-six repair work check passed
+    jig.source_core_test                              # 2,523 passed
+    jig.source_frontend_test                          # 107 passed
+    jig.contract_check / rust_file_loc / fmt / clippy # fresh and passed
 
 Final structured evidence:
 
@@ -297,7 +308,7 @@ Final structured evidence:
 
 Keep all new types and methods crate-private. Do not add dependencies. `ScheduledTick` remains the representation of a tick that reached workflow execution or later reporting; a new typed startup error represents the mutually exclusive unexecuted path. `ScheduleOccurrence` owns the shared attention predicate, and `OccurrenceStore` owns atomic reconciliation plus acknowledgement. `CodexExecOutput` owns the distinction between process status, authoritative result bytes, and provider diagnostics. `AdditionalCancellationControl` must implement the entire `ExecutionObserver` contract by forwarding both `event` and `flush`.
 
-The persisted schedule schema stays version 3. Existing schema-version-1 loop and worker evidence fields remain readable; new provider-diagnostic fields are additive. Linux and macOS behavior, Rust 1.88, edition 2024, child-process supervision, cancellation timing, and receipt truncation limits must remain unchanged.
+The persisted schedule schema is version 4. Existing schema-version-1 loop and worker evidence fields remain readable; markerless schedule schemas 1 through 3 migrate conservatively, and new provider-diagnostic fields remain additive. Linux and macOS behavior, Rust 1.88, edition 2024, child-process supervision, cancellation timing, and established receipt preview truncation limits must remain unchanged.
 
 Plan revision note (2026-08-30): replaced the initial one-line work note with a self-contained ExecPlan after resolving the review questions and establishing the green baseline. The plan separates Fowler refactoring steps from behavior fixes and defines the bounded comprehensive-review loop.
 
@@ -310,3 +321,5 @@ Plan revision note (2026-08-30): the first post-round-two structured check expos
 Plan revision note (2026-08-30): after the third review, extracted checkout completion reporting and the shared renewal policy, added typed ambiguous-push evidence, and narrowed repository dirtiness to task-authored changes by excluding only Jig's own worker receipt. This preserves the repository's LOC boundary and prevents the safety fix from backpressuring every otherwise-clean repo-mode task.
 
 Plan revision note (2026-08-30): after the fourth review, extracted manual occurrence lifecycle, one-clock runtime attention aggregation, and PR outcome classification. The receipt-path exception now has an independent append-only proof, and accepted workflow IDs are encoded at the PR-worktree sink. These Fowler-sized boundaries keep every changed Rust file under the repository's 800-line limit while centralizing the new safety invariants.
+
+Plan revision note (2026-08-30): after the sixth review, made the durable occurrence ledger the admission authority across the workflow-lease release/finalization gap, introduced an explicit unknown value for pre-schema-4 shared-checkout scope, made retained-path inspection fail closed, and serialized repo-mode workers with trusted receipt-journal writers. Exact bounded receipt verification now distinguishes runtime-owned appends from worker injection without preventing unrelated Jig commands from appending after the authority window.

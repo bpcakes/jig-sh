@@ -20,7 +20,10 @@ use crate::execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,
 };
-use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
+use crate::state::{
+    ReceiptInput, ReceiptJournalWriter, now_ms, record_receipt_with_cancellation,
+    record_receipt_with_journal_writer,
+};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
@@ -95,6 +98,7 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) transcript_overflow_policy: ProcessOutputOverflowPolicy,
     pub(crate) prompt: CodexPrompt<'a>,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
+    pub(crate) receipt_journal: Option<&'a ReceiptJournalWriter<'a>>,
     pub(crate) phase: Option<WorkerPhase<'a>>,
 }
 
@@ -724,34 +728,36 @@ fn record_worker_receipt(
         "provider_stdout_preview_truncated": provider_stdout_preview_truncated,
         "provider_stdout_truncated": outcome.provider_stdout_truncated,
     });
-    record_receipt_with_cancellation(
-        ctx,
-        ReceiptInput {
-            tool_name: WORKER_RUN_TOOL,
-            args: json!({
-                "provider": "codex",
-                "runner": "codex_exec",
-                "mode": request.mode.as_str(),
-                "purpose": request.receipt.purpose,
-                "plan_id": request.receipt.plan_id,
-                "workflow_id": request.receipt.workflow_id,
-                "item_key": request.receipt.item_key,
-            }),
-            invoked_command_key: None,
-            plan_id: request.receipt.plan_id.map(ToOwned::to_owned),
-            started_at_ms: outcome.started_at_ms,
-            ended_at_ms: outcome.ended_at_ms,
-            exit_status: outcome.exit_status,
-            stdout: outcome.stdout,
-            stderr: outcome.stderr,
-            evidence: Some(evidence),
-            session_override: None,
-            collect_git_metadata: request.receipt.collect_git_metadata,
-            collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
-            worktree_fingerprint_override: None,
-        },
-        &|| observer.cancelled(),
-    )
+    let input = ReceiptInput {
+        tool_name: WORKER_RUN_TOOL,
+        args: json!({
+            "provider": "codex",
+            "runner": "codex_exec",
+            "mode": request.mode.as_str(),
+            "purpose": request.receipt.purpose,
+            "plan_id": request.receipt.plan_id,
+            "workflow_id": request.receipt.workflow_id,
+            "item_key": request.receipt.item_key,
+        }),
+        invoked_command_key: None,
+        plan_id: request.receipt.plan_id.map(ToOwned::to_owned),
+        started_at_ms: outcome.started_at_ms,
+        ended_at_ms: outcome.ended_at_ms,
+        exit_status: outcome.exit_status,
+        stdout: outcome.stdout,
+        stderr: outcome.stderr,
+        evidence: Some(evidence),
+        session_override: None,
+        collect_git_metadata: request.receipt.collect_git_metadata,
+        collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
+        worktree_fingerprint_override: None,
+    };
+    match request.receipt_journal {
+        Some(writer) => {
+            record_receipt_with_journal_writer(ctx, input, &|| observer.cancelled(), writer)
+        }
+        None => record_receipt_with_cancellation(ctx, input, &|| observer.cancelled()),
+    }
     .context("Failed to record worker receipt")
 }
 

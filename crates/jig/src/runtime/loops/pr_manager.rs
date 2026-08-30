@@ -553,6 +553,7 @@ fn run_pr_repair_steps(
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
             },
+            receipt_journal: None,
             phase: None,
         },
         observer,

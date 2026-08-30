@@ -82,7 +82,7 @@ fn current_worktree_fingerprint_from_result_for_receipt(
 }
 
 pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
-    record_receipt_inner(ctx, input, None, None)
+    record_receipt_inner(ctx, input, None, None, None)
 }
 
 pub(crate) fn record_target_receipt(
@@ -90,7 +90,7 @@ pub(crate) fn record_target_receipt(
     input: ReceiptInput<'_>,
     target: TargetReceiptMetadata,
 ) -> Result<String> {
-    record_receipt_inner(ctx, input, Some(target), None)
+    record_receipt_inner(ctx, input, Some(target), None, None)
 }
 
 pub(crate) fn record_receipt_with_cancellation(
@@ -98,7 +98,16 @@ pub(crate) fn record_receipt_with_cancellation(
     input: ReceiptInput<'_>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    record_receipt_inner(ctx, input, None, Some(cancelled))
+    record_receipt_inner(ctx, input, None, Some(cancelled), None)
+}
+
+pub(crate) fn record_receipt_with_journal_writer(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    cancelled: &dyn Fn() -> bool,
+    writer: &super::ReceiptJournalWriter<'_>,
+) -> Result<String> {
+    record_receipt_inner(ctx, input, None, Some(cancelled), Some(writer))
 }
 
 fn record_receipt_inner(
@@ -106,6 +115,7 @@ fn record_receipt_inner(
     input: ReceiptInput<'_>,
     target: Option<TargetReceiptMetadata>,
     cancelled: Option<&dyn Fn() -> bool>,
+    writer: Option<&super::ReceiptJournalWriter<'_>>,
 ) -> Result<String> {
     ensure_state_layout(ctx)?;
     let mut git_metadata = receipt_git_metadata(
@@ -185,7 +195,10 @@ fn record_receipt_inner(
             .map(|value| redact_repository_root(&value, &root_spellings)),
     };
     let receipt_id = receipt.id.clone();
-    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt)?;
+    match writer {
+        Some(writer) => writer.append(&receipt)?,
+        None => append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt)?,
+    }
     Ok(receipt_id)
 }
 

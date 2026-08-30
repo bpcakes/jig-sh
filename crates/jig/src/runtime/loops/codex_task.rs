@@ -26,6 +26,7 @@ use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
     run_codex_exec,
 };
+use crate::state::{ReceiptJournalWriter, with_receipt_journal_writer};
 
 use super::state::LOOP_RUNTIME_DIR;
 use super::workflow::{
@@ -52,6 +53,25 @@ pub(super) fn codex_task_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     execution: CodexTaskExecution<'_>,
+    observer: &mut dyn ExecutionControl,
+) -> Result<WorkflowTick> {
+    if workflow
+        .codex_task
+        .as_ref()
+        .is_some_and(|settings| settings.checkout == CodexTaskCheckout::Repo)
+    {
+        return with_receipt_journal_writer(ctx, |writer| {
+            codex_task_tick_with_journal(ctx, workflow, execution, Some(writer), observer)
+        });
+    }
+    codex_task_tick_with_journal(ctx, workflow, execution, None, observer)
+}
+
+fn codex_task_tick_with_journal(
+    ctx: &RepoContext,
+    workflow: &ResolvedWorkflow,
+    execution: CodexTaskExecution<'_>,
+    receipt_journal: Option<&ReceiptJournalWriter<'_>>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     let settings = workflow
@@ -94,6 +114,7 @@ pub(super) fn codex_task_tick(
         workflow,
         execution.item_key,
         settings.checkout,
+        receipt_journal,
         observer,
     ) {
         Ok(checkout) => checkout,
@@ -130,6 +151,7 @@ pub(super) fn codex_task_tick(
                 collect_git_metadata: matches!(settings.checkout, CodexTaskCheckout::Repo),
                 collect_worktree_fingerprint: matches!(settings.checkout, CodexTaskCheckout::Repo),
             },
+            receipt_journal,
             phase: None,
         },
         observer,
@@ -146,6 +168,7 @@ pub(super) fn codex_task_tick(
                 },
                 ctx,
                 Some(worker.worker_receipt_id()),
+                receipt_journal,
             );
             let worker_error = (!worker_succeeded).then(|| {
                 format!(
@@ -206,6 +229,7 @@ pub(super) fn codex_task_tick(
                 },
                 ctx,
                 Some(&worker_receipt_id),
+                receipt_journal,
             );
             let timing = if before_start {
                 " before the worker started"
@@ -264,6 +288,7 @@ pub(super) fn codex_task_tick(
                 },
                 ctx,
                 worker_receipt_id.as_deref(),
+                receipt_journal,
             );
             let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
             let retained_worktree = checkout.report.retained_worktree();
@@ -393,6 +418,7 @@ fn prepare_checkout(
     workflow: &ResolvedWorkflow,
     item_key: &str,
     checkout: CodexTaskCheckout,
+    receipt_journal: Option<&ReceiptJournalWriter<'_>>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
     if checkout == CodexTaskCheckout::Repo {
@@ -421,7 +447,12 @@ fn prepare_checkout(
         }
         return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
-            receipt_journal: checkout::ReceiptJournalBaseline::capture(ctx)?,
+            receipt_journal: checkout::ReceiptJournalBaseline::capture(
+                ctx,
+                receipt_journal.ok_or_else(|| {
+                    anyhow!("Shared checkout execution requires receipt-journal authority")
+                })?,
+            )?,
         });
     }
 

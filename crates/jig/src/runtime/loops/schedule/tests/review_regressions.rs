@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tempfile::tempdir;
 
-use super::super::super::engine::status_at_with_cancellation;
+use super::super::super::engine::{status_at_with_cancellation, tick_with_observer};
 use super::super::super::occurrence::{
     OccurrenceAttentionScope, OccurrenceFinish, OccurrenceOutcome,
 };
 use super::super::super::state::AttemptStore;
 use super::super::{NoopExecutionObserver, OccurrenceStore, dispatch_workflow, list_workflows};
-use crate::command::LoopStatusRequest;
+use crate::command::{LoopStatusRequest, LoopTickRequest};
 use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 #[cfg(unix)]
@@ -39,6 +39,90 @@ impl crate::execution::ExecutionCancellation for CancelAfterFirstCheck {
     fn cancelled(&self) -> bool {
         self.0.fetch_add(1, Ordering::SeqCst) > 0
     }
+}
+
+#[test]
+fn live_shared_occurrence_defers_dispatch_and_manual_tick() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    fs::create_dir_all(temp.path().join(".agent/tasks")).unwrap();
+    fs::write(temp.path().join(".agent/tasks/shared.md"), "Review it.\n").unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "repo-task-a"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = ".agent/tasks/shared.md"
+checkout = "repo"
+
+[[loop.workflows]]
+id = "repo-task-b"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = ".agent/tasks/shared.md"
+checkout = "repo"
+"#
+        ),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = list_workflows(&ctx)
+        .unwrap()
+        .into_iter()
+        .find(|workflow| workflow.id == "repo-task-b")
+        .unwrap();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+    let super::super::OccurrenceClaim::Acquired(running) = occurrences
+        .claim_scheduled(
+            "repo-task-a",
+            100,
+            60,
+            OccurrenceAttentionScope::SharedRepository,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected live shared occurrence");
+    };
+
+    let step = dispatch_workflow(
+        &ctx,
+        &mut occurrences,
+        &workflow,
+        super::timestamp("2026-08-21T08:42:30Z"),
+        &mut NoopExecutionObserver,
+    );
+    assert_eq!(step.executed_count, 0);
+    assert_eq!(step.deferred_count, 1);
+    assert_eq!(step.skipped_count, 1);
+    assert_eq!(step.action.as_ref().unwrap()["status"], "deferred");
+    assert_eq!(
+        step.action.as_ref().unwrap()["reason"],
+        "occurrence_in_progress"
+    );
+
+    let tick = tick_with_observer(
+        &ctx,
+        LoopTickRequest {
+            workflow: Some("repo-task-b".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        },
+        &mut NoopExecutionObserver,
+    )
+    .unwrap();
+    assert_eq!(tick["status"], "waiting", "{tick:#}");
+    assert_eq!(tick["actions"][0]["status"], "waiting");
+    assert_eq!(tick["actions"][0]["reason"], "manual_occurrence_running");
+    assert_eq!(
+        tick["manual_occurrence"]["occurrence_id"],
+        running.occurrence_id
+    );
 }
 
 #[test]

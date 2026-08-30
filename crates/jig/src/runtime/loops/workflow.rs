@@ -70,6 +70,7 @@ pub(super) enum WorkflowExecution {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum UnexecutedReason {
+    BlockedByActiveOccurrence,
     BlockedByAttention,
     CancelledBeforeStart,
     PreExecutionError,
@@ -78,6 +79,7 @@ pub(super) enum UnexecutedReason {
 impl UnexecutedReason {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
+            Self::BlockedByActiveOccurrence => "blocked_by_active_occurrence",
             Self::BlockedByAttention => "blocked_by_attention",
             Self::CancelledBeforeStart => "cancelled_before_start",
             Self::PreExecutionError => "pre_execution_error",
