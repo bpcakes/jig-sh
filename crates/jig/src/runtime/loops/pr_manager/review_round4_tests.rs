@@ -27,7 +27,7 @@ mod review_round4_tests {
             title: "Example repair".into(),
             base_ref: "main".into(),
             head_ref: "repair/example".into(),
-            head_sha: "abc123".into(),
+            head_sha: "a".repeat(40),
             reasons: vec!["failing_checks".into()],
         }
     }

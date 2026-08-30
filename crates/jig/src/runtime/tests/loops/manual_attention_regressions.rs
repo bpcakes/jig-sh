@@ -69,8 +69,17 @@ printf 'task complete\n' > "$out"
             backoff_seconds: None,
         })),
     )
-    .unwrap_err();
-    assert!(second.to_string().contains("Retained worktree"));
+    .unwrap();
+    assert_eq!(second["status"], "needs_attention", "{second:#}");
+    assert_eq!(second["ok"], false, "{second:#}");
+    assert!(second["receipt_id"].is_string(), "{second:#}");
+    assert_eq!(
+        second["actions"][0]["reason"],
+        "manual_occurrence_blocked"
+    );
+    assert!(second["actions"][0]["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("Retained worktree")));
 
     let scheduled =
         crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
@@ -90,6 +99,7 @@ fn tick_and_run_report_attention_owned_by_another_workflow() {
     let bin = tempdir().unwrap();
     write_fixture_repo(temp.path());
     configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
+    let run_log = temp.path().join(".agent/.cache/repo-task-runs");
     let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
     fs::write(
         temp.path().join(".jig.toml"),
@@ -116,15 +126,36 @@ for arg in "$@"; do
   prev="$arg"
 done
 cat >/dev/null
+printf 'run\n' >> "$JIG_TEST_RUN_LOG"
 printf 'scheduled change\n' > scheduled-change.txt
 printf 'task complete\n' > "$out"
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch =
         crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
     assert_eq!(dispatch["needs_attention_count"], 1, "{dispatch:#}");
+
+    let blocked = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("repo-task".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap();
+    assert_eq!(blocked["status"], "needs_attention", "{blocked:#}");
+    assert_eq!(blocked["ok"], false, "{blocked:#}");
+    assert!(blocked["receipt_id"].is_string(), "{blocked:#}");
+    assert_eq!(
+        blocked["actions"][0]["reason"],
+        "manual_occurrence_blocked"
+    );
+    assert_eq!(fs::read_to_string(&run_log).unwrap(), "run\n");
 
     let tick = crate::runtime::dispatch(
         &ctx,

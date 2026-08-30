@@ -1,7 +1,14 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::runtime::loops) enum OccurrenceAttentionScope {
+    None,
+    Workflow,
+    SharedRepository,
+}
+
 pub(super) struct OccurrenceClaimConstraints {
-    pub(super) block_attention: bool,
+    pub(super) attention_scope: OccurrenceAttentionScope,
     pub(super) block_newer_occurrences: bool,
     pub(super) block_retained_worktree: bool,
 }
@@ -13,7 +20,7 @@ impl OccurrenceStore {
         scheduled_at_ms: u64,
         ttl_seconds: u64,
         now: u64,
-        scheduled_claim: bool,
+        attention_scope: OccurrenceAttentionScope,
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
         let occurrence_id = occurrence_id(workflow_id, scheduled_at_ms);
@@ -24,8 +31,8 @@ impl OccurrenceStore {
             ttl_seconds,
             now,
             OccurrenceClaimConstraints {
-                block_attention: scheduled_claim,
-                block_newer_occurrences: scheduled_claim,
+                attention_scope,
+                block_newer_occurrences: attention_scope != OccurrenceAttentionScope::None,
                 block_retained_worktree,
             },
         )
@@ -46,27 +53,25 @@ impl OccurrenceStore {
             if let Some(existing) = store.occurrences.get(&occurrence_id) {
                 return Ok(OccurrenceClaim::AlreadyRecorded(existing.clone()));
             }
-            if constraints.block_attention {
-                if let Some(attention) = latest_matching_occurrence(store, workflow_id, |record| {
-                    record.status == OccurrenceStatus::NeedsAttention
-                }) {
-                    return Ok(OccurrenceClaim::BlockedByAttention(attention));
-                }
-                if constraints.block_retained_worktree
-                    && let Some(retained) = latest_matching_occurrence(
-                        store,
-                        workflow_id,
-                        ScheduleOccurrence::has_retained_worktree,
-                    )
-                {
-                    return Ok(OccurrenceClaim::BlockedByRetainedWorktree(retained));
-                }
-                if constraints.block_newer_occurrences
-                    && let Some(latest) = latest_matching_occurrence(store, workflow_id, |_| true)
-                    && latest.scheduled_at_ms > scheduled_at_ms
-                {
-                    return Ok(OccurrenceClaim::AlreadyRecorded(latest));
-                }
+            if let Some(attention) =
+                latest_attention_for_scope(store, workflow_id, constraints.attention_scope)
+            {
+                return Ok(OccurrenceClaim::BlockedByAttention(attention));
+            }
+            if constraints.block_retained_worktree
+                && let Some(retained) = latest_workflow_occurrence(
+                    store,
+                    workflow_id,
+                    ScheduleOccurrence::has_retained_worktree,
+                )
+            {
+                return Ok(OccurrenceClaim::BlockedByRetainedWorktree(retained));
+            }
+            if constraints.block_newer_occurrences
+                && let Some(latest) = latest_workflow_occurrence(store, workflow_id, |_| true)
+                && latest.scheduled_at_ms > scheduled_at_ms
+            {
+                return Ok(OccurrenceClaim::AlreadyRecorded(latest));
             }
             let record = ScheduleOccurrence {
                 occurrence_id: occurrence_id.clone(),
@@ -75,6 +80,8 @@ impl OccurrenceStore {
                 owner: format!("{}-{}", std::process::id(), Ulid::new()),
                 claim_expires_at_ms: expiry(now, ttl_seconds),
                 started_at_ms: now,
+                uses_shared_checkout: constraints.attention_scope
+                    == OccurrenceAttentionScope::SharedRepository,
                 finished_at_ms: None,
                 acknowledged_at_ms: None,
                 status: OccurrenceStatus::Running,
@@ -89,7 +96,27 @@ impl OccurrenceStore {
     }
 }
 
-fn latest_matching_occurrence(
+fn latest_attention_for_scope(
+    store: &ScheduleFile,
+    workflow_id: &str,
+    scope: OccurrenceAttentionScope,
+) -> Option<ScheduleOccurrence> {
+    store
+        .occurrences
+        .values()
+        .filter(|record| record.status == OccurrenceStatus::NeedsAttention)
+        .filter(|record| match scope {
+            OccurrenceAttentionScope::None => false,
+            OccurrenceAttentionScope::Workflow => record.workflow_id == workflow_id,
+            OccurrenceAttentionScope::SharedRepository => {
+                record.workflow_id == workflow_id || record.uses_shared_checkout
+            }
+        })
+        .max_by_key(|record| record.scheduled_at_ms)
+        .cloned()
+}
+
+fn latest_workflow_occurrence(
     store: &ScheduleFile,
     workflow_id: &str,
     predicate: impl Fn(&ScheduleOccurrence) -> bool,

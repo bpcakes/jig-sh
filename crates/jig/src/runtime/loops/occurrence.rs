@@ -24,6 +24,7 @@ mod claim;
 mod manual;
 mod persistence;
 
+pub(super) use claim::OccurrenceAttentionScope;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
 
@@ -42,6 +43,8 @@ pub(super) struct ScheduleOccurrence {
     pub(super) owner: String,
     pub(super) claim_expires_at_ms: u64,
     pub(super) started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) uses_shared_checkout: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) finished_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +71,10 @@ impl ScheduleOccurrence {
             .as_deref()
             .is_some_and(|worktree| Path::new(worktree).exists())
     }
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -354,6 +361,7 @@ impl OccurrenceStore {
         workflow_id: &str,
         scheduled_at_ms: u64,
         ttl_seconds: u64,
+        attention_scope: claim::OccurrenceAttentionScope,
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
         self.claim_with_constraints_at(
@@ -361,7 +369,7 @@ impl OccurrenceStore {
             scheduled_at_ms,
             ttl_seconds,
             now_ms(),
-            true,
+            attention_scope,
             block_retained_worktree,
         )
     }
@@ -548,7 +556,14 @@ impl OccurrenceStore {
         ttl_seconds: u64,
         now: u64,
     ) -> Result<OccurrenceClaim> {
-        self.claim_with_constraints_at(workflow_id, scheduled_at_ms, ttl_seconds, now, false, false)
+        self.claim_with_constraints_at(
+            workflow_id,
+            scheduled_at_ms,
+            ttl_seconds,
+            now,
+            claim::OccurrenceAttentionScope::None,
+            false,
+        )
     }
 
     fn renew_at(

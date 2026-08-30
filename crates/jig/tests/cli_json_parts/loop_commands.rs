@@ -403,6 +403,12 @@ timezone = "UTC"
 #[cfg(unix)]
 fn write_failing_loop_repo(root: &Path) {
     write_info_commands_repo(root);
+    let gitignore = fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
+    fs::write(
+        root.join(".gitignore"),
+        format!("{gitignore}\n.agent/.cache/\n.agent/runtime/\n"),
+    )
+    .unwrap();
     fs::create_dir_all(root.join("tasks")).unwrap();
     fs::write(root.join("tasks/task.md"), "Review the repository.\n").unwrap();
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();

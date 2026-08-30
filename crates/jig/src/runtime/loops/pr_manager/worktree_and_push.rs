@@ -4,6 +4,12 @@ fn prepare_worktree(
     item: &PrWorkItem,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<PathBuf> {
+    if !is_git_object_id(&item.head_sha) {
+        return Err(PrRepairStepError::failed(anyhow!(
+            "GitHub PR snapshot did not include a valid head object ID for PR #{}",
+            item.pr_number
+        )));
+    }
     let worktree = pr_worktree_root(ctx, &workflow.id)
         .join(format!(
             "pr-{}-{}",
@@ -21,18 +27,19 @@ fn prepare_worktree(
         ["fetch", "origin", &item.head_ref],
         observer,
     )?;
+    let expected_head = format!("{}^{{commit}}", item.head_sha);
+    git_checked(
+        ctx,
+        ctx.root(),
+        ["cat-file", "-e", &expected_head],
+        observer,
+    )?;
     if worktree.join(".git").exists() {
         clean_reused_worktree(ctx, &worktree, observer)?;
         git_checked(
             ctx,
             &worktree,
-            ["fetch", "origin", &item.head_ref],
-            observer,
-        )?;
-        git_checked(
-            ctx,
-            &worktree,
-            ["checkout", "--detach", "FETCH_HEAD"],
+            ["checkout", "--detach", &item.head_sha],
             observer,
         )?;
     } else {
@@ -44,7 +51,7 @@ fn prepare_worktree(
                 OsString::from("add"),
                 OsString::from("--detach"),
                 worktree.as_os_str().to_os_string(),
-                OsString::from("FETCH_HEAD"),
+                OsString::from(&item.head_sha),
             ],
             observer,
         )?;
@@ -67,6 +74,10 @@ fn prepare_worktree(
         observer,
     )?;
     Ok(worktree)
+}
+
+fn is_git_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn pr_worktree_root(ctx: &RepoContext, workflow_id: &str) -> PathBuf {

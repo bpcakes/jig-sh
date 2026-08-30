@@ -1,15 +1,53 @@
 use anyhow::{Result, bail};
+use serde_json::{Value, json};
 
 use super::super::occurrence::{
-    OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish, OccurrenceGuard, OccurrenceOutcome,
-    OccurrenceStore,
+    OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish,
+    OccurrenceGuard, OccurrenceOutcome, OccurrenceStore, ScheduleOccurrence,
 };
 use super::super::workflow::{
-    CodexTaskCheckout, ResolvedWorkflow, WorkflowCompletion, WorkflowOutcome,
+    CodexTaskCheckout, ResolvedWorkflow, UnexecutedReason, WorkflowCompletion, WorkflowExecution,
+    WorkflowOutcome,
 };
 
 pub(super) struct ManualOccurrenceGuard {
     guard: OccurrenceGuard,
+}
+
+pub(super) enum ManualOccurrenceStart {
+    Acquired(ManualOccurrenceGuard),
+    Blocked {
+        occurrence: ScheduleOccurrence,
+        error: String,
+    },
+}
+
+impl ManualOccurrenceStart {
+    pub(super) fn prepare_tick(
+        self,
+        actions: &mut Vec<Value>,
+        completion: &mut WorkflowCompletion,
+    ) -> (Option<ManualOccurrenceGuard>, Option<ScheduleOccurrence>) {
+        match self {
+            Self::Acquired(guard) => (Some(guard), None),
+            Self::Blocked { occurrence, error } => {
+                actions.push(json!({
+                    "kind": "manual_occurrence",
+                    "status": "needs_attention",
+                    "reason": "manual_occurrence_blocked",
+                    "occurrence": &occurrence,
+                    "error": &error,
+                }));
+                *completion = WorkflowCompletion {
+                    outcome: WorkflowOutcome::NeedsAttention,
+                    execution: WorkflowExecution::Unexecuted(UnexecutedReason::BlockedByAttention),
+                    error: Some(error),
+                    ..WorkflowCompletion::default()
+                };
+                (None, Some(occurrence))
+            }
+        }
+    }
 }
 
 impl ManualOccurrenceGuard {
@@ -17,16 +55,26 @@ impl ManualOccurrenceGuard {
         workflow: &ResolvedWorkflow,
         item_key: &str,
         ctx: &crate::context::RepoContext,
-    ) -> Result<Self> {
+    ) -> Result<ManualOccurrenceStart> {
         let block_retained_worktree = workflow
             .codex_task
             .as_ref()
             .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
+        let attention_scope = if workflow
+            .codex_task
+            .as_ref()
+            .is_some_and(|task| task.checkout == CodexTaskCheckout::Repo)
+        {
+            OccurrenceAttentionScope::SharedRepository
+        } else {
+            OccurrenceAttentionScope::Workflow
+        };
         let mut store = OccurrenceStore::new(ctx);
         let claim = store.claim_manual(
             &workflow.id,
             item_key,
             workflow.lease_ttl_seconds,
+            attention_scope,
             block_retained_worktree,
         )?;
         let occurrence = match claim {
@@ -36,19 +84,28 @@ impl ManualOccurrenceGuard {
                 occurrence.occurrence_id,
                 occurrence.status
             ),
-            OccurrenceClaim::BlockedByAttention(occurrence) => bail!(
-                "Loop occurrence '{}' requires acknowledgement before workflow '{}' can run manually",
-                occurrence.occurrence_id,
-                workflow.id
-            ),
-            OccurrenceClaim::BlockedByRetainedWorktree(occurrence) => bail!(
-                "Retained worktree '{}' must be removed before workflow '{}' can run manually",
-                occurrence.worktree.as_deref().unwrap_or("<unknown>"),
-                workflow.id
-            ),
+            OccurrenceClaim::BlockedByAttention(occurrence) => {
+                return Ok(ManualOccurrenceStart::Blocked {
+                    error: format!(
+                        "Loop occurrence '{}' requires acknowledgement before workflow '{}' can run manually",
+                        occurrence.occurrence_id, workflow.id
+                    ),
+                    occurrence,
+                });
+            }
+            OccurrenceClaim::BlockedByRetainedWorktree(occurrence) => {
+                return Ok(ManualOccurrenceStart::Blocked {
+                    error: format!(
+                        "Retained worktree '{}' must be removed before workflow '{}' can run manually",
+                        occurrence.worktree.as_deref().unwrap_or("<unknown>"),
+                        workflow.id
+                    ),
+                    occurrence,
+                });
+            }
         };
         match OccurrenceGuard::start(store.clone(), &occurrence, workflow.lease_ttl_seconds) {
-            Ok(guard) => Ok(Self { guard }),
+            Ok(guard) => Ok(ManualOccurrenceStart::Acquired(Self { guard })),
             Err(error) => {
                 let cleanup = store
                     .abandon_unexecuted(&occurrence.occurrence_id, &occurrence.owner)
@@ -83,5 +140,35 @@ impl ManualOccurrenceGuard {
             },
             retain,
         )
+    }
+
+    pub(super) fn complete_tick(
+        self,
+        completion: &mut WorkflowCompletion,
+    ) -> (Option<ScheduleOccurrence>, Option<String>) {
+        match self.finish(completion) {
+            Ok(finalization) => {
+                let error = finalization
+                    .renewal_error
+                    .map(|error| format!("Manual occurrence renewal failed: {error}"));
+                let occurrence = finalization.occurrence;
+                if occurrence.status.as_str() == "running" {
+                    return (None, error);
+                }
+                if occurrence.requires_attention_at(crate::state::now_ms()) {
+                    completion.outcome = WorkflowOutcome::NeedsAttention;
+                    if completion.error.is_none() {
+                        completion.error = occurrence.error.clone();
+                    }
+                }
+                (Some(occurrence), error)
+            }
+            Err(error) => (
+                None,
+                Some(format!(
+                    "Failed to finalize manual loop occurrence: {error:#}"
+                )),
+            ),
+        }
     }
 }

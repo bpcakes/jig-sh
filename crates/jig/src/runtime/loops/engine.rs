@@ -111,6 +111,13 @@ impl ScheduledTick {
     fn into_manual_result(self) -> Result<Value> {
         match self {
             Self::Reported {
+                value, completion, ..
+            } if completion.execution.unexecuted_reason()
+                == Some(UnexecutedReason::BlockedByAttention) =>
+            {
+                Ok(value)
+            }
+            Self::Reported {
                 value: _,
                 completion,
                 ..
@@ -222,9 +229,16 @@ fn tick_with_execution(
                     &acquired,
                     workflow.lease_ttl_seconds,
                 )?;
+                let mut manual_blocked = false;
                 let manual_guard = if execution.manual {
                     match ManualOccurrenceGuard::start(&workflow, &execution.item_key, ctx) {
-                        Ok(guard) => Some(guard),
+                        Ok(start) => {
+                            let (guard, occurrence) =
+                                start.prepare_tick(&mut actions, &mut completion);
+                            manual_blocked = occurrence.is_some();
+                            manual_occurrence = occurrence;
+                            guard
+                        }
                         Err(error) => {
                             let release_error = lease_guard.finish().err();
                             let error = release_error.map_or_else(
@@ -247,34 +261,38 @@ fn tick_with_execution(
                         .as_ref()
                         .is_some_and(ManualOccurrenceGuard::renewal_failed)
                 };
-                let workflow_tick = {
-                    let mut lease_control =
-                        AdditionalCancellationControl::new(observer, &lease_cancelled);
-                    let mut occurrence_control =
-                        AdditionalCancellationControl::new(&mut lease_control, &manual_cancelled);
-                    run_workflow_tick(
-                        ctx,
-                        &workflow,
-                        &execution,
-                        &mut lease_store,
-                        &mut attempt_store,
-                        &mut occurrence_control,
-                    )
-                };
-                match workflow_tick {
-                    Ok(tick) => {
-                        observed = tick.observed;
-                        actions = tick.actions;
-                        completion = tick.completion;
-                    }
-                    Err(error) => {
-                        let error = format!("{error:#}");
-                        completion = WorkflowCompletion {
-                            outcome: WorkflowOutcome::Failed,
-                            error: Some(error.clone()),
-                            ..WorkflowCompletion::default()
-                        };
-                        tick_error = Some(error);
+                if !manual_blocked {
+                    let workflow_tick = {
+                        let mut lease_control =
+                            AdditionalCancellationControl::new(observer, &lease_cancelled);
+                        let mut occurrence_control = AdditionalCancellationControl::new(
+                            &mut lease_control,
+                            &manual_cancelled,
+                        );
+                        run_workflow_tick(
+                            ctx,
+                            &workflow,
+                            &execution,
+                            &mut lease_store,
+                            &mut attempt_store,
+                            &mut occurrence_control,
+                        )
+                    };
+                    match workflow_tick {
+                        Ok(tick) => {
+                            observed = tick.observed;
+                            actions = tick.actions;
+                            completion = tick.completion;
+                        }
+                        Err(error) => {
+                            let error = format!("{error:#}");
+                            completion = WorkflowCompletion {
+                                outcome: WorkflowOutcome::Failed,
+                                error: Some(error.clone()),
+                                ..WorkflowCompletion::default()
+                            };
+                            tick_error = Some(error);
+                        }
                     }
                 }
                 let released = lease_guard.finish();
@@ -298,28 +316,10 @@ fn tick_with_execution(
                     }
                 }
                 if let Some(manual_guard) = manual_guard {
-                    match manual_guard.finish(&completion) {
-                        Ok(finalization) => {
-                            if let Some(error) = finalization.renewal_error {
-                                append_tick_error(
-                                    &mut tick_error,
-                                    format!("Manual occurrence renewal failed: {error}"),
-                                );
-                            }
-                            if finalization.occurrence.status.as_str() != "running" {
-                                if finalization.occurrence.requires_attention_at(now_ms()) {
-                                    completion.outcome = WorkflowOutcome::NeedsAttention;
-                                    if completion.error.is_none() {
-                                        completion.error = finalization.occurrence.error.clone();
-                                    }
-                                }
-                                manual_occurrence = Some(finalization.occurrence);
-                            }
-                        }
-                        Err(error) => append_tick_error(
-                            &mut tick_error,
-                            format!("Failed to finalize manual loop occurrence: {error:#}"),
-                        ),
+                    let (occurrence, error) = manual_guard.complete_tick(&mut completion);
+                    manual_occurrence = occurrence;
+                    if let Some(error) = error {
+                        append_tick_error(&mut tick_error, error);
                     }
                 }
             }

@@ -1,4 +1,4 @@
-use super::claim::OccurrenceClaimConstraints;
+use super::claim::{OccurrenceAttentionScope, OccurrenceClaimConstraints};
 use super::*;
 
 pub(super) const MANUAL_OCCURRENCE_SCHEDULED_AT_MS: u64 = 0;
@@ -21,6 +21,7 @@ impl OccurrenceStore {
         workflow_id: &str,
         item_key: &str,
         ttl_seconds: u64,
+        attention_scope: OccurrenceAttentionScope,
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
         self.claim_id_with_constraints_at(
@@ -30,7 +31,7 @@ impl OccurrenceStore {
             ttl_seconds,
             now_ms(),
             OccurrenceClaimConstraints {
-                block_attention: true,
+                attention_scope,
                 block_newer_occurrences: false,
                 block_retained_worktree,
             },

@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn unexecuted_task_failure(
     settings: &CodexTaskSettings,
+    reason: UnexecutedReason,
     item_key: &str,
     codex_home: Option<&Path>,
     retained_worktree: Option<String>,
@@ -42,7 +43,7 @@ pub(super) fn unexecuted_task_failure(
             } else {
                 WorkflowOutcome::Failed
             },
-            execution: WorkflowExecution::Unexecuted(UnexecutedReason::PreExecutionError),
+            execution: WorkflowExecution::Unexecuted(reason),
             worker_receipt_id: None,
             worktree: retained_worktree,
             error: Some(error),
@@ -53,6 +54,7 @@ pub(super) fn unexecuted_task_failure(
 #[derive(Debug)]
 pub(super) struct CheckoutPreparationFailure {
     retained_worktree: Option<String>,
+    reason: UnexecutedReason,
     error: anyhow::Error,
 }
 
@@ -60,6 +62,15 @@ impl CheckoutPreparationFailure {
     pub(super) fn new(error: impl Into<anyhow::Error>) -> Self {
         Self {
             retained_worktree: None,
+            reason: UnexecutedReason::PreExecutionError,
+            error: error.into(),
+        }
+    }
+
+    pub(super) fn cancelled(error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            retained_worktree: None,
+            reason: UnexecutedReason::CancelledBeforeStart,
             error: error.into(),
         }
     }
@@ -67,12 +78,17 @@ impl CheckoutPreparationFailure {
     pub(super) fn retained(path: &Path, error: impl Into<anyhow::Error>) -> Self {
         Self {
             retained_worktree: Some(path.display().to_string()),
+            reason: UnexecutedReason::PreExecutionError,
             error: error.into(),
         }
     }
 
     pub(super) fn retained_worktree(&self) -> Option<&str> {
         self.retained_worktree.as_deref()
+    }
+
+    pub(super) const fn reason(&self) -> UnexecutedReason {
+        self.reason
     }
 }
 

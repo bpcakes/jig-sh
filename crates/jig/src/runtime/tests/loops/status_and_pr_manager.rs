@@ -487,6 +487,10 @@ fn loop_tick_pr_manager_records_partial_review_post_failures() {
     let codex_home_log = temp.path().join("ambient-codex-home.log");
     fs::create_dir(&ambient_codex_home).unwrap();
     let origin = setup_origin_with_pr_branch(temp.path());
+    let head_sha = git_stdout(temp.path(), ["rev-parse", "codex/widgets"])
+        .trim()
+        .to_string();
+    let _head_sha = EnvVarGuard::set("JIG_TEST_HEAD_SHA", &head_sha);
     let _gh = fake_gh(
         temp.path(),
         r#"#!/bin/sh
@@ -497,8 +501,8 @@ case "$1 $2" in
 JSON
     ;;
   "pr list")
-    cat <<'JSON'
-[{"number":7,"title":"Fix widgets","url":"https://github.com/acme/demo/pull/7","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"abc123","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
+    cat <<JSON
+[{"number":7,"title":"Fix widgets","url":"https://github.com/acme/demo/pull/7","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$JIG_TEST_HEAD_SHA","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
 JSON
     ;;
   "pr checks")

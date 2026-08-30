@@ -63,6 +63,7 @@ pub(super) fn codex_task_tick(
         Err(error) => {
             return Ok(unexecuted_task_failure(
                 settings,
+                UnexecutedReason::PreExecutionError,
                 execution.item_key,
                 None,
                 None,
@@ -80,6 +81,7 @@ pub(super) fn codex_task_tick(
         Err(error) => {
             return Ok(unexecuted_task_failure(
                 settings,
+                UnexecutedReason::PreExecutionError,
                 execution.item_key,
                 None,
                 None,
@@ -98,6 +100,7 @@ pub(super) fn codex_task_tick(
         Err(error) => {
             return Ok(unexecuted_task_failure(
                 settings,
+                error.reason(),
                 execution.item_key,
                 codex_home.as_deref(),
                 error.retained_worktree().map(str::to_string),
@@ -393,6 +396,29 @@ fn prepare_checkout(
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
     if checkout == CodexTaskCheckout::Repo {
+        if observer.cancelled() {
+            return Err(CheckoutPreparationFailure::cancelled(anyhow!(
+                "Scheduled Codex task was cancelled before shared-checkout preflight"
+            )));
+        }
+        match repo_task_has_changes(ctx, ctx.root(), observer) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(CheckoutPreparationFailure::new(anyhow!(
+                    "Shared repository checkout is dirty before Codex task execution; preserve or discard the existing changes before retrying"
+                )));
+            }
+            Err(error) => {
+                let error = error.context(
+                    "Failed to verify that the shared repository checkout is clean before Codex task execution",
+                );
+                return Err(if observer.cancelled() {
+                    CheckoutPreparationFailure::cancelled(error)
+                } else {
+                    CheckoutPreparationFailure::new(error)
+                });
+            }
+        }
         return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
             receipt_journal: checkout::ReceiptJournalBaseline::capture(ctx)?,

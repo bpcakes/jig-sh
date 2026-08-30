@@ -41,10 +41,34 @@ pub(super) fn pr_manager_tick(
         .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
         .transpose()?;
     let observed = github::github_pr_status_snapshot(ctx, observer)?;
+    pr_manager_tick_from_snapshot(
+        ctx,
+        workflow,
+        lease_store,
+        attempt_store,
+        observed,
+        PrManagerExecution {
+            codex_home: codex_home.as_deref(),
+            observer,
+        },
+    )
+}
+
+fn pr_manager_tick_from_snapshot(
+    ctx: &RepoContext,
+    workflow: &ResolvedWorkflow,
+    lease_store: &mut LeaseStore,
+    attempt_store: &mut AttemptStore,
+    observed: Value,
+    execution: PrManagerExecution<'_>,
+) -> Result<WorkflowTick> {
     let pull_requests = observed
         .get("pull_requests")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("GitHub PR snapshot did not include pull_requests array"))?;
+    if let Some(action) = incomplete_snapshot_action(&observed, pull_requests) {
+        return Ok(WorkflowTick::from_actions(observed, vec![action]));
+    }
     let default_branch = observed
         .pointer("/repository/default_branch")
         .and_then(Value::as_str)
@@ -52,7 +76,7 @@ pub(super) fn pr_manager_tick(
 
     let mut actions = Vec::new();
     for pull_request in pull_requests {
-        if observer.cancelled() {
+        if execution.observer.cancelled() {
             bail!("PR manager tick was cancelled");
         }
         let candidate = classify_pull_request(pull_request, default_branch);
@@ -75,8 +99,8 @@ pub(super) fn pr_manager_tick(
                     &item,
                     pull_request,
                     PrManagerExecution {
-                        codex_home: codex_home.as_deref(),
-                        observer: &mut *observer,
+                        codex_home: execution.codex_home,
+                        observer: &mut *execution.observer,
                     },
                 )?;
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
@@ -89,6 +113,40 @@ pub(super) fn pr_manager_tick(
     }
 
     Ok(WorkflowTick::from_actions(observed, actions))
+}
+
+fn incomplete_snapshot_action(observed: &Value, pull_requests: &[Value]) -> Option<Value> {
+    let pr_list_truncated = observed
+        .pointer("/summary/pr_list_truncated")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let review_threads_truncated = pull_requests.iter().any(|pull_request| {
+        pull_request
+            .pointer("/review_threads/page_info/truncated")
+            .and_then(Value::as_bool)
+            == Some(true)
+    });
+    let truncated_review_threads = pull_requests
+        .iter()
+        .filter(|pull_request| {
+            pull_request
+                .pointer("/review_threads/page_info/truncated")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .filter_map(|pull_request| pull_request.get("number").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    if !pr_list_truncated && !review_threads_truncated {
+        return None;
+    }
+    Some(json!({
+        "kind": "pr_manager_observation",
+        "status": "failed",
+        "reason": "incomplete_github_snapshot",
+        "pr_list_truncated": pr_list_truncated,
+        "review_thread_prs_truncated": truncated_review_threads,
+        "error": "PR manager refused to mutate attempts or branches from an incomplete GitHub snapshot",
+    }))
 }
 
 enum PrCandidate {

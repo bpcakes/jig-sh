@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
 use super::super::super::engine::status_at_with_cancellation;
-use super::super::super::occurrence::{OccurrenceFinish, OccurrenceOutcome};
+use super::super::super::occurrence::{
+    OccurrenceAttentionScope, OccurrenceFinish, OccurrenceOutcome,
+};
 use super::super::super::state::AttemptStore;
 use super::super::{NoopExecutionObserver, OccurrenceStore, dispatch_workflow, list_workflows};
 use crate::command::LoopStatusRequest;
@@ -177,7 +179,13 @@ checkout = "worktree"
 
     fs::remove_dir(&retained).unwrap();
     let super::super::OccurrenceClaim::Acquired(_) = occurrences
-        .claim_scheduled("nightly-task", 200, 60, true)
+        .claim_scheduled(
+            "nightly-task",
+            200,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            true,
+        )
         .unwrap()
     else {
         panic!("removing the retained checkout must unblock the workflow");

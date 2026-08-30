@@ -30,7 +30,7 @@ mod tests {
             title: "Repair example".into(),
             base_ref: "main".into(),
             head_ref: "example/repair".into(),
-            head_sha: "abc123".into(),
+            head_sha: "a".repeat(40),
             reasons: vec!["failing_checks".into()],
         };
         let mut attempts = AttemptStore::new(&ctx);
@@ -177,5 +177,195 @@ mod tests {
                 panic!("expected pending PR candidate")
             }
         }
+    }
+
+    #[test]
+    fn pr_manager_refuses_truncated_pr_and_review_thread_snapshots() {
+        let pr_list = json!({
+            "summary": {"pr_list_truncated": true},
+            "pull_requests": [],
+        });
+        let pr_list_action = incomplete_snapshot_action(
+            &pr_list,
+            pr_list["pull_requests"].as_array().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pr_list_action["status"], "failed");
+        assert_eq!(pr_list_action["pr_list_truncated"], true);
+
+        let review_threads = json!({
+            "summary": {"pr_list_truncated": false},
+            "pull_requests": [{
+                "number": 7,
+                "review_threads": {"page_info": {"truncated": true}},
+            }],
+        });
+        let review_action = incomplete_snapshot_action(
+            &review_threads,
+            review_threads["pull_requests"].as_array().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(review_action["status"], "failed");
+        assert_eq!(review_action["review_thread_prs_truncated"], json!([7]));
+    }
+
+    #[test]
+    fn pr_manager_accepts_a_complete_snapshot() {
+        let observed = json!({
+            "summary": {"pr_list_truncated": false},
+            "pull_requests": [{
+                "number": 7,
+                "review_threads": {"page_info": {"truncated": false}},
+            }],
+        });
+
+        assert!(
+            incomplete_snapshot_action(
+                &observed,
+                observed["pull_requests"].as_array().unwrap(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn truncated_review_threads_do_not_clear_a_healthy_attempt() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::workflow::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 2,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+            schedule: None,
+            codex_task: None,
+        };
+        let mut leases = LeaseStore::new(&ctx);
+        let mut attempts = AttemptStore::new(&ctx);
+        attempts
+            .record_attempt_for_version(&workflow, "pr-7", Some("a-head"), "failed")
+            .unwrap();
+        let observed = json!({
+            "summary": {"pr_list_truncated": false},
+            "repository": {"default_branch": "main"},
+            "pull_requests": [{
+                "number": 7,
+                "review_threads": {"page_info": {"truncated": true}},
+            }],
+        });
+        let mut observer = crate::execution::NoopExecutionObserver;
+
+        let tick = pr_manager_tick_from_snapshot(
+            &ctx,
+            &workflow,
+            &mut leases,
+            &mut attempts,
+            observed,
+            PrManagerExecution {
+                codex_home: None,
+                observer: &mut observer,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(tick.actions[0]["reason"], "incomplete_github_snapshot");
+        assert_eq!(attempts.snapshot().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pr_worktree_pins_the_observed_head_when_the_remote_branch_advances() {
+        let _env_lock = lock_env();
+        let repo = tempdir().unwrap();
+        let origin_parent = tempdir().unwrap();
+        let origin = origin_parent.path().join("origin.git");
+        TestRepoBuilder::new(repo.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "fixture@example.com"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "initial"]);
+        git(&["branch", "repair/example"]);
+        let observed_head = git(&["rev-parse", "repair/example"]);
+        let clone = Command::new("git")
+            .args([
+                "clone",
+                "--bare",
+                repo.path().to_str().unwrap(),
+                origin.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(clone.status.success(), "{clone:?}");
+        git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(&["checkout", "repair/example"]);
+        fs::write(repo.path().join("advanced.txt"), "new remote head\n").unwrap();
+        git(&["add", "advanced.txt"]);
+        git(&["commit", "-m", "advance branch"]);
+        let advanced_head = git(&["rev-parse", "HEAD"]);
+        git(&["push", "origin", "repair/example"]);
+        assert_ne!(observed_head, advanced_head);
+
+        let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, OsStr::new("git"));
+        let ctx = RepoContext::load_from(repo.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::workflow::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 2,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+            schedule: None,
+            codex_task: None,
+        };
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Repair example".into(),
+            base_ref: "main".into(),
+            head_ref: "repair/example".into(),
+            head_sha: observed_head.clone(),
+            reasons: vec!["failing_checks".into()],
+        };
+
+        let worktree = prepare_worktree(
+            &ctx,
+            &workflow,
+            &item,
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+        let worktree_head = Command::new("git")
+            .current_dir(&worktree)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+
+        assert!(worktree_head.status.success(), "{worktree_head:?}");
+        assert_eq!(
+            String::from_utf8(worktree_head.stdout)
+                .unwrap()
+                .trim(),
+            observed_head
+        );
     }
 }

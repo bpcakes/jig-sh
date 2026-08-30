@@ -285,7 +285,7 @@ mod tests {
         let marker = temp.path().join("escaped-result-writer");
         let output_file = NamedTempFile::new().unwrap();
         let script = format!(
-            "(sleep 1; printf leaked > \"$1\") & head -c {} /dev/zero > \"$2\"; wait",
+            "(sleep 4; printf leaked > \"$1\") & head -c {} /dev/zero > \"$2\"; wait",
             EXECUTION_OUTPUT_CAPTURE_LIMIT + 1
         );
         let mut command = Command::new("/bin/sh");
@@ -319,7 +319,10 @@ mod tests {
             started.elapsed() < Duration::from_secs(3),
             "result-file overflow was checked only after the worker exited"
         );
-        thread::sleep(Duration::from_millis(1250));
+        let leak_deadline = Duration::from_millis(4250);
+        if let Some(remaining) = leak_deadline.checked_sub(started.elapsed()) {
+            thread::sleep(remaining);
+        }
         assert!(
             !marker.exists(),
             "result-file overflow killed the child process but left its process group running"

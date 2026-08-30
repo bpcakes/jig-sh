@@ -473,6 +473,7 @@ printf 'authoritative task result\n' > "$out"
 fn codex_task_cannot_succeed_after_workflow_lease_renewal_fails() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
     write_fixture_repo(temp.path());
     fs::create_dir_all(temp.path().join("tasks")).unwrap();
     fs::write(
@@ -501,8 +502,8 @@ lease_ttl_seconds = 1
     git_ok(temp.path(), ["config", "user.name", "Fixture"]);
     git_ok(temp.path(), ["add", "."]);
     git_ok(temp.path(), ["commit", "-m", "fixture"]);
-    let codex_path = temp.path().join("codex-task-stub.sh");
-    let completion_marker = temp.path().join("worker-completed");
+    let codex_path = bin.path().join("codex-task-stub.sh");
+    let completion_marker = bin.path().join("worker-completed");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh

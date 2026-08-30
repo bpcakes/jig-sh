@@ -13,8 +13,8 @@ use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
 use super::engine::{ScheduledTick, tick_scheduled_with_observer, tick_with_observer};
 use super::occurrence::{
-    OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStatus, OccurrenceStore,
-    ScheduleOccurrence,
+    OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStatus,
+    OccurrenceStore, ScheduleOccurrence,
 };
 use super::state::prepare_disposable_state_for_dispatch;
 use super::workflow::{
@@ -183,10 +183,20 @@ fn dispatch_workflow(
         .codex_task
         .as_ref()
         .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
+    let attention_scope = if workflow
+        .codex_task
+        .as_ref()
+        .is_some_and(|task| task.checkout == CodexTaskCheckout::Repo)
+    {
+        OccurrenceAttentionScope::SharedRepository
+    } else {
+        OccurrenceAttentionScope::Workflow
+    };
     let claim = match occurrences.claim_scheduled(
         &workflow.id,
         due_at_ms,
         workflow.lease_ttl_seconds,
+        attention_scope,
         isolated_task,
     ) {
         Ok(claim) => claim,

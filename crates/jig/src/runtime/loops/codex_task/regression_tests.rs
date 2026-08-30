@@ -99,6 +99,52 @@ fn normal_untracked_mode_still_detects_an_untracked_directory() {
     assert!(git_is_dirty(&ctx, repo.path(), &mut NoopExecutionObserver).unwrap());
 }
 
+#[test]
+fn repo_checkout_refuses_preexisting_repository_changes() {
+    let _env_lock = lock_env();
+    let repo = tempdir().unwrap();
+    TestRepoBuilder::new(repo.path())
+        .required_commands(Vec::<String>::new())
+        .write();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "fixture@example.com"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["add", "."],
+        vec!["commit", "-m", "fixture"],
+    ] {
+        let output = Command::new("git")
+            .current_dir(repo.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    fs::write(repo.path().join("user-work.txt"), "preserve me\n").unwrap();
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, OsStr::new("git"));
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+    let error = prepare_checkout(
+        &ctx,
+        &test_worktree_workflow(),
+        "item-1",
+        CodexTaskCheckout::Repo,
+        &mut NoopExecutionObserver,
+    )
+    .err()
+    .expect("a dirty shared checkout must fail before worker execution")
+    .to_string();
+
+    assert!(
+        error.contains("dirty before Codex task execution"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join("user-work.txt")).unwrap(),
+        "preserve me\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn failed_worktree_add_cleans_its_partial_checkout() {

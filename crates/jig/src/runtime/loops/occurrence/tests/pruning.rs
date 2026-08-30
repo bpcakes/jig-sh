@@ -22,6 +22,7 @@ fn pruning_preserves_discoverability_until_retained_worktree_is_removed() {
                 owner: "owner".into(),
                 claim_expires_at_ms: 0,
                 started_at_ms: 0,
+                uses_shared_checkout: false,
                 finished_at_ms: Some(1),
                 acknowledged_at_ms: None,
                 status: OccurrenceStatus::Succeeded,
@@ -59,6 +60,7 @@ fn pruning_never_discards_occurrences_that_need_attention() {
                 owner: "owner".into(),
                 claim_expires_at_ms: 0,
                 started_at_ms: 0,
+                uses_shared_checkout: false,
                 finished_at_ms: Some(1),
                 acknowledged_at_ms: None,
                 status: if scheduled_at_ms == 0 {

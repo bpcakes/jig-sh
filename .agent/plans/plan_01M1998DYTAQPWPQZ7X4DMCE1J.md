@@ -32,6 +32,10 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
 - [x] (2026-08-30) Complete the fourth independent Claude/Codex review against verified fingerprint `2cff7c3bc6977eda7b29ddce073b05de17d3a78c98822bf673d31c59cb0a8ed2`; record Claude's large-diff coverage limit and use Codex's complete branch-diff review as the full-scope counterpart.
 - [x] (2026-08-30) Research all three fourth-round open questions before changing code, then repair typed occurrence ownership loss, durable manual/global attention, post-start PR cancellation, append-only receipt verification, workflow-ID path containment, and checkout error-chain reporting with focused regressions.
 - [x] (2026-08-30) Complete fresh structured gates for the fourth repair: contract, LOC, format, Clippy, 2,507 core tests, and 107 frontend tests all pass under batch receipt `receipt_01M19YMRZ4EHGPBCVAVEQTGKB1`.
+- [x] (2026-08-30 18:40Z) Complete the fifth independent Claude/Codex review against verified fingerprint `65da2db28d1ab8d7e77264a192cae98f5137cbbebdb427fb5fad085ba91a021e`; research all three open questions before adjudicating any finding.
+- [x] (2026-08-30 18:42Z) Exclude the pre-existing exhausted-attempt UI field mismatch from the branch loop and record it as Bead `jig-sh-z9h`.
+- [x] (2026-08-30 18:52Z) Repair fifth-round shared-checkout authority, manual blocked-result, claim-policy coupling, immutable PR-head, and incomplete-GitHub-observation findings with focused regressions.
+- [x] (2026-08-30 19:29Z) Correct the loaded-suite timing oracle exposed by the first structured run, then complete fresh gates: contract, LOC, format, Clippy, 2,514 core tests, and 107 frontend tests pass under batch receipt `receipt_01M1A28NETM5VCKTH3SEAHBP9W`; rebuilt-binary contract receipt `receipt_01M1A2BDG0X0KH5F506ATF1KSR` makes all eight gates fresh.
 - [ ] Repeat full gates and fresh comprehensive Claude/Codex branch reviews until no actionable in-scope findings remain; record unrelated findings in Beads and exclude them from the loop.
 
 ## Surprises & Discoveries
@@ -78,6 +82,16 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
   Evidence: manual and scheduled ticks did not share one durable attention authority, occurrence renewal erased ownership-loss semantics into `anyhow`, PR cancellation flattened pre-start and post-start phases, and shared-checkout dirtiness excluded a path without first proving the excluded journal's exact append. Extracting manual occurrence lifecycle, runtime attention aggregation, PR outcome classification, and receipt-baseline verification gives each invariant one owner.
 - Observation: the diagnostic `loop status` exit behavior is intentional and already protected by a CLI adapter test.
   Evidence: the public guide names tick, dispatch, and run as the commands that map `ok: false` to nonzero; `run_tests.rs` explicitly keeps status outside that classification. The documentation now states the distinction directly.
+- Observation: all fifth-round open questions were answerable without product input, and one reported UI defect predates the branch.
+  Evidence: pruning retains recent scheduled chronology and excludes manual sentinels, the first-dispatch rule is explicit in `docs/configuration.md`, post-work state errors intentionally make dispatch unsuccessful while preserving its receipt, and Git history places the mismatched `ExhaustedAttemptView` fields in pre-branch commit `10bfe619`. Bead `jig-sh-z9h` tracks that unrelated defect.
+- Observation: occurrence-renewal errors after a successful unexecuted abandonment must not be reintroduced as state errors.
+  Evidence: abandonment removes the owned record before the renewal thread joins, so its terminal ownership-loss diagnostic is expected. `renewal_error_does_not_turn_a_persisted_abandonment_into_ambiguous_attention` protects this distinction; surfacing that diagnostic would convert a safe retry into false failure evidence.
+- Observation: the valid fifth-round symptoms expose three missing authority boundaries plus two local result-model omissions.
+  Evidence: shared-root work lacked a durable cross-workflow scope, PR checkout creation consumed the main worktree's mutable `FETCH_HEAD`, and PR-manager policy consumed snapshots whose producers explicitly marked them truncated. Manual claim conflicts were represented as exceptions despite a successfully written receipt, while independent claim predicates were accidentally nested under one boolean.
+- Observation: the first fifth-repair core gate exposed a branch-owned test-oracle omission, not a process-cleanup defect.
+  Evidence: the failing run lasted 3.49 seconds while the background marker writer woke after only one second, so loaded scheduling could create the marker before overflow detection despite correct later group cleanup. The regression now requires overflow cancellation before three seconds but delays the leak write until four seconds; it passes in isolation and in the 2,514-test parallel core partition.
+- Observation: native gate evidence becomes stale when the dev binary is rebuilt from a different source identity after a batch begins.
+  Evidence: `gate_signature_with_native_identity` hashes `JIG_BUILD_IDENTITY` for native tools. The final test edit followed the initial binary build, and Clippy produced a binary with the new identity while the in-flight work check retained the old one. Rebuilding once from the final tree and refreshing only `jig-contract` restored all eight gates to fresh without rerunning already-fresh test receipts.
 
 ## Decision Log
 
@@ -129,10 +143,19 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
 - Decision: keep the established workflow-ID grammar and encode IDs at the new PR-worktree filesystem sink.
   Rationale: tightening a long-standing identifier contract would be an unnecessary compatibility break. A fixed digest component contains absolute and parent traversal syntax while remaining deterministic and collision-resistant.
   Date/Author: 2026-08-30 / Codex
+- Decision: persist whether an occurrence uses the shared repository checkout and make attention scope an enum owned by the claim transaction.
+  Rationale: workflow-local attention is sufficient for isolated work, but repo-mode ambiguity is a property of the shared mutable root and must block every repo-mode workflow. A durable marker survives configuration changes, and an enum prevents attention, chronology, and retained-worktree predicates from becoming accidentally coupled again.
+  Date/Author: 2026-08-30 / Codex
+- Decision: represent a blocked manual claim as a receipted unexecuted disposition rather than an engine error.
+  Rationale: no worker starts, but the command has completed a meaningful audited observation. A distinct `BlockedByAttention` disposition preserves that fact without weakening genuine startup-error handling.
+  Date/Author: 2026-08-30 / Codex
+- Decision: pin PR worktrees to the validated object ID from the GitHub snapshot and reject incomplete snapshots before policy evaluation.
+  Rationale: content-addressed commit IDs cannot be redirected by concurrent fetches, while truncation flags prove only that the observation is incomplete. Failing before attempt cleanup or branch mutation keeps both authorities conservative at one boundary.
+  Date/Author: 2026-08-30 / Codex
 
 ## Outcomes & Retrospective
 
-The initial implementation slices and four review repair rounds are complete. The focused runtime-loop unit suite now passes 150 tests. Round-one regressions prove strict lease ownership at finalization, retryable cancellation before workflow and worker start, fail-closed lease corruption, auditable attempt recovery, retained-worktree backpressure, per-workflow status degradation, unchanged-marker no-op writes, and first-error renewal diagnostics. Round-two regressions add transactional stale-claim rejection, attention backpressure, typed setup retry, cancellation receipt phase preservation, retained cleanup evidence, and one-clock status classification. Round three adds transient workflow-lease retry, dirty shared-checkout backpressure, worker-receipt self-exclusion, and durable ambiguity for a started but unreconciled PR push. Round four adds immediate typed occurrence-ownership loss, durable manual and machine-global attention, post-start PR cancellation evidence, authenticated receipt appends, path-contained PR worktrees, and full checkout error chains. The fourth-round focused unit and end-to-end regressions pass, and fresh structured gates pass contract, Rust file-size policy, formatting, workspace Clippy with warnings denied, 2,507 core tests, and 107 frontend tests. Another comprehensive branch review remains.
+The initial implementation slices and five review repair rounds are complete. Round-one regressions prove strict lease ownership at finalization, retryable cancellation before workflow and worker start, fail-closed lease corruption, auditable attempt recovery, retained-worktree backpressure, per-workflow status degradation, unchanged-marker no-op writes, and first-error renewal diagnostics. Round two adds transactional stale-claim rejection, attention backpressure, typed setup retry, cancellation receipt phase preservation, retained cleanup evidence, and one-clock status classification. Round three adds transient workflow-lease retry, dirty shared-checkout backpressure, worker-receipt self-exclusion, and durable ambiguity for a started but unreconciled PR push. Round four adds immediate typed occurrence-ownership loss, durable manual and machine-global attention, post-start PR cancellation evidence, authenticated receipt appends, path-contained PR worktrees, and full checkout error chains. Round five adds durable cross-workflow shared-checkout authority, a receipted manual blocked result, independent transactional claim predicates, immutable PR-head checkout, and fail-closed incomplete-snapshot handling. Fresh structured gates pass contract, Rust file-size policy, formatting, workspace Clippy with warnings denied, 2,514 core tests, and 107 frontend tests. A fresh comprehensive branch review remains.
 
 ## Context and Orientation
 
@@ -244,6 +267,15 @@ Focused implementation evidence:
     receipt_01M19YMRZ4EHGPBCVAVEQTGKB1               # round-four repair work check passed
     jig.source_core_test                              # 2,507 passed
     jig.source_frontend_test                          # 107 passed
+    jig.contract_check / rust_file_loc / fmt / clippy # fresh and passed
+    cargo test -p jig-sh --lib runtime::loops         # 157 passed after round five
+    cargo test -p jig-sh --lib 'runtime::tests::loops::' # 53 passed after round five
+    cargo test -p jig-sh --test cli_json loop_        # 5 passed after round five
+    worker_result_file_limit_terminates_process_group_while_running # passed in 4.25s and loaded core gate
+    receipt_01M1A28NETM5VCKTH3SEAHBP9W               # round-five repair work check passed
+    jig.source_core_test                              # 2,514 passed
+    jig.source_frontend_test                          # 107 passed
+    receipt_01M1A2BDG0X0KH5F506ATF1KSR               # final rebuilt-binary contract refresh passed
     jig.contract_check / rust_file_loc / fmt / clippy # fresh and passed
 
 Final structured evidence:

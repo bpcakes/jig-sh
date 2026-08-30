@@ -161,6 +161,7 @@ printf 'task complete\n'
 fn scheduled_dispatch_fails_closed_after_durable_ledger_loss() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
     write_fixture_repo(temp.path());
     configure_scheduled_task(
         &temp,
@@ -173,8 +174,8 @@ kind = "noop_status"
 schedule = "* * * * *""#,
         true,
     );
-    let codex_path = temp.path().join("codex-task-stub.sh");
-    let completion_marker = temp.path().join("scheduled-worker-completed");
+    let codex_path = bin.path().join("codex-task-stub.sh");
+    let completion_marker = bin.path().join("scheduled-worker-completed");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
