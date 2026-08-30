@@ -320,6 +320,31 @@ fn acknowledging_attention_is_idempotent_and_preserves_the_claim() {
 }
 
 #[test]
+fn acknowledging_an_expired_running_claim_reconciles_it_under_the_same_lock() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(claim) = store.claim_at("nightly", 100, 2, 1_000).unwrap() else {
+        panic!("expected occurrence claim");
+    };
+
+    let OccurrenceAcknowledgement::Acknowledged(acknowledged) =
+        store.acknowledge_at(&claim.occurrence_id, 3_000).unwrap()
+    else {
+        panic!("expected expired occurrence to be acknowledged");
+    };
+
+    assert_eq!(acknowledged.status, OccurrenceStatus::Acknowledged);
+    assert_eq!(acknowledged.finished_at_ms, Some(3_000));
+    assert_eq!(acknowledged.acknowledged_at_ms, Some(3_000));
+    assert_eq!(
+        acknowledged.error.as_deref(),
+        Some(STALE_RECONCILIATION_ERROR)
+    );
+}
+
+#[test]
 fn read_only_snapshot_can_inspect_legacy_state_without_migrating_it() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());
@@ -472,17 +497,31 @@ fn divergent_legacy_and_durable_ledgers_require_manual_reconciliation() {
 }
 
 #[test]
-fn one_second_occurrence_claim_renews_before_expiry() {
+fn occurrence_guard_renews_the_persisted_claim_before_expiry() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let mut store = OccurrenceStore::new(&ctx);
-    let OccurrenceClaim::Acquired(claim) = store.claim("nightly", 100, 1).unwrap() else {
+    let OccurrenceClaim::Acquired(claim) = store.claim("nightly", 100, 60).unwrap() else {
         panic!("expected occurrence claim");
     };
-    let guard = OccurrenceGuard::start(store.clone(), &claim, 1).unwrap();
+    let guard =
+        OccurrenceGuard::start_for_test(store.clone(), &claim, 60, Duration::from_millis(1))
+            .unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(1_200));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let renewed = store.snapshot().unwrap().into_iter().next().unwrap();
+        if renewed.claim_expires_at_ms > claim.claim_expires_at_ms {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "occurrence renewal was not persisted before the test deadline"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
     let finished = guard
         .finish(OccurrenceFinish {
             outcome: OccurrenceOutcome::Succeeded,

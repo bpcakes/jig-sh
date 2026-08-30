@@ -24,6 +24,7 @@ use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
+const WORKER_PROVIDER_PREVIEW_BYTES: usize = 4_000;
 // Preserve the supervisor's normal idle responsiveness without repeating a
 // metadata syscall for every faster poll while transcript output is flowing.
 const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(10);
@@ -98,9 +99,36 @@ pub(crate) struct CodexExecRequest<'a> {
 }
 
 pub(crate) struct CodexExecOutput {
-    pub(crate) output: Output,
-    pub(crate) provider_stdout: String,
-    pub(crate) worker_receipt_id: String,
+    output: Output,
+    provider_stdout: String,
+    provider_stdout_truncated: bool,
+    worker_receipt_id: String,
+}
+
+impl CodexExecOutput {
+    pub(crate) fn status(&self) -> &std::process::ExitStatus {
+        &self.output.status
+    }
+
+    pub(crate) fn authoritative_stdout(&self) -> &[u8] {
+        &self.output.stdout
+    }
+
+    pub(crate) fn provider_stdout(&self) -> &str {
+        &self.provider_stdout
+    }
+
+    pub(crate) fn provider_stdout_truncated(&self) -> bool {
+        self.provider_stdout_truncated
+    }
+
+    pub(crate) fn worker_receipt_id(&self) -> &str {
+        &self.worker_receipt_id
+    }
+
+    pub(crate) fn into_process_output(self) -> Output {
+        self.output
+    }
 }
 
 #[derive(Debug)]
@@ -171,6 +199,7 @@ pub(crate) fn run_codex_exec(
     match result {
         Ok(run) => {
             let exit_status = run.output.status.code().unwrap_or(1);
+            let authoritative_stdout = String::from_utf8_lossy(&run.output.stdout).into_owned();
             let receipt_id = record_worker_receipt(
                 ctx,
                 &request,
@@ -178,10 +207,11 @@ pub(crate) fn run_codex_exec(
                     started_at_ms: started,
                     ended_at_ms: ended,
                     exit_status,
-                    stdout: &run.provider_stdout,
+                    stdout: &authoritative_stdout,
                     stderr: &run.provider_stderr,
-                    stdout_truncated: run.provider_stdout_truncated,
-                    stderr_truncated: run.provider_stderr_truncated,
+                    provider_stdout: Some(&run.provider_stdout),
+                    provider_stdout_truncated: run.provider_stdout_truncated,
+                    provider_stderr_truncated: run.provider_stderr_truncated,
                     error: None,
                     status: "completed",
                 },
@@ -190,6 +220,7 @@ pub(crate) fn run_codex_exec(
             Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
                 provider_stdout: run.provider_stdout,
+                provider_stdout_truncated: run.provider_stdout_truncated,
                 worker_receipt_id: receipt_id,
             }))
         }
@@ -208,8 +239,9 @@ pub(crate) fn run_codex_exec(
                     exit_status: 1,
                     stdout: "",
                     stderr: &message,
-                    stdout_truncated: false,
-                    stderr_truncated: false,
+                    provider_stdout: None,
+                    provider_stdout_truncated: false,
+                    provider_stderr_truncated: false,
                     error: Some(&message),
                     status: "cancelled",
                 },
@@ -231,8 +263,9 @@ pub(crate) fn run_codex_exec(
                     exit_status: 1,
                     stdout: "",
                     stderr: &message,
-                    stdout_truncated: false,
-                    stderr_truncated: false,
+                    provider_stdout: None,
+                    provider_stdout_truncated: false,
+                    provider_stderr_truncated: false,
                     error: Some(&message),
                     status: "error",
                 },
@@ -293,8 +326,8 @@ fn run_codex_exec_inner(
     )?;
     let provider_stdout = String::from_utf8_lossy(&output.output.stdout).into_owned();
     let provider_stderr = String::from_utf8_lossy(&output.output.stderr).into_owned();
-    let provider_stdout_truncated = output.stdout_truncated;
-    let provider_stderr_truncated = output.stderr_truncated;
+    let provider_stdout_truncated = output.provider_stdout_truncated;
+    let provider_stderr_truncated = output.provider_stderr_truncated;
     let mut output = output.output;
 
     output.stdout = read_worker_output_file(output_file.path())?.unwrap_or_default();
@@ -422,8 +455,8 @@ fn run_worker_command(
             stdout: stdout.bytes,
             stderr: stderr.bytes,
         },
-        stdout_truncated: stdout.truncated,
-        stderr_truncated: stderr.truncated,
+        provider_stdout_truncated: stdout.truncated,
+        provider_stderr_truncated: stderr.truncated,
     })
 }
 
@@ -527,8 +560,8 @@ impl WorkerResultFileFailure {
 #[derive(Debug)]
 struct WorkerCommandOutput {
     output: Output,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
+    provider_stdout_truncated: bool,
+    provider_stderr_truncated: bool,
 }
 
 struct CapturedWorkerOutput {
@@ -584,8 +617,9 @@ struct WorkerReceiptOutcome<'a> {
     exit_status: i32,
     stdout: &'a str,
     stderr: &'a str,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
+    provider_stdout: Option<&'a str>,
+    provider_stdout_truncated: bool,
+    provider_stderr_truncated: bool,
     error: Option<&'a str>,
     status: &'static str,
 }
@@ -603,6 +637,12 @@ fn record_worker_receipt(
     } else {
         outcome.status
     };
+    let (provider_stdout_preview, provider_stdout_preview_truncated) = outcome
+        .provider_stdout
+        .map(bounded_provider_preview)
+        .map_or((None, false), |(preview, truncated)| {
+            (Some(preview), truncated)
+        });
     let evidence = json!({
         "kind": "worker_run",
         "schema_version": 1,
@@ -629,8 +669,11 @@ fn record_worker_receipt(
         "workflow_id": request.receipt.workflow_id,
         "item_key": request.receipt.item_key,
         "error": outcome.error,
-        "stdout_truncated": outcome.stdout_truncated,
-        "stderr_truncated": outcome.stderr_truncated,
+        "stdout_truncated": outcome.provider_stdout_truncated,
+        "stderr_truncated": outcome.provider_stderr_truncated,
+        "provider_stdout_preview": provider_stdout_preview,
+        "provider_stdout_preview_truncated": provider_stdout_preview_truncated,
+        "provider_stdout_truncated": outcome.provider_stdout_truncated,
     });
     record_receipt_with_cancellation(
         ctx,
@@ -661,6 +704,17 @@ fn record_worker_receipt(
         &|| observer.cancelled(),
     )
     .context("Failed to record worker receipt")
+}
+
+fn bounded_provider_preview(text: &str) -> (String, bool) {
+    if text.len() <= WORKER_PROVIDER_PREVIEW_BYTES {
+        return (text.to_owned(), false);
+    }
+    let mut end = WORKER_PROVIDER_PREVIEW_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_owned(), true)
 }
 
 fn codex_timeout(ctx: &RepoContext) -> Result<CommandTimeout> {

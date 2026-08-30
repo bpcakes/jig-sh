@@ -424,9 +424,16 @@ exec git "$@"
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "-o" ]; then out="$argument"; fi
+  previous="$argument"
+done
 cat >/dev/null
 touch "$JIG_TEST_GIT_FAILURE_FLAG"
-printf 'task complete\n'
+printf 'diagnostic task transcript\n'
+printf 'authoritative task result\n' > "$out"
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
@@ -449,7 +456,8 @@ printf 'task complete\n'
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(action["status"], "failed");
     assert!(action["worker_receipt_id"].is_string());
-    assert_eq!(action["output"], "task complete\n");
+    assert_eq!(action["output"], "authoritative task result\n");
+    assert_eq!(action["provider_stdout"], "diagnostic task transcript\n");
     assert_eq!(action["checkout"]["retained"], true);
     assert!(action["checkout"]["dirty"].is_null());
     assert!(

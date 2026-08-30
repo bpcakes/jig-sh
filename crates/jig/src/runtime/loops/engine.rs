@@ -10,7 +10,7 @@ use crate::execution::{AdditionalCancellationControl, ExecutionControl};
 use crate::state::{ReceiptInput, now_ms, record_receipt, record_receipt_with_cancellation};
 use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
-use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStatus, OccurrenceStore};
+use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStore};
 use super::state::{
     AttemptRecord, AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseRecord, LeaseStore,
 };
@@ -103,6 +103,37 @@ pub(super) enum ScheduledTick {
     },
 }
 
+#[derive(Debug)]
+pub(super) struct UnexecutedTickError(anyhow::Error);
+
+impl UnexecutedTickError {
+    fn into_inner(self) -> anyhow::Error {
+        self.0
+    }
+}
+
+impl std::fmt::Display for UnexecutedTickError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if formatter.alternate() {
+            write!(formatter, "{:#}", self.0)
+        } else {
+            write!(formatter, "{}", self.0)
+        }
+    }
+}
+
+impl std::error::Error for UnexecutedTickError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+impl From<anyhow::Error> for UnexecutedTickError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
 impl ScheduledTick {
     pub(super) fn value(&self) -> Option<&Value> {
         match self {
@@ -170,6 +201,7 @@ pub(super) fn tick_with_observer(
         },
         observer,
     )
+    .map_err(UnexecutedTickError::into_inner)
     .and_then(ScheduledTick::into_manual_result)
 }
 
@@ -178,7 +210,7 @@ pub(super) fn tick_scheduled_with_observer(
     workflow_id: &str,
     occurrence_id: &str,
     observer: &mut dyn ExecutionControl,
-) -> Result<ScheduledTick> {
+) -> std::result::Result<ScheduledTick, UnexecutedTickError> {
     tick_with_execution(
         ctx,
         LoopTickRequest {
@@ -201,7 +233,7 @@ fn tick_with_execution(
     started: u64,
     execution: TickExecution,
     observer: &mut dyn ExecutionControl,
-) -> Result<ScheduledTick> {
+) -> std::result::Result<ScheduledTick, UnexecutedTickError> {
     let workflow = resolve_workflow(
         ctx,
         request.workflow.as_deref(),
@@ -498,11 +530,7 @@ pub(super) fn status_with_cancellation(
         .collect::<Result<Vec<_>>>()?;
     let scheduled_needs_attention = occurrences
         .iter()
-        .filter(|record| {
-            record.status == OccurrenceStatus::NeedsAttention
-                || (record.status == OccurrenceStatus::Running
-                    && record.claim_expires_at_ms <= checked_at_ms)
-        })
+        .filter(|record| record.requires_attention_at(checked_at_ms))
         .cloned()
         .collect::<Vec<_>>();
 

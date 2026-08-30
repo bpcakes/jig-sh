@@ -126,6 +126,10 @@ impl LeaseStore {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
     }
 
+    fn recover_unparsable(&self) -> Result<()> {
+        recover_unparsable_json_cache::<LeaseFile>(&self.dir, &self.lock_path, &self.path)
+    }
+
     fn renew_at(
         &mut self,
         key: &str,
@@ -166,11 +170,37 @@ impl LeaseGuard {
         lease: &LeaseRecord,
         ttl_seconds: u64,
     ) -> Result<Self> {
+        Self::start_with_interval(
+            store,
+            key,
+            lease,
+            ttl_seconds,
+            renewal_interval(ttl_seconds),
+        )
+    }
+
+    #[cfg(test)]
+    fn start_for_test(
+        store: LeaseStore,
+        key: &str,
+        lease: &LeaseRecord,
+        ttl_seconds: u64,
+        interval: Duration,
+    ) -> Result<Self> {
+        Self::start_with_interval(store, key, lease, ttl_seconds, interval)
+    }
+
+    fn start_with_interval(
+        store: LeaseStore,
+        key: &str,
+        lease: &LeaseRecord,
+        ttl_seconds: u64,
+        interval: Duration,
+    ) -> Result<Self> {
         let (stop, receiver) = mpsc::channel();
         let mut renewal_store = store.clone();
         let renewal_key = key.to_string();
         let renewal_owner = lease.owner.clone();
-        let interval = renewal_interval(ttl_seconds);
         let renewal_failed = Arc::new(AtomicBool::new(false));
         let renewal_failed_in_thread = Arc::clone(&renewal_failed);
         let renewal = thread::Builder::new()
@@ -418,6 +448,15 @@ impl AttemptStore {
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
     }
+
+    fn recover_unparsable(&self) -> Result<()> {
+        recover_unparsable_json_cache::<AttemptFile>(&self.dir, &self.lock_path, &self.path)
+    }
+}
+
+pub(super) fn recover_unparsable_disposable_state(ctx: &RepoContext) -> Result<()> {
+    LeaseStore::new(ctx).recover_unparsable()?;
+    AttemptStore::new(ctx).recover_unparsable()
 }
 
 pub(super) fn with_json_cache_lock<T, S>(
@@ -434,6 +473,21 @@ where
         let result = action(&mut store)?;
         write_json(data_path, &store)?;
         Ok(result)
+    })
+}
+
+fn recover_unparsable_json_cache<T>(dir: &Path, lock_path: &Path, data_path: &Path) -> Result<()>
+where
+    T: Default + DeserializeOwned + Serialize,
+{
+    with_exclusive_file_lock(dir, lock_path, || {
+        match read_json_or_default::<T>(data_path) {
+            Ok(_) => Ok(()),
+            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
+                write_json(data_path, &T::default())
+            }
+            Err(error) => Err(error),
+        }
     })
 }
 
@@ -599,6 +653,31 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_preflight_recovers_unparsable_disposable_caches() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let cache_dir = temp.path().join(LOOP_CACHE_DIR);
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(cache_dir.join("leases.json"), b"{").unwrap();
+        fs::write(cache_dir.join("attempts.json"), b"{").unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        recover_unparsable_disposable_state(&ctx).unwrap();
+
+        let mut leases = LeaseStore::new(&ctx);
+        assert!(matches!(
+            leases.acquire("workflow:ExampleProject", 60).unwrap(),
+            LeaseAcquire::Acquired(_)
+        ));
+        let mut attempts = AttemptStore::new(&ctx);
+        assert!(attempts.snapshot().unwrap().is_empty());
+
+        serde_json::from_slice::<Value>(&fs::read(cache_dir.join("leases.json")).unwrap()).unwrap();
+        serde_json::from_slice::<Value>(&fs::read(cache_dir.join("attempts.json")).unwrap())
+            .unwrap();
+    }
+
+    #[test]
     fn lease_guard_renews_until_finished_and_then_releases() {
         let temp = tempdir().unwrap();
         write_loop_fixture_repo(temp.path());
@@ -623,21 +702,38 @@ mod tests {
     }
 
     #[test]
-    fn one_second_lease_renews_before_expiry() {
+    fn lease_guard_renews_the_persisted_lease_before_expiry() {
         assert!(renewal_interval(1) < Duration::from_secs(1));
 
         let temp = tempdir().unwrap();
         write_loop_fixture_repo(temp.path());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let mut store = LeaseStore::new(&ctx);
-        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:short", 1).unwrap() else {
+        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:short", 60).unwrap() else {
             panic!("expected lease acquisition");
         };
-        let guard = LeaseGuard::start(store.clone(), "workflow:short", &lease, 1).unwrap();
+        let guard = LeaseGuard::start_for_test(
+            store.clone(),
+            "workflow:short",
+            &lease,
+            60,
+            Duration::from_millis(1),
+        )
+        .unwrap();
 
-        std::thread::sleep(Duration::from_millis(1_200));
-        let LeaseAcquire::Held(renewed) = store.acquire("workflow:short", 1).unwrap() else {
-            panic!("one-second lease must renew before another owner can acquire it");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let renewed = loop {
+            let LeaseAcquire::Held(renewed) = store.acquire("workflow:short", 60).unwrap() else {
+                panic!("renewed lease must remain held by its original owner");
+            };
+            if renewed.expires_at_ms > lease.expires_at_ms {
+                break renewed;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lease renewal was not persisted before the test deadline"
+            );
+            std::thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(renewed.owner, lease.owner);
         guard.finish().unwrap();

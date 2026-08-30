@@ -91,7 +91,7 @@ pub(super) fn codex_task_tick(
 
     let (action, completion) = match worker {
         Ok(CodexExecOutcome::Completed(worker)) => {
-            let worker_succeeded = worker.output.status.success();
+            let worker_succeeded = worker.status().success();
             let checkout = checkout.finish(
                 if worker_succeeded {
                     TaskOutcome::Succeeded
@@ -103,7 +103,7 @@ pub(super) fn codex_task_tick(
             let worker_error = (!worker_succeeded).then(|| {
                 format!(
                     "Codex task worker exited with status {}",
-                    worker.output.status.code().unwrap_or(1)
+                    worker.status().code().unwrap_or(1)
                 )
             });
             let error = combine_task_errors(worker_error, checkout.error);
@@ -113,7 +113,7 @@ pub(super) fn codex_task_tick(
                 } else {
                     WorkflowOutcome::Failed
                 },
-                worker_receipt_id: Some(worker.worker_receipt_id.clone()),
+                worker_receipt_id: Some(worker.worker_receipt_id().to_owned()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
             };
@@ -121,10 +121,12 @@ pub(super) fn codex_task_tick(
                 "kind": "codex_task_worker",
                 "status": if error.is_none() { "succeeded" } else { "failed" },
                 "item_key": execution.item_key,
-                "worker_receipt_id": worker.worker_receipt_id,
+                "worker_receipt_id": worker.worker_receipt_id(),
                 "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
-                "output": bounded_text(&worker.provider_stdout),
+                "output": bounded_bytes(worker.authoritative_stdout()),
+                "provider_stdout": bounded_text(worker.provider_stdout()),
+                "provider_stdout_truncated": worker.provider_stdout_truncated(),
                 "error": error,
             });
             (action, completion)
@@ -444,6 +446,7 @@ fn prepare_checkout(
     if path.exists() {
         bail!("Codex task worktree already exists: {}", path.display());
     }
+    require_ignored_task_worktree_root(ctx, observer)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -483,6 +486,35 @@ fn prepare_checkout(
         path,
         initial_head,
     })
+}
+
+fn require_ignored_task_worktree_root(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> Result<()> {
+    let worktree_root = Path::new(LOOP_RUNTIME_DIR).join("worktrees/tasks");
+    let output = git_output(
+        ctx,
+        ctx.root(),
+        [
+            OsString::from("check-ignore"),
+            OsString::from("--quiet"),
+            OsString::from("--"),
+            worktree_root.as_os_str().to_os_string(),
+        ],
+        observer,
+    )?;
+    match output.status.code() {
+        Some(0) => Ok(()),
+        Some(1) => bail!(
+            "Codex task worktree path is not ignored by Git: {}; refresh the managed .gitignore with `scripts/jig update --recopy` before using worktree checkout",
+            worktree_root.display()
+        ),
+        _ => Err(git_error(
+            "Failed to verify that the Codex task worktree path is ignored",
+            output,
+        )),
+    }
 }
 
 fn git_is_dirty(
@@ -643,6 +675,10 @@ fn checkout_preparation_error(
 
 fn bounded_text(text: &str) -> String {
     text.chars().take(MAX_OUTPUT_CHARS).collect()
+}
+
+fn bounded_bytes(bytes: &[u8]) -> String {
+    bounded_text(&String::from_utf8_lossy(bytes))
 }
 
 #[cfg(test)]

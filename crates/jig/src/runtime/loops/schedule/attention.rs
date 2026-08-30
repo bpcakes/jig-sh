@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::super::occurrence::{OccurrenceStatus, OccurrenceStore};
+use super::super::occurrence::OccurrenceStore;
 use super::super::state::{AttemptSections, AttemptStore};
 
 pub(super) struct DispatchAttention {
@@ -23,11 +23,14 @@ impl DispatchAttention {
         let mut state_errors = Vec::new();
         let scheduled_occurrence_count =
             match occurrences.snapshot_read_only_with_cancellation(cancelled) {
-                Ok(occurrences) => bounded_count(
-                    occurrences
-                        .iter()
-                        .filter(|occurrence| occurrence.status == OccurrenceStatus::NeedsAttention),
-                ),
+                Ok(occurrences) => {
+                    let checked_at_ms = now_ms();
+                    bounded_count(
+                        occurrences
+                            .iter()
+                            .filter(|occurrence| occurrence.requires_attention_at(checked_at_ms)),
+                    )
+                }
                 Err(error) => {
                     state_errors.push(state_error("scheduled_occurrences", error));
                     0
@@ -119,5 +122,21 @@ mod tests {
                 .as_str()
                 .is_some_and(|error| error.contains("cancelled"))
         }));
+    }
+
+    #[test]
+    fn collection_counts_an_expired_running_occurrence_as_attention() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut occurrences = OccurrenceStore::new(&ctx);
+        let _ = occurrences.claim("nightly", 100, 0).unwrap();
+
+        let attention = DispatchAttention::collect(&ctx, &occurrences, &|| false);
+
+        assert_eq!(attention.scheduled_occurrence_count, 1);
+        assert!(attention.state_errors.is_empty());
     }
 }

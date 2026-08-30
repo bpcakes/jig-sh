@@ -12,8 +12,9 @@ use super::super::state::{LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
 use super::super::workflow::{WorkflowCompletion, WorkflowOutcome};
 use super::{
     DispatchStep, DispatchSummary, NoopExecutionObserver, OccurrenceStore, RunSummary,
-    RunTickDisposition, ScheduleSpec, begin_execution, dispatch_due_at, dispatch_workflow,
-    include_occurrence_renewal_error, list_workflows, scheduled_tick_state_errors,
+    RunTickDisposition, ScheduleSpec, abandon_unexecuted_start_failure, dispatch_due_at,
+    dispatch_workflow, include_occurrence_renewal_error, list_workflows,
+    scheduled_tick_state_errors,
 };
 use crate::command::LoopStatusRequest;
 use crate::context::RepoContext;
@@ -109,7 +110,7 @@ fn dispatch_summary_distinguishes_deferred_work_from_idle() {
 
 #[test]
 fn failed_workflow_keeps_a_separate_tick_receipt_error() {
-    let tick = Ok(ScheduledTick::Errored {
+    let tick = ScheduledTick::Errored {
         value: None,
         completion: WorkflowCompletion {
             outcome: WorkflowOutcome::Failed,
@@ -120,7 +121,7 @@ fn failed_workflow_keeps_a_separate_tick_receipt_error() {
         state_errors: Vec::new(),
         error: "Failed to record loop tick receipt: disk full".into(),
         post_work_error: Some("Failed to record loop tick receipt: disk full".into()),
-    });
+    };
 
     let errors = scheduled_tick_state_errors(&tick, "nightly", "nightly@100");
 
@@ -153,17 +154,6 @@ fn persisted_finalization_keeps_renewal_failure_as_dispatch_state_evidence() {
     assert_eq!(summary.state_errors[0]["kind"], "occurrence_renewal");
     assert_eq!(summary.state_errors[0]["workflow_id"], "nightly");
     assert_eq!(summary.state_errors[0]["occurrence_id"], "nightly@100");
-}
-
-#[test]
-fn execution_count_starts_only_after_guard_start_succeeds() {
-    let mut step = DispatchStep::default();
-
-    assert!(begin_execution::<()>(&mut step, || anyhow::bail!("injected start failure")).is_err());
-    assert_eq!(step.executed_count, 0);
-
-    begin_execution(&mut step, || Ok(())).unwrap();
-    assert_eq!(step.executed_count, 1);
 }
 
 #[test]
@@ -262,6 +252,112 @@ timezone = "UTC"
     );
     assert_eq!(status["scheduled_occurrences"].as_array().unwrap().len(), 1);
     serde_json::from_value::<jig_ui::LoopsView>(status).unwrap();
+}
+
+#[test]
+fn dispatcher_retries_after_a_pre_execution_lease_error() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+"#
+        ),
+    )
+    .unwrap();
+    let cache_dir = temp.path().join(LOOP_CACHE_DIR);
+    fs::create_dir_all(cache_dir.join("leases.json")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let dispatch_at = timestamp("2026-08-21T08:42:30Z");
+
+    let workflow = list_workflows(&ctx)
+        .unwrap()
+        .into_iter()
+        .find(|workflow| workflow.id == "scheduled-noop")
+        .unwrap();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+    let known_occurrences = occurrences.snapshot().unwrap();
+    let failed = dispatch_workflow(
+        &ctx,
+        &mut occurrences,
+        &known_occurrences,
+        &workflow,
+        dispatch_at,
+        &mut NoopExecutionObserver,
+    );
+
+    assert_eq!(failed.action.as_ref().unwrap()["status"], "failed");
+    assert_eq!(failed.executed_count, 0);
+    assert!(OccurrenceStore::new(&ctx).snapshot().unwrap().is_empty());
+
+    fs::remove_dir(cache_dir.join("leases.json")).unwrap();
+    let retried = dispatch_workflow(
+        &ctx,
+        &mut occurrences,
+        &known_occurrences,
+        &workflow,
+        dispatch_at,
+        &mut NoopExecutionObserver,
+    );
+    assert_eq!(retried.action.as_ref().unwrap()["status"], "succeeded");
+    assert_eq!(retried.executed_count, 1);
+}
+
+#[test]
+fn occurrence_guard_start_failure_abandons_the_unexecuted_claim() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+"#
+        ),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = list_workflows(&ctx)
+        .unwrap()
+        .into_iter()
+        .find(|workflow| workflow.id == "scheduled-noop")
+        .unwrap();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+    let super::OccurrenceClaim::Acquired(claim) = occurrences
+        .claim(&workflow.id, 100, workflow.lease_ttl_seconds)
+        .unwrap()
+    else {
+        panic!("expected occurrence claim");
+    };
+
+    let step = abandon_unexecuted_start_failure(
+        DispatchStep {
+            due_count: 1,
+            ..DispatchStep::default()
+        },
+        &mut occurrences,
+        &workflow,
+        &claim,
+        200,
+        "injected occurrence renewal start failure".into(),
+    );
+
+    assert_eq!(step.executed_count, 0);
+    assert_eq!(step.skipped_count, 1);
+    assert_eq!(step.failed_count, 1);
+    assert_eq!(step.action.as_ref().unwrap()["retryable"], true);
+    assert!(occurrences.snapshot().unwrap().is_empty());
 }
 
 #[test]

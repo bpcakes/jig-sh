@@ -395,6 +395,10 @@ impl ExecutionObserver for AdditionalCancellationControl<'_> {
     fn event(&mut self, event: ExecutionEvent<'_>) {
         self.control.event(event);
     }
+
+    fn flush(&mut self) -> anyhow::Result<()> {
+        self.control.flush()
+    }
 }
 
 impl ExecutionCancellation for AdditionalCancellationControl<'_> {
@@ -580,6 +584,8 @@ impl OwnedProcessObserver for ProcessExecutionObserver<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     struct CancelledControl;
@@ -590,6 +596,65 @@ mod tests {
         fn cancelled(&self) -> bool {
             true
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingControl {
+        event_count: usize,
+        flush_count: usize,
+        cancelled: bool,
+        fail_flush: bool,
+    }
+
+    impl ExecutionObserver for RecordingControl {
+        fn event(&mut self, _event: ExecutionEvent<'_>) {
+            self.event_count += 1;
+        }
+
+        fn flush(&mut self) -> anyhow::Result<()> {
+            self.flush_count += 1;
+            if self.fail_flush {
+                return Err(anyhow!("injected flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    impl ExecutionCancellation for RecordingControl {
+        fn cancelled(&self) -> bool {
+            self.cancelled
+        }
+    }
+
+    #[test]
+    fn additional_cancellation_control_preserves_the_observer_contract() {
+        let additional_cancelled = Cell::new(false);
+        let mut control = RecordingControl::default();
+        {
+            let additional = || additional_cancelled.get();
+            let mut wrapper = AdditionalCancellationControl::new(&mut control, &additional);
+            wrapper.event(ExecutionEvent::Heartbeat {
+                label: "test",
+                elapsed: Duration::ZERO,
+            });
+            wrapper.flush().unwrap();
+            assert!(!wrapper.cancelled());
+            additional_cancelled.set(true);
+            assert!(wrapper.cancelled());
+        }
+        assert_eq!(control.event_count, 1);
+        assert_eq!(control.flush_count, 1);
+
+        control.cancelled = true;
+        control.fail_flush = true;
+        additional_cancelled.set(false);
+        let additional = || additional_cancelled.get();
+        let mut wrapper = AdditionalCancellationControl::new(&mut control, &additional);
+        assert!(wrapper.cancelled());
+        assert_eq!(
+            wrapper.flush().unwrap_err().to_string(),
+            "injected flush failure"
+        );
     }
 
     #[test]

@@ -56,10 +56,12 @@ pub(super) fn run_codex_review(
         observer,
     )?
     .into_completed()?;
+    let codex_stdout = output.provider_stdout().to_owned();
+    let worker_receipt_id = output.worker_receipt_id().to_owned();
     Ok(CodexReviewCommandOutput {
-        output: output.output,
-        codex_stdout: output.provider_stdout,
-        worker_receipt_id: output.worker_receipt_id,
+        output: output.into_process_output(),
+        codex_stdout,
+        worker_receipt_id,
     })
 }
 
@@ -102,9 +104,10 @@ pub(super) fn run_codex_refine(
         observer,
     )?
     .into_completed()?;
+    let worker_receipt_id = output.worker_receipt_id().to_owned();
     Ok(CodexRefineCommandOutput {
-        output: output.output,
-        worker_receipt_id: output.worker_receipt_id,
+        output: output.into_process_output(),
+        worker_receipt_id,
     })
 }
 

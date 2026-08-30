@@ -1,4 +1,3 @@
-use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::super::engine::ScheduledTick;
@@ -94,15 +93,6 @@ impl DispatchStep {
     }
 }
 
-pub(super) fn begin_execution<T>(
-    step: &mut DispatchStep,
-    start: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let execution = start()?;
-    step.executed_count = 1;
-    Ok(execution)
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RunTickDisposition {
     Continue,
@@ -161,28 +151,18 @@ pub(super) struct TerminalDetails {
 }
 
 impl TerminalDetails {
-    pub(super) fn from_tick(tick: &Result<ScheduledTick>) -> Self {
-        match tick {
-            Ok(tick) => {
-                let completion = tick.completion();
-                let outcome = match completion.outcome {
-                    WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
-                    WorkflowOutcome::Succeeded => OccurrenceOutcome::Succeeded,
-                    WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
-                };
-                Self {
-                    outcome,
-                    worker_receipt_id: completion.worker_receipt_id.clone(),
-                    worktree: completion.worktree.clone(),
-                    error: completion.error.clone(),
-                }
-            }
-            Err(error) => Self {
-                outcome: OccurrenceOutcome::Failed,
-                worker_receipt_id: None,
-                worktree: None,
-                error: Some(format!("{error:#}")),
-            },
+    pub(super) fn from_tick(tick: &ScheduledTick) -> Self {
+        let completion = tick.completion();
+        let outcome = match completion.outcome {
+            WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
+            WorkflowOutcome::Succeeded => OccurrenceOutcome::Succeeded,
+            WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
+        };
+        Self {
+            outcome,
+            worker_receipt_id: completion.worker_receipt_id.clone(),
+            worktree: completion.worktree.clone(),
+            error: completion.error.clone(),
         }
     }
 }
@@ -224,7 +204,7 @@ mod tests {
 
     #[test]
     fn scheduled_tick_preserves_needs_attention_as_an_occurrence_outcome() {
-        let tick = Ok(ScheduledTick::Reported {
+        let tick = ScheduledTick::Reported {
             value: json!({"status": "acted"}),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::NeedsAttention,
@@ -232,7 +212,7 @@ mod tests {
             },
             lease_disposition: WorkflowLeaseDisposition::Acquired,
             state_errors: Vec::new(),
-        });
+        };
 
         let details = TerminalDetails::from_tick(&tick);
 
@@ -241,7 +221,7 @@ mod tests {
 
     #[test]
     fn scheduled_tick_error_keeps_worker_completion_evidence() {
-        let tick = Ok(ScheduledTick::Errored {
+        let tick = ScheduledTick::Errored {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
@@ -253,7 +233,7 @@ mod tests {
             state_errors: Vec::new(),
             error: "tick receipt failed".into(),
             post_work_error: Some("tick receipt failed".into()),
-        });
+        };
 
         let details = TerminalDetails::from_tick(&tick);
 
@@ -265,7 +245,7 @@ mod tests {
 
     #[test]
     fn scheduled_tick_error_cannot_downgrade_ambiguous_worker_completion() {
-        let tick = Ok(ScheduledTick::Errored {
+        let tick = ScheduledTick::Errored {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::NeedsAttention,
@@ -276,7 +256,7 @@ mod tests {
             state_errors: Vec::new(),
             error: "tick receipt failed".into(),
             post_work_error: Some("tick receipt failed".into()),
-        });
+        };
 
         let details = TerminalDetails::from_tick(&tick);
 
@@ -289,7 +269,7 @@ mod tests {
 
     #[test]
     fn post_work_tick_error_cannot_override_successful_worker_completion() {
-        let tick = Ok(ScheduledTick::Errored {
+        let tick = ScheduledTick::Errored {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Succeeded,
@@ -301,7 +281,7 @@ mod tests {
             state_errors: Vec::new(),
             error: "attempt state could not be observed".into(),
             post_work_error: Some("attempt state could not be observed".into()),
-        });
+        };
 
         let details = TerminalDetails::from_tick(&tick);
 

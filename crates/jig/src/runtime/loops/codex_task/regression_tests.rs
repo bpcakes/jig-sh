@@ -114,6 +114,7 @@ fn failed_worktree_add_cleans_its_partial_checkout() {
         r#"#!/bin/sh
 set -eu
 case " $* " in
+  *" check-ignore --quiet -- "*) exit 0 ;;
   *" rev-parse HEAD "*) printf 'initial-head\n' ;;
   *" worktree add "*)
     previous=
@@ -168,6 +169,7 @@ fn failed_worktree_add_does_not_report_an_absent_leftover() {
         r#"#!/bin/sh
 set -eu
 case " $* " in
+  *" check-ignore --quiet -- "*) exit 0 ;;
   *" rev-parse HEAD "*) printf 'initial-head\n' ;;
   *" worktree add "*) exit 9 ;;
   *" worktree remove "*) exit 4 ;;
@@ -212,6 +214,7 @@ fn cancelled_worktree_add_reports_cleanup_failure_and_blocks_reuse() {
         r#"#!/bin/sh
 set -eu
 case " $* " in
+  *" check-ignore --quiet -- "*) exit 0 ;;
   *" rev-parse HEAD "*) printf 'initial-head\n' ;;
   *" worktree add "*)
     previous=
@@ -277,6 +280,46 @@ fn test_worktree_workflow() -> ResolvedWorkflow {
         schedule: None,
         codex_task: None,
     }
+}
+
+#[test]
+fn worktree_checkout_refuses_a_stale_repository_before_creating_runtime_paths() {
+    let _env_lock = lock_env();
+    let repo = tempdir().unwrap();
+    TestRepoBuilder::new(repo.path())
+        .required_commands(Vec::<String>::new())
+        .write();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "fixture@example.com"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["add", "."],
+        vec!["commit", "-m", "fixture"],
+    ] {
+        let output = Command::new("git")
+            .current_dir(repo.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, OsStr::new("git"));
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+    let error = prepare_checkout(
+        &ctx,
+        &test_worktree_workflow(),
+        "item-1",
+        CodexTaskCheckout::Worktree,
+        &mut NoopExecutionObserver,
+    )
+    .err()
+    .expect("missing runtime ignore rule must fail closed")
+    .to_string();
+
+    assert!(error.contains("not ignored by Git"), "{error}");
+    assert!(error.contains("scripts/jig update --recopy"), "{error}");
+    assert!(!repo.path().join(LOOP_RUNTIME_DIR).exists());
 }
 
 #[cfg(unix)]

@@ -274,8 +274,8 @@ mod tests {
 
         assert!(output.output.status.success());
         assert_eq!(output.output.stdout.len(), EXECUTION_OUTPUT_CAPTURE_LIMIT);
-        assert!(output.stdout_truncated);
-        assert!(!output.stderr_truncated);
+        assert!(output.provider_stdout_truncated);
+        assert!(!output.provider_stderr_truncated);
     }
 
     #[cfg(unix)]
@@ -390,8 +390,19 @@ printf 'authoritative result\n' > "$out"
             panic!("worker unexpectedly cancelled");
         };
 
-        assert_eq!(output.output.stdout, b"authoritative result\n");
-        assert_eq!(output.provider_stdout, "diagnostic transcript\n");
+        assert_eq!(output.authoritative_stdout(), b"authoritative result\n");
+        assert_eq!(output.provider_stdout(), "diagnostic transcript\n");
+        let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|receipt| receipt["id"] == output.worker_receipt_id())
+            .unwrap();
+        assert_eq!(receipt["stdout_preview"], "authoritative result\n");
+        assert_eq!(
+            receipt["evidence"]["provider_stdout_preview"],
+            "diagnostic transcript\n"
+        );
     }
 
     #[cfg(unix)]

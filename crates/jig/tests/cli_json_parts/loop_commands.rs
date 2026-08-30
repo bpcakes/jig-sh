@@ -138,6 +138,61 @@ fn loop_acknowledge_occurrence_has_human_and_json_contracts() {
 }
 
 #[test]
+fn occurrence_reported_as_attention_can_be_acknowledged_directly() {
+    let repo = tempdir().unwrap();
+    write_info_commands_repo(repo.path());
+    let runtime_dir = repo.path().join(".agent/runtime/loop");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    fs::write(
+        runtime_dir.join("schedule.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 3,
+            "occurrences": {
+                "nightly@100": {
+                    "occurrence_id": "nightly@100",
+                    "workflow_id": "nightly",
+                    "scheduled_at_ms": 100,
+                    "owner": "stopped-owner",
+                    "claim_expires_at_ms": 200,
+                    "started_at_ms": 100,
+                    "status": "running"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let status = jig()
+        .current_dir(repo.path())
+        .args(["loop", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "{status:?}");
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        status["needs_attention"]["scheduled_occurrences"][0]["occurrence_id"],
+        "nightly@100"
+    );
+
+    let acknowledgement = jig()
+        .current_dir(repo.path())
+        .args([
+            "loop",
+            "acknowledge-occurrence",
+            "--occurrence",
+            "nightly@100",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(acknowledgement.status.success(), "{acknowledgement:?}");
+    let acknowledgement: Value = serde_json::from_slice(&acknowledgement.stdout).unwrap();
+    assert_eq!(acknowledgement["changed"], true);
+    assert_eq!(acknowledgement["occurrence"]["status"], "acknowledged");
+}
+
+#[test]
 fn loop_clear_attempt_accepts_a_removed_workflow_key() {
     let repo = tempdir().unwrap();
     write_info_commands_repo(repo.path());

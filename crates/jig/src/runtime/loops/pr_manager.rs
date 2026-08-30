@@ -602,14 +602,14 @@ fn run_pr_repair_steps(
             )));
         }
     };
-    if !worker.output.status.success() {
+    if !worker.status().success() {
         return Err(PrRepairStepError::failed(anyhow!(
             "PR manager worker exited with status {}",
-            worker.output.status.code().unwrap_or(1)
+            worker.status().code().unwrap_or(1)
         )));
     }
 
-    let worker_output = parse_pr_worker_output(&worker.output.stdout)?;
+    let worker_output = parse_pr_worker_output(worker.authoritative_stdout())?;
     let push = commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer)?;
     let repair_version = push["final_head"].as_str().unwrap_or(&item.head_sha);
     let review_thread_posts =
@@ -642,7 +642,7 @@ fn run_pr_repair_steps(
         "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
         "merge": merge,
         "worker_output": worker_output,
-        "worker_receipt_id": worker.worker_receipt_id,
+        "worker_receipt_id": worker.worker_receipt_id(),
         "push": push,
         "review_thread_posts": review_thread_posts.posts,
         "error": error,

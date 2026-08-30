@@ -17,6 +17,7 @@ use crate::state::now_ms;
 
 use super::state::renewal_interval;
 
+mod attention;
 mod persistence;
 
 use persistence::SchedulePersistence;
@@ -169,13 +170,36 @@ impl OccurrenceGuard {
         occurrence: &ScheduleOccurrence,
         ttl_seconds: u64,
     ) -> Result<Self> {
+        Self::start_with_interval(
+            store,
+            occurrence,
+            ttl_seconds,
+            renewal_interval(ttl_seconds),
+        )
+    }
+
+    #[cfg(test)]
+    fn start_for_test(
+        store: OccurrenceStore,
+        occurrence: &ScheduleOccurrence,
+        ttl_seconds: u64,
+        interval: Duration,
+    ) -> Result<Self> {
+        Self::start_with_interval(store, occurrence, ttl_seconds, interval)
+    }
+
+    fn start_with_interval(
+        store: OccurrenceStore,
+        occurrence: &ScheduleOccurrence,
+        ttl_seconds: u64,
+        interval: Duration,
+    ) -> Result<Self> {
         let (stop, receiver) = mpsc::channel();
         let mut renewal_store = store.clone();
         let occurrence_id = occurrence.occurrence_id.clone();
         let renewal_occurrence_id = occurrence_id.clone();
         let owner = occurrence.owner.clone();
         let renewal_owner = owner.clone();
-        let interval = renewal_interval(ttl_seconds);
         let renewal_failed = Arc::new(AtomicBool::new(false));
         let renewal_failed_in_thread = Arc::clone(&renewal_failed);
         let claim_expires_at_ms = occurrence.claim_expires_at_ms;
@@ -435,29 +459,6 @@ impl OccurrenceStore {
         })
     }
 
-    pub(super) fn acknowledge(&mut self, occurrence_id: &str) -> Result<OccurrenceAcknowledgement> {
-        self.with_locked(|store| {
-            let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
-                anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
-            })?;
-            match record.status {
-                OccurrenceStatus::NeedsAttention => {
-                    record.status = OccurrenceStatus::Acknowledged;
-                    record.acknowledged_at_ms = Some(now_ms());
-                    let acknowledged = record.clone();
-                    prune_history(store);
-                    Ok(OccurrenceAcknowledgement::Acknowledged(acknowledged))
-                }
-                OccurrenceStatus::Acknowledged => Ok(
-                    OccurrenceAcknowledgement::AlreadyAcknowledged(record.clone()),
-                ),
-                status => bail!(
-                    "Scheduled occurrence '{occurrence_id}' is {status}; only needs_attention occurrences can be acknowledged"
-                ),
-            }
-        })
-    }
-
     #[cfg(test)]
     fn abandon(&mut self, occurrence_id: &str, owner: &str) -> Result<ScheduleOccurrence> {
         self.abandon_with_clock(occurrence_id, owner, now_ms)
@@ -497,7 +498,7 @@ impl OccurrenceStore {
         })
     }
 
-    fn abandon_unexecuted(
+    pub(super) fn abandon_unexecuted(
         &mut self,
         occurrence_id: &str,
         owner: &str,

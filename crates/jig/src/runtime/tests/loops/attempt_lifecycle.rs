@@ -113,7 +113,7 @@ timezone = "UTC"
 }
 
 #[test]
-fn dispatch_records_a_failed_receipt_when_attempt_state_is_unreadable_after_work() {
+fn dispatch_recovers_unparsable_attempt_state_before_work() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
@@ -141,27 +141,16 @@ timezone = "UTC"
     )
     .unwrap();
 
-    assert_eq!(output["ok"], false, "{output:#}");
-    assert_eq!(output["status"], "failed", "{output:#}");
-    assert_eq!(output["state_error_count"], 2, "{output:#}");
-    assert_eq!(output["state_errors"][0]["kind"], "attempts");
-    assert_eq!(
-        output["state_errors"][0]["workflow_id"],
-        "scheduled-noop"
-    );
-    assert_eq!(output["state_errors"][1]["kind"], "attempts");
-    assert!(output["state_errors"][1]["workflow_id"].is_null());
+    assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["status"], "acted", "{output:#}");
+    assert_eq!(output["state_error_count"], 0, "{output:#}");
     assert!(output["receipt_id"].as_str().is_some(), "{output:#}");
     assert_eq!(output["actions"][0]["status"], "succeeded", "{output:#}");
-    assert_eq!(
-        output["actions"][0]["tick"]["state_errors"][0]["kind"],
-        "attempts",
-        "{output:#}"
-    );
+    serde_json::from_slice::<Value>(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
 }
 
 #[test]
-fn dispatch_preserves_same_kind_state_errors_from_distinct_workflows() {
+fn dispatch_recovers_unparsable_attempt_state_once_for_all_workflows() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
@@ -195,17 +184,7 @@ timezone = "UTC"
     )
     .unwrap();
 
-    assert_eq!(output["state_error_count"], 3, "{output:#}");
-    let workflow_ids = output["state_errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|error| error["workflow_id"].as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        workflow_ids,
-        vec!["first-scheduled-noop", "second-scheduled-noop"]
-    );
+    assert_eq!(output["state_error_count"], 0, "{output:#}");
     assert!(
         output["actions"]
             .as_array()
@@ -217,7 +196,7 @@ timezone = "UTC"
 }
 
 #[test]
-fn dispatch_state_error_alone_is_sufficient_to_fail_finalization() {
+fn dispatch_recovers_unparsable_cache_when_no_work_is_due() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let cache = temp.path().join(".agent/.cache/loop");
@@ -231,11 +210,13 @@ fn dispatch_state_error_alone_is_sufficient_to_fail_finalization() {
     )
     .unwrap();
 
-    assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["status"], "idle", "{output:#}");
     assert_eq!(output["failed_count"], 0, "{output:#}");
-    assert_eq!(output["state_error_count"], 1, "{output:#}");
+    assert_eq!(output["state_error_count"], 0, "{output:#}");
     assert!(output["actions"].as_array().unwrap().is_empty(), "{output:#}");
     assert!(output["receipt_id"].is_string(), "{output:#}");
+    serde_json::from_slice::<Value>(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
 }
 
 #[test]

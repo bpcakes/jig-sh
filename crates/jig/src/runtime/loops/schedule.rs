@@ -13,9 +13,10 @@ use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
 use super::engine::{ScheduledTick, tick_scheduled_with_observer, tick_with_observer};
 use super::occurrence::{
-    OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceOutcome, OccurrenceStatus,
-    OccurrenceStore, ScheduleOccurrence,
+    OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStatus, OccurrenceStore,
+    ScheduleOccurrence,
 };
+use super::state::recover_unparsable_disposable_state;
 use super::workflow::{
     ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, loop_status_is_success,
     resolve_workflow,
@@ -27,9 +28,7 @@ mod policy;
 
 use attention::DispatchAttention;
 pub(super) use cron::ScheduleSpec;
-use policy::{
-    DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails, begin_execution,
-};
+use policy::{DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails};
 
 #[cfg(test)]
 pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<Value> {
@@ -51,6 +50,7 @@ fn dispatch_due_at_with_observer(
 ) -> Result<Value> {
     let started = now_ms();
     let workflows = list_workflows(ctx)?;
+    recover_unparsable_disposable_state(ctx)?;
     let mut occurrences = OccurrenceStore::new(ctx);
     let reconciled = occurrences.reconcile_stale()?;
     let known_occurrences = occurrences.snapshot()?;
@@ -195,48 +195,44 @@ fn dispatch_workflow(
         OccurrenceClaim::Acquired(claim) => claim,
     };
 
-    let guard = match begin_execution(&mut step, || {
-        OccurrenceGuard::start(occurrences.clone(), &claim, workflow.lease_ttl_seconds)
-    }) {
-        Ok(guard) => guard,
-        Err(error) => {
-            let error = format!("Failed to renew scheduled occurrence: {error:#}");
-            step.failed_count = 1;
-            step.action = Some(
-                match occurrences.finish(
-                    &claim.occurrence_id,
-                    &claim.owner,
-                    OccurrenceFinish {
-                        outcome: OccurrenceOutcome::Failed,
-                        worker_receipt_id: None,
-                        worktree: None,
-                        error: Some(&error),
-                    },
-                ) {
-                    Ok(record) => dispatch_action(&record, "failed", window.next_at_ms, None),
-                    Err(finish_error) => dispatch_state_failure(
-                        workflow,
-                        &claim,
-                        window.next_at_ms,
-                        None,
-                        format!("{error}; recording the failure also failed: {finish_error:#}"),
-                    ),
-                },
-            );
-            return step;
-        }
-    };
+    let guard =
+        match OccurrenceGuard::start(occurrences.clone(), &claim, workflow.lease_ttl_seconds) {
+            Ok(guard) => guard,
+            Err(error) => {
+                return abandon_unexecuted_start_failure(
+                    step,
+                    occurrences,
+                    workflow,
+                    &claim,
+                    window.next_at_ms,
+                    format!("Failed to renew scheduled occurrence: {error:#}"),
+                );
+            }
+        };
     let occurrence_cancelled = || guard.renewal_failed();
     let mut occurrence_control =
         AdditionalCancellationControl::new(observer, &occurrence_cancelled);
-    let tick = tick_scheduled_with_observer(
+    let tick = match tick_scheduled_with_observer(
         ctx,
         &workflow.id,
         &claim.occurrence_id,
         &mut occurrence_control,
-    );
+    ) {
+        Ok(tick) => tick,
+        Err(error) => {
+            return abandon_unexecuted_tick_failure(
+                step,
+                guard,
+                workflow,
+                &claim,
+                window.next_at_ms,
+                format!("{error:#}"),
+            );
+        }
+    };
+    step.executed_count = 1;
     step.state_errors = scheduled_tick_state_errors(&tick, &workflow.id, &claim.occurrence_id);
-    if tick.as_ref().is_ok_and(ScheduledTick::lease_was_held) {
+    if tick.lease_was_held() {
         return match guard.abandon_unexecuted() {
             Ok(finalization) => {
                 include_occurrence_renewal_error(
@@ -309,6 +305,98 @@ fn dispatch_workflow(
     step
 }
 
+fn abandon_unexecuted_start_failure(
+    mut step: DispatchStep,
+    occurrences: &mut OccurrenceStore,
+    workflow: &ResolvedWorkflow,
+    claim: &ScheduleOccurrence,
+    next_at_ms: u64,
+    error: String,
+) -> DispatchStep {
+    match occurrences.abandon_unexecuted(&claim.occurrence_id, &claim.owner) {
+        Ok(abandoned) => {
+            record_unexecuted_failure(&mut step, workflow, abandoned, next_at_ms, error)
+        }
+        Err(abandon_error) => {
+            step.failed_count = 1;
+            step.action = Some(dispatch_state_failure(
+                workflow,
+                claim,
+                next_at_ms,
+                None,
+                format!(
+                    "{error}; abandoning the unexecuted occurrence also failed: {abandon_error:#}"
+                ),
+            ));
+            return step;
+        }
+    }
+    step
+}
+
+fn abandon_unexecuted_tick_failure(
+    mut step: DispatchStep,
+    guard: OccurrenceGuard,
+    workflow: &ResolvedWorkflow,
+    claim: &ScheduleOccurrence,
+    next_at_ms: u64,
+    error: String,
+) -> DispatchStep {
+    match guard.abandon_unexecuted() {
+        Ok(finalization) => {
+            include_occurrence_renewal_error(
+                &mut step,
+                &workflow.id,
+                &claim.occurrence_id,
+                finalization.renewal_error,
+            );
+            record_unexecuted_failure(
+                &mut step,
+                workflow,
+                finalization.occurrence,
+                next_at_ms,
+                error,
+            );
+        }
+        Err(abandon_error) => {
+            step.failed_count = 1;
+            step.action = Some(dispatch_state_failure(
+                workflow,
+                claim,
+                next_at_ms,
+                None,
+                format!(
+                    "{error}; abandoning the unexecuted occurrence also failed: {abandon_error:#}"
+                ),
+            ));
+        }
+    }
+    step
+}
+
+fn record_unexecuted_failure(
+    step: &mut DispatchStep,
+    workflow: &ResolvedWorkflow,
+    occurrence: ScheduleOccurrence,
+    next_at_ms: u64,
+    error: String,
+) {
+    step.executed_count = 0;
+    step.skipped_count = 1;
+    step.failed_count = 1;
+    step.action = Some(json!({
+        "workflow_id": workflow.id,
+        "occurrence": occurrence,
+        "status": "failed",
+        "reason": "pre_execution_error",
+        "retryable": true,
+        "occurrence_state_persisted": false,
+        "next_at_ms": next_at_ms,
+        "tick": null,
+        "error": error,
+    }));
+}
+
 fn include_occurrence_renewal_error(
     step: &mut DispatchStep,
     workflow_id: &str,
@@ -326,13 +414,10 @@ fn include_occurrence_renewal_error(
 }
 
 fn scheduled_tick_state_errors(
-    tick: &Result<ScheduledTick>,
+    tick: &ScheduledTick,
     workflow_id: &str,
     occurrence_id: &str,
 ) -> Vec<Value> {
-    let Ok(tick) = tick else {
-        return Vec::new();
-    };
     let mut state_errors = tick.state_errors().to_vec();
     for error in &mut state_errors {
         scope_state_error(error, workflow_id, occurrence_id);
@@ -379,8 +464,8 @@ fn dispatch_state_failure(
     })
 }
 
-fn tick_value(tick: &Result<ScheduledTick>) -> Option<Value> {
-    tick.as_ref().ok().and_then(ScheduledTick::value).cloned()
+fn tick_value(tick: &ScheduledTick) -> Option<Value> {
+    tick.value().cloned()
 }
 
 fn dispatch_action(
