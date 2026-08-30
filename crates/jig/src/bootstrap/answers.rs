@@ -197,8 +197,10 @@ impl PreparedInitAnswers {
         scaffold: &ScaffoldOpts,
         answers: &AnswerOpts,
     ) -> Result<()> {
-        if scaffold.preset == Some(ScaffoldPreset::RustLibrary) {
-            return self.input.validate_rust_library(scaffold, answers);
+        if let Some(preset @ (ScaffoldPreset::RustLibrary | ScaffoldPreset::RustCli)) =
+            scaffold.preset
+        {
+            return self.input.validate_rust_only(preset, scaffold, answers);
         }
         self.input.validate_explicit_file_semantics()
     }
@@ -217,9 +219,10 @@ fn nonempty_answer_string(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
-fn reject_rust_library_input(input: &str) -> Result<()> {
+fn reject_rust_only_input(preset: ScaffoldPreset, input: &str) -> Result<()> {
     bail!(
-        "--preset rust-library cannot be combined with incompatible input `{input}`; remove that input or select a matching preset"
+        "--preset {} cannot be combined with incompatible input `{input}`; remove that input or select a matching preset",
+        preset.as_str()
     )
 }
 

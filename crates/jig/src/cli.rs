@@ -187,6 +187,7 @@ Examples:
   jig presets
   jig init ./my-repo --preset harness-only --no-input --no-vault
   jig init ./my-library --preset rust-library --no-input --no-vault
+  jig init ./my-cli --preset rust-cli --no-input --no-vault
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
 

@@ -109,52 +109,58 @@ impl AnswerInput {
         Ok(())
     }
 
-    fn validate_rust_library(&self, scaffold: &ScaffoldOpts, answers: &AnswerOpts) -> Result<()> {
+    fn validate_rust_only(
+        &self,
+        preset: ScaffoldPreset,
+        scaffold: &ScaffoldOpts,
+        answers: &AnswerOpts,
+    ) -> Result<()> {
         let mut raw = self.raw.clone();
         raw.merge_opts(answers);
+        let reject = |input| reject_rust_only_input(preset, input);
 
         for key in ["repository", "commands", "work", "loop"] {
             if self.shape.contains_top_level_key(key) {
-                return reject_rust_library_input(key);
+                return reject(key);
             }
         }
         if let Some(key) = self.raw.first_extra_top_level_key() {
-            return reject_rust_library_input(&format!("unknown top-level answer key `{key}`"));
+            return reject(&format!("unknown top-level answer key `{key}`"));
         }
         if !scaffold.frontends.is_empty() {
-            return reject_rust_library_input("--frontend");
+            return reject("--frontend");
         }
         if !scaffold.frontend_list.is_empty() {
-            return reject_rust_library_input("--frontends");
+            return reject("--frontends");
         }
         if scaffold.db.is_some() {
-            return reject_rust_library_input("--db");
+            return reject("--db");
         }
         if raw.go_module.as_deref().is_some_and(nonempty_answer_string) {
-            return reject_rust_library_input("--go-module / go_module");
+            return reject("--go-module / go_module");
         }
         if self.shape.contains_key("go_database") {
-            return reject_rust_library_input("go_database");
+            return reject("go_database");
         }
         if raw.backend_language == Some(BackendLanguage::Go) {
-            return reject_rust_library_input("backend_language = \"go\"");
+            return reject("backend_language = \"go\"");
         }
         if raw.harness_footprint == Some(HarnessFootprint::Minimal) {
-            return reject_rust_library_input("harness_footprint = \"minimal\"");
+            return reject("harness_footprint = \"minimal\"");
         }
         if let Some(roots) = raw.rust_crate_roots.as_deref()
             && (roots.len() != 1 || roots[0] != "crates")
         {
-            return reject_rust_library_input("rust_crate_roots");
+            return reject("rust_crate_roots");
         }
         if raw.sqlx_enabled == Some(true) {
-            return reject_rust_library_input("sqlx_enabled = true");
+            return reject("sqlx_enabled = true");
         }
         if raw.schema_dump_enabled == Some(true) {
-            return reject_rust_library_input("schema_dump_enabled = true");
+            return reject("schema_dump_enabled = true");
         }
         if raw.rust_migration_layout.is_some() || self.shape.contains_key("rust_migration_layout") {
-            return reject_rust_library_input("rust_migration_layout");
+            return reject("rust_migration_layout");
         }
 
         for (key, value) in [
@@ -199,7 +205,7 @@ impl AnswerInput {
             ("dev_command", raw.dev_command.as_deref()),
         ] {
             if value.is_some_and(nonempty_answer_string) {
-                return reject_rust_library_input(key);
+                return reject(key);
             }
         }
         if raw
@@ -207,14 +213,14 @@ impl AnswerInput {
             .as_ref()
             .is_some_and(|apps| !apps.is_empty())
         {
-            return reject_rust_library_input("frontend_apps");
+            return reject("frontend_apps");
         }
         if raw
             .frontend_workspace_roots
             .as_ref()
             .is_some_and(|roots| !roots.is_empty())
         {
-            return reject_rust_library_input("frontend_workspace_roots");
+            return reject("frontend_workspace_roots");
         }
         if raw
             .dev
@@ -222,10 +228,10 @@ impl AnswerInput {
             .and_then(|dev| dev.apps.as_ref())
             .is_some_and(|apps| !apps.is_empty())
         {
-            return reject_rust_library_input("dev.apps");
+            return reject("dev.apps");
         }
         if raw.application_contracts_enabled == Some(true) {
-            return reject_rust_library_input("application_contracts_enabled = true");
+            return reject("application_contracts_enabled = true");
         }
         Ok(())
     }

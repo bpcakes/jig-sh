@@ -39,6 +39,7 @@ Examples:
   jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
   jig init /path/to/new-repo --preset harness-only --no-input --no-vault
   jig init /path/to/new-repo --preset rust-library --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-cli --no-input --no-vault
   jig init /path/to/new-repo --preset rust-react
   jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
   jig init /path/to/new-repo --preset go-react --db postgres --frontends web --go-module github.com/acme/new-repo
@@ -89,7 +90,7 @@ pub struct InitOpts {
         long,
         help_heading = "Automation",
         help = "Skip the init wizard and require an explicit, complete project shape instead of prompting",
-        long_help = "Skip the init wizard and require --preset. Application presets require an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file; go-react also requires --go-module. The harness-only preset rejects database and scaffold frontend flags. Non-terminal execution without --defaults follows this strict behavior."
+        long_help = "Skip the init wizard and require --preset. The rust-react and go-react application presets require an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file; go-react also requires --go-module. The harness-only, rust-library, and rust-cli presets need no database or frontend choice and reject those scaffold flags. Non-terminal execution without --defaults follows this strict behavior."
     )]
     pub no_input: bool,
     #[arg(
@@ -324,6 +325,7 @@ pub enum ScaffoldPreset {
     GoReact,
     HarnessOnly,
     RustLibrary,
+    RustCli,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

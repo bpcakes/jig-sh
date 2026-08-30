@@ -61,9 +61,14 @@ fn prepare_init(
             let mut prepared = progress.log_blocked_on_err(
                 PreparedInitAnswers::from_opts_at(&opts.answers, &invocation_cwd).map_err(
                     |error| {
-                        if opts.scaffold.preset == Some(super::ScaffoldPreset::RustLibrary) {
+                        if let Some(
+                            preset @ (super::ScaffoldPreset::RustLibrary
+                            | super::ScaffoldPreset::RustCli),
+                        ) = opts.scaffold.preset
+                        {
                             anyhow::anyhow!(
-                                "Failed to prepare --preset rust-library answers: {error:#}"
+                                "Failed to prepare --preset {} answers: {error:#}",
+                                preset.as_str()
                             )
                         } else {
                             error

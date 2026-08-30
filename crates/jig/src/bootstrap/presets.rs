@@ -117,7 +117,7 @@ impl ScaffoldPreset {
                 frontends: ScaffoldChoiceCapability::UNSUPPORTED,
                 go_module: ScaffoldChoiceCapability::UNSUPPORTED,
             },
-            Self::RustLibrary => ScaffoldPresetCapabilities {
+            Self::RustLibrary | Self::RustCli => ScaffoldPresetCapabilities {
                 has_project_scaffold: true,
                 database: ScaffoldChoiceCapability::UNSUPPORTED,
                 frontends: ScaffoldChoiceCapability::UNSUPPORTED,
@@ -164,6 +164,7 @@ impl ScaffoldPreset {
             Self::GoReact => Some("Go React"),
             Self::HarnessOnly => None,
             Self::RustLibrary => Some("Rust library"),
+            Self::RustCli => Some("Rust CLI"),
         }
     }
 
@@ -173,6 +174,7 @@ impl ScaffoldPreset {
             Self::GoReact => "go-react",
             Self::HarnessOnly => "harness-only",
             Self::RustLibrary => "rust-library",
+            Self::RustCli => "rust-cli",
         }
     }
 
@@ -181,7 +183,7 @@ impl ScaffoldPreset {
             Self::RustReact => Some(BackendLanguage::Rust),
             Self::GoReact => Some(BackendLanguage::Go),
             Self::HarnessOnly => None,
-            Self::RustLibrary => Some(BackendLanguage::Rust),
+            Self::RustLibrary | Self::RustCli => Some(BackendLanguage::Rust),
         }
     }
 
@@ -192,7 +194,7 @@ impl ScaffoldPreset {
                 RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
             ],
             Self::GoReact => &[APPLICATION_BACKEND_DEV_APP_NAME],
-            Self::HarnessOnly | Self::RustLibrary => &[],
+            Self::HarnessOnly | Self::RustLibrary | Self::RustCli => &[],
         }
     }
 
@@ -200,7 +202,7 @@ impl ScaffoldPreset {
         match self {
             Self::RustReact => &["apps", "crates"],
             Self::GoReact => &["cmd", "internal"],
-            Self::HarnessOnly | Self::RustLibrary => &[],
+            Self::HarnessOnly | Self::RustLibrary | Self::RustCli => &[],
         }
     }
 
@@ -323,6 +325,30 @@ impl ScaffoldPreset {
                     "The scaffold does not select a license or enable package publication.",
                 ],
             },
+            Self::RustCli => ScaffoldPresetDescriptor {
+                name: "rust-cli",
+                summary: "Expandable Rust workspace with one command-line binary crate.",
+                defaults: &[
+                    "The virtual workspace uses crates/<repo> as its only initial member.",
+                    "Rust 2024 uses the top-level Jig workspace Rust baseline.",
+                    "The starter binary uses only std and prints its package name and version.",
+                    "SQLx, schema dumps, application contracts, frontends, and dev apps are disabled.",
+                ],
+                layout: &[
+                    "Cargo.toml virtual workspace",
+                    "crates/<repo> command-line binary crate",
+                ],
+                frontend_shorthands: &[],
+                examples: &[
+                    "jig init ./example-cli --preset rust-cli --no-input --no-vault",
+                    "cargo run -p example-cli",
+                ],
+                ownership: "The generated Cargo manifests, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
+                non_goals: &[
+                    "The rust-cli preset does not create a database, frontend, API, dev app, release workflow, library target, or additional crate layers.",
+                    "The scaffold does not select a license, enable package publication, or choose an argument parser or logging framework.",
+                ],
+            },
         }
     }
 }
@@ -340,6 +366,7 @@ mod tests {
                 ScaffoldPreset::GoReact,
                 ScaffoldPreset::HarnessOnly,
                 ScaffoldPreset::RustLibrary,
+                ScaffoldPreset::RustCli,
             ]
         );
 
@@ -376,6 +403,14 @@ mod tests {
                 (false, false),
                 Some("Rust library"),
             ),
+            (
+                ScaffoldPreset::RustCli,
+                true,
+                (false, false),
+                (false, false),
+                (false, false),
+                Some("Rust CLI"),
+            ),
         ];
         for (preset, project, database, frontends, go_module, label) in expected {
             assert_eq!(preset.has_project_scaffold(), project, "{preset:?}");
@@ -392,5 +427,16 @@ mod tests {
                 "{preset:?}"
             );
         }
+        assert_eq!(ScaffoldPreset::RustCli.as_str(), "rust-cli");
+        assert_eq!(
+            ScaffoldPreset::RustCli.generated_backend_language(),
+            Some(BackendLanguage::Rust)
+        );
+        assert!(
+            ScaffoldPreset::RustCli
+                .reserved_backend_dev_app_names()
+                .is_empty()
+        );
+        assert!(ScaffoldPreset::RustCli.reserved_backend_roots().is_empty());
     }
 }

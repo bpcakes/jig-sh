@@ -13,6 +13,11 @@ mod snapshot {
 }
 
 #[cfg(test)]
+pub(super) fn snapshot_scaffold_template_files() -> &'static [EmbeddedScaffoldTemplateFile] {
+    snapshot::EMBEDDED_SCAFFOLD_TEMPLATE_FILES
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         EMBEDDED_SCAFFOLD_TEMPLATE_FILES, EMBEDDED_SCAFFOLD_TEMPLATE_FILES_FROM_SNAPSHOT, snapshot,

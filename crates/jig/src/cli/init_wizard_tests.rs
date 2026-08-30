@@ -310,12 +310,12 @@ fn json_output_does_not_disable_init_wizard() {
     assert!(
         String::from_utf8(output)
             .unwrap()
-            .contains("Scaffold an app?")
+            .contains("Project shape?")
     );
 }
 
 #[test]
-fn numeric_scaffold_aliases_preserve_harness_only_and_append_go() {
+fn numeric_scaffold_aliases_preserve_the_existing_first_three_choices() {
     let mut output = Vec::new();
     assert_eq!(
         prompt_scaffold_choice(&mut Cursor::new("2\n"), &mut output).unwrap(),
@@ -336,7 +336,8 @@ fn numeric_scaffold_aliases_preserve_harness_only_and_append_go() {
 
     let output = String::from_utf8(output).unwrap();
     assert!(
-        output.contains("[1 rust-react / 2 harness-only / 3 go-react]"),
+        output
+            .contains("[1 rust-react / 2 harness-only / 3 go-react / 4 rust-library / 5 rust-cli]"),
         "{output}"
     );
 }
@@ -659,7 +660,17 @@ fn no_input_requires_an_explicit_complete_project_shape() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("--no-input was supplied"));
-    assert!(error.contains("application preset"));
+    for preset in [
+        "rust-react",
+        "harness-only",
+        "go-react",
+        "rust-library",
+        "rust-cli",
+    ] {
+        assert!(error.contains(preset), "missing {preset} from {error}");
+    }
+    assert!(error.contains("rust-react with explicit database and frontend choices"));
+    assert!(error.contains("go-react with explicit database, frontend, and Go module choices"));
 
     let mut missing_db = init_opts(&[
         "jig",

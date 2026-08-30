@@ -291,7 +291,40 @@ fn presets_summary_explains_defaults_and_ownership() {
             .iter()
             .map(|preset| preset["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["rust-react", "go-react", "harness-only", "rust-library"]
+        [
+            "rust-react",
+            "go-react",
+            "harness-only",
+            "rust-library",
+            "rust-cli",
+        ]
+    );
+    assert_eq!(
+        output["presets"][4],
+        json!({
+            "name": "rust-cli",
+            "summary": "Expandable Rust workspace with one command-line binary crate.",
+            "defaults": [
+                "The virtual workspace uses crates/<repo> as its only initial member.",
+                "Rust 2024 uses the top-level Jig workspace Rust baseline.",
+                "The starter binary uses only std and prints its package name and version.",
+                "SQLx, schema dumps, application contracts, frontends, and dev apps are disabled."
+            ],
+            "layout": [
+                "Cargo.toml virtual workspace",
+                "crates/<repo> command-line binary crate"
+            ],
+            "frontend_shorthands": [],
+            "examples": [
+                "jig init ./example-cli --preset rust-cli --no-input --no-vault",
+                "cargo run -p example-cli"
+            ],
+            "ownership": "The generated Cargo manifests, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
+            "non_goals": [
+                "The rust-cli preset does not create a database, frontend, API, dev app, release workflow, library target, or additional crate layers.",
+                "The scaffold does not select a license, enable package publication, or choose an argument parser or logging framework."
+            ]
+        })
     );
 
     let summary = format_presets_human_summary(&output);
@@ -319,6 +352,14 @@ fn presets_summary_explains_defaults_and_ownership() {
     );
     assert!(summary.contains("does not create a database, frontend, API, dev app"));
     assert!(summary.contains("does not select a license or enable package publication"));
+    assert!(summary.contains("rust-cli"));
+    assert!(summary.contains("Expandable Rust workspace with one command-line binary crate."));
+    assert!(summary.contains("crates/<repo> command-line binary crate"));
+    assert!(summary.contains("jig init ./example-cli --preset rust-cli --no-input --no-vault"));
+    assert!(summary.contains("cargo run -p example-cli"));
+    assert!(summary.contains("does not create a database, frontend, API, dev app"));
+    assert!(summary.contains("does not select a license, enable package publication"));
+    assert!(summary.contains("argument parser or logging framework"));
 }
 
 #[test]

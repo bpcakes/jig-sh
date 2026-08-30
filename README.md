@@ -94,7 +94,7 @@ See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/
 
 ## Creating and adopting repos
 
-Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choose a Rust + React starter, a Go + React starter, or a harness-only repo, then choose the supported database and frontends. `--defaults` skips the project-shape questions and fills omitted choices with `--preset rust-react --db none --frontend web`; initial vault setup can still prompt unless `JIG_VAULT_PASSPHRASE` is set or `--no-vault` is passed. `--no-input` is strict automation: pass a complete application shape (including `--go-module` for Go) or the explicit `--preset harness-only`; redirected/non-terminal init is equally strict unless `--defaults` is present. Explicit CLI and answers-file values always win over defaults.
+Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choose `rust-react`, `go-react`, `harness-only`, `rust-library`, or `rust-cli`. The two application presets then ask for their supported database and frontends; the harness-only and Rust-only choices need no application-shape follow-up. `--defaults` skips the project-shape questions and fills omitted choices with `--preset rust-react --db none --frontend web`; initial vault setup can still prompt unless `JIG_VAULT_PASSPHRASE` is set or `--no-vault` is passed. `--no-input` is strict automation: pass a complete application shape (including `--go-module` for Go) or an explicit complete `harness-only`, `rust-library`, or `rust-cli` preset. Redirected/non-terminal init is equally strict unless `--defaults` is present. Explicit CLI and answers-file values always win over defaults. Run `jig presets` for the complete generated layouts and boundaries.
 
 **Greenfield, harness only:**
 
@@ -105,10 +105,27 @@ jig init /path/to/target-repo --preset harness-only --no-input --no-vault
 **Greenfield Rust library:**
 
 ```sh
-jig init /path/to/target-repo --preset rust-library --no-input --no-vault
+jig init /path/to/example-library --preset rust-library --no-input --no-vault
 ```
 
-This creates a virtual Rust 2024 workspace with one documented library crate under `crates/`, using the repository's Rust 1.88 baseline. The crate is non-publishable and the preset adds no database, frontend, API, dev app, parser dependency, or license grant.
+This creates a virtual Rust 2024 workspace whose only member is `crates/example-library`, with its starter source in `src/lib.rs`.
+
+**Greenfield Rust CLI:**
+
+```sh
+jig init /path/to/example-cli --preset rust-cli --no-input --no-vault
+```
+
+This creates the same expandable virtual workspace shape with one binary crate, `src/main.rs`, and an explicit `[[bin]]` target. The replaceable std-only starter prints its package name and version; it does not choose an argument parser or logging framework.
+
+Both Rust-only presets use Jig's top-level Rust 1.88 baseline, start non-publishable and license-neutral, and add no database, SQLx, application contract, frontend, API, dev app, release workflow, or extra crate layer. The generated Cargo manifests, Rust source, crate guide, and scaffold README become project-owned immediately; `jig update` keeps only the Jig harness current. Neither preset configures `scripts/jig dev`. From the generated repository, prepare the lock file and run the documented verification:
+
+```sh
+scripts/jig setup
+scripts/jig check test
+```
+
+Setup creates `Cargo.lock`; commit it for both the library and CLI so locked checks and CI use the same dependency resolution. Use `jig adopt .` instead of `jig init` when the Rust repository already exists. The similar-sounding `rust-workspace` name is not a public preset.
 
 **Greenfield Rust backend + React frontends.** Run `jig presets` to see available presets and their generated layout, then:
 

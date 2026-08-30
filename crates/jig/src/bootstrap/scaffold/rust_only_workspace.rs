@@ -105,7 +105,8 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use super::super::templates::render_scaffold_template;
+    use super::super::embedded_templates::snapshot_scaffold_template_files;
+    use super::super::templates::{render_scaffold_template, render_scaffold_template_from_files};
     use super::super::{AnswerOpts, ScaffoldDb, ScaffoldPreset};
     use super::*;
 
@@ -128,6 +129,43 @@ mod tests {
             .into_iter()
             .map(|file| (file.relative, file.contents))
             .collect()
+    }
+
+    fn snapshot_rendered_by_path(
+        plan: &InitScaffoldPlan,
+        artifact: RustOnlyArtifact,
+    ) -> BTreeMap<String, String> {
+        let project = RustOnlyScaffoldPlan { artifact };
+        let source_template = artifact.source_template();
+        let context = plan.rust_only_workspace_template_context(&project);
+        RUST_ONLY_WORKSPACE_TEMPLATES
+            .iter()
+            .chain(std::iter::once(&source_template))
+            .map(|file| {
+                (
+                    plan.template_output_path(file),
+                    render_scaffold_template_from_files(
+                        snapshot_scaffold_template_files(),
+                        file.template,
+                        &context,
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rust_only_rendered_paths_and_bytes_match_the_checked_in_snapshot() {
+        for artifact in [RustOnlyArtifact::Library, RustOnlyArtifact::Cli] {
+            let plan = plan(artifact, "ExampleProject");
+            assert_eq!(
+                rendered_by_path(&plan),
+                snapshot_rendered_by_path(&plan, artifact),
+                "{} rendered output drifted from the checked-in snapshot",
+                artifact.as_str()
+            );
+        }
     }
 
     #[test]
@@ -336,7 +374,13 @@ mod tests {
                 .iter()
                 .map(|preset| preset.as_str())
                 .collect::<Vec<_>>(),
-            ["rust-react", "go-react", "harness-only", "rust-library"]
+            [
+                "rust-react",
+                "go-react",
+                "harness-only",
+                "rust-library",
+                "rust-cli",
+            ]
         );
     }
 

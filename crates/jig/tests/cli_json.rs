@@ -923,6 +923,9 @@ fn forbidden_rust_library_answers_fail_before_template_vault_and_publication() {
     assert!(!destination.exists());
 }
 
+include!("cli_json_parts/rust_cli.rs");
+include!("cli_json_parts/rust_only_acceptance.rs");
+
 #[test]
 fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
     let repo = tempdir().unwrap();

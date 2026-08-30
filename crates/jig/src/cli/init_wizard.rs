@@ -75,8 +75,13 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
 
 fn prepare_init_answers(opts: &InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
     bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
-        if opts.scaffold.preset == Some(ScaffoldPreset::RustLibrary) {
-            anyhow::anyhow!("Failed to prepare --preset rust-library answers: {error:#}")
+        if let Some(preset @ (ScaffoldPreset::RustLibrary | ScaffoldPreset::RustCli)) =
+            opts.scaffold.preset
+        {
+            anyhow::anyhow!(
+                "Failed to prepare --preset {} answers: {error:#}",
+                preset.as_str()
+            )
         } else {
             error
         }
@@ -173,7 +178,7 @@ fn validate_project_shape_resolved(opts: &InitOpts, non_terminal: bool) -> Resul
     };
     let Some(preset) = opts.scaffold.preset else {
         bail!(
-            "Init cannot prompt because {mode}; pass an application preset with explicit database and frontend choices, pass --preset harness-only, or use --defaults"
+            "Init cannot prompt because {mode}; pass --preset rust-react with explicit database and frontend choices, pass --preset go-react with explicit database, frontend, and Go module choices, pass --preset harness-only, --preset rust-library, or --preset rust-cli, or use --defaults"
         );
     };
     if preset.requires_database_choice() && opts.scaffold.db.is_none() {
@@ -217,6 +222,12 @@ fn guide_project_shape<R: BufRead, W: Write>(
             }
             ScaffoldChoice::HarnessOnly => {
                 opts.scaffold.preset = Some(ScaffoldPreset::HarnessOnly);
+            }
+            ScaffoldChoice::RustLibrary => {
+                opts.scaffold.preset = Some(ScaffoldPreset::RustLibrary);
+            }
+            ScaffoldChoice::RustCli => {
+                opts.scaffold.preset = Some(ScaffoldPreset::RustCli);
             }
         }
     }
@@ -262,6 +273,16 @@ fn print_project_shape_header<W: Write>(
         output,
         "  3. go-react — Go 1.26, chi, Huma, pgx/sqlc/Goose, and React."
     )?;
+    writeln!(
+        output,
+        "  4. rust-library — {}",
+        ScaffoldPreset::RustLibrary.descriptor().summary()
+    )?;
+    writeln!(
+        output,
+        "  5. rust-cli — {}",
+        ScaffoldPreset::RustCli.descriptor().summary()
+    )?;
     Ok(())
 }
 
@@ -270,6 +291,8 @@ enum ScaffoldChoice {
     RustReact,
     HarnessOnly,
     GoReact,
+    RustLibrary,
+    RustCli,
 }
 
 fn prompt_scaffold_choice<R: BufRead, W: Write>(
@@ -280,7 +303,7 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
         let answer = prompt_line(
             input,
             output,
-            "Scaffold an app? [1 rust-react / 2 harness-only / 3 go-react] (1): ",
+            "Project shape? [1 rust-react / 2 harness-only / 3 go-react / 4 rust-library / 5 rust-cli] (1): ",
             "1",
             "project scaffold",
         )?;
@@ -292,9 +315,11 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
                 return Ok(ScaffoldChoice::HarnessOnly);
             }
             "3" | "go" | "go-react" => return Ok(ScaffoldChoice::GoReact),
+            "4" | "rust-library" => return Ok(ScaffoldChoice::RustLibrary),
+            "5" | "rust-cli" => return Ok(ScaffoldChoice::RustCli),
             _ => writeln!(
                 output,
-                "  Enter 1, 2, 3, rust-react, harness-only, or go-react."
+                "  Enter 1, 2, 3, 4, 5, rust-react, harness-only, go-react, rust-library, or rust-cli."
             )?,
         }
     }
@@ -520,3 +545,11 @@ mod tests;
 #[cfg(test)]
 #[path = "init_wizard_rust_library_tests.rs"]
 mod rust_library_tests;
+
+#[cfg(test)]
+#[path = "init_wizard_rust_cli_tests.rs"]
+mod rust_cli_tests;
+
+#[cfg(test)]
+#[path = "init_wizard_discovery_tests.rs"]
+mod discovery_tests;

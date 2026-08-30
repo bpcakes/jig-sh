@@ -472,7 +472,7 @@ fn update_help_explains_modes() {
 }
 
 #[test]
-fn init_help_explains_defaults_strict_input_and_harness_only() {
+fn init_help_explains_defaults_and_the_complete_strict_preset_family() {
     let init_help = rendered_long_help(&["init"]);
 
     assert_help_contains(
@@ -499,9 +499,19 @@ fn init_help_explains_defaults_strict_input_and_harness_only() {
     );
     assert_help_contains(
         &init_help,
-        "Application presets require an explicit --db choice",
+        "The rust-react and go-react application presets require an explicit --db choice",
     );
     assert_help_contains(&init_help, "go-react also requires --go-module");
+    assert_help_contains(
+        &init_help,
+        "The harness-only, rust-library, and rust-cli presets need no database or frontend choice",
+    );
+    assert_help_contains(&init_help, "--preset rust-library --no-input --no-vault");
+    assert_help_contains(&init_help, "--preset rust-cli --no-input --no-vault");
+    assert_help_omits(
+        &init_help,
+        "The harness-only preset rejects database and scaffold frontend flags",
+    );
     assert_help_contains(
         &init_help,
         "Non-terminal execution without --defaults follows this strict behavior",

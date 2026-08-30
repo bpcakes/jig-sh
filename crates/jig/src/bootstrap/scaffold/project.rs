@@ -122,7 +122,6 @@ pub(super) struct RustOnlyScaffoldPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::bootstrap) enum RustOnlyArtifact {
     Library,
-    #[allow(dead_code)]
     Cli,
 }
 
@@ -261,5 +260,25 @@ mod tests {
         assert_eq!(library.identity(), ScaffoldIdentity::RustLibrary);
         assert_eq!(library.database(), ScaffoldDb::None);
         assert!(library.frontends().is_empty());
+
+        let cli = InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustCli),
+                ..ScaffoldOpts::default()
+            },
+            &AnswerOpts::default(),
+            destination.path(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            &cli.project,
+            ScaffoldProjectPlan::RustOnly(RustOnlyScaffoldPlan {
+                artifact: RustOnlyArtifact::Cli
+            })
+        ));
+        assert_eq!(cli.identity(), ScaffoldIdentity::RustCli);
+        assert_eq!(cli.database(), ScaffoldDb::None);
+        assert!(cli.frontends().is_empty());
     }
 }
