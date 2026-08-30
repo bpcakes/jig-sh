@@ -28,10 +28,16 @@ use jig_owned_process::{
     run_owned_process_tree_with_output_policy_and_observer,
 };
 
+mod change_scope;
+mod comparison;
+mod exact_path;
 mod process;
 mod scope;
 mod worktree;
 
+pub(crate) use change_scope::*;
+pub(crate) use comparison::*;
+pub(crate) use exact_path::*;
 use process::*;
 use scope::*;
 use worktree::*;
@@ -251,26 +257,36 @@ pub(crate) fn resolve_git_commit(root: &Path, reference: &str) -> Result<String>
 }
 
 pub(crate) fn resolve_empty_tree_for_unborn_repository(root: &Path) -> Result<Option<String>> {
-    if git_output(
-        root,
-        &["symbolic-ref", "-q", "HEAD"],
-        "git symbolic-ref HEAD",
-    )
-    .is_err()
-    {
+    resolve_empty_tree_for_unborn_repository_inner(root, GitReceiptCollection::Blocking)
+}
+
+fn resolve_empty_tree_for_unborn_repository_inner(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Option<String>> {
+    if !has_unborn_symbolic_head(root, collection)? {
         return Ok(None);
     }
-    Ok(Some(resolve_empty_tree_oid_inner(
-        root,
-        GitReceiptCollection::Blocking,
-    )?))
+    Ok(Some(resolve_empty_tree_oid_inner(root, collection)?))
 }
 
 fn resolve_empty_tree_oid_inner(
     root: &Path,
     collection: GitReceiptCollection<'_>,
 ) -> Result<String> {
-    let output = collection.git_output(root, &["mktree"], "git mktree empty baseline")?;
+    let output = collection.git_bounded_output(
+        root,
+        &[
+            "--no-replace-objects",
+            "hash-object",
+            "-t",
+            "tree",
+            "--stdin",
+        ],
+        "git hash-object empty baseline",
+        MAX_GIT_ERROR_PREVIEW_BYTES as usize,
+        "empty-tree",
+    )?;
     parse_git_object_oid(&output.stdout, "empty tree")
 }
 
@@ -278,7 +294,7 @@ fn parse_git_object_oid(stdout: &[u8], label: &str) -> Result<String> {
     let oid = std::str::from_utf8(stdout)
         .with_context(|| format!("Git {label} object id was not UTF-8"))?
         .trim();
-    if oid.is_empty() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("Git returned an invalid {label} object id");
     }
     Ok(oid.to_ascii_lowercase())
@@ -445,37 +461,6 @@ fn repo_changed_paths_inner(
     })
 }
 
-fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBuf>> {
-    let output = GitReceiptCollection::Blocking.git_changed_path_stdout(
-        root,
-        &[
-            "-c",
-            "diff.ignoreSubmodules=none",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git status --porcelain -z for affected selection",
-    )?;
-    parse_porcelain_status_z(&output).map(|entries| {
-        entries
-            .into_iter()
-            .flat_map(|entry| {
-                let mut paths = vec![entry.path];
-                if let Some(original_path) = entry.original_path {
-                    paths.push(original_path);
-                }
-                paths
-            })
-            .collect()
-    })
-}
-
 fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
     if stdout.is_empty() {
         return Ok(Vec::new());
@@ -510,36 +495,13 @@ fn strict_git_path(path: PathBuf) -> Result<String> {
 /// Returns the deterministic union of paths changed from the merge base of an
 /// explicit Git revision to `HEAD` and paths currently changed in the worktree.
 pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
-    let base_commit = resolve_git_commit(root, base)?;
-    let head_commit = resolve_git_commit(root, "HEAD")?;
-    let range = format!("{base_commit}...{head_commit}");
-    let committed = GitReceiptCollection::Blocking.git_changed_path_stdout(
+    let comparison = resolve_comparison_v1(
         root,
-        &[
-            "-c",
-            "diff.ignoreSubmodules=none",
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            "--no-ext-diff",
-            "--ignore-submodules=none",
-            &range,
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git diff for affected selection",
+        ComparisonRequestV1::MergeBaseRef {
+            requested_ref: base.to_owned(),
+        },
     )?;
-    let mut paths = parse_name_only_z(&committed)?;
-    paths.extend(repo_affected_worktree_changed_path_buffers(root)?);
-    let mut normalized = paths
-        .into_iter()
-        .map(strict_git_path)
-        .collect::<Result<Vec<_>>>()?;
-    normalized.sort();
-    normalized.dedup();
-    Ok(normalized)
+    capture_affected_paths_v1(root, &comparison)
 }
 
 fn ignored_dotenv_paths(root: &Path) -> Result<Vec<PathBuf>> {
@@ -631,9 +593,9 @@ fn repository_source_snapshot_inner(
     collection: GitReceiptCollection<'_>,
 ) -> Result<RepositorySourceSnapshot> {
     collection.ensure_active()?;
-    let head_commit = match resolve_git_commit(root, "HEAD") {
+    let head_commit = match resolve_git_commit_inner(root, "HEAD", collection) {
         Ok(commit) => Some(commit),
-        Err(error) => match resolve_empty_tree_for_unborn_repository(root)? {
+        Err(error) => match resolve_empty_tree_for_unborn_repository_inner(root, collection)? {
             Some(_) => None,
             None => return Err(error),
         },
@@ -796,6 +758,17 @@ impl GitReceiptCollection<'_> {
 
     fn git_changed_path_stdout(self, root: &Path, args: &[&str], label: &str) -> Result<Vec<u8>> {
         git_changed_path_stdout(root, args, label, self)
+    }
+
+    fn git_bounded_output(
+        self,
+        root: &Path,
+        args: &[&str],
+        label: &str,
+        limit: usize,
+        proof_kind: &str,
+    ) -> Result<Output> {
+        git_bounded_proof_output(root, args, label, limit, proof_kind, self)
     }
 
     fn git_hash_file(self, root: &Path, full_path: &Path) -> Result<String> {

@@ -1309,6 +1309,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-file-budget"
+version = "0.2.0"
+dependencies = [
+ "globset",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+]
+
+[[package]]
 name = "jig-go"
 version = "0.2.0"
 dependencies = [

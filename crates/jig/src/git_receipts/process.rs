@@ -82,10 +82,21 @@ pub(super) fn git_bounded_proof_stdout(
     proof_kind: &str,
     collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<u8>> {
+    Ok(git_bounded_proof_output(root, args, label, limit, proof_kind, collection)?.stdout)
+}
+
+pub(super) fn git_bounded_proof_output(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+    limit: usize,
+    proof_kind: &str,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Output> {
     collection.ensure_active()?;
     let mut command = Command::new("git");
     command.current_dir(root).args(args);
-    git_bounded_proof_command_stdout(root, &mut command, label, limit, proof_kind, collection)
+    git_bounded_proof_command_output(root, &mut command, label, limit, proof_kind, collection)
 }
 
 pub(super) fn git_bounded_proof_command_stdout(
@@ -96,6 +107,20 @@ pub(super) fn git_bounded_proof_command_stdout(
     proof_kind: &str,
     collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<u8>> {
+    Ok(
+        git_bounded_proof_command_output(root, command, label, limit, proof_kind, collection)?
+            .stdout,
+    )
+}
+
+pub(super) fn git_bounded_proof_command_output(
+    root: &Path,
+    command: &mut Command,
+    label: &str,
+    limit: usize,
+    proof_kind: &str,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Output> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -157,7 +182,7 @@ pub(super) fn git_bounded_proof_command_stdout(
         )
     })?;
     collection.ensure_active()?;
-    Ok(output.stdout)
+    Ok(output)
 }
 
 pub(super) struct GitReceiptProcessObserver<'a> {
@@ -382,4 +407,5 @@ pub(super) fn configure_read_only_git_environment(command: &mut Command) {
     // `git status` must not refresh stat data by taking an optional index lock.
     scrub_known_repository_git_environment(command);
     command.env("GIT_OPTIONAL_LOCKS", "0");
+    command.env("LC_ALL", "C");
 }

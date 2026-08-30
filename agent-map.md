@@ -12,6 +12,7 @@ Fast jump index for agent-facing guidance in this repository.
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
 - [crates/jig-dev-proxy](./crates/jig-dev-proxy/AGENTS.md)
 - [crates/jig-features](./crates/jig-features/AGENTS.md)
+- [crates/jig-file-budget](./crates/jig-file-budget/AGENTS.md)
 - [crates/jig-go](./crates/jig-go/AGENTS.md)
 - [crates/jig-owned-process](./crates/jig-owned-process/AGENTS.md)
 - [crates/jig-rust](./crates/jig-rust/AGENTS.md)

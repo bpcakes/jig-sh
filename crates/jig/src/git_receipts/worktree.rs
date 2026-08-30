@@ -113,7 +113,7 @@ pub(super) fn append_length_prefixed(output: &mut Vec<u8>, field: &[u8]) {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct PorcelainStatusEntry {
-    status: String,
+    pub(super) status: String,
     pub(super) path: PathBuf,
     pub(super) original_path: Option<PathBuf>,
 }
@@ -147,6 +147,7 @@ pub(super) fn ensure_no_whole_worktree_staged_deletion_replacements(
 }
 
 pub(super) fn parse_porcelain_status_z(stdout: &[u8]) -> Result<Vec<PorcelainStatusEntry>> {
+    require_nul_terminated(stdout, "git status --porcelain -z")?;
     let mut fields = stdout.split(|byte| *byte == 0).peekable();
     let mut entries = Vec::new();
     while let Some(field) = fields.next() {

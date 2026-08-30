@@ -147,6 +147,36 @@ fn affected_direct_api_and_web_inputs_remain_component_scoped() {
 }
 
 #[test]
+fn target_input_matcher_retains_target_local_ownership_without_changing_legacy_selection() {
+    let catalog = affected_fixture();
+    let matcher = super::target_matcher::TargetInputMatcherV1::new(&catalog).unwrap();
+    let matches = matcher.matching_paths([
+        "api/main.go".to_string(),
+        "web/src/main.ts".to_string(),
+        "packages/shared/value.txt".to_string(),
+    ]);
+
+    assert_eq!(
+        matches
+            .into_iter()
+            .map(|(target, paths)| (target.to_string(), paths.into_iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>(),
+        [
+            ("api:test".to_string(), vec!["api/main.go".to_string()]),
+            (
+                "shared:test".to_string(),
+                vec!["packages/shared/value.txt".to_string()],
+            ),
+            ("web:test".to_string(), vec!["web/src/main.ts".to_string()],),
+        ]
+    );
+    assert_eq!(
+        target_names(&selected(&catalog, &["packages/shared/value.txt"])),
+        ["api:test", "shared:test", "web:test"]
+    );
+}
+
+#[test]
 fn affected_shared_input_propagates_only_by_component_policy() {
     let catalog = affected_fixture();
     let selection = selected(&catalog, &["packages/shared/value.txt"]);

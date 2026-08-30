@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 
 use super::RepositoryCatalog;
 
+use self::target_matcher::TargetInputMatcherV1;
+
+mod target_matcher;
+
 pub(super) const MAX_SELECTION_REASONS: usize = 100;
 const SELECTION_REASON_ITEM_DIGEST_DOMAIN: &[u8] = b"jig-selection-reason-item-v2\0";
 
@@ -149,7 +153,7 @@ pub(super) fn select_affected_targets(
     observed_input_paths: &[String],
 ) -> Result<TargetSelection> {
     let mut paths = normalized_changed_paths(changed_paths)?;
-    let matchers = component_input_matchers(catalog)?;
+    let matchers = TargetInputMatcherV1::new(catalog)?;
     // Ignored dotenv files have no committed baseline, so their presence is
     // not a Git change. Keep a presence-only observation only when checked-in
     // action policy explicitly declares it as an input; never let it become an
@@ -157,11 +161,7 @@ pub(super) fn select_affected_targets(
     paths.extend(
         normalized_changed_paths(observed_input_paths)?
             .into_iter()
-            .filter(|path| {
-                matchers
-                    .values()
-                    .any(|inputs| inputs.iter().any(|input| input.is_match(path)))
-            }),
+            .filter(|path| matchers.matches_any(path)),
     );
     let ignored_matchers = catalog
         .affected_ignore()
@@ -170,9 +170,7 @@ pub(super) fn select_affected_targets(
         .collect::<Result<Vec<_>>>()?;
     paths.retain(|path| {
         REPOSITORY_AUTHORITY_INPUTS.contains(&path.as_str())
-            || matchers
-                .values()
-                .any(|inputs| inputs.iter().any(|input| input.is_match(path)))
+            || matchers.matches_any(path)
             || !ignored_matchers
                 .iter()
                 .any(|matcher| matcher.is_match(path))
@@ -344,36 +342,18 @@ fn validate_git_changed_path(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn component_input_matchers(
-    catalog: &RepositoryCatalog,
-) -> Result<BTreeMap<ComponentId, Vec<GlobMatcher>>> {
-    let mut matchers = catalog
-        .components()
-        .map(|component| (component.id.clone(), Vec::new()))
-        .collect::<BTreeMap<_, _>>();
-    for action in catalog.actions() {
-        let component_matchers = matchers
-            .get_mut(&action.target.component)
-            .expect("catalog actions must reference defined components");
-        for input in &action.inputs {
-            component_matchers.push(compile_input(&action.target, input)?);
-        }
-    }
-    Ok(matchers)
-}
-
 fn directly_affected_components(
     catalog: &RepositoryCatalog,
-    matchers: &BTreeMap<ComponentId, Vec<GlobMatcher>>,
+    matchers: &TargetInputMatcherV1,
     paths: &BTreeSet<String>,
 ) -> (BTreeMap<ComponentId, BTreeSet<String>>, BTreeSet<String>) {
     let mut direct = BTreeMap::<ComponentId, BTreeSet<String>>::new();
     let mut unclaimed = BTreeSet::new();
     for path in paths {
         let matched_components = matchers
-            .iter()
-            .filter(|(_, patterns)| patterns.iter().any(|pattern| pattern.is_match(path)))
-            .map(|(component, _)| component.clone())
+            .matching_targets(path)
+            .into_iter()
+            .map(|target| target.component)
             .collect::<BTreeSet<_>>();
         let matched_components = if matched_components.is_empty() {
             most_specific_component_roots(catalog, matchers, path)
@@ -392,7 +372,7 @@ fn directly_affected_components(
 
 fn most_specific_component_roots(
     catalog: &RepositoryCatalog,
-    matchers: &BTreeMap<ComponentId, Vec<GlobMatcher>>,
+    matchers: &TargetInputMatcherV1,
     path: &str,
 ) -> BTreeSet<ComponentId> {
     let mut matches = Vec::new();
@@ -401,11 +381,7 @@ fn most_specific_component_roots(
         if !root_contains(&component.root, path) {
             continue;
         }
-        if component.root == "."
-            && matchers
-                .get(&component.id)
-                .is_some_and(|patterns| !patterns.is_empty())
-        {
+        if component.root == "." && matchers.component_has_inputs(&component.id) {
             continue;
         }
         let depth = root_depth(&component.root);
