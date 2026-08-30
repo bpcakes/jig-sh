@@ -58,7 +58,7 @@ impl ScheduleOccurrence {
         )
     }
 
-    fn has_retained_worktree(&self) -> bool {
+    pub(super) fn has_retained_worktree(&self) -> bool {
         self.worktree
             .as_deref()
             .is_some_and(|worktree| Path::new(worktree).exists())
@@ -320,11 +320,13 @@ fn run_occurrence_renewal_with_wait(
                 return Ok(());
             }
             Err(RecvTimeoutError::Timeout) => {
-                if let Some(error) = pending_error.take()
+                if pending_error.is_some()
                     && renewal_failure_window_reached(now(), claim_expires_at_ms, interval)
                 {
                     renewal_failed.store(true, Ordering::Release);
-                    return Err(error);
+                    return Err(pending_error
+                        .take()
+                        .expect("a pending renewal error was checked above"));
                 }
                 match renew() {
                     Ok(renewed_expires_at_ms) => {
@@ -339,7 +341,7 @@ fn run_occurrence_renewal_with_wait(
                             renewal_failed.store(true, Ordering::Release);
                             return Err(error);
                         };
-                        pending_error = Some(error);
+                        pending_error.get_or_insert(error);
                         wait = retry_delay;
                     }
                 }

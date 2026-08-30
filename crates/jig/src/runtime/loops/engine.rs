@@ -148,6 +148,10 @@ impl ScheduledTick {
         }
     }
 
+    pub(super) fn workflow_was_unexecuted(&self) -> bool {
+        self.completion().unexecuted
+    }
+
     pub(super) fn post_work_error(&self) -> Option<&str> {
         match self {
             Self::Reported { .. } => None,
@@ -234,6 +238,12 @@ fn tick_with_execution(
     execution: TickExecution,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<ScheduledTick, UnexecutedTickError> {
+    if observer.cancelled() {
+        return Err(anyhow::anyhow!(
+            "Loop execution was cancelled before workflow execution started"
+        )
+        .into());
+    }
     let workflow = resolve_workflow(
         ctx,
         request.workflow.as_deref(),
@@ -302,6 +312,16 @@ fn tick_with_execution(
                 if let Err(error) = released {
                     let error = format!("{error:#}");
                     release_warning = Some(error.clone());
+                    if !completion.unexecuted {
+                        completion.outcome = WorkflowOutcome::NeedsAttention;
+                        let ownership_error = format!(
+                            "Workflow lease ownership was lost before completion could be finalized: {error}"
+                        );
+                        match &mut completion.error {
+                            Some(existing) => existing.push_str(&format!("; {ownership_error}")),
+                            None => completion.error = Some(ownership_error),
+                        }
+                    }
                     if tick_error.is_none() {
                         tick_error = Some(format!(
                             "Loop workflow lease renewal or release failed: {error}"
@@ -478,6 +498,15 @@ pub(super) fn status_with_cancellation(
     request: LoopStatusRequest,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
+    status_at_with_cancellation(ctx, request, cancelled, now_ms())
+}
+
+pub(super) fn status_at_with_cancellation(
+    ctx: &RepoContext,
+    request: LoopStatusRequest,
+    cancelled: &dyn Fn() -> bool,
+    checked_at_ms: u64,
+) -> Result<Value> {
     ensure_status_active(cancelled)?;
     let resolved_workflows = if let Some(workflow) = request.workflow.as_deref() {
         vec![resolve_workflow(
@@ -507,27 +536,39 @@ pub(super) fn status_with_cancellation(
         occurrences.retain(|record| record.workflow_id == *workflow_id);
     }
     ensure_status_active(cancelled)?;
-    let checked_at_ms = now_ms();
+    let mut schedule_state_errors = Vec::new();
     let workflows = resolved_workflows
         .into_iter()
         .map(|workflow| {
             let mut value = workflow.value();
             if let Some(schedule) = workflow.schedule.as_ref() {
                 let latest = OccurrenceStore::latest_for_workflow(&occurrences, &workflow.id);
-                let window = schedule.window(
+                match schedule.window(
                     checked_at_ms,
                     latest.as_ref().map(|record| record.scheduled_at_ms),
-                )?;
-                value["schedule_state"] = json!({
-                    "due_at_ms": window.due_at_ms,
-                    "next_at_ms": window.next_at_ms,
-                    "last_scheduled_at_ms": latest.as_ref().map(|record| record.scheduled_at_ms),
-                    "last_status": latest.as_ref().map(|record| record.status.as_str()),
-                });
+                ) {
+                    Ok(window) => {
+                        value["schedule_state"] = json!({
+                            "due_at_ms": window.due_at_ms,
+                            "next_at_ms": window.next_at_ms,
+                            "last_scheduled_at_ms": latest.as_ref().map(|record| record.scheduled_at_ms),
+                            "last_status": latest.as_ref().map(|record| record.status.as_str()),
+                        });
+                    }
+                    Err(error) => {
+                        let error = format!("Failed to evaluate workflow schedule: {error:#}");
+                        value["schedule_state_error"] = error.clone().into();
+                        schedule_state_errors.push(json!({
+                            "kind": "workflow_schedule",
+                            "workflow_id": workflow.id,
+                            "error": error,
+                        }));
+                    }
+                }
             }
-            Ok(value)
+            value
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     let scheduled_needs_attention = occurrences
         .iter()
         .filter(|record| record.requires_attention_at(checked_at_ms))
@@ -535,13 +576,15 @@ pub(super) fn status_with_cancellation(
         .collect::<Vec<_>>();
 
     Ok(json!({
-        "ok": true,
+        "ok": schedule_state_errors.is_empty(),
         "command": "loop status",
         "workflows": workflows,
         "leases": leases,
         "attempts": attempts,
         "scheduled_occurrences": occurrences,
         "waiting_attempts": attempt_sections.waiting,
+        "state_error_count": schedule_state_errors.len(),
+        "state_errors": schedule_state_errors,
         "needs_attention": {
             "exhausted_attempts": attempt_sections.needs_attention,
             "scheduled_occurrences": scheduled_needs_attention,

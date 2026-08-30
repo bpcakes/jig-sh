@@ -5,6 +5,8 @@ use crate::runtime::loops::state::{LOOP_CACHE_DIR, LOOP_RUNTIME_DIR, with_exclus
 
 #[path = "tests/pruning.rs"]
 mod pruning;
+#[path = "tests/renewal_diagnostics.rs"]
+mod renewal_diagnostics;
 #[path = "tests/schema_migration.rs"]
 mod schema_migration;
 
@@ -576,21 +578,6 @@ fn occurrence_renewal_retries_transient_failure_before_claim_expiry() {
         [Duration::from_millis(300), Duration::from_millis(75)]
     );
     assert!(!failed.load(Ordering::Acquire));
-}
-
-#[test]
-fn occurrence_renewal_retry_delay_preserves_the_finish_window() {
-    let interval = Duration::from_millis(300);
-
-    assert_eq!(
-        renewal_retry_delay(300, 900, interval),
-        Some(Duration::from_millis(75))
-    );
-    assert_eq!(
-        renewal_retry_delay(599, 900, interval),
-        Some(Duration::from_millis(1))
-    );
-    assert_eq!(renewal_retry_delay(600, 900, interval), None);
 }
 
 #[test]

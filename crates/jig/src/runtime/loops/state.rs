@@ -84,14 +84,33 @@ impl LeaseStore {
     }
 
     pub(super) fn release(&mut self, key: &str, owner: &str) -> Result<()> {
+        self.release_with_clock(key, owner, now_ms)
+    }
+
+    #[cfg(test)]
+    fn release_at(&mut self, key: &str, owner: &str, now: u64) -> Result<()> {
+        self.release_with_clock(key, owner, || now)
+    }
+
+    fn release_with_clock(
+        &mut self,
+        key: &str,
+        owner: &str,
+        now: impl FnOnce() -> u64,
+    ) -> Result<()> {
         self.with_locked(|store| {
-            if store
+            let now = now();
+            let lease = store
                 .leases
                 .get(key)
-                .is_some_and(|lease| lease.owner == owner)
-            {
-                store.leases.remove(key);
+                .ok_or_else(|| anyhow!("Loop lease is no longer held: {key}"))?;
+            if lease.owner != owner {
+                return Err(anyhow!("Loop lease '{key}' is owned by another worker"));
             }
+            if lease.expires_at_ms <= now {
+                return Err(anyhow!("Loop lease expired before release: {key}"));
+            }
+            store.leases.remove(key);
             Ok(())
         })
     }
@@ -126,8 +145,10 @@ impl LeaseStore {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
     }
 
-    fn recover_unparsable(&self) -> Result<()> {
-        recover_unparsable_json_cache::<LeaseFile>(&self.dir, &self.lock_path, &self.path)
+    fn validate_parseable(&self) -> Result<()> {
+        with_exclusive_file_lock(&self.dir, &self.lock_path, || {
+            read_json_or_default::<LeaseFile>(&self.path).map(|_| ())
+        })
     }
 
     fn renew_at(
@@ -449,14 +470,23 @@ impl AttemptStore {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
     }
 
-    fn recover_unparsable(&self) -> Result<()> {
+    fn recover_unparsable(&self) -> Result<bool> {
         recover_unparsable_json_cache::<AttemptFile>(&self.dir, &self.lock_path, &self.path)
     }
 }
 
-pub(super) fn recover_unparsable_disposable_state(ctx: &RepoContext) -> Result<()> {
-    LeaseStore::new(ctx).recover_unparsable()?;
-    AttemptStore::new(ctx).recover_unparsable()
+#[derive(Debug)]
+pub(super) struct DisposableStateRecovery {
+    pub(super) attempt_cache_reset: bool,
+}
+
+pub(super) fn prepare_disposable_state_for_dispatch(
+    ctx: &RepoContext,
+) -> Result<DisposableStateRecovery> {
+    LeaseStore::new(ctx).validate_parseable()?;
+    Ok(DisposableStateRecovery {
+        attempt_cache_reset: AttemptStore::new(ctx).recover_unparsable()?,
+    })
 }
 
 pub(super) fn with_json_cache_lock<T, S>(
@@ -476,15 +506,16 @@ where
     })
 }
 
-fn recover_unparsable_json_cache<T>(dir: &Path, lock_path: &Path, data_path: &Path) -> Result<()>
+fn recover_unparsable_json_cache<T>(dir: &Path, lock_path: &Path, data_path: &Path) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
 {
     with_exclusive_file_lock(dir, lock_path, || {
         match read_json_or_default::<T>(data_path) {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(false),
             Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
-                write_json(data_path, &T::default())
+                write_json(data_path, &T::default())?;
+                Ok(true)
             }
             Err(error) => Err(error),
         }
@@ -653,31 +684,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_preflight_recovers_unparsable_disposable_caches() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let cache_dir = temp.path().join(LOOP_CACHE_DIR);
-        fs::create_dir_all(&cache_dir).unwrap();
-        fs::write(cache_dir.join("leases.json"), b"{").unwrap();
-        fs::write(cache_dir.join("attempts.json"), b"{").unwrap();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-        recover_unparsable_disposable_state(&ctx).unwrap();
-
-        let mut leases = LeaseStore::new(&ctx);
-        assert!(matches!(
-            leases.acquire("workflow:ExampleProject", 60).unwrap(),
-            LeaseAcquire::Acquired(_)
-        ));
-        let mut attempts = AttemptStore::new(&ctx);
-        assert!(attempts.snapshot().unwrap().is_empty());
-
-        serde_json::from_slice::<Value>(&fs::read(cache_dir.join("leases.json")).unwrap()).unwrap();
-        serde_json::from_slice::<Value>(&fs::read(cache_dir.join("attempts.json")).unwrap())
-            .unwrap();
-    }
-
-    #[test]
     fn lease_guard_renews_until_finished_and_then_releases() {
         let temp = tempdir().unwrap();
         write_loop_fixture_repo(temp.path());
@@ -756,40 +762,13 @@ mod tests {
         assert!(error.contains("Loop lease is no longer held"), "{error}");
     }
 
-    #[test]
-    fn lease_renewal_is_owner_checked_and_cannot_revive_expired_lease() {
-        let temp = tempdir().unwrap();
-        write_loop_fixture_repo(temp.path());
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut store = LeaseStore::new(&ctx);
-        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:owner", 60).unwrap() else {
-            panic!("expected lease acquisition");
-        };
-
-        assert!(
-            store
-                .renew_at(
-                    "workflow:owner",
-                    "another-owner",
-                    60,
-                    lease.acquired_at_ms + 1
-                )
-                .unwrap_err()
-                .to_string()
-                .contains("owned by another worker")
-        );
-        assert!(
-            store
-                .renew_at("workflow:owner", &lease.owner, 60, lease.expires_at_ms)
-                .unwrap_err()
-                .to_string()
-                .contains("expired before renewal")
-        );
-    }
-
     fn write_loop_fixture_repo(root: &Path) {
         crate::test_env::TestRepoBuilder::new(root)
             .required_commands(Vec::<String>::new())
             .write();
     }
 }
+
+#[cfg(test)]
+#[path = "state/review_tests.rs"]
+mod review_tests;

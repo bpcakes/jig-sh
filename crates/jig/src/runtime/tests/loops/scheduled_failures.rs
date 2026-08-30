@@ -53,6 +53,7 @@ printf 'task complete\n'
 
     let occurrence = &output["actions"][0]["occurrence"];
     assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(occurrence["status"], "needs_attention", "{output:#}");
     assert!(occurrence["worker_receipt_id"].is_string(), "{output:#}");
     let worktree = occurrence["worktree"]
         .as_str()

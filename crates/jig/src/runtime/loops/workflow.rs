@@ -55,6 +55,7 @@ pub(super) enum WorkflowOutcome {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct WorkflowCompletion {
     pub(super) outcome: WorkflowOutcome,
+    pub(super) unexecuted: bool,
     pub(super) worker_receipt_id: Option<String>,
     pub(super) worktree: Option<String>,
     pub(super) error: Option<String>,
@@ -75,6 +76,7 @@ impl WorkflowCompletion {
         let evidence = completion_evidence_action(actions, outcome);
         Self {
             outcome,
+            unexecuted: false,
             worker_receipt_id: evidence
                 .and_then(|action| action["worker_receipt_id"].as_str())
                 .map(str::to_string),
@@ -449,6 +451,7 @@ mod tests {
             completion,
             WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
+                unexecuted: false,
                 worker_receipt_id: Some("receipt_failed".into()),
                 worktree: None,
                 error: Some("worker failed".into()),

@@ -113,6 +113,7 @@ pub(super) fn codex_task_tick(
                 } else {
                     WorkflowOutcome::Failed
                 },
+                unexecuted: false,
                 worker_receipt_id: Some(worker.worker_receipt_id().to_owned()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -135,7 +136,14 @@ pub(super) fn codex_task_tick(
             before_start,
             worker_receipt_id,
         }) => {
-            let checkout = checkout.finish(TaskOutcome::Failed, ctx);
+            let checkout = checkout.finish(
+                if before_start {
+                    TaskOutcome::Succeeded
+                } else {
+                    TaskOutcome::Failed
+                },
+                ctx,
+            );
             let timing = if before_start {
                 " before the worker started"
             } else {
@@ -147,6 +155,7 @@ pub(super) fn codex_task_tick(
             );
             let completion = WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
+                unexecuted: before_start,
                 worker_receipt_id: Some(worker_receipt_id.clone()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -172,6 +181,7 @@ pub(super) fn codex_task_tick(
             let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
             let completion = WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
+                unexecuted: false,
                 worker_receipt_id: worker_receipt_id.clone(),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),

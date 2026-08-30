@@ -141,9 +141,10 @@ timezone = "UTC"
     )
     .unwrap();
 
-    assert_eq!(output["ok"], true, "{output:#}");
-    assert_eq!(output["status"], "acted", "{output:#}");
-    assert_eq!(output["state_error_count"], 0, "{output:#}");
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(output["state_error_count"], 1, "{output:#}");
+    assert_eq!(output["state_errors"][0]["kind"], "attempts_reset");
     assert!(output["receipt_id"].as_str().is_some(), "{output:#}");
     assert_eq!(output["actions"][0]["status"], "succeeded", "{output:#}");
     serde_json::from_slice::<Value>(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
@@ -184,7 +185,8 @@ timezone = "UTC"
     )
     .unwrap();
 
-    assert_eq!(output["state_error_count"], 0, "{output:#}");
+    assert_eq!(output["state_error_count"], 1, "{output:#}");
+    assert_eq!(output["state_errors"][0]["kind"], "attempts_reset");
     assert!(
         output["actions"]
             .as_array()
@@ -210,13 +212,49 @@ fn dispatch_recovers_unparsable_cache_when_no_work_is_due() {
     )
     .unwrap();
 
-    assert_eq!(output["ok"], true, "{output:#}");
-    assert_eq!(output["status"], "idle", "{output:#}");
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(output["failed_count"], 0, "{output:#}");
-    assert_eq!(output["state_error_count"], 0, "{output:#}");
+    assert_eq!(output["state_error_count"], 1, "{output:#}");
+    assert_eq!(output["state_errors"][0]["kind"], "attempts_reset");
     assert!(output["actions"].as_array().unwrap().is_empty(), "{output:#}");
     assert!(output["receipt_id"].is_string(), "{output:#}");
     serde_json::from_slice::<Value>(&fs::read(cache.join("attempts.json")).unwrap()).unwrap();
+}
+
+#[test]
+fn dispatch_does_not_reset_a_corrupt_live_lease_cache_or_claim_an_occurrence() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+"#
+        ),
+    )
+    .unwrap();
+    let cache = temp.path().join(".agent/.cache/loop");
+    fs::create_dir_all(&cache).unwrap();
+    fs::write(cache.join("leases.json"), b"not JSON").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("leases.json"), "{error}");
+    assert_eq!(fs::read(cache.join("leases.json")).unwrap(), b"not JSON");
+    assert!(!temp.path().join(".agent/runtime/loop/schedule.json").exists());
 }
 
 #[test]

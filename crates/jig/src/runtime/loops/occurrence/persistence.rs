@@ -210,14 +210,19 @@ impl SchedulePersistence {
     }
 
     fn write_legacy_marker(&self) -> Result<()> {
-        write_json_durable(
-            &self.legacy_path,
-            &ScheduleFile {
-                schema_version: SCHEDULE_SCHEMA_VERSION,
-                migrated_to: Some(SCHEDULE_STATE_PATH.to_string()),
-                occurrences: BTreeMap::new(),
-            },
-        )
+        let marker = ScheduleFile {
+            schema_version: SCHEDULE_SCHEMA_VERSION,
+            migrated_to: Some(SCHEDULE_STATE_PATH.to_string()),
+            occurrences: BTreeMap::new(),
+        };
+        if let Some(mut existing) =
+            read_json_if_exists_with_cancellation::<ScheduleFile>(&self.legacy_path, &|| false)?
+            && legacy_is_migration_marker(&mut existing, &self.legacy_path)?
+            && existing == marker
+        {
+            return Ok(());
+        }
+        write_json_durable(&self.legacy_path, &marker)
     }
 
     fn durable_state_expected(&self) -> Result<bool> {
@@ -500,6 +505,26 @@ mod tests {
         assert_eq!(
             steps.into_inner(),
             ["sync_file", "rename", "sync_directory"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unchanged_legacy_marker_is_not_rewritten() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let persistence = SchedulePersistence::new(&ctx);
+        persistence.with_locked(|_| Ok(())).unwrap();
+        let original_inode = fs::metadata(&persistence.legacy_path).unwrap().ino();
+
+        persistence.read_locked(|_| Ok(())).unwrap();
+
+        assert_eq!(
+            fs::metadata(&persistence.legacy_path).unwrap().ino(),
+            original_inode
         );
     }
 

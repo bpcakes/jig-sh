@@ -20,6 +20,9 @@ use crate::command::LoopStatusRequest;
 use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
+#[path = "tests/review_regressions.rs"]
+mod review_regressions;
+
 #[test]
 fn schedule_window_coalesces_missed_occurrences() {
     let schedule = ScheduleSpec::parse("0 2 * * *", Some("UTC")).unwrap();

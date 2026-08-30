@@ -16,10 +16,10 @@ use super::occurrence::{
     OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStatus, OccurrenceStore,
     ScheduleOccurrence,
 };
-use super::state::recover_unparsable_disposable_state;
+use super::state::prepare_disposable_state_for_dispatch;
 use super::workflow::{
-    ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, loop_status_is_success,
-    resolve_workflow,
+    CodexTaskCheckout, ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows,
+    loop_status_is_success, resolve_workflow,
 };
 
 mod attention;
@@ -50,12 +50,18 @@ fn dispatch_due_at_with_observer(
 ) -> Result<Value> {
     let started = now_ms();
     let workflows = list_workflows(ctx)?;
-    recover_unparsable_disposable_state(ctx)?;
+    let disposable_recovery = prepare_disposable_state_for_dispatch(ctx)?;
     let mut occurrences = OccurrenceStore::new(ctx);
     let reconciled = occurrences.reconcile_stale()?;
     let known_occurrences = occurrences.snapshot()?;
     let mut actions = Vec::new();
     let mut summary = DispatchSummary::default();
+    if disposable_recovery.attempt_cache_reset {
+        summary.include_state_errors(vec![json!({
+            "kind": "attempts_reset",
+            "error": "Malformed disposable loop attempt state was reset before dispatch",
+        })]);
+    }
 
     for workflow in workflows {
         let step = dispatch_workflow(
@@ -173,6 +179,20 @@ fn dispatch_workflow(
         due_count: 1,
         ..DispatchStep::default()
     };
+    if let Some(retained) = blocking_retained_task_checkout(known_occurrences, workflow) {
+        step.skipped_count = 1;
+        step.failed_count = 1;
+        step.action = Some(json!({
+            "workflow_id": workflow.id,
+            "occurrence": retained,
+            "status": "failed",
+            "reason": "retained_worktree_requires_cleanup",
+            "retryable": true,
+            "next_at_ms": window.next_at_ms,
+            "error": "A retained task worktree must be removed before this workflow can run another scheduled occurrence",
+        }));
+        return step;
+    }
     let claim = match occurrences.claim(&workflow.id, due_at_ms, workflow.lease_ttl_seconds) {
         Ok(claim) => claim,
         Err(error) => {
@@ -225,13 +245,37 @@ fn dispatch_workflow(
                 guard,
                 workflow,
                 &claim,
-                window.next_at_ms,
-                format!("{error:#}"),
+                UnexecutedDispatchDetails {
+                    next_at_ms: window.next_at_ms,
+                    reason: "pre_execution_error",
+                    tick: None,
+                    error: format!("{error:#}"),
+                },
             );
         }
     };
-    step.executed_count = 1;
     step.state_errors = scheduled_tick_state_errors(&tick, &workflow.id, &claim.occurrence_id);
+    if tick.workflow_was_unexecuted() {
+        let error = tick
+            .completion()
+            .error
+            .clone()
+            .unwrap_or_else(|| "Workflow was cancelled before execution started".into());
+        let tick = tick_value(&tick);
+        return abandon_unexecuted_tick_failure(
+            step,
+            guard,
+            workflow,
+            &claim,
+            UnexecutedDispatchDetails {
+                next_at_ms: window.next_at_ms,
+                reason: "cancelled_before_start",
+                tick,
+                error,
+            },
+        );
+    }
+    step.executed_count = 1;
     if tick.lease_was_held() {
         return match guard.abandon_unexecuted() {
             Ok(finalization) => {
@@ -305,6 +349,22 @@ fn dispatch_workflow(
     step
 }
 
+fn blocking_retained_task_checkout<'a>(
+    occurrences: &'a [ScheduleOccurrence],
+    workflow: &ResolvedWorkflow,
+) -> Option<&'a ScheduleOccurrence> {
+    let isolated_task = workflow
+        .codex_task
+        .as_ref()
+        .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
+    isolated_task.then(|| {
+        occurrences
+            .iter()
+            .filter(|record| record.workflow_id == workflow.id && record.has_retained_worktree())
+            .max_by_key(|record| record.scheduled_at_ms)
+    })?
+}
+
 fn abandon_unexecuted_start_failure(
     mut step: DispatchStep,
     occurrences: &mut OccurrenceStore,
@@ -314,9 +374,15 @@ fn abandon_unexecuted_start_failure(
     error: String,
 ) -> DispatchStep {
     match occurrences.abandon_unexecuted(&claim.occurrence_id, &claim.owner) {
-        Ok(abandoned) => {
-            record_unexecuted_failure(&mut step, workflow, abandoned, next_at_ms, error)
-        }
+        Ok(abandoned) => record_unexecuted_failure(
+            &mut step,
+            workflow,
+            abandoned,
+            next_at_ms,
+            "pre_execution_error",
+            None,
+            error,
+        ),
         Err(abandon_error) => {
             step.failed_count = 1;
             step.action = Some(dispatch_state_failure(
@@ -334,14 +400,26 @@ fn abandon_unexecuted_start_failure(
     step
 }
 
+struct UnexecutedDispatchDetails {
+    next_at_ms: u64,
+    reason: &'static str,
+    tick: Option<Value>,
+    error: String,
+}
+
 fn abandon_unexecuted_tick_failure(
     mut step: DispatchStep,
     guard: OccurrenceGuard,
     workflow: &ResolvedWorkflow,
     claim: &ScheduleOccurrence,
-    next_at_ms: u64,
-    error: String,
+    details: UnexecutedDispatchDetails,
 ) -> DispatchStep {
+    let UnexecutedDispatchDetails {
+        next_at_ms,
+        reason,
+        tick,
+        error,
+    } = details;
     match guard.abandon_unexecuted() {
         Ok(finalization) => {
             include_occurrence_renewal_error(
@@ -355,6 +433,8 @@ fn abandon_unexecuted_tick_failure(
                 workflow,
                 finalization.occurrence,
                 next_at_ms,
+                reason,
+                tick,
                 error,
             );
         }
@@ -379,6 +459,8 @@ fn record_unexecuted_failure(
     workflow: &ResolvedWorkflow,
     occurrence: ScheduleOccurrence,
     next_at_ms: u64,
+    reason: &str,
+    tick: Option<Value>,
     error: String,
 ) {
     step.executed_count = 0;
@@ -388,11 +470,11 @@ fn record_unexecuted_failure(
         "workflow_id": workflow.id,
         "occurrence": occurrence,
         "status": "failed",
-        "reason": "pre_execution_error",
+        "reason": reason,
         "retryable": true,
         "occurrence_state_persisted": false,
         "next_at_ms": next_at_ms,
-        "tick": null,
+        "tick": tick,
         "error": error,
     }));
 }

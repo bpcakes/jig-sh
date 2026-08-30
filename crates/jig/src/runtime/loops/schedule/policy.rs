@@ -225,6 +225,7 @@ mod tests {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
+                unexecuted: false,
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: Some("worker failed".into()),
@@ -273,6 +274,7 @@ mod tests {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Succeeded,
+                unexecuted: false,
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: None,
