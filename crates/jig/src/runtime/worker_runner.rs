@@ -20,10 +20,7 @@ use crate::execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,
 };
-use crate::state::{
-    ReceiptInput, ReceiptJournalWriter, now_ms, record_receipt_with_cancellation,
-    record_receipt_with_journal_writer,
-};
+use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
@@ -98,7 +95,6 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) transcript_overflow_policy: ProcessOutputOverflowPolicy,
     pub(crate) prompt: CodexPrompt<'a>,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
-    pub(crate) receipt_journal: Option<&'a ReceiptJournalWriter<'a>>,
     pub(crate) phase: Option<WorkerPhase<'a>>,
 }
 
@@ -752,13 +748,8 @@ fn record_worker_receipt(
         collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
         worktree_fingerprint_override: None,
     };
-    match request.receipt_journal {
-        Some(writer) => {
-            record_receipt_with_journal_writer(ctx, input, &|| observer.cancelled(), writer)
-        }
-        None => record_receipt_with_cancellation(ctx, input, &|| observer.cancelled()),
-    }
-    .context("Failed to record worker receipt")
+    record_receipt_with_cancellation(ctx, input, &|| observer.cancelled())
+        .context("Failed to record worker receipt")
 }
 
 fn bounded_provider_preview(text: &str) -> (String, bool) {

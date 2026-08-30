@@ -327,6 +327,8 @@ pub(super) struct AttemptRecord {
     item_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) item_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) observed_item_version: Option<String>,
     attempts: u32,
     max_attempts: u32,
     last_attempt_ms: u64,
@@ -400,11 +402,12 @@ impl AttemptStore {
         }
     }
 
-    pub(super) fn record_attempt_for_version(
+    pub(super) fn record_attempt_for_transition(
         &mut self,
         workflow: &ResolvedWorkflow,
         item_key: &str,
-        item_version: Option<&str>,
+        observed_item_version: Option<&str>,
+        resulting_item_version: Option<&str>,
         status: &str,
     ) -> Result<AttemptRecord> {
         let key = format!("{}:{item_key}", workflow.id);
@@ -417,13 +420,20 @@ impl AttemptStore {
                 .unwrap_or(0);
             let attempts = current.saturating_add(1);
             let exhausted = attempts >= workflow.max_attempts && status != "passed";
+            let item_version = resulting_item_version
+                .or(observed_item_version)
+                .filter(|version| !version.is_empty())
+                .map(str::to_string);
+            let observed_item_version = observed_item_version
+                .filter(|version| !version.is_empty())
+                .filter(|version| Some(*version) != item_version.as_deref())
+                .map(str::to_string);
             let record = AttemptRecord {
                 key: key.clone(),
                 workflow_id: workflow.id.clone(),
                 item_key: item_key.to_string(),
-                item_version: item_version
-                    .filter(|version| !version.is_empty())
-                    .map(str::to_string),
+                item_version,
+                observed_item_version,
                 attempts,
                 max_attempts: workflow.max_attempts,
                 last_attempt_ms: now,
@@ -682,19 +692,19 @@ mod tests {
         };
 
         let first = store
-            .record_attempt_for_version(&workflow, "item-1", None, "failed")
+            .record_attempt_for_transition(&workflow, "item-1", None, None, "failed")
             .unwrap();
         assert_eq!(first.attempts, 1);
         assert!(!first.exhausted);
 
         let second = store
-            .record_attempt_for_version(&workflow, "item-1", None, "failed")
+            .record_attempt_for_transition(&workflow, "item-1", None, None, "failed")
             .unwrap();
         assert_eq!(second.attempts, 2);
         assert!(second.exhausted);
 
         store
-            .record_attempt_for_version(&workflow, "item-1", None, "passed")
+            .record_attempt_for_transition(&workflow, "item-1", None, None, "passed")
             .unwrap();
         assert!(store.snapshot().unwrap().is_empty());
     }

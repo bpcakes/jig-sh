@@ -6,6 +6,29 @@ mod tests {
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     #[test]
+    fn remote_branch_names_are_never_passed_as_git_options() {
+        assert_eq!(
+            remote_branch_ref("-upload-pack=fixture"),
+            "refs/heads/-upload-pack=fixture"
+        );
+        assert_eq!(remote_branch_ref("repair/example"), "refs/heads/repair/example");
+    }
+
+    #[test]
+    fn remote_head_parser_requires_the_exact_requested_ref() {
+        let stdout = b"abc123\trefs/heads/example\ndef456\trefs/heads/example-old\n";
+
+        assert_eq!(
+            remote_head_from_ls_remote(stdout, "refs/heads/example"),
+            Some("abc123")
+        );
+        assert_eq!(
+            remote_head_from_ls_remote(stdout, "refs/heads/missing"),
+            None
+        );
+    }
+
+    #[test]
     fn exhausted_attempt_is_not_an_occurrence_attention_action() {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path())
@@ -35,9 +58,10 @@ mod tests {
         };
         let mut attempts = AttemptStore::new(&ctx);
         let attempt = attempts
-            .record_attempt_for_version(
+            .record_attempt_for_transition(
                 &workflow,
                 &item.item_key,
+                Some(&item.head_sha),
                 Some(&item.head_sha),
                 "failed",
             )
@@ -250,7 +274,13 @@ mod tests {
         let mut leases = LeaseStore::new(&ctx);
         let mut attempts = AttemptStore::new(&ctx);
         attempts
-            .record_attempt_for_version(&workflow, "pr-7", Some("a-head"), "failed")
+            .record_attempt_for_transition(
+                &workflow,
+                "pr-7",
+                Some("a-head"),
+                Some("a-head"),
+                "failed",
+            )
             .unwrap();
         let observed = json!({
             "summary": {"pr_list_truncated": false},

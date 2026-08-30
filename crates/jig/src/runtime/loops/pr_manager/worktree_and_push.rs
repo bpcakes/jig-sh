@@ -21,12 +21,8 @@ fn prepare_worktree(
         .ok_or_else(|| anyhow!("Worktree path has no parent: {}", worktree.display()))?;
     fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
 
-    git_checked(
-        ctx,
-        ctx.root(),
-        ["fetch", "origin", &item.head_ref],
-        observer,
-    )?;
+    let head_ref = remote_branch_ref(&item.head_ref);
+    git_checked(ctx, ctx.root(), ["fetch", "origin", &head_ref], observer)?;
     let expected_head = format!("{}^{{commit}}", item.head_sha);
     git_checked(
         ctx,
@@ -111,7 +107,8 @@ fn start_base_merge(
     base_ref: &str,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<Value> {
-    let fetch = git_output(ctx, worktree, ["fetch", "origin", base_ref], observer)?;
+    let base_ref = remote_branch_ref(base_ref);
+    let fetch = git_output(ctx, worktree, ["fetch", "origin", &base_ref], observer)?;
     if !fetch.status.success() {
         return Err(PrRepairStepError::failed(git_error(
             "git fetch base branch failed",
@@ -130,6 +127,10 @@ fn start_base_merge(
         "stderr": String::from_utf8_lossy(&merge.stderr),
         "conflicts": !merge.status.success(),
     }))
+}
+
+fn remote_branch_ref(branch: &str) -> String {
+    format!("refs/heads/{branch}")
 }
 
 fn commit_and_push(
@@ -356,7 +357,8 @@ fn with_branch_lease_result(mut action: Value, release_error: Option<&anyhow::Er
         if let Some(completed_error) = completed_error.as_deref() {
             action["completed_error"] = json!(completed_error);
         }
-        action["status"] = json!("failed");
+        action["status"] = json!("needs_attention");
+        action["attention_kind"] = json!("branch_lease_lost_after_start");
         action["lease_error"] = json!(format!("{release_error:#}"));
         action["error"] = json!(match completed_error {
             Some(completed_error) => format!(

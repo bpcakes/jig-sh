@@ -33,14 +33,12 @@ pub(crate) use receipts::{
 };
 pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
-    record_receipt_with_cancellation, record_receipt_with_journal_writer,
-};
-pub(crate) use receipts::{
-    ReceiptJournalWriter, validate_receipt_record_id, with_receipt_journal_writer,
+    record_receipt_with_cancellation,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
 pub(crate) use receipts::{TargetReceiptMetadata, record_target_receipt};
+pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
 #[cfg(test)]
 pub(crate) use receipts::{
     reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,

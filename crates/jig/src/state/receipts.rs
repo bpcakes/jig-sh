@@ -38,9 +38,7 @@ use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
 use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
 pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
-pub(crate) use journal::{
-    ReceiptJournalWriter, validate_receipt_record_id, with_receipt_journal_writer,
-};
+pub(crate) use journal::{receipt_record_id, with_receipt_journal_writer};
 pub(crate) use target_evidence::TargetReceiptStatus;
 use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
 

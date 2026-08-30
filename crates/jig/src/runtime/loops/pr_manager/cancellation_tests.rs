@@ -116,7 +116,7 @@ mod cancellation_tests {
             schedule: None,
             codex_task: None,
         };
-        let item = PrWorkItem {
+        let mut item = PrWorkItem {
             pr_number: 7,
             item_key: "pr-7".into(),
             title: "Example repair".into(),
@@ -144,9 +144,25 @@ mod cancellation_tests {
 
         assert_eq!(action["status"], "cancelled_after_commit");
         assert_eq!(action["attempt"]["item_version"], "pushed-head");
+        assert_eq!(
+            action["attempt"]["observed_item_version"],
+            "observed-head"
+        );
         assert_eq!(action["attempt"]["last_status"], "attempted");
         let attempts = attempt_store.snapshot().unwrap();
         assert_eq!(attempts[0].item_version.as_deref(), Some("pushed-head"));
+        assert_eq!(
+            attempts[0].observed_item_version.as_deref(),
+            Some("observed-head")
+        );
+        assert!(
+            !attempt_version_is_stale(&attempts[0], &item),
+            "a lagging snapshot must not reset the attempt budget"
+        );
+        item.head_sha = "pushed-head".into();
+        assert!(!attempt_version_is_stale(&attempts[0], &item));
+        item.head_sha = "new-contributor-head".into();
+        assert!(attempt_version_is_stale(&attempts[0], &item));
     }
 
     #[test]
@@ -168,12 +184,21 @@ mod cancellation_tests {
 
         let action = with_branch_lease_result(action, Some(&error));
 
-        assert_eq!(action["status"], "failed");
+        assert_eq!(action["status"], "needs_attention");
+        assert_eq!(
+            action["attention_kind"],
+            "branch_lease_lost_after_start"
+        );
         assert_eq!(action["completed_status"], "attempted");
         assert_eq!(action["push"]["final_head"], "abc123");
         assert_eq!(action["attempt"]["attempts"], 1);
         assert_eq!(action["attempt"]["last_status"], "attempted");
         assert_eq!(action["lease_error"], "injected lease renewal failure");
+        let completion = super::super::workflow::WorkflowCompletion::from_actions(&[action]);
+        assert_eq!(
+            completion.outcome,
+            super::super::workflow::WorkflowOutcome::NeedsAttention
+        );
     }
 
     #[test]
@@ -187,7 +212,7 @@ mod cancellation_tests {
 
         let action = with_branch_lease_result(action, Some(&error));
 
-        assert_eq!(action["status"], "failed");
+        assert_eq!(action["status"], "needs_attention");
         assert_eq!(action["completed_status"], "cancelled_after_commit");
         assert_eq!(
             action["completed_error"],
@@ -761,20 +786,6 @@ esac
                 .as_str()
                 .unwrap()
                 .contains("confirmed at")
-        );
-    }
-
-    #[test]
-    fn remote_head_parser_requires_the_exact_requested_ref() {
-        let stdout = b"abc123\trefs/heads/example\ndef456\trefs/heads/example-old\n";
-
-        assert_eq!(
-            remote_head_from_ls_remote(stdout, "refs/heads/example"),
-            Some("abc123")
-        );
-        assert_eq!(
-            remote_head_from_ls_remote(stdout, "refs/heads/missing"),
-            None
         );
     }
 

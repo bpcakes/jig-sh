@@ -2,19 +2,19 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
-use crate::state::{ReceiptJournalWriter, validate_receipt_record_id};
+use crate::state::{receipt_record_id, with_receipt_journal_writer};
 
 use super::{
     WORKER_RECEIPT_PATH, git_is_dirty, git_stdout, remove_worktree, repo_task_has_changes,
 };
 
-const MAX_EXPECTED_RECEIPT_APPEND_BYTES: u64 = 1024 * 1024;
+const MAX_VERIFIED_RECEIPT_APPEND_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TaskOutcome {
@@ -54,6 +54,10 @@ pub(super) enum CheckoutReport {
 }
 
 impl CheckoutReport {
+    pub(super) const fn is_repository(&self) -> bool {
+        matches!(self, Self::Repository { .. })
+    }
+
     pub(super) fn repository_requires_attention(&self) -> bool {
         matches!(
             self,
@@ -119,7 +123,6 @@ impl PreparedCheckout {
         outcome: TaskOutcome,
         ctx: &RepoContext,
         worker_receipt_id: Option<&str>,
-        receipt_writer: Option<&ReceiptJournalWriter<'_>>,
     ) -> CheckoutCompletion {
         let mut cleanup_observer = NoopExecutionObserver;
         match self {
@@ -128,10 +131,7 @@ impl PreparedCheckout {
                 receipt_journal,
             } => {
                 let dirty = repo_task_has_changes(ctx, &path, &mut cleanup_observer);
-                let receipt_append = receipt_writer.map_or_else(
-                    || Err(anyhow!("Shared checkout lost receipt-journal authority")),
-                    |writer| receipt_journal.verify(ctx, worker_receipt_id, writer),
-                );
+                let receipt_append = receipt_journal.verify(ctx, worker_receipt_id);
                 let mut errors = Vec::new();
                 if let Err(error) = &dirty {
                     errors.push(format!(
@@ -202,58 +202,57 @@ pub(super) struct ReceiptJournalBaseline {
 }
 
 impl ReceiptJournalBaseline {
-    pub(super) fn capture(ctx: &RepoContext, writer: &ReceiptJournalWriter<'_>) -> Result<Self> {
-        let path = ctx.root().join(WORKER_RECEIPT_PATH);
-        let snapshot = writer.inspect(|file| capture_prefix(&path, file))?;
-        let path_existed = snapshot.is_some();
-        let (byte_len, digest) = snapshot.unwrap_or_else(|| (0, Sha256::digest([]).into()));
-        let mut observer = NoopExecutionObserver;
-        let index_entry = match git_stdout(
-            ctx,
-            ctx.root(),
-            ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
-            &mut observer,
-        ) {
-            Ok(entry) => Some(entry),
-            Err(_) if !path_existed => None,
-            Err(error) => return Err(error),
-        };
-        Ok(Self {
-            path,
-            path_existed,
-            byte_len,
-            digest,
-            index_entry,
-        })
-    }
-
-    fn verify(
-        &self,
-        ctx: &RepoContext,
-        worker_receipt_id: Option<&str>,
-        writer: &ReceiptJournalWriter<'_>,
-    ) -> Result<()> {
-        let mut observer = NoopExecutionObserver;
-        if let Some(baseline_entry) = self.index_entry.as_deref() {
-            let index_entry = git_stdout(
+    pub(super) fn capture(ctx: &RepoContext) -> Result<Self> {
+        with_receipt_journal_writer(ctx, |writer| {
+            let path = ctx.root().join(WORKER_RECEIPT_PATH);
+            let snapshot = writer.inspect(|file| capture_prefix(&path, file))?;
+            let path_existed = snapshot.is_some();
+            let (byte_len, digest) = snapshot.unwrap_or_else(|| (0, Sha256::digest([]).into()));
+            let mut observer = NoopExecutionObserver;
+            let index_entry = match git_stdout(
                 ctx,
                 ctx.root(),
                 ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
                 &mut observer,
-            )?;
-            if index_entry != baseline_entry {
-                bail!("Git index entry changed for {WORKER_RECEIPT_PATH}");
-            }
-        }
+            ) {
+                Ok(entry) => Some(entry),
+                Err(_) if !path_existed => None,
+                Err(error) => return Err(error),
+            };
+            Ok(Self {
+                path,
+                path_existed,
+                byte_len,
+                digest,
+                index_entry,
+            })
+        })
+    }
 
-        let verified = writer.inspect(|file| verify_append(self, file, worker_receipt_id))?;
-        if verified.is_none() {
-            if !self.path_existed && worker_receipt_id.is_none() {
-                return Ok(());
+    fn verify(&self, ctx: &RepoContext, worker_receipt_id: Option<&str>) -> Result<()> {
+        with_receipt_journal_writer(ctx, |writer| {
+            let mut observer = NoopExecutionObserver;
+            if let Some(baseline_entry) = self.index_entry.as_deref() {
+                let index_entry = git_stdout(
+                    ctx,
+                    ctx.root(),
+                    ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
+                    &mut observer,
+                )?;
+                if index_entry != baseline_entry {
+                    bail!("Git index entry changed for {WORKER_RECEIPT_PATH}");
+                }
             }
-            bail!("Receipt journal disappeared: {}", self.path.display());
-        }
-        Ok(())
+
+            let verified = writer.inspect(|file| verify_append(self, file, worker_receipt_id))?;
+            if verified.is_none() {
+                if !self.path_existed && worker_receipt_id.is_none() {
+                    return Ok(());
+                }
+                bail!("Receipt journal disappeared: {}", self.path.display());
+            }
+            Ok(())
+        })
     }
 }
 
@@ -322,9 +321,9 @@ fn verify_append(
         );
     }
     let append_bytes = current_len - baseline.byte_len;
-    if append_bytes > MAX_EXPECTED_RECEIPT_APPEND_BYTES {
+    if append_bytes > MAX_VERIFIED_RECEIPT_APPEND_BYTES {
         bail!(
-            "receipt journal append exceeds the {MAX_EXPECTED_RECEIPT_APPEND_BYTES} byte verification limit"
+            "receipt journal append exceeds the {MAX_VERIFIED_RECEIPT_APPEND_BYTES} byte verification limit"
         );
     }
     let mut prefix = (&mut file).take(baseline.byte_len);
@@ -339,8 +338,7 @@ fn verify_append(
     file.seek(SeekFrom::Start(baseline.byte_len))
         .with_context(|| format!("Failed to inspect {}", baseline.path.display()))?;
     let mut reader = BufReader::new(file);
-    let mut found_worker_receipt = false;
-    let mut appended_records = 0_u64;
+    let mut worker_receipt_matches = 0_u64;
     loop {
         let mut record = Vec::new();
         let read = reader
@@ -352,24 +350,16 @@ fn verify_append(
         if record.last() != Some(&b'\n') {
             bail!("appended receipt record is unterminated");
         }
-        appended_records += 1;
         record.pop();
-        if let Some(expected) = worker_receipt_id {
-            validate_receipt_record_id(&record, expected)?;
-            found_worker_receipt = true;
+        let receipt_id = receipt_record_id(&record)?;
+        if worker_receipt_id == Some(receipt_id.as_str()) {
+            worker_receipt_matches += 1;
         }
     }
-    let expected_records = u64::from(worker_receipt_id.is_some());
-    if appended_records != expected_records {
-        bail!("expected {expected_records} runtime receipt append, found {appended_records}");
-    }
-    if worker_receipt_id.is_some() && !found_worker_receipt {
-        return Err(anyhow!(
-            "worker receipt was not appended to the durable journal"
-        ));
-    }
-    if worker_receipt_id.is_none() && appended_records != 0 {
-        bail!("receipt records were appended without an expected worker receipt");
+    if worker_receipt_id.is_some() && worker_receipt_matches != 1 {
+        bail!(
+            "expected exactly one matching worker receipt append, found {worker_receipt_matches}"
+        );
     }
     Ok(())
 }
@@ -378,18 +368,13 @@ fn verify_append(
 mod tests {
     use std::fs::OpenOptions;
     use std::io::Write as _;
-    use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
 
     use tempfile::tempdir;
 
     use super::*;
     use crate::bootstrap::GIT_BIN_ENV;
-    use crate::state::{
-        ReceiptInput, now_ms, record_receipt, record_receipt_with_journal_writer,
-        with_receipt_journal_writer,
-    };
+    use crate::state::{ReceiptInput, now_ms, record_receipt};
     use crate::test_env::{EnvVarGuard, lock_env};
 
     fn fixture() -> (tempfile::TempDir, RepoContext, PathBuf) {
@@ -409,11 +394,8 @@ mod tests {
         (temp, ctx, path)
     }
 
-    fn append_runtime_receipt(
-        ctx: &RepoContext,
-        writer: &ReceiptJournalWriter<'_>,
-    ) -> Result<String> {
-        record_receipt_with_journal_writer(ctx, receipt_input(), &|| false, writer)
+    fn append_runtime_receipt(ctx: &RepoContext) -> Result<String> {
+        record_receipt(ctx, receipt_input())
     }
 
     fn receipt_input() -> ReceiptInput<'static> {
@@ -437,50 +419,28 @@ mod tests {
     }
 
     #[test]
-    fn exclusive_journal_authority_accepts_one_runtime_receipt() {
+    fn short_journal_windows_accept_the_worker_receipt() {
         let _env_lock = lock_env();
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, _path) = fixture();
 
-        with_receipt_journal_writer(&ctx, |writer| {
-            let baseline = ReceiptJournalBaseline::capture(&ctx, writer)?;
-            let receipt_id = append_runtime_receipt(&ctx, writer)?;
-            baseline.verify(&ctx, Some(&receipt_id), writer)
-        })
-        .unwrap();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        let receipt_id = append_runtime_receipt(&ctx).unwrap();
+        baseline.verify(&ctx, Some(&receipt_id)).unwrap();
     }
 
     #[test]
-    fn unrelated_runtime_receipt_waits_for_repo_worker_verification() {
+    fn unrelated_runtime_receipt_can_finish_during_repo_worker_execution() {
         let _env_lock = lock_env();
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, path) = fixture();
         let competing_ctx = RepoContext::load_from(ctx.root()).unwrap();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (finished_tx, finished_rx) = mpsc::channel();
-
-        let competing_writer = with_receipt_journal_writer(&ctx, |writer| {
-            let baseline = ReceiptJournalBaseline::capture(&ctx, writer)?;
-            let handle = thread::spawn(move || {
-                started_tx.send(()).unwrap();
-                let result = record_receipt(&competing_ctx, receipt_input());
-                finished_tx.send(()).unwrap();
-                result
-            });
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-            assert!(
-                finished_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .is_err(),
-                "the competing runtime writer bypassed journal authority"
-            );
-            let receipt_id = append_runtime_receipt(&ctx, writer)?;
-            baseline.verify(&ctx, Some(&receipt_id), writer)?;
-            Ok(handle)
-        })
-        .unwrap();
-
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        let competing_writer =
+            thread::spawn(move || record_receipt(&competing_ctx, receipt_input()));
         competing_writer.join().unwrap().unwrap();
+        let receipt_id = append_runtime_receipt(&ctx).unwrap();
+        baseline.verify(&ctx, Some(&receipt_id)).unwrap();
         assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
     }
 
@@ -490,17 +450,16 @@ mod tests {
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, path) = fixture();
 
-        let error = with_receipt_journal_writer(&ctx, |writer| {
-            let baseline = ReceiptJournalBaseline::capture(&ctx, writer)?;
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)?
-                .write_all(b"{}\n")?;
-            let receipt_id = append_runtime_receipt(&ctx, writer)?;
-            baseline.verify(&ctx, Some(&receipt_id), writer)
-        })
-        .unwrap_err();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{}\n")
+            .unwrap();
+        let receipt_id = append_runtime_receipt(&ctx).unwrap();
+        let error = baseline.verify(&ctx, Some(&receipt_id)).unwrap_err();
 
         assert!(error.to_string().contains("durable receipt schema"));
     }
@@ -511,13 +470,15 @@ mod tests {
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, path) = fixture();
 
-        let error = with_receipt_journal_writer(&ctx, |writer| {
-            let baseline = ReceiptJournalBaseline::capture(&ctx, writer)?;
-            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-            file.write_all(&vec![b'x'; MAX_EXPECTED_RECEIPT_APPEND_BYTES as usize + 1])?;
-            baseline.verify(&ctx, None, writer)
-        })
-        .unwrap_err();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&vec![b'x'; MAX_VERIFIED_RECEIPT_APPEND_BYTES as usize + 1])
+            .unwrap();
+        let error = baseline.verify(&ctx, None).unwrap_err();
 
         assert!(error.to_string().contains("byte verification limit"));
     }
@@ -528,44 +489,24 @@ mod tests {
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, path) = fixture();
         fs::write(&path, b"{\"id\":\"old-a\"}\n").unwrap();
-        let baseline = with_receipt_journal_writer(&ctx, |writer| {
-            ReceiptJournalBaseline::capture(&ctx, writer)
-        })
-        .unwrap();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
 
         fs::write(&path, b"{\"id\":\"old-b\"}\n{\"id\":\"receipt-worker\"}\n").unwrap();
 
-        let error = with_receipt_journal_writer(&ctx, |writer| {
-            baseline.verify(&ctx, Some("receipt-worker"), writer)
-        })
-        .unwrap_err();
+        let error = baseline.verify(&ctx, Some("receipt-worker")).unwrap_err();
         assert!(error.to_string().contains("prefix was rewritten"));
     }
 
     #[test]
-    fn receipt_baseline_rejects_unattributed_appends() {
+    fn receipt_baseline_accepts_other_schema_valid_runtime_appends() {
         let _env_lock = lock_env();
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, path) = fixture();
-        fs::write(&path, b"{\"id\":\"old\"}\n").unwrap();
-        let baseline = with_receipt_journal_writer(&ctx, |writer| {
-            ReceiptJournalBaseline::capture(&ctx, writer)
-        })
-        .unwrap();
-        OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(b"{\"id\":\"unexpected\"}\n")
-            .unwrap();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        record_receipt(&ctx, receipt_input()).unwrap();
 
-        let error = with_receipt_journal_writer(&ctx, |writer| baseline.verify(&ctx, None, writer))
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("expected 0 runtime receipt append, found 1")
-        );
+        baseline.verify(&ctx, None).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 1);
     }
 
     #[test]
@@ -573,11 +514,8 @@ mod tests {
         let _env_lock = lock_env();
         let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
         let (_temp, ctx, _path) = fixture();
-        let baseline = with_receipt_journal_writer(&ctx, |writer| {
-            ReceiptJournalBaseline::capture(&ctx, writer)
-        })
-        .unwrap();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
 
-        with_receipt_journal_writer(&ctx, |writer| baseline.verify(&ctx, None, writer)).unwrap();
+        baseline.verify(&ctx, None).unwrap();
     }
 }

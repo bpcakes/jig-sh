@@ -110,6 +110,57 @@ printf 'task complete\n' > "$out"
 
 #[cfg(unix)]
 #[test]
+fn timed_out_repo_task_keeps_corrupt_checkout_under_attention() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!("{config}\n[execution]\ncommand_timeout_seconds = 1\n"),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["add", ".jig.toml"]);
+    git_ok(temp.path(), ["commit", "-m", "configure timeout"]);
+    let run_log = bin.path().join("repo-timeout-runs");
+    let codex_path = bin.path().join("codex-repo-timeout-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf 'run\n' >> "$JIG_TEST_RUN_LOG"
+printf '{}\n' >> .agent/state/receipts.jsonl
+printf 'partial change\n' > partial-change.txt
+sleep 60
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let dispatch_at = fixed_dispatch_time();
+
+    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+
+    assert_eq!(first["status"], "needs_attention", "{first:#}");
+    let task = &first["actions"][0]["tick"]["actions"][0];
+    assert_eq!(task["status"], "needs_attention", "{first:#}");
+    assert_eq!(task["checkout"]["dirty"], true, "{first:#}");
+    assert_eq!(
+        task["checkout"]["receipt_append_valid"], false,
+        "{first:#}"
+    );
+
+    let second = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at + 60_000).unwrap();
+    assert_eq!(second["status"], "needs_attention", "{second:#}");
+    assert_eq!(second["executed_count"], 0, "{second:#}");
+    assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
+}
+
+#[cfg(unix)]
+#[test]
 fn scheduled_pr_manager_preserves_unconfirmed_push_as_attention() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -210,7 +261,7 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn scheduled_pr_manager_preserves_post_start_cancellation_as_attention() {
+fn scheduled_pr_manager_preserves_branch_lease_loss_after_start_as_attention() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let bin = tempdir().unwrap();
@@ -270,7 +321,10 @@ while :; do sleep 1; done
     assert_eq!(first["status"], "failed", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(dispatch_action["occurrence"]["status"], "needs_attention");
-    assert_eq!(worker_action["attention_kind"], "cancelled_after_start");
+    assert_eq!(
+        worker_action["attention_kind"],
+        "branch_lease_lost_after_start"
+    );
     assert_eq!(worker_action["completed_status"], "needs_attention");
     assert!(worker_action["worker_receipt_id"].is_string());
     let worktree = worker_action["worktree"]

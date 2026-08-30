@@ -48,7 +48,6 @@ pub(super) fn run_codex_review(
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
-            receipt_journal: None,
             phase: Some(WorkerPhase {
                 label: &gate.id,
                 position,
@@ -97,7 +96,6 @@ pub(super) fn run_codex_refine(
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
-            receipt_journal: None,
             phase: Some(WorkerPhase {
                 label: phase_label,
                 position,

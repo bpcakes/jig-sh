@@ -183,7 +183,7 @@ fn status_uses_its_snapshot_clock_for_attempt_backoff() {
         .unwrap();
     let mut attempts = AttemptStore::new(&ctx);
     attempts
-        .record_attempt_for_version(&workflow, "ExampleProject", None, "failed")
+        .record_attempt_for_transition(&workflow, "ExampleProject", None, None, "failed")
         .unwrap();
 
     let output = status_at_with_cancellation(

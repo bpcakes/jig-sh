@@ -401,6 +401,62 @@ timezone = "UTC"
 }
 
 #[cfg(unix)]
+#[test]
+fn repo_worker_can_run_a_nested_receipt_writing_jig_command() {
+    let repo = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    write_failing_loop_repo(repo.path());
+    let codex = bin.path().join("codex-nested-jig.sh");
+    fs::write(
+        &codex,
+        r#"#!/bin/sh
+set -eu
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "-o" ]; then out="$argument"; fi
+  previous="$argument"
+done
+cat >/dev/null
+if ! "$JIG_TEST_JIG_BIN" bootstrap --json > "$JIG_TEST_NESTED_LOG" 2>&1; then
+  cat "$JIG_TEST_NESTED_LOG" >&2
+  exit 1
+fi
+printf 'nested Jig completed\n' > "$out"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let nested_log = bin.path().join("nested-jig.log");
+
+    let output = jig()
+        .current_dir(repo.path())
+        .env("JIG_CODEX_BIN", &codex)
+        .env("JIG_TEST_JIG_BIN", env!("CARGO_BIN_EXE_jig"))
+        .env("JIG_TEST_NESTED_LOG", &nested_log)
+        .args(["loop", "dispatch", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{output:?}\nnested Jig output: {}",
+        fs::read_to_string(nested_log).unwrap_or_default()
+    );
+    let dispatch: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(dispatch["ok"], true, "{dispatch:#}");
+    let receipts = fs::read_to_string(repo.path().join(".agent/state/receipts.jsonl")).unwrap();
+    assert!(
+        receipts.lines().any(|line| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .is_some_and(|receipt| receipt["tool_name"] == "jig.bootstrap")
+        }),
+        "nested Jig receipt was not retained: {receipts}"
+    );
+}
+
+#[cfg(unix)]
 fn write_failing_loop_repo(root: &Path) {
     write_info_commands_repo(root);
     let gitignore = fs::read_to_string(root.join(".gitignore")).unwrap_or_default();

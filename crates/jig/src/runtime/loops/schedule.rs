@@ -329,6 +329,9 @@ fn dispatch_workflow(
     if tick.lease_was_held() {
         return match guard.abandon_unexecuted() {
             Ok(finalization) => {
+                // Abandonment removes the durable claim before the renewal
+                // thread joins, so its final ownership-loss diagnostic is
+                // expected and must not turn safe deferral into a state error.
                 let abandoned = finalization.occurrence;
                 step.executed_count = 0;
                 step.skipped_count = 1;
@@ -450,6 +453,9 @@ fn abandon_unexecuted_tick_failure(
     } = details;
     match guard.abandon_unexecuted() {
         Ok(finalization) => {
+            // See the workflow-lease deferral path above: a persisted
+            // abandonment intentionally suppresses the renewer's expected
+            // post-removal ownership-loss diagnostic.
             record_unexecuted_failure(
                 &mut step,
                 workflow,

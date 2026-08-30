@@ -19,9 +19,10 @@ fn record_pr_repair_outcome(
                 .and_then(Value::as_str)
                 .filter(|status| *status == "failed")
                 .unwrap_or("attempted");
-            let attempt = attempt_store.record_attempt_for_version(
+            let attempt = attempt_store.record_attempt_for_transition(
                 workflow,
                 &item.item_key,
+                Some(&item.head_sha),
                 item_version,
                 attempt_status,
             )?;
@@ -74,9 +75,10 @@ fn record_pr_repair_outcome(
             ))
         }
         Err(error) => {
-            let attempt = attempt_store.record_attempt_for_version(
+            let attempt = attempt_store.record_attempt_for_transition(
                 workflow,
                 &item.item_key,
+                Some(&item.head_sha),
                 Some(&item.head_sha),
                 "failed",
             )?;

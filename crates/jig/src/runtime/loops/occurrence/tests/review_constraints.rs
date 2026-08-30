@@ -252,13 +252,14 @@ fn retained_worktree_constraint_does_not_depend_on_attention_constraint() {
             &first.occurrence_id,
             &first.owner,
             OccurrenceFinish {
-                outcome: OccurrenceOutcome::Succeeded,
+                outcome: OccurrenceOutcome::NeedsAttention,
                 worker_receipt_id: None,
                 worktree: Some(retained.to_string_lossy().as_ref()),
                 error: None,
             },
         )
         .unwrap();
+    store.acknowledge(&first.occurrence_id).unwrap();
 
     let OccurrenceClaim::BlockedByRetainedWorktree(blocker) = store
         .claim_id_with_constraints_at(

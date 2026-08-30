@@ -15,6 +15,11 @@ use jig_owned_process::{OwnedProcessOutputStream, ProcessOutputOverflowPolicy};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::state::LOOP_RUNTIME_DIR;
+use super::workflow::{
+    CodexTaskCheckout, CodexTaskSettings, ResolvedWorkflow, UnexecutedReason, WorkflowCompletion,
+    WorkflowExecution, WorkflowOutcome, WorkflowTick,
+};
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
 use crate::execution::{
@@ -25,13 +30,6 @@ use crate::execution::{
 use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
     run_codex_exec,
-};
-use crate::state::{ReceiptJournalWriter, with_receipt_journal_writer};
-
-use super::state::LOOP_RUNTIME_DIR;
-use super::workflow::{
-    CodexTaskCheckout, CodexTaskSettings, ResolvedWorkflow, UnexecutedReason, WorkflowCompletion,
-    WorkflowExecution, WorkflowOutcome, WorkflowTick,
 };
 
 mod checkout;
@@ -53,25 +51,6 @@ pub(super) fn codex_task_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     execution: CodexTaskExecution<'_>,
-    observer: &mut dyn ExecutionControl,
-) -> Result<WorkflowTick> {
-    if workflow
-        .codex_task
-        .as_ref()
-        .is_some_and(|settings| settings.checkout == CodexTaskCheckout::Repo)
-    {
-        return with_receipt_journal_writer(ctx, |writer| {
-            codex_task_tick_with_journal(ctx, workflow, execution, Some(writer), observer)
-        });
-    }
-    codex_task_tick_with_journal(ctx, workflow, execution, None, observer)
-}
-
-fn codex_task_tick_with_journal(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
-    execution: CodexTaskExecution<'_>,
-    receipt_journal: Option<&ReceiptJournalWriter<'_>>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     let settings = workflow
@@ -114,7 +93,6 @@ fn codex_task_tick_with_journal(
         workflow,
         execution.item_key,
         settings.checkout,
-        receipt_journal,
         observer,
     ) {
         Ok(checkout) => checkout,
@@ -151,7 +129,6 @@ fn codex_task_tick_with_journal(
                 collect_git_metadata: matches!(settings.checkout, CodexTaskCheckout::Repo),
                 collect_worktree_fingerprint: matches!(settings.checkout, CodexTaskCheckout::Repo),
             },
-            receipt_journal,
             phase: None,
         },
         observer,
@@ -168,7 +145,6 @@ fn codex_task_tick_with_journal(
                 },
                 ctx,
                 Some(worker.worker_receipt_id()),
-                receipt_journal,
             );
             let worker_error = (!worker_succeeded).then(|| {
                 format!(
@@ -176,22 +152,16 @@ fn codex_task_tick_with_journal(
                     worker.status().code().unwrap_or(1)
                 )
             });
-            let repository_requires_attention = checkout.report.repository_requires_attention();
-            let error = combine_task_errors(worker_error, checkout.error);
-            let error = combine_task_errors(
-                error,
-                repository_requires_attention.then(|| {
-                    "Codex task left the shared repository checkout dirty or its state could not be verified"
-                        .to_string()
-                }),
+            let (outcome, error) = classify_checkout(
+                &checkout,
+                if worker_succeeded && checkout.error.is_none() {
+                    WorkflowOutcome::Succeeded
+                } else {
+                    WorkflowOutcome::Failed
+                },
+                CheckoutTermination::Completed,
+                worker_error,
             );
-            let outcome = if repository_requires_attention {
-                WorkflowOutcome::NeedsAttention
-            } else if error.is_some() {
-                WorkflowOutcome::Failed
-            } else {
-                WorkflowOutcome::Succeeded
-            };
             let completion = WorkflowCompletion {
                 outcome,
                 execution: WorkflowExecution::Executed,
@@ -229,23 +199,25 @@ fn codex_task_tick_with_journal(
                 },
                 ctx,
                 Some(&worker_receipt_id),
-                receipt_journal,
             );
             let timing = if before_start {
                 " before the worker started"
             } else {
                 " while the worker was running"
             };
-            let error = combine_task_errors(
+            let termination = if before_start {
+                CheckoutTermination::BeforeStart
+            } else {
+                CheckoutTermination::AfterStart
+            };
+            let (outcome, error) = classify_checkout(
+                &checkout,
+                WorkflowOutcome::Failed,
+                termination,
                 Some(format!("Scheduled Codex task was cancelled{timing}")),
-                checkout.error,
             );
             let completion = WorkflowCompletion {
-                outcome: if before_start && checkout.report.retained_worktree().is_some() {
-                    WorkflowOutcome::NeedsAttention
-                } else {
-                    WorkflowOutcome::Failed
-                },
+                outcome,
                 execution: if before_start {
                     WorkflowExecution::Unexecuted(UnexecutedReason::CancelledBeforeStart)
                 } else {
@@ -257,7 +229,7 @@ fn codex_task_tick_with_journal(
             };
             let action = json!({
                 "kind": "codex_task_worker",
-                "status": "failed",
+                "status": task_outcome_status(outcome),
                 "item_key": execution.item_key,
                 "worker_receipt_id": worker_receipt_id,
                 "checkout": checkout.report.value(),
@@ -288,16 +260,21 @@ fn codex_task_tick_with_journal(
                 },
                 ctx,
                 worker_receipt_id.as_deref(),
-                receipt_journal,
             );
-            let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
+            let termination = if unexecuted {
+                CheckoutTermination::BeforeStart
+            } else {
+                CheckoutTermination::AfterStart
+            };
+            let (outcome, error) = classify_checkout(
+                &checkout,
+                WorkflowOutcome::Failed,
+                termination,
+                Some(format!("{error:#}")),
+            );
             let retained_worktree = checkout.report.retained_worktree();
             let completion = WorkflowCompletion {
-                outcome: if unexecuted && retained_worktree.is_some() {
-                    WorkflowOutcome::NeedsAttention
-                } else {
-                    WorkflowOutcome::Failed
-                },
+                outcome,
                 execution: if unexecuted {
                     WorkflowExecution::Unexecuted(unexecuted_reason)
                 } else {
@@ -309,7 +286,7 @@ fn codex_task_tick_with_journal(
             };
             let action = json!({
                 "kind": "codex_task_worker",
-                "status": "failed",
+                "status": task_outcome_status(outcome),
                 "item_key": execution.item_key,
                 "worker_receipt_id": worker_receipt_id,
                 "checkout": checkout.report.value(),
@@ -413,12 +390,57 @@ fn combine_task_errors(primary: Option<String>, cleanup: Option<String>) -> Opti
     }
 }
 
+#[derive(Clone, Copy)]
+enum CheckoutTermination {
+    Completed,
+    BeforeStart,
+    AfterStart,
+}
+
+fn classify_checkout(
+    checkout: &checkout::CheckoutCompletion,
+    fallback: WorkflowOutcome,
+    termination: CheckoutTermination,
+    primary_error: Option<String>,
+) -> (WorkflowOutcome, Option<String>) {
+    let repository_integrity_failed = checkout.report.repository_requires_attention();
+    let repository_side_effects_ambiguous =
+        matches!(termination, CheckoutTermination::AfterStart) && checkout.report.is_repository();
+    let retained_before_start = matches!(termination, CheckoutTermination::BeforeStart)
+        && checkout.report.retained_worktree().is_some();
+    let needs_attention =
+        repository_integrity_failed || repository_side_effects_ambiguous || retained_before_start;
+    let error = combine_task_errors(primary_error, checkout.error.clone());
+    let error = combine_task_errors(
+        error,
+        repository_integrity_failed.then(|| {
+            "Codex task left the shared repository checkout dirty or its state could not be verified"
+                .to_string()
+        }),
+    );
+    (
+        if needs_attention {
+            WorkflowOutcome::NeedsAttention
+        } else {
+            fallback
+        },
+        error,
+    )
+}
+
+const fn task_outcome_status(outcome: WorkflowOutcome) -> &'static str {
+    match outcome {
+        WorkflowOutcome::Succeeded => "succeeded",
+        WorkflowOutcome::Failed => "failed",
+        WorkflowOutcome::NeedsAttention => "needs_attention",
+    }
+}
+
 fn prepare_checkout(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     item_key: &str,
     checkout: CodexTaskCheckout,
-    receipt_journal: Option<&ReceiptJournalWriter<'_>>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
     if checkout == CodexTaskCheckout::Repo {
@@ -447,12 +469,7 @@ fn prepare_checkout(
         }
         return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
-            receipt_journal: checkout::ReceiptJournalBaseline::capture(
-                ctx,
-                receipt_journal.ok_or_else(|| {
-                    anyhow!("Shared checkout execution requires receipt-journal authority")
-                })?,
-            )?,
+            receipt_journal: checkout::ReceiptJournalBaseline::capture(ctx)?,
         });
     }
 

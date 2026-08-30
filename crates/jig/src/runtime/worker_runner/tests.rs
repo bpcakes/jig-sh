@@ -63,7 +63,6 @@ mod tests {
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
-            receipt_journal: None,
             phase: Some(WorkerPhase {
                 label: "test worker",
                 position: PhasePosition::single(),
@@ -385,7 +384,6 @@ printf 'authoritative result\n' > "$out"
                     collect_git_metadata: false,
                     collect_worktree_fingerprint: false,
                 },
-                receipt_journal: None,
                 phase: None,
             },
             &mut crate::execution::NoopExecutionObserver,
@@ -442,7 +440,6 @@ printf 'authoritative result\n' > "$out"
                     collect_git_metadata: false,
                     collect_worktree_fingerprint: false,
                 },
-                receipt_journal: None,
                 phase: None,
             },
             &mut CancelledControl,

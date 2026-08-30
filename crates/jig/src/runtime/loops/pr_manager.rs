@@ -486,7 +486,9 @@ fn attempt_blocking_action(
 }
 
 fn attempt_version_is_stale(attempt: &AttemptRecord, item: &PrWorkItem) -> bool {
-    !item.head_sha.is_empty() && attempt.item_version.as_deref() != Some(item.head_sha.as_str())
+    !item.head_sha.is_empty()
+        && attempt.item_version.as_deref() != Some(item.head_sha.as_str())
+        && attempt.observed_item_version.as_deref() != Some(item.head_sha.as_str())
 }
 
 fn run_pr_repair(
@@ -553,7 +555,6 @@ fn run_pr_repair_steps(
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
             },
-            receipt_journal: None,
             phase: None,
         },
         observer,
