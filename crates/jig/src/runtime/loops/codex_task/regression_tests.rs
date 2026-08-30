@@ -374,6 +374,51 @@ fn worktree_checkout_refuses_a_stale_repository_before_creating_runtime_paths() 
 
 #[cfg(unix)]
 #[test]
+fn worktree_checkout_requires_the_runtime_root_ignore_rule() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = lock_env();
+    let repo = tempdir().unwrap();
+    TestRepoBuilder::new(repo.path())
+        .required_commands(Vec::<String>::new())
+        .write();
+    let git = repo.path().join("git-ignore-stub");
+    fs::write(
+        &git,
+        r#"#!/bin/sh
+case " $* " in
+  *" check-ignore --quiet -- .agent/runtime/loop "*) exit 1 ;;
+  *" check-ignore --quiet -- .agent/runtime/loop/worktrees/tasks "*) exit 0 ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+    let error = prepare_checkout(
+        &ctx,
+        &test_worktree_workflow(),
+        "item-1",
+        CodexTaskCheckout::Worktree,
+        &mut NoopExecutionObserver,
+    )
+    .err()
+    .expect("missing root ignore rule must fail closed")
+    .to_string();
+
+    assert!(
+        error.contains("Loop runtime root is not ignored"),
+        "{error}"
+    );
+    assert!(error.contains(LOOP_RUNTIME_DIR), "{error}");
+    assert!(!repo.path().join(LOOP_RUNTIME_DIR).exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn checkout_git_honors_cancellation_timeout_and_output_limits() {
     use std::os::unix::fs::PermissionsExt;
 

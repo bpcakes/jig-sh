@@ -22,6 +22,10 @@ use crate::state::now_ms;
 use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval, run_with_wait};
 use super::workflow::ResolvedWorkflow;
 
+mod json_cache;
+
+use json_cache::{recover_unparsable_json_cache, validate_json_cache, with_json_cache_lock};
+
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
 pub(super) const LOOP_RUNTIME_DIR: &str = ".agent/runtime/loop";
 
@@ -157,9 +161,7 @@ impl LeaseStore {
     }
 
     fn validate_parseable(&self) -> Result<()> {
-        with_exclusive_file_lock(&self.dir, &self.lock_path, || {
-            read_json_or_default::<LeaseFile>(&self.path).map(|_| ())
-        })
+        validate_json_cache::<LeaseFile>(&self.dir, &self.lock_path, &self.path)
     }
 
     fn renew_at(
@@ -515,39 +517,6 @@ pub(super) fn prepare_disposable_state_for_dispatch(
     })
 }
 
-pub(super) fn with_json_cache_lock<T, S>(
-    dir: &Path,
-    lock_path: &Path,
-    data_path: &Path,
-    action: impl FnOnce(&mut S) -> Result<T>,
-) -> Result<T>
-where
-    S: Default + DeserializeOwned + Serialize,
-{
-    with_exclusive_file_lock(dir, lock_path, || {
-        let mut store = read_json_or_default(data_path)?;
-        let result = action(&mut store)?;
-        write_json(data_path, &store)?;
-        Ok(result)
-    })
-}
-
-fn recover_unparsable_json_cache<T>(dir: &Path, lock_path: &Path, data_path: &Path) -> Result<bool>
-where
-    T: Default + DeserializeOwned + Serialize,
-{
-    with_exclusive_file_lock(dir, lock_path, || {
-        match read_json_or_default::<T>(data_path) {
-            Ok(_) => Ok(false),
-            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
-                write_json(data_path, &T::default())?;
-                Ok(true)
-            }
-            Err(error) => Err(error),
-        }
-    })
-}
-
 pub(super) fn with_exclusive_file_lock<T>(
     dir: &Path,
     lock_path: &Path,
@@ -616,26 +585,6 @@ where
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("Failed to read {}", path.display())),
     }
-}
-
-pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let Some(parent) = path.parent() else {
-        return Err(anyhow!("Loop state path has no parent: {}", path.display()));
-    };
-    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
-    let tmp = path.with_extension(format!("tmp-{}", Ulid::new()));
-    fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(value).context("Failed to encode loop state JSON")?,
-    )
-    .with_context(|| format!("Failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| {
-        format!(
-            "Failed to replace loop cache file {} with {}",
-            path.display(),
-            tmp.display()
-        )
-    })
 }
 
 fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {

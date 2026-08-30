@@ -238,6 +238,8 @@ esac
         .as_str()
         .expect("ambiguous push must retain its diagnostic worktree");
     assert!(Path::new(worktree).exists());
+    let operator_note = Path::new(worktree).join("operator-note.txt");
+    fs::write(&operator_note, "preserve until acknowledgement\n").unwrap();
     assert_eq!(action["tick"]["actions"][0]["attention_kind"], "ambiguous_push");
     assert_eq!(action["tick"]["actions"][0]["worktree_retained"], true);
     assert_eq!(action["tick"]["actions"][0]["push"]["status"], "unconfirmed");
@@ -258,6 +260,10 @@ esac
     assert_eq!(second["executed_count"], 0, "{second:#}");
     assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
+    assert_eq!(
+        fs::read_to_string(operator_note).unwrap(),
+        "preserve until acknowledgement\n"
+    );
 }
 
 #[cfg(unix)]
@@ -346,6 +352,11 @@ while :; do sleep 1; done
     .unwrap();
     assert_eq!(second["executed_count"], 0, "{second:#}");
     assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
+    assert!(
+        fs::read_to_string(Path::new(worktree).join("src.rs"))
+            .unwrap()
+            .contains("partial scheduled repair")
+    );
 }
 
 #[cfg(unix)]

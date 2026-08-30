@@ -22,11 +22,12 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 Some(&repair.item.head_sha),
                 item_version,
                 attempt_status,
-            )?;
-            let action = with_branch_lease_result(
-                with_attempt(action, attempt),
-                release_error,
             );
+            let action = match attempt {
+                Ok(attempt) => with_attempt(action, attempt),
+                Err(error) => attempt_state_attention(action, error),
+            };
+            let action = with_branch_lease_result(action, release_error);
             Ok(finalize_pr_worktree(repair.repo, action, false))
         }
         Ok(PrRepairOutcome::Cancelled { detail, worktree }) => {
@@ -124,17 +125,18 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 &error,
                 release_error,
                 Some(&worktree),
-            )?;
+            );
             Ok(finalize_pr_worktree(repair.repo, action, true))
         }
         Err(error) => {
-            failed_pr_repair_action(
+            let action = failed_pr_repair_action(
                 repair,
                 attempt_store,
                 &error,
                 release_error,
                 None,
-            )
+            );
+            Ok(action)
         }
     }
 }
@@ -145,14 +147,7 @@ fn failed_pr_repair_action<L: serde::Serialize>(
     error: &anyhow::Error,
     release_error: Option<&anyhow::Error>,
     worktree: Option<&Path>,
-) -> Result<Value> {
-    let attempt = attempt_store.record_attempt_for_transition(
-        repair.workflow,
-        &repair.item.item_key,
-        Some(&repair.item.head_sha),
-        Some(&repair.item.head_sha),
-        "failed",
-    )?;
+) -> Value {
     let mut action = pr_worker_action(
         repair.item,
         repair.lease,
@@ -169,8 +164,40 @@ fn failed_pr_repair_action<L: serde::Serialize>(
         worktree,
         None,
     );
-    action["attempt"] = json!(attempt);
-    Ok(action)
+    let attempt = attempt_store.record_attempt_for_transition(
+        repair.workflow,
+        &repair.item.item_key,
+        Some(&repair.item.head_sha),
+        Some(&repair.item.head_sha),
+        "failed",
+    );
+    match attempt {
+        Ok(attempt) => action["attempt"] = json!(attempt),
+        Err(error) => return attempt_state_attention(action, error),
+    }
+    action
+}
+
+fn attempt_state_attention(mut action: Value, attempt_error: anyhow::Error) -> Value {
+    let completed_status = action["status"].clone();
+    let completed_error = action["error"].as_str().map(str::to_string);
+    let attempt_error = format!("{attempt_error:#}");
+    action["completed_status"] = completed_status;
+    if let Some(completed_error) = completed_error.as_deref() {
+        action["completed_error"] = json!(completed_error);
+    }
+    action["status"] = json!("needs_attention");
+    action["attention_kind"] = json!("attempt_state_persistence_failed");
+    action["attempt_error"] = json!(attempt_error);
+    action["error"] = json!(match completed_error {
+        Some(completed_error) => format!(
+            "PR repair evidence requires attention because attempt state persistence failed: {attempt_error}; completed action: {completed_error}"
+        ),
+        None => format!(
+            "PR repair evidence requires attention because attempt state persistence failed: {attempt_error}"
+        ),
+    });
+    action
 }
 
 fn pr_worker_action(

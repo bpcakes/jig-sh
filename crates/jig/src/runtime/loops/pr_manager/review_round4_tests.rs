@@ -99,4 +99,82 @@ mod review_round4_tests {
         );
         assert!(attempts.snapshot().unwrap().is_empty());
     }
+
+    #[test]
+    fn attempt_persistence_failure_preserves_completed_repair_evidence() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = workflow();
+        let item = item();
+        let worktree = temp.path().join("retained-pr-worktree");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::create_dir_all(temp.path().join(LOOP_CACHE_DIR).join("attempts.json")).unwrap();
+        let mut attempts = AttemptStore::new(&ctx);
+        let lease = json!({"owner": "test"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
+
+        let action = record_pr_repair_outcome(
+            &repair,
+            &mut attempts,
+            Ok(PrRepairOutcome::Completed(json!({
+                "kind": "pr_manager_worker",
+                "status": "attempted",
+                "worktree": worktree,
+                "worker_receipt_id": "receipt-worker",
+                "push": {"final_head": "pushed-head"},
+            }))),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(action["status"], "needs_attention");
+        assert_eq!(
+            action["attention_kind"],
+            "attempt_state_persistence_failed"
+        );
+        assert_eq!(action["completed_status"], "attempted");
+        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert_eq!(action["push"]["final_head"], "pushed-head");
+        assert_eq!(action["worktree_retained"], true);
+        assert!(worktree.exists());
+        assert!(action.get("attempt").is_none());
+        assert!(
+            action["attempt_error"]
+                .as_str()
+                .unwrap()
+                .contains("attempts.json")
+        );
+
+        let failed_worktree = temp.path().join("failed-pr-worktree");
+        std::fs::create_dir(&failed_worktree).unwrap();
+        let failed = record_pr_repair_outcome(
+            &repair,
+            &mut attempts,
+            Ok(PrRepairOutcome::Failed {
+                error: anyhow!("worker output was invalid"),
+                worktree: failed_worktree.clone(),
+            }),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(failed["status"], "needs_attention");
+        assert_eq!(
+            failed["attention_kind"],
+            "attempt_state_persistence_failed"
+        );
+        assert_eq!(failed["completed_status"], "failed");
+        assert_eq!(failed["completed_error"], "worker output was invalid");
+        assert_eq!(failed["worktree_retained"], true);
+        assert!(failed_worktree.exists());
+    }
 }

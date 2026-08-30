@@ -36,7 +36,10 @@ mod checkout;
 mod pre_execution;
 
 use checkout::{PreparedCheckout, TaskOutcome};
-use pre_execution::{CheckoutPreparationFailure, unexecuted_task_failure};
+use pre_execution::{
+    CheckoutPreparationFailure, require_ignored_runtime_path, require_ignored_task_worktree_root,
+    unexecuted_task_failure,
+};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
@@ -537,51 +540,6 @@ fn prepare_checkout(
         path,
         initial_head,
     })
-}
-
-fn require_ignored_task_worktree_root(
-    ctx: &RepoContext,
-    observer: &mut dyn ExecutionControl,
-) -> Result<()> {
-    let worktree_root = Path::new(LOOP_RUNTIME_DIR).join("worktrees/tasks");
-    require_ignored_runtime_path(
-        ctx,
-        &worktree_root,
-        "Codex task worktree path",
-        "worktree",
-        observer,
-    )
-}
-
-fn require_ignored_runtime_path(
-    ctx: &RepoContext,
-    path: &Path,
-    description: &str,
-    checkout: &str,
-    observer: &mut dyn ExecutionControl,
-) -> Result<()> {
-    let output = git_output(
-        ctx,
-        ctx.root(),
-        [
-            OsString::from("check-ignore"),
-            OsString::from("--quiet"),
-            OsString::from("--"),
-            path.as_os_str().to_os_string(),
-        ],
-        observer,
-    )?;
-    match output.status.code() {
-        Some(0) => Ok(()),
-        Some(1) => bail!(
-            "{description} is not ignored by Git: {}; refresh the managed .gitignore with `scripts/jig update --recopy` before using {checkout} checkout",
-            path.display()
-        ),
-        _ => Err(git_error(
-            &format!("Failed to verify that the {description} is ignored"),
-            output,
-        )),
-    }
 }
 
 fn git_is_dirty(

@@ -203,47 +203,47 @@ pub(super) struct ReceiptJournalBaseline {
 
 impl ReceiptJournalBaseline {
     pub(super) fn capture(ctx: &RepoContext) -> Result<Self> {
-        with_receipt_journal_writer(ctx, |writer| {
-            let path = ctx.root().join(WORKER_RECEIPT_PATH);
-            let snapshot = writer.inspect(|file| capture_prefix(&path, file))?;
-            let path_existed = snapshot.is_some();
-            let (byte_len, digest) = snapshot.unwrap_or_else(|| (0, Sha256::digest([]).into()));
-            let mut observer = NoopExecutionObserver;
-            let index_entry = match git_stdout(
-                ctx,
-                ctx.root(),
-                ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
-                &mut observer,
-            ) {
-                Ok(entry) => Some(entry),
-                Err(_) if !path_existed => None,
-                Err(error) => return Err(error),
-            };
-            Ok(Self {
-                path,
-                path_existed,
-                byte_len,
-                digest,
-                index_entry,
-            })
+        let path = ctx.root().join(WORKER_RECEIPT_PATH);
+        let snapshot = with_receipt_journal_writer(ctx, |writer| {
+            writer.inspect(|file| capture_prefix(&path, file))
+        })?;
+        let path_existed = snapshot.is_some();
+        let (byte_len, digest) = snapshot.unwrap_or_else(|| (0, Sha256::digest([]).into()));
+        let mut observer = NoopExecutionObserver;
+        let index_entry = match git_stdout(
+            ctx,
+            ctx.root(),
+            ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
+            &mut observer,
+        ) {
+            Ok(entry) => Some(entry),
+            Err(_) if !path_existed => None,
+            Err(error) => return Err(error),
+        };
+        Ok(Self {
+            path,
+            path_existed,
+            byte_len,
+            digest,
+            index_entry,
         })
     }
 
     fn verify(&self, ctx: &RepoContext, worker_receipt_id: Option<&str>) -> Result<()> {
-        with_receipt_journal_writer(ctx, |writer| {
-            let mut observer = NoopExecutionObserver;
-            if let Some(baseline_entry) = self.index_entry.as_deref() {
-                let index_entry = git_stdout(
-                    ctx,
-                    ctx.root(),
-                    ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
-                    &mut observer,
-                )?;
-                if index_entry != baseline_entry {
-                    bail!("Git index entry changed for {WORKER_RECEIPT_PATH}");
-                }
+        let mut observer = NoopExecutionObserver;
+        if let Some(baseline_entry) = self.index_entry.as_deref() {
+            let index_entry = git_stdout(
+                ctx,
+                ctx.root(),
+                ["ls-files", "--stage", "--", WORKER_RECEIPT_PATH],
+                &mut observer,
+            )?;
+            if index_entry != baseline_entry {
+                bail!("Git index entry changed for {WORKER_RECEIPT_PATH}");
             }
+        }
 
+        with_receipt_journal_writer(ctx, |writer| {
             let verified = writer.inspect(|file| verify_append(self, file, worker_receipt_id))?;
             if verified.is_none() {
                 if !self.path_existed && worker_receipt_id.is_none() {
@@ -442,6 +442,63 @@ mod tests {
         let receipt_id = append_runtime_receipt(&ctx).unwrap();
         baseline.verify(&ctx, Some(&receipt_id)).unwrap();
         assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_index_probe_does_not_hold_the_receipt_writer_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let _env_lock = lock_env();
+        let (temp, ctx, _path) = fixture();
+        let marker = temp.path().join("git-probe-started");
+        let release = temp.path().join("release-git-probe");
+        let git = temp.path().join("git-probe-stub");
+        fs::write(
+            &git,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nwhile [ ! -e '{}' ]; do sleep 0.01; done\n",
+                marker.display(),
+                release.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+        let capture_ctx = RepoContext::load_from(ctx.root()).unwrap();
+        let capture = thread::spawn(move || ReceiptJournalBaseline::capture(&capture_ctx));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !marker.exists() {
+            fs::write(&release, b"").unwrap();
+            let detail = match capture.join().unwrap() {
+                Ok(_) => "probe completed without creating its marker".to_string(),
+                Err(error) => format!("probe failed: {error:#}"),
+            };
+            panic!("Git index probe did not start: {detail}");
+        }
+
+        let writer_ctx = RepoContext::load_from(ctx.root()).unwrap();
+        let (sent, received) = mpsc::channel();
+        let writer = thread::spawn(move || {
+            let result = append_runtime_receipt(&writer_ctx);
+            let _ = sent.send(());
+            result
+        });
+        let wrote_during_probe = received.recv_timeout(Duration::from_secs(1)).is_ok();
+        fs::write(&release, b"").unwrap();
+        let baseline = capture.join().unwrap().unwrap();
+        let receipt_id = writer.join().unwrap().unwrap();
+
+        assert!(
+            wrote_during_probe,
+            "receipt append was blocked by the Git index probe"
+        );
+        baseline.verify(&ctx, Some(&receipt_id)).unwrap();
     }
 
     #[test]
