@@ -262,6 +262,14 @@ The existing answer model is sufficient. Rust-only presets must set existing
 answers correctly rather than add preset identity to the long-lived runtime
 contract.
 
+Init currently loads an answers file once for CLI interaction and then rebuilds
+`AnswerInput` inside bootstrap after vault preparation has been planned. That
+double-read is not sufficient for the Rust-only fail-closed policy: the raw key
+shape used for validation and the values used for rendering must be the same
+parsed input, and every incompatible value must fail before passphrase capture.
+B03 therefore owns a crate-private prepared-input handoff across the CLI and
+bootstrap boundary; B04 reuses it rather than adding another parser path.
+
 ### 5.5 Scaffold template sources
 
 - live scaffold sources are under `templates/scaffolds/`;
@@ -841,34 +849,71 @@ No preset-specific agent-map writer is introduced.
 
 The following table is normative.
 
-| Input | `rust-library` | `rust-cli` | Rationale |
-|---|---:|---:|---|
-| `--repo-name` | accept | accept | Existing naming authority. |
-| `--default-branch` | accept | accept | Existing Git/CI authority. |
-| `--ci-github-runner` | accept | accept | Existing CI authority. |
-| `--template` | accept | accept | Existing template-source authority. |
-| `--template-mode` | accept | accept | Existing template-source authority. |
-| `--vcs-ref` | accept | accept | Existing template-source authority. |
-| `--force` | accept | accept | Existing transactional collision policy. |
-| `--defaults` | accept | accept | Does not change explicit preset. |
-| `--no-input` | accept | accept | Preset is a complete shape. |
-| `--no-vault` | accept | accept | Existing vault lifecycle choice. |
-| `--db` | reject | reject | No database artifact is defined. |
-| `--frontend` | reject | reject | No frontend artifact is defined. |
-| `--frontends` | reject | reject | No frontend artifact is defined. |
-| `--go-module` | reject | reject | Existing Go-only authority. |
-| `--frontend-app` | reject for scaffold shape | reject for scaffold shape | Existing-app wiring belongs to adopt/harness-only configuration, not a new pure Rust scaffold. |
-| `backend_language = "go"` | reject | reject | Conflicts with generated Rust authority. |
-| `sqlx_enabled = true` | reject | reject | Database support is out of scope. |
-| `rust_migration_dir` | reject when nonempty | reject when nonempty | No migration owner exists. |
-| `rust_sqlx_metadata_dir` | reject when nonempty | reject when nonempty | No SQLx metadata owner exists. |
-| `schema_dump_enabled = true` | reject | reject | Implies SQLx behavior absent here. |
-| explicit Rust check commands | accept | accept | Existing project-owned command overrides. |
-| `rust_crate_roots` other than `crates` | reject | reject | The scaffold owns its initial layout; use adopt for custom existing layouts. |
-| `harness_footprint = "minimal"` | reject | reject | Application source plus a partial harness is not an established init contract. |
+The policy applies equally to CLI flags and their effective values after
+`--answers-file` merging. “Reject when supplied” means the caller supplied the
+field explicitly; renderer defaults needed by the existing schema may remain as
+inert compatibility values when the generated model contains no corresponding
+component, action, gate, frontend root, or dev app.
 
-Empty optional migration strings normalized away by the existing answer parser do
-not create a conflict. Effective nonempty values do.
+| Input or effective answer authority | `rust-library` | `rust-cli` | Rationale |
+|---|---:|---:|---|
+| destination path | accept | accept | Existing init destination authority. |
+| `--answers-file` | accept | accept | Existing noninteractive answer transport, subject to every row below. |
+| `--repo-name`, `--default-branch`, `--ci-github-runner` | accept | accept | Existing naming and CI authority. |
+| `--template`, `--template-mode`, `--vcs-ref`, `template_source_url` | accept | accept | Existing template-source authority. |
+| legacy `jig_version` | parse and ignore on current renders | parse and ignore on current renders | Preserve current legacy-input compatibility without changing output. |
+| `--force`, `--defaults`, `--no-input`, `--no-vault` | accept | accept | Existing transaction, automation, and vault choices. |
+| `harness_footprint = "full"` or omitted | accept | accept | Rust-only presets require the established full harness. |
+| `harness_footprint = "minimal"` | reject | reject | Application source plus a partial harness is not an established init contract. |
+| omitted or Rust `backend_language` compatibility value | accept | accept | The generated workspace uses Rust actions. |
+| `backend_language = "go"` | reject | reject | Conflicts with generated Rust authority. |
+| omitted or exact `rust_crate_roots = ["crates"]` | accept | accept | Matches the scaffold-owned layout. |
+| any other effective Rust crate roots | reject | reject | Use adopt for a custom existing layout. |
+| Rust fmt, Clippy, test, and locked-test command overrides | accept | accept | Existing project-owned Rust command authority. |
+| bootstrap and contract-check command overrides | accept | accept | Existing repository-wide harness commands. |
+| omitted or false `sqlx_enabled` and `schema_dump_enabled` | accept | accept | The renderer fixes both capabilities false. |
+| true `sqlx_enabled` or `schema_dump_enabled` | reject | reject | Database and schema generation are out of scope. |
+| caller-supplied migration/SQLx/schema layout, path, or command authority | reject when present or nonempty | reject when present or nonempty | No migration, SQLx metadata, schema, or database owner exists. |
+| `--db` | reject | reject | No database artifact is defined. |
+| `--frontend`, `--frontends`, `--frontend-app`, nonempty `frontend_apps`, or nonempty `frontend_workspace_roots` | reject | reject | No frontend artifact or workspace authority is defined. |
+| nonempty `dev.apps` or legacy `dev_command` | reject | reject | Neither preset defines a supervised application. |
+| other `[dev]` scalar settings with no apps | accept | accept | Preserve ordinary harness proxy configuration without creating a dev app. |
+| `web_package_manager` | accept as inert compatibility input | accept as inert compatibility input | It may remain in the existing config shape but creates no web output and triggers no executable preflight. |
+| omitted or false `application_contracts_enabled` | accept | accept | No frontend contract gates are generated. |
+| true `application_contracts_enabled` or TypeScript command overrides | reject | reject | They imply an absent frontend/public-artifact boundary. |
+| `--go-module`, `go_database`, `migration_dir`, Go command overrides, or SQLc command authority | reject when present or nonempty | reject when present or nonempty | No Go component or Go database exists. |
+| caller-authored `repository`, `commands`, `work`, or `loop` model | reject | reject | Initial projection and verification authority must be the exact neutral model authored by this preset. |
+| `vault`, `status`, `execution`, and `agent_tooling` answers | accept | accept | Existing harness-only authority that does not redefine project shape. |
+| unknown top-level answer keys | reject during Rust-only answer-file validation | reject during Rust-only answer-file validation | The generic deserializer can ignore top-level keys, so these presets must fail closed instead of silently dropping possible shape authority. |
+
+The migration/SQLx/schema row includes `rust_migration_dir`, `migration_dir`,
+`rust_migration_layout`, `rust_sqlx_metadata_dir`, `schema_dump_command`,
+`schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, and
+`migration_add_command`. The Go row includes `go_module`, `go_database`,
+`go_fmt_check_command`, `go_lint_command`, `go_test_command`,
+`go_test_locked_command`, and `sqlc_check_command`. The TypeScript row includes
+the lint, typecheck, build, and coverage command overrides. Empty optional
+strings that the existing answer parser normalizes away do not create a
+conflict. Rejections name the selected preset and offending field and happen
+after answer-file merging but before template resolution, vault capture, or
+destination publication.
+
+“Unknown” in this matrix means an unrecognized top-level answer key. Recognized
+nested `vault`, `status`, `execution`, `agent_tooling`, and scalar-only `dev`
+sections continue to use their existing typed parsers and compatibility rules;
+they do not gain project-shape authority. The complete `repository`, `commands`,
+`work`, and `loop` sections are rejected as units, and nonempty `dev.apps` is
+rejected, so nested data in those shape-bearing sections cannot bypass the
+policy.
+
+The answers file is parsed exactly once for an init invocation. A crate-private
+prepared-input value retains both `AnswerInputShape` and the merged
+`AnswerOpts`; interaction may resolve the preset after that parse, but the
+selected preset validates the retained shape and effective values before
+package-manager preflight or `prepare_bootstrap_vault`. Bootstrap rendering
+then consumes the same retained `AnswerInput` rather than reopening the path.
+This removes a time-of-check/time-of-use gap and makes “before vault capture” an
+oracle over the input that is actually rendered.
 
 Errors must name the selected preset and the incompatible input. They must occur
 before template resolution where the current preflight ordering permits, and
@@ -985,6 +1030,13 @@ all current presets without creating a runtime language model. A suitable
 semantic shape is:
 
 ```rust
+enum ScaffoldIdentity {
+    RustReact,
+    GoReact,
+    RustLibrary,
+    RustCli,
+}
+
 enum ScaffoldProjectPlan {
     RustReact(RustReactScaffoldPlan),
     GoReact(GoReactScaffoldPlan),
@@ -1003,16 +1055,27 @@ enum RustOnlyArtifact {
 
 Exact names may vary, but the following properties are required:
 
-- `preset()` returns the exact public preset;
+- `identity()` returns a crate-private `ScaffoldIdentity` whose `as_str()` is
+  the exact report spelling;
+- public `ScaffoldPreset` values convert to one exact private identity, while
+  internal identities do not become Clap values, wizard choices, or preset
+  descriptors until their owning public task lands;
 - `backend_language()` returns Rust for both new presets;
 - `database()` returns `none` without pretending a DB plan exists;
 - frontend rendering is callable only for React-bearing variants;
 - Rust-only rendering cannot construct `FrontendBackendContext`;
 - answer defaults are selected by typed variant rather than strings;
-- report generation is exhaustive over every public preset;
+- report generation is exhaustive over private scaffold identity, and public
+  reachability is exhaustive over `ScaffoldPreset`;
 - existing Rust React and Go behavior remains unchanged.
 
-This is a bootstrap-only type. It must not escape into `jig-core`, repository
+`ScaffoldIdentity::RustLibrary` and `RustCli` first land in B02 beside their
+internal renderer consumers. B02 may therefore construct and report internal
+test plans without adding `ScaffoldPreset` variants. B03 and B04 separately add
+the public Clap variants and their one-to-one conversions. The preset report
+and `ScaffoldPreset::value_variants()` remain unchanged through B02.
+
+These are bootstrap-only types. They must not escape into `jig-core`, repository
 contracts, action planning, receipts, or generated application APIs.
 
 ### 16.2 Preset capabilities
@@ -1133,6 +1196,25 @@ transaction budget to account for every generated leaf.
 
 Tests compare `output_paths()` with rendered relative paths for both new
 presets. Missing or extra entries are failures.
+
+### 16.7 Single-read init answer handoff
+
+B03 introduces one crate-private prepared init-answer value shared by CLI
+interaction and bootstrap execution. It owns:
+
+- the single `AnswerInput::from_opts_at` call for an init invocation;
+- the retained raw top-level key shape;
+- the merged effective `AnswerOpts` used by interaction and validation;
+- selected-preset validation after interactive/default/strict resolution but
+  before package-manager or vault preflight; and
+- transfer of the same parsed `AnswerInput` into `prepare_init` and rendering.
+
+The exact wrapper name may vary. It must make a second filesystem read
+unnecessary and impossible on the ordinary init path. Adopt and update answer
+loading are outside this change. Tests use an injectable loader or equivalent
+read counter to prove one parse, and mutation of the source file after
+interaction cannot change rendered authority. B04 adds only its preset policy
+to this common path.
 
 ## 17. Template architecture
 
@@ -1363,6 +1445,8 @@ Add focused tests for:
 - strict-mode completeness;
 - `--defaults` preservation;
 - every invalid flag/answer combination in section 13;
+- single-read init answer preparation and retained raw-shape validation before
+  vault preparation;
 - package normalization and module names;
 - scaffold plan summary;
 - answer defaults;
@@ -1611,6 +1695,12 @@ interaction/help/diagnostics, and B06 composes those positive oracles rather
 than redefining them. The explicit edge is cheaper and more truthful than
 making two agents negotiate the same central integration tests.
 
+B02 owns exact private scaffold identity and internal rendering, but not public
+Clap reachability. B03 owns the common single-parse init-answer handoff plus
+library strict/default success; B04 reuses both foundations for CLI
+strict/default success. B05 may change the guided menu and diagnostic wording,
+but treats those explicit success paths as finalized regression oracles.
+
 The features are organizational parents, not blocking implementation gates.
 Blocking edges are attached directly between concrete tasks.
 
@@ -1700,6 +1790,8 @@ preset behavior unchanged until the delivery tasks expose new values.
 - Frontend rendering is unreachable for Rust-only plans.
 - Existing preset output and reports remain compatible.
 - Shared workspace policy is represented once.
+- Private Rust-only scaffold identities can be exercised internally without
+  appearing in Clap, the wizard, or `jig presets`.
 - No runtime or repository-contract type is added.
 
 ### B01 — Refactor preset capabilities and backend-only plan assumptions
@@ -1707,8 +1799,9 @@ preset behavior unchanged until the delivery tasks expose new values.
 #### Outcome
 
 The init wizard, strict validator, scaffold planner, and report code consume one
-typed source of preset capabilities, and `InitScaffoldPlan` can represent a
-non-backend artifact without unused frontend/database state.
+typed source of preset capabilities, and `InitScaffoldPlan` has an extensible
+typed project-plan boundary ready for B02's first non-backend variant without
+moving common fields or disturbing existing output.
 
 #### Context
 
@@ -1723,8 +1816,9 @@ taxonomy across CLI, preflight, planning, and reporting.
   `ScaffoldPreset`.
 - Refactor wizard/default/strict/package-manager decisions to those methods
   without exposing new preset values yet.
-- Replace or generalize backend-only scaffold plan dispatch so a Rust-only plan
-  variant can be added cleanly.
+- Replace backend-only dispatch with a typed project-plan boundary containing
+  only the existing Rust React and Go React variants; B02 owns adding the first
+  non-backend variant and no test-only placeholder variant is introduced here.
 - Separate common naming/branch/CI context from web-only package-manager and DNS
   context where doing so removes fake values.
 - Make report and answer methods exhaustive through typed plan methods.
@@ -1738,18 +1832,23 @@ taxonomy across CLI, preflight, planning, and reporting.
 - Package-manager preflight still runs only for frontend-bearing presets.
 - Representative Rust React and Go React rendered files/reports are unchanged.
 - Harness-only remains scaffold-free.
-- A compile-time test plan can represent a non-backend shape without rendering
-  files, constructing frontend context, or changing repository output.
+- Exhaustive common answer/report helpers operate through the new project-plan
+  boundary for both existing variants, while harness-only remains no scaffold
+  plan and no test-only non-backend shape is introduced.
 
 #### Acceptance criteria
 
 - Preset requirements are not encoded through repeated ad hoc enum unions.
-- Common plan code does not require every shape to have an HTTP backend.
+- Common plan data no longer stores HTTP-backend-only, frontend, package-manager,
+  or DNS fields outside the existing React-bearing variants; B02 can add its
+  first non-backend variant without moving those common fields.
 - Existing preset outputs, reports, answers, and next steps remain compatible.
 - No public new preset is partially exposed.
 - No render hint, neutral repository projection, contract-schema field, adapter
   kind, runner kind, persisted answer key, template, or generated file is added
   in this refactor task.
+- B01 does not instantiate or test a Rust-only/non-backend artifact; B02 owns
+  `RustOnlyScaffoldPlan`, its artifact kind, and the first such construction.
 
 #### Execution workflow
 
@@ -1795,7 +1894,14 @@ API, database, frontend, DNS, and dev state.
 
 #### Scope
 
+- Add a crate-private `ScaffoldIdentity` (or equivalently exact internal
+  identity) and move scaffold report spelling to that exhaustive bootstrap-only
+  type without changing existing report bytes.
 - Add `RustOnlyScaffoldPlan` and artifact kind internally.
+- Map library and CLI artifacts to private `RustLibrary` and `RustCli`
+  identities; do not add public `ScaffoldPreset` variants in this task.
+- Add the first non-backend project-plan variant and prove it constructs without
+  frontend, database, package-manager, DNS, or dev-app state.
 - Add `rust_only_workspace.rs` or an equivalently focused renderer module.
 - Add live templates for common workspace files, library source, and CLI source.
 - Add strict template context and exact output paths.
@@ -1823,6 +1929,9 @@ API, database, frontend, DNS, and dev state.
 - Normalized and maximum-boundary package names.
 - Output paths equal rendered relative paths.
 - No DB/frontend/dev files or context.
+- Internal plans report exact `rust-library`/`rust-cli` identity strings, while
+  `ScaffoldPreset::value_variants()`, Clap possible values, the wizard, and
+  `jig presets` remain byte-for-byte unchanged.
 - A Rust-only projection produces `workspace` Rust actions and no `api`/backend
   description, while the existing Rust React projection remains unchanged.
 - Root guidance uses Rust workspace/crate terminology, omits the transport rule
@@ -1840,6 +1949,8 @@ API, database, frontend, DNS, and dev state.
   added.
 - Neutral root guidance is recoverable from authored repository semantics and
   does not depend on historical preset identity.
+- Private identity is bootstrap-only and has no public parser, descriptor, or
+  persisted-contract reachability until B03/B04 add explicit conversions.
 - No public preset is exposed until its end-to-end answer/report path exists.
 
 #### Execution workflow
@@ -1878,14 +1989,19 @@ complete validation, answer derivation, reports, and user guidance.
 
 #### Scope
 
-Ship the public enum values sequentially, then integrate the interactive menu,
-strict/default behavior, preset report, help, and diagnostics across the full
-preset family.
+Ship the public enum values sequentially with their explicit strict/default
+success behavior, then integrate the interactive menu, preset report, help, and
+diagnostics across the full preset family.
 
 #### Acceptance criteria
 
 - Each public value works as a complete explicit noninteractive shape.
-- Incompatible database/frontend/Go/SQLx answers fail before mutation.
+- Init parses an answers file once, validates the retained raw shape and merged
+  values before vault capture, and renders from that same prepared input.
+- Every CLI and answers-file family has an exact accept/reject/derived policy;
+  incompatible database, frontend, dev, Go, SQLx/schema, authored repository,
+  command-model, work, and loop authority fails before template resolution,
+  vault capture, or mutation.
 - `jig presets` describes exact output and boundaries.
 - Interactive and default compatibility rules hold.
 
@@ -1900,12 +2016,20 @@ the established passphrase environment authority instead of `--no-vault`.
 
 #### Scope
 
-- Add the public `RustLibrary` enum value and exact CLI spelling.
+- Add the public `RustLibrary` enum value and exact CLI spelling, and map it
+  one-to-one to B02's private `ScaffoldIdentity::RustLibrary`.
 - Connect it to the internal library renderer.
 - Add descriptor metadata at the end of current preset order.
 - Derive Rust backend compatibility, SQLx false, crate root `crates`, no
   frontend/application contracts, no dev apps, and ordinary Rust commands.
 - Validate the complete task-local input contract below.
+- Introduce the shared single-parse prepared init-answer handoff: retain raw
+  top-level key shape and merged values through interaction, validate the
+  selected preset before package-manager/vault preflight, and give bootstrap
+  the same parsed `AnswerInput` without reopening the file.
+- Own explicit library behavior for strict/no-terminal and explicit
+  `--defaults` execution through the typed capability mapping. B05 owns the
+  later guided menu and diagnostic prose, not this success behavior.
 - Report `preset = rust-library`, `db = none`, empty frontends, and exact files.
 - Add explicit noninteractive init and generated contract tests.
 - Update only the minimum help text needed for an explicit user to discover the
@@ -1920,26 +2044,49 @@ migration or SQLx metadata tree, database crate, `apps/`, OpenAPI tree,
 JavaScript manifest or lockfile, frontend contract script, dev-app entry, or
 release workflow.
 
-Accept existing common init authority: `--repo-name`, `--default-branch`,
-`--ci-github-runner`, `--template`, `--template-mode`, `--vcs-ref`, `--force`,
-`--defaults`, `--no-input`, and `--no-vault`. Accept explicit Rust check-command
-overrides and an effective `rust_crate_roots = ["crates"]`.
+Accept the destination and `--answers-file`; merge the answer file before
+applying this policy. Accept `--repo-name`, `--default-branch`,
+`--ci-github-runner`, `--template`, `--template-mode`, `--vcs-ref`,
+`template_source_url`, `--force`, `--defaults`, `--no-input`, `--no-vault`, an
+omitted/full harness footprint, an omitted/Rust backend compatibility value, an
+omitted or exact `rust_crate_roots = ["crates"]`, Rust fmt/Clippy/test/locked-test
+overrides, bootstrap and contract-check overrides, false/omitted SQLx and schema
+dump flags, harness-only `vault`, `status`, `execution`, and `agent_tooling`
+answers, and `[dev]` scalar settings when `dev.apps` is empty. Parse but ignore
+legacy `jig_version` exactly as current renders do. Accept `web_package_manager`
+only as an inert compatibility value: do not check its executable or author web
+files, roots, actions, gates, or dev apps. Accept
+`application_contracts_enabled` only when omitted or false.
 
-Reject `--db`, `--frontend`, `--frontends`, `--frontend-app`, `--go-module`,
-`backend_language = "go"`, `sqlx_enabled = true`, nonempty
-`rust_migration_dir`, nonempty `rust_sqlx_metadata_dir`,
-`schema_dump_enabled = true`, any effective Rust crate root other than
-`crates`, and `harness_footprint = "minimal"`. Empty optional migration values
-that the existing parser normalizes away are not conflicts. Every rejection
-names `rust-library` and the incompatible input and occurs before vault capture
-or destination publication.
+Reject `--db`, `--frontend`, `--frontends`, `--frontend-app`, nonempty
+`frontend_apps`, nonempty `frontend_workspace_roots`, nonempty `dev.apps`, legacy
+`dev_command`, true `application_contracts_enabled`, and TypeScript lint,
+typecheck, build, or coverage command overrides. Reject `--go-module`,
+`backend_language = "go"`, `go_database`, `migration_dir`, Go fmt/lint/test/
+locked-test overrides, and SQLc command authority. Reject true `sqlx_enabled` or
+`schema_dump_enabled`; any caller-supplied `rust_migration_layout`; and nonempty
+`rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_command`,
+`schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, or
+`migration_add_command`. Reject any effective Rust crate root other than
+`crates`, `harness_footprint = "minimal"`, caller-authored `repository`,
+`commands`, `work`, or `loop` models, and unknown top-level answer keys. Empty
+optional strings normalized away by the existing parser are absent, not
+conflicts.
+Every rejection names `rust-library` and the offending input and occurs after
+answer-file merging but before template resolution, vault capture, or
+destination publication.
 
 #### Required tests
 
 - Clap parse and invalid spelling.
 - Strict/no-terminal complete shape.
 - `--defaults` preserves explicit library.
-- Every incompatible flag family fails prepublication.
+- Every accepted/rejected CLI and answers-file family above has an exact oracle;
+  incompatible values fail before template resolution, vault capture, and
+  publication.
+- The init answer file is parsed once; changing its path contents after
+  interaction does not change the retained render input, and forbidden raw keys
+  cannot reach passphrase capture.
 - Exact library files and absence list.
 - Generated `.jig.toml` and contract semantics.
 - Neutral `workspace` component identity and Rust action aliases.
@@ -1953,6 +2100,10 @@ or destination publication.
 
 - The explicit command creates a buildable documented library workspace.
 - No database, frontend, API, dev app, or parser dependency appears.
+- Caller-authored repository/command/work models cannot replace the preset's
+  neutral workspace projection.
+- The selected preset validates and renders one frozen answer input with no
+  interaction/bootstrap reread gap.
 - No license grant is implied and accidental publication is disabled.
 - Setup generates a lock file and locked checks pass after it is present.
 - Report and next-step output are truthful.
@@ -1996,9 +2147,15 @@ the existing passphrase environment authority.
 
 #### Scope
 
-- Add the public `RustCli` enum value after `RustLibrary`.
+- Add the public `RustCli` enum value after `RustLibrary` and map it one-to-one
+  to B02's private `ScaffoldIdentity::RustCli`.
 - Connect it to the shared Rust-only renderer's CLI branch.
 - Add exact descriptor, validation, answer, report, and summary behavior.
+- Reuse B03's single-parse prepared init-answer handoff and add only the CLI
+  policy/identity branch; do not add a second loader or validation path.
+- Own explicit CLI behavior for strict/no-terminal and explicit `--defaults`
+  execution through the typed capability mapping. B05 owns guided interaction
+  and diagnostic prose.
 - Generate the explicit binary target and task-local `src/main.rs` contract
   below.
 - Add run guidance and hermetic binary execution acceptance.
@@ -2021,25 +2178,47 @@ writes exactly one newline-terminated UTF-8 stdout line containing
 stderr. It defines no argument or option behavior and adds no generated test
 that merely reasserts this replaceable smoke output.
 
-Accept existing common init authority: `--repo-name`, `--default-branch`,
-`--ci-github-runner`, `--template`, `--template-mode`, `--vcs-ref`, `--force`,
-`--defaults`, `--no-input`, and `--no-vault`. Accept explicit Rust check-command
-overrides and an effective `rust_crate_roots = ["crates"]`.
+Accept the destination and `--answers-file`; merge the answer file before
+applying this policy. Accept `--repo-name`, `--default-branch`,
+`--ci-github-runner`, `--template`, `--template-mode`, `--vcs-ref`,
+`template_source_url`, `--force`, `--defaults`, `--no-input`, `--no-vault`, an
+omitted/full harness footprint, an omitted/Rust backend compatibility value, an
+omitted or exact `rust_crate_roots = ["crates"]`, Rust fmt/Clippy/test/locked-test
+overrides, bootstrap and contract-check overrides, false/omitted SQLx and schema
+dump flags, harness-only `vault`, `status`, `execution`, and `agent_tooling`
+answers, and `[dev]` scalar settings when `dev.apps` is empty. Parse but ignore
+legacy `jig_version` exactly as current renders do. Accept `web_package_manager`
+only as an inert compatibility value: do not check its executable or author web
+files, roots, actions, gates, or dev apps. Accept
+`application_contracts_enabled` only when omitted or false.
 
-Reject `--db`, `--frontend`, `--frontends`, `--frontend-app`, `--go-module`,
-`backend_language = "go"`, `sqlx_enabled = true`, nonempty
-`rust_migration_dir`, nonempty `rust_sqlx_metadata_dir`,
-`schema_dump_enabled = true`, any effective Rust crate root other than
-`crates`, and `harness_footprint = "minimal"`. Empty optional migration values
-that the existing parser normalizes away are not conflicts. Every rejection
-names `rust-cli` and the incompatible input and occurs before vault capture or
+Reject `--db`, `--frontend`, `--frontends`, `--frontend-app`, nonempty
+`frontend_apps`, nonempty `frontend_workspace_roots`, nonempty `dev.apps`, legacy
+`dev_command`, true `application_contracts_enabled`, and TypeScript lint,
+typecheck, build, or coverage command overrides. Reject `--go-module`,
+`backend_language = "go"`, `go_database`, `migration_dir`, Go fmt/lint/test/
+locked-test overrides, and SQLc command authority. Reject true `sqlx_enabled` or
+`schema_dump_enabled`; any caller-supplied `rust_migration_layout`; and nonempty
+`rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_command`,
+`schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, or
+`migration_add_command`. Reject any effective Rust crate root other than
+`crates`, `harness_footprint = "minimal"`, caller-authored `repository`,
+`commands`, `work`, or `loop` models, and unknown top-level answer keys. Empty
+optional strings normalized away by the existing parser are absent, not
+conflicts.
+Every rejection names `rust-cli` and the offending input and occurs after
+answer-file merging but before template resolution, vault capture, or
 destination publication.
 
 #### Required tests
 
 - Clap parse and preset order.
 - Strict/no-terminal complete shape.
-- Full invalid input matrix.
+- Every accepted/rejected CLI and answers-file family above has an exact oracle;
+  incompatible values fail before template resolution, vault capture, and
+  publication.
+- CLI policy reuses the frozen B03 input and proves no second answers-file read
+  or CLI-specific parser path exists.
 - Exact CLI files and absence list.
 - Binary exits zero, prints package/version, and writes no stderr.
 - Cargo fmt, Clippy, test, locked test, and docs.
@@ -2057,6 +2236,10 @@ destination publication.
 - The CLI chooses no third-party parser or logging framework.
 - No license grant is implied and accidental publication is disabled.
 - The binary is not modeled as a Jig dev service.
+- Caller-authored repository/command/work models cannot replace the preset's
+  neutral workspace projection.
+- CLI strict/default success and answer validation reuse the common prepared
+  input without reopening its source path.
 - Shared workspace policy does not drift from the library preset.
 - Existing and library preset behavior remains compatible.
 
@@ -2106,9 +2289,13 @@ with database/frontend requirements.
 - Append numeric choices 4 and 5 and exact text aliases.
 - Preserve choices 1–3 and default 1.
 - Make database/frontend prompts capability-driven.
-- Make strict mode accept each Rust-only preset without more shape flags.
-- Preserve bare `--defaults` as Rust React/web/no DB.
-- Update usage diagnostics and CLI help comprehensively.
+- Verify, without redefining, the B03/B04-owned strict/no-terminal and explicit
+  `--defaults` success behavior. If either preset is not already complete,
+  treat its owning task as incomplete rather than taking ownership in B05.
+- Preserve and regression-test bare `--defaults` as Rust React/web/no DB.
+- Update CLI long help in `crates/jig/src/bootstrap_parts/part_01.rs`, wizard and
+  strict-mode diagnostics, and doctor recovery text that enumerates complete
+  init shapes. B05 owns these messages and their snapshots/assertions.
 - Ensure package-manager availability is not checked for Rust-only presets.
 - Add interaction matrix tests.
 - Treat B03/B04 descriptor, init-report, and human-summary output as finalized;
@@ -2124,8 +2311,12 @@ with database/frontend requirements.
 - Strict and implicit non-terminal error/success matrix.
 - `--defaults` explicit/implicit matrix.
 - Missing package manager does not block Rust-only init.
+- CLI long-help, wizard/strict error, and doctor recovery snapshots enumerate
+  both Rust-only presets without changing existing default semantics.
 - B03/B04 preset human/JSON order, descriptors, and init summaries remain exact
   while interaction code changes around them.
+- B03/B04 strict/default capability decisions remain exact while B05 changes
+  only guided selection and user-visible diagnostics around them.
 
 #### Acceptance criteria
 
@@ -2133,6 +2324,8 @@ with database/frontend requirements.
 - Existing numeric choices and default remain stable.
 - No diagnostic falsely says every non-harness preset needs DB/frontends.
 - Automation needs only the explicit preset plus normal vault choice.
+- B05 does not redefine explicit strict/default success semantics already owned
+  by B03/B04.
 - JSON stdout remains uncontaminated.
 
 #### Execution workflow
@@ -2283,13 +2476,15 @@ family.
 #### Scope
 
 - Update `README.md` quick start and examples; `docs/developer-ux.md` init/adopt
-  distinction, guided flow, layouts, and ownership boundary;
+  distinction, guided flow, layouts, and ownership boundary; and
   `docs/configuration.md` answers, compatibility, setup, lock policy, and
-  snapshot notes; CLI long help in
-  `crates/jig/src/bootstrap_parts/part_01.rs`; wizard and strict diagnostics;
-  doctor recovery text that enumerates complete shapes; and snapshots/assertions
-  for those messages.
-- Ensure those surfaces say that `init` is for a new destination, `adopt` is for
+  snapshot notes.
+- Verify, without redefining, B05-owned CLI long help, wizard/strict diagnostics,
+  doctor recovery text, and their snapshots. If those finalized surfaces are
+  inconsistent, treat B05 as incomplete rather than silently taking ownership
+  in B07.
+- Ensure the user documentation and finalized B05 surfaces say that `init` is
+  for a new destination, `adopt` is for
   an existing Rust repository, `rust-library` creates a one-library virtual
   workspace, `rust-cli` creates a one-binary virtual workspace, neither adds a
   database or frontend, `rust-workspace` is not public, scaffold source is
@@ -2322,7 +2517,8 @@ reports.
 
 #### Acceptance criteria
 
-- README, developer UX, configuration docs, help, and presets output agree.
+- README, developer UX, and configuration docs agree with finalized B05-owned
+  help/diagnostics and B03/B04-owned presets output.
 - Existing init/adopt distinction is explicit.
 - No downstream/private identifiers appear in source, tests, docs, plans, Beads,
   or receipts.
@@ -2363,8 +2559,10 @@ Closes the epic.
 
 1. Complete B01 as a behavior-preserving refactor and run existing preset tests.
 2. Complete B02 internally and prove live/snapshot parity before public values.
-3. Expose and validate `rust-library` through B03.
-4. Reuse that path for `rust-cli` through B04.
+3. Expose and validate `rust-library` through B03, establishing the frozen
+   single-parse answer handoff before vault preparation.
+4. Reuse that identity, answer, and explicit strict/default path for `rust-cli`
+   through B04.
 5. Complete B05 interaction, help, and diagnostic integration without reopening
    B03/B04 descriptor or report ownership.
 6. Run B06 hardening against that settled public surface.
@@ -2425,9 +2623,17 @@ epic comment 27, which summarizes the audit remediation. Per-pass intermediate
 drafts were not retained, so their resolutions are evidence of the decisions
 but not evidence of round-to-round steady state.
 
-Rounds 9 onward use explicit baselines and content digests. Round 9 begins at
-commit `f282726`; later rounds record the SHA-256 digest of the reviewed plan so
-the exact input can be recovered from this worktree or its resulting commit.
+Round 9 begins at commit `f282726`. Rounds 10–12 recorded content digests, but
+their intermediate drafts were not retained; a digest identifies content but
+cannot recover it. Those rounds remain design history and their stated checks
+are useful, but they are not treated as independently reconstructable review
+inputs. Rounds 13–16 used a recoverable Git baseline and a then-current
+worktree output, but that output was revised before it was committed. Their
+ledger still identifies the reviewed digest and decisions, but no longer
+recovers the exact bytes independently; they therefore remain design history.
+Rounds 18 onward use the recoverable baseline, the resulting committed plan,
+and the retained validation ledger in
+`docs/rust-only-presets-plan-review-evidence.md`.
 
 ### Round 1 — Product taxonomy and user contract
 
@@ -2689,6 +2895,254 @@ Result: no change for a second consecutive round. The plan is at evidenced
 steady state and further revision is deferred until implementation discovers a
 new grounded fact.
 
+Subsequent audit found that this conclusion was premature: B01/B02 had an
+impossible first-non-backend ownership split, B03/B04 omitted accepted
+answers-file authority from their supposedly complete contracts, and B05/B07
+both owned CLI help and diagnostics. Round 12 therefore does not remain the
+current steady-state conclusion.
+
+### Round 13 — Audit remediation integration
+
+Provenance:
+
+- date: 2026-08-30;
+- reviewer/model: Codex, GPT-5;
+- recoverable input baseline: commit `78b54d4`;
+- output and validation evidence:
+  `docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- whether B01 can remain behavior-preserving while B02 owns the first real
+  non-backend plan;
+- whether Rust-only CLI and answers-file inputs have an exhaustive policy;
+- whether interaction/help/diagnostic ownership is singular;
+- whether earlier review provenance overclaimed recoverability.
+
+Resolution:
+
+- make B01 establish only the extensible typed boundary and move first
+  non-backend construction entirely to B02;
+- define accept/reject/derived/legacy behavior for every relevant common, Rust,
+  SQLx/schema, frontend, dev, Go, authored-model, and harness answer family;
+- assign CLI long help, wizard/strict diagnostics, and doctor recovery text to
+  B05 while B07 verifies them without redefining them;
+- distinguish content identification from recoverable review evidence and add
+  the retained validation ledger.
+
+Validation-loop result: self-containment, DAG, and five-decision justification
+checks passed after integration. The diff from `78b54d4` was structural, so
+another review round was required.
+
+### Round 14 — Standalone delivery-task review
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- B01/B02 boundary implementability without a placeholder variant;
+- B03 and B04 behavior when given only their Beads descriptions;
+- pre-vault and prepublication ordering for every incompatible answer family;
+- B05/B07 artifact ownership.
+
+Resolution:
+
+- B01 now has a behavior-preserving acceptance oracle and B02 owns the first
+  non-backend construction;
+- B03/B04 each carry the full input policy without numbered-section references;
+- B05 mutates CLI guidance and B07 performs documentation/final verification;
+- no plan, Beads edge, or product revision was required.
+
+Validation-loop result: all four checks passed and the plan digest did not
+change, providing the first post-remediation steady-state signal.
+
+### Round 15 — Dependency, rationale, and source-grounding review
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- live task readiness, cycles, orphans, and terminal-node intent;
+- current `InitScaffoldPlan`, `AnswerOpts`, `RawAnswers`, and repository-model
+  behavior against the revised task contracts;
+- five sampled decision rationales and compatibility tradeoffs;
+- plan/Beads description and acceptance-criteria alignment.
+
+Resolution:
+
+- the seven-task blocking path remains acyclic with B01 as the sole ready task;
+- source behavior supports the revised boundary and input-policy decisions;
+- every sampled choice retains an explicit why/tradeoff;
+- no plan or graph revision was required.
+
+Validation-loop result: all four checks passed with the same plan digest for a
+second consecutive round.
+
+### Round 16 — Final reconstructable steady-state audit
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- exact affected Beads descriptions and acceptance criteria;
+- stale ownership or “complete contract” contradictions;
+- graph health, private-fixture hygiene, formatting, and recoverable evidence;
+- final implementation readiness of the sole ready task.
+
+Resolution:
+
+- affected Beads records match their plan specifications;
+- no duplicate CLI-guidance owner or premature non-backend owner remains;
+- the input contract covers the parser's shape-bearing authority and preserves
+  inert compatibility fields deliberately;
+- no structural or wording revision was required.
+
+Validation-loop result: all four checks passed with an unchanged plan digest.
+At the time, rounds 13–16 were recorded as four reconstructable rounds ending
+in three no-change passes and a steady-state conclusion.
+
+The subsequent implementation-readiness audit found that this conclusion was
+also premature. B02 required exact public preset identity before B03/B04 owned
+the public enum values; the answers file was not frozen across interaction,
+pre-vault validation, and bootstrap rendering; B03/B04 and B05 duplicated
+strict/default success ownership; and the reviewed output had never been
+committed as an exact implementation baseline. Rounds 13–16 therefore do not
+remain the current evidenced steady-state conclusion.
+
+### Round 17 — Implementation-readiness remediation
+
+Provenance:
+
+- date: 2026-08-30;
+- reviewer/model: Codex, GPT-5;
+- input plan identified by SHA-256
+  `80816bfcd427d6f854f06acbd5bf03f1baa8ba6fb436b303f68595af30259192`;
+- output and validation evidence:
+  `docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- internal renderer identity before public Clap exposure;
+- one parsed answers-file value across interaction, vault preflight, and render;
+- singular strict/default success ownership;
+- exact committed baseline readiness.
+
+Resolution:
+
+- add a crate-private scaffold identity in B02 and leave public enum values to
+  B03/B04;
+- make B03 own a frozen single-parse init-answer handoff and make B04 reuse it;
+- assign explicit strict/default success to B03/B04 and guided interaction plus
+  diagnostics to B05;
+- require the final plan, ledger, and Beads export to land in one clean Git
+  baseline before B01 is claimed.
+
+Validation-loop result: the plan and affected Beads changed structurally, so
+the prior steady-state conclusion was invalidated and another review was
+required. The exact pre-remediation bytes were not committed, so this round is
+design history rather than one of the four current reconstructable rounds.
+
+### Round 18 — Standalone task and private/public identity review
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- whether B02 can compile, render, and report both internal artifacts without
+  adding public Clap values;
+- whether B03/B04 each own one explicit public conversion and complete success
+  path;
+- whether B05 can execute without reopening strict/default decisions;
+- self-contained rollback and test oracles.
+
+Resolution:
+
+- B02 owns private identity and proves public parser/report discovery is
+  unchanged;
+- B03/B04 own public reachability and their strict/default success behavior;
+- B05 owns guided selection and diagnostic text and treats explicit success as
+  a regression oracle;
+- no plan, product, or graph revision was required.
+
+Validation-loop result: all four checks passed with no plan change, providing
+the first post-remediation steady-state signal.
+
+### Round 19 — Answer lifecycle and source-ordering review
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- current double-read ordering across `prepare_init_interaction`, vault
+  preparation, and `prepare_init`;
+- retained raw-shape authority and unknown-top-level-key semantics;
+- one-parse and time-of-check/time-of-use acceptance oracles;
+- adoption/update non-regression boundaries.
+
+Resolution:
+
+- B03 carries one parsed input through interaction, selected-preset validation,
+  vault preflight, and rendering;
+- recognized harness-only nested models retain existing typed compatibility,
+  while shape-bearing top-level models fail closed;
+- B04 adds no second parser or validator;
+- no plan or graph revision was required.
+
+Validation-loop result: all four checks passed with the same plan digest for a
+second consecutive no-change round.
+
+### Round 20 — Dependency, rationale, and Beads alignment review
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- direct B01–B07 dependency edges, readiness, cycles, and terminal intent;
+- exact affected Beads descriptions and acceptance criteria;
+- five sampled load-bearing decisions and tradeoffs;
+- stale ownership/provenance language.
+
+Resolution:
+
+- the serial delivery chain remains complete and acyclic with B01 as its only
+  ready task;
+- plan and affected Beads contracts agree;
+- private identity, frozen answer input, explicit-versus-guided ownership,
+  license neutrality, and neutral repository projection retain explicit
+  rationale;
+- no plan or graph revision was required.
+
+Validation-loop result: all four checks passed with a third unchanged digest.
+
+### Round 21 — Final committed-baseline readiness audit
+
+Provenance and exact plan SHA-256 are retained in
+`docs/rust-only-presets-plan-review-evidence.md`.
+
+Review focus:
+
+- final format, fixture hygiene, and source-grounded assumptions;
+- review evidence recoverability;
+- Beads store health and task-scoped readiness;
+- whether B01 can capture a clean exact Git baseline.
+
+Resolution:
+
+- final artifacts are retained together and the plan digest is reproducible;
+- both Beads stores are healthy and synchronized;
+- no current task-boundary or answer-lifecycle contradiction remains;
+- B01 may be claimed only from the resulting clean committed baseline.
+
+Validation-loop result: all four checks passed with a fourth unchanged digest.
+Rounds 18–21 are the four current reconstructable strong-model rounds and end
+in steady state.
+
 ## 28. Final acceptance checklist
 
 Product:
@@ -2733,6 +3187,11 @@ Compatibility:
 - [ ] Go React output remains compatible.
 - [ ] harness-only remains compatible.
 - [ ] bare and `--defaults` init remain Rust React/web/no DB.
+- [ ] every Rust-only CLI and answers-file input family follows the exhaustive
+      policy, including fail-closed authored-model and unknown-top-level-key
+      handling.
+- [ ] init parses an answers file once and validates/renders the same retained
+      input before any vault capture.
 - [ ] update/recopy never owns scaffold files.
 - [ ] adoption behavior does not change.
 
@@ -2755,6 +3214,9 @@ Validation:
 The plan relies on these verified current-code facts:
 
 - only `RustReact`, `GoReact`, and `HarnessOnly` exist in `ScaffoldPreset`;
+- scaffold reports currently derive preset spelling directly from that public
+  enum, so B02 needs a separate private identity before B03/B04 add public
+  values;
 - preset descriptors already provide human and JSON discovery metadata;
 - strict init currently requires DB/frontends only for the two React presets;
 - package-manager preflight is already limited to React presets;
@@ -2764,6 +3226,9 @@ The plan relies on these verified current-code facts:
   writes, init transaction rollback, and JSON file classification;
 - existing Rust answers already express crate roots, SQLx disabled, Rust checks,
   frontend absence, and dev absence;
+- init currently loads answers for interaction and then loads them again inside
+  bootstrap after vault preparation, so B03 must freeze one parsed input across
+  that boundary to satisfy pre-vault fail-closed validation;
 - the current generated repository model otherwise labels every Rust shape as
   an API/backend, so Rust-only initial rendering needs a neutral projection
   through the existing component/action schema;
