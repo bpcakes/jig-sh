@@ -286,11 +286,9 @@ timezone = "UTC"
         .find(|workflow| workflow.id == "scheduled-noop")
         .unwrap();
     let mut occurrences = OccurrenceStore::new(&ctx);
-    let known_occurrences = occurrences.snapshot().unwrap();
     let failed = dispatch_workflow(
         &ctx,
         &mut occurrences,
-        &known_occurrences,
         &workflow,
         dispatch_at,
         &mut NoopExecutionObserver,
@@ -304,7 +302,6 @@ timezone = "UTC"
     let retried = dispatch_workflow(
         &ctx,
         &mut occurrences,
-        &known_occurrences,
         &workflow,
         dispatch_at,
         &mut NoopExecutionObserver,
@@ -427,8 +424,9 @@ timezone = "UTC"
         .acknowledge("scheduled-noop@1787301600000")
         .unwrap();
     let acknowledged = dispatch_due_at(&ctx, dispatch_at).unwrap();
-    assert_eq!(acknowledged["status"], "idle", "{acknowledged:#}");
-    assert_eq!(acknowledged["due_count"], 0);
+    assert_eq!(acknowledged["status"], "acted", "{acknowledged:#}");
+    assert_eq!(acknowledged["due_count"], 1);
+    assert_eq!(acknowledged["executed_count"], 1);
     assert_eq!(acknowledged["needs_attention_count"], 0);
 }
 
@@ -600,7 +598,6 @@ schedule = "* * * * *"
     let step = dispatch_workflow(
         &ctx,
         &mut occurrences,
-        &[],
         &workflow,
         timestamp("2026-08-21T08:42:30Z"),
         &mut NoopExecutionObserver,

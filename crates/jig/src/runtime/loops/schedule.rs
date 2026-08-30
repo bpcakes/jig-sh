@@ -53,7 +53,6 @@ fn dispatch_due_at_with_observer(
     let disposable_recovery = prepare_disposable_state_for_dispatch(ctx)?;
     let mut occurrences = OccurrenceStore::new(ctx);
     let reconciled = occurrences.reconcile_stale()?;
-    let known_occurrences = occurrences.snapshot()?;
     let mut actions = Vec::new();
     let mut summary = DispatchSummary::default();
     if disposable_recovery.attempt_cache_reset {
@@ -64,14 +63,7 @@ fn dispatch_due_at_with_observer(
     }
 
     for workflow in workflows {
-        let step = dispatch_workflow(
-            ctx,
-            &mut occurrences,
-            &known_occurrences,
-            &workflow,
-            dispatch_at_ms,
-            observer,
-        );
+        let step = dispatch_workflow(ctx, &mut occurrences, &workflow, dispatch_at_ms, observer);
         summary.include(&step);
         if let Some(action) = step.action {
             actions.push(action);
@@ -146,7 +138,6 @@ fn dispatch_due_at_with_observer(
 fn dispatch_workflow(
     ctx: &RepoContext,
     occurrences: &mut OccurrenceStore,
-    known_occurrences: &[ScheduleOccurrence],
     workflow: &ResolvedWorkflow,
     dispatch_at_ms: u64,
     observer: &mut dyn ExecutionControl,
@@ -160,7 +151,16 @@ fn dispatch_workflow(
             "status": "disabled",
         }));
     }
-    let latest = OccurrenceStore::latest_for_workflow(known_occurrences, &workflow.id);
+    let known_occurrences = match occurrences.snapshot() {
+        Ok(occurrences) => occurrences,
+        Err(error) => {
+            return DispatchStep::failure(
+                &workflow.id,
+                format!("Failed to refresh scheduled occurrence state: {error:#}"),
+            );
+        }
+    };
+    let latest = OccurrenceStore::latest_for_workflow(&known_occurrences, &workflow.id);
     let window = match schedule.window(
         dispatch_at_ms,
         latest.as_ref().map(|record| record.scheduled_at_ms),
@@ -179,21 +179,16 @@ fn dispatch_workflow(
         due_count: 1,
         ..DispatchStep::default()
     };
-    if let Some(retained) = blocking_retained_task_checkout(known_occurrences, workflow) {
-        step.skipped_count = 1;
-        step.failed_count = 1;
-        step.action = Some(json!({
-            "workflow_id": workflow.id,
-            "occurrence": retained,
-            "status": "failed",
-            "reason": "retained_worktree_requires_cleanup",
-            "retryable": true,
-            "next_at_ms": window.next_at_ms,
-            "error": "A retained task worktree must be removed before this workflow can run another scheduled occurrence",
-        }));
-        return step;
-    }
-    let claim = match occurrences.claim(&workflow.id, due_at_ms, workflow.lease_ttl_seconds) {
+    let isolated_task = workflow
+        .codex_task
+        .as_ref()
+        .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
+    let claim = match occurrences.claim_scheduled(
+        &workflow.id,
+        due_at_ms,
+        workflow.lease_ttl_seconds,
+        isolated_task,
+    ) {
         Ok(claim) => claim,
         Err(error) => {
             step.failed_count = 1;
@@ -209,6 +204,33 @@ fn dispatch_workflow(
                 "occurrence": record,
                 "status": "already_recorded",
                 "next_at_ms": window.next_at_ms,
+            }));
+            return step;
+        }
+        OccurrenceClaim::BlockedByAttention(record) => {
+            step.skipped_count = 1;
+            step.action = Some(json!({
+                "workflow_id": workflow.id,
+                "occurrence": record,
+                "status": "needs_attention",
+                "reason": "occurrence_requires_attention",
+                "retryable": false,
+                "next_at_ms": window.next_at_ms,
+                "error": "A prior scheduled occurrence requires acknowledgement before this workflow can claim another occurrence",
+            }));
+            return step;
+        }
+        OccurrenceClaim::BlockedByRetainedWorktree(record) => {
+            step.skipped_count = 1;
+            step.failed_count = 1;
+            step.action = Some(json!({
+                "workflow_id": workflow.id,
+                "occurrence": record,
+                "status": "failed",
+                "reason": "retained_worktree_requires_cleanup",
+                "retryable": true,
+                "next_at_ms": window.next_at_ms,
+                "error": "A retained task worktree must be removed before this workflow can run another scheduled occurrence",
             }));
             return step;
         }
@@ -255,12 +277,16 @@ fn dispatch_workflow(
         }
     };
     step.state_errors = scheduled_tick_state_errors(&tick, &workflow.id, &claim.occurrence_id);
-    if tick.workflow_was_unexecuted() {
+    if tick.workflow_was_unexecuted() && tick.completion().worktree.is_none() {
         let error = tick
             .completion()
             .error
             .clone()
             .unwrap_or_else(|| "Workflow was cancelled before execution started".into());
+        let reason = tick
+            .unexecuted_reason()
+            .expect("an unexecuted tick carries its phase reason")
+            .as_str();
         let tick = tick_value(&tick);
         return abandon_unexecuted_tick_failure(
             step,
@@ -269,13 +295,13 @@ fn dispatch_workflow(
             &claim,
             UnexecutedDispatchDetails {
                 next_at_ms: window.next_at_ms,
-                reason: "cancelled_before_start",
+                reason,
                 tick,
                 error,
             },
         );
     }
-    step.executed_count = 1;
+    step.executed_count = u64::from(!tick.workflow_was_unexecuted());
     if tick.lease_was_held() {
         return match guard.abandon_unexecuted() {
             Ok(finalization) => {
@@ -347,22 +373,6 @@ fn dispatch_workflow(
         }
     }
     step
-}
-
-fn blocking_retained_task_checkout<'a>(
-    occurrences: &'a [ScheduleOccurrence],
-    workflow: &ResolvedWorkflow,
-) -> Option<&'a ScheduleOccurrence> {
-    let isolated_task = workflow
-        .codex_task
-        .as_ref()
-        .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
-    isolated_task.then(|| {
-        occurrences
-            .iter()
-            .filter(|record| record.workflow_id == workflow.id && record.has_retained_worktree())
-            .max_by_key(|record| record.scheduled_at_ms)
-    })?
 }
 
 fn abandon_unexecuted_start_failure(

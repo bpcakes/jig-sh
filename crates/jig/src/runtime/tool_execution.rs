@@ -525,7 +525,7 @@ fn run_native_tool(
                     Ok(NativeToolRun::CancelledBeforeStart)
                 }
                 Err(ExecutionCommandError::Cancelled) => Ok(NativeToolRun::Cancelled),
-                Err(ExecutionCommandError::Failed(error)) => Err(error),
+                Err(ExecutionCommandError::Failed { error, .. }) => Err(error),
             }
         }
         _ => bail!("Unsupported native tool kind for {operation}"),

@@ -7,6 +7,8 @@ use crate::runtime::loops::state::{LOOP_CACHE_DIR, LOOP_RUNTIME_DIR, with_exclus
 mod pruning;
 #[path = "tests/renewal_diagnostics.rs"]
 mod renewal_diagnostics;
+#[path = "tests/review_constraints.rs"]
+mod review_constraints;
 #[path = "tests/schema_migration.rs"]
 mod schema_migration;
 

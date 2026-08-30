@@ -29,8 +29,13 @@ use crate::runtime::worker_runner::{
 
 use super::state::LOOP_RUNTIME_DIR;
 use super::workflow::{
-    CodexTaskCheckout, ResolvedWorkflow, WorkflowCompletion, WorkflowOutcome, WorkflowTick,
+    CodexTaskCheckout, CodexTaskSettings, ResolvedWorkflow, UnexecutedReason, WorkflowCompletion,
+    WorkflowExecution, WorkflowOutcome, WorkflowTick,
 };
+
+mod pre_execution;
+
+use pre_execution::{CheckoutPreparationFailure, unexecuted_task_failure};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
@@ -49,19 +54,53 @@ pub(super) fn codex_task_tick(
         .codex_task
         .as_ref()
         .ok_or_else(|| anyhow!("Workflow '{}' is missing codex_task settings", workflow.id))?;
-    let prompt = read_prompt(ctx, &settings.prompt_file)?;
-    let codex_home = workflow
+    let prompt = match read_prompt(ctx, &settings.prompt_file) {
+        Ok(prompt) => prompt,
+        Err(error) => {
+            return Ok(unexecuted_task_failure(
+                settings,
+                execution.item_key,
+                None,
+                None,
+                format!("{error:#}"),
+            ));
+        }
+    };
+    let codex_home = match workflow
         .codex_home_configured
         .as_deref()
         .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
-        .transpose()?;
-    let checkout = prepare_checkout(
+        .transpose()
+    {
+        Ok(codex_home) => codex_home,
+        Err(error) => {
+            return Ok(unexecuted_task_failure(
+                settings,
+                execution.item_key,
+                None,
+                None,
+                format!("{error:#}"),
+            ));
+        }
+    };
+    let checkout = match prepare_checkout(
         ctx,
         workflow,
         execution.item_key,
         settings.checkout,
         observer,
-    )?;
+    ) {
+        Ok(checkout) => checkout,
+        Err(error) => {
+            return Ok(unexecuted_task_failure(
+                settings,
+                execution.item_key,
+                codex_home.as_deref(),
+                error.retained_worktree().map(str::to_string),
+                error.to_string(),
+            ));
+        }
+    };
     let worker = run_codex_exec(
         ctx,
         CodexExecRequest {
@@ -113,7 +152,7 @@ pub(super) fn codex_task_tick(
                 } else {
                     WorkflowOutcome::Failed
                 },
-                unexecuted: false,
+                execution: WorkflowExecution::Executed,
                 worker_receipt_id: Some(worker.worker_receipt_id().to_owned()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -154,8 +193,16 @@ pub(super) fn codex_task_tick(
                 checkout.error,
             );
             let completion = WorkflowCompletion {
-                outcome: WorkflowOutcome::Failed,
-                unexecuted: before_start,
+                outcome: if before_start && checkout.report.retained_worktree().is_some() {
+                    WorkflowOutcome::NeedsAttention
+                } else {
+                    WorkflowOutcome::Failed
+                },
+                execution: if before_start {
+                    WorkflowExecution::Unexecuted(UnexecutedReason::CancelledBeforeStart)
+                } else {
+                    WorkflowExecution::Executed
+                },
                 worker_receipt_id: Some(worker_receipt_id.clone()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -173,17 +220,41 @@ pub(super) fn codex_task_tick(
             (action, completion)
         }
         Err(error) => {
-            let worker_receipt_id = error
-                .downcast_ref::<crate::runtime::worker_runner::CodexExecFailure>()
+            let worker_failure =
+                error.downcast_ref::<crate::runtime::worker_runner::CodexExecFailure>();
+            let worker_receipt_id = worker_failure
                 .and_then(|error| error.worker_receipt_id())
                 .map(str::to_string);
-            let checkout = checkout.finish(TaskOutcome::Failed, ctx);
+            let unexecuted = worker_failure.is_some_and(|error| error.worker_was_unexecuted());
+            let unexecuted_reason =
+                if worker_failure.is_some_and(|error| error.worker_was_cancelled_before_start()) {
+                    UnexecutedReason::CancelledBeforeStart
+                } else {
+                    UnexecutedReason::PreExecutionError
+                };
+            let checkout = checkout.finish(
+                if unexecuted {
+                    TaskOutcome::Succeeded
+                } else {
+                    TaskOutcome::Failed
+                },
+                ctx,
+            );
             let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
+            let retained_worktree = checkout.report.retained_worktree();
             let completion = WorkflowCompletion {
-                outcome: WorkflowOutcome::Failed,
-                unexecuted: false,
+                outcome: if unexecuted && retained_worktree.is_some() {
+                    WorkflowOutcome::NeedsAttention
+                } else {
+                    WorkflowOutcome::Failed
+                },
+                execution: if unexecuted {
+                    WorkflowExecution::Unexecuted(unexecuted_reason)
+                } else {
+                    WorkflowExecution::Executed
+                },
                 worker_receipt_id: worker_receipt_id.clone(),
-                worktree: checkout.report.retained_worktree(),
+                worktree: retained_worktree,
                 error: error.clone(),
             };
             let action = json!({
@@ -435,7 +506,7 @@ fn prepare_checkout(
     item_key: &str,
     checkout: CodexTaskCheckout,
     observer: &mut dyn ExecutionControl,
-) -> Result<PreparedCheckout> {
+) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
     if checkout == CodexTaskCheckout::Repo {
         return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
@@ -454,7 +525,10 @@ fn prepare_checkout(
         .join("tasks")
         .join(name);
     if path.exists() {
-        bail!("Codex task worktree already exists: {}", path.display());
+        return Err(CheckoutPreparationFailure::retained(
+            &path,
+            anyhow!("Codex task worktree already exists: {}", path.display()),
+        ));
     }
     require_ignored_task_worktree_root(ctx, observer)?;
     if let Some(parent) = path.parent() {
@@ -666,20 +740,37 @@ fn checkout_preparation_error(
     path: &Path,
     error: anyhow::Error,
     cleanup_error: Option<anyhow::Error>,
-) -> anyhow::Error {
-    match cleanup_error {
-        Some(cleanup_error) => match fs::symlink_metadata(path) {
-            Ok(_) => anyhow!(
-                "{error:#}; partial Codex task worktree may remain at {}; cleanup failed: {cleanup_error:#}",
-                path.display()
-            ),
-            Err(inspect_error) if inspect_error.kind() == std::io::ErrorKind::NotFound => error,
-            Err(inspect_error) => anyhow!(
-                "{error:#}; cleanup failed and Jig could not inspect the possible partial Codex task worktree at {}: {cleanup_error:#}; inspection failed: {inspect_error}",
-                path.display()
-            ),
-        },
-        None => error,
+) -> CheckoutPreparationFailure {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            let error = match cleanup_error {
+                Some(cleanup_error) => anyhow!(
+                    "{error:#}; partial Codex task worktree may remain at {}; cleanup failed: {cleanup_error:#}",
+                    path.display()
+                ),
+                None => anyhow!(
+                    "{error:#}; partial Codex task worktree remains at {} after cleanup",
+                    path.display()
+                ),
+            };
+            CheckoutPreparationFailure::retained(path, error)
+        }
+        Err(inspect_error) if inspect_error.kind() == std::io::ErrorKind::NotFound => {
+            CheckoutPreparationFailure::new(error)
+        }
+        Err(inspect_error) => {
+            let error = match cleanup_error {
+                Some(cleanup_error) => anyhow!(
+                    "{error:#}; cleanup failed and Jig could not inspect the possible partial Codex task worktree at {}: {cleanup_error:#}; inspection failed: {inspect_error}",
+                    path.display()
+                ),
+                None => anyhow!(
+                    "{error:#}; Jig could not verify cleanup of the possible partial Codex task worktree at {}: {inspect_error}",
+                    path.display()
+                ),
+            };
+            CheckoutPreparationFailure::retained(path, error)
+        }
     }
 }
 

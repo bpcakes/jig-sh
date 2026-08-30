@@ -134,12 +134,22 @@ impl CodexExecOutput {
 #[derive(Debug)]
 pub(crate) struct CodexExecFailure {
     worker_receipt_id: Option<String>,
+    unexecuted: bool,
+    cancelled_before_start: bool,
     message: String,
 }
 
 impl CodexExecFailure {
     pub(crate) fn worker_receipt_id(&self) -> Option<&str> {
         self.worker_receipt_id.as_deref()
+    }
+
+    pub(crate) fn worker_was_unexecuted(&self) -> bool {
+        self.unexecuted
+    }
+
+    pub(crate) fn worker_was_cancelled_before_start(&self) -> bool {
+        self.cancelled_before_start
     }
 }
 
@@ -216,7 +226,15 @@ pub(crate) fn run_codex_exec(
                     status: "completed",
                 },
                 observer,
-            )?;
+            )
+            .map_err(|error| CodexExecFailure {
+                worker_receipt_id: None,
+                unexecuted: false,
+                cancelled_before_start: false,
+                message: format!(
+                    "Codex worker completed but its receipt could not be recorded: {error:#}"
+                ),
+            })?;
             Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
                 provider_stdout: run.provider_stdout,
@@ -246,13 +264,24 @@ pub(crate) fn run_codex_exec(
                     status: "cancelled",
                 },
                 observer,
-            )?;
+            )
+            .map_err(|receipt_error| CodexExecFailure {
+                worker_receipt_id: None,
+                unexecuted: before_start,
+                cancelled_before_start: before_start,
+                message: format!(
+                    "{message}; the cancellation receipt could not be recorded: {receipt_error:#}"
+                ),
+            })?;
             Ok(CodexExecOutcome::Cancelled {
                 before_start,
                 worker_receipt_id: receipt_id,
             })
         }
-        Err(ExecutionCommandError::Failed(error)) => {
+        Err(ExecutionCommandError::Failed {
+            error,
+            process_started,
+        }) => {
             let message = format!("{error:#}");
             let receipt_id = record_worker_receipt(
                 ctx,
@@ -270,9 +299,19 @@ pub(crate) fn run_codex_exec(
                     status: "error",
                 },
                 observer,
-            )?;
+            )
+            .map_err(|receipt_error| CodexExecFailure {
+                worker_receipt_id: None,
+                unexecuted: !process_started,
+                cancelled_before_start: false,
+                message: format!(
+                    "{message}; the worker failure receipt could not be recorded: {receipt_error:#}"
+                ),
+            })?;
             Err(CodexExecFailure {
                 worker_receipt_id: Some(receipt_id.clone()),
+                unexecuted: !process_started,
+                cancelled_before_start: false,
                 message: format!("Codex worker invocation failed; receipt {receipt_id}: {message}"),
             }
             .into())
@@ -330,7 +369,9 @@ fn run_codex_exec_inner(
     let provider_stderr_truncated = output.provider_stderr_truncated;
     let mut output = output.output;
 
-    output.stdout = read_worker_output_file(output_file.path())?.unwrap_or_default();
+    output.stdout = read_worker_output_file(output_file.path())
+        .map_err(ExecutionCommandError::failed_after_start)?
+        .unwrap_or_default();
 
     Ok(CodexRunOutput {
         output,
@@ -438,17 +479,21 @@ fn run_worker_command(
     );
     let result_file_failure = process_observer.take_result_file_failure();
     let output = match (process_result, result_file_failure) {
-        (Ok(_), Some(failure))
-        | (
-            Err(OwnedProcessTreeError::CancelledBeforeStart | OwnedProcessTreeError::Cancelled),
-            Some(failure),
-        ) => return Err(failure.into_execution_error()),
+        (Ok(_), Some(failure)) => return Err(failure.into_execution_error(true)),
+        (Err(OwnedProcessTreeError::CancelledBeforeStart), Some(failure)) => {
+            return Err(failure.into_execution_error(false));
+        }
+        (Err(OwnedProcessTreeError::Cancelled), Some(failure)) => {
+            return Err(failure.into_execution_error(true));
+        }
         (Ok(output), None) => output,
         (Err(error), _) => return Err(worker_process_error(error, timeout)),
     };
 
-    let stdout = complete_worker_output(output.stdout, "stdout")?;
-    let stderr = complete_worker_output(output.stderr, "stderr")?;
+    let stdout = complete_worker_output(output.stdout, "stdout")
+        .map_err(ExecutionCommandError::failed_after_start)?;
+    let stderr = complete_worker_output(output.stderr, "stderr")
+        .map_err(ExecutionCommandError::failed_after_start)?;
     Ok(WorkerCommandOutput {
         output: Output {
             status: output.status,
@@ -546,14 +591,18 @@ enum WorkerResultFileFailure {
 }
 
 impl WorkerResultFileFailure {
-    fn into_execution_error(self) -> ExecutionCommandError {
+    fn into_execution_error(self, process_started: bool) -> ExecutionCommandError {
         let error = match self {
             Self::CaptureLimitExceeded => anyhow!(
                 "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
             ),
             Self::Inspection(message) => anyhow!(message),
         };
-        ExecutionCommandError::failed(error)
+        if process_started {
+            ExecutionCommandError::failed_after_start(error)
+        } else {
+            ExecutionCommandError::failed(error)
+        }
     }
 }
 
@@ -591,21 +640,21 @@ fn worker_process_error(
         OwnedProcessTreeError::Start(error) => {
             ExecutionCommandError::failed(anyhow!(error).context("Failed to start worker process"))
         }
-        OwnedProcessTreeError::TimedOut => ExecutionCommandError::failed(anyhow!(
+        OwnedProcessTreeError::TimedOut => ExecutionCommandError::failed_after_start(anyhow!(
             "Worker process timed out after {} seconds",
             timeout.as_secs()
         )),
         OwnedProcessTreeError::CancelledBeforeStart => ExecutionCommandError::CancelledBeforeStart,
         OwnedProcessTreeError::Cancelled => ExecutionCommandError::Cancelled,
         OwnedProcessTreeError::OutputLimitExceeded(stream) => {
-            ExecutionCommandError::failed(anyhow!(
+            ExecutionCommandError::failed_after_start(anyhow!(
                 "Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
             ))
         }
         OwnedProcessTreeError::Await => {
-            ExecutionCommandError::failed(anyhow!("Failed to wait for worker process"))
+            ExecutionCommandError::failed_after_start(anyhow!("Failed to wait for worker process"))
         }
-        OwnedProcessTreeError::Cleanup => ExecutionCommandError::failed(anyhow!(
+        OwnedProcessTreeError::Cleanup => ExecutionCommandError::failed_after_start(anyhow!(
             "Worker process tree could not be cleaned up safely"
         )),
     }

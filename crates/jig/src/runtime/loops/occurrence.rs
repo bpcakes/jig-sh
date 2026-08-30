@@ -18,6 +18,7 @@ use crate::state::now_ms;
 use super::state::renewal_interval;
 
 mod attention;
+mod claim;
 mod persistence;
 
 use persistence::SchedulePersistence;
@@ -131,6 +132,8 @@ impl Default for ScheduleFile {
 pub(super) enum OccurrenceClaim {
     Acquired(ScheduleOccurrence),
     AlreadyRecorded(ScheduleOccurrence),
+    BlockedByAttention(ScheduleOccurrence),
+    BlockedByRetainedWorktree(ScheduleOccurrence),
 }
 
 pub(super) enum OccurrenceAcknowledgement {
@@ -393,6 +396,7 @@ impl OccurrenceStore {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn claim(
         &mut self,
         workflow_id: &str,
@@ -400,6 +404,23 @@ impl OccurrenceStore {
         ttl_seconds: u64,
     ) -> Result<OccurrenceClaim> {
         self.claim_at(workflow_id, scheduled_at_ms, ttl_seconds, now_ms())
+    }
+
+    pub(super) fn claim_scheduled(
+        &mut self,
+        workflow_id: &str,
+        scheduled_at_ms: u64,
+        ttl_seconds: u64,
+        block_retained_worktree: bool,
+    ) -> Result<OccurrenceClaim> {
+        self.claim_with_constraints_at(
+            workflow_id,
+            scheduled_at_ms,
+            ttl_seconds,
+            now_ms(),
+            true,
+            block_retained_worktree,
+        )
     }
 
     pub(super) fn renew(
@@ -557,6 +578,7 @@ impl OccurrenceStore {
             .cloned()
     }
 
+    #[cfg(test)]
     fn claim_at(
         &mut self,
         workflow_id: &str,
@@ -564,31 +586,7 @@ impl OccurrenceStore {
         ttl_seconds: u64,
         now: u64,
     ) -> Result<OccurrenceClaim> {
-        let occurrence_id = occurrence_id(workflow_id, scheduled_at_ms);
-        self.with_locked(|store| {
-            validate_schema(store)?;
-            reconcile_stale_file(store, now);
-            if let Some(existing) = store.occurrences.get(&occurrence_id) {
-                return Ok(OccurrenceClaim::AlreadyRecorded(existing.clone()));
-            }
-            let record = ScheduleOccurrence {
-                occurrence_id: occurrence_id.clone(),
-                workflow_id: workflow_id.to_string(),
-                scheduled_at_ms,
-                owner: format!("{}-{}", std::process::id(), Ulid::new()),
-                claim_expires_at_ms: expiry(now, ttl_seconds),
-                started_at_ms: now,
-                finished_at_ms: None,
-                acknowledged_at_ms: None,
-                status: OccurrenceStatus::Running,
-                worker_receipt_id: None,
-                worktree: None,
-                error: None,
-            };
-            store.occurrences.insert(occurrence_id, record.clone());
-            prune_history(store);
-            Ok(OccurrenceClaim::Acquired(record))
-        })
+        self.claim_with_constraints_at(workflow_id, scheduled_at_ms, ttl_seconds, now, false, false)
     }
 
     fn renew_at(

@@ -407,6 +407,51 @@ printf 'authoritative result\n' > "$out"
 
     #[cfg(unix)]
     #[test]
+    fn cancelled_before_start_keeps_its_phase_when_receipt_recording_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        fs::create_dir_all(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let error = run_codex_exec(
+            &ctx,
+            CodexExecRequest {
+                root: temp.path(),
+                codex_home: None,
+                mode: CodexExecMode::Exec,
+                model: None,
+                approval_policy: Some("never"),
+                sandbox: Some("workspace-write"),
+                ephemeral: true,
+                extra_args: Vec::new(),
+                output_schema: None,
+                transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
+                prompt: CodexPrompt::Stdin("example prompt"),
+                receipt: WorkerReceiptRequest {
+                    purpose: "test",
+                    plan_id: None,
+                    workflow_id: Some("ExampleProject"),
+                    item_key: Some("ExampleProject@100"),
+                    collect_git_metadata: false,
+                    collect_worktree_fingerprint: false,
+                },
+                phase: None,
+            },
+            &mut CancelledControl,
+        )
+        .err()
+        .expect("receipt recording failure must surface");
+        let failure = error.downcast_ref::<CodexExecFailure>().unwrap();
+
+        assert!(failure.worker_was_unexecuted());
+        assert!(failure.worker_was_cancelled_before_start());
+        assert!(failure.worker_receipt_id().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn worker_timeout_kills_process_group() {
         use std::os::unix::fs::PermissionsExt;
 

@@ -75,7 +75,7 @@ printf 'task complete\n'
 
 #[cfg(unix)]
 #[test]
-fn scheduled_codex_invocation_failure_links_worker_receipt() {
+fn scheduled_codex_start_failure_links_retry_receipt_without_consuming_occurrence() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -87,21 +87,33 @@ fn scheduled_codex_invocation_failure_links_worker_receipt() {
     let output = dispatch_loop(&ctx);
 
     assert_eq!(output["ok"], false, "{output:#}");
-    let occurrence_receipt = output["actions"][0]["occurrence"]["worker_receipt_id"]
-        .as_str()
-        .expect("failed occurrence must link its worker receipt");
     assert_eq!(
-        output["actions"][0]["tick"]["actions"][0]["worker_receipt_id"],
-        occurrence_receipt
+        output["actions"][0]["reason"],
+        "pre_execution_error",
+        "{output:#}"
     );
-    let retained = output["actions"][0]["occurrence"]["worktree"]
-        .as_str()
-        .expect("a failed isolated task must retain its worktree");
+    assert_eq!(output["actions"][0]["retryable"], true, "{output:#}");
     assert_eq!(
-        output["actions"][0]["tick"]["actions"][0]["checkout"]["path"],
-        retained
+        output["actions"][0]["occurrence_state_persisted"],
+        false,
+        "{output:#}"
     );
-    assert!(Path::new(retained).exists());
+    let worker_receipt = output["actions"][0]["tick"]["actions"][0]["worker_receipt_id"]
+        .as_str()
+        .expect("pre-start worker failure must link its diagnostic receipt");
+    assert!(worker_receipt.starts_with("receipt_"));
+    let checkout = &output["actions"][0]["tick"]["actions"][0]["checkout"];
+    assert_eq!(checkout["retained"], false, "{output:#}");
+    let removed = checkout["path"]
+        .as_str()
+        .expect("worktree checkout path must be reported");
+    assert!(!Path::new(removed).exists());
+    let status = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
+    )
+    .unwrap();
+    assert_eq!(status["scheduled_occurrences"], json!([]));
 }
 
 #[cfg(unix)]

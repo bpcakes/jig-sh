@@ -16,10 +16,14 @@ use super::state::{
 };
 use super::workflow::{
     CODEX_TASK_KIND, DEFAULT_WORKFLOW_ID, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND,
-    ResolvedWorkflow, TuningOverrides, WorkflowCompletion, WorkflowOutcome, WorkflowTick,
-    list_workflows, loop_status_is_success, resolve_workflow,
+    ResolvedWorkflow, TuningOverrides, UnexecutedReason, WorkflowCompletion, WorkflowOutcome,
+    WorkflowTick, list_workflows, loop_status_is_success, resolve_workflow,
 };
 use super::{codex_task, github, noop, pr_manager};
+
+mod unexecuted;
+
+use unexecuted::UnexecutedTickError;
 
 struct TickExecution {
     item_key: String,
@@ -103,37 +107,6 @@ pub(super) enum ScheduledTick {
     },
 }
 
-#[derive(Debug)]
-pub(super) struct UnexecutedTickError(anyhow::Error);
-
-impl UnexecutedTickError {
-    fn into_inner(self) -> anyhow::Error {
-        self.0
-    }
-}
-
-impl std::fmt::Display for UnexecutedTickError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if formatter.alternate() {
-            write!(formatter, "{:#}", self.0)
-        } else {
-            write!(formatter, "{}", self.0)
-        }
-    }
-}
-
-impl std::error::Error for UnexecutedTickError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.0.source()
-    }
-}
-
-impl From<anyhow::Error> for UnexecutedTickError {
-    fn from(error: anyhow::Error) -> Self {
-        Self(error)
-    }
-}
-
 impl ScheduledTick {
     pub(super) fn value(&self) -> Option<&Value> {
         match self {
@@ -149,7 +122,11 @@ impl ScheduledTick {
     }
 
     pub(super) fn workflow_was_unexecuted(&self) -> bool {
-        self.completion().unexecuted
+        self.unexecuted_reason().is_some()
+    }
+
+    pub(super) fn unexecuted_reason(&self) -> Option<UnexecutedReason> {
+        self.completion().execution.unexecuted_reason()
     }
 
     pub(super) fn post_work_error(&self) -> Option<&str> {
@@ -184,6 +161,17 @@ impl ScheduledTick {
 
     fn into_manual_result(self) -> Result<Value> {
         match self {
+            Self::Reported {
+                value: _,
+                completion,
+                ..
+            } if completion.execution.unexecuted_reason().is_some()
+                && completion.worker_receipt_id.is_none() =>
+            {
+                Err(anyhow::anyhow!(completion.error.unwrap_or_else(|| {
+                    "Workflow did not start execution".into()
+                })))
+            }
             Self::Reported { value, .. } => Ok(value),
             Self::Errored { error, .. } => Err(anyhow::anyhow!(error)),
         }
@@ -312,7 +300,7 @@ fn tick_with_execution(
                 if let Err(error) = released {
                     let error = format!("{error:#}");
                     release_warning = Some(error.clone());
-                    if !completion.unexecuted {
+                    if completion.execution.unexecuted_reason().is_none() {
                         completion.outcome = WorkflowOutcome::NeedsAttention;
                         let ownership_error = format!(
                             "Workflow lease ownership was lost before completion could be finalized: {error}"
@@ -525,7 +513,8 @@ pub(super) fn status_at_with_cancellation(
 
     let attempts = AttemptStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;
     ensure_status_active(cancelled)?;
-    let attempt_sections = AttemptSections::new_with_cancellation(&attempts, now_ms(), cancelled)?;
+    let attempt_sections =
+        AttemptSections::new_with_cancellation(&attempts, checked_at_ms, cancelled)?;
     ensure_status_active(cancelled)?;
     let leases = LeaseStore::new(ctx).active_leases_read_only_with_cancellation(cancelled)?;
     ensure_status_active(cancelled)?;

@@ -48,19 +48,32 @@ pub(crate) enum SupervisedExecutionError {
 pub(crate) enum ExecutionCommandError {
     CancelledBeforeStart,
     Cancelled,
-    Failed(anyhow::Error),
+    Failed {
+        error: anyhow::Error,
+        process_started: bool,
+    },
 }
 
 impl ExecutionCommandError {
     pub(crate) fn failed(error: impl Into<anyhow::Error>) -> Self {
-        Self::Failed(error.into())
+        Self::Failed {
+            error: error.into(),
+            process_started: false,
+        }
+    }
+
+    pub(crate) fn failed_after_start(error: impl Into<anyhow::Error>) -> Self {
+        Self::Failed {
+            error: error.into(),
+            process_started: true,
+        }
     }
 
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::CancelledBeforeStart => anyhow!("Execution was cancelled before it started"),
             Self::Cancelled => anyhow!("Execution was cancelled"),
-            Self::Failed(error) => error,
+            Self::Failed { error, .. } => error,
         }
     }
 }
@@ -72,7 +85,7 @@ impl fmt::Display for ExecutionCommandError {
                 formatter.write_str("Execution was cancelled before it started")
             }
             Self::Cancelled => formatter.write_str("Execution was cancelled"),
-            Self::Failed(error) => fmt::Display::fmt(error, formatter),
+            Self::Failed { error, .. } => fmt::Display::fmt(error, formatter),
         }
     }
 }
@@ -80,7 +93,7 @@ impl fmt::Display for ExecutionCommandError {
 impl std::error::Error for ExecutionCommandError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Failed(error) => error.source(),
+            Self::Failed { error, .. } => error.source(),
             Self::CancelledBeforeStart | Self::Cancelled => None,
         }
     }
@@ -88,7 +101,7 @@ impl std::error::Error for ExecutionCommandError {
 
 impl From<anyhow::Error> for ExecutionCommandError {
     fn from(error: anyhow::Error) -> Self {
-        Self::Failed(error)
+        Self::failed(error)
     }
 }
 
@@ -161,9 +174,17 @@ pub(crate) fn execution_command_error(
             "{label} exceeded the {} byte {stream} capture limit",
             output_limit.bytes()
         ),
-        SupervisedExecutionError::Failed { error, .. } => error,
+        SupervisedExecutionError::Failed {
+            error,
+            process_started,
+        } => {
+            return ExecutionCommandError::Failed {
+                error,
+                process_started,
+            };
+        }
     };
-    ExecutionCommandError::Failed(error)
+    ExecutionCommandError::failed_after_start(error)
 }
 
 fn supervised_execution_error(

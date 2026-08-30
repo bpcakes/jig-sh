@@ -4,6 +4,8 @@ use super::super::engine::ScheduledTick;
 #[cfg(test)]
 use super::super::engine::WorkflowLeaseDisposition;
 use super::super::occurrence::OccurrenceOutcome;
+#[cfg(test)]
+use super::super::workflow::WorkflowExecution;
 use super::super::workflow::WorkflowOutcome;
 
 #[derive(Default)]
@@ -225,7 +227,7 @@ mod tests {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
-                unexecuted: false,
+                execution: WorkflowExecution::Executed,
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: Some("worker failed".into()),
@@ -274,7 +276,7 @@ mod tests {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Succeeded,
-                unexecuted: false,
+                execution: WorkflowExecution::Executed,
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: None,

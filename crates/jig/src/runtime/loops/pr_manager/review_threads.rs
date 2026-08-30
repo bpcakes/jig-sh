@@ -76,7 +76,7 @@ fn post_review_thread_updates(
                     reply_error = Value::String("review thread reply was cancelled".into());
                     None
                 }
-                Err(ExecutionCommandError::Failed(error)) => {
+                Err(ExecutionCommandError::Failed { error, .. }) => {
                     failed = true;
                     thread_failed = true;
                     reply_error = Value::String(format!("{error:#}"));
@@ -110,7 +110,7 @@ fn post_review_thread_updates(
                     resolve_error = Value::String("review thread resolution was cancelled".into());
                     None
                 }
-                Err(ExecutionCommandError::Failed(error)) => {
+                Err(ExecutionCommandError::Failed { error, .. }) => {
                     failed = true;
                     thread_failed = true;
                     resolve_error = Value::String(format!("{error:#}"));

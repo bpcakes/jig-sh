@@ -22,6 +22,8 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
 - [x] (2026-08-30 18:10Z) Repair the valid first-round lease, cancellation, retention, cache-recovery, status-degradation, marker-write, and renewal-diagnostic findings with focused regressions.
 - [x] (2026-08-30 18:35Z) Split the enlarged occurrence and schedule regression modules after the first repeated gate run exposed the repository's 800-line Rust-file limit; 135 focused loop tests and workspace Clippy pass after the split.
 - [x] (2026-08-30 18:50Z) Complete a fresh structured work check: contract, LOC, format, Clippy, 2,485 core tests, and 107 frontend tests pass under batch receipt `receipt_01M19HAKRWJYQN319QQ5JHKS9G`.
+- [x] (2026-08-30 19:15Z) Complete the second independent Claude/Codex review against verified fingerprint `b8255ceffff53d8a96e0e8b73c60b141aca5f3ccd83230873717989dbc20c6eb` and research all three open questions before adjudicating findings.
+- [x] (2026-08-30 20:00Z) Repair the valid second-round stale-claim, pre-worker phase, retained-cleanup, attention-growth, receipt-failure, and mixed-clock findings with 140 passing focused loop tests.
 - [ ] Repeat full gates and fresh comprehensive Claude/Codex branch reviews until no actionable in-scope findings remain; record unrelated findings in Beads and exclude them from the loop.
 
 ## Surprises & Discoveries
@@ -46,6 +48,12 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
   Evidence: task worktree creation records `rev-parse HEAD` and passes that same immutable object id to `git worktree add`; concurrent root HEAD movement therefore cannot create the claimed recorded-HEAD mismatch. `git fetch` and `git worktree add` operate on refs/common worktree metadata and a separate worktree index, not the main worktree index.
 - Observation: the first repeated structured gate run passed contract, format, Clippy, all 2,485 core tests, and all 107 frontend tests, but the new regressions pushed two existing test modules above the configured 800-line limit.
   Evidence: `occurrence/tests.rs` measured 835 lines and `schedule/tests.rs` measured 880 lines. Moving cohesive renewal diagnostics and review regressions into child modules reduced them to 787 and 629 lines without changing behavior; compilation, 135 focused loop tests, and workspace Clippy then passed.
+- Observation: all second-round open questions were answerable without product input.
+  Evidence: Git's documented branch-name validation forbids a leading dash, the loop operator guide names durable-ledger restoration and manual reconciliation, and occurrence ids are opaque ledger keys with no `@` parser. The first-dispatch behavior is also explicitly documented and remains intentional.
+- Observation: refreshing a schedule snapshot before each workflow narrows but cannot close the overlapping-dispatch race.
+  Evidence: another dispatcher can still terminalize a newer occurrence between the refresh and claim. The durable claim lock must reject newer chronology, unresolved attention, and retained-worktree evidence in the same transaction that inserts a claim.
+- Observation: a boolean `unexecuted` flag could not distinguish cancellation from setup failure and allowed retained cleanup evidence to conflict with retry.
+  Evidence: prompt/home/checkout failures and cancellation-receipt failures reached different error paths, while both could precede worker start. Replacing the flag with `WorkflowExecution::Unexecuted(UnexecutedReason)` makes the retry reason explicit; a retained path changes finalization to `needs_attention` instead of deleting the only durable evidence.
 
 ## Decision Log
 
@@ -73,10 +81,16 @@ Scheduled loop work must never lose a due occurrence before a worker starts, hid
 - Decision: validate lease-cache parseability and fail closed, but recover malformed attempt state with structured dispatch evidence.
   Rationale: attempt counters affect retry policy but do not confer mutual exclusion; leases are live safety claims. Treating both files as equally disposable creates an overlap window.
   Date/Author: 2026-08-30 / Codex
+- Decision: enforce schedule chronology, unresolved-attention backpressure, and retained-worktree backpressure inside the occurrence claim transaction.
+  Rationale: per-dispatch and even per-workflow snapshots are observations, not synchronization. One locked precondition prevents stale runs and bounds ambiguous evidence to one unresolved occurrence per workflow without deleting or collapsing operator evidence.
+  Date/Author: 2026-08-30 / Codex
+- Decision: replace the workflow's unexecuted boolean with a typed execution disposition and preserve process-start facts through worker receipt errors.
+  Rationale: cancellation and setup failures share retry policy but require distinct evidence, while a retained checkout makes automatic retry unsafe. The typed disposition prevents invalid flag/reason combinations and lets finalization keep the occurrence discoverable when cleanup fails.
+  Date/Author: 2026-08-30 / Codex
 
 ## Outcomes & Retrospective
 
-The initial implementation slices and first review repair round are complete. The combined loop suites now pass with 135 runtime-loop unit tests and 47 higher-level loop tests. Round-one regressions prove strict lease ownership at finalization, retryable cancellation before workflow and worker start, fail-closed lease corruption, auditable attempt recovery, retained-worktree backpressure, per-workflow status degradation, unchanged-marker no-op writes, and first-error renewal diagnostics. The fresh structured work check passes contract, Rust file-size policy, formatting, workspace Clippy with warnings denied, 2,485 core tests, and 107 frontend tests. Repeated comprehensive review remains.
+The initial implementation slices and two review repair rounds are complete. The focused runtime-loop suite now passes 140 tests. Round-one regressions prove strict lease ownership at finalization, retryable cancellation before workflow and worker start, fail-closed lease corruption, auditable attempt recovery, retained-worktree backpressure, per-workflow status degradation, unchanged-marker no-op writes, and first-error renewal diagnostics. Round-two regressions add transactional stale-claim rejection, attention backpressure, typed setup retry, cancellation receipt phase preservation, retained cleanup evidence, and one-clock status classification. The preceding structured work check passed contract, Rust file-size policy, formatting, workspace Clippy with warnings denied, 2,485 core tests, and 107 frontend tests; fresh gates for the second repair and another comprehensive review remain.
 
 ## Context and Orientation
 
@@ -166,6 +180,13 @@ Focused implementation evidence:
     cargo clippy --workspace --all-targets --locked -- -D warnings # passed
     generated_web_checks_recover_interrupted...       # passed
     occurrence_reported_as_attention...               # passed
+    cargo test -p jig-sh --lib runtime::loops         # 140 passed after round two
+    cargo test -p jig-sh --lib runtime::worker_runner::tests # 12 passed after round two
+    cargo test -p jig-sh --lib runtime::tests::loops  # 47 passed after round two
+    cancelled_before_start_keeps_its_phase...         # passed
+    cargo check -p jig-sh --all-targets --locked      # passed after phase extractions
+    cargo clippy --workspace --all-targets --locked -- -D warnings # passed after round two
+    scripts/jig check rust-file-loc --changed-against 73075be... # passed
 
 Final structured evidence:
 
@@ -175,6 +196,10 @@ Final structured evidence:
     jig.contract_check / rust_file_loc / fmt / clippy # passed
     receipt_01M19HAKRWJYQN319QQ5JHKS9G               # post-review work check passed
     jig.source_core_test                              # 2,485 passed
+    jig.source_frontend_test                          # 107 passed
+    jig.contract_check / rust_file_loc / fmt / clippy # fresh and passed
+    receipt_01M19N04DG2QCJ2N6QG64AMC21               # round-two repair work check passed
+    jig.source_core_test                              # 2,491 passed
     jig.source_frontend_test                          # 107 passed
     jig.contract_check / rust_file_loc / fmt / clippy # fresh and passed
 
@@ -187,3 +212,7 @@ The persisted schedule schema stays version 3. Existing schema-version-1 loop an
 Plan revision note (2026-08-30): replaced the initial one-line work note with a self-contained ExecPlan after resolving the review questions and establishing the green baseline. The plan separates Fowler refactoring steps from behavior fixes and defines the bounded comprehensive-review loop.
 
 Plan revision note (2026-08-30): narrowed disposable-cache recovery from every mutating access to the pre-claim dispatch phase after existing post-work state-error tests exposed the difference.
+
+Plan revision note (2026-08-30): after the second review, extracted pre-execution failure construction, transactional occurrence claiming, and unexecuted tick errors into focused child modules. This keeps the typed phase boundaries explicit and all changed Rust files within the repository's absolute line-count limit without changing behavior.
+
+Plan revision note (2026-08-30): the first post-round-two structured check exposed a direct-CLI adapter regression: a worker start failure had already produced a diagnostic receipt and structured failed tick, but `into_manual_result` discarded it because execution never began. Preserve the structured result when a worker receipt exists while continuing to return raw configuration/setup errors before any worker receipt is available.

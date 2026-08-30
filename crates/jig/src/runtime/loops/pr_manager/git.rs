@@ -119,7 +119,7 @@ fn pr_git_execution_error(label: &str, error: ExecutionCommandError) -> PrRepair
         ExecutionCommandError::Cancelled => {
             PrRepairStepError::Cancelled(format!("{label} was cancelled while it was running"))
         }
-        ExecutionCommandError::Failed(error) => PrRepairStepError::Failed(error),
+        ExecutionCommandError::Failed { error, .. } => PrRepairStepError::Failed(error),
     }
 }
 
