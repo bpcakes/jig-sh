@@ -41,6 +41,7 @@ use pre_execution::{CheckoutPreparationFailure, unexecuted_task_failure};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
+const WORKER_RECEIPT_PATH: &str = ".agent/state/receipts.jsonl";
 const WORKER_RECEIPT_EXCLUDE: &str = ":(exclude).agent/state/receipts.jsonl";
 
 pub(super) struct CodexTaskExecution<'a> {
@@ -100,7 +101,7 @@ pub(super) fn codex_task_tick(
                 execution.item_key,
                 codex_home.as_deref(),
                 error.retained_worktree().map(str::to_string),
-                error.to_string(),
+                format!("{error:#}"),
             ));
         }
     };
@@ -141,6 +142,7 @@ pub(super) fn codex_task_tick(
                     TaskOutcome::Failed
                 },
                 ctx,
+                Some(worker.worker_receipt_id()),
             );
             let worker_error = (!worker_succeeded).then(|| {
                 format!(
@@ -200,6 +202,7 @@ pub(super) fn codex_task_tick(
                     TaskOutcome::Failed
                 },
                 ctx,
+                Some(&worker_receipt_id),
             );
             let timing = if before_start {
                 " before the worker started"
@@ -257,6 +260,7 @@ pub(super) fn codex_task_tick(
                     TaskOutcome::Failed
                 },
                 ctx,
+                worker_receipt_id.as_deref(),
             );
             let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
             let retained_worktree = checkout.report.retained_worktree();
@@ -391,6 +395,7 @@ fn prepare_checkout(
     if checkout == CodexTaskCheckout::Repo {
         return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
+            receipt_journal: checkout::ReceiptJournalBaseline::capture(ctx)?,
         });
     }
 

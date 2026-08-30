@@ -305,12 +305,6 @@ fn dispatch_workflow(
     if tick.lease_was_held() {
         return match guard.abandon_unexecuted() {
             Ok(finalization) => {
-                include_occurrence_renewal_error(
-                    &mut step,
-                    &workflow.id,
-                    &claim.occurrence_id,
-                    finalization.renewal_error,
-                );
                 let abandoned = finalization.occurrence;
                 step.executed_count = 0;
                 step.skipped_count = 1;
@@ -432,12 +426,6 @@ fn abandon_unexecuted_tick_failure(
     } = details;
     match guard.abandon_unexecuted() {
         Ok(finalization) => {
-            include_occurrence_renewal_error(
-                &mut step,
-                &workflow.id,
-                &claim.occurrence_id,
-                finalization.renewal_error,
-            );
             record_unexecuted_failure(
                 &mut step,
                 workflow,

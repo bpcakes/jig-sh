@@ -12,6 +12,7 @@ pub(crate) use execution_leases::{
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
+pub(crate) use jsonl::with_stable_jsonl_file;
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,

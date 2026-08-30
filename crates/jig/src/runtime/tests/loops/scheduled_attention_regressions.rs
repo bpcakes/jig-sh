@@ -61,6 +61,55 @@ printf 'task complete\n' > "$out"
 
 #[cfg(unix)]
 #[test]
+fn scheduled_repo_task_detects_receipt_history_rewrites() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
+    let receipts = temp.path().join(".agent/state/receipts.jsonl");
+    fs::write(&receipts, "{\"id\":\"receipt-seed\"}\n").unwrap();
+    git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
+    git_ok(temp.path(), ["commit", "-m", "seed receipt history"]);
+    let codex_path = bin.path().join("codex-receipt-rewrite-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  prev="$arg"
+done
+cat >/dev/null
+: > .agent/state/receipts.jsonl
+printf 'task complete\n' > "$out"
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output =
+        crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+
+    assert_eq!(output["status"], "needs_attention", "{output:#}");
+    let task = &output["actions"][0]["tick"]["actions"][0];
+    assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
+    assert_eq!(
+        task["checkout"]["receipt_append_valid"], false,
+        "{output:#}"
+    );
+    assert!(
+        task["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("receipt history changed")),
+        "{output:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn scheduled_pr_manager_preserves_unconfirmed_push_as_attention() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -157,6 +206,89 @@ esac
     assert_eq!(second["executed_count"], 0, "{second:#}");
     assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn scheduled_pr_manager_preserves_post_start_cancellation_as_attention() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    append_scheduled_pr_manager_workflow(temp.path());
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!("{config}lease_ttl_seconds = 1\n"),
+    )
+    .unwrap();
+    setup_origin_with_pr_branch(temp.path());
+    let _gh = fake_gh(
+        temp.path(),
+        r#"#!/bin/sh
+head_sha="$(git --git-dir .tmp-origin.git rev-parse refs/heads/codex/widgets)"
+case "$1 $2" in
+  "repo view")
+    printf '%s\n' '{"nameWithOwner":"example/project","name":"project","owner":{"login":"example"},"url":"https://example.invalid/project","defaultBranchRef":{"name":"main"}}'
+    ;;
+  "pr list")
+    cat <<JSON
+[{"number":7,"title":"Repair checks","url":"https://example.invalid/project/pull/7","state":"OPEN","isDraft":false,"author":{"login":"contributor"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"example/project"},"headRepositoryOwner":{"login":"example"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-08-30T10:00:00Z","createdAt":"2026-08-30T09:00:00Z"}]
+JSON
+    ;;
+  "pr checks")
+    printf '%s\n' '[{"bucket":"fail","completedAt":"2026-08-30T10:01:00Z","description":"failed","event":"pull_request","link":"https://example.invalid/check/1","name":"test","startedAt":"2026-08-30T10:00:00Z","state":"FAILURE","workflow":"ci"}]'
+    ;;
+  "api graphql")
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+    ;;
+  *) exit 2 ;;
+esac
+"#,
+    );
+    let leases = temp.path().join(".agent/.cache/loop/leases.json");
+    let codex_path = bin.path().join("codex-pr-cancel-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf '\n// partial scheduled repair\n' >> src.rs
+printf '%s\n' '{"leases":{}}' > "$JIG_TEST_LEASES"
+while :; do sleep 1; done
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _leases = EnvVarGuard::set("JIG_TEST_LEASES", leases.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let dispatch_at = fixed_dispatch_time();
+
+    let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+
+    let dispatch_action = &first["actions"][0];
+    let worker_action = &dispatch_action["tick"]["actions"][0];
+    assert_eq!(first["status"], "failed", "{first:#}");
+    assert_eq!(first["needs_attention_count"], 1, "{first:#}");
+    assert_eq!(dispatch_action["occurrence"]["status"], "needs_attention");
+    assert_eq!(worker_action["attention_kind"], "cancelled_after_start");
+    assert_eq!(worker_action["completed_status"], "needs_attention");
+    assert!(worker_action["worker_receipt_id"].is_string());
+    let worktree = worker_action["worktree"]
+        .as_str()
+        .expect("cancelled worker must retain its worktree");
+    assert!(
+        fs::read_to_string(Path::new(worktree).join("src.rs"))
+            .unwrap()
+            .contains("partial scheduled repair")
+    );
+
+    let second = crate::runtime::loops::dispatch_due_at(
+        &ctx,
+        dispatch_at.saturating_add(60_000),
+    )
+    .unwrap();
+    assert_eq!(second["executed_count"], 0, "{second:#}");
+    assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
 }
 
 #[cfg(unix)]

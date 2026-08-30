@@ -445,6 +445,79 @@ pub(super) fn read_jsonl_with_cancellation<T: DeserializeOwned>(
     }
 }
 
+pub(crate) fn with_stable_jsonl_file<T>(
+    path: &Path,
+    mut operation: impl FnMut(&File) -> Result<T>,
+) -> Result<Option<T>> {
+    with_stable_jsonl_file_with_cancellation(path, &|| false, &mut operation)
+}
+
+fn with_stable_jsonl_file_with_cancellation<T>(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    operation: &mut impl FnMut(&File) -> Result<T>,
+) -> Result<Option<T>> {
+    ensure_state_read_active(cancelled)?;
+    loop {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+            }
+        };
+        ensure_state_read_active(cancelled)?;
+        loop {
+            match FileExt::try_lock_shared(&file) {
+                Ok(true) => break,
+                Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                    let snapshot = stable_unlocked_raw_snapshot(path, cancelled)?;
+                    return operation(&snapshot).map(Some);
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("Failed to shared-lock {}", path.display()));
+                }
+            }
+            ensure_state_read_active(cancelled)?;
+        }
+
+        // Match the writer's data-file-then-cache-lock acquisition order. The
+        // cache lock is deliberately opportunistic: reads never create state,
+        // but wait cancellably when an existing writer owns it.
+        let cache_lock = match lock_existing_cache_with_cancellation(path, cancelled) {
+            Ok(lock) => lock,
+            Err(error) => {
+                let _ = FileExt::unlock(&file);
+                return Err(error);
+            }
+        };
+        let is_current = opened_file_is_current(&file, path)?;
+        let result = is_current.then(|| operation(&file));
+        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
+        let data_unlock = FileExt::unlock(&file);
+        match (result, cache_unlock, data_unlock) {
+            (Some(Ok(value)), Ok(()), Ok(())) => return Ok(Some(value)),
+            (Some(Err(error)), _, _) => return Err(error),
+            (Some(Ok(_)), Err(error), _) => {
+                return Err(error).context("Failed to unlock state cache file");
+            }
+            (Some(Ok(_)), Ok(()), Err(error)) => {
+                return Err(error).context("Failed to unlock state data file");
+            }
+            (None, Ok(()), Ok(())) => continue,
+            (None, Err(error), _) => {
+                return Err(error).context("Failed to unlock stale state cache file");
+            }
+            (None, Ok(()), Err(error)) => {
+                return Err(error).context("Failed to unlock stale state data file");
+            }
+        }
+    }
+}
+
 pub(super) fn opened_file_is_current(file: &File, path: &Path) -> Result<bool> {
     let opened = file
         .metadata()

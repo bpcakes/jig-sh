@@ -11,9 +11,7 @@ use crate::state::{ReceiptInput, now_ms, record_receipt, record_receipt_with_can
 use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
 use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStore};
-use super::state::{
-    AttemptRecord, AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseRecord, LeaseStore,
-};
+use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
     CODEX_TASK_KIND, DEFAULT_WORKFLOW_ID, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND,
     ResolvedWorkflow, TuningOverrides, UnexecutedReason, WorkflowCompletion, WorkflowOutcome,
@@ -21,66 +19,17 @@ use super::workflow::{
 };
 use super::{codex_task, github, noop, pr_manager};
 
+mod manual_occurrence;
+mod runtime_state;
 mod unexecuted;
 
+use manual_occurrence::ManualOccurrenceGuard;
+use runtime_state::{TickRuntimeState, append_tick_error};
 use unexecuted::UnexecutedTickError;
 
 struct TickExecution {
     item_key: String,
-}
-
-struct TickRuntimeState {
-    live_leases: Vec<LeaseRecord>,
-    attempts: Vec<AttemptRecord>,
-    state_errors: Vec<Value>,
-}
-
-impl TickRuntimeState {
-    fn collect(lease_store: &mut LeaseStore, attempt_store: &mut AttemptStore) -> Self {
-        let mut state_errors = Vec::new();
-        let live_leases = match lease_store.active_leases() {
-            Ok(leases) => leases,
-            Err(error) => {
-                state_errors.push(runtime_state_error("leases", error));
-                Vec::new()
-            }
-        };
-        let attempts = match attempt_store.snapshot() {
-            Ok(attempts) => attempts,
-            Err(error) => {
-                state_errors.push(runtime_state_error("attempts", error));
-                Vec::new()
-            }
-        };
-        Self {
-            live_leases,
-            attempts,
-            state_errors,
-        }
-    }
-
-    fn error_text(&self) -> Option<String> {
-        let errors = self
-            .state_errors
-            .iter()
-            .filter_map(|error| error["error"].as_str())
-            .collect::<Vec<_>>();
-        (!errors.is_empty()).then(|| errors.join("; "))
-    }
-}
-
-fn runtime_state_error(kind: &str, error: anyhow::Error) -> Value {
-    json!({
-        "kind": kind,
-        "error": format!("Failed to inspect post-work loop {kind} state: {error:#}"),
-    })
-}
-
-fn append_tick_error(tick_error: &mut Option<String>, error: String) {
-    match tick_error {
-        Some(existing) => existing.push_str(&format!("; {error}")),
-        None => *tick_error = Some(error),
-    }
+    manual: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,6 +139,7 @@ pub(super) fn tick_with_observer(
         started,
         TickExecution {
             item_key: format!("manual-{started}"),
+            manual: true,
         },
         observer,
     )
@@ -214,6 +164,7 @@ pub(super) fn tick_scheduled_with_observer(
         now_ms(),
         TickExecution {
             item_key: occurrence_id.to_string(),
+            manual: false,
         },
         observer,
     )
@@ -254,6 +205,7 @@ fn tick_with_execution(
     let mut actions = Vec::new();
     let mut completion = WorkflowCompletion::default();
     let mut tick_error = None;
+    let mut manual_occurrence = None;
 
     if !workflow.enabled {
         status = "disabled";
@@ -270,17 +222,46 @@ fn tick_with_execution(
                     &acquired,
                     workflow.lease_ttl_seconds,
                 )?;
+                let manual_guard = if execution.manual {
+                    match ManualOccurrenceGuard::start(&workflow, &execution.item_key, ctx) {
+                        Ok(guard) => Some(guard),
+                        Err(error) => {
+                            let release_error = lease_guard.finish().err();
+                            let error = release_error.map_or_else(
+                                || format!("Failed to start manual loop occurrence: {error:#}"),
+                                |release_error| {
+                                    format!(
+                                        "Failed to start manual loop occurrence: {error:#}; workflow lease release also failed: {release_error:#}"
+                                    )
+                                },
+                            );
+                            return Err(anyhow::anyhow!(error).into());
+                        }
+                    }
+                } else {
+                    None
+                };
                 let lease_cancelled = || lease_guard.renewal_failed();
-                let mut lease_control =
-                    AdditionalCancellationControl::new(observer, &lease_cancelled);
-                match run_workflow_tick(
-                    ctx,
-                    &workflow,
-                    &execution,
-                    &mut lease_store,
-                    &mut attempt_store,
-                    &mut lease_control,
-                ) {
+                let manual_cancelled = || {
+                    manual_guard
+                        .as_ref()
+                        .is_some_and(ManualOccurrenceGuard::renewal_failed)
+                };
+                let workflow_tick = {
+                    let mut lease_control =
+                        AdditionalCancellationControl::new(observer, &lease_cancelled);
+                    let mut occurrence_control =
+                        AdditionalCancellationControl::new(&mut lease_control, &manual_cancelled);
+                    run_workflow_tick(
+                        ctx,
+                        &workflow,
+                        &execution,
+                        &mut lease_store,
+                        &mut attempt_store,
+                        &mut occurrence_control,
+                    )
+                };
+                match workflow_tick {
                     Ok(tick) => {
                         observed = tick.observed;
                         actions = tick.actions;
@@ -316,6 +297,31 @@ fn tick_with_execution(
                         ));
                     }
                 }
+                if let Some(manual_guard) = manual_guard {
+                    match manual_guard.finish(&completion) {
+                        Ok(finalization) => {
+                            if let Some(error) = finalization.renewal_error {
+                                append_tick_error(
+                                    &mut tick_error,
+                                    format!("Manual occurrence renewal failed: {error}"),
+                                );
+                            }
+                            if finalization.occurrence.status.as_str() != "running" {
+                                if finalization.occurrence.requires_attention_at(now_ms()) {
+                                    completion.outcome = WorkflowOutcome::NeedsAttention;
+                                    if completion.error.is_none() {
+                                        completion.error = finalization.occurrence.error.clone();
+                                    }
+                                }
+                                manual_occurrence = Some(finalization.occurrence);
+                            }
+                        }
+                        Err(error) => append_tick_error(
+                            &mut tick_error,
+                            format!("Failed to finalize manual loop occurrence: {error:#}"),
+                        ),
+                    }
+                }
             }
             LeaseAcquire::Held(existing) => {
                 lease_disposition = WorkflowLeaseDisposition::Held;
@@ -324,20 +330,29 @@ fn tick_with_execution(
         }
     }
 
-    let runtime_state = TickRuntimeState::collect(&mut lease_store, &mut attempt_store);
+    let active_scheduled_occurrence = (!execution.manual).then_some(execution.item_key.as_str());
+    let runtime_state = TickRuntimeState::collect(
+        ctx,
+        &mut lease_store,
+        &mut attempt_store,
+        active_scheduled_occurrence,
+    );
     if let Some(error) = runtime_state.error_text() {
         append_tick_error(&mut tick_error, error);
     }
     let TickRuntimeState {
+        checked_at_ms,
         live_leases,
         attempts,
+        scheduled_needs_attention,
         state_errors,
     } = runtime_state;
-    let attempt_check_at_ms = now_ms();
-    let attempt_sections = AttemptSections::new(&attempts, attempt_check_at_ms);
+    let attempt_sections = AttemptSections::new(&attempts, checked_at_ms);
 
-    let blocked_by_runtime =
-        release_warning.is_some() || !live_leases.is_empty() || attempt_sections.blocks_idle();
+    let blocked_by_runtime = release_warning.is_some()
+        || !live_leases.is_empty()
+        || attempt_sections.blocks_idle()
+        || !scheduled_needs_attention.is_empty();
 
     // Idleness is machine-global for now: `loop run --until idle` should not
     // claim quiescence while any workflow lease or attempt backoff is live.
@@ -346,6 +361,7 @@ fn tick_with_execution(
         status = "failed";
     } else if completion.outcome == WorkflowOutcome::NeedsAttention
         || !attempt_sections.needs_attention.is_empty()
+        || !scheduled_needs_attention.is_empty()
     {
         idle = false;
         status = "needs_attention";
@@ -379,12 +395,14 @@ fn tick_with_execution(
         "waiting_attempts": attempt_sections.waiting,
         "needs_attention": {
             "exhausted_attempts": attempt_sections.needs_attention,
+            "scheduled_occurrences": scheduled_needs_attention,
         },
         "state_error_count": state_errors.len(),
         "state_errors": state_errors,
         "release_warning": release_warning,
         "error": tick_error,
         "item_key": execution.item_key,
+        "manual_occurrence": manual_occurrence,
     });
     let mut post_work_error = release_warning
         .as_ref()
@@ -453,6 +471,7 @@ fn tick_with_execution(
         "state_errors": evidence["state_errors"],
         "release_warning": release_warning,
         "item_key": evidence["item_key"],
+        "manual_occurrence": evidence["manual_occurrence"],
     });
     if let Some(error) = evidence["error"].as_str() {
         return Ok(ScheduledTick::Errored {

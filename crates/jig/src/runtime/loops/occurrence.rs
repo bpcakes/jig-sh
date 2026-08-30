@@ -17,12 +17,14 @@ use crate::state::now_ms;
 
 #[cfg(test)]
 use super::renewal::retry_delay as renewal_retry_delay;
-use super::renewal::{RenewalAttemptError, renewal_interval, run_with_wait};
+use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval, run_with_wait};
 
 mod attention;
 mod claim;
+mod manual;
 mod persistence;
 
+use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
 
 const SCHEDULE_SCHEMA_VERSION: u32 = 3;
@@ -218,7 +220,7 @@ impl OccurrenceGuard {
                     &renewal_failed_in_thread,
                     || {
                         renewal_store
-                            .renew(&renewal_occurrence_id, &renewal_owner, ttl_seconds)
+                            .renew_for_guard(&renewal_occurrence_id, &renewal_owner, ttl_seconds)
                             .map(|renewed| renewed.claim_expires_at_ms)
                     },
                     now_ms,
@@ -293,7 +295,7 @@ fn run_occurrence_renewal(
     interval: Duration,
     claim_expires_at_ms: u64,
     renewal_failed: &AtomicBool,
-    renew: impl FnMut() -> Result<u64>,
+    renew: impl FnMut() -> std::result::Result<u64, RenewalAttemptError>,
     now: impl Fn() -> u64,
 ) -> Result<()> {
     run_occurrence_renewal_with_wait(
@@ -310,7 +312,7 @@ fn run_occurrence_renewal_with_wait(
     interval: Duration,
     claim_expires_at_ms: u64,
     renewal_failed: &AtomicBool,
-    mut renew: impl FnMut() -> Result<u64>,
+    renew: impl FnMut() -> std::result::Result<u64, RenewalAttemptError>,
     now: impl Fn() -> u64,
     wait_for_stop: impl FnMut(Duration) -> std::result::Result<(), RecvTimeoutError>,
 ) -> Result<()> {
@@ -318,7 +320,7 @@ fn run_occurrence_renewal_with_wait(
         interval,
         claim_expires_at_ms,
         renewal_failed,
-        || renew().map_err(RenewalAttemptError::Retryable),
+        renew,
         now,
         wait_for_stop,
     )
@@ -371,6 +373,22 @@ impl OccurrenceStore {
         ttl_seconds: u64,
     ) -> Result<ScheduleOccurrence> {
         self.renew_at(occurrence_id, owner, ttl_seconds, now_ms())
+    }
+
+    fn renew_for_guard(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        ttl_seconds: u64,
+    ) -> std::result::Result<ScheduleOccurrence, RenewalAttemptError> {
+        self.renew(occurrence_id, owner, ttl_seconds)
+            .map_err(|error| {
+                if error.downcast_ref::<RenewalOwnershipLost>().is_some() {
+                    RenewalAttemptError::Terminal(error)
+                } else {
+                    RenewalAttemptError::Retryable(error)
+                }
+            })
     }
 
     pub(super) fn finish(
@@ -514,7 +532,10 @@ impl OccurrenceStore {
     ) -> Option<ScheduleOccurrence> {
         occurrences
             .iter()
-            .filter(|record| record.workflow_id == workflow_id)
+            .filter(|record| {
+                record.workflow_id == workflow_id
+                    && record.scheduled_at_ms != MANUAL_OCCURRENCE_SCHEDULED_AT_MS
+            })
             .max_by_key(|record| record.scheduled_at_ms)
             .cloned()
     }
@@ -539,11 +560,28 @@ impl OccurrenceStore {
     ) -> Result<ScheduleOccurrence> {
         self.with_locked(|store| {
             let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
-                anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
+                RenewalOwnershipLost::new(format!(
+                    "Loop occurrence is no longer held: {occurrence_id}"
+                ))
             })?;
-            require_running_owner(record, owner)?;
+            if record.owner != owner {
+                return Err(RenewalOwnershipLost::new(format!(
+                    "Loop occurrence '{occurrence_id}' is owned by another dispatcher"
+                ))
+                .into());
+            }
+            if record.status != OccurrenceStatus::Running {
+                return Err(RenewalOwnershipLost::new(format!(
+                    "Loop occurrence '{occurrence_id}' is already {}",
+                    record.status
+                ))
+                .into());
+            }
             if record.claim_expires_at_ms <= now {
-                bail!("Scheduled occurrence claim expired before renewal: {occurrence_id}");
+                return Err(RenewalOwnershipLost::new(format!(
+                    "Loop occurrence claim expired before renewal: {occurrence_id}"
+                ))
+                .into());
             }
             record.claim_expires_at_ms = expiry(now, ttl_seconds);
             Ok(record.clone())

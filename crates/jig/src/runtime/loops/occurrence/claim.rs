@@ -1,5 +1,11 @@
 use super::*;
 
+pub(super) struct OccurrenceClaimConstraints {
+    pub(super) block_attention: bool,
+    pub(super) block_newer_occurrences: bool,
+    pub(super) block_retained_worktree: bool,
+}
+
 impl OccurrenceStore {
     pub(super) fn claim_with_constraints_at(
         &mut self,
@@ -11,19 +17,42 @@ impl OccurrenceStore {
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
         let occurrence_id = occurrence_id(workflow_id, scheduled_at_ms);
+        self.claim_id_with_constraints_at(
+            occurrence_id,
+            workflow_id,
+            scheduled_at_ms,
+            ttl_seconds,
+            now,
+            OccurrenceClaimConstraints {
+                block_attention: scheduled_claim,
+                block_newer_occurrences: scheduled_claim,
+                block_retained_worktree,
+            },
+        )
+    }
+
+    pub(super) fn claim_id_with_constraints_at(
+        &mut self,
+        occurrence_id: String,
+        workflow_id: &str,
+        scheduled_at_ms: u64,
+        ttl_seconds: u64,
+        now: u64,
+        constraints: OccurrenceClaimConstraints,
+    ) -> Result<OccurrenceClaim> {
         self.with_locked(|store| {
             validate_schema(store)?;
             reconcile_stale_file(store, now);
             if let Some(existing) = store.occurrences.get(&occurrence_id) {
                 return Ok(OccurrenceClaim::AlreadyRecorded(existing.clone()));
             }
-            if scheduled_claim {
+            if constraints.block_attention {
                 if let Some(attention) = latest_matching_occurrence(store, workflow_id, |record| {
                     record.status == OccurrenceStatus::NeedsAttention
                 }) {
                     return Ok(OccurrenceClaim::BlockedByAttention(attention));
                 }
-                if block_retained_worktree
+                if constraints.block_retained_worktree
                     && let Some(retained) = latest_matching_occurrence(
                         store,
                         workflow_id,
@@ -32,7 +61,8 @@ impl OccurrenceStore {
                 {
                     return Ok(OccurrenceClaim::BlockedByRetainedWorktree(retained));
                 }
-                if let Some(latest) = latest_matching_occurrence(store, workflow_id, |_| true)
+                if constraints.block_newer_occurrences
+                    && let Some(latest) = latest_matching_occurrence(store, workflow_id, |_| true)
                     && latest.scheduled_at_ms > scheduled_at_ms
                 {
                     return Ok(OccurrenceClaim::AlreadyRecorded(latest));

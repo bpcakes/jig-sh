@@ -4,11 +4,7 @@ fn prepare_worktree(
     item: &PrWorkItem,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<PathBuf> {
-    let worktree = ctx
-        .root()
-        .join(LOOP_CACHE_DIR)
-        .join("worktrees")
-        .join(&workflow.id)
+    let worktree = pr_worktree_root(ctx, &workflow.id)
         .join(format!(
             "pr-{}-{}",
             item.pr_number,
@@ -71,6 +67,18 @@ fn prepare_worktree(
         observer,
     )?;
     Ok(worktree)
+}
+
+fn pr_worktree_root(ctx: &RepoContext, workflow_id: &str) -> PathBuf {
+    let digest = Sha256::digest(workflow_id.as_bytes());
+    let workflow_key = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    ctx.root()
+        .join(LOOP_CACHE_DIR)
+        .join("worktrees")
+        .join(workflow_key)
 }
 fn clean_reused_worktree(
     ctx: &RepoContext,

@@ -554,7 +554,9 @@ fn occurrence_renewal_retries_transient_failure_before_claim_expiry() {
         &failed,
         || {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                anyhow::bail!("injected transient renewal failure");
+                return Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
+                    "injected transient renewal failure"
+                )));
             }
             Ok(1_800)
         },
@@ -592,7 +594,11 @@ fn occurrence_renewal_latches_failure_at_claim_expiry() {
         Duration::from_millis(1),
         100,
         &failed,
-        || anyhow::bail!("persistent renewal failure"),
+        || {
+            Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
+                "persistent renewal failure"
+            )))
+        },
         || 100,
     )
     .unwrap_err()
@@ -612,7 +618,11 @@ fn occurrence_renewal_latches_failure_with_time_to_cancel_and_finish() {
         Duration::from_millis(100),
         1_000,
         &failed,
-        || anyhow::bail!("persistent renewal failure"),
+        || {
+            Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
+                "persistent renewal failure"
+            )))
+        },
         || 950,
     )
     .unwrap_err()

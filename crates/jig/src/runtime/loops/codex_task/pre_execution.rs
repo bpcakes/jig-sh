@@ -93,3 +93,23 @@ impl From<anyhow::Error> for CheckoutPreparationFailure {
         Self::new(error)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Context as _;
+
+    use super::*;
+
+    #[test]
+    fn alternate_display_preserves_checkout_error_context() {
+        let source = Err::<(), _>(std::io::Error::other("disk unavailable"))
+            .context("failed to create checkout parent")
+            .unwrap_err();
+        let failure = CheckoutPreparationFailure::new(source);
+
+        assert_eq!(
+            format!("{failure:#}"),
+            "failed to create checkout parent: disk unavailable"
+        );
+    }
+}
