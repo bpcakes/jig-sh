@@ -532,11 +532,27 @@ The epoch owns a backward-readable run-plan schema bump, durable prepared native
 
 Historical run plans and receipts remain readable.
 
-Epoch allocation must be serialized with the open literal-argv runner work.
+Epoch allocation must be serialized with the open literal-argv runner work and
+the separate freshness epoch.
 
-If both capabilities land atomically they may share one new epoch.
+The parent epic currently has three epoch-producing tasks: literal argv
+(`.3.3`), target freshness (`.4.2`), and durable file-budget authority (`.8.3`).
 
-Otherwise the later capability uses the next epoch; two independent features never claim the same number.
+The rollout order is file budget, literal argv, then target freshness. Task
+`.8.3` allocates the first compatible epoch. The file-budget continuation then
+completes lifecycle migration, Jig source dogfood, and Bash deletion through
+`.8.6` before `.3.3` may allocate the following epoch. Task `.4.2` waits for
+`.3.3` before allocating the freshness epoch.
+
+This order keeps the active file-budget continuation independent of unrelated
+features and avoids predeclaring dormant schemas merely to force three changes
+into one atomic epoch. The pre-epoch work in `.3.1`, `.3.2`, and `.4.1` remains
+parallel. Blocking Beads edges encode `.8.6 -> .3.3 -> .4.2`, so two tasks
+cannot claim the same next version from prose alone.
+
+Source dogfood follows the same ownership. Task `.1.2` migrates Jig to the
+file-budget epoch before Bash deletion. Tasks `.3.3` and `.4.2` each migrate
+Jig again when their later epoch lands; `.1.2` does not wait for them.
 
 ### 7.5 Durable native execution contract
 
@@ -870,6 +886,11 @@ Duplicate waiver IDs and duplicate waivers for the same rule and path are reject
 
 Waivers for unmatched paths are errors in every mode.
 
+Changed-candidate scope is not evidence that an unchanged waiver target still
+exists or still matches its named rule. Every waiver therefore receives one
+bounded exact-path observation from the selected current view. The pure
+evaluator consumes that explicit fact and never reads repository state.
+
 Waivers do not suppress warning findings.
 
 An active waiver produces a visible finding when exercised.
@@ -1139,8 +1160,20 @@ enum ComparisonPreparationV1 {
 
 struct ScopeSnapshotV1 {
     entries: Vec<ScopeEntry>,
+    exact_current_paths: Vec<ExactCurrentPathFactV1>,
     complete: bool,
     issues: Vec<ScopeIssue>,
+}
+
+struct ExactCurrentPathFactV1 {
+    path: String,
+    state: ExactCurrentPathStateV1,
+}
+
+enum ExactCurrentPathStateV1 {
+    Regular,
+    Missing,
+    Unsupported { reason: ScopeIssue },
 }
 
 enum CurrentView {
@@ -1208,6 +1241,11 @@ It does not weaken existing cancellation.
 Existing gate applicability may continue consuming flattened paths.
 
 File budgets consume the richer entries.
+
+The service also exposes bounded exact-path observation against the selected
+worktree, index, or inventory view. It reports regular, missing, or unsupported
+authority without parsing file-budget policy. Task D requests one fact for
+every policy-named waiver path, including paths absent from the changed set.
 
 Future internal consumers may use the same typed model.
 
@@ -1500,6 +1538,10 @@ Current measurement above a waiver ceiling fails.
 Comparison-side debt above a waiver ceiling does not silently expand the waiver.
 
 An expired waiver fails before content can pass under it.
+
+A waiver whose exact current-view target is missing, unsupported, or no longer
+matches its named rule fails in every mode, even when the waiver path is not a
+changed candidate.
 
 Removing a waiver is valid only after the file is at or below the ordinary maximum.
 
@@ -2558,6 +2600,10 @@ Reject expired waivers.
 
 Reject unmatched waivers.
 
+Reject a supplied missing or unsupported current-view waiver target.
+
+Reject a waiver target that exists but no longer matches its named rule.
+
 Reject numeric overflow and configured cardinality limits.
 
 Protect contract and policy authority paths from exclusion.
@@ -2661,6 +2707,14 @@ Exclude ignored untracked files.
 Read index blobs in staged scope.
 
 Ignore unstaged content in staged scope.
+
+Observe an unchanged exact waiver path from the worktree view during an
+otherwise unrelated change.
+
+Observe exact waiver paths from the index and inventory views.
+
+Report missing and unsupported exact-current-view paths without treating an
+absent changed-set entry as proof of absence.
 
 Preserve rename ancestry.
 
@@ -2924,6 +2978,9 @@ This task owns line and byte measurement semantics.
 
 This task owns debt and waiver decisions.
 
+This task consumes explicit current-view waiver-target facts and rejects
+missing, unsupported, or rule-mismatched targets without repository access.
+
 This task owns pure cross-language tests.
 
 This task does not own Git.
@@ -2953,6 +3010,9 @@ This task owns copy-as-new behavior.
 This task owns prepared comparison anchors, scope completeness, and flattened paths for generic affected selection.
 
 This task supplies a target-local matching primitive for non-empty action inputs without changing contract projection by itself.
+
+This task supplies bounded exact-current-view observation for policy-named
+paths without parsing file-budget policy.
 
 This task does not persist unbounded path inventories or publish an external protocol.
 
@@ -2984,7 +3044,9 @@ This task owns the typed checked-in `NativeFileBudgetConfigV1`, backward default
 
 This task owns the backward-readable run-plan and receipt schema changes.
 
-This task owns one serialized contract epoch coordinated with literal-argv work.
+This task owns the first serialized contract epoch. Literal-argv epoch work is
+blocked on the completed file-budget cutover, and freshness epoch work follows
+literal argv.
 
 This task owns the epoch-gated switch to target-local non-empty input matching, legacy-epoch component behavior, dependency propagation, and compatibility tests over the primitive from Task B.
 
@@ -3001,6 +3063,10 @@ This task maps failed preparation states into normalized `Failure` or `Blocked` 
 This task owns human and versioned direct JSON output.
 
 This task owns comparison flags, exit codes, resource bounds, and strict-inventory fallback.
+
+This task requests one exact-current-view fact for every waiver path and
+supplies those facts to the pure evaluator even when ordinary comparison scope
+contains only unrelated changes.
 
 This task executes Task C's prepared strict-inventory fallback, default blocked outcome, and explicit exact-tree selection without changing comparison authority.
 
@@ -3042,6 +3108,10 @@ It owns source dogfood configuration, source policy, default profile membership,
 
 It depends on Task E.
 
+It dogfoods the file-budget epoch for this continuation and does not wait for
+literal argv or target freshness. Those later epoch owners each migrate the Jig
+source contract as part of their own acceptance criteria.
+
 ### 21.8 Task F: final Bash deletion and compatibility cleanup
 
 Outcome: pull request `#18` contains the proven universal implementation and no temporary Bash checker.
@@ -3069,7 +3139,17 @@ stack-neutral epic
     └── F: final Bash deletion           depends on source dogfood, closed .7.2
 
 existing authored-contract dogfood task  depends on E
+
+F --blocks--> argv epoch task `.3.3` --blocks--> freshness epoch task `.4.2`
+                  ^                                  ^
+                  |                                  |
+        foreground + arguments                 freshness policy
+            `.3.1 -> .3.2`                         `.4.1`
 ```
+
+The cross-feature edges serialize only epoch activation and source migration.
+They do not make the file-budget engine depend functionally on argv or
+freshness, and they leave each feature's pre-epoch foundation work available.
 
 ### 21.10 Why there are no planning beads
 
@@ -3089,7 +3169,9 @@ It does not require the future foreground `jig run` command.
 
 It does not require action string arguments.
 
-It does not require the future argv runner, but Task C serializes contract epoch allocation with it.
+It does not require the future argv runner for execution. Task C allocates the
+first epoch; only the later argv activation waits for the completed file-budget
+cutover to prevent concurrent version allocation.
 
 It adds generic time validity without claiming the future input-scoped freshness design.
 
@@ -3277,11 +3359,13 @@ NUL-containing regular files remain byte-measurable.
 
 Direct check without a comparison flag uses configured-default-branch merge-base semantics when history exists and exact empty-tree `UnbornWorktree` semantics when it does not.
 
-The first-party action is native immediately; literal-argv work is independent except for serialized epoch allocation.
+The first-party action is native immediately; literal-argv work is independent
+except that its epoch activation follows the completed file-budget cutover.
 
 Durable native context/result and the contract epoch live in Task C.
 
-The existing `.1.2` task owns source dogfood; final deletion is a later Task F.
+The existing `.1.2` task owns file-budget source dogfood; final deletion is a
+later Task F, and every subsequent epoch owner migrates Jig again.
 
 ## 26. Decisions already made
 
@@ -3543,6 +3627,47 @@ No plan revision was warranted.
 
 Structural steady state has been reached.
 
+### Audit correction round 11
+
+The parent-epic audit found four consistency defects and two product choices
+that prior feature-local reviews did not expose.
+
+The parent acceptance now permits the already-approved language-neutral native
+file-budget capability while continuing to prohibit Rust-specific LOC dispatch
+and stack-specific runtime branches. The frozen contract-v6 source-dogfood
+claim is replaced by allocation at the compatible authored epoch.
+
+The delivery graph now records that action-argument CLI binding depends on the
+foreground `jig run` surface, and feature `.8` records the satisfied
+architectural dependency on closed `.7.2`.
+
+Waiver matching now has explicit cross-layer ownership: Task B observes every
+exact policy-named path in the selected current view, Task D requests those
+facts even for unchanged paths, and Task A evaluates them without repository
+access.
+
+Two product choices remain open. The product owner must choose combined versus
+serialized ordering for the argv, freshness, and file-budget contract epochs,
+and must choose one final source dogfood cutover versus dogfood owned by every
+epoch. Structural steady state is withdrawn until those choices are recorded
+in both this plan and blocking Beads edges.
+
+### Resolution round 12
+
+The rollout audit selected explicit serialization rather than a combined
+three-feature epoch: file budget first, literal argv second, and target
+freshness third. The decision preserves the active continuation's independence,
+avoids dormant schema authority, and reduces each compatibility cutover to one
+feature.
+
+Task `.1.2` owns source dogfood for the file-budget epoch. Tasks `.3.3` and
+`.4.2` own their later source migrations. Blocking edges encode `.8.6 -> .3.3
+-> .4.2`; pre-epoch foundation work remains parallel.
+
+Four corrective review passes then checked self-containment, DAG shape,
+decision rationale, and steady-state diff. No remaining implementation-changing
+question or structural revision was found.
+
 ## 29. Beads conversion and graph polish
 
 The reviewed delivery architecture is represented by feature
@@ -3560,11 +3685,14 @@ cutover sequence:
                                        -> .8.6 Bash deletion
 ```
 
-The existing closed Bash tasks remain unchanged as historical evidence. The
-current source-dogfood task now owns the authored epoch cutover exactly once,
-and final source deletion remains a separate downstream proof boundary.
+The existing closed Bash tasks remain unchanged as historical evidence. Final
+source deletion remains a separate downstream proof boundary. The resulting
+epoch path is `.8.3 -> .8.4 -> .8.5 -> .1.2 -> .8.6 -> .3.3 -> .4.2`, while
+`.3.1 -> .3.2` and `.4.1` may proceed before their epoch tasks become ready.
 
-Six graph-polish passes reached steady state:
+Six earlier graph-polish passes established the feature-local `.8` chain. The
+parent-epic correction and resolution rounds then restored whole-epic steady
+state:
 
 1. Cycle and critical-path inspection confirmed an acyclic graph and the
    intended `A + B -> C -> D -> E -> source dogfood -> F` path.
@@ -3577,10 +3705,8 @@ Six graph-polish passes reached steady state:
 5. Priority and readiness inspection confirmed that Tasks A and B are the only
    initially ready implementation tasks and that the P1 chain matches the
    active pull-request cutover.
-6. Alert and suggestion inspection found no actionable alert. Keyword-only
-   dependency suggestions were rejected where they duplicated ancestry,
-   reversed the dogfood chain, introduced a cycle, or coupled this feature to
-   an intentionally independent freshness feature.
+6. Alert and suggestion inspection found no actionable feature-local edge;
+   explicit cross-feature edges serialize only the three epoch activations.
 
 `br --no-db sync --flush-only` confirms that the authoritative JSONL has no
 unflushed issue mutations. `br --no-db dep cycles --json` reports zero active
@@ -3593,13 +3719,14 @@ cycles.
 - [x] Every delivery task has an independently verifiable outcome.
 - [x] The dependency graph is acyclic.
 - [x] There are no planning-only Beads.
-- [x] Ten sequential strong-model reviews are integrated.
-- [x] The most recent review is marginal rather than structural.
+- [x] Twelve sequential strong-model reviews are integrated.
+- [x] The most recent audit's epoch-rollout revisions are integrated.
 - [x] The plan contains no unresolved implementation-changing question.
 - [x] Beads descriptions preserve the plan's delivery boundaries.
-- [x] Beads dependencies preserve the plan's graph.
+- [x] Beads dependencies preserve the final cross-feature epoch graph.
 - [x] `bv --robot-insights` reports no cycles.
 - [x] Beads JSONL is flushed after mutation.
 - [x] Fixture names satisfy open-source hygiene.
-- [x] The plan and Beads changes are committed to the continuation branch.
-- [x] Pull request `#18` points at the committed planning continuation.
+- [x] The corrected plan and Beads changes are committed to the continuation
+  branch.
+- [x] Pull request `#18` points at the committed corrected continuation.
