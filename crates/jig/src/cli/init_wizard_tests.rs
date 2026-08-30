@@ -267,6 +267,38 @@ fn harness_only_init_does_not_require_a_web_package_manager() {
 }
 
 #[test]
+fn go_react_requires_its_selected_web_package_manager() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "go-react",
+        "--db",
+        "none",
+        "--frontend",
+        "web",
+        "--go-module",
+        "example.com/ExampleProject",
+        "--web-package-manager",
+        "yarn",
+        "--no-input",
+        "--no-vault",
+    ]);
+    prepare_init_interaction_with_io(
+        &mut opts,
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    let error = preflight_init_package_manager_with(&opts, |_| false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Selected web package manager 'yarn'"));
+}
+
+#[test]
 fn json_output_does_not_disable_init_wizard() {
     let mut opts = init_opts(&["jig", "--json", "init", "demo", "--no-vault"]);
     let mut input = Cursor::new("harness-only\n");

@@ -35,6 +35,44 @@ pub(crate) struct ScaffoldFrontendShorthand {
     expands_to: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScaffoldChoiceCapability {
+    supported: bool,
+    required: bool,
+}
+
+impl ScaffoldChoiceCapability {
+    const UNSUPPORTED: Self = Self::new(false, false);
+    const REQUIRED: Self = Self::new(true, true);
+
+    const fn new(supported: bool, required: bool) -> Self {
+        assert!(
+            !required || supported,
+            "a required scaffold choice must be supported"
+        );
+        Self {
+            supported,
+            required,
+        }
+    }
+
+    const fn is_supported(self) -> bool {
+        self.supported
+    }
+
+    const fn is_required(self) -> bool {
+        self.required
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScaffoldPresetCapabilities {
+    has_project_scaffold: bool,
+    database: ScaffoldChoiceCapability,
+    frontends: ScaffoldChoiceCapability,
+    go_module: ScaffoldChoiceCapability,
+}
+
 impl ScaffoldFrontendShorthand {
     pub(crate) const fn name(self) -> &'static str {
         self.name
@@ -59,6 +97,69 @@ pub fn scaffold_presets_report() -> Value {
 }
 
 impl ScaffoldPreset {
+    const fn capabilities(self) -> ScaffoldPresetCapabilities {
+        match self {
+            Self::RustReact => ScaffoldPresetCapabilities {
+                has_project_scaffold: true,
+                database: ScaffoldChoiceCapability::REQUIRED,
+                frontends: ScaffoldChoiceCapability::REQUIRED,
+                go_module: ScaffoldChoiceCapability::UNSUPPORTED,
+            },
+            Self::GoReact => ScaffoldPresetCapabilities {
+                has_project_scaffold: true,
+                database: ScaffoldChoiceCapability::REQUIRED,
+                frontends: ScaffoldChoiceCapability::REQUIRED,
+                go_module: ScaffoldChoiceCapability::REQUIRED,
+            },
+            Self::HarnessOnly => ScaffoldPresetCapabilities {
+                has_project_scaffold: false,
+                database: ScaffoldChoiceCapability::UNSUPPORTED,
+                frontends: ScaffoldChoiceCapability::UNSUPPORTED,
+                go_module: ScaffoldChoiceCapability::UNSUPPORTED,
+            },
+        }
+    }
+
+    pub(crate) const fn has_project_scaffold(self) -> bool {
+        self.capabilities().has_project_scaffold
+    }
+
+    pub(crate) const fn supports_database(self) -> bool {
+        self.capabilities().database.is_supported()
+    }
+
+    pub(crate) const fn requires_database_choice(self) -> bool {
+        self.capabilities().database.is_required()
+    }
+
+    pub(crate) const fn supports_frontends(self) -> bool {
+        self.capabilities().frontends.is_supported()
+    }
+
+    pub(crate) const fn requires_frontend_choice(self) -> bool {
+        self.capabilities().frontends.is_required()
+    }
+
+    pub(crate) const fn supports_go_module(self) -> bool {
+        self.capabilities().go_module.is_supported()
+    }
+
+    pub(crate) const fn requires_go_module(self) -> bool {
+        self.capabilities().go_module.is_required()
+    }
+
+    pub(crate) const fn requires_web_package_manager(self) -> bool {
+        self.supports_frontends()
+    }
+
+    pub(crate) const fn project_scaffold_label(self) -> Option<&'static str> {
+        match self {
+            Self::RustReact => Some("Rust React"),
+            Self::GoReact => Some("Go React"),
+            Self::HarnessOnly => None,
+        }
+    }
+
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::RustReact => "rust-react",
@@ -191,6 +292,65 @@ impl ScaffoldPreset {
                     "The harness-only preset does not create Rust crates, databases, or frontend applications.",
                 ],
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_capabilities_are_exhaustive_and_preserve_the_public_family() {
+        assert_eq!(
+            ScaffoldPreset::value_variants(),
+            &[
+                ScaffoldPreset::RustReact,
+                ScaffoldPreset::GoReact,
+                ScaffoldPreset::HarnessOnly,
+            ]
+        );
+
+        let expected = [
+            (
+                ScaffoldPreset::RustReact,
+                true,
+                (true, true),
+                (true, true),
+                (false, false),
+                Some("Rust React"),
+            ),
+            (
+                ScaffoldPreset::GoReact,
+                true,
+                (true, true),
+                (true, true),
+                (true, true),
+                Some("Go React"),
+            ),
+            (
+                ScaffoldPreset::HarnessOnly,
+                false,
+                (false, false),
+                (false, false),
+                (false, false),
+                None,
+            ),
+        ];
+        for (preset, project, database, frontends, go_module, label) in expected {
+            assert_eq!(preset.has_project_scaffold(), project, "{preset:?}");
+            assert_eq!(preset.project_scaffold_label(), label, "{preset:?}");
+            assert_eq!(preset.supports_database(), database.0, "{preset:?}");
+            assert_eq!(preset.requires_database_choice(), database.1, "{preset:?}");
+            assert_eq!(preset.supports_frontends(), frontends.0, "{preset:?}");
+            assert_eq!(preset.requires_frontend_choice(), frontends.1, "{preset:?}");
+            assert_eq!(preset.supports_go_module(), go_module.0, "{preset:?}");
+            assert_eq!(preset.requires_go_module(), go_module.1, "{preset:?}");
+            assert_eq!(
+                preset.requires_web_package_manager(),
+                frontends.0,
+                "{preset:?}"
+            );
         }
     }
 }

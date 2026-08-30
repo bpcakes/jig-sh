@@ -293,7 +293,7 @@ impl InitScaffoldPlan {
     }
 
     pub(super) fn has_admin_frontend(&self) -> bool {
-        self.frontends
+        self.frontends()
             .iter()
             .any(|frontend| frontend.kind == super::ScaffoldFrontendKind::Admin)
     }

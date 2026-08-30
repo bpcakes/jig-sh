@@ -111,19 +111,19 @@ impl ScaffoldReport {
 
     pub(super) fn into_json(self, plan: &InitScaffoldPlan) -> Value {
         json!({
-            "preset": match plan.backend.preset() {
+            "preset": match plan.preset() {
                 ScaffoldPreset::RustReact => "rust-react",
                 ScaffoldPreset::GoReact => "go-react",
                 ScaffoldPreset::HarnessOnly => unreachable!("harness-only has no scaffold report"),
             },
             "repo_name": &plan.repo_name,
             "repo_name_sanitized_from": (plan.requested_repo_name != plan.repo_name).then_some(&plan.requested_repo_name),
-            "db": match plan.backend.database() {
+            "db": match plan.database() {
                 ScaffoldDb::None => "none",
                 ScaffoldDb::Postgres => "postgres",
                 ScaffoldDb::Sqlite => "sqlite",
             },
-            "frontends": plan.frontends.iter().map(|frontend| {
+            "frontends": plan.frontends().iter().map(|frontend| {
                 json!({
                     "name": frontend.name,
                     "dir": frontend.dir,
@@ -132,7 +132,7 @@ impl ScaffoldReport {
                     "ui": frontend.ui_provenance(),
                 })
             }).collect::<Vec<_>>(),
-            "frontend_notices": &plan.custom_frontend_notices,
+            "frontend_notices": plan.custom_frontend_notices(),
             "files_created": self.files_created,
             "files_modified": self.files_modified,
             "files_unchanged": self.files_unchanged,

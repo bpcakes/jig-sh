@@ -26,10 +26,11 @@ fn preflight_init_package_manager_with(
     opts: &InitOpts,
     available: impl FnOnce(&str) -> bool,
 ) -> Result<()> {
-    if !matches!(
-        opts.scaffold.preset,
-        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-    ) {
+    if !opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_web_package_manager)
+    {
         return Ok(());
     }
     let package_manager = opts.answers.web_package_manager.as_deref().unwrap_or("bun");
@@ -114,18 +115,30 @@ fn apply_project_shape_defaults(opts: &mut InitOpts) -> Result<()> {
     if opts.scaffold.preset.is_none() {
         opts.scaffold.preset = Some(ScaffoldPreset::RustReact);
     }
-    if matches!(
-        opts.scaffold.preset,
-        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-    ) {
+    if opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_database_choice)
+    {
         opts.scaffold.db.get_or_insert(ScaffoldDb::None);
-        if !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty() {
-            opts.scaffold
-                .frontends
-                .push(parse_scaffold_frontend("web").map_err(|error| anyhow::anyhow!(error))?);
-        }
     }
-    if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
+    if opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_frontend_choice)
+        && !opts.scaffold.has_frontends()
+        && opts.answers.frontend_apps.is_empty()
+    {
+        opts.scaffold
+            .frontends
+            .push(parse_scaffold_frontend("web").map_err(|error| anyhow::anyhow!(error))?);
+    }
+    if opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_go_module)
+        && opts.answers.go_module.is_none()
+    {
         opts.answers.go_module = Some(default_go_module_for_init(opts));
     }
     Ok(())
@@ -142,19 +155,20 @@ fn validate_project_shape_resolved(opts: &InitOpts, non_terminal: bool) -> Resul
             "Init cannot prompt because {mode}; pass an application preset with explicit database and frontend choices, pass --preset harness-only, or use --defaults"
         );
     };
-    if matches!(preset, ScaffoldPreset::RustReact | ScaffoldPreset::GoReact) {
-        if opts.scaffold.db.is_none() {
-            bail!(
-                "Init cannot prompt because {mode}; the selected application preset requires an explicit --db choice, or use --defaults"
-            );
-        }
-        if !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty() {
-            bail!(
-                "Init cannot prompt because {mode}; the selected application preset requires --frontend/--frontends or frontend_apps in --answers-file, or use --defaults"
-            );
-        }
+    if preset.requires_database_choice() && opts.scaffold.db.is_none() {
+        bail!(
+            "Init cannot prompt because {mode}; the selected application preset requires an explicit --db choice, or use --defaults"
+        );
     }
-    if preset == ScaffoldPreset::GoReact && opts.answers.go_module.is_none() {
+    if preset.requires_frontend_choice()
+        && !opts.scaffold.has_frontends()
+        && opts.answers.frontend_apps.is_empty()
+    {
+        bail!(
+            "Init cannot prompt because {mode}; the selected application preset requires --frontend/--frontends or frontend_apps in --answers-file, or use --defaults"
+        );
+    }
+    if preset.requires_go_module() && opts.answers.go_module.is_none() {
         bail!(
             "Init cannot prompt because {mode}; --preset go-react requires --go-module <module>, or use --defaults"
         );
@@ -186,27 +200,27 @@ fn guide_project_shape<R: BufRead, W: Write>(
         }
     }
 
-    if !matches!(
-        opts.scaffold.preset,
-        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-    ) {
+    let Some(preset) = opts.scaffold.preset else {
         return Ok(());
-    }
-    let needs_frontends = !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty();
-    if !printed_header && (opts.scaffold.db.is_none() || needs_frontends) {
+    };
+    let needs_database = preset.requires_database_choice() && opts.scaffold.db.is_none();
+    let needs_frontends = preset.requires_frontend_choice()
+        && !opts.scaffold.has_frontends()
+        && opts.answers.frontend_apps.is_empty();
+    if !printed_header && (needs_database || needs_frontends) {
         print_project_shape_header(output, &metadata)?;
     }
-    if opts.scaffold.db.is_none() {
+    if needs_database {
         opts.scaffold.db = Some(prompt_database(
             input,
             output,
-            opts.scaffold.preset == Some(ScaffoldPreset::GoReact),
+            preset == ScaffoldPreset::GoReact,
         )?);
     }
     if needs_frontends {
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
     }
-    if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
+    if preset.requires_go_module() && opts.answers.go_module.is_none() {
         let default = default_go_module_for_init(opts);
         opts.answers.go_module = Some(prompt_go_module(input, output, &default)?);
     }
