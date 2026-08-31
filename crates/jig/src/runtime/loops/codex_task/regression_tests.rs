@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
 use super::*;
+use crate::runtime::loops::occurrence::{
+    OccurrenceAttentionScope, OccurrenceClaim, OccurrenceGuard, OccurrenceStore,
+};
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 struct CancelAfterStart(AtomicUsize);
@@ -84,6 +87,7 @@ esac
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Repo,
+        None,
         &mut observer,
     )
     .err()
@@ -112,6 +116,7 @@ fn task_worktree_root_rejects_a_symlinked_tasks_component() {
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -228,6 +233,7 @@ fn repo_checkout_refuses_preexisting_repository_changes() {
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Repo,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -282,12 +288,29 @@ esac
     fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
     let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
     let ctx = RepoContext::load_from(repo.path()).unwrap();
+    let workflow = test_worktree_workflow();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(occurrence) = occurrences
+        .claim_scheduled(
+            &workflow.id,
+            100,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected occurrence claim");
+    };
+    let occurrence_guard = OccurrenceGuard::start(occurrences.clone(), &occurrence, 60).unwrap();
+    let reservation = occurrence_guard.worktree_reservation();
 
     let error = prepare_checkout(
         &ctx,
-        &test_worktree_workflow(),
+        &workflow,
         "item-1",
         CodexTaskCheckout::Worktree,
+        Some(&reservation),
         &mut NoopExecutionObserver,
     )
     .err()
@@ -297,6 +320,7 @@ esac
     assert!(error.contains("status 9"), "{error}");
     let task_root = repo.path().join(LOOP_RUNTIME_DIR).join("worktrees/tasks");
     assert_eq!(fs::read_dir(task_root).unwrap().count(), 0);
+    assert_eq!(occurrences.snapshot().unwrap()[0].worktree, None);
 }
 
 #[cfg(unix)]
@@ -333,6 +357,7 @@ esac
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -381,6 +406,21 @@ esac
     let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
     let ctx = RepoContext::load_from(repo.path()).unwrap();
     let workflow = test_worktree_workflow();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(occurrence) = occurrences
+        .claim_scheduled(
+            &workflow.id,
+            100,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected occurrence claim");
+    };
+    let occurrence_guard = OccurrenceGuard::start(occurrences.clone(), &occurrence, 60).unwrap();
+    let reservation = occurrence_guard.worktree_reservation();
     let mut observer = CancelWhenPresent(repo.path().join("add-started"));
 
     let error = prepare_checkout(
@@ -388,6 +428,7 @@ esac
         &workflow,
         "item-1",
         CodexTaskCheckout::Worktree,
+        Some(&reservation),
         &mut observer,
     )
     .err()
@@ -400,11 +441,14 @@ esac
         "{error}"
     );
     assert!(error.contains("cleanup failed"), "{error}");
+    let reserved = occurrences.snapshot().unwrap().remove(0).worktree.unwrap();
+    assert!(Path::new(&reserved).exists());
     let retry = prepare_checkout(
         &ctx,
         &workflow,
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -448,6 +492,7 @@ esac
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut observer,
     )
     .err()
@@ -501,6 +546,7 @@ fn worktree_checkout_refuses_a_stale_repository_before_creating_runtime_paths() 
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()
@@ -543,6 +589,7 @@ esac
         &test_worktree_workflow(),
         "item-1",
         CodexTaskCheckout::Worktree,
+        None,
         &mut NoopExecutionObserver,
     )
     .err()

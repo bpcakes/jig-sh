@@ -228,30 +228,42 @@ impl SchedulePersistence {
             &self.legacy_lock_path,
             "legacy loop schedule lock",
         )?;
-        with_exclusive_file_lock_until(&self.legacy_dir, &self.legacy_lock_path, deadline, || {
-            remove_orphaned_schedule_temps(&self.legacy_dir)?;
-            let (authority_root, authority_dir, authority_lock) = self.authority_lock()?;
-            ensure_managed_directory(
-                authority_root,
-                authority_dir,
-                "authoritative loop schedule directory",
-            )?;
-            ensure_managed_directory(&self.root, &self.dir, "loop schedule directory")?;
-            inspect_managed_file(
-                authority_root,
-                authority_lock,
-                "authoritative loop schedule lock",
-            )?;
-            with_exclusive_file_lock_until(authority_dir, authority_lock, deadline, || {
-                remove_orphaned_schedule_temps(authority_dir)?;
-                remove_orphaned_schedule_temps(&self.dir)?;
-                // Keep one lock order for every mutating access: the legacy cache lock
-                // first, then the protected authority lock. Migration may publish the
-                // authoritative ledger, so it belongs inside both locks.
-                self.ensure_legacy_migrated_locked()?;
-                action()
-            })
-        })
+        with_exclusive_file_lock_until(
+            &self.root,
+            &self.legacy_dir,
+            &self.legacy_lock_path,
+            deadline,
+            || {
+                remove_orphaned_schedule_temps(&self.legacy_dir)?;
+                let (authority_root, authority_dir, authority_lock) = self.authority_lock()?;
+                ensure_managed_directory(
+                    authority_root,
+                    authority_dir,
+                    "authoritative loop schedule directory",
+                )?;
+                ensure_managed_directory(&self.root, &self.dir, "loop schedule directory")?;
+                inspect_managed_file(
+                    authority_root,
+                    authority_lock,
+                    "authoritative loop schedule lock",
+                )?;
+                with_exclusive_file_lock_until(
+                    authority_root,
+                    authority_dir,
+                    authority_lock,
+                    deadline,
+                    || {
+                        remove_orphaned_schedule_temps(authority_dir)?;
+                        remove_orphaned_schedule_temps(&self.dir)?;
+                        // Keep one lock order for every mutating access: the legacy cache lock
+                        // first, then the protected authority lock. Migration may publish the
+                        // authoritative ledger, so it belongs inside both locks.
+                        self.ensure_legacy_migrated_locked()?;
+                        action()
+                    },
+                )
+            },
+        )
     }
 
     fn ensure_legacy_migrated_locked(&self) -> Result<()> {

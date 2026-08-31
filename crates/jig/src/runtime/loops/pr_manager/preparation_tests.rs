@@ -9,6 +9,9 @@ mod preparation_tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::runtime::loops::occurrence::{
+        OccurrenceAttentionScope, OccurrenceClaim, OccurrenceGuard, OccurrenceStore,
+    };
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     struct CancelWhenPresent(PathBuf);
@@ -66,6 +69,7 @@ mod preparation_tests {
             &ctx,
             &workflow(60),
             &item("a".repeat(40)),
+            None,
             &mut NoopExecutionObserver,
         )
         .unwrap_err();
@@ -147,12 +151,29 @@ exit "$status"
         let workflow = workflow(60);
         let item = item(head_sha);
         let lease = json!({"owner": "fixture-owner"});
+        let mut occurrences = OccurrenceStore::new(&ctx);
+        let OccurrenceClaim::Acquired(occurrence) = occurrences
+            .claim_scheduled(
+                &workflow.id,
+                100,
+                60,
+                OccurrenceAttentionScope::Workflow,
+                false,
+            )
+            .unwrap()
+        else {
+            panic!("expected occurrence claim");
+        };
+        let occurrence_guard =
+            OccurrenceGuard::start(occurrences.clone(), &occurrence, 60).unwrap();
+        let reservation = occurrence_guard.worktree_reservation();
         let repair = PrRepairContext {
             repo: &ctx,
             workflow: &workflow,
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: Some(&reservation),
         };
         let expected_worktree = pr_worktree_path(&ctx, &workflow, &item);
         let mut observer = CancelWhenPresent(marker);
@@ -164,6 +185,10 @@ exit "$status"
         };
         assert_eq!(worktree.as_deref(), Some(expected_worktree.as_path()));
         assert!(expected_worktree.exists());
+        assert_eq!(
+            occurrences.snapshot().unwrap()[0].worktree.as_deref(),
+            Some(expected_worktree.to_string_lossy().as_ref())
+        );
         let listing = Command::new(real_git.trim())
             .current_dir(repo.path())
             .args(["worktree", "list", "--porcelain"])
@@ -213,6 +238,7 @@ exit "$status"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
         let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
@@ -352,6 +378,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &json!({}),
             PrManagerExecution {
                 codex_home: None,
+                worktree_reservation: None,
                 observer: &mut observer,
             },
         )

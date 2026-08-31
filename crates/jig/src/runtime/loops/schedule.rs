@@ -285,12 +285,14 @@ fn dispatch_workflow(
             }
         };
     let occurrence_cancelled = || guard.renewal_failed();
+    let worktree_reservation = guard.worktree_reservation();
     let mut occurrence_control =
         AdditionalCancellationControl::new(observer, &occurrence_cancelled);
     let tick = match tick_scheduled_with_observer(
         ctx,
         &workflow.id,
         &claim.occurrence_id,
+        worktree_reservation,
         &mut occurrence_control,
     ) {
         Ok(tick) => tick,

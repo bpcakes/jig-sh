@@ -24,6 +24,7 @@ use crate::state::now_ms;
 
 use super::github;
 use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
+use super::occurrence::OccurrenceWorktreeReservation;
 #[cfg(test)]
 use super::state::LOOP_CACHE_DIR;
 use super::state::{
@@ -44,6 +45,7 @@ enum PrCandidate {
 
 struct PrManagerExecution<'a> {
     codex_home: Option<&'a Path>,
+    worktree_reservation: Option<&'a OccurrenceWorktreeReservation>,
     observer: &'a mut dyn ExecutionControl,
 }
 
@@ -53,6 +55,7 @@ struct PrRepairContext<'a, L: serde::Serialize> {
     item: &'a PrWorkItem,
     lease: &'a L,
     codex_home: Option<&'a Path>,
+    worktree_reservation: Option<&'a OccurrenceWorktreeReservation>,
 }
 
 struct PrWorkItem {
@@ -341,6 +344,7 @@ fn handle_actionable_pr(
         item,
         lease: &lease,
         codex_home: execution.codex_home,
+        worktree_reservation: execution.worktree_reservation,
     };
     let outcome = {
         let mut branch_control =
@@ -426,7 +430,13 @@ fn run_pr_repair<L: serde::Serialize>(
     pull_request: &Value,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairOutcome {
-    let worktree = match prepare_worktree(repair.repo, repair.workflow, repair.item, observer) {
+    let worktree = match prepare_worktree(
+        repair.repo,
+        repair.workflow,
+        repair.item,
+        repair.worktree_reservation,
+        observer,
+    ) {
         Ok(worktree) => worktree,
         Err(failure) => {
             return match failure.source {

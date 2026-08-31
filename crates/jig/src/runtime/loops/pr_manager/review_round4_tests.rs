@@ -114,6 +114,7 @@ mod review_round4_tests {
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(
@@ -208,6 +209,7 @@ exec git "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = finalize_pr_repair_outcome(
@@ -292,6 +294,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
         let replacement = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -348,6 +351,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(
@@ -391,6 +395,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
         let release_error = anyhow!("branch lease belongs to another dispatcher");
         let mut cleanup = PrWorktreeCleanup::assuming_lease(&ctx);
@@ -449,6 +454,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(
@@ -493,6 +499,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(
@@ -547,6 +554,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(
@@ -587,6 +595,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(
@@ -625,6 +634,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
         let release_error = anyhow!("branch lease belongs to another dispatcher");
         let mut cleanup = PrWorktreeCleanup::assuming_lease(&ctx);
@@ -676,6 +686,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(

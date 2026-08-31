@@ -270,6 +270,69 @@ fn shared_repository_claim_waits_for_all_managed_worktree_authority() {
 }
 
 #[test]
+fn pre_creation_worktree_reservation_survives_a_crashed_occurrence() {
+    let temp = tempdir().unwrap();
+    super::write_loop_fixture_repo(temp.path());
+    let retained = temp.path().join("reserved-before-git-add");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(isolated) = store
+        .claim_scheduled(
+            "isolated-task",
+            100,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected isolated occurrence claim");
+    };
+    let reservation = OccurrenceWorktreeReservation {
+        store: store.clone(),
+        occurrence_id: isolated.occurrence_id.clone(),
+        owner: isolated.owner.clone(),
+    };
+
+    reservation.reserve(&retained).unwrap();
+    std::fs::create_dir(&retained).unwrap();
+    let running = store
+        .snapshot()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.occurrence_id == isolated.occurrence_id)
+        .unwrap();
+    assert_eq!(
+        running.worktree.as_deref(),
+        Some(retained.to_string_lossy().as_ref())
+    );
+
+    let expired_at = isolated.claim_expires_at_ms;
+    store.reconcile_stale_for_test(expired_at).unwrap();
+    store
+        .acknowledge_at(&isolated.occurrence_id, expired_at)
+        .unwrap();
+    let claim = store
+        .claim_id_with_constraints_at(
+            "shared-task@manual:test".into(),
+            "shared-task",
+            0,
+            60,
+            expired_at,
+            super::super::claim::OccurrenceClaimConstraints {
+                attention_scope: OccurrenceAttentionScope::SharedRepository,
+                block_newer_occurrences: false,
+                block_retained_worktree: false,
+            },
+        )
+        .unwrap();
+    let OccurrenceClaim::BlockedByRetainedWorktree(blocker) = claim else {
+        panic!("a crash-created worktree must keep shared-root execution blocked");
+    };
+    assert_eq!(blocker.occurrence_id, isolated.occurrence_id);
+}
+
+#[test]
 fn live_workflow_occurrence_blocks_a_newer_claim_for_the_same_workflow() {
     let temp = tempdir().unwrap();
     super::write_loop_fixture_repo(temp.path());

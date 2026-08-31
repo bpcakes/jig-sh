@@ -2,6 +2,7 @@ fn prepare_worktree(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     item: &PrWorkItem,
+    worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PathBuf, PrWorktreePreparationError> {
     let worktree = pr_worktree_path(ctx, workflow, item);
@@ -47,6 +48,16 @@ fn prepare_worktree(
     if let Err(error) = preflight {
         return Err(PrWorktreePreparationError {
             source: error,
+            worktree: existed_before_preflight.then_some(worktree),
+        });
+    }
+    if let Some(reservation) = worktree_reservation
+        && let Err(error) = reservation.reserve(&worktree)
+    {
+        return Err(PrWorktreePreparationError {
+            source: PrRepairStepError::failed(
+                error.context("Failed to reserve the PR repair worktree in occurrence state"),
+            ),
             worktree: existed_before_preflight.then_some(worktree),
         });
     }

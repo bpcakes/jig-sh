@@ -205,6 +205,49 @@ fn protected_coordination_state_rejects_an_unknown_schema_without_rewriting_it()
 }
 
 #[test]
+fn attempt_decision_read_waits_for_compensating_rollback() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = example_workflow();
+    let mut attempts = AttemptStore::new(&ctx);
+    attempts
+        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
+        .unwrap();
+    let (start_read, read_start) = std::sync::mpsc::channel();
+    let (read_result, result_read) = std::sync::mpsc::channel();
+    let root = temp.path().to_path_buf();
+    let reader = std::thread::spawn(move || {
+        read_start.recv().unwrap();
+        let ctx = RepoContext::load_from(&root).unwrap();
+        read_result
+            .send(AttemptStore::new(&ctx).get("ExampleProject", "pr-17"))
+            .unwrap();
+    });
+
+    let error = attempts
+        .clear_attempt_and_then("ExampleProject", "pr-17", |cleared, _| {
+            assert!(cleared);
+            start_read.send(()).unwrap();
+            assert!(matches!(
+                result_read.recv_timeout(Duration::from_millis(100)),
+                Err(RecvTimeoutError::Timeout)
+            ));
+            Err::<(), _>(anyhow!("injected receipt failure"))
+        })
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "injected receipt failure");
+    let restored = result_read
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(restored.is_some());
+    reader.join().unwrap();
+}
+
+#[test]
 fn legacy_migration_marker_cannot_redirect_state_to_another_authority() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());

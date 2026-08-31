@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
+use super::occurrence::OccurrenceWorktreeReservation;
 use super::state::LOOP_RUNTIME_DIR;
 use super::workflow::{
     CodexTaskCheckout, CodexTaskSettings, RepositoryRevisionState, ResolvedWorkflow,
@@ -49,6 +50,7 @@ const WORKER_RECEIPT_EXCLUDE: &str = ":(exclude).agent/state/receipts.jsonl";
 
 pub(super) struct CodexTaskExecution<'a> {
     pub(super) item_key: &'a str,
+    pub(super) worktree_reservation: Option<&'a OccurrenceWorktreeReservation>,
 }
 
 pub(super) fn codex_task_tick(
@@ -97,6 +99,7 @@ pub(super) fn codex_task_tick(
         workflow,
         execution.item_key,
         settings.checkout,
+        execution.worktree_reservation,
         observer,
     ) {
         Ok(checkout) => checkout,
@@ -451,6 +454,7 @@ fn prepare_checkout(
     workflow: &ResolvedWorkflow,
     item_key: &str,
     checkout: CodexTaskCheckout,
+    worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
     if checkout == CodexTaskCheckout::Repo {
@@ -500,6 +504,9 @@ fn prepare_checkout(
         git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer),
         observer,
     )?;
+    if let Some(reservation) = worktree_reservation {
+        classify_checkout_preflight(reservation.reserve(&path), observer)?;
+    }
     let output = match git_output(
         ctx,
         ctx.root(),
@@ -516,7 +523,8 @@ fn prepare_checkout(
         Err(error) => {
             let cancelled = observer.cancelled();
             let mut cleanup_observer = NoopExecutionObserver;
-            let cleanup = remove_worktree(ctx, ctx.root(), &path, true, &mut cleanup_observer);
+            let cleanup =
+                cleanup_failed_worktree(ctx, &path, worktree_reservation, &mut cleanup_observer);
             return Err(checkout_preparation_error(
                 &path,
                 error,
@@ -528,7 +536,8 @@ fn prepare_checkout(
     if !output.status.success() {
         let error = git_error("Failed to create Codex task worktree", output);
         let mut cleanup_observer = NoopExecutionObserver;
-        let cleanup = remove_worktree(ctx, ctx.root(), &path, true, &mut cleanup_observer);
+        let cleanup =
+            cleanup_failed_worktree(ctx, &path, worktree_reservation, &mut cleanup_observer);
         return Err(checkout_preparation_error(
             &path,
             error,
@@ -541,6 +550,21 @@ fn prepare_checkout(
         path,
         initial_head,
     })
+}
+
+fn cleanup_failed_worktree(
+    ctx: &RepoContext,
+    path: &Path,
+    reservation: Option<&OccurrenceWorktreeReservation>,
+    observer: &mut dyn ExecutionControl,
+) -> Result<()> {
+    remove_worktree(ctx, ctx.root(), path, true, observer)?;
+    if let Some(reservation) = reservation {
+        reservation
+            .clear(path)
+            .context("Failed to clear the occurrence worktree reservation after cleanup")?;
+    }
+    Ok(())
 }
 
 fn git_is_dirty(

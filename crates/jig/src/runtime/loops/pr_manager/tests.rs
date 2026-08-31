@@ -424,6 +424,7 @@ mod tests {
             observed,
             PrManagerExecution {
                 codex_home: None,
+                worktree_reservation: None,
                 observer: &mut observer,
             },
         )
@@ -504,6 +505,7 @@ mod tests {
             observed,
             PrManagerExecution {
                 codex_home: None,
+                worktree_reservation: None,
                 observer: &mut observer,
             },
         )
@@ -592,6 +594,7 @@ mod tests {
             &ctx,
             &workflow,
             &item,
+            None,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err();
@@ -615,6 +618,7 @@ mod tests {
             &ctx,
             &workflow,
             &item,
+            None,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err();

@@ -72,6 +72,7 @@ mod cancellation_tests {
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let mut observer = CancelledControl;
@@ -136,6 +137,7 @@ mod cancellation_tests {
             item: &item,
             lease: &lease,
             codex_home: None,
+            worktree_reservation: None,
         };
 
         let action = record_pr_repair_outcome_under_branch_lease(

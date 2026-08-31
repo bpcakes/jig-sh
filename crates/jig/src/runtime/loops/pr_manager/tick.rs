@@ -3,6 +3,7 @@ pub(super) fn pr_manager_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
+    worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     let codex_home = match workflow
@@ -45,6 +46,7 @@ pub(super) fn pr_manager_tick(
         observed,
         PrManagerExecution {
             codex_home: codex_home.as_deref(),
+            worktree_reservation,
             observer,
         },
     )
@@ -124,6 +126,7 @@ fn pr_manager_tick_from_snapshot(
                     pull_request,
                     PrManagerExecution {
                         codex_home: execution.codex_home,
+                        worktree_reservation: execution.worktree_reservation,
                         observer: &mut *execution.observer,
                     },
                 ) {

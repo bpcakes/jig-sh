@@ -8,9 +8,9 @@ use crate::context::RepoContext;
 use crate::runtime::loops::authority::{ProtectedLoopAuthority, resolve_protected_loop_authority};
 
 use super::json_cache::{
-    read_json_cache_or_default_with_cancellation, recover_unparsable_json_cache,
-    replace_unparsable_json_cache, with_json_cache_lock_compensating_until,
-    with_json_cache_lock_until,
+    read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
+    recover_unparsable_json_cache, replace_unparsable_json_cache,
+    with_json_cache_lock_compensating_until, with_json_cache_lock_until,
 };
 use super::{LOOP_CACHE_DIR, loop_state_lock_deadline};
 
@@ -144,6 +144,32 @@ impl JsonStatePersistence {
         }
         self.read_legacy::<S>(cancelled)?
             .state(&self.protected_state_path)
+    }
+
+    pub(super) fn read_locked<S>(&self) -> Result<S>
+    where
+        S: Clone + Default + DeserializeOwned + Serialize,
+    {
+        let deadline = loop_state_lock_deadline();
+        let Some(protected) = self.protected()? else {
+            return read_json_cache_locked_until(
+                &self.legacy.root,
+                &self.legacy.dir,
+                &self.legacy.lock_path,
+                &self.legacy.path,
+                deadline,
+            );
+        };
+        self.ensure_initialized::<S>(protected, deadline)?;
+        let primary: ProtectedState<S> = read_json_cache_locked_until(
+            &protected.root,
+            &protected.dir,
+            &protected.lock_path,
+            &protected.path,
+            deadline,
+        )?;
+        primary.require_initialized()?;
+        Ok(primary.state)
     }
 
     pub(super) fn validate<S>(&self) -> Result<()>

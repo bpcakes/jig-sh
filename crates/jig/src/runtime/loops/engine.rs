@@ -9,7 +9,9 @@ use crate::state::{
 };
 use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
-use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStore};
+use super::occurrence::{
+    OccurrenceAcknowledgement, OccurrenceStore, OccurrenceWorktreeReservation,
+};
 use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
     CODEX_TASK_KIND, DEFAULT_WORKFLOW_ID, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND,
@@ -34,6 +36,7 @@ use unexecuted::UnexecutedTickError;
 struct TickExecution {
     item_key: String,
     manual: bool,
+    worktree_reservation: Option<OccurrenceWorktreeReservation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,6 +159,7 @@ pub(super) fn tick_with_observer(
         TickExecution {
             item_key: started.to_string(),
             manual: true,
+            worktree_reservation: None,
         },
         observer,
     )
@@ -167,6 +171,7 @@ pub(super) fn tick_scheduled_with_observer(
     ctx: &RepoContext,
     workflow_id: &str,
     occurrence_id: &str,
+    worktree_reservation: OccurrenceWorktreeReservation,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<ScheduledTick, UnexecutedTickError> {
     tick_with_execution(
@@ -181,6 +186,7 @@ pub(super) fn tick_scheduled_with_observer(
         TickExecution {
             item_key: occurrence_id.to_string(),
             manual: false,
+            worktree_reservation: Some(worktree_reservation),
         },
         observer,
     )
@@ -275,6 +281,10 @@ fn tick_with_execution(
                         .is_some_and(ManualOccurrenceGuard::renewal_failed)
                 };
                 if !manual_blocked {
+                    let worktree_reservation = manual_guard
+                        .as_ref()
+                        .map(ManualOccurrenceGuard::worktree_reservation)
+                        .or_else(|| execution.worktree_reservation.clone());
                     let workflow_tick = {
                         let mut lease_control =
                             AdditionalCancellationControl::new(observer, &lease_cancelled);
@@ -288,6 +298,7 @@ fn tick_with_execution(
                             &execution,
                             &mut lease_store,
                             &mut attempt_store,
+                            worktree_reservation.as_ref(),
                             &mut occurrence_control,
                         )
                     };
@@ -390,8 +401,7 @@ fn tick_with_execution(
         || attempt_sections.blocks_idle()
         || !scheduled_needs_attention.is_empty();
 
-    // Idleness is machine-global for now: `loop run --until idle` should not
-    // claim quiescence while any workflow lease or attempt backoff is live.
+    // Machine-global idleness cannot hide another workflow's live lease or backoff.
     if tick_error.is_some() || completion.outcome == WorkflowOutcome::Failed {
         idle = false;
         status = "failed";
@@ -578,6 +588,7 @@ fn run_workflow_tick(
     execution: &TickExecution,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
+    worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     match workflow.kind.as_str() {
@@ -586,14 +597,20 @@ fn run_workflow_tick(
             workflow,
             codex_task::CodexTaskExecution {
                 item_key: &execution.item_key,
+                worktree_reservation,
             },
             observer,
         ),
         GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx, observer),
         NOOP_STATUS_KIND => noop::noop_status_tick(ctx),
-        PR_MANAGER_KIND => {
-            pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store, observer)
-        }
+        PR_MANAGER_KIND => pr_manager::pr_manager_tick(
+            ctx,
+            workflow,
+            lease_store,
+            attempt_store,
+            worktree_reservation,
+            observer,
+        ),
         _ => bail!(
             "Unsupported loop workflow kind '{}'. Supported kinds: {CODEX_TASK_KIND}, {NOOP_STATUS_KIND}, {GITHUB_PR_STATUS_KIND}, {PR_MANAGER_KIND}.",
             workflow.kind
@@ -758,9 +775,7 @@ pub(super) fn acknowledge_occurrence(
                         "changed": changed,
                     })),
                     session_override: None,
-                    // The schedule locks stay held until receipt publication so
-                    // rollback cannot overwrite a concurrent state change. Keep
-                    // Git inspection outside this short commit boundary.
+                    // Hold schedule locks through receipt publication; keep Git inspection outside.
                     collect_git_metadata: false,
                     collect_worktree_fingerprint: false,
                     worktree_fingerprint_override: None,

@@ -24,6 +24,7 @@ mod claim;
 mod guard_renewal;
 mod manual;
 mod persistence;
+mod worktree;
 
 pub(super) use claim::OccurrenceAttentionScope;
 use guard_renewal::run_occurrence_renewal;
@@ -31,6 +32,7 @@ use guard_renewal::run_occurrence_renewal;
 use guard_renewal::run_occurrence_renewal_with_wait;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
+pub(super) use worktree::OccurrenceWorktreeReservation;
 
 const SCHEDULE_SCHEMA_VERSION: u32 = 4;
 const PREVIOUS_SCHEDULE_SCHEMA_VERSION: u32 = 3;
@@ -68,12 +70,6 @@ impl ScheduleOccurrence {
             self.status,
             OccurrenceStatus::Succeeded | OccurrenceStatus::Failed | OccurrenceStatus::Acknowledged
         )
-    }
-
-    pub(super) fn has_retained_worktree(&self) -> bool {
-        self.worktree
-            .as_deref()
-            .is_some_and(|worktree| Path::new(worktree).try_exists().unwrap_or(true))
     }
 }
 

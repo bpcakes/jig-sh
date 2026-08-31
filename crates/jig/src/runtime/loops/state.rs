@@ -448,7 +448,7 @@ impl AttemptStore {
         let key = format!("{workflow_id}:{item_key}");
         Ok(self
             .persistence
-            .read_only_with_cancellation::<AttemptFile>(&|| false)?
+            .read_locked::<AttemptFile>()?
             .attempts
             .get(&key)
             .cloned())

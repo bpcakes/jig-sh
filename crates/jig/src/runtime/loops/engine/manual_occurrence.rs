@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 
 use super::super::occurrence::{
     OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish,
-    OccurrenceGuard, OccurrenceOutcome, OccurrenceStore, ScheduleOccurrence,
+    OccurrenceGuard, OccurrenceOutcome, OccurrenceStore, OccurrenceWorktreeReservation,
+    ScheduleOccurrence,
 };
 use super::super::workflow::{
     CodexTaskCheckout, ResolvedWorkflow, UnexecutedReason, WorkflowCompletion, WorkflowExecution,
@@ -72,6 +73,10 @@ impl ManualOccurrenceStart {
 }
 
 impl ManualOccurrenceGuard {
+    pub(super) fn worktree_reservation(&self) -> OccurrenceWorktreeReservation {
+        self.guard.worktree_reservation()
+    }
+
     pub(super) fn start(
         workflow: &ResolvedWorkflow,
         item_key: &str,

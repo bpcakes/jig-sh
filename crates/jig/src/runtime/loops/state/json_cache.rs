@@ -109,6 +109,24 @@ where
     cache.read_json_or_default(&data_name, data_path, cancelled)
 }
 
+pub(super) fn read_json_cache_locked_until<T>(
+    root: &Path,
+    dir: &Path,
+    lock_path: &Path,
+    data_path: &Path,
+    deadline: Instant,
+) -> Result<T>
+where
+    T: Default + DeserializeOwned,
+{
+    let cache = CacheDirectory::open(root, dir)?;
+    let lock_name = cache_file_name(dir, lock_path)?;
+    let data_name = cache_file_name(dir, data_path)?;
+    cache.with_lock_until(&lock_name, lock_path, deadline, || {
+        cache.read_json_or_default(&data_name, data_path, &|| false)
+    })
+}
+
 pub(super) fn recover_unparsable_json_cache<T>(
     root: &Path,
     dir: &Path,
