@@ -88,7 +88,9 @@ pub(super) fn read_json_cache_or_default_with_cancellation<T>(
 where
     T: Default + DeserializeOwned,
 {
-    let cache = CacheDirectory::open(root, dir)?;
+    let Some(cache) = CacheDirectory::open_existing(root, dir)? else {
+        return Ok(T::default());
+    };
     let data_name = cache_file_name(dir, data_path)?;
     cache.read_json_or_default(&data_name, data_path, cancelled)
 }
@@ -136,6 +138,19 @@ struct CacheDirectory {
 
 impl CacheDirectory {
     fn open(root: &Path, cache_dir: &Path) -> Result<Self> {
+        Self::open_with_creation(root, cache_dir, true)?.ok_or_else(|| {
+            anyhow!(
+                "Failed to create loop cache directory {}",
+                cache_dir.display()
+            )
+        })
+    }
+
+    fn open_existing(root: &Path, cache_dir: &Path) -> Result<Option<Self>> {
+        Self::open_with_creation(root, cache_dir, false)
+    }
+
+    fn open_with_creation(root: &Path, cache_dir: &Path, create: bool) -> Result<Option<Self>> {
         let relative = cache_dir.strip_prefix(root).with_context(|| {
             format!(
                 "Loop cache directory {} is outside repository root {}",
@@ -151,7 +166,10 @@ impl CacheDirectory {
                 Component::CurDir => {}
                 Component::Normal(name) => {
                     opened.push(name);
-                    directory = open_or_create_directory(&directory, name, &opened)?;
+                    directory = match open_directory(&directory, name, &opened, create)? {
+                        Some(directory) => directory,
+                        None => return Ok(None),
+                    };
                 }
                 _ => bail!(
                     "Loop cache directory must be repository-relative: {}",
@@ -159,7 +177,7 @@ impl CacheDirectory {
                 ),
             }
         }
-        Ok(Self { directory })
+        Ok(Some(Self { directory }))
     }
 
     fn with_lock_until<T>(
@@ -334,9 +352,10 @@ fn cache_file_name(cache_dir: &Path, path: &Path) -> Result<OsString> {
         .ok_or_else(|| anyhow!("Loop cache path has no file name: {}", path.display()))
 }
 
-fn open_or_create_directory(parent: &Dir, name: &OsStr, path: &Path) -> Result<Dir> {
+fn open_directory(parent: &Dir, name: &OsStr, path: &Path, create: bool) -> Result<Option<Dir>> {
     match parent.open_dir_nofollow(name) {
-        Ok(directory) => Ok(directory),
+        Ok(directory) => Ok(Some(directory)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !create => Ok(None),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             match parent.create_dir(name) {
                 Ok(()) => {}
@@ -347,7 +366,7 @@ fn open_or_create_directory(parent: &Dir, name: &OsStr, path: &Path) -> Result<D
                     });
                 }
             }
-            parent.open_dir_nofollow(name).with_context(|| {
+            parent.open_dir_nofollow(name).map(Some).with_context(|| {
                 format!(
                     "Failed to open loop cache directory {} without following links",
                     path.display()
