@@ -1,5 +1,70 @@
 use super::*;
 
+pub(super) fn prepare_repository_checkout(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
+    if observer.cancelled() {
+        return Err(CheckoutPreparationFailure::cancelled(anyhow!(
+            "Scheduled Codex task was cancelled before shared-checkout preflight"
+        )));
+    }
+    super::super::pre_execution::require_ignored_runtime_path(
+        ctx,
+        Path::new(LOOP_RUNTIME_DIR),
+        "Codex task runtime path",
+        "repo checkout",
+        observer,
+    )?;
+    match repo_task_has_changes(ctx, ctx.root(), observer) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(CheckoutPreparationFailure::new(anyhow!(
+                "Shared repository checkout is dirty before Codex task execution; preserve or discard the existing changes before retrying"
+            )));
+        }
+        Err(error) => {
+            let error = error.context(
+                "Failed to verify that the shared repository checkout is clean before Codex task execution",
+            );
+            return Err(if observer.cancelled() {
+                CheckoutPreparationFailure::cancelled(error)
+            } else {
+                CheckoutPreparationFailure::new(error)
+            });
+        }
+    }
+    let initial_head = classify_checkout_preflight(
+        git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer),
+        observer,
+    )?;
+    if observer.cancelled() {
+        return Err(CheckoutPreparationFailure::cancelled(anyhow!(
+            "Scheduled Codex task was cancelled before receipt-journal preflight"
+        )));
+    }
+    let receipt_journal =
+        classify_checkout_preflight(checkout::ReceiptJournalBaseline::capture(ctx), observer)?;
+    Ok(PreparedCheckout::Repo {
+        path: ctx.root().to_path_buf(),
+        initial_head,
+        receipt_journal,
+    })
+}
+
+pub(super) fn classify_checkout_preflight<T>(
+    result: Result<T>,
+    observer: &dyn ExecutionControl,
+) -> std::result::Result<T, CheckoutPreparationFailure> {
+    result.map_err(|error| {
+        if observer.cancelled() {
+            CheckoutPreparationFailure::cancelled(error)
+        } else {
+            CheckoutPreparationFailure::new(error)
+        }
+    })
+}
+
 pub(super) fn require_ignored_task_worktree_root(
     ctx: &RepoContext,
     observer: &mut dyn ExecutionControl,

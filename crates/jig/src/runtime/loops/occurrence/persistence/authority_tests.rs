@@ -59,7 +59,12 @@ fn legacy_migration_waits_for_the_protected_authority_lock() {
     let persistence = SchedulePersistence::new(&ctx);
     let protected = persistence.protected_authority().unwrap().unwrap().clone();
     fs::create_dir_all(&protected.dir).unwrap();
-    write_json_durable(&persistence.legacy_path, &ScheduleFile::default()).unwrap();
+    write_json_durable(
+        &persistence.root,
+        &persistence.legacy_path,
+        &ScheduleFile::default(),
+    )
+    .unwrap();
     let authority_lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -212,6 +217,29 @@ fn symbolic_link_git_metadata_is_rejected_as_mutable_redirection() {
 
 #[cfg(unix)]
 #[test]
+fn dangling_symbolic_link_git_metadata_is_rejected_instead_of_treated_as_non_git() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    symlink(
+        temp.path().join("missing-git-metadata"),
+        temp.path().join(".git"),
+    )
+    .unwrap();
+
+    let error = resolve_protected_schedule_authority(temp.path()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("must be a directory or regular pointer file"),
+        "{error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn checkout_replica_directory_cannot_redirect_schedule_writes_through_a_symlink() {
     use std::os::unix::fs::symlink;
 
@@ -227,10 +255,38 @@ fn checkout_replica_directory_cannot_redirect_schedule_writes_through_a_symlink(
     let error = persistence.with_locked(|_| Ok(())).unwrap_err();
 
     assert!(
-        error.to_string().contains("is not a directory"),
+        error.to_string().contains("component is a symlink"),
         "{error:#}"
     );
     assert!(fs::read_dir(redirected.path()).unwrap().next().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn checkout_replica_ancestor_cannot_redirect_schedule_writes_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let redirected = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    fs::create_dir_all(redirected.path().join("loop")).unwrap();
+    symlink(redirected.path(), temp.path().join(".agent/runtime")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+
+    let error = persistence.with_locked(|_| Ok(())).unwrap_err();
+
+    assert!(
+        error.to_string().contains("component is a symlink"),
+        "{error:#}"
+    );
+    assert!(
+        fs::read_dir(redirected.path().join("loop"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -260,8 +316,9 @@ fn protected_initialization_witness_upgrades_without_losing_public_state() {
             error: None,
         },
     );
-    write_json_durable(&persistence.path, &public).unwrap();
+    write_json_durable(&persistence.root, &persistence.path, &public).unwrap();
     write_json_durable(
+        &protected.root,
         &protected.initialized_path,
         &ScheduleInitializationMarker {
             schema_version: SCHEDULE_INITIALIZATION_SCHEMA_VERSION,

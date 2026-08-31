@@ -28,6 +28,102 @@ impl crate::execution::ExecutionCancellation for CancelWhenPresent {
     }
 }
 
+struct AlwaysCancelled;
+
+impl crate::execution::ExecutionObserver for AlwaysCancelled {}
+
+impl crate::execution::ExecutionCancellation for AlwaysCancelled {
+    fn cancelled(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn failed_checkout_preflight_uses_the_cancellation_reason_when_authority_is_lost() {
+    let failure = classify_checkout_preflight::<()>(
+        Err(anyhow!("repository preflight failed")),
+        &AlwaysCancelled,
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.reason(), UnexecutedReason::CancelledBeforeStart);
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelled_repo_head_preflight_is_reported_as_cancelled_before_start() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = lock_env();
+    let repo = tempdir().unwrap();
+    TestRepoBuilder::new(repo.path())
+        .required_commands(Vec::<String>::new())
+        .write();
+    let marker = repo.path().join("cancel-repo-head-preflight");
+    let git = repo.path().join("git-cancelled-repo-head");
+    fs::write(
+        &git,
+        r#"#!/bin/sh
+set -eu
+case " $* " in
+  *" check-ignore --quiet -- "*) exit 0 ;;
+  *" status --porcelain=v1 "*) exit 0 ;;
+  *" rev-parse HEAD "*) : > cancel-repo-head-preflight; exit 1 ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+    let mut observer = CancelWhenPresent(marker);
+
+    let failure = prepare_checkout(
+        &ctx,
+        &test_worktree_workflow(),
+        "item-1",
+        CodexTaskCheckout::Repo,
+        &mut observer,
+    )
+    .err()
+    .expect("cancelled repository head preflight must fail preparation");
+
+    assert_eq!(failure.reason(), UnexecutedReason::CancelledBeforeStart);
+}
+
+#[cfg(unix)]
+#[test]
+fn task_worktree_root_rejects_a_symlinked_tasks_component() {
+    use std::os::unix::fs::symlink;
+
+    let repo = tempdir().unwrap();
+    let redirected = tempdir().unwrap();
+    TestRepoBuilder::new(repo.path())
+        .required_commands(Vec::<String>::new())
+        .write();
+    let worktrees = repo.path().join(LOOP_RUNTIME_DIR).join("worktrees");
+    fs::create_dir_all(&worktrees).unwrap();
+    symlink(redirected.path(), worktrees.join("tasks")).unwrap();
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+    let failure = prepare_checkout(
+        &ctx,
+        &test_worktree_workflow(),
+        "item-1",
+        CodexTaskCheckout::Worktree,
+        &mut NoopExecutionObserver,
+    )
+    .err()
+    .expect("symlinked task roots must fail checkout preparation");
+
+    assert!(
+        failure.to_string().contains("component is a symlink"),
+        "{failure:#}"
+    );
+    assert!(fs::read_dir(redirected.path()).unwrap().next().is_none());
+}
+
 #[cfg(unix)]
 #[test]
 fn prompt_reader_rejects_a_fifo_without_waiting_for_input() {

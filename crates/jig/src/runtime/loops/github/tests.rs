@@ -39,6 +39,53 @@ mod tests {
         assert_eq!(encode_path_segment("example[bot]"), "example%5Bbot%5D");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn gh_commands_scrub_repository_redirects_but_keep_authentication() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
+
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config("")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let gh = temp.path().join("fixture-gh-environment");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+[ -z "${GIT_DIR+x}" ]
+[ -z "${GIT_WORK_TREE+x}" ]
+[ -z "${GH_REPO+x}" ]
+[ "$GH_TOKEN" = "fixture-token" ]
+printf '%s\n' '{}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh, permissions).unwrap();
+        let _git_dir = EnvVarGuard::set("GIT_DIR", OsStr::new("/redirected/git"));
+        let _git_work_tree = EnvVarGuard::set("GIT_WORK_TREE", OsStr::new("/redirected/tree"));
+        let _gh_repo = EnvVarGuard::set("GH_REPO", OsStr::new("OtherProject/OtherVault"));
+        let _gh_token = EnvVarGuard::set("GH_TOKEN", OsStr::new("fixture-token"));
+
+        let output = run_gh_with_program(
+            &ctx,
+            Vec::new(),
+            gh.as_os_str(),
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+
+        assert_eq!(output.status_code, Some(0));
+    }
+
     #[test]
     fn review_thread_graphql_uses_raw_string_variables() {
         let repository = RepositorySnapshot {

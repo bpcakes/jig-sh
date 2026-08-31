@@ -31,6 +31,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Reject symlinked ancestors across loop schedule and managed worktree roots, reject dangling `.git` redirection, scrub repository-selecting environment from GitHub CLI calls, preserve cancellation classification through shared-checkout preflight, and bound all review-thread update and reconciliation requests under one aggregate budget.
 - Defer every PR-manager preparation cleanup to the lease-refreshing outcome finalizer, quarantine only the PR whose review history is truncated, retain the newest manual occurrences during bounded pruning, and preserve non-ownership renewal shutdown failures as state evidence.
 - Keep PR-manager worktree inspection and cleanup behind a freshly renewed branch lease, retain authority-lost paths without touching them, store retained PR evidence outside disposable cache, bound composed GitHub snapshots across nested requests and payloads, and preserve truthful staged occurrence diagnostics through stale reconciliation.
 - Make PR-manager repair publication compare-and-swap the exact GitHub-observed remote head, reject non-descendant worker history, and page nested review comments backward so older trusted feedback cannot disappear behind GitHub's per-connection limit.

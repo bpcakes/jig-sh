@@ -8,6 +8,7 @@ use crate::execution::ExecutionControl;
 mod codex_task;
 mod engine;
 mod github;
+mod managed_path;
 mod noop;
 mod occurrence;
 mod pr_manager;

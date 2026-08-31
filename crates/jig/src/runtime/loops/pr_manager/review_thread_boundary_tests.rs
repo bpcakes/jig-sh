@@ -141,6 +141,7 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let body = format!("review reply begins\n{}\nreview reply ends", "x".repeat(256 * 1_024));
+        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
 
         let response = post_review_thread_reply(
             &ctx,
@@ -148,6 +149,7 @@ esac
             &body,
             "example-head",
             &mut NoopExecutionObserver,
+            &mut budget,
         )
         .unwrap();
 

@@ -3,13 +3,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::path_exists;
-
 const PROTECTED_SCHEDULE_DIR: &str = "jig/loop";
 const MAX_GITDIR_FILE_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Debug)]
 pub(super) struct ProtectedScheduleAuthority {
+    pub(super) root: PathBuf,
     pub(super) dir: PathBuf,
     pub(super) path: PathBuf,
     pub(super) initialized_path: PathBuf,
@@ -19,12 +18,20 @@ pub(super) struct ProtectedScheduleAuthority {
 pub(super) fn resolve_protected_schedule_authority(
     repo_root: &Path,
 ) -> Result<Option<ProtectedScheduleAuthority>> {
-    if !path_exists(&repo_root.join(".git"), "Git metadata entry")? {
-        return Ok(None);
-    }
-    let git_dir = resolve_git_metadata_directory(repo_root)?;
+    let dot_git = repo_root.join(".git");
+    let metadata = match fs::symlink_metadata(&dot_git) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Failed to inspect Git metadata entry {}", dot_git.display())
+            });
+        }
+    };
+    let git_dir = resolve_git_metadata_directory(repo_root, dot_git, metadata)?;
     let dir = git_dir.join(PROTECTED_SCHEDULE_DIR);
     Ok(Some(ProtectedScheduleAuthority {
+        root: git_dir,
         path: dir.join("schedule.json"),
         initialized_path: dir.join("schedule.initialized"),
         lock_path: dir.join("schedule.lock"),
@@ -32,10 +39,11 @@ pub(super) fn resolve_protected_schedule_authority(
     }))
 }
 
-fn resolve_git_metadata_directory(repo_root: &Path) -> Result<PathBuf> {
-    let dot_git = repo_root.join(".git");
-    let metadata = fs::symlink_metadata(&dot_git)
-        .with_context(|| format!("Failed to inspect Git metadata entry {}", dot_git.display()))?;
+fn resolve_git_metadata_directory(
+    repo_root: &Path,
+    dot_git: PathBuf,
+    metadata: fs::Metadata,
+) -> Result<PathBuf> {
     let git_dir = if metadata.file_type().is_dir() {
         dot_git
     } else if metadata.file_type().is_file() {

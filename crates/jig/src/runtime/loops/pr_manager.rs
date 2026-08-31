@@ -23,6 +23,7 @@ use crate::runtime::worker_runner::{
 use crate::state::now_ms;
 
 use super::github;
+use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
 #[cfg(test)]
 use super::state::LOOP_CACHE_DIR;
 use super::state::{
@@ -707,6 +708,7 @@ include!("pr_manager/worktree_and_push.rs");
 include!("pr_manager/push_error_tests.rs");
 include!("pr_manager/review_round4_tests.rs");
 include!("pr_manager/cancellation_tests.rs");
+include!("pr_manager/review_thread_budget_tests.rs");
 include!("pr_manager/review_thread_boundary_tests.rs");
 include!("pr_manager/preparation_tests.rs");
 include!("pr_manager/git.rs");

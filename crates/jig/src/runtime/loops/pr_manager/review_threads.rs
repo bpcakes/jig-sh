@@ -5,7 +5,62 @@ struct ReviewThreadPostResult {
 }
 
 const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 100;
+const REVIEW_THREAD_UPDATE_REQUEST_LIMIT: usize = 256;
+const REVIEW_THREAD_UPDATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MUTATION_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct ReviewThreadUpdateBudget {
+    started_at: Instant,
+    timeout: Duration,
+    request_count: usize,
+}
+
+impl ReviewThreadUpdateBudget {
+    fn new(command_timeout: CommandTimeout) -> Self {
+        Self {
+            started_at: Instant::now(),
+            timeout: command_timeout.duration().min(REVIEW_THREAD_UPDATE_TIMEOUT),
+            request_count: 0,
+        }
+    }
+
+    fn reserve_request(
+        &mut self,
+        requested_timeout: CommandTimeout,
+    ) -> std::result::Result<CommandTimeout, ExecutionCommandError> {
+        if self.request_count >= REVIEW_THREAD_UPDATE_REQUEST_LIMIT {
+            return Err(ExecutionCommandError::failed(anyhow!(
+                "GitHub review thread updates exceeded their {REVIEW_THREAD_UPDATE_REQUEST_LIMIT}-request budget"
+            )));
+        }
+        let remaining = self
+            .timeout
+            .checked_sub(self.started_at.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                ExecutionCommandError::failed(anyhow!(
+                    "GitHub review thread updates exceeded their {}-second deadline",
+                    self.timeout.as_secs()
+                ))
+            })?;
+        let timeout = remaining.min(requested_timeout.duration());
+        let seconds = timeout.as_secs();
+        if seconds == 0 {
+            return Err(ExecutionCommandError::failed(anyhow!(
+                "GitHub review thread updates exceeded their {}-second deadline",
+                self.timeout.as_secs()
+            )));
+        }
+        let timeout = CommandTimeout::from_seconds(seconds).ok_or_else(|| {
+            ExecutionCommandError::failed(anyhow!(
+                "GitHub review thread updates produced an invalid request timeout"
+            ))
+        })?;
+        self.request_count += 1;
+        Ok(timeout)
+    }
+}
+
 fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
@@ -42,6 +97,7 @@ fn post_review_thread_updates(
     }
     let mut posts = Vec::new();
     let mut handled_thread_ids = BTreeSet::new();
+    let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
     let mut failed = false;
     let mut cancelled = false;
     for reply in replies {
@@ -100,7 +156,14 @@ fn post_review_thread_updates(
         let reply_response = if body.is_empty() {
             None
         } else {
-            match post_review_thread_reply(ctx, thread_id, body, repair_version, observer) {
+            match post_review_thread_reply(
+                ctx,
+                thread_id,
+                body,
+                repair_version,
+                observer,
+                &mut budget,
+            ) {
                 Ok(response) => Some(response),
                 Err(
                     ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
@@ -134,7 +197,7 @@ fn post_review_thread_updates(
             resolve_skip_reason = Value::String("reply_failed".into());
             None
         } else if resolve {
-            match resolve_review_thread(ctx, thread_id, observer) {
+            match resolve_review_thread(ctx, thread_id, observer, &mut budget) {
                 Ok(response) => Some(response),
                 Err(
                     ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
@@ -231,9 +294,12 @@ fn post_review_thread_reply(
     body: &str,
     repair_version: &str,
     observer: &mut dyn ExecutionControl,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let marker = review_thread_reply_marker(thread_id, repair_version);
-    if let Some(comment) = review_thread_reply_comment(ctx, thread_id, &marker, observer)? {
+    if let Some(comment) =
+        review_thread_reply_comment(ctx, thread_id, &marker, observer, budget)?
+    {
         return Ok(reconciled_reply_response(&comment));
     }
     let body = format!("{body}\n\n{marker}");
@@ -251,7 +317,8 @@ fn post_review_thread_reply(
         .map_err(ExecutionCommandError::failed)?;
     let mut body_field = OsString::from("body=@");
     body_field.push(body_file.path());
-    let result = github::gh_json(
+    let timeout = budget.reserve_request(ctx.command_timeout())?;
+    let result = github::gh_json_with_timeout(
         ctx,
         vec![
             OsString::from("api"),
@@ -264,18 +331,20 @@ fn post_review_thread_reply(
             body_field,
         ],
         &[0],
+        timeout,
         observer,
     )
     .and_then(validate_reply_mutation_response);
-    reconcile_reply_mutation(ctx, thread_id, &marker, result)
+    reconcile_reply_mutation(ctx, thread_id, &marker, result, budget)
 }
 
 fn resolve_review_thread(
     ctx: &RepoContext,
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    let state = review_thread_resolution_state(ctx, thread_id, observer)?;
+    let state = review_thread_resolution_state(ctx, thread_id, observer, budget)?;
     if state
         .pointer("/data/node/isResolved")
         .and_then(Value::as_bool)
@@ -283,7 +352,8 @@ fn resolve_review_thread(
     {
         return Ok(reconciled_resolve_response(thread_id));
     }
-    let result = github::gh_json(
+    let timeout = budget.reserve_request(ctx.command_timeout())?;
+    let result = github::gh_json_with_timeout(
         ctx,
         vec![
             OsString::from("api"),
@@ -294,10 +364,11 @@ fn resolve_review_thread(
             OsString::from(format!("threadId={thread_id}")),
         ],
         &[0],
+        timeout,
         observer,
     )
     .and_then(validate_resolve_mutation_response);
-    reconcile_resolve_mutation(ctx, thread_id, result)
+    reconcile_resolve_mutation(ctx, thread_id, result, budget)
 }
 
 fn review_thread_reply_marker(thread_id: &str, repair_version: &str) -> String {
@@ -309,19 +380,22 @@ fn review_thread_reply_comment(
     thread_id: &str,
     marker: &str,
     observer: &mut dyn ExecutionControl,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Option<Value>, ExecutionCommandError> {
     let total_timeout = ctx.command_timeout().duration();
     let deadline = Instant::now() + total_timeout;
     fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
+        let timeout = remaining_operation_timeout(
+            deadline,
+            total_timeout,
+            "GitHub review thread reply lookup",
+        )?;
+        let timeout = budget.reserve_request(timeout)?;
         github::gh_json_with_timeout(
             ctx,
             review_thread_reply_state_args(thread_id, cursor),
             &[0],
-            remaining_operation_timeout(
-                deadline,
-                total_timeout,
-                "GitHub review thread reply lookup",
-            )?,
+            timeout,
             observer,
         )
     })
@@ -331,15 +405,17 @@ fn review_thread_reply_comment_for_reconciliation(
     ctx: &RepoContext,
     thread_id: &str,
     marker: &str,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Option<Value>, ExecutionCommandError> {
     let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
     fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
         let mut observer = NoopExecutionObserver;
+        let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
         github::gh_json_with_timeout(
             ctx,
             review_thread_reply_state_args(thread_id, cursor),
             &[0],
-            remaining_reconciliation_timeout(deadline)?,
+            timeout,
             &mut observer,
         )
     })
@@ -365,11 +441,14 @@ fn review_thread_resolution_state(
     ctx: &RepoContext,
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    github::gh_json(
+    let timeout = budget.reserve_request(ctx.command_timeout())?;
+    github::gh_json_with_timeout(
         ctx,
         review_thread_resolution_state_args(thread_id),
         &[0],
+        timeout,
         observer,
     )
     .and_then(|value| validate_review_thread_resolution_state(value, thread_id))
@@ -378,14 +457,16 @@ fn review_thread_resolution_state(
 fn review_thread_resolution_state_for_reconciliation(
     ctx: &RepoContext,
     thread_id: &str,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
     let mut observer = NoopExecutionObserver;
+    let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
     github::gh_json_with_timeout(
         ctx,
         review_thread_resolution_state_args(thread_id),
         &[0],
-        remaining_reconciliation_timeout(deadline)?,
+        timeout,
         &mut observer,
     )
     .and_then(|value| validate_review_thread_resolution_state(value, thread_id))
@@ -553,14 +634,19 @@ fn reconcile_reply_mutation(
     thread_id: &str,
     marker: &str,
     result: std::result::Result<Value, ExecutionCommandError>,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let error = match result {
         Ok(value) => return Ok(value),
         Err(error @ ExecutionCommandError::CancelledBeforeStart) => return Err(error),
         Err(error) => error,
     };
-    if let Ok(Some(comment)) =
-        review_thread_reply_comment_for_reconciliation(ctx, thread_id, marker)
+    if let Ok(Some(comment)) = review_thread_reply_comment_for_reconciliation(
+        ctx,
+        thread_id,
+        marker,
+        budget,
+    )
     {
         return Ok(reconciled_reply_response(&comment));
     }
@@ -571,13 +657,15 @@ fn reconcile_resolve_mutation(
     ctx: &RepoContext,
     thread_id: &str,
     result: std::result::Result<Value, ExecutionCommandError>,
+    budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let error = match result {
         Ok(value) => return Ok(value),
         Err(error @ ExecutionCommandError::CancelledBeforeStart) => return Err(error),
         Err(error) => error,
     };
-    if let Ok(state) = review_thread_resolution_state_for_reconciliation(ctx, thread_id)
+    if let Ok(state) =
+        review_thread_resolution_state_for_reconciliation(ctx, thread_id, budget)
         && state
             .pointer("/data/node/isResolved")
             .and_then(Value::as_bool)

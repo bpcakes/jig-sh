@@ -15,6 +15,7 @@ use jig_owned_process::{OwnedProcessOutputStream, ProcessOutputOverflowPolicy};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
 use super::state::LOOP_RUNTIME_DIR;
 use super::workflow::{
     CodexTaskCheckout, CodexTaskSettings, RepositoryRevisionState, ResolvedWorkflow,
@@ -37,7 +38,8 @@ mod pre_execution;
 
 use checkout::{PreparedCheckout, TaskOutcome};
 use pre_execution::{
-    CheckoutPreparationFailure, require_ignored_task_worktree_root, unexecuted_task_failure,
+    CheckoutPreparationFailure, classify_checkout_preflight, prepare_repository_checkout,
+    require_ignored_task_worktree_root, unexecuted_task_failure,
 };
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
@@ -452,42 +454,7 @@ fn prepare_checkout(
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
     if checkout == CodexTaskCheckout::Repo {
-        if observer.cancelled() {
-            return Err(CheckoutPreparationFailure::cancelled(anyhow!(
-                "Scheduled Codex task was cancelled before shared-checkout preflight"
-            )));
-        }
-        super::pre_execution::require_ignored_runtime_path(
-            ctx,
-            Path::new(LOOP_RUNTIME_DIR),
-            "Codex task runtime path",
-            "repo checkout",
-            observer,
-        )?;
-        match repo_task_has_changes(ctx, ctx.root(), observer) {
-            Ok(false) => {}
-            Ok(true) => {
-                return Err(CheckoutPreparationFailure::new(anyhow!(
-                    "Shared repository checkout is dirty before Codex task execution; preserve or discard the existing changes before retrying"
-                )));
-            }
-            Err(error) => {
-                let error = error.context(
-                    "Failed to verify that the shared repository checkout is clean before Codex task execution",
-                );
-                return Err(if observer.cancelled() {
-                    CheckoutPreparationFailure::cancelled(error)
-                } else {
-                    CheckoutPreparationFailure::new(error)
-                });
-            }
-        }
-        let initial_head = git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer)?;
-        return Ok(PreparedCheckout::Repo {
-            path: ctx.root().to_path_buf(),
-            initial_head,
-            receipt_journal: checkout::ReceiptJournalBaseline::capture(ctx)?,
-        });
+        return prepare_repository_checkout(ctx, observer);
     }
 
     if observer.cancelled() {
@@ -506,7 +473,11 @@ fn prepare_checkout(
         .join("worktrees")
         .join("tasks")
         .join(name);
-    if path.exists() {
+    let path_exists = classify_checkout_preflight(
+        inspect_managed_directory(ctx.root(), &path, "Codex task worktree"),
+        observer,
+    )?;
+    if path_exists {
         return Err(CheckoutPreparationFailure::retained(
             &path,
             anyhow!("Codex task worktree already exists: {}", path.display()),
@@ -520,20 +491,15 @@ fn prepare_checkout(
         });
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create Codex task worktree parent {}",
-                parent.display()
-            )
-        })?;
+        classify_checkout_preflight(
+            ensure_managed_directory(ctx.root(), parent, "Codex task worktree parent"),
+            observer,
+        )?;
     }
-    let initial_head = match git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer) {
-        Ok(initial_head) => initial_head,
-        Err(error) if observer.cancelled() => {
-            return Err(CheckoutPreparationFailure::cancelled(error));
-        }
-        Err(error) => return Err(CheckoutPreparationFailure::new(error)),
-    };
+    let initial_head = classify_checkout_preflight(
+        git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer),
+        observer,
+    )?;
     let output = match git_output(
         ctx,
         ctx.root(),

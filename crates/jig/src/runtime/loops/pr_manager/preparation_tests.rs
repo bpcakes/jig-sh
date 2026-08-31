@@ -49,6 +49,38 @@ mod preparation_tests {
     }
 
     #[test]
+    fn pr_worktree_root_rejects_a_symlinked_prs_component() {
+        use std::os::unix::fs::symlink;
+
+        let repo = tempdir().unwrap();
+        let redirected = tempdir().unwrap();
+        TestRepoBuilder::new(repo.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let worktrees = repo.path().join(LOOP_RUNTIME_DIR).join("worktrees");
+        fs::create_dir_all(&worktrees).unwrap();
+        symlink(redirected.path(), worktrees.join("prs")).unwrap();
+        let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+        let error = prepare_worktree(
+            &ctx,
+            &workflow(60),
+            &item("a".repeat(40)),
+            &mut NoopExecutionObserver,
+        )
+        .unwrap_err();
+        let PrRepairStepError::Failed(error) = error.source else {
+            panic!("symlinked PR worktree roots must be a preparation failure");
+        };
+
+        assert!(
+            format!("{error:#}").contains("component is a symlink"),
+            "{error:#}"
+        );
+        assert!(fs::read_dir(redirected.path()).unwrap().next().is_none());
+    }
+
+    #[test]
     fn cancellation_after_worktree_add_defers_cleanup_to_finalization() {
         let _guard = lock_env();
         let repo = tempdir().unwrap();

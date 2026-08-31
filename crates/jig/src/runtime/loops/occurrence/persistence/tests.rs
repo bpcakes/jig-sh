@@ -80,7 +80,7 @@ fn durable_directory_creation_builds_missing_parent_chain() {
     let temp = tempfile::tempdir().unwrap();
     let nested = temp.path().join(".agent/runtime/loop");
 
-    ensure_durable_directory(&nested).unwrap();
+    ensure_managed_directory(temp.path(), &nested, "loop schedule directory").unwrap();
 
     assert!(nested.is_dir());
 }
@@ -90,7 +90,7 @@ fn durable_write_publishes_a_readable_schedule_without_a_temp_leftover() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("schedule.json");
 
-    write_json_durable(&path, &ScheduleFile::default()).unwrap();
+    write_json_durable(temp.path(), &path, &ScheduleFile::default()).unwrap();
 
     let published: ScheduleFile = read_json_or_default(&path).unwrap();
     assert_eq!(published.schema_version, SCHEDULE_SCHEMA_VERSION);
@@ -111,25 +111,24 @@ fn durable_directory_rejects_a_non_directory_path() {
     let path = temp.path().join("loop");
     fs::write(&path, "not a directory").unwrap();
 
-    let error = ensure_durable_directory(&path).unwrap_err().to_string();
+    let error = ensure_managed_directory(temp.path(), &path, "loop schedule directory")
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("is not a directory"), "{error}");
 }
 
 #[test]
-fn durable_write_removes_temporary_file_after_rename_failure() {
+fn durable_write_rejects_a_non_file_destination_without_leaving_a_temp_file() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("schedule.json");
     fs::create_dir(&path).unwrap();
 
-    let error = write_json_durable(&path, &ScheduleFile::default())
+    let error = write_json_durable(temp.path(), &path, &ScheduleFile::default())
         .unwrap_err()
         .to_string();
 
-    assert!(
-        error.contains("Failed to replace loop schedule state"),
-        "{error}"
-    );
+    assert!(error.contains("is not a regular file"), "{error}");
     let leftovers = fs::read_dir(temp.path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -147,7 +146,7 @@ fn read_only_rechecks_durable_state_when_marker_follows_initial_miss() {
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let persistence = SchedulePersistence::new(&ctx);
     let durable = ScheduleFile::default();
-    write_json_durable(&persistence.path, &durable).unwrap();
+    write_json_durable(&persistence.root, &persistence.path, &durable).unwrap();
     let marker = ScheduleFile {
         schema_version: SCHEDULE_SCHEMA_VERSION,
         migrated_to: Some(SCHEDULE_STATE_PATH.into()),

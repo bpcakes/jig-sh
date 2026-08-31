@@ -5,7 +5,11 @@ fn prepare_worktree(
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PathBuf, PrWorktreePreparationError> {
     let worktree = pr_worktree_path(ctx, workflow, item);
-    let existed_before_preflight = match worktree.try_exists() {
+    let existed_before_preflight = match inspect_managed_directory(
+        ctx.root(),
+        &worktree,
+        "PR repair worktree",
+    ) {
         Ok(exists) => exists,
         Err(error) => {
             return Err(PrWorktreePreparationError {
@@ -27,8 +31,7 @@ fn prepare_worktree(
         let parent = worktree
             .parent()
             .ok_or_else(|| anyhow!("Worktree path has no parent: {}", worktree.display()))?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        ensure_managed_directory(ctx.root(), parent, "PR repair worktree parent")?;
 
         let head_ref = remote_branch_ref(&item.head_ref);
         git_checked(ctx, ctx.root(), ["fetch", "origin", &head_ref], observer)?;
@@ -105,9 +108,8 @@ struct PrWorktreePreparationError {
 }
 
 fn cleanup_pr_worktree_candidate(ctx: &RepoContext, worktree: &Path) -> Result<bool> {
-    let path_exists = worktree
-        .try_exists()
-        .with_context(|| format!("Failed to inspect PR repair worktree {}", worktree.display()))?;
+    let path_exists =
+        inspect_managed_directory(ctx.root(), worktree, "PR repair worktree")?;
     if pr_worktree_is_registered(ctx, worktree)? {
         remove_pr_worktree(ctx, worktree, true)?;
         return Ok(true);

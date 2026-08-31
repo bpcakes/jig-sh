@@ -327,6 +327,7 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
 
         let response = post_review_thread_reply(
             &ctx,
@@ -334,6 +335,7 @@ esac
             "Addressed in the pushed repair.",
             "pushed-head",
             &mut observer,
+            &mut budget,
         )
         .unwrap();
 
@@ -582,33 +584,6 @@ esac
         assert!(expired.contains("total timeout"), "{expired}");
     }
 
-    #[test]
-    fn cancellation_before_mutation_skips_remote_reconciliation() {
-        let temp = tempdir().unwrap();
-        crate::test_env::TestRepoBuilder::new(temp.path())
-            .required_commands(Vec::<String>::new())
-            .write();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-        assert!(matches!(
-            reconcile_reply_mutation(
-                &ctx,
-                "PRRT_1",
-                "marker",
-                Err(ExecutionCommandError::CancelledBeforeStart),
-            ),
-            Err(ExecutionCommandError::CancelledBeforeStart)
-        ));
-        assert!(matches!(
-            reconcile_resolve_mutation(
-                &ctx,
-                "PRRT_1",
-                Err(ExecutionCommandError::CancelledBeforeStart),
-            ),
-            Err(ExecutionCommandError::CancelledBeforeStart)
-        ));
-    }
-
     #[cfg(unix)]
     #[test]
     fn cancelled_review_resolution_reconciles_the_remote_thread() {
@@ -649,8 +624,10 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
 
-        let response = resolve_review_thread(&ctx, "PRRT_1", &mut observer).unwrap();
+        let response =
+            resolve_review_thread(&ctx, "PRRT_1", &mut observer, &mut budget).unwrap();
 
         assert_eq!(response["_jig"]["reconciled"], true);
         assert_eq!(

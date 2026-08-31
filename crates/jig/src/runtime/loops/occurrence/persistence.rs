@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::context::RepoContext;
+use crate::runtime::loops::managed_path::{ensure_managed_directory, inspect_managed_file};
 
 use super::{SCHEDULE_SCHEMA_VERSION, ScheduleFile, migrate_schedule_schema, validate_schema};
 use crate::runtime::loops::state::{
@@ -36,6 +37,7 @@ struct ScheduleInitializationMarker {
 
 #[derive(Clone)]
 pub(super) struct SchedulePersistence {
+    root: PathBuf,
     dir: PathBuf,
     path: PathBuf,
     initialized_path: PathBuf,
@@ -53,6 +55,7 @@ impl SchedulePersistence {
         let protected_authority =
             resolve_protected_schedule_authority(ctx.root()).map_err(|error| format!("{error:#}"));
         Self {
+            root: ctx.root().to_path_buf(),
             path: dir.join("schedule.json"),
             initialized_path: dir.join("schedule.initialized"),
             lock_path: dir.join("schedule.lock"),
@@ -67,8 +70,10 @@ impl SchedulePersistence {
     pub(super) fn read_only(&self, cancelled: &dyn Fn() -> bool) -> Result<ScheduleFile> {
         let durable_required = self.durable_state_expected()?;
         let durable = self.read_durable(durable_required, cancelled)?;
-        let legacy_expected = path_exists(&self.legacy_path, "legacy loop schedule state")?;
+        let legacy_expected =
+            path_exists(&self.root, &self.legacy_path, "legacy loop schedule state")?;
         let legacy = read_expected_schedule(
+            &self.root,
             &self.legacy_path,
             legacy_expected,
             "Legacy loop schedule state disappeared before it could be read",
@@ -163,12 +168,30 @@ impl SchedulePersistence {
     }
 
     fn with_schedule_locks<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
-        ensure_durable_directory(&self.legacy_dir)?;
+        ensure_managed_directory(
+            &self.root,
+            &self.legacy_dir,
+            "legacy loop schedule directory",
+        )?;
+        inspect_managed_file(
+            &self.root,
+            &self.legacy_lock_path,
+            "legacy loop schedule lock",
+        )?;
         with_exclusive_file_lock(&self.legacy_dir, &self.legacy_lock_path, || {
             remove_orphaned_schedule_temps(&self.legacy_dir)?;
-            let (authority_dir, authority_lock) = self.authority_lock()?;
-            ensure_durable_directory(authority_dir)?;
-            ensure_durable_directory(&self.dir)?;
+            let (authority_root, authority_dir, authority_lock) = self.authority_lock()?;
+            ensure_managed_directory(
+                authority_root,
+                authority_dir,
+                "authoritative loop schedule directory",
+            )?;
+            ensure_managed_directory(&self.root, &self.dir, "loop schedule directory")?;
+            inspect_managed_file(
+                authority_root,
+                authority_lock,
+                "authoritative loop schedule lock",
+            )?;
             with_exclusive_file_lock(authority_dir, authority_lock, || {
                 remove_orphaned_schedule_temps(authority_dir)?;
                 remove_orphaned_schedule_temps(&self.dir)?;
@@ -182,8 +205,10 @@ impl SchedulePersistence {
     }
 
     fn ensure_legacy_migrated_locked(&self) -> Result<()> {
-        let legacy_expected = path_exists(&self.legacy_path, "legacy loop schedule state")?;
+        let legacy_expected =
+            path_exists(&self.root, &self.legacy_path, "legacy loop schedule state")?;
         let Some(mut legacy) = read_expected_schedule(
+            &self.root,
             &self.legacy_path,
             legacy_expected,
             "Legacy loop schedule state disappeared before migration",
@@ -213,7 +238,7 @@ impl SchedulePersistence {
             }
             self.ensure_initialization_markers()?;
             if marker_schema != legacy.schema_version {
-                write_json_durable(&self.legacy_path, &legacy)?;
+                write_json_durable(&self.root, &self.legacy_path, &legacy)?;
             }
             return Ok(());
         }
@@ -244,33 +269,47 @@ impl SchedulePersistence {
             migrated_to: Some(SCHEDULE_STATE_PATH.to_string()),
             occurrences: BTreeMap::new(),
         };
-        if let Some(mut existing) =
-            read_json_if_exists_with_cancellation::<ScheduleFile>(&self.legacy_path, &|| false)?
+        let existing = path_exists(&self.root, &self.legacy_path, "legacy loop schedule state")?
+            .then(|| {
+                read_json_if_exists_with_cancellation::<ScheduleFile>(&self.legacy_path, &|| false)
+            })
+            .transpose()?
+            .flatten();
+        if let Some(mut existing) = existing
             && legacy_is_migration_marker(&mut existing, &self.legacy_path)?
             && existing == marker
         {
             return Ok(());
         }
-        write_json_durable(&self.legacy_path, &marker)
+        write_json_durable(&self.root, &self.legacy_path, &marker)
     }
 
     fn durable_state_expected(&self) -> Result<bool> {
-        let public_marker = path_exists(
-            &self.initialized_path,
-            "loop schedule initialization marker",
-        )?;
-        let durable_state = path_exists(&self.path, "loop schedule state")?;
         let (protected_state, protected_marker) = match self.protected_authority()? {
             Some(authority) => (
-                path_exists(&authority.path, "protected loop schedule state")?,
                 path_exists(
+                    &authority.root,
+                    &authority.path,
+                    "protected loop schedule state",
+                )?,
+                path_exists(
+                    &authority.root,
                     &authority.initialized_path,
                     "protected loop schedule initialization marker",
                 )?,
             ),
             None => (false, false),
         };
-        Ok(public_marker || durable_state || protected_state || protected_marker)
+        if protected_state || protected_marker {
+            return Ok(true);
+        }
+        let public_marker = path_exists(
+            &self.root,
+            &self.initialized_path,
+            "loop schedule initialization marker",
+        )?;
+        let durable_state = path_exists(&self.root, &self.path, "loop schedule state")?;
+        Ok(public_marker || durable_state)
     }
 
     fn read_durable(
@@ -279,8 +318,9 @@ impl SchedulePersistence {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Option<ScheduleFile>> {
         let required = required || self.durable_state_expected()?;
-        let path = self.durable_read_path()?;
+        let (root, path) = self.durable_read_path()?;
         let store = read_expected_schedule(
+            root,
             path,
             required,
             "Initialized loop schedule state is missing",
@@ -297,13 +337,20 @@ impl SchedulePersistence {
 
     fn ensure_initialization_markers(&self) -> Result<()> {
         let protected = match self.protected_authority()? {
-            Some(authority) if path_exists(&authority.path, "protected loop schedule state")? => {
+            Some(authority)
+                if path_exists(
+                    &authority.root,
+                    &authority.path,
+                    "protected loop schedule state",
+                )? =>
+            {
                 Some(authority)
             }
             _ => None,
         };
         if let Some(authority) = protected {
             self.ensure_initialization_marker_at(
+                &authority.root,
                 &authority.initialized_path,
                 "protected loop schedule initialization marker",
                 PROTECTED_SCHEDULE_AUTHORITY_SCHEMA_VERSION,
@@ -312,6 +359,7 @@ impl SchedulePersistence {
             )?;
         }
         let public_marker = self.ensure_initialization_marker_at(
+            &self.root,
             &self.initialized_path,
             "loop schedule initialization marker",
             SCHEDULE_INITIALIZATION_SCHEMA_VERSION,
@@ -328,6 +376,7 @@ impl SchedulePersistence {
 
     fn ensure_initialization_marker_at(
         &self,
+        root: &Path,
         path: &Path,
         description: &str,
         schema_version: u32,
@@ -338,8 +387,11 @@ impl SchedulePersistence {
             schema_version,
             state_path: state_path.to_string(),
         };
-        let current =
-            read_json_if_exists_with_cancellation::<ScheduleInitializationMarker>(path, &|| false);
+        let current = if path_exists(root, path, description)? {
+            read_json_if_exists_with_cancellation::<ScheduleInitializationMarker>(path, &|| false)
+        } else {
+            Ok(None)
+        };
         if replace_existing {
             if current
                 .as_ref()
@@ -352,7 +404,7 @@ impl SchedulePersistence {
             {
                 return Ok(());
             }
-            return write_json_durable(path, &expected);
+            return write_json_durable(root, path, &expected);
         }
         let current = current?;
         if current.as_ref().is_some_and(|marker| {
@@ -369,7 +421,7 @@ impl SchedulePersistence {
         if current.is_some() && !upgrading_protected_witness {
             bail!("Invalid {description} at {}", path.display());
         }
-        write_json_durable(path, &expected)
+        write_json_durable(root, path, &expected)
     }
 
     fn protected_authority(&self) -> Result<Option<&ProtectedScheduleAuthority>> {
@@ -383,11 +435,19 @@ impl SchedulePersistence {
         let Some(authority) = self.protected_authority()? else {
             return Ok(false);
         };
-        let Some(marker) = read_json_if_exists_with_cancellation::<ScheduleInitializationMarker>(
+        let Some(marker) = path_exists(
+            &authority.root,
             &authority.initialized_path,
-            &|| false,
+            "protected loop schedule initialization marker",
         )?
-        else {
+        .then(|| {
+            read_json_if_exists_with_cancellation::<ScheduleInitializationMarker>(
+                &authority.initialized_path,
+                &|| false,
+            )
+        })
+        .transpose()?
+        .flatten() else {
             return Ok(false);
         };
         match (marker.schema_version, marker.state_path.as_str()) {
@@ -402,34 +462,44 @@ impl SchedulePersistence {
         }
     }
 
-    fn durable_read_path(&self) -> Result<&Path> {
+    fn durable_read_path(&self) -> Result<(&Path, &Path)> {
         if let Some(authority) = self.protected_authority()?
-            && (path_exists(&authority.path, "protected loop schedule state")?
-                || self.protected_marker_requires_authority()?)
+            && (path_exists(
+                &authority.root,
+                &authority.path,
+                "protected loop schedule state",
+            )? || self.protected_marker_requires_authority()?)
         {
-            return Ok(&authority.path);
+            return Ok((&authority.root, &authority.path));
         }
-        Ok(&self.path)
+        Ok((&self.root, &self.path))
     }
 
     fn protected_authority_needs_state(&self) -> Result<bool> {
         self.protected_authority()?
-            .map(|authority| path_exists(&authority.path, "protected loop schedule state"))
+            .map(|authority| {
+                path_exists(
+                    &authority.root,
+                    &authority.path,
+                    "protected loop schedule state",
+                )
+            })
             .transpose()
             .map(|exists| exists == Some(false))
     }
 
-    fn authority_lock(&self) -> Result<(&Path, &Path)> {
+    fn authority_lock(&self) -> Result<(&Path, &Path, &Path)> {
         Ok(match self.protected_authority()? {
-            Some(authority) => (&authority.dir, &authority.lock_path),
-            None => (&self.dir, &self.lock_path),
+            Some(authority) => (&authority.root, &authority.dir, &authority.lock_path),
+            None => (&self.root, &self.dir, &self.lock_path),
         })
     }
 
     fn write_durable_schedule(&self, store: &ScheduleFile) -> Result<()> {
         if let Some(authority) = self.protected_authority()? {
-            write_json_durable(&authority.path, store)?;
+            write_json_durable(&authority.root, &authority.path, store)?;
             self.ensure_initialization_marker_at(
+                &authority.root,
                 &authority.initialized_path,
                 "protected loop schedule initialization marker",
                 PROTECTED_SCHEDULE_AUTHORITY_SCHEMA_VERSION,
@@ -438,25 +508,29 @@ impl SchedulePersistence {
             )?;
             // Protected Git metadata is the commit point. The checkout copy is a
             // compatibility/diagnostic replica and is repaired on later writes.
-            let _ = write_json_durable(&self.path, store);
+            let _ = write_json_durable(&self.root, &self.path, store);
             return Ok(());
         }
-        write_json_durable(&self.path, store)
+        write_json_durable(&self.root, &self.path, store)
     }
 }
 
-fn path_exists(path: &Path, description: &str) -> Result<bool> {
-    path.try_exists()
-        .with_context(|| format!("Failed to inspect {description} {}", path.display()))
+fn path_exists(root: &Path, path: &Path, description: &str) -> Result<bool> {
+    inspect_managed_file(root, path, description)
 }
 
 fn read_expected_schedule(
+    root: &Path,
     path: &Path,
     expected: bool,
     missing_message: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<ScheduleFile>> {
-    let schedule = read_json_if_exists_with_cancellation::<ScheduleFile>(path, cancelled)?;
+    let schedule = if path_exists(root, path, "loop schedule state")? {
+        read_json_if_exists_with_cancellation::<ScheduleFile>(path, cancelled)?
+    } else {
+        None
+    };
     if expected && schedule.is_none() {
         bail!("{missing_message} at {}", path.display());
     }
@@ -533,11 +607,12 @@ fn legacy_is_migration_marker(store: &mut ScheduleFile, path: &Path) -> Result<b
     Ok(true)
 }
 
-fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+fn write_json_durable<T: Serialize>(root: &Path, path: &Path, value: &T) -> Result<()> {
     let Some(parent) = path.parent() else {
         bail!("Loop schedule state path has no parent: {}", path.display());
     };
-    ensure_durable_directory(parent)?;
+    ensure_managed_directory(root, parent, "loop schedule directory")?;
+    inspect_managed_file(root, path, "loop schedule state")?;
     let tmp = path.with_extension(format!("tmp-{}", Ulid::new()));
     let bytes = serde_json::to_vec_pretty(value).context("Failed to encode loop schedule JSON")?;
     let result = publish_durable(
@@ -567,58 +642,6 @@ fn write_json_durable<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     result
-}
-
-fn ensure_durable_directory(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => return Ok(()),
-        Ok(_) => bail!(
-            "Loop schedule directory path is not a directory: {}",
-            path.display()
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "Failed to inspect loop schedule directory {}",
-                    path.display()
-                )
-            });
-        }
-    }
-
-    let Some(parent) = path.parent() else {
-        bail!("Loop schedule directory has no parent: {}", path.display());
-    };
-    ensure_durable_directory(parent)?;
-    match fs::create_dir(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if !fs::symlink_metadata(path)
-                .with_context(|| {
-                    format!(
-                        "Failed to inspect loop schedule directory {}",
-                        path.display()
-                    )
-                })?
-                .is_dir()
-            {
-                bail!(
-                    "Loop schedule directory path is not a directory: {}",
-                    path.display()
-                );
-            }
-        }
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "Failed to create loop schedule directory {}",
-                    path.display()
-                )
-            });
-        }
-    }
-    sync_parent_directory(parent)
 }
 
 fn publish_durable(

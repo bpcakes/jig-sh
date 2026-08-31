@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
+use crate::bootstrap::scrub_known_repository_git_environment;
 use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
@@ -539,15 +540,6 @@ impl GhOutput {
     }
 }
 
-pub(super) fn gh_json(
-    ctx: &RepoContext,
-    args: Vec<OsString>,
-    allowed_statuses: &[i32],
-    observer: &mut dyn ExecutionControl,
-) -> std::result::Result<Value, ExecutionCommandError> {
-    gh_json_with_timeout(ctx, args, allowed_statuses, ctx.command_timeout(), observer)
-}
-
 pub(super) fn gh_json_with_timeout(
     ctx: &RepoContext,
     args: Vec<OsString>,
@@ -602,6 +594,7 @@ fn run_gh_with_program_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    scrub_github_repository_environment(&mut command);
     let output = run_authoritative_execution_command(
         &mut command,
         timeout,
@@ -615,6 +608,22 @@ fn run_gh_with_program_timeout(
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
+}
+
+fn scrub_github_repository_environment(command: &mut Command) {
+    scrub_known_repository_git_environment(command);
+    let explicitly_configured = command
+        .get_envs()
+        .map(|(name, _)| name.to_os_string())
+        .collect::<Vec<_>>();
+    for name in std::env::vars_os()
+        .map(|(name, _)| name)
+        .chain(explicitly_configured)
+    {
+        if name.to_string_lossy().eq_ignore_ascii_case("GH_REPO") {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn parse_gh_json(stdout: &str, command: &str) -> Result<Value> {
