@@ -401,33 +401,15 @@ fn run_pr_repair<L: serde::Serialize>(
 ) -> PrRepairOutcome {
     let worktree = match prepare_worktree(repair.repo, repair.workflow, repair.item, observer) {
         Ok(worktree) => worktree,
-        Err(error) => {
-            if let (Some(worktree), Some(cleanup_error)) =
-                (error.retained_worktree, error.cleanup_error)
-            {
-                let (error, reason) = match error.source {
-                    PrRepairStepError::Cancelled(detail) => {
-                        (anyhow!(detail), UnexecutedReason::CancelledBeforeStart)
-                    }
-                    PrRepairStepError::Failed(error) => {
-                        (error, UnexecutedReason::PreExecutionError)
-                    }
-                };
-                return PrRepairOutcome::PreparationCleanupFailed {
-                    error,
-                    cleanup_error,
-                    worktree,
-                    reason,
-                };
-            }
-            return match error.source {
+        Err(failure) => {
+            return match failure.source {
                 PrRepairStepError::Cancelled(detail) => PrRepairOutcome::Cancelled {
                     detail,
-                    worktree: None,
+                    worktree: failure.worktree,
                 },
                 PrRepairStepError::Failed(error) => PrRepairOutcome::PreExecutionFailed {
                     error,
-                    worktree: None,
+                    worktree: failure.worktree,
                     worker_receipt_id: None,
                 },
             };

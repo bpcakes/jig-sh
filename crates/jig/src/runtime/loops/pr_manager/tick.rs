@@ -66,7 +66,7 @@ fn pr_manager_tick_from_snapshot(
             UnexecutedReason::PreExecutionError,
         ));
     };
-    if let Some(action) = incomplete_snapshot_action(&observed, pull_requests) {
+    if let Some(action) = incomplete_pr_list_action(&observed) {
         let actions = vec![action];
         let completion = pr_manager_completion(&actions);
         return Ok(WorkflowTick::with_completion(
@@ -87,6 +87,10 @@ fn pr_manager_tick_from_snapshot(
                 anyhow!("PR manager tick was cancelled before its worker started"),
                 UnexecutedReason::CancelledBeforeStart,
             ));
+        }
+        if let Some(action) = incomplete_pull_request_action(pull_request) {
+            actions.push(action);
+            continue;
         }
         let candidate = classify_pull_request(pull_request, default_branch);
         match candidate {
@@ -172,28 +176,12 @@ fn pr_manager_unexecuted_tick(
     WorkflowTick::with_completion(observed, actions, completion)
 }
 
-fn incomplete_snapshot_action(observed: &Value, pull_requests: &[Value]) -> Option<Value> {
+fn incomplete_pr_list_action(observed: &Value) -> Option<Value> {
     let pr_list_truncated = observed
         .pointer("/summary/pr_list_truncated")
         .and_then(Value::as_bool)
         == Some(true);
-    let review_threads_truncated = pull_requests.iter().any(|pull_request| {
-        pull_request
-            .pointer("/review_threads/page_info/truncated")
-            .and_then(Value::as_bool)
-            == Some(true)
-    });
-    let truncated_review_threads = pull_requests
-        .iter()
-        .filter(|pull_request| {
-            pull_request
-                .pointer("/review_threads/page_info/truncated")
-                .and_then(Value::as_bool)
-                == Some(true)
-        })
-        .filter_map(|pull_request| pull_request.get("number").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    if !pr_list_truncated && !review_threads_truncated {
+    if !pr_list_truncated {
         return None;
     }
     Some(json!({
@@ -201,8 +189,29 @@ fn incomplete_snapshot_action(observed: &Value, pull_requests: &[Value]) -> Opti
         "status": "failed",
         "reason": "incomplete_github_snapshot",
         "unexecuted_reason": UnexecutedReason::PreExecutionError.as_str(),
-        "pr_list_truncated": pr_list_truncated,
-        "review_thread_prs_truncated": truncated_review_threads,
-        "error": "PR manager refused to mutate attempts or branches from an incomplete GitHub snapshot",
+        "pr_list_truncated": true,
+        "error": "PR manager refused to mutate attempts or branches because the open-PR list was truncated",
+    }))
+}
+
+fn incomplete_pull_request_action(pull_request: &Value) -> Option<Value> {
+    let truncated = pull_request
+        .pointer("/review_threads/page_info/truncated")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if !truncated {
+        return None;
+    }
+    let pr_number = pull_request.get("number").and_then(Value::as_u64);
+    Some(json!({
+        "kind": "pr_manager_observation",
+        "status": "waiting",
+        "reason": "incomplete_github_snapshot",
+        "scope": "pull_request",
+        "pr_number": pr_number,
+        "item_key": pr_number.map(|number| format!("pr-{number}")),
+        "review_threads_truncated": true,
+        "retryable": true,
+        "error": "PR manager skipped this PR because its review-thread snapshot was truncated",
     }))
 }

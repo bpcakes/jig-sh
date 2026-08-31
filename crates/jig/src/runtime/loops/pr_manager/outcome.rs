@@ -87,19 +87,6 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
             cleanup_authority_error,
             UnexecutedReason::PreExecutionError,
         )),
-        PrRepairOutcome::PreparationCleanupFailed {
-            error,
-            cleanup_error,
-            worktree,
-            reason,
-        } => Ok(preparation_cleanup_attention(
-            repair,
-            error,
-            cleanup_error,
-            worktree,
-            reason,
-            cleanup_authority_error,
-        )),
         PrRepairOutcome::WorkerFailed {
             error,
             worker_receipt_id,
@@ -125,45 +112,6 @@ fn record_pr_repair_outcome_under_branch_lease<L: serde::Serialize>(
     outcome: PrRepairOutcome,
 ) -> Result<Value> {
     record_pr_repair_outcome(repair, attempt_store, outcome, None)
-}
-
-fn preparation_cleanup_attention<L: serde::Serialize>(
-    repair: &PrRepairContext<'_, L>,
-    error: anyhow::Error,
-    cleanup_error: anyhow::Error,
-    worktree: PathBuf,
-    reason: UnexecutedReason,
-    cleanup_authority_error: Option<&anyhow::Error>,
-) -> Value {
-    let error = format!("{error:#}");
-    let cleanup_error = format!("{cleanup_error:#}");
-    let mut action = pr_worker_action(
-        repair.item,
-        repair.lease,
-        repair.codex_home,
-        "needs_attention",
-        &format!(
-            "PR repair preparation failed and its worktree could not be cleaned while the branch lease was held: {cleanup_error}; preparation error: {error}"
-        ),
-        Some(&worktree),
-        None,
-    );
-    action["attention_kind"] = json!("worktree_cleanup_failed");
-    action["unexecuted_reason"] = json!(reason.as_str());
-    action["worktree_retained"] = json!(true);
-    action["completed_status"] = json!("failed");
-    action["completed_error"] = json!(error);
-    action["cleanup_error"] = json!(cleanup_error);
-    if let Some(authority_error) = cleanup_authority_error {
-        action["lease_error"] = json!(format!("{authority_error:#}"));
-        action["error"] = json!(format!(
-            "{}; branch lease authority proof also failed: {authority_error:#}",
-            action["error"]
-                .as_str()
-                .unwrap_or("PR repair preparation cleanup failed")
-        ));
-    }
-    action
 }
 
 fn cancelled_before_start_action<L: serde::Serialize>(
@@ -205,8 +153,8 @@ fn unexecuted_pr_action<L: serde::Serialize>(
         if let Some(authority_error) = cleanup_authority_error {
             return branch_lease_cleanup_attention(action, authority_error);
         }
-        match remove_pr_worktree(repair.repo, worktree, true) {
-            Ok(()) => action["worktree_retained"] = json!(false),
+        match cleanup_pr_worktree_candidate(repair.repo, worktree) {
+            Ok(_) => action["worktree_retained"] = json!(false),
             Err(cleanup_error) => return worktree_cleanup_attention(action, cleanup_error),
         }
     } else if let Some(authority_error) = cleanup_authority_error {
@@ -450,12 +398,6 @@ enum PrRepairOutcome {
         error: anyhow::Error,
         worktree: Option<PathBuf>,
         worker_receipt_id: Option<String>,
-    },
-    PreparationCleanupFailed {
-        error: anyhow::Error,
-        cleanup_error: anyhow::Error,
-        worktree: PathBuf,
-        reason: UnexecutedReason,
     },
     WorkerFailed {
         error: anyhow::Error,

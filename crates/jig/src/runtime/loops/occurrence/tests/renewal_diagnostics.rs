@@ -59,6 +59,43 @@ fn occurrence_renewal_preserves_the_first_unrecovered_error() {
 }
 
 #[test]
+fn stopping_before_the_failure_window_does_not_latch_a_pending_transient_error() {
+    let failed = AtomicBool::new(false);
+    let now_ms = Cell::new(0_u64);
+    let waits = Cell::new(0_u64);
+
+    run_occurrence_renewal_with_wait(
+        Duration::from_millis(300),
+        900,
+        &failed,
+        || {
+            Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
+                "injected transient renewal failure"
+            )))
+        },
+        || now_ms.get(),
+        |wait| {
+            let count = waits.get().saturating_add(1);
+            waits.set(count);
+            now_ms.set(
+                now_ms
+                    .get()
+                    .saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+            );
+            if count == 1 {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .unwrap();
+
+    assert_eq!(waits.get(), 2);
+    assert!(!failed.load(Ordering::Acquire));
+}
+
+#[test]
 fn occurrence_renewal_stops_immediately_after_ownership_loss() {
     let failed = AtomicBool::new(false);
     let calls = Cell::new(0_u64);

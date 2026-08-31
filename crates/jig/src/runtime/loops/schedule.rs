@@ -13,8 +13,8 @@ use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
 use super::engine::{ScheduledTick, tick_scheduled_with_observer, tick_with_observer};
 use super::occurrence::{
-    OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStatus,
-    OccurrenceStore, ScheduleOccurrence,
+    OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish,
+    OccurrenceGuard, OccurrenceStatus, OccurrenceStore, ScheduleOccurrence,
 };
 use super::state::prepare_disposable_state_for_dispatch;
 use super::workflow::{
@@ -337,10 +337,13 @@ fn dispatch_workflow(
     if tick.lease_was_held() {
         return match guard.abandon_unexecuted() {
             Ok(finalization) => {
-                // Abandonment removes the durable claim before the renewal
-                // thread joins, so its final ownership-loss diagnostic is
-                // expected and must not turn safe deferral into a state error.
-                let abandoned = finalization.occurrence;
+                let abandoned = occurrence_from_finalization(
+                    &mut step,
+                    &workflow.id,
+                    &claim.occurrence_id,
+                    finalization,
+                    true,
+                );
                 step.executed_count = 0;
                 step.skipped_count = 1;
                 step.deferred_count = 1;
@@ -375,13 +378,13 @@ fn dispatch_workflow(
         error: details.error.as_deref(),
     }) {
         Ok(finalization) => {
-            include_occurrence_renewal_error(
+            let record = occurrence_from_finalization(
                 &mut step,
                 &workflow.id,
                 &claim.occurrence_id,
-                finalization.renewal_error,
+                finalization,
+                false,
             );
-            let record = finalization.occurrence;
             step.failed_count = u64::from(record.status == OccurrenceStatus::Failed);
             step.action = Some(dispatch_action(
                 &record,
@@ -451,17 +454,15 @@ fn abandon_unexecuted_tick_failure(
     } = details;
     match guard.abandon_unexecuted() {
         Ok(finalization) => {
-            // Renewal is stopped and joined before this owner-checked transition.
-            // Successful abandonment therefore proves that the claim was still ours;
-            // an earlier transient renewal diagnostic does not make it ambiguous.
-            record_unexecuted_failure(
+            let occurrence = occurrence_from_finalization(
                 &mut step,
-                workflow,
-                finalization.occurrence,
-                next_at_ms,
-                reason,
-                tick,
-                error,
+                &workflow.id,
+                &claim.occurrence_id,
+                finalization,
+                true,
+            );
+            record_unexecuted_failure(
+                &mut step, workflow, occurrence, next_at_ms, reason, tick, error,
             );
         }
         Err(abandon_error) => {
@@ -530,6 +531,22 @@ fn include_occurrence_renewal_error(
             "occurrence_id": occurrence_id,
         }));
     }
+}
+
+fn occurrence_from_finalization(
+    step: &mut DispatchStep,
+    workflow_id: &str,
+    occurrence_id: &str,
+    finalization: OccurrenceFinalization,
+    suppress_ownership_loss: bool,
+) -> ScheduleOccurrence {
+    let renewal_error = if suppress_ownership_loss && finalization.renewal_ownership_lost {
+        None
+    } else {
+        finalization.renewal_error
+    };
+    include_occurrence_renewal_error(step, workflow_id, occurrence_id, renewal_error);
+    finalization.occurrence
 }
 
 fn scheduled_tick_state_errors(

@@ -81,6 +81,38 @@ fn pruning_never_discards_occurrences_that_need_attention() {
     assert!(store.occurrences.contains_key("nightly@0"));
 }
 
+#[test]
+fn pruning_keeps_the_newest_manual_occurrences() {
+    let mut store = ScheduleFile::default();
+    for started_at_ms in 1..=OCCURRENCE_HISTORY_PER_WORKFLOW as u64 + 1 {
+        let occurrence_id = format!("nightly@manual-{started_at_ms:03}");
+        store.occurrences.insert(
+            occurrence_id.clone(),
+            ScheduleOccurrence {
+                occurrence_id,
+                workflow_id: "nightly".into(),
+                scheduled_at_ms: 0,
+                owner: "owner".into(),
+                claim_expires_at_ms: 0,
+                started_at_ms,
+                uses_shared_checkout: Some(false),
+                finished_at_ms: Some(started_at_ms),
+                acknowledged_at_ms: None,
+                status: OccurrenceStatus::Failed,
+                worker_receipt_id: None,
+                worktree: None,
+                error: None,
+            },
+        );
+    }
+
+    prune_history(&mut store);
+
+    assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW);
+    assert!(!store.occurrences.contains_key("nightly@manual-001"));
+    assert!(store.occurrences.contains_key("nightly@manual-021"));
+}
+
 #[cfg(unix)]
 #[test]
 fn retained_worktree_inspection_errors_fail_closed() {

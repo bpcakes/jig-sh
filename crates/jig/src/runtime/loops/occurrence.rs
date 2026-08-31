@@ -173,6 +173,7 @@ pub(super) struct OccurrenceGuard {
 pub(super) struct OccurrenceFinalization {
     pub(super) occurrence: ScheduleOccurrence,
     pub(super) renewal_error: Option<String>,
+    pub(super) renewal_ownership_lost: bool,
 }
 
 impl OccurrenceGuard {
@@ -264,12 +265,17 @@ impl OccurrenceGuard {
         mut self,
         transition: impl FnOnce(&mut OccurrenceStore, &str, &str) -> Result<ScheduleOccurrence>,
     ) -> Result<OccurrenceFinalization> {
-        let renewal_error = self.stop_renewal().err().map(|error| format!("{error:#}"));
+        let renewal_error = self.stop_renewal().err();
+        let renewal_ownership_lost = renewal_error
+            .as_ref()
+            .is_some_and(|error| error.downcast_ref::<RenewalOwnershipLost>().is_some());
+        let renewal_error = renewal_error.map(|error| format!("{error:#}"));
         let transition = transition(&mut self.store, &self.occurrence_id, &self.owner);
         match (transition, renewal_error) {
             (Ok(occurrence), renewal_error) => Ok(OccurrenceFinalization {
                 occurrence,
                 renewal_error,
+                renewal_ownership_lost,
             }),
             (Err(error), Some(renewal_error)) if format!("{error:#}") == renewal_error => {
                 Err(error)
@@ -741,10 +747,17 @@ fn prune_history(store: &mut ScheduleFile) {
                     && record.is_prunable_history()
                     && !record.has_retained_worktree()
             })
-            .map(|record| (record.scheduled_at_ms, record.occurrence_id.clone()))
+            .map(|record| {
+                (
+                    record.finished_at_ms.unwrap_or(record.started_at_ms),
+                    record.started_at_ms,
+                    record.scheduled_at_ms,
+                    record.occurrence_id.clone(),
+                )
+            })
             .collect::<Vec<_>>();
-        terminal.sort_by_key(|(scheduled_at_ms, _)| std::cmp::Reverse(*scheduled_at_ms));
-        for (_, occurrence_id) in terminal.into_iter().skip(OCCURRENCE_HISTORY_PER_WORKFLOW) {
+        terminal.sort_by(|left, right| right.cmp(left));
+        for (_, _, _, occurrence_id) in terminal.into_iter().skip(OCCURRENCE_HISTORY_PER_WORKFLOW) {
             store.occurrences.remove(&occurrence_id);
         }
     }

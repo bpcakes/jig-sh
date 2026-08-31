@@ -246,6 +246,78 @@ esac
 
     #[cfg(unix)]
     #[test]
+    fn full_pr_page_without_review_fanout_fits_the_snapshot_budget() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .config("")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let pull_requests = (1..=PR_LIST_LIMIT)
+            .map(|number| {
+                json!({
+                    "number": number,
+                    "title": format!("Example PR {number}"),
+                    "state": "OPEN",
+                    "isDraft": false,
+                    "baseRefName": "main",
+                    "headRefName": format!("repair/example-{number}"),
+                    "headRefOid": format!("{number:040x}"),
+                    "isCrossRepository": false,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                })
+            })
+            .collect::<Vec<_>>();
+        let pull_requests = serde_json::to_string(&pull_requests).unwrap();
+        let log = temp.path().join("gh-calls.log");
+        let gh = temp.path().join("fixture-gh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+printf 'CALL\n' >> "$JIG_TEST_GH_LOG"
+case "$*" in
+  *"repo view"*)
+    printf '%s\n' '{"nameWithOwner":"ExampleProject/ExampleVault","name":"ExampleVault","owner":{"login":"ExampleProject"},"url":"https://example.invalid/ExampleProject/ExampleVault","defaultBranchRef":{"name":"main"}}'
+    ;;
+  *"pr list"*) printf '%s\n' "$JIG_TEST_PR_LIST" ;;
+  *"pr checks"*) printf '%s\n' '[]' ;;
+  *"api graphql"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh, permissions).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let _pr_list = EnvVarGuard::set("JIG_TEST_PR_LIST", OsStr::new(&pull_requests));
+        let _log = EnvVarGuard::set("JIG_TEST_GH_LOG", log.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = crate::execution::NoopExecutionObserver;
+
+        let snapshot = github_pr_status_snapshot(&ctx, &mut observer).unwrap();
+
+        assert_eq!(snapshot["pull_requests"].as_array().unwrap().len(), PR_LIST_LIMIT);
+        assert_eq!(snapshot["summary"]["pr_list_truncated"], false);
+        assert_eq!(snapshot["budget"]["request_count"], 2 + 2 * PR_LIST_LIMIT);
+        assert_eq!(snapshot["budget"]["review_item_count"], 0);
+        assert_eq!(
+            fs::read_to_string(log).unwrap().lines().count(),
+            2 + 2 * PR_LIST_LIMIT
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn missing_review_thread_cursor_stops_pagination_without_duplicates() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt as _;

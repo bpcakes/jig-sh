@@ -272,16 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn pr_manager_refuses_truncated_pr_and_review_thread_snapshots() {
+    fn pr_manager_refuses_a_truncated_pr_list_but_scopes_truncated_threads() {
         let pr_list = json!({
             "summary": {"pr_list_truncated": true},
             "pull_requests": [],
         });
-        let pr_list_action = incomplete_snapshot_action(
-            &pr_list,
-            pr_list["pull_requests"].as_array().unwrap(),
-        )
-        .unwrap();
+        let pr_list_action = incomplete_pr_list_action(&pr_list).unwrap();
         assert_eq!(pr_list_action["status"], "failed");
         assert_eq!(pr_list_action["pr_list_truncated"], true);
 
@@ -292,13 +288,11 @@ mod tests {
                 "review_threads": {"page_info": {"truncated": true}},
             }],
         });
-        let review_action = incomplete_snapshot_action(
-            &review_threads,
-            review_threads["pull_requests"].as_array().unwrap(),
-        )
-        .unwrap();
-        assert_eq!(review_action["status"], "failed");
-        assert_eq!(review_action["review_thread_prs_truncated"], json!([7]));
+        let review_action =
+            incomplete_pull_request_action(&review_threads["pull_requests"][0]).unwrap();
+        assert_eq!(review_action["status"], "waiting");
+        assert_eq!(review_action["pr_number"], 7);
+        assert_eq!(review_action["review_threads_truncated"], true);
     }
 
     #[test]
@@ -312,12 +306,9 @@ mod tests {
         });
 
         assert!(
-            incomplete_snapshot_action(
-                &observed,
-                observed["pull_requests"].as_array().unwrap(),
-            )
-            .is_none()
+            incomplete_pr_list_action(&observed).is_none()
         );
+        assert!(incomplete_pull_request_action(&observed["pull_requests"][0]).is_none());
     }
 
     #[test]
@@ -376,9 +367,81 @@ mod tests {
         assert_eq!(tick.actions[0]["reason"], "incomplete_github_snapshot");
         assert_eq!(
             tick.completion.execution,
-            WorkflowExecution::Unexecuted(UnexecutedReason::PreExecutionError)
+            WorkflowExecution::Executed
         );
         assert_eq!(attempts.snapshot().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn truncated_review_threads_do_not_block_healthy_pr_processing() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::workflow::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 2,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+            schedule: None,
+            codex_task: None,
+        };
+        let mut leases = LeaseStore::new(&ctx);
+        let mut attempts = AttemptStore::new(&ctx);
+        attempts
+            .record_attempt_for_transition(
+                &workflow,
+                "pr-8",
+                Some("healthy-head"),
+                Some("healthy-head"),
+                "failed",
+            )
+            .unwrap();
+        let observed = json!({
+            "summary": {"pr_list_truncated": false},
+            "repository": {"default_branch": "main"},
+            "pull_requests": [
+                {
+                    "number": 7,
+                    "review_threads": {"page_info": {"truncated": true}}
+                },
+                {
+                    "number": 8,
+                    "head": {"ref": "repair/healthy", "sha": "healthy-head"},
+                    "checks": {"summary": {"fail": 0, "pending": 0}},
+                    "review_threads": {
+                        "page_info": {"truncated": false},
+                        "summary": {"trusted_unresolved": 0}
+                    }
+                }
+            ],
+        });
+        let mut observer = crate::execution::NoopExecutionObserver;
+
+        let tick = pr_manager_tick_from_snapshot(
+            &ctx,
+            &workflow,
+            &mut leases,
+            &mut attempts,
+            observed,
+            PrManagerExecution {
+                codex_home: None,
+                observer: &mut observer,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(tick.actions[0]["status"], "waiting");
+        assert_eq!(tick.actions[0]["pr_number"], 7);
+        assert_eq!(tick.actions[1]["kind"], "pr_manager_attempt_clear");
+        assert_eq!(tick.actions[1]["pr_number"], 8);
+        assert_eq!(tick.completion.execution, WorkflowExecution::Executed);
+        assert!(attempts.snapshot().unwrap().is_empty());
     }
 
     #[test]

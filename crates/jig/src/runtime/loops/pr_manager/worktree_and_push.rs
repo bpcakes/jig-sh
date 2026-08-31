@@ -5,6 +5,18 @@ fn prepare_worktree(
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<PathBuf, PrWorktreePreparationError> {
     let worktree = pr_worktree_path(ctx, workflow, item);
+    let existed_before_preflight = match worktree.try_exists() {
+        Ok(exists) => exists,
+        Err(error) => {
+            return Err(PrWorktreePreparationError {
+                source: PrRepairStepError::failed(anyhow!(error).context(format!(
+                    "Failed to inspect PR repair worktree {}",
+                    worktree.display()
+                ))),
+                worktree: Some(worktree),
+            });
+        }
+    };
     let preflight = (|| -> PrRepairStepResult<()> {
         if !is_git_object_id(&item.head_sha) {
             return Err(PrRepairStepError::failed(anyhow!(
@@ -30,9 +42,10 @@ fn prepare_worktree(
         require_remote_head(ctx, ctx.root(), &head_ref, &item.head_sha, observer)
     })();
     if let Err(error) = preflight {
-        return Err(cleanup_failed_worktree_preparation(
-            ctx, &worktree, error, false,
-        ));
+        return Err(PrWorktreePreparationError {
+            source: error,
+            worktree: existed_before_preflight.then_some(worktree),
+        });
     }
     let result = (|| {
         if worktree.join(".git").exists() {
@@ -78,66 +91,37 @@ fn prepare_worktree(
     })();
     match result {
         Ok(()) => Ok(worktree),
-        Err(error) => Err(cleanup_failed_worktree_preparation(
-            ctx, &worktree, error, true,
-        )),
+        Err(error) => Err(PrWorktreePreparationError {
+            source: error,
+            worktree: Some(worktree),
+        }),
     }
 }
 
 #[derive(Debug)]
 struct PrWorktreePreparationError {
     source: PrRepairStepError,
-    retained_worktree: Option<PathBuf>,
-    cleanup_error: Option<anyhow::Error>,
+    worktree: Option<PathBuf>,
 }
 
-impl From<PrRepairStepError> for PrWorktreePreparationError {
-    fn from(source: PrRepairStepError) -> Self {
-        Self {
-            source,
-            retained_worktree: None,
-            cleanup_error: None,
-        }
+fn cleanup_pr_worktree_candidate(ctx: &RepoContext, worktree: &Path) -> Result<bool> {
+    let path_exists = worktree
+        .try_exists()
+        .with_context(|| format!("Failed to inspect PR repair worktree {}", worktree.display()))?;
+    if pr_worktree_is_registered(ctx, worktree)? {
+        remove_pr_worktree(ctx, worktree, true)?;
+        return Ok(true);
     }
-}
-
-fn cleanup_failed_worktree_preparation(
-    ctx: &RepoContext,
-    worktree: &Path,
-    source: PrRepairStepError,
-    may_be_registered_without_a_path: bool,
-) -> PrWorktreePreparationError {
-    let cleanup = (|| -> Result<bool> {
-        let path_exists = worktree.try_exists().with_context(|| {
-            format!("Failed to inspect PR repair worktree {}", worktree.display())
+    if path_exists {
+        fs::remove_dir(worktree).with_context(|| {
+            format!(
+                "Failed to remove partial unregistered PR repair worktree {}",
+                worktree.display()
+            )
         })?;
-        if !path_exists && !may_be_registered_without_a_path {
-            return Ok(false);
-        }
-        let registered = pr_worktree_is_registered(ctx, worktree)?;
-        if registered {
-            remove_pr_worktree(ctx, worktree, true)?;
-            return Ok(true);
-        }
-        if path_exists {
-            fs::remove_dir(worktree).with_context(|| {
-                format!(
-                    "Failed to remove partial unregistered PR repair worktree {}",
-                    worktree.display()
-                )
-            })?;
-            return Ok(true);
-        }
-        Ok(false)
-    })();
-    match cleanup {
-        Ok(_) => PrWorktreePreparationError::from(source),
-        Err(cleanup_error) => PrWorktreePreparationError {
-            source,
-            retained_worktree: Some(worktree.to_path_buf()),
-            cleanup_error: Some(cleanup_error),
-        },
+        return Ok(true);
     }
+    Ok(false)
 }
 
 fn pr_worktree_is_registered(ctx: &RepoContext, worktree: &Path) -> Result<bool> {

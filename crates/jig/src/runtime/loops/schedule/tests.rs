@@ -8,13 +8,14 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::super::engine::{ScheduledTick, WorkflowLeaseDisposition};
+use super::super::occurrence::{OccurrenceFinalization, OccurrenceStatus, ScheduleOccurrence};
 use super::super::state::{LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
 use super::super::workflow::{RepositoryRevisionState, WorkflowCompletion, WorkflowOutcome};
 use super::{
     DispatchStep, DispatchSummary, NoopExecutionObserver, OccurrenceStore, RunSummary,
     RunTickDisposition, ScheduleSpec, abandon_unexecuted_start_failure, dispatch_due_at,
     dispatch_workflow, include_occurrence_renewal_error, list_workflows,
-    scheduled_tick_state_errors,
+    occurrence_from_finalization, scheduled_tick_state_errors,
 };
 use crate::command::LoopStatusRequest;
 use crate::context::RepoContext;
@@ -182,6 +183,81 @@ fn persisted_finalization_keeps_renewal_failure_as_dispatch_state_evidence() {
     assert_eq!(summary.state_errors[0]["kind"], "occurrence_renewal");
     assert_eq!(summary.state_errors[0]["workflow_id"], "nightly");
     assert_eq!(summary.state_errors[0]["occurrence_id"], "nightly@100");
+}
+
+#[test]
+fn unexecuted_finalization_keeps_renewal_failure_as_dispatch_state_evidence() {
+    let occurrence = ScheduleOccurrence {
+        occurrence_id: "nightly@100".into(),
+        workflow_id: "nightly".into(),
+        scheduled_at_ms: 100,
+        owner: "owner".into(),
+        claim_expires_at_ms: 200,
+        started_at_ms: 100,
+        uses_shared_checkout: Some(false),
+        finished_at_ms: None,
+        acknowledged_at_ms: None,
+        status: OccurrenceStatus::Running,
+        worker_receipt_id: None,
+        worktree: None,
+        error: None,
+    };
+    let mut step = DispatchStep::default();
+
+    let returned = occurrence_from_finalization(
+        &mut step,
+        "nightly",
+        "nightly@100",
+        OccurrenceFinalization {
+            occurrence: occurrence.clone(),
+            renewal_error: Some("injected renewal failure".into()),
+            renewal_ownership_lost: false,
+        },
+        true,
+    );
+
+    assert_eq!(returned, occurrence);
+    assert_eq!(step.state_errors.len(), 1);
+    assert_eq!(step.state_errors[0]["kind"], "occurrence_renewal");
+    assert_eq!(
+        step.state_errors[0]["error"],
+        "Occurrence renewal failed before terminal state was recorded: injected renewal failure"
+    );
+}
+
+#[test]
+fn unexecuted_finalization_suppresses_only_expected_ownership_loss() {
+    let occurrence = ScheduleOccurrence {
+        occurrence_id: "nightly@100".into(),
+        workflow_id: "nightly".into(),
+        scheduled_at_ms: 100,
+        owner: "owner".into(),
+        claim_expires_at_ms: 200,
+        started_at_ms: 100,
+        uses_shared_checkout: Some(false),
+        finished_at_ms: None,
+        acknowledged_at_ms: None,
+        status: OccurrenceStatus::Running,
+        worker_receipt_id: None,
+        worktree: None,
+        error: None,
+    };
+    let mut step = DispatchStep::default();
+
+    let returned = occurrence_from_finalization(
+        &mut step,
+        "nightly",
+        "nightly@100",
+        OccurrenceFinalization {
+            occurrence: occurrence.clone(),
+            renewal_error: Some("occurrence ownership was deliberately removed".into()),
+            renewal_ownership_lost: true,
+        },
+        true,
+    );
+
+    assert_eq!(returned, occurrence);
+    assert!(step.state_errors.is_empty());
 }
 
 #[test]
@@ -567,7 +643,7 @@ fn dispatcher_retries_an_expired_unexecuted_claim_when_workflow_lease_is_held() 
         format!(
             r#"{config}
 [loop]
-lease_ttl_seconds = 1
+lease_ttl_seconds = 60
 
 [[loop.workflows]]
 id = "scheduled-noop"
@@ -604,7 +680,7 @@ schedule = "* * * * *"
 
     let runtime_dir = temp.path().join(super::super::state::LOOP_RUNTIME_DIR);
     let schedule_path = runtime_dir.join("schedule.json");
-    let running_deadline = Instant::now() + Duration::from_secs(2);
+    let running_deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if fs::read(&schedule_path)
             .ok()
@@ -625,6 +701,8 @@ schedule = "* * * * *"
     }
 
     let mut competing_dispatcher = OccurrenceStore::new(&ctx);
+    // The sampled maximum time deterministically expires the claim without making
+    // the later successful retry depend on a production lease expiring in real time.
     let reconciled = competing_dispatcher
         .reconcile_stale_for_test(u64::MAX)
         .unwrap();
