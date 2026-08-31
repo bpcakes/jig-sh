@@ -175,12 +175,14 @@ jobs:
       - name: Validate committed release
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: scripts/release.sh check "$VERSION"
 
       - name: Create local tag
         if: ${{ github.event.inputs.dry_run != 'true' && steps.version.outputs.tag_exists != 'true' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: scripts/release.sh tag "$VERSION"
 
       - name: Stop before remote side effects
@@ -208,6 +210,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
           CARGO_REGISTRY_TOKEN: ${{ steps.crates.outputs.token }}
+          ALLOW_RELEASE_RUN_JOURNAL_DIRTY: "1"
         run: |
           # scripts/release.sh publish pushes the tag only after all crates publish.
           # If a publish step fails, rerun this workflow with the explicit version.

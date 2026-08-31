@@ -239,14 +239,22 @@ PY
 }
 
 require_clean_tree() {
+  local status
+
   if [[ "${ALLOW_DIRTY:-}" == "1" ]]; then
     echo "ALLOW_DIRTY=1 set; skipping clean working tree requirement." >&2
     return 0
   fi
 
-  if [[ -n "$(git status --short --untracked-files=all)" ]]; then
+  status="$(git status --short --untracked-files=all)"
+  if [[ "${ALLOW_RELEASE_RUN_JOURNAL_DIRTY:-}" == "1" && "$status" == " M .agent/state/runs.jsonl" ]]; then
+    echo "ALLOW_RELEASE_RUN_JOURNAL_DIRTY=1 set; allowing the ephemeral release-check run journal." >&2
+    return 0
+  fi
+
+  if [[ -n "$status" ]]; then
     echo "Working tree is not clean. Commit or discard changes before releasing." >&2
-    git status --short --untracked-files=all >&2
+    printf '%s\n' "$status" >&2
     exit 1
   fi
 }
