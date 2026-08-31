@@ -130,9 +130,10 @@ mod tests {
         assert!(output.status.success(), "{output:?}");
         fs::write(worktree.join("partial.txt"), "preserve me\n").unwrap();
         let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut cleanup = PrWorktreeCleanup::assuming_lease(&ctx);
 
         let action = finalize_pr_worktree(
-            &ctx,
+            &mut cleanup,
             json!({
                 "kind": "pr_manager_worker",
                 "status": "attempted",

@@ -107,32 +107,127 @@ struct PrWorktreePreparationError {
     worktree: Option<PathBuf>,
 }
 
-fn cleanup_pr_worktree_candidate(ctx: &RepoContext, worktree: &Path) -> Result<bool> {
-    let path_exists =
-        inspect_managed_directory(ctx.root(), worktree, "PR repair worktree")?;
-    if pr_worktree_is_registered(ctx, worktree)? {
-        remove_pr_worktree(ctx, worktree, true)?;
-        return Ok(true);
-    }
-    if path_exists {
-        fs::remove_dir(worktree).with_context(|| {
-            format!(
-                "Failed to remove partial unregistered PR repair worktree {}",
-                worktree.display()
-            )
-        })?;
-        return Ok(true);
-    }
-    Ok(false)
+enum PrCleanupLease<'a> {
+    Guard(&'a mut LeaseGuard),
+    #[cfg(test)]
+    AssumedHeld,
 }
 
-fn pr_worktree_is_registered(ctx: &RepoContext, worktree: &Path) -> Result<bool> {
-    let mut observer = NoopExecutionObserver;
+impl PrCleanupLease<'_> {
+    fn refresh(&mut self) -> Result<()> {
+        match self {
+            Self::Guard(guard) => guard.refresh(),
+            #[cfg(test)]
+            Self::AssumedHeld => Ok(()),
+        }
+    }
+
+    fn renewal_failed(&self) -> bool {
+        match self {
+            Self::Guard(guard) => guard.renewal_failed(),
+            #[cfg(test)]
+            Self::AssumedHeld => false,
+        }
+    }
+}
+
+struct PrWorktreeCleanup<'a> {
+    ctx: &'a RepoContext,
+    lease: PrCleanupLease<'a>,
+    observer: NoopExecutionObserver,
+}
+
+impl<'a> PrWorktreeCleanup<'a> {
+    fn new(ctx: &'a RepoContext, lease_guard: &'a mut LeaseGuard) -> Self {
+        Self {
+            ctx,
+            lease: PrCleanupLease::Guard(lease_guard),
+            observer: NoopExecutionObserver,
+        }
+    }
+
+    #[cfg(test)]
+    fn assuming_lease(ctx: &'a RepoContext) -> Self {
+        Self {
+            ctx,
+            lease: PrCleanupLease::AssumedHeld,
+            observer: NoopExecutionObserver,
+        }
+    }
+
+    fn refresh(&mut self, operation: &str) -> Result<()> {
+        self.lease.refresh().with_context(|| {
+            format!("Branch lease authority was lost before PR worktree {operation}")
+        })
+    }
+
+    fn with_control<T>(
+        &mut self,
+        operation: impl FnOnce(&RepoContext, &mut dyn ExecutionControl) -> Result<T>,
+    ) -> Result<T> {
+        let lease = &self.lease;
+        let cancelled = || lease.renewal_failed();
+        let mut control = AdditionalCancellationControl::new(&mut self.observer, &cancelled);
+        operation(self.ctx, &mut control)
+    }
+
+    fn cleanup_candidate(&mut self, worktree: &Path) -> Result<bool> {
+        self.refresh("path inspection")?;
+        let path_exists =
+            inspect_managed_directory(self.ctx.root(), worktree, "PR repair worktree")?;
+        self.refresh("registration inspection")?;
+        if self.with_control(|ctx, observer| {
+            pr_worktree_is_registered(ctx, worktree, observer)
+        })? {
+            self.remove(worktree, true)?;
+            return Ok(true);
+        }
+        if path_exists {
+            self.refresh("partial-directory removal")?;
+            fs::remove_dir(worktree).with_context(|| {
+                format!(
+                    "Failed to remove partial unregistered PR repair worktree {}",
+                    worktree.display()
+                )
+            })?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn failed_worktree_has_evidence(
+        &mut self,
+        worktree: &Path,
+        expected_head: &str,
+    ) -> Result<bool> {
+        self.refresh("status inspection")?;
+        let status = self.with_control(|ctx, observer| {
+            git_stdout(ctx, worktree, ["status", "--porcelain"], observer)
+                .map_err(pr_step_error)
+        })?;
+        self.refresh("revision inspection")?;
+        let head = self.with_control(|ctx, observer| {
+            git_stdout(ctx, worktree, ["rev-parse", "HEAD"], observer).map_err(pr_step_error)
+        })?;
+        Ok(!status.trim().is_empty() || head.trim() != expected_head)
+    }
+
+    fn remove(&mut self, worktree: &Path, force: bool) -> Result<()> {
+        self.refresh("removal")?;
+        self.with_control(|ctx, observer| remove_pr_worktree(ctx, worktree, force, observer))
+    }
+}
+
+fn pr_worktree_is_registered(
+    ctx: &RepoContext,
+    worktree: &Path,
+    observer: &mut dyn ExecutionControl,
+) -> Result<bool> {
     let listing = git_stdout(
         ctx,
         ctx.root(),
         ["worktree", "list", "--porcelain"],
-        &mut observer,
+        observer,
     )
     .map_err(pr_step_error)?;
     Ok(listing.lines().any(|line| {
@@ -182,14 +277,18 @@ fn clean_reused_worktree(
     Ok(())
 }
 
-fn remove_pr_worktree(ctx: &RepoContext, worktree: &Path, force: bool) -> Result<()> {
+fn remove_pr_worktree(
+    ctx: &RepoContext,
+    worktree: &Path,
+    force: bool,
+    observer: &mut dyn ExecutionControl,
+) -> Result<()> {
     let mut args = vec![OsString::from("worktree"), OsString::from("remove")];
     if force {
         args.push(OsString::from("--force"));
     }
     args.push(worktree.as_os_str().to_os_string());
-    let mut observer = NoopExecutionObserver;
-    match git_output(ctx, ctx.root(), args, &mut observer) {
+    match git_output(ctx, ctx.root(), args, observer) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(git_error("Failed to remove PR repair worktree", output)),
         Err(PrRepairStepError::Cancelled(detail)) => Err(anyhow!(detail)),

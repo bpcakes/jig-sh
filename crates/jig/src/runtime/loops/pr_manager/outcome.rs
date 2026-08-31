@@ -3,6 +3,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
     attempt_store: &mut AttemptStore,
     outcome: PrRepairOutcome,
     cleanup_authority_error: Option<&anyhow::Error>,
+    cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Result<Value> {
     match outcome {
         PrRepairOutcome::Completed(action) => {
@@ -28,7 +29,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 Err(error) => attempt_state_attention(action, error),
             };
             let action = with_branch_lease_result(action, cleanup_authority_error);
-            Ok(finalize_pr_worktree(repair.repo, action, false))
+            Ok(finalize_pr_worktree(cleanup, action, false))
         }
         PrRepairOutcome::Cancelled { detail, worktree } => Ok(cancelled_before_start_action(
             repair,
@@ -36,6 +37,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
             worktree.as_deref(),
             None,
             cleanup_authority_error,
+            cleanup,
         )),
         PrRepairOutcome::WorkerCancelled {
             before_start,
@@ -55,6 +57,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                     Some(&worktree),
                     Some(&worker_receipt_id),
                     cleanup_authority_error,
+                    cleanup,
                 ));
             }
             let action = with_branch_lease_result(json!({
@@ -73,7 +76,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 "worker_receipt_id": worker_receipt_id,
                 "error": error,
             }), cleanup_authority_error);
-            Ok(finalize_pr_worktree(repair.repo, action, false))
+            Ok(finalize_pr_worktree(cleanup, action, false))
         }
         PrRepairOutcome::PreExecutionFailed {
             error,
@@ -86,6 +89,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
             worker_receipt_id.as_deref(),
             cleanup_authority_error,
             UnexecutedReason::PreExecutionError,
+            cleanup,
         )),
         PrRepairOutcome::WorkerFailed {
             error,
@@ -100,7 +104,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 worker_receipt_id.as_deref(),
             );
             let action = with_branch_lease_result(action, cleanup_authority_error);
-            Ok(finalize_failed_pr_worktree(repair, action))
+            Ok(finalize_failed_pr_worktree(repair, action, cleanup))
         }
     }
 }
@@ -111,7 +115,8 @@ fn record_pr_repair_outcome_under_branch_lease<L: serde::Serialize>(
     attempt_store: &mut AttemptStore,
     outcome: PrRepairOutcome,
 ) -> Result<Value> {
-    record_pr_repair_outcome(repair, attempt_store, outcome, None)
+    let mut cleanup = PrWorktreeCleanup::assuming_lease(repair.repo);
+    record_pr_repair_outcome(repair, attempt_store, outcome, None, &mut cleanup)
 }
 
 fn cancelled_before_start_action<L: serde::Serialize>(
@@ -120,6 +125,7 @@ fn cancelled_before_start_action<L: serde::Serialize>(
     worktree: Option<&Path>,
     worker_receipt_id: Option<&str>,
     cleanup_authority_error: Option<&anyhow::Error>,
+    cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Value {
     unexecuted_pr_action(
         repair,
@@ -128,6 +134,7 @@ fn cancelled_before_start_action<L: serde::Serialize>(
         worker_receipt_id,
         cleanup_authority_error,
         UnexecutedReason::CancelledBeforeStart,
+        cleanup,
     )
 }
 
@@ -138,6 +145,7 @@ fn unexecuted_pr_action<L: serde::Serialize>(
     worker_receipt_id: Option<&str>,
     cleanup_authority_error: Option<&anyhow::Error>,
     reason: UnexecutedReason,
+    cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Value {
     let mut action = pr_worker_action(
         repair.item,
@@ -153,7 +161,7 @@ fn unexecuted_pr_action<L: serde::Serialize>(
         if let Some(authority_error) = cleanup_authority_error {
             return branch_lease_cleanup_attention(action, authority_error);
         }
-        match cleanup_pr_worktree_candidate(repair.repo, worktree) {
+        match cleanup.cleanup_candidate(worktree) {
             Ok(_) => action["worktree_retained"] = json!(false),
             Err(cleanup_error) => return worktree_cleanup_attention(action, cleanup_error),
         }
@@ -199,9 +207,10 @@ fn failed_pr_repair_action<L: serde::Serialize>(
 fn finalize_failed_pr_worktree<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     action: Value,
+    cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Value {
     if action.get("status").and_then(Value::as_str) == Some("needs_attention") {
-        return finalize_pr_worktree(repair.repo, action, false);
+        return finalize_pr_worktree(cleanup, action, false);
     }
     let Some(worktree) = action
         .get("worktree")
@@ -210,24 +219,11 @@ fn finalize_failed_pr_worktree<L: serde::Serialize>(
     else {
         return action;
     };
-    match failed_worktree_has_evidence(repair.repo, &worktree, &repair.item.head_sha) {
+    match cleanup.failed_worktree_has_evidence(&worktree, &repair.item.head_sha) {
         Ok(true) => failed_worktree_attention(action),
-        Ok(false) => finalize_pr_worktree(repair.repo, action, false),
+        Ok(false) => finalize_pr_worktree(cleanup, action, false),
         Err(error) => worktree_inspection_attention(action, error),
     }
-}
-
-fn failed_worktree_has_evidence(
-    ctx: &RepoContext,
-    worktree: &Path,
-    expected_head: &str,
-) -> Result<bool> {
-    let mut observer = NoopExecutionObserver;
-    let status = git_stdout(ctx, worktree, ["status", "--porcelain"], &mut observer)
-        .map_err(pr_step_error)?;
-    let head = git_stdout(ctx, worktree, ["rev-parse", "HEAD"], &mut observer)
-        .map_err(pr_step_error)?;
-    Ok(!status.trim().is_empty() || head.trim() != expected_head)
 }
 
 fn pr_step_error(error: PrRepairStepError) -> anyhow::Error {
@@ -321,7 +317,11 @@ fn pr_worker_action(
     action
 }
 
-fn finalize_pr_worktree(ctx: &RepoContext, mut action: Value, force: bool) -> Value {
+fn finalize_pr_worktree(
+    cleanup: &mut PrWorktreeCleanup<'_>,
+    mut action: Value,
+    force: bool,
+) -> Value {
     let retained = matches!(
         action.get("status").and_then(Value::as_str),
         Some("needs_attention" | "cancelled_after_commit")
@@ -337,7 +337,7 @@ fn finalize_pr_worktree(ctx: &RepoContext, mut action: Value, force: bool) -> Va
     else {
         return action;
     };
-    match remove_pr_worktree(ctx, &worktree, force) {
+    match cleanup.remove(&worktree, force) {
         Ok(()) => {
             action["worktree_retained"] = json!(false);
             action

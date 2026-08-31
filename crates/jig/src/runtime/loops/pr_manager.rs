@@ -335,12 +335,16 @@ fn finalize_pr_repair_outcome<L: serde::Serialize>(
     mut lease_guard: LeaseGuard,
 ) -> Result<Value> {
     let cleanup_authority_error = lease_guard.refresh().err();
-    let action = record_pr_repair_outcome(
-        repair,
-        attempt_store,
-        outcome,
-        cleanup_authority_error.as_ref(),
-    )?;
+    let action = {
+        let mut cleanup = PrWorktreeCleanup::new(repair.repo, &mut lease_guard);
+        record_pr_repair_outcome(
+            repair,
+            attempt_store,
+            outcome,
+            cleanup_authority_error.as_ref(),
+            &mut cleanup,
+        )?
+    };
     let release_error = lease_guard.finish().err();
     Ok(with_branch_lease_result(action, release_error.as_ref()))
 }

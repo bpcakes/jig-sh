@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -738,6 +738,15 @@ fn prune_history(store: &mut ScheduleFile) {
         .map(|record| record.workflow_id.clone())
         .collect::<std::collections::BTreeSet<_>>();
     for workflow_id in workflow_ids {
+        let latest_scheduled_id = store
+            .occurrences
+            .values()
+            .filter(|record| {
+                record.workflow_id == workflow_id
+                    && record.scheduled_at_ms != MANUAL_OCCURRENCE_SCHEDULED_AT_MS
+            })
+            .max_by_key(|record| record.scheduled_at_ms)
+            .map(|record| record.occurrence_id.clone());
         let mut terminal = store
             .occurrences
             .values()
@@ -756,8 +765,24 @@ fn prune_history(store: &mut ScheduleFile) {
             })
             .collect::<Vec<_>>();
         terminal.sort_by(|left, right| right.cmp(left));
-        for (_, _, _, occurrence_id) in terminal.into_iter().skip(OCCURRENCE_HISTORY_PER_WORKFLOW) {
-            store.occurrences.remove(&occurrence_id);
+        let mut retained = BTreeSet::new();
+        if let Some(latest_scheduled_id) = latest_scheduled_id
+            && terminal
+                .iter()
+                .any(|(_, _, _, occurrence_id)| occurrence_id == &latest_scheduled_id)
+        {
+            retained.insert(latest_scheduled_id);
+        }
+        for (_, _, _, occurrence_id) in &terminal {
+            if retained.len() == OCCURRENCE_HISTORY_PER_WORKFLOW {
+                break;
+            }
+            retained.insert(occurrence_id.clone());
+        }
+        for (_, _, _, occurrence_id) in terminal {
+            if !retained.contains(&occurrence_id) {
+                store.occurrences.remove(&occurrence_id);
+            }
         }
     }
 }

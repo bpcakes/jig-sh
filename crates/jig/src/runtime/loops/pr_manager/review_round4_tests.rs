@@ -226,6 +226,104 @@ exec git "$@"
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn pr_worktree_cleanup_stops_when_the_branch_lease_is_reassigned_mid_removal() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_lock = crate::test_env::lock_env();
+        let (temp, ctx, worktree, head) = repair_worktree_fixture();
+        let started = temp.path().join("cleanup-started");
+        let reassigned = temp.path().join("lease-reassigned");
+        let real_git = Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        assert!(real_git.status.success(), "{real_git:?}");
+        let real_git = String::from_utf8(real_git.stdout).unwrap();
+        let git = temp.path().join("lease-loss-during-cleanup-git");
+        fs::write(
+            &git,
+            r#"#!/bin/sh
+case "$*" in
+  *"worktree remove"*)
+    touch "$JIG_TEST_CLEANUP_STARTED"
+    while [ ! -f "$JIG_TEST_LEASE_REASSIGNED" ]; do sleep 0.05; done
+    sleep 5
+    ;;
+esac
+exec "$JIG_TEST_REAL_GIT" "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let _real_git = crate::test_env::EnvVarGuard::set(
+            "JIG_TEST_REAL_GIT",
+            std::ffi::OsStr::new(real_git.trim()),
+        );
+        let _started = crate::test_env::EnvVarGuard::set(
+            "JIG_TEST_CLEANUP_STARTED",
+            started.as_os_str(),
+        );
+        let _reassigned = crate::test_env::EnvVarGuard::set(
+            "JIG_TEST_LEASE_REASSIGNED",
+            reassigned.as_os_str(),
+        );
+        let _git = crate::test_env::EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, git.as_os_str());
+
+        let workflow = workflow();
+        let mut item = item();
+        item.head_sha = head;
+        let mut leases = LeaseStore::new(&ctx);
+        let mut replacement_store = leases.clone();
+        let LeaseAcquire::Acquired(lease) = leases.acquire("branch:repair/example", 1).unwrap()
+        else {
+            panic!("expected branch lease acquisition");
+        };
+        let guard = LeaseGuard::start(leases.clone(), "branch:repair/example", &lease, 1).unwrap();
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
+        let replacement = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !started.exists() {
+                assert!(Instant::now() < deadline, "worktree removal never started");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            replacement_store
+                .revoke_for_test("branch:repair/example")
+                .unwrap();
+            assert!(matches!(
+                replacement_store
+                    .acquire("branch:repair/example", 60)
+                    .unwrap(),
+                LeaseAcquire::Acquired(_)
+            ));
+            fs::write(reassigned, "reassigned\n").unwrap();
+        });
+
+        let action = finalize_pr_repair_outcome(
+            &repair,
+            &mut AttemptStore::new(&ctx),
+            PrRepairOutcome::PreExecutionFailed {
+                error: anyhow!("worker did not start"),
+                worktree: Some(worktree.clone()),
+                worker_receipt_id: None,
+            },
+            guard,
+        )
+        .unwrap();
+        replacement.join().unwrap();
+
+        assert_eq!(action["status"], "needs_attention", "{action:#}");
+        assert_eq!(action["worktree_retained"], true, "{action:#}");
+        assert!(worktree.exists(), "former lease owner removed the worktree");
+    }
+
     #[test]
     fn pre_start_worker_cancellation_is_reported_as_unexecuted() {
         let _env_lock = crate::test_env::lock_env();
@@ -290,6 +388,7 @@ exec git "$@"
             codex_home: None,
         };
         let release_error = anyhow!("branch lease belongs to another dispatcher");
+        let mut cleanup = PrWorktreeCleanup::assuming_lease(&ctx);
 
         let action = record_pr_repair_outcome(
             &repair,
@@ -300,6 +399,7 @@ exec git "$@"
                 worktree: worktree.clone(),
             },
             Some(&release_error),
+            &mut cleanup,
         )
         .unwrap();
         let completion = pr_manager_completion(std::slice::from_ref(&action));
@@ -522,6 +622,7 @@ exec git "$@"
             codex_home: None,
         };
         let release_error = anyhow!("branch lease belongs to another dispatcher");
+        let mut cleanup = PrWorktreeCleanup::assuming_lease(&ctx);
 
         let action = record_pr_repair_outcome(
             &repair,
@@ -532,6 +633,7 @@ exec git "$@"
                 worktree: worktree.clone(),
             },
             Some(&release_error),
+            &mut cleanup,
         )
         .unwrap();
 
