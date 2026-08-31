@@ -31,6 +31,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Bound each loop renewal lock attempt by the remaining lease cancellation window, share one deadline across the schedule ledger's ordered locks, preserve late terminal worker evidence after stale reconciliation, and label manual loop runs by their start time instead of the Unix epoch.
 - Reject symlinked ancestors across loop schedule and managed worktree roots, reject dangling `.git` redirection, scrub repository-selecting environment from GitHub CLI calls, preserve cancellation classification through shared-checkout preflight, and bound all review-thread update and reconciliation requests under one aggregate budget.
 - Defer every PR-manager preparation cleanup to the lease-refreshing outcome finalizer, quarantine only the PR whose review history is truncated, retain the newest manual occurrences during bounded pruning, and preserve non-ownership renewal shutdown failures as state evidence.
 - Keep PR-manager worktree inspection and cleanup behind a freshly renewed branch lease, retain authority-lost paths without touching them, store retained PR evidence outside disposable cache, bound composed GitHub snapshots across nested requests and payloads, and preserve truthful staged occurrence diagnostics through stale reconciliation.

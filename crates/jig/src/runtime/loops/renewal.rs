@@ -1,8 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
+
+use super::state::LOOP_STATE_LOCK_TIMEOUT;
 
 #[derive(Debug)]
 pub(super) struct RenewalOwnershipLost(String);
@@ -35,7 +37,7 @@ pub(super) fn run_with_wait(
     interval: Duration,
     mut expires_at_ms: u64,
     renewal_failed: &AtomicBool,
-    mut renew: impl FnMut() -> std::result::Result<u64, RenewalAttemptError>,
+    mut renew: impl FnMut(Instant) -> std::result::Result<u64, RenewalAttemptError>,
     now: impl Fn() -> u64,
     mut wait_for_stop: impl FnMut(Duration) -> std::result::Result<(), RecvTimeoutError>,
 ) -> Result<()> {
@@ -57,7 +59,10 @@ pub(super) fn run_with_wait(
                         .take()
                         .expect("a pending renewal error was checked above"));
                 }
-                match renew() {
+                let now_ms = now();
+                let deadline =
+                    renewal_lock_deadline(Instant::now(), now_ms, expires_at_ms, interval);
+                match renew(deadline) {
                     Ok(renewed_expires_at_ms) => {
                         expires_at_ms = renewed_expires_at_ms;
                         pending_error = None;
@@ -81,6 +86,22 @@ pub(super) fn run_with_wait(
     }
 }
 
+fn renewal_lock_deadline(
+    now: Instant,
+    now_ms: u64,
+    expires_at_ms: u64,
+    interval: Duration,
+) -> Instant {
+    now.checked_add(renewal_lock_wait(now_ms, expires_at_ms, interval))
+        .unwrap_or(now)
+}
+
+fn renewal_lock_wait(now_ms: u64, expires_at_ms: u64, interval: Duration) -> Duration {
+    let remaining_ms = expires_at_ms.saturating_sub(now_ms);
+    let wait_budget_ms = remaining_ms.saturating_sub(cancellation_window_ms(interval));
+    Duration::from_millis(wait_budget_ms).min(LOOP_STATE_LOCK_TIMEOUT)
+}
+
 pub(super) fn retry_delay(now_ms: u64, expires_at_ms: u64, interval: Duration) -> Option<Duration> {
     let cancellation_window_ms = cancellation_window_ms(interval);
     let remaining_ms = expires_at_ms.saturating_sub(now_ms);
@@ -101,4 +122,29 @@ fn cancellation_window_ms(interval: Duration) -> u64 {
     u64::try_from(interval.as_millis())
         .unwrap_or(u64::MAX)
         .max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renewal_lock_wait_preserves_the_cancellation_window() {
+        assert_eq!(
+            renewal_lock_wait(100, 1_000, Duration::from_millis(300)),
+            Duration::from_millis(600)
+        );
+        assert_eq!(
+            renewal_lock_wait(700, 1_000, Duration::from_millis(300)),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn renewal_lock_wait_never_exceeds_the_global_lock_timeout() {
+        assert_eq!(
+            renewal_lock_wait(0, 120_000, Duration::from_secs(10)),
+            LOOP_STATE_LOCK_TIMEOUT
+        );
+    }
 }

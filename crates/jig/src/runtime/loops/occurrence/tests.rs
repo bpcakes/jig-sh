@@ -1,3 +1,4 @@
+use std::sync::mpsc::RecvTimeoutError;
 use tempfile::tempdir;
 
 use super::*;
@@ -13,6 +14,8 @@ mod renewal_diagnostics;
 mod review_constraints;
 #[path = "tests/schema_migration.rs"]
 mod schema_migration;
+#[path = "tests/stale_enrichment.rs"]
+mod stale_enrichment;
 #[test]
 fn occurrence_claim_is_single_use_and_owner_checked() {
     let temp = tempdir().unwrap();
@@ -131,45 +134,6 @@ fn renewal_error_does_not_turn_a_persisted_abandonment_into_ambiguous_attention(
     assert_eq!(finalization.occurrence.status, OccurrenceStatus::Running);
     assert!(finalization.renewal_error.is_some());
     assert!(store.snapshot().unwrap().is_empty());
-}
-
-#[test]
-fn expired_claim_finishes_as_attention_and_preserves_worker_evidence() {
-    let temp = tempdir().unwrap();
-    write_loop_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut store = OccurrenceStore::new(&ctx);
-    let OccurrenceClaim::Acquired(claim) = store.claim_at("nightly", 100, 2, 1_000).unwrap() else {
-        panic!("expected occurrence claim");
-    };
-
-    let finished = store
-        .finish_at(
-            &claim.occurrence_id,
-            &claim.owner,
-            OccurrenceFinish {
-                outcome: OccurrenceOutcome::Succeeded,
-                worker_receipt_id: Some("receipt-worker"),
-                worktree: Some("/tmp/retained-worktree"),
-                error: None,
-            },
-            claim.claim_expires_at_ms,
-        )
-        .unwrap();
-
-    assert_eq!(finished.status, OccurrenceStatus::NeedsAttention);
-    assert_eq!(
-        finished.worker_receipt_id.as_deref(),
-        Some("receipt-worker")
-    );
-    assert_eq!(finished.worktree.as_deref(), Some("/tmp/retained-worktree"));
-    assert!(
-        finished
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("claim expired")),
-        "{finished:?}"
-    );
 }
 
 #[test]
@@ -553,7 +517,7 @@ fn occurrence_renewal_retries_transient_failure_before_claim_expiry() {
         Duration::from_millis(300),
         900,
         &failed,
-        || {
+        |_| {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
                     "injected transient renewal failure"
@@ -595,7 +559,7 @@ fn occurrence_renewal_latches_failure_at_claim_expiry() {
         Duration::from_millis(1),
         100,
         &failed,
-        || {
+        |_| {
             Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
                 "persistent renewal failure"
             )))
@@ -619,7 +583,7 @@ fn occurrence_renewal_latches_failure_with_time_to_cancel_and_finish() {
         Duration::from_millis(100),
         1_000,
         &failed,
-        || {
+        |_| {
             Err(RenewalAttemptError::Retryable(anyhow::anyhow!(
                 "persistent renewal failure"
             )))
@@ -641,7 +605,7 @@ fn occurrence_renewal_stop_latches_an_already_expired_claim() {
         Duration::from_millis(300),
         900,
         &failed,
-        || panic!("an immediate stop must not renew"),
+        |_| panic!("an immediate stop must not renew"),
         || 900,
         |_| Ok(()),
     )

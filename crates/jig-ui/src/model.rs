@@ -211,6 +211,8 @@ pub struct ScheduledOccurrenceView {
     pub occurrence_id: String,
     pub workflow_id: String,
     pub scheduled_at_ms: u64,
+    #[serde(default)]
+    pub started_at_ms: u64,
     pub status: String,
     pub finished_at_ms: Option<u64>,
     pub worker_receipt_id: Option<String>,

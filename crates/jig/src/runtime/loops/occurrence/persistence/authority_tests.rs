@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::context::RepoContext;
@@ -89,6 +89,35 @@ fn legacy_migration_waits_for_the_protected_authority_lock() {
     FileExt::unlock(&authority_lock).unwrap();
     migrating.join().unwrap().unwrap();
     assert!(protected.path.is_file());
+}
+
+#[test]
+fn schedule_lock_pair_shares_one_operation_deadline() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    persistence.with_locked(|_| Ok(())).unwrap();
+    let protected = persistence.protected_authority().unwrap().unwrap().clone();
+    let authority_lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&protected.lock_path)
+        .unwrap();
+    authority_lock.lock_exclusive().unwrap();
+
+    let started = Instant::now();
+    let error = persistence
+        .with_locked_until(Instant::now(), |_| Ok(()))
+        .unwrap_err()
+        .to_string();
+
+    FileExt::unlock(&authority_lock).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(error.contains("operation deadline"), "{error}");
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 pub(super) fn with_json_cache_lock<T, S>(
     dir: &Path,
@@ -9,7 +10,26 @@ pub(super) fn with_json_cache_lock<T, S>(
 where
     S: Default + DeserializeOwned + Serialize,
 {
-    with_exclusive_file_lock(dir, lock_path, || {
+    with_json_cache_lock_until(
+        dir,
+        lock_path,
+        data_path,
+        loop_state_lock_deadline(),
+        action,
+    )
+}
+
+pub(super) fn with_json_cache_lock_until<T, S>(
+    dir: &Path,
+    lock_path: &Path,
+    data_path: &Path,
+    deadline: Instant,
+    action: impl FnOnce(&mut S) -> Result<T>,
+) -> Result<T>
+where
+    S: Default + DeserializeOwned + Serialize,
+{
+    with_exclusive_file_lock_until(dir, lock_path, deadline, || {
         reclaim_orphaned_json_cache_temps(data_path)?;
         let mut store = read_json_or_default(data_path)?;
         let result = action(&mut store)?;

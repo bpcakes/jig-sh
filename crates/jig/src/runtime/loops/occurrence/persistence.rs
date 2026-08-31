@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,8 @@ use crate::runtime::loops::managed_path::{ensure_managed_directory, inspect_mana
 
 use super::{SCHEDULE_SCHEMA_VERSION, ScheduleFile, migrate_schedule_schema, validate_schema};
 use crate::runtime::loops::state::{
-    LOOP_CACHE_DIR, LOOP_RUNTIME_DIR, read_json_if_exists_with_cancellation,
-    with_exclusive_file_lock,
+    LOOP_CACHE_DIR, LOOP_RUNTIME_DIR, loop_state_lock_deadline,
+    read_json_if_exists_with_cancellation, with_exclusive_file_lock_until,
 };
 
 mod authority;
@@ -127,7 +128,15 @@ impl SchedulePersistence {
         &self,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
     ) -> Result<T> {
-        self.with_schedule_locks(|| {
+        self.with_locked_until(loop_state_lock_deadline(), action)
+    }
+
+    pub(super) fn with_locked_until<T>(
+        &self,
+        deadline: Instant,
+        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
+    ) -> Result<T> {
+        self.with_schedule_locks_until(deadline, || {
             let durable_required = self.durable_state_expected()?;
             let durable = self.read_durable(durable_required, &|| false)?;
             let mut store = durable.unwrap_or_default();
@@ -148,7 +157,7 @@ impl SchedulePersistence {
         &self,
         action: impl FnOnce(&ScheduleFile) -> Result<T>,
     ) -> Result<T> {
-        self.with_schedule_locks(|| {
+        self.with_schedule_locks_until(loop_state_lock_deadline(), || {
             let durable_required = self.durable_state_expected()?;
             let store = self.read_durable(durable_required, &|| false)?;
             let durable_exists = store.is_some();
@@ -167,7 +176,11 @@ impl SchedulePersistence {
         })
     }
 
-    fn with_schedule_locks<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
+    fn with_schedule_locks_until<T>(
+        &self,
+        deadline: Instant,
+        action: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
         ensure_managed_directory(
             &self.root,
             &self.legacy_dir,
@@ -178,7 +191,7 @@ impl SchedulePersistence {
             &self.legacy_lock_path,
             "legacy loop schedule lock",
         )?;
-        with_exclusive_file_lock(&self.legacy_dir, &self.legacy_lock_path, || {
+        with_exclusive_file_lock_until(&self.legacy_dir, &self.legacy_lock_path, deadline, || {
             remove_orphaned_schedule_temps(&self.legacy_dir)?;
             let (authority_root, authority_dir, authority_lock) = self.authority_lock()?;
             ensure_managed_directory(
@@ -192,7 +205,7 @@ impl SchedulePersistence {
                 authority_lock,
                 "authoritative loop schedule lock",
             )?;
-            with_exclusive_file_lock(authority_dir, authority_lock, || {
+            with_exclusive_file_lock_until(authority_dir, authority_lock, deadline, || {
                 remove_orphaned_schedule_temps(authority_dir)?;
                 remove_orphaned_schedule_temps(&self.dir)?;
                 // Keep one lock order for every mutating access: the legacy cache lock

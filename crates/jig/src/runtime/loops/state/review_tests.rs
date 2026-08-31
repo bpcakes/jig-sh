@@ -158,7 +158,7 @@ fn lease_renewal_retries_transient_state_failure_before_expiry() {
         Duration::from_millis(300),
         900,
         &failed,
-        || {
+        |_| {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Err(super::super::renewal::RenewalAttemptError::Retryable(
                     anyhow!("injected transient lease state failure"),

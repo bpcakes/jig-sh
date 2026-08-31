@@ -18,16 +18,20 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval, run_with_wait};
+use super::renewal::{renewal_interval, run_with_wait};
 use super::workflow::ResolvedWorkflow;
 
 mod file_lock;
 mod json_cache;
+mod lease_renewal;
 
-pub(super) use file_lock::with_exclusive_file_lock;
+pub(super) use file_lock::{
+    LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline, with_exclusive_file_lock,
+    with_exclusive_file_lock_until,
+};
 use json_cache::{
     recover_unparsable_json_cache, validate_json_cache, with_json_cache_lock,
-    with_json_cache_read_lock,
+    with_json_cache_lock_until, with_json_cache_read_lock,
 };
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
@@ -136,30 +140,6 @@ impl LeaseStore {
         })
     }
 
-    pub(super) fn renew(
-        &mut self,
-        key: &str,
-        owner: &str,
-        ttl_seconds: u64,
-    ) -> Result<LeaseRecord> {
-        self.renew_at(key, owner, ttl_seconds, now_ms())
-    }
-
-    fn renew_for_guard(
-        &mut self,
-        key: &str,
-        owner: &str,
-        ttl_seconds: u64,
-    ) -> std::result::Result<LeaseRecord, RenewalAttemptError> {
-        self.renew(key, owner, ttl_seconds).map_err(|error| {
-            if error.downcast_ref::<RenewalOwnershipLost>().is_some() {
-                RenewalAttemptError::Terminal(error)
-            } else {
-                RenewalAttemptError::Retryable(error)
-            }
-        })
-    }
-
     pub(super) fn active_leases(&mut self) -> Result<Vec<LeaseRecord>> {
         self.with_locked(|store| {
             store.prune_expired(now_ms());
@@ -183,34 +163,6 @@ impl LeaseStore {
 
     fn validate_parseable(&self) -> Result<()> {
         validate_json_cache::<LeaseFile>(&self.dir, &self.lock_path, &self.path)
-    }
-
-    fn renew_at(
-        &mut self,
-        key: &str,
-        owner: &str,
-        ttl_seconds: u64,
-        now: u64,
-    ) -> Result<LeaseRecord> {
-        self.with_locked(|store| {
-            let lease = store.leases.get_mut(key).ok_or_else(|| {
-                RenewalOwnershipLost::new(format!("Loop lease is no longer held: {key}"))
-            })?;
-            if lease.owner != owner {
-                return Err(RenewalOwnershipLost::new(format!(
-                    "Loop lease '{key}' is owned by another worker"
-                ))
-                .into());
-            }
-            if lease.expires_at_ms <= now {
-                return Err(RenewalOwnershipLost::new(format!(
-                    "Loop lease expired before renewal: {key}"
-                ))
-                .into());
-            }
-            lease.expires_at_ms = now.saturating_add(ttl_seconds.saturating_mul(1_000));
-            Ok(lease.clone())
-        })
     }
 }
 
@@ -273,9 +225,9 @@ impl LeaseGuard {
                     interval,
                     lease_expires_at_ms,
                     &renewal_failed_in_thread,
-                    || {
+                    |deadline| {
                         renewal_store
-                            .renew_for_guard(&renewal_key, &renewal_owner, ttl_seconds)
+                            .renew_for_guard(&renewal_key, &renewal_owner, ttl_seconds, deadline)
                             .map(|lease| lease.expires_at_ms)
                     },
                     now_ms,

@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -21,10 +21,14 @@ use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval
 
 mod attention;
 mod claim;
+mod guard_renewal;
 mod manual;
 mod persistence;
 
 pub(super) use claim::OccurrenceAttentionScope;
+use guard_renewal::run_occurrence_renewal;
+#[cfg(test)]
+use guard_renewal::run_occurrence_renewal_with_wait;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
 
@@ -223,9 +227,14 @@ impl OccurrenceGuard {
                     interval,
                     claim_expires_at_ms,
                     &renewal_failed_in_thread,
-                    || {
+                    |deadline| {
                         renewal_store
-                            .renew_for_guard(&renewal_occurrence_id, &renewal_owner, ttl_seconds)
+                            .renew_for_guard(
+                                &renewal_occurrence_id,
+                                &renewal_owner,
+                                ttl_seconds,
+                                deadline,
+                            )
                             .map(|renewed| renewed.claim_expires_at_ms)
                     },
                     now_ms,
@@ -300,42 +309,6 @@ impl OccurrenceGuard {
     }
 }
 
-fn run_occurrence_renewal(
-    receiver: &mpsc::Receiver<()>,
-    interval: Duration,
-    claim_expires_at_ms: u64,
-    renewal_failed: &AtomicBool,
-    renew: impl FnMut() -> std::result::Result<u64, RenewalAttemptError>,
-    now: impl Fn() -> u64,
-) -> Result<()> {
-    run_occurrence_renewal_with_wait(
-        interval,
-        claim_expires_at_ms,
-        renewal_failed,
-        renew,
-        now,
-        |wait| receiver.recv_timeout(wait),
-    )
-}
-
-fn run_occurrence_renewal_with_wait(
-    interval: Duration,
-    claim_expires_at_ms: u64,
-    renewal_failed: &AtomicBool,
-    renew: impl FnMut() -> std::result::Result<u64, RenewalAttemptError>,
-    now: impl Fn() -> u64,
-    wait_for_stop: impl FnMut(Duration) -> std::result::Result<(), RecvTimeoutError>,
-) -> Result<()> {
-    run_with_wait(
-        interval,
-        claim_expires_at_ms,
-        renewal_failed,
-        renew,
-        now,
-        wait_for_stop,
-    )
-}
-
 impl Drop for OccurrenceGuard {
     fn drop(&mut self) {
         let _ = self.stop_renewal();
@@ -377,22 +350,14 @@ impl OccurrenceStore {
         )
     }
 
-    pub(super) fn renew(
-        &mut self,
-        occurrence_id: &str,
-        owner: &str,
-        ttl_seconds: u64,
-    ) -> Result<ScheduleOccurrence> {
-        self.renew_at(occurrence_id, owner, ttl_seconds, now_ms())
-    }
-
     fn renew_for_guard(
         &mut self,
         occurrence_id: &str,
         owner: &str,
         ttl_seconds: u64,
+        deadline: Instant,
     ) -> std::result::Result<ScheduleOccurrence, RenewalAttemptError> {
-        self.renew(occurrence_id, owner, ttl_seconds)
+        self.renew_with_lock_deadline(occurrence_id, owner, ttl_seconds, deadline, now_ms)
             .map_err(|error| {
                 if error.downcast_ref::<RenewalOwnershipLost>().is_some() {
                     RenewalAttemptError::Terminal(error)
@@ -434,6 +399,12 @@ impl OccurrenceStore {
             let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
+            if record.owner == owner && is_unacknowledged_stale_reconciliation(record) {
+                record_expired_finish_evidence(record, &finish);
+                let finished = record.clone();
+                prune_history(store);
+                return Ok(finished);
+            }
             require_running_owner(record, owner)?;
             if record.claim_expires_at_ms <= now {
                 mark_expired_claim(record, now, Some(&finish));
@@ -564,6 +535,7 @@ impl OccurrenceStore {
         )
     }
 
+    #[cfg(test)]
     fn renew_at(
         &mut self,
         occurrence_id: &str,
@@ -571,7 +543,25 @@ impl OccurrenceStore {
         ttl_seconds: u64,
         now: u64,
     ) -> Result<ScheduleOccurrence> {
-        self.with_locked(|store| {
+        self.renew_with_lock_deadline(
+            occurrence_id,
+            owner,
+            ttl_seconds,
+            super::state::loop_state_lock_deadline(),
+            || now,
+        )
+    }
+
+    fn renew_with_lock_deadline(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        ttl_seconds: u64,
+        deadline: Instant,
+        now: impl FnOnce() -> u64,
+    ) -> Result<ScheduleOccurrence> {
+        self.persistence.with_locked_until(deadline, |store| {
+            let now = now();
             let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
                 RenewalOwnershipLost::new(format!(
                     "Loop occurrence is no longer held: {occurrence_id}"
@@ -643,21 +633,26 @@ fn require_unexecuted_owner(record: &ScheduleOccurrence, owner: &str) -> Result<
             record.occurrence_id
         );
     }
-    let reconciled_without_worker_evidence = record.status == OccurrenceStatus::NeedsAttention
-        && record.finished_at_ms.is_some()
-        && record.acknowledged_at_ms.is_none()
-        && record.worker_receipt_id.is_none()
-        && record.worktree.is_none()
-        && record.error.as_deref() == Some(STALE_RECONCILIATION_ERROR);
     match record.status {
         OccurrenceStatus::Running => Ok(()),
-        OccurrenceStatus::NeedsAttention if reconciled_without_worker_evidence => Ok(()),
+        OccurrenceStatus::NeedsAttention if is_unacknowledged_stale_reconciliation(record) => {
+            Ok(())
+        }
         _ => bail!(
             "Scheduled occurrence '{}' is already {}",
             record.occurrence_id,
             record.status
         ),
     }
+}
+
+fn is_unacknowledged_stale_reconciliation(record: &ScheduleOccurrence) -> bool {
+    record.status == OccurrenceStatus::NeedsAttention
+        && record.finished_at_ms.is_some()
+        && record.acknowledged_at_ms.is_none()
+        && record.worker_receipt_id.is_none()
+        && record.worktree.is_none()
+        && record.error.as_deref() == Some(STALE_RECONCILIATION_ERROR)
 }
 
 fn reconcile_stale_file(store: &mut ScheduleFile, now: u64) -> Vec<ScheduleOccurrence> {
@@ -679,14 +674,7 @@ fn mark_expired_claim(
     record.status = OccurrenceStatus::NeedsAttention;
     record.finished_at_ms = Some(now);
     if let Some(finish) = finish {
-        record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
-        record.worktree = finish.worktree.map(str::to_string);
-        record.error = Some(bounded_error(&match finish.error {
-            Some(error) => format!(
-                "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous: {error}"
-            ),
-            None => "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous".into(),
-        }));
+        record_expired_finish_evidence(record, finish);
     } else {
         record.error = Some(match record.error.take() {
             Some(staged_error) => bounded_error(&format!(
@@ -695,6 +683,17 @@ fn mark_expired_claim(
             None => STALE_RECONCILIATION_ERROR.into(),
         });
     }
+}
+
+fn record_expired_finish_evidence(record: &mut ScheduleOccurrence, finish: &OccurrenceFinish<'_>) {
+    record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
+    record.worktree = finish.worktree.map(str::to_string);
+    record.error = Some(bounded_error(&match finish.error {
+        Some(error) => format!(
+            "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous: {error}"
+        ),
+        None => "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous".into(),
+    }));
 }
 
 fn sorted_occurrences(store: &ScheduleFile) -> Vec<ScheduleOccurrence> {

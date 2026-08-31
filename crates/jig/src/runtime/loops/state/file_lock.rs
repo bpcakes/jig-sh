@@ -6,23 +6,22 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
 
-const LOOP_STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(in crate::runtime::loops) const LOOP_STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOOP_STATE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+pub(in crate::runtime::loops) fn loop_state_lock_deadline() -> Instant {
+    Instant::now() + LOOP_STATE_LOCK_TIMEOUT
+}
 
 pub(in crate::runtime::loops) fn with_exclusive_file_lock<T>(
     dir: &Path,
     lock_path: &Path,
     action: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    with_exclusive_file_lock_until(
-        dir,
-        lock_path,
-        Instant::now() + LOOP_STATE_LOCK_TIMEOUT,
-        action,
-    )
+    with_exclusive_file_lock_until(dir, lock_path, loop_state_lock_deadline(), action)
 }
 
-fn with_exclusive_file_lock_until<T>(
+pub(in crate::runtime::loops) fn with_exclusive_file_lock_until<T>(
     dir: &Path,
     lock_path: &Path,
     deadline: Instant,
@@ -39,11 +38,16 @@ fn with_exclusive_file_lock_until<T>(
     loop {
         match lock.try_lock_exclusive() {
             Ok(true) => break,
-            Ok(false) if Instant::now() >= deadline => bail!(
-                "Timed out waiting for loop state lock {} after {LOOP_STATE_LOCK_TIMEOUT:?}",
-                lock_path.display()
-            ),
-            Ok(false) => thread::sleep(LOOP_STATE_LOCK_POLL_INTERVAL),
+            Ok(false) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    bail!(
+                        "Timed out waiting for loop state lock {} before its operation deadline",
+                        lock_path.display()
+                    );
+                }
+                thread::sleep(LOOP_STATE_LOCK_POLL_INTERVAL.min(remaining));
+            }
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("Failed to lock {}", lock_path.display()));
