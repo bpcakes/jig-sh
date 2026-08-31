@@ -95,7 +95,7 @@ fn unresolved_attention_blocks_new_scheduled_claims_until_acknowledged() {
 }
 
 #[test]
-fn shared_repository_attention_blocks_other_shared_repository_workflows() {
+fn shared_repository_attention_blocks_all_workflows() {
     let temp = tempdir().unwrap();
     super::write_loop_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -139,7 +139,7 @@ fn shared_repository_attention_blocks_other_shared_repository_workflows() {
     };
     assert_eq!(blocker.occurrence_id, first.occurrence_id);
 
-    let OccurrenceClaim::Acquired(isolated) = store
+    let OccurrenceClaim::BlockedByAttention(isolated_blocker) = store
         .claim_scheduled(
             "isolated-task",
             100,
@@ -149,13 +149,13 @@ fn shared_repository_attention_blocks_other_shared_repository_workflows() {
         )
         .unwrap()
     else {
-        panic!("shared-repository attention must not block an isolated workflow");
+        panic!("shared-repository attention must block an isolated workflow");
     };
-    assert_eq!(isolated.uses_shared_checkout, Some(false));
+    assert_eq!(isolated_blocker.occurrence_id, first.occurrence_id);
 }
 
 #[test]
-fn live_shared_repository_occurrence_blocks_only_overlapping_scope() {
+fn live_shared_repository_occurrence_blocks_all_workflows() {
     let temp = tempdir().unwrap();
     super::write_loop_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -187,7 +187,7 @@ fn live_shared_repository_occurrence_blocks_only_overlapping_scope() {
     };
     assert_eq!(blocker.occurrence_id, first.occurrence_id);
 
-    let OccurrenceClaim::Acquired(isolated) = store
+    let OccurrenceClaim::BlockedByRunning(isolated_blocker) = store
         .claim_scheduled(
             "isolated-task",
             100,
@@ -197,9 +197,76 @@ fn live_shared_repository_occurrence_blocks_only_overlapping_scope() {
         )
         .unwrap()
     else {
-        panic!("unrelated isolated work must remain admissible");
+        panic!("live shared-repository work must block isolated work");
     };
-    assert_eq!(isolated.uses_shared_checkout, Some(false));
+    assert_eq!(isolated_blocker.occurrence_id, first.occurrence_id);
+}
+
+#[test]
+fn shared_repository_claim_waits_for_all_managed_worktree_authority() {
+    let temp = tempdir().unwrap();
+    super::write_loop_fixture_repo(temp.path());
+    let retained = temp.path().join("retained-isolated-worktree");
+    std::fs::create_dir(&retained).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(isolated) = store
+        .claim_scheduled(
+            "isolated-task",
+            100,
+            60,
+            OccurrenceAttentionScope::Workflow,
+            true,
+        )
+        .unwrap()
+    else {
+        panic!("expected isolated occurrence claim");
+    };
+
+    let claim_shared = |store: &mut OccurrenceStore| {
+        store
+            .claim_scheduled(
+                "repo-task",
+                200,
+                60,
+                OccurrenceAttentionScope::SharedRepository,
+                false,
+            )
+            .unwrap()
+    };
+    let OccurrenceClaim::BlockedByRunning(blocker) = claim_shared(&mut store) else {
+        panic!("an isolated worker must exclude a shared-root worker");
+    };
+    assert_eq!(blocker.occurrence_id, isolated.occurrence_id);
+
+    store
+        .finish(
+            &isolated.occurrence_id,
+            &isolated.owner,
+            OccurrenceFinish {
+                outcome: OccurrenceOutcome::NeedsAttention,
+                worker_receipt_id: None,
+                worktree: Some(retained.to_string_lossy().as_ref()),
+                error: Some("retained isolated evidence"),
+            },
+        )
+        .unwrap();
+    let OccurrenceClaim::BlockedByAttention(blocker) = claim_shared(&mut store) else {
+        panic!("isolated attention must exclude a shared-root worker");
+    };
+    assert_eq!(blocker.occurrence_id, isolated.occurrence_id);
+
+    store.acknowledge(&isolated.occurrence_id).unwrap();
+    let OccurrenceClaim::BlockedByRetainedWorktree(blocker) = claim_shared(&mut store) else {
+        panic!("acknowledged retained evidence must exclude a shared-root worker");
+    };
+    assert_eq!(blocker.occurrence_id, isolated.occurrence_id);
+
+    std::fs::remove_dir(&retained).unwrap();
+    let OccurrenceClaim::Acquired(shared) = claim_shared(&mut store) else {
+        panic!("removing retained evidence must release shared-root admission");
+    };
+    assert!(shared.uses_shared_checkout.unwrap());
 }
 
 #[test]

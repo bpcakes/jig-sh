@@ -31,6 +31,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Make repo-root workspace-write tasks mutually exclusive with every managed-worktree occurrence and block them while any retained task or PR evidence remains reachable below that writable root.
 - Preserve each workflow's latest scheduled occurrence as a non-prunable dispatch watermark, and keep PR-worktree inspection and removal behind repeated branch-lease validation with renewal-loss cancellation.
 - Move Git-backed lease and attempt authority outside repo-mode workspace-write sandboxes with typed legacy migration barriers; keep non-Git cache access beneath no-follow directory capabilities; require exact same-repository PR head metadata before origin branch mutation; namespace manual occurrence identities at their owning store; keep acknowledgement/attempt state receipts cancelable without running Git inspection inside the schedule commit boundary; restore state when those receipts cannot be published within the shared bounded lock deadline; and use file-handle lock guards so post-commit unlock cleanup cannot misreport a durable receipt as failed.
 - Keep PR-manager Git staging and commits parent-owned across workspace-write conflict repairs, collapse duplicate review-thread intents before mutation, roll back occurrence acknowledgement when receipt publication fails, and apply retained-worktree backpressure consistently to PR-manager workflows.

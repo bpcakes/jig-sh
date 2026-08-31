@@ -69,13 +69,12 @@ impl OccurrenceStore {
             ) {
                 return Ok(OccurrenceClaim::BlockedByRunning(running));
             }
-            if constraints.block_retained_worktree
-                && let Some(retained) = latest_workflow_occurrence(
-                    store,
-                    workflow_id,
-                    ScheduleOccurrence::has_retained_worktree,
-                )
-            {
+            if let Some(retained) = latest_retained_worktree_for_claim(
+                store,
+                workflow_id,
+                constraints.attention_scope,
+                constraints.block_retained_worktree,
+            ) {
                 return Ok(OccurrenceClaim::BlockedByRetainedWorktree(retained));
             }
             if constraints.block_newer_occurrences
@@ -118,12 +117,41 @@ fn latest_status_for_scope(
         .occurrences
         .values()
         .filter(|record| record.status == status)
-        .filter(|record| match scope {
-            OccurrenceAttentionScope::None => false,
-            OccurrenceAttentionScope::Workflow => record.workflow_id == workflow_id,
-            OccurrenceAttentionScope::SharedRepository => {
-                record.workflow_id == workflow_id || record.uses_shared_checkout.unwrap_or(true)
-            }
+        .filter(|record| occurrence_claims_overlap(record, workflow_id, scope))
+        .max_by_key(|record| record.scheduled_at_ms)
+        .cloned()
+}
+
+fn occurrence_claims_overlap(
+    record: &ScheduleOccurrence,
+    workflow_id: &str,
+    scope: OccurrenceAttentionScope,
+) -> bool {
+    match scope {
+        OccurrenceAttentionScope::None => false,
+        OccurrenceAttentionScope::Workflow => {
+            record.workflow_id == workflow_id || record.uses_shared_checkout.unwrap_or(true)
+        }
+        OccurrenceAttentionScope::SharedRepository => true,
+    }
+}
+
+fn latest_retained_worktree_for_claim(
+    store: &ScheduleFile,
+    workflow_id: &str,
+    scope: OccurrenceAttentionScope,
+    block_workflow_retained_worktree: bool,
+) -> Option<ScheduleOccurrence> {
+    let block_every_worktree = scope == OccurrenceAttentionScope::SharedRepository;
+    if !block_every_worktree && !block_workflow_retained_worktree {
+        return None;
+    }
+    store
+        .occurrences
+        .values()
+        .filter(|record| {
+            (block_every_worktree || record.workflow_id == workflow_id)
+                && record.has_retained_worktree()
         })
         .max_by_key(|record| record.scheduled_at_ms)
         .cloned()

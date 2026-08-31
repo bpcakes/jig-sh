@@ -42,7 +42,7 @@ impl crate::execution::ExecutionCancellation for CancelAfterFirstCheck {
 }
 
 #[test]
-fn live_shared_occurrence_defers_dispatch_and_manual_tick() {
+fn live_shared_occurrence_defers_isolated_dispatch_and_manual_tick() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     fs::create_dir_all(temp.path().join(".agent/tasks")).unwrap();
@@ -64,7 +64,7 @@ id = "repo-task-b"
 kind = "codex_task"
 schedule = "* * * * *"
 prompt_file = ".agent/tasks/shared.md"
-checkout = "repo"
+checkout = "worktree"
 "#
         ),
     )
