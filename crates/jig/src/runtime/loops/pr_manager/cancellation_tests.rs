@@ -75,22 +75,36 @@ mod cancellation_tests {
         };
 
         let mut observer = CancelledControl;
-        let action_result = run_pr_repair(&repair, &json!({}), &mut observer).unwrap();
+        let action_result = run_pr_repair(&repair, &json!({}), &mut observer);
         let PrRepairOutcome::Cancelled { detail, worktree } = &action_result else {
             panic!("pre-start Git cancellation must cancel the repair");
         };
         assert!(detail.contains("git fetch was cancelled before it started"));
         assert!(worktree.is_none());
 
-        let error = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome(
             &repair,
             &mut attempt_store,
-            Ok(action_result),
+            action_result,
             None,
         )
-        .unwrap_err();
+        .unwrap();
+        let completion = pr_manager_completion(std::slice::from_ref(&action));
 
-        assert!(error.to_string().contains("git fetch was cancelled"));
+        assert_eq!(action["status"], "failed");
+        assert_eq!(
+            action["unexecuted_reason"],
+            UnexecutedReason::CancelledBeforeStart.as_str()
+        );
+        assert!(
+            action["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("git fetch was cancelled"))
+        );
+        assert_eq!(
+            completion.execution,
+            WorkflowExecution::Unexecuted(UnexecutedReason::CancelledBeforeStart)
+        );
         assert!(attempt_store.snapshot().unwrap().is_empty());
     }
 
@@ -135,11 +149,11 @@ mod cancellation_tests {
         let action = record_pr_repair_outcome(
             &repair,
             &mut attempt_store,
-            Ok(PrRepairOutcome::Completed(json!({
+            PrRepairOutcome::Completed(json!({
                 "kind": "pr_manager_worker",
                 "status": "cancelled_after_commit",
                 "push": {"final_head": "pushed-head"},
-            }))),
+            })),
             None,
         )
         .unwrap();

@@ -384,7 +384,7 @@ exit 2
 
 #[cfg(unix)]
 #[test]
-fn loop_run_pr_manager_preserves_failure_and_cleans_worktree_before_retry() {
+fn loop_run_pr_manager_retains_failed_worker_worktree_for_attention() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -459,6 +459,7 @@ exit 2
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let original_src = git_stdout(&origin, ["show", "refs/heads/codex/conflict:src.rs"]);
 
     let run = crate::runtime::dispatch(
         &ctx,
@@ -473,31 +474,32 @@ exit 2
     )
     .unwrap();
     assert_eq!(run["ok"], false, "{run:#}");
-    assert_eq!(run["status"], "failed", "{run:#}");
-    assert_eq!(run["tick_count"], 2, "{run:#}");
-    assert_eq!(run["ticks"][0]["actions"][0]["status"], "failed");
-    assert_eq!(run["ticks"][1]["status"], "waiting");
+    assert_eq!(run["status"], "needs_attention", "{run:#}");
+    assert_eq!(run["tick_count"], 1, "{run:#}");
+    let action = &run["ticks"][0]["actions"][0];
+    assert_eq!(action["status"], "needs_attention", "{run:#}");
     assert_eq!(
-        run["ticks"][0]["actions"][0]["codex_home_resolved"],
+        action["attention_kind"],
+        "failed_repair_worktree_retained",
+        "{run:#}"
+    );
+    assert_eq!(action["completed_status"], "failed", "{run:#}");
+    assert_eq!(action["worktree_retained"], true, "{run:#}");
+    assert!(action["worker_receipt_id"].is_string(), "{run:#}");
+    let retained_worktree = action["worktree"]
+        .as_str()
+        .expect("failed worker action must report its retained worktree");
+    assert!(Path::new(retained_worktree).exists(), "{run:#}");
+    assert_eq!(
+        action["codex_home_resolved"],
         codex_home.canonicalize().unwrap().display().to_string()
     );
     assert_eq!(run["ticks"][0]["attempts"][0]["attempts"], 1);
-
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-    let second = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
-            workflow: Some("pr-manager".into()),
-            lease_ttl_seconds: None,
-            max_attempts: Some(3),
-            backoff_seconds: Some(1),
-        })),
-    )
-    .unwrap();
-    assert_eq!(second["actions"][0]["status"], "attempted", "{second:#}");
-
-    let pushed_src = git_stdout(&origin, ["show", "refs/heads/codex/conflict:src.rs"]);
-    assert_eq!(pushed_src, "fn value() -> i32 { 5 }\n");
+    assert_eq!(
+        git_stdout(&origin, ["show", "refs/heads/codex/conflict:src.rs"]),
+        original_src,
+        "a failed worker must not alter the remote branch"
+    );
 }
 
 #[cfg(unix)]

@@ -32,7 +32,7 @@ fn dispatch_preflight_fails_closed_for_lease_corruption_and_recovers_attempts() 
         leases.acquire("workflow:ExampleProject", 60).unwrap(),
         LeaseAcquire::Acquired(_)
     ));
-    let mut attempts = AttemptStore::new(&ctx);
+    let attempts = AttemptStore::new(&ctx);
     assert!(attempts.snapshot().unwrap().is_empty());
 
     serde_json::from_slice::<Value>(&fs::read(cache_dir.join("attempts.json")).unwrap()).unwrap();

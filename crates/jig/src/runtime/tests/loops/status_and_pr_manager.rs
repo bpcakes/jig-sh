@@ -468,11 +468,18 @@ fn invalid_pr_manager_codex_home_does_not_consume_attempt_budget() {
     .unwrap();
     assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
     assert_eq!(receipts["receipts"][0]["evidence"]["observed"], Value::Null);
+    let actions = receipts["receipts"][0]["evidence"]["actions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(actions.len(), 1, "{receipts:#}");
+    assert_eq!(actions[0]["kind"], "pr_manager_pre_execution");
+    assert_eq!(actions[0]["status"], "failed");
+    assert_eq!(actions[0]["unexecuted_reason"], "pre_execution_error");
     assert!(
-        receipts["receipts"][0]["evidence"]["actions"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        actions[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Codex home does not exist")),
+        "{receipts:#}"
     );
     assert!(
         receipts["receipts"][0]["evidence"]["attempts"]

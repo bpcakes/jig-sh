@@ -113,16 +113,19 @@ impl SchedulePersistence {
             ensure_durable_directory(&self.dir)?;
             let result = with_exclusive_file_lock(&self.dir, &self.lock_path, || {
                 remove_orphaned_schedule_temps(&self.dir)?;
-                let mut store = self
-                    .read_durable(durable_required, &|| false)?
-                    .unwrap_or_default();
+                let durable = self.read_durable(durable_required, &|| false)?;
+                let mut store = durable.unwrap_or_default();
+                if !durable_required {
+                    validate_durable_schedule(&store, &self.path)?;
+                    write_json_durable(&self.path, &store)?;
+                }
+                self.ensure_initialization_marker()?;
+                self.write_legacy_marker()?;
                 let result = action(&mut store)?;
                 validate_durable_schedule(&store, &self.path)?;
                 write_json_durable(&self.path, &store)?;
-                self.ensure_initialization_marker()?;
                 Ok(result)
             })?;
-            self.write_legacy_marker()?;
             Ok(result)
         })
     }
@@ -526,6 +529,25 @@ mod tests {
             fs::metadata(&persistence.legacy_path).unwrap().ino(),
             original_inode
         );
+    }
+
+    #[test]
+    fn mutation_runs_only_after_schedule_authority_is_published() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let persistence = SchedulePersistence::new(&ctx);
+
+        persistence
+            .with_locked(|_| {
+                assert!(persistence.path.is_file());
+                assert!(persistence.initialized_path.is_file());
+                let mut legacy: ScheduleFile =
+                    read_json_or_default(&persistence.legacy_path).unwrap();
+                assert!(legacy_is_migration_marker(&mut legacy, &persistence.legacy_path).unwrap());
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

@@ -18,6 +18,22 @@ where
     })
 }
 
+pub(super) fn with_json_cache_read_lock<T, S>(
+    dir: &Path,
+    lock_path: &Path,
+    data_path: &Path,
+    action: impl FnOnce(&S) -> Result<T>,
+) -> Result<T>
+where
+    S: Default + DeserializeOwned,
+{
+    with_exclusive_file_lock(dir, lock_path, || {
+        reclaim_orphaned_json_cache_temps(data_path)?;
+        let store = read_json_or_default(data_path)?;
+        action(&store)
+    })
+}
+
 pub(super) fn validate_json_cache<T>(dir: &Path, lock_path: &Path, data_path: &Path) -> Result<()>
 where
     T: Default + DeserializeOwned,
@@ -146,6 +162,26 @@ mod tests {
 
         assert!(!orphan.exists());
         assert!(data_path.exists());
+    }
+
+    #[test]
+    fn read_locked_cache_access_does_not_rewrite_the_cache() {
+        let temp = tempdir().unwrap();
+        let data_path = temp.path().join("attempts.json");
+        let lock_path = temp.path().join("attempts.lock");
+        let original = b"{\n  \"example\": \"value\"\n}\n";
+        fs::write(&data_path, original).unwrap();
+
+        let value = with_json_cache_read_lock::<_, BTreeMap<String, String>>(
+            temp.path(),
+            &lock_path,
+            &data_path,
+            |store| Ok(store.get("example").cloned()),
+        )
+        .unwrap();
+
+        assert_eq!(value.as_deref(), Some("value"));
+        assert_eq!(fs::read(&data_path).unwrap(), original);
     }
 
     #[test]

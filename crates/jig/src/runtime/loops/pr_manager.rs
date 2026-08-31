@@ -17,8 +17,8 @@ use crate::execution::{
     run_authoritative_execution_command,
 };
 use crate::runtime::worker_runner::{
-    CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
-    run_codex_exec,
+    CodexExecFailure, CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt,
+    WorkerReceiptRequest, run_codex_exec,
 };
 use crate::state::now_ms;
 
@@ -26,128 +26,11 @@ use super::github;
 use super::state::{
     AttemptRecord, AttemptStore, LOOP_CACHE_DIR, LeaseAcquire, LeaseGuard, LeaseStore,
 };
-use super::workflow::{ResolvedWorkflow, WorkflowTick};
+use super::workflow::{
+    ResolvedWorkflow, UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowTick,
+};
 
-pub(super) fn pr_manager_tick(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
-    lease_store: &mut LeaseStore,
-    attempt_store: &mut AttemptStore,
-    observer: &mut dyn ExecutionControl,
-) -> Result<WorkflowTick> {
-    let codex_home = workflow
-        .codex_home_configured
-        .as_deref()
-        .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
-        .transpose()?;
-    let observed = github::github_pr_status_snapshot(ctx, observer)?;
-    pr_manager_tick_from_snapshot(
-        ctx,
-        workflow,
-        lease_store,
-        attempt_store,
-        observed,
-        PrManagerExecution {
-            codex_home: codex_home.as_deref(),
-            observer,
-        },
-    )
-}
-
-fn pr_manager_tick_from_snapshot(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
-    lease_store: &mut LeaseStore,
-    attempt_store: &mut AttemptStore,
-    observed: Value,
-    execution: PrManagerExecution<'_>,
-) -> Result<WorkflowTick> {
-    let pull_requests = observed
-        .get("pull_requests")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("GitHub PR snapshot did not include pull_requests array"))?;
-    if let Some(action) = incomplete_snapshot_action(&observed, pull_requests) {
-        return Ok(WorkflowTick::from_actions(observed, vec![action]));
-    }
-    let default_branch = observed
-        .pointer("/repository/default_branch")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| ctx.default_branch());
-
-    let mut actions = Vec::new();
-    for pull_request in pull_requests {
-        if execution.observer.cancelled() {
-            bail!("PR manager tick was cancelled");
-        }
-        let candidate = classify_pull_request(pull_request, default_branch);
-        match candidate {
-            PrCandidate::Skip(action) => actions.push(action),
-            PrCandidate::Idle(item) => {
-                if let Some(action) =
-                    clear_observed_healthy_attempt(workflow, attempt_store, &item)?
-                {
-                    actions.push(action);
-                }
-            }
-            PrCandidate::Pending(item) => actions.push(pending_checks_action(&item)),
-            PrCandidate::Actionable(item) => {
-                let action = handle_actionable_pr(
-                    ctx,
-                    workflow,
-                    lease_store,
-                    attempt_store,
-                    &item,
-                    pull_request,
-                    PrManagerExecution {
-                        codex_home: execution.codex_home,
-                        observer: &mut *execution.observer,
-                    },
-                )?;
-                let consumed_tick = pr_manager_action_consumed_tick(&action);
-                actions.push(action);
-                if consumed_tick {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(WorkflowTick::from_actions(observed, actions))
-}
-
-fn incomplete_snapshot_action(observed: &Value, pull_requests: &[Value]) -> Option<Value> {
-    let pr_list_truncated = observed
-        .pointer("/summary/pr_list_truncated")
-        .and_then(Value::as_bool)
-        == Some(true);
-    let review_threads_truncated = pull_requests.iter().any(|pull_request| {
-        pull_request
-            .pointer("/review_threads/page_info/truncated")
-            .and_then(Value::as_bool)
-            == Some(true)
-    });
-    let truncated_review_threads = pull_requests
-        .iter()
-        .filter(|pull_request| {
-            pull_request
-                .pointer("/review_threads/page_info/truncated")
-                .and_then(Value::as_bool)
-                == Some(true)
-        })
-        .filter_map(|pull_request| pull_request.get("number").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    if !pr_list_truncated && !review_threads_truncated {
-        return None;
-    }
-    Some(json!({
-        "kind": "pr_manager_observation",
-        "status": "failed",
-        "reason": "incomplete_github_snapshot",
-        "pr_list_truncated": pr_list_truncated,
-        "review_thread_prs_truncated": truncated_review_threads,
-        "error": "PR manager refused to mutate attempts or branches from an incomplete GitHub snapshot",
-    }))
-}
+include!("pr_manager/tick.rs");
 
 enum PrCandidate {
     Actionable(PrWorkItem),
@@ -434,18 +317,13 @@ fn handle_actionable_pr(
         lease: &lease,
         codex_home: execution.codex_home,
     };
-    let action_result = {
+    let outcome = {
         let mut branch_control =
             AdditionalCancellationControl::new(execution.observer, &branch_lease_cancelled);
         run_pr_repair(&repair, pull_request, &mut branch_control)
     };
     let release_error = lease_guard.finish().err();
-    record_pr_repair_outcome(
-        &repair,
-        attempt_store,
-        action_result,
-        release_error.as_ref(),
-    )
+    record_pr_repair_outcome(&repair, attempt_store, outcome, release_error.as_ref())
 }
 
 include!("pr_manager/outcome.rs");
@@ -502,24 +380,39 @@ fn run_pr_repair<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     pull_request: &Value,
     observer: &mut dyn ExecutionControl,
-) -> Result<PrRepairOutcome> {
+) -> PrRepairOutcome {
     let worktree = match prepare_worktree(repair.repo, repair.workflow, repair.item, observer) {
         Ok(worktree) => worktree,
         Err(PrRepairStepError::Cancelled(detail)) => {
-            return Ok(PrRepairOutcome::Cancelled {
+            return PrRepairOutcome::Cancelled {
                 detail,
                 worktree: None,
-            });
+            };
         }
-        Err(PrRepairStepError::Failed(error)) => return Err(error),
+        Err(PrRepairStepError::Failed(error)) => {
+            let worktree = pr_worktree_root(repair.repo, &repair.workflow.id).join(format!(
+                "pr-{}-{}",
+                repair.item.pr_number,
+                sanitize_path_component(&repair.item.head_ref)
+            ));
+            return PrRepairOutcome::PreExecutionFailed {
+                error,
+                worktree: worktree.join(".git").exists().then_some(worktree),
+                worker_receipt_id: None,
+            };
+        }
     };
     match run_pr_repair_in_worktree(repair, pull_request, &worktree, observer) {
-        Ok(outcome) => Ok(outcome),
-        Err(PrRepairStepError::Cancelled(detail)) => Ok(PrRepairOutcome::Cancelled {
+        Ok(outcome) => outcome,
+        Err(PrRepairStepError::Cancelled(detail)) => PrRepairOutcome::Cancelled {
             detail,
             worktree: Some(worktree),
-        }),
-        Err(PrRepairStepError::Failed(error)) => Ok(PrRepairOutcome::Failed { error, worktree }),
+        },
+        Err(PrRepairStepError::Failed(error)) => PrRepairOutcome::PreExecutionFailed {
+            error,
+            worktree: Some(worktree),
+            worker_receipt_id: None,
+        },
     }
 }
 
@@ -572,27 +465,60 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             phase: None,
         },
         observer,
-    )? {
-        CodexExecOutcome::Completed(worker) => worker,
-        CodexExecOutcome::Cancelled {
-            before_start,
-            worker_receipt_id,
-        } => {
-            return Ok(PrRepairOutcome::WorkerCancelled {
-                before_start,
+    ) {
+        Err(error) => {
+            let failure = error.downcast_ref::<CodexExecFailure>();
+            let worker_receipt_id = failure
+                .and_then(CodexExecFailure::worker_receipt_id)
+                .map(str::to_string);
+            if failure.is_some_and(CodexExecFailure::worker_was_unexecuted) {
+                return Ok(PrRepairOutcome::PreExecutionFailed {
+                    error,
+                    worktree: Some(worktree.to_path_buf()),
+                    worker_receipt_id,
+                });
+            }
+            return Ok(PrRepairOutcome::WorkerFailed {
+                error,
                 worker_receipt_id,
                 worktree: worktree.to_path_buf(),
             });
         }
+        Ok(outcome) => match outcome {
+            CodexExecOutcome::Completed(worker) => worker,
+            CodexExecOutcome::Cancelled {
+                before_start,
+                worker_receipt_id,
+            } => {
+                return Ok(PrRepairOutcome::WorkerCancelled {
+                    before_start,
+                    worker_receipt_id,
+                    worktree: worktree.to_path_buf(),
+                });
+            }
+        },
     };
     if !worker.status().success() {
-        return Err(PrRepairStepError::failed(anyhow!(
-            "PR manager worker exited with status {}",
-            worker.status().code().unwrap_or(1)
-        )));
+        return Ok(PrRepairOutcome::WorkerFailed {
+            error: anyhow!(
+                "PR manager worker exited with status {}",
+                worker.status().code().unwrap_or(1)
+            ),
+            worker_receipt_id: Some(worker.worker_receipt_id().to_string()),
+            worktree: worktree.to_path_buf(),
+        });
     }
 
-    let worker_output = parse_pr_worker_output(worker.authoritative_stdout())?;
+    let worker_output = match parse_pr_worker_output(worker.authoritative_stdout()) {
+        Ok(output) => output,
+        Err(error) => {
+            return Ok(PrRepairOutcome::WorkerFailed {
+                error,
+                worker_receipt_id: Some(worker.worker_receipt_id().to_string()),
+                worktree: worktree.to_path_buf(),
+            });
+        }
+    };
     let push = match commit_and_push(
         repair.repo,
         worktree,
@@ -629,7 +555,17 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                 "error": format!("{error:#}"),
             })));
         }
-        Err(PrPushError::Step(error)) => return Err(error),
+        Err(PrPushError::Step(error)) => {
+            let error = match error {
+                PrRepairStepError::Cancelled(detail) => anyhow!(detail),
+                PrRepairStepError::Failed(error) => error,
+            };
+            return Ok(PrRepairOutcome::WorkerFailed {
+                error,
+                worker_receipt_id: Some(worker.worker_receipt_id().to_string()),
+                worktree: worktree.to_path_buf(),
+            });
+        }
     };
     let repair_version = push["final_head"].as_str().unwrap_or(&repair.item.head_sha);
     let review_thread_posts = post_review_thread_updates(

@@ -24,7 +24,10 @@ use super::workflow::ResolvedWorkflow;
 
 mod json_cache;
 
-use json_cache::{recover_unparsable_json_cache, validate_json_cache, with_json_cache_lock};
+use json_cache::{
+    recover_unparsable_json_cache, validate_json_cache, with_json_cache_lock,
+    with_json_cache_read_lock,
+};
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
 pub(super) const LOOP_RUNTIME_DIR: &str = ".agent/runtime/loop";
@@ -200,6 +203,7 @@ pub(super) struct LeaseGuard {
     stop: Option<Sender<()>>,
     renewal: Option<JoinHandle<Result<()>>>,
     renewal_failed: Arc<AtomicBool>,
+    release_pending: bool,
 }
 
 impl LeaseGuard {
@@ -280,6 +284,7 @@ impl LeaseGuard {
             stop: Some(stop),
             renewal: Some(renewal),
             renewal_failed,
+            release_pending: true,
         })
     }
 
@@ -304,7 +309,15 @@ impl LeaseGuard {
                     .map_err(|_| anyhow!("Loop lease renewal thread panicked"))?
             })
             .transpose();
-        let release_result = self.store.release(&self.key, &self.owner);
+        let release_result = if self.release_pending {
+            let result = self.store.release(&self.key, &self.owner);
+            if result.is_ok() {
+                self.release_pending = false;
+            }
+            result
+        } else {
+            Ok(())
+        };
         renewal_result?;
         release_result
     }
@@ -456,17 +469,13 @@ impl AttemptStore {
         })
     }
 
-    pub(super) fn get(
-        &mut self,
-        workflow_id: &str,
-        item_key: &str,
-    ) -> Result<Option<AttemptRecord>> {
+    pub(super) fn get(&self, workflow_id: &str, item_key: &str) -> Result<Option<AttemptRecord>> {
         let key = format!("{workflow_id}:{item_key}");
-        self.with_locked(|store| Ok(store.attempts.get(&key).cloned()))
+        self.with_read_lock(|store| Ok(store.attempts.get(&key).cloned()))
     }
 
-    pub(super) fn snapshot(&mut self) -> Result<Vec<AttemptRecord>> {
-        self.with_locked(|store| Ok(store.attempts.values().cloned().collect()))
+    pub(super) fn snapshot(&self) -> Result<Vec<AttemptRecord>> {
+        self.with_read_lock(|store| Ok(store.attempts.values().cloned().collect()))
     }
 
     pub(super) fn snapshot_read_only_with_cancellation(
@@ -496,6 +505,10 @@ impl AttemptStore {
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
+    }
+
+    fn with_read_lock<T>(&self, action: impl FnOnce(&AttemptFile) -> Result<T>) -> Result<T> {
+        with_json_cache_read_lock(&self.dir, &self.lock_path, &self.path, action)
     }
 
     fn recover_unparsable(&self) -> Result<bool> {
@@ -680,6 +693,36 @@ mod tests {
             store.acquire("workflow:slow", 3).unwrap(),
             LeaseAcquire::Acquired(_)
         ));
+    }
+
+    #[test]
+    fn lease_guard_shutdown_releases_at_most_once() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = LeaseStore::new(&ctx);
+        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:once", 60).unwrap() else {
+            panic!("expected lease acquisition");
+        };
+        let mut guard = LeaseGuard::start(store, "workflow:once", &lease, 60).unwrap();
+
+        guard.shutdown().unwrap();
+        guard.shutdown().unwrap();
+    }
+
+    #[test]
+    fn attempt_store_reads_do_not_rewrite_the_cache() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let store = AttemptStore::new(&ctx);
+        fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        let original = b"{\n  \"attempts\": {}\n}\n";
+        fs::write(&store.path, original).unwrap();
+
+        assert!(store.get("workflow", "item").unwrap().is_none());
+        assert!(store.snapshot().unwrap().is_empty());
+        assert_eq!(fs::read(&store.path).unwrap(), original);
     }
 
     #[test]
