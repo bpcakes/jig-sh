@@ -785,7 +785,6 @@ esac
             .as_deref()
             .is_some_and(|path| std::path::Path::new(path).exists())
     );
-
     let blocked = dispatch_workflow(
         &ctx,
         &mut occurrences,

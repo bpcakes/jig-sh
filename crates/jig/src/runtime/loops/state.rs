@@ -643,7 +643,6 @@ mod tests {
 
         assert_eq!(error.to_string(), "status collection was cancelled");
     }
-
     #[test]
     fn attempt_store_exhausts_after_budget_and_clears_on_success() {
         let temp = tempdir().unwrap();
@@ -796,7 +795,6 @@ mod tests {
             .write();
     }
 }
-
 #[cfg(test)]
 #[path = "state/review_tests.rs"]
 mod review_tests;
