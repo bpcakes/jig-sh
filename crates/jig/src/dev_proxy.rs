@@ -897,18 +897,14 @@ fn build_settings(
         .clone()
         .unwrap_or(defaults.tld)
         .to_ascii_lowercase();
-    jig_dev_proxy::validate_tld(&tld)?;
     let http_port = opts.http_port.unwrap_or(defaults.http_port);
-    if http_port == 0 && opts.http_port.is_none() {
-        bail!("proxy HTTP port must be greater than 0");
-    }
     let https_port = opts.https_port.or(defaults.https_port);
-    if https_port == Some(0) {
-        bail!("proxy HTTPS port must be greater than 0");
-    }
-    if https_port == Some(http_port) {
-        bail!("proxy HTTP and HTTPS ports must be different");
-    }
+    crate::context::validate_dev_proxy_settings(
+        http_port,
+        https_port,
+        &tld,
+        opts.http_port == Some(0),
+    )?;
     let additional_dns_names = additional_dns_names(&tld)?;
     Ok(jig_dev_proxy::ProxySettings {
         state_dir: Some(jig_dev_proxy::resolve_state_dir(opts.state_dir.clone())?),

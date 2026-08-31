@@ -1,5 +1,53 @@
 // agentic-loc-exception: retain the generated Go/Rust stack matrix in one end-to-end scaffold contract test module.
 
+#[test]
+fn rust_react_dev_answer_authority_reaches_config_and_vite_fallback() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("ExampleProject");
+    let answers = temp.path().join("answers.toml");
+    fs::write(
+        &answers,
+        r#"[dev]
+proxy_port = 2455
+https_port = 2443
+tld = "Example.TEST"
+"#,
+    )
+    .unwrap();
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert!(config.contains("proxy_port = 2455"));
+    assert!(config.contains("https_port = 2443"));
+    assert!(config.contains("tld = \"example.test\""));
+    let vite = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
+    assert!(vite.contains("http://api.exampleproject.example.test:2455"));
+    assert!(!vite.contains("localhost:1355"));
+}
+
 
 #[cfg(unix)]
 #[test]

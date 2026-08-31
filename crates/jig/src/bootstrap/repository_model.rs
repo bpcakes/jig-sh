@@ -17,6 +17,7 @@ use super::source_inputs::FRONTEND_SHARED_INPUTS;
 
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
+const RUST_WORKSPACE_COMPONENT: &str = "workspace";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
@@ -42,6 +43,22 @@ const DEFAULT_AFFECTED_IGNORE: &[&str] = &[
     "LICENSE.*",
     ".github/**",
 ];
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum RepositoryProjectionHint {
+    #[default]
+    Backend,
+    RustWorkspace,
+}
+
+impl RepositoryProjectionHint {
+    pub(super) const fn rust_component_id(self) -> &'static str {
+        match self {
+            Self::Backend => BACKEND_COMPONENT,
+            Self::RustWorkspace => RUST_WORKSPACE_COMPONENT,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RepositoryRenderModel {
@@ -107,6 +124,10 @@ impl AuthoredRepositoryModel {
             .into_iter()
             .collect()
     }
+
+    pub(super) fn rust_workspace_guidance_enabled(&self) -> bool {
+        rust_workspace_guidance_enabled(&self.components)
+    }
 }
 
 #[derive(Serialize)]
@@ -126,7 +147,10 @@ impl RepositoryRenderModel {
         }
         let mut builder = ModelBuilder::new(answers)?;
         builder.add_repository_component()?;
-        builder.add_backend_component()?;
+        match answers.repository_projection_hint() {
+            RepositoryProjectionHint::Backend => builder.add_backend_component()?,
+            RepositoryProjectionHint::RustWorkspace => builder.add_rust_workspace_component()?,
+        }
         builder.add_frontend_components()?;
         builder.finish()
     }
@@ -334,6 +358,23 @@ impl RepositoryRenderModel {
             })
         })
     }
+
+    pub(super) fn rust_workspace_guidance_enabled(&self) -> bool {
+        rust_workspace_guidance_enabled(&self.components)
+    }
+}
+
+fn rust_workspace_guidance_enabled(components: &[ComponentSpec]) -> bool {
+    let has_neutral_workspace = components.iter().any(|component| {
+        component.id.as_str() == RUST_WORKSPACE_COMPONENT
+            && component.root == "."
+            && component.adapters.iter().any(|adapter| adapter == "rust")
+    });
+    let has_backend_identity = components.iter().any(|component| {
+        component.id.as_str() == BACKEND_COMPONENT
+            || component.tags.iter().any(|tag| tag == "backend")
+    });
+    has_neutral_workspace && !has_backend_identity
 }
 
 fn component_root_input(root: &str) -> String {
@@ -436,6 +477,37 @@ impl<'a> ModelBuilder<'a> {
                 |_| true,
             )?;
         }
+        Ok(())
+    }
+
+    fn add_rust_workspace_component(&mut self) -> Result<()> {
+        if self.answers.backend_language().is_go() {
+            bail!("the neutral Rust workspace projection requires Rust answers");
+        }
+        if self.answers.sqlx_enabled() {
+            bail!("the neutral Rust workspace projection does not include SQLx state");
+        }
+        if self.answers.frontend_harness_enabled() {
+            bail!("the neutral Rust workspace projection does not include frontend state");
+        }
+
+        let mut component = ComponentSpec::new(component_id(RUST_WORKSPACE_COMPONENT)?, ".");
+        component.description = Some("Repository Rust workspace.".into());
+        component.tags = vec!["workspace".into()];
+        component.adapters = vec!["rust".into()];
+        component.provenance = provenance(&[
+            ("id", FieldProvenance::Inferred),
+            ("root", FieldProvenance::Inferred),
+            ("adapters", FieldProvenance::Inferred),
+        ]);
+        self.insert_component(component)?;
+        self.add_adapter_actions(
+            RUST_WORKSPACE_COMPONENT,
+            "rust",
+            CommandScope::Component,
+            |_| true,
+        )?;
+        self.add_rust_file_loc_action()?;
         Ok(())
     }
 
@@ -873,121 +945,7 @@ impl CommandScope {
     }
 }
 
-fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
-    let id = frontend_component_id(&app.name)?;
-    let mut component = ComponentSpec::new(id, &app.dir);
-    component.description = Some(format!("Frontend application '{}'.", app.name));
-    component.tags = vec!["frontend".into(), app.role.clone()];
-    component.depends_on = vec![component_id(BACKEND_COMPONENT)?];
-    component.adapters = vec!["typescript".into()];
-    component.provenance = provenance(&[
-        ("id", FieldProvenance::Inferred),
-        ("root", FieldProvenance::Declared),
-        ("depends_on", FieldProvenance::Inferred),
-        ("adapters", FieldProvenance::Inferred),
-    ]);
-    Ok(component)
-}
-
-pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
-    let normalized = name.to_ascii_lowercase();
-    if matches!(normalized.as_str(), REPO_COMPONENT | BACKEND_COMPONENT) {
-        bail!(
-            "Frontend app name '{name}' resolves to reserved repository component id '{normalized}'; choose a different frontend name"
-        );
-    }
-    let value = if normalized.len() <= 64 {
-        normalized
-    } else {
-        let digest = format!("{:x}", Sha256::digest(normalized.as_bytes()));
-        let mut end = 51;
-        while !normalized.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!(
-            "{}-{}",
-            normalized[..end].trim_end_matches('-'),
-            &digest[..12]
-        )
-    };
-    component_id(&value)
-        .with_context(|| format!("Invalid frontend app name '{name}' for repository identity"))
-}
-
-fn frontend_inputs(root: &str, inputs: &[&str], workspace_roots: &[String]) -> Vec<String> {
-    let mut resolved = inputs
-        .iter()
-        .map(|input| {
-            if root == "." {
-                (*input).to_owned()
-            } else {
-                format!("{root}/{input}")
-            }
-        })
-        .collect::<Vec<_>>();
-    resolved.extend(
-        FRONTEND_SHARED_INPUTS
-            .iter()
-            .map(|input| (*input).to_owned()),
-    );
-    resolved.extend(
-        workspace_roots
-            .iter()
-            .map(|root| component_root_input(root)),
-    );
-    resolved.sort();
-    resolved.dedup();
-    resolved
-}
-
-fn aggregate_frontend_inputs(
-    apps: &[FrontendApp],
-    inputs: &[&str],
-    workspace_roots: &[String],
-) -> Vec<String> {
-    apps.iter()
-        .flat_map(|app| frontend_inputs(&app.dir, inputs, workspace_roots))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn frontend_contract_inputs(
-    include_public_artifacts: bool,
-    workspace_roots: &[String],
-) -> Vec<String> {
-    let mut inputs = FRONTEND_SHARED_INPUTS
-        .iter()
-        .copied()
-        .chain([
-            "Cargo.toml",
-            "**/Cargo.toml",
-            "**/*.rs",
-            "go.mod",
-            "**/go.mod",
-            "**/*.go",
-        ])
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    inputs.extend(
-        workspace_roots
-            .iter()
-            .map(|root| component_root_input(root)),
-    );
-    if include_public_artifacts {
-        inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
-    }
-    inputs.sort();
-    inputs.dedup();
-    inputs
-}
-
-fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {
-    entries
-        .iter()
-        .map(|(field, source)| ((*field).into(), *source))
-        .collect()
-}
+include!("repository_model/frontend.rs");
 
 include!("repository_model/ids.rs");
 

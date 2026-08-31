@@ -9,7 +9,8 @@ use super::super::embedded_templates::EMBEDDED_SCAFFOLD_TEMPLATE_FILES;
 use super::super::templates::ScaffoldTemplateFile;
 use super::super::{ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldPreset};
 use super::app::{
-    FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold, e2e_database_name,
+    FrontendBackendContext, FrontendDatabaseContext, FrontendDevProxyContext, FrontendScaffold,
+    e2e_database_name,
 };
 use super::templates::{
     ADMIN_API_CLIENT_TEMPLATES, ASTRO_TEMPLATES, E2E_WORKFLOW_TEMPLATE,
@@ -109,6 +110,47 @@ fn embedded_frontend_templates_are_registered() {
             ADMIN_API_CLIENT_TEMPLATES,
         ],
     );
+}
+
+#[test]
+fn vite_direct_fallback_uses_the_rendered_dev_proxy_authority() {
+    let frontend = FrontendScaffold::from_spec(ScaffoldFrontend {
+        name: "web".into(),
+        kind: ScaffoldFrontendKind::Spa,
+        custom_default_name: false,
+    })
+    .unwrap();
+    let files = frontend
+        .render_files_for_backend(
+            "bun",
+            "example-project",
+            FrontendDevProxyContext {
+                repo_dns_label: "example-project",
+                port: 2455,
+                tld: "example.test",
+            },
+            "example_project",
+            FrontendBackendContext {
+                preset: ScaffoldPreset::RustReact,
+                root: ".",
+                database: FrontendDatabaseContext {
+                    db: ScaffoldDb::None,
+                    migration_dir: "migrations",
+                    sqlx_metadata_dir: ".sqlx",
+                },
+            },
+        )
+        .unwrap();
+    let vite = files
+        .iter()
+        .find(|file| file.relative == "web/vite.config.ts")
+        .unwrap();
+
+    assert!(
+        vite.contents
+            .contains("http://api.example-project.example.test:2455")
+    );
+    assert!(!vite.contents.contains("localhost:1355"));
 }
 
 #[test]

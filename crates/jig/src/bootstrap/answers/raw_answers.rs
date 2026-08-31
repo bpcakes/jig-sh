@@ -12,6 +12,8 @@ pub(super) struct RawAnswers {
     #[serde(default)]
     pub(super) harness_footprint: Option<HarnessFootprint>,
     pub(super) backend_language: Option<BackendLanguage>,
+    #[serde(skip)]
+    pub(super) repository_projection_hint: RepositoryProjectionHint,
     pub(super) go_database: Option<GoDatabase>,
     pub(super) sqlx_enabled: Option<bool>,
     pub(super) rust_crate_roots: Option<Vec<String>>,
@@ -51,6 +53,8 @@ pub(super) struct RawAnswers {
     pub(super) status: Option<StatusConfig>,
     pub(super) execution: Option<ExecutionConfig>,
     pub(super) agent_tooling: Option<AgentToolingAnswers>,
+    #[serde(flatten)]
+    pub(super) extra_top_level: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -82,6 +86,10 @@ pub(super) struct CodexMarketplaceAnswers {
 }
 
 impl RawAnswers {
+    pub(super) fn first_extra_top_level_key(&self) -> Option<&str> {
+        self.extra_top_level.keys().next().map(String::as_str)
+    }
+
     pub(super) fn normalize_repository_model(&mut self, table: &toml::Table) {
         let Some(repository) = table.get("repository").and_then(toml::Value::as_table) else {
             return;
@@ -263,6 +271,7 @@ impl RawAnswers {
         );
         merge_option(&mut self.harness_footprint, opts.harness_footprint);
         merge_option(&mut self.backend_language, opts.backend_language);
+        self.repository_projection_hint = opts.repository_projection_hint;
         merge_option(&mut self.go_database, opts.go_database);
         merge_option(&mut self.sqlx_enabled, opts.sqlx_enabled);
         if !opts.rust_crate_roots.is_empty() {
@@ -334,6 +343,11 @@ impl RawAnswers {
                 .get_or_insert_with(dev::RawDevAnswers::default)
                 .apps = Some(opts.dev_apps.clone());
         }
+        if let Some(settings) = &opts.dev_settings {
+            self.dev
+                .get_or_insert_with(dev::RawDevAnswers::default)
+                .merge_settings(settings);
+        }
         merge_option(&mut self.status, opts.status.clone());
         merge_option(&mut self.execution, opts.execution.clone());
     }
@@ -370,7 +384,13 @@ impl RawAnswers {
     }
 
     pub(super) fn into_answer_opts(self, answers_file: Option<PathBuf>) -> AnswerOpts {
-        let dev_apps = self.dev.and_then(|dev| dev.apps).unwrap_or_default();
+        let (dev_settings, dev_apps) = self.dev.map_or_else(
+            || (None, Vec::new()),
+            |dev| {
+                let (settings, apps) = dev.into_parts();
+                (Some(settings), apps)
+            },
+        );
         AnswerOpts {
             answers_file,
             repo_name: self.repo_name.filter(|value| !value.is_empty()),
@@ -381,6 +401,7 @@ impl RawAnswers {
             template_source_url: self.template_source_url,
             harness_footprint: self.harness_footprint,
             backend_language: self.backend_language,
+            repository_projection_hint: self.repository_projection_hint,
             go_database: self.go_database,
             scaffold_go_component_roots: Vec::new(),
             sqlx_enabled: self.sqlx_enabled,
@@ -407,6 +428,7 @@ impl RawAnswers {
             frontend_apps: self.frontend_apps.unwrap_or_default(),
             frontend_workspace_roots: self.frontend_workspace_roots.unwrap_or_default(),
             dev_apps,
+            dev_settings,
             status: self.status,
             execution: self.execution,
         }
@@ -481,19 +503,25 @@ impl RawAnswers {
             .as_ref()
             .is_some_and(|model| model.has_adapter("rust") || model.has_adapter("sqlx"));
         let authored_rust_crate_roots = authored_repository.as_ref().map(|model| {
-            model
-                .components
-                .iter()
-                .filter(|component| {
-                    component
-                        .adapters
-                        .iter()
-                        .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
-                })
-                .map(|component| component.root.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
+            if model.rust_workspace_guidance_enabled() {
+                self.rust_crate_roots
+                    .clone()
+                    .unwrap_or_else(|| vec!["crates".into()])
+            } else {
+                model
+                    .components
+                    .iter()
+                    .filter(|component| {
+                        component
+                            .adapters
+                            .iter()
+                            .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
+                    })
+                    .map(|component| component.root.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            }
         });
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
@@ -559,6 +587,7 @@ impl RawAnswers {
         frontend_workspace_roots.sort();
         frontend_workspace_roots.dedup();
         let dev::ResolvedDevApps {
+            settings: dev,
             dev_apps,
             generated_frontend_dev_apps,
         } = dev::resolve(frontend_apps.as_slice(), self.dev)?;
@@ -618,6 +647,7 @@ impl RawAnswers {
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
             go_postgres_integration_script: false,
+            repository_projection_hint: self.repository_projection_hint,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),
             ci_github_runner: self
@@ -702,6 +732,7 @@ impl RawAnswers {
             typescript_coverage_command: self
                 .typescript_coverage_command
                 .unwrap_or_else(|| "scripts/check-webapps.sh coverage".into()),
+            dev,
             dev_apps,
             generated_frontend_dev_apps,
             frontend_apps,

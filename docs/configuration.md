@@ -47,6 +47,27 @@ If a later template, scaffold, agent-map, or Git step fails in an existing desti
 
 Existing-destination init preflights its retained file-descriptor budget before it acquires snapshots. Each planned leaf is charged for a possible preimage plus its first Jig generation, repeated publications such as the post-scaffold `agent-map.md` refresh are counted explicitly, and directory identities, per-parent write staging, and transient cleanup headroom are added separately. The generation cap includes repeats. This conservative model permits the default existing-empty scaffold under macOS's ordinary soft limit of 256 while continuing to assume a currently missing path can appear concurrently before its snapshot.
 
+## Rust-only Init Presets
+
+`rust-library` and `rust-cli` are the two public presets for new Rust repositories that do not need an application stack. Use `jig init` for a new destination; use `jig adopt .` when Rust source and Cargo authority already exist. There is no public `rust-workspace` preset.
+
+Both presets create a Rust 2024 virtual workspace using Jig's Rust 1.88 baseline. The only initial member is `crates/<repo>`: `rust-library` renders `src/lib.rs`, while `rust-cli` renders `src/main.rs` and an explicit `[[bin]]` target. The package starts with `publish = false` and no license metadata. Neither shape enables a database, SQLx, schema tooling, application contracts, a frontend, an API, a dev app, a release workflow, or an extra crate layer. The CLI seed is std-only and leaves argument parsing and logging to the project.
+
+In strict `--no-input` mode, naming either preset is a complete project shape. Rust-only answer input may still supply ordinary full-harness settings such as repository identity, default branch, CI runner, vault, status, execution, agent-tooling, and proxy settings. The generated crate root is fixed at `crates`; false/empty compatibility values and Rust check/bootstrap command overrides are accepted, and `web_package_manager` is inert because no web workspace is rendered. Effective Go, database, migration, SQLx, schema, frontend, application-contract, dev-app, custom repository, custom command-map, work, loop, or minimal-footprint authority is rejected when it would contradict the selected Rust-only shape.
+
+The root/member Cargo manifests, seed source, member `AGENTS.md`, and scaffold README are one-time scaffold output and become project-owned immediately. `jig update` maintains the Jig harness but does not redefine that Rust project structure. The generated repository model has one neutral `workspace` component, and the root guidance documents workspace and crate ownership without application transport rules. Neither preset configures or recommends `scripts/jig dev`.
+
+After init, run:
+
+```sh
+scripts/jig setup
+scripts/jig check test
+```
+
+Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI use the same dependency resolution.
+
+Unreleased binaries render from checked-in embedded project and scaffold snapshots when `--template` is omitted. Template maintainers must refresh both generated snapshot sources with `JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh` after changing either template tree; do not edit the generated snapshot copies independently. Release builds package those snapshots, and acceptance tests compare their raw files and rendered Rust-only output with live template rendering.
+
 When Git has an explicit `GIT_TEMPLATE_DIR` or configured `init.templateDir`, init mirrors that template into private staging before invoking Git. Only identity-stable regular files and real directories are accepted; symlinks, special files, linked-worktree markers, and object-store redirections are rejected before Git can follow or mutate them.
 
 For local git template checkouts, `jig init` / `jig adopt` use a committed source:

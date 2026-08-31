@@ -793,6 +793,14 @@ fn render_context(
                 .unwrap_or_default(),
         )?,
     );
+    context.insert(
+        "rust_workspace_guidance_enabled".into(),
+        JsonValue::Bool(
+            repository
+                .as_ref()
+                .is_some_and(RepositoryRenderModel::rust_workspace_guidance_enabled),
+        ),
+    );
     if contract_version >= 6 {
         let repository = repository.expect("contract v6 always resolves a repository model");
         let repository_toml = repository.authored_toml()?;

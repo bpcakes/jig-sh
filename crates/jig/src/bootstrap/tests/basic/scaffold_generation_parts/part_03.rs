@@ -293,6 +293,34 @@ fn scaffold_options_require_preset() {
 }
 
 #[test]
+fn go_module_rejects_non_go_presets_with_stable_errors() {
+    for (preset, expected) in [
+        (None, "--go-module requires --preset go-react"),
+        (
+            Some(ScaffoldPreset::RustReact),
+            "--go-module requires --preset go-react",
+        ),
+        (
+            Some(ScaffoldPreset::HarnessOnly),
+            "--preset harness-only cannot be combined with --db, --go-module, --frontend, or --frontends",
+        ),
+    ] {
+        let error = ScaffoldOpts {
+            preset,
+            ..ScaffoldOpts::default()
+        }
+        .validate_init_invariants(&AnswerOpts {
+            go_module: Some("example.com/ExampleProject".into()),
+            ..AnswerOpts::default()
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains(expected), "{preset:?}: {error}");
+    }
+}
+
+#[test]
 fn rust_react_reserves_backend_dev_identity_across_frontend_sources() {
     let cases = vec![
         (

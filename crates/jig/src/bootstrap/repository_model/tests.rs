@@ -5,6 +5,9 @@ use std::fs;
 use tempfile::TempDir;
 
 use super::*;
+use crate::backend::BackendLanguage;
+use crate::bootstrap::AnswerOpts;
+use crate::bootstrap::answers::AnswerResolution;
 
 fn answers(contents: &str) -> RenderAnswers {
     let temp = TempDir::new().unwrap();
@@ -23,6 +26,23 @@ fn scaffold_answers(contents: &str) -> RenderAnswers {
     let mut answers = answers(contents);
     answers.enable_scaffolded_frontend_contracts();
     answers
+}
+
+fn rust_workspace_answers() -> RenderAnswers {
+    let destination = TempDir::new().unwrap();
+    let opts = AnswerOpts {
+        repo_name: Some("ExampleProject".into()),
+        backend_language: Some(BackendLanguage::Rust),
+        repository_projection_hint: RepositoryProjectionHint::RustWorkspace,
+        sqlx_enabled: Some(false),
+        schema_dump_enabled: Some(false),
+        rust_crate_roots: vec!["crates".into()],
+        ..AnswerOpts::default()
+    };
+    AnswerResolution::from_opts(&opts, destination.path(), false)
+        .unwrap()
+        .into_parts()
+        .0
 }
 
 #[test]
@@ -250,6 +270,135 @@ fn rust_repository_uses_adapter_actions_without_backend_identity_fields() {
     assert!(!authored.contains("backend_language"));
     assert!(commands.contains("api_test_command"));
     assert!(!commands.contains("rust_test_command"));
+}
+
+#[test]
+fn neutral_rust_workspace_uses_existing_records_actions_and_aliases() {
+    let answers = rust_workspace_answers();
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert_eq!(
+        model
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<Vec<_>>(),
+        ["repo", "workspace"]
+    );
+    let workspace = model
+        .components
+        .iter()
+        .find(|component| component.id.as_str() == "workspace")
+        .unwrap();
+    assert_eq!(workspace.root, ".");
+    assert_eq!(
+        workspace.description.as_deref(),
+        Some("Repository Rust workspace.")
+    );
+    assert_eq!(workspace.tags, ["workspace"]);
+    assert_eq!(workspace.adapters, ["rust"]);
+    assert!(model.rust_workspace_guidance_enabled());
+    assert!(model.rust_ci_input_paths().contains(&"**".into()));
+    assert_eq!(model.rust_component_input_paths(), ["**"]);
+
+    for (target, alias) in [
+        ("workspace:fmt", jig_contract::tool::FMT_CHECK),
+        ("workspace:clippy", jig_contract::tool::CLIPPY),
+        ("workspace:test", jig_contract::tool::TEST),
+        ("workspace:test-locked", jig_contract::tool::TEST_LOCKED),
+        ("repo:rust-file-loc", "jig.rust_file_loc"),
+    ] {
+        let action = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == target)
+            .unwrap_or_else(|| panic!("missing {target}"));
+        assert!(
+            action
+                .legacy_aliases
+                .iter()
+                .any(|candidate| candidate == alias),
+            "{target} is missing compatibility alias {alias}"
+        );
+    }
+    assert!(model.components.iter().all(|component| {
+        component.id.as_str() != "api"
+            && !component.tags.iter().any(|tag| tag == "backend")
+            && !component
+                .description
+                .as_deref()
+                .is_some_and(|description| description.contains("backend"))
+    }));
+    assert!(
+        model
+            .actions
+            .iter()
+            .all(|action| { !matches!(action.target.component.as_str(), "api" | "web" | "admin") })
+    );
+    assert_eq!(
+        answers.rust_fmt_ci_target().as_deref(),
+        Some("workspace:fmt")
+    );
+    assert_eq!(
+        answers.rust_clippy_ci_target().as_deref(),
+        Some("workspace:clippy")
+    );
+    assert_eq!(
+        answers.rust_test_locked_ci_target().as_deref(),
+        Some("workspace:test-locked")
+    );
+    assert!(
+        serde_json::to_value(&answers)
+            .unwrap()
+            .get("repository_projection_hint")
+            .is_none()
+    );
+    let authored = model.authored_toml().unwrap();
+    assert!(!authored.contains("rust-library"));
+    assert!(!authored.contains("rust-cli"));
+    assert!(!authored.contains("projection"));
+}
+
+#[test]
+fn neutral_workspace_guidance_is_recovered_from_authored_semantics() {
+    let initial = RepositoryRenderModel::from_answers(&rust_workspace_answers()).unwrap();
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
+            initial.authored_toml().unwrap(),
+            initial.commands_toml().unwrap()
+        ),
+    )
+    .unwrap();
+
+    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
+    assert_eq!(
+        reloaded.repository_projection_hint(),
+        RepositoryProjectionHint::Backend
+    );
+    let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
+
+    assert!(rerendered.rust_workspace_guidance_enabled());
+    assert_eq!(
+        serde_json::to_value(&rerendered).unwrap(),
+        serde_json::to_value(&initial).unwrap()
+    );
+}
+
+#[test]
+fn existing_backend_projection_does_not_enable_workspace_guidance() {
+    let model = RepositoryRenderModel::from_answers(&answers("")).unwrap();
+    assert!(!model.rust_workspace_guidance_enabled());
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.id.as_str() == "api"
+                && component.description.as_deref() == Some("Primary application backend."))
+    );
 }
 
 #[test]
@@ -660,218 +809,4 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     assert_eq!(rerendered.default_check_profile.as_str(), "ci");
 }
 
-#[test]
-fn authored_mixed_go_postgres_model_defaults_its_owned_migration_directory() {
-    let api = ComponentSpec {
-        adapters: vec!["go".into(), "go-postgres".into()],
-        ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
-    };
-    let worker = ComponentSpec {
-        adapters: vec!["rust".into()],
-        ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
-    };
-    let mut api_test = ActionSpec::new(
-        target_id("api", "test").unwrap(),
-        ActionIntent::Check,
-        ActionRunner::command("api_test_command"),
-    );
-    api_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
-    let mut worker_test = ActionSpec::new(
-        target_id("worker", "test").unwrap(),
-        ActionIntent::Check,
-        ActionRunner::command("worker_test_command"),
-    );
-    worker_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
-    let authored = RepositoryRenderModel {
-        affected_ignore: Vec::new(),
-        components: vec![api, worker],
-        actions: vec![api_test, worker_test],
-        profiles: vec![ProfileSpec::new(
-            ProfileId::parse("ci").unwrap(),
-            vec![
-                target_id("api", "test").unwrap(),
-                target_id("worker", "test").unwrap(),
-            ],
-        )],
-        default_check_profile: ProfileId::parse("ci").unwrap(),
-        required_commands: vec!["api_test_command".into(), "worker_test_command".into()],
-        tools: Vec::new(),
-        commands: BTreeMap::from([
-            ("api_test_command".into(), "go test ./...".into()),
-            (
-                "worker_test_command".into(),
-                "cargo test -p example-worker".into(),
-            ),
-        ]),
-    };
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("answers.toml");
-    fs::write(
-        &path,
-        format!(
-            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-            authored.authored_toml().unwrap(),
-            authored.commands_toml().unwrap()
-        ),
-    )
-    .unwrap();
-
-    let answers = RenderAnswers::from_answers_file(&path).unwrap();
-    let rendered = serde_json::to_value(&answers).unwrap();
-
-    assert!(answers.go_backend_enabled());
-    assert!(answers.rust_backend_enabled());
-    assert_eq!(
-        answers.migration_dir(),
-        Some(crate::backend::GO_POSTGRES_MIGRATION_DIR)
-    );
-    assert_eq!(
-        rendered["migration_dir"],
-        crate::backend::GO_POSTGRES_MIGRATION_DIR
-    );
-    assert_eq!(rendered["rust_migration_dir"], serde_json::Value::Null);
-}
-
-#[test]
-fn authored_go_workflow_renders_exact_targets_from_its_capability_aliases() {
-    for (action_ids, add_aliases, read_only, add_foreign_fmt, expected) in [
-        (
-            ["format", "vet", "verify"],
-            true,
-            true,
-            false,
-            [Some("api:format"), Some("api:vet"), Some("api:verify")],
-        ),
-        (
-            ["fmt", "lint", "test-locked"],
-            true,
-            true,
-            true,
-            [Some("api:fmt"), Some("api:lint"), Some("api:test-locked")],
-        ),
-        (
-            ["fmt", "lint", "test-locked"],
-            false,
-            true,
-            false,
-            [None, None, None],
-        ),
-        (
-            ["fmt", "lint", "test-locked"],
-            true,
-            false,
-            false,
-            [None, None, None],
-        ),
-    ] {
-        let component = ComponentSpec {
-            adapters: vec!["go".into()],
-            ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
-        };
-        let mut actions = action_ids
-            .into_iter()
-            .zip([
-                jig_contract::tool::FMT_CHECK,
-                jig_contract::tool::LINT,
-                jig_contract::tool::TEST_LOCKED,
-            ])
-            .map(|(action_id, alias)| {
-                let mut action = ActionSpec::new(
-                    target_id("api", action_id).unwrap(),
-                    ActionIntent::Check,
-                    ActionRunner::command(format!("go_{action_id}_command")),
-                );
-                action.effects = if read_only {
-                    vec![
-                        jig_contract::ActionEffect::ReadOnly,
-                        jig_contract::ActionEffect::Process,
-                    ]
-                } else {
-                    vec![jig_contract::ActionEffect::Worktree]
-                };
-                if add_aliases {
-                    action.legacy_aliases.push(alias.into());
-                }
-                action.inputs = vec!["shared/proto/**".into()];
-                action
-            })
-            .collect::<Vec<_>>();
-        let mut components = vec![component];
-        if add_foreign_fmt {
-            components.push(ComponentSpec {
-                adapters: vec!["rust".into()],
-                ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
-            });
-            let mut action = ActionSpec::new(
-                target_id("worker", "fmt").unwrap(),
-                ActionIntent::Check,
-                ActionRunner::command("rust_fmt_command"),
-            );
-            action.effects = vec![
-                jig_contract::ActionEffect::ReadOnly,
-                jig_contract::ActionEffect::Process,
-            ];
-            actions.push(action);
-        }
-        let targets = actions
-            .iter()
-            .map(|action| action.target.clone())
-            .collect::<Vec<_>>();
-        let commands = actions
-            .iter()
-            .map(|action| {
-                let ActionRunner::Command { command, .. } = &action.runner else {
-                    unreachable!()
-                };
-                (command.to_string(), "true".to_string())
-            })
-            .collect::<BTreeMap<_, _>>();
-        let authored = RepositoryRenderModel {
-            affected_ignore: Vec::new(),
-            components,
-            profiles: vec![ProfileSpec::new(ProfileId::parse("ci").unwrap(), targets)],
-            default_check_profile: ProfileId::parse("ci").unwrap(),
-            required_commands: commands.keys().cloned().collect(),
-            tools: Vec::new(),
-            commands,
-            actions: std::mem::take(&mut actions),
-        };
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-                authored.authored_toml().unwrap(),
-                authored.commands_toml().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let answers = RenderAnswers::from_answers_file(&path).unwrap();
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-        assert!(
-            model
-                .go_ci_input_paths()
-                .contains(&"services/api/**".into())
-        );
-        assert_eq!(
-            model
-                .go_ci_input_paths()
-                .contains(&"shared/proto/**".into()),
-            add_aliases
-        );
-        assert_eq!(
-            [
-                answers.go_fmt_ci_target(),
-                answers.go_lint_ci_target(),
-                answers.go_test_locked_ci_target(),
-            ],
-            expected.map(|target| target.map(str::to_owned))
-        );
-        assert_eq!(
-            answers.go_ci_workflow_enabled(),
-            expected.iter().all(Option::is_some)
-        );
-    }
-}
+include!("tests/authored_workflows.rs");
