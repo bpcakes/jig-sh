@@ -153,6 +153,46 @@ impl SchedulePersistence {
         })
     }
 
+    pub(super) fn with_locked_compensating<T, U>(
+        &self,
+        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
+        after_commit: impl FnOnce(&T) -> Result<U>,
+    ) -> Result<(T, U)> {
+        self.with_locked_compensating_until(loop_state_lock_deadline(), action, after_commit)
+    }
+
+    fn with_locked_compensating_until<T, U>(
+        &self,
+        deadline: Instant,
+        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
+        after_commit: impl FnOnce(&T) -> Result<U>,
+    ) -> Result<(T, U)> {
+        self.with_schedule_locks_until(deadline, || {
+            let durable_required = self.durable_state_expected()?;
+            let durable = self.read_durable(durable_required, &|| false)?;
+            let mut store = durable.unwrap_or_default();
+            if !durable_required || self.protected_authority_needs_state()? {
+                validate_durable_schedule(&store, &self.path)?;
+                self.write_durable_schedule(&store)?;
+            }
+            self.ensure_initialization_markers()?;
+            self.write_legacy_marker()?;
+            let rollback = store.clone();
+            let result = action(&mut store)?;
+            validate_durable_schedule(&store, &self.path)?;
+            self.write_durable_schedule(&store)?;
+            match after_commit(&result) {
+                Ok(effect) => Ok((result, effect)),
+                Err(error) => match self.write_durable_schedule(&rollback) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(error.context(format!(
+                        "Failed to roll back committed loop schedule state: {rollback_error:#}"
+                    ))),
+                },
+            }
+        })
+    }
+
     pub(super) fn read_locked<T>(
         &self,
         action: impl FnOnce(&ScheduleFile) -> Result<T>,

@@ -74,27 +74,6 @@ fn post_review_thread_updates(
         .and_then(Value::as_array)
         .unwrap_or(&empty);
     let allowed_thread_ids = observed_review_thread_ids(pull_request);
-    let actionable_reply_count = replies
-        .iter()
-        .filter_map(|reply| reply.get("thread_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|thread_id| allowed_thread_ids.contains(*thread_id))
-        .count();
-    if actionable_reply_count > allowed_thread_ids.len() {
-        return ReviewThreadPostResult {
-            posts: json!([{
-                "thread_id": Value::Null,
-                "status": "failed",
-                "reason": "review_thread_reply_limit_exceeded",
-                "detail": format!(
-                    "worker returned {actionable_reply_count} actionable review thread intents for {} observed actionable threads",
-                    allowed_thread_ids.len()
-                ),
-            }]),
-            failed: true,
-            cancelled: false,
-        };
-    }
     let mut posts = Vec::new();
     let mut handled_thread_ids = BTreeSet::new();
     let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());

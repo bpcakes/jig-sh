@@ -260,16 +260,18 @@ fn commit_and_push(
     validation_head: &str,
     observer: &mut dyn ExecutionControl,
 ) -> PrPushResult<Value> {
-    let unmerged = git_stdout(ctx, worktree, ["ls-files", "--unmerged"], observer)?;
-    if !unmerged.is_empty() {
-        return Err(PrRepairStepError::failed(anyhow!(
-            "PR manager worker left unresolved merge entries in the Git index; resolve and stage every conflict before commit"
-        ))
-        .into());
-    }
     let dirty_before_commit = git_stdout(ctx, worktree, ["status", "--porcelain"], observer)?;
     if !dirty_before_commit.is_empty() {
+        // Git metadata is deliberately outside the workspace-write worker's
+        // authority. The parent owns staging as well as validation and commit.
         git_checked(ctx, worktree, ["add", "-A"], observer)?;
+        let unmerged = git_stdout(ctx, worktree, ["ls-files", "--unmerged"], observer)?;
+        if !unmerged.is_empty() {
+            return Err(PrRepairStepError::failed(anyhow!(
+                "PR manager parent staging left unresolved merge entries in the Git index"
+            ))
+            .into());
+        }
         git_checked(ctx, worktree, ["diff", "--cached", "--check"], observer)?;
         git_checked(
             ctx,
@@ -490,7 +492,8 @@ fn pr_worker_prompt(
          Do not use `gh`, `curl`, or network access to reply to or resolve review threads. \
          Instead, return review-thread reply intents in the required structured output. \
          Include a reply intent only when a concise comment or resolution is needed after your code changes; set `resolve` only when the feedback is fully addressed.\n\
-         Run relevant local tests when available. Do not merge the PR. Do not force-push. Keep changes minimal and commit them if you change files. \
+         Run relevant local tests when available. Do not merge the PR. Do not force-push. Keep changes minimal. \
+         Do not stage or commit changes; Jig owns Git metadata and will stage, validate, and commit after you exit. \
          Always write structured output with `summary` and `review_thread_replies`.\n\n\
          Merge preparation result:\n{}\n\n\
          Normalized PR snapshot:\n{}\n",

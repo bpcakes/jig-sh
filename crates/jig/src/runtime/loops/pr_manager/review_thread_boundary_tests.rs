@@ -9,7 +9,7 @@ mod review_thread_boundary_tests {
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     #[test]
-    fn reply_intents_cannot_exceed_observed_actionable_threads() {
+    fn duplicate_intents_are_skipped_with_one_observed_thread() {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path())
             .required_commands(Vec::<String>::new())
@@ -24,8 +24,8 @@ mod review_thread_boundary_tests {
         });
         let worker_output = json!({
             "review_thread_replies": [
-                {"thread_id": "PRRT_1", "body": "first"},
-                {"thread_id": "PRRT_1", "body": "duplicate"},
+                {"thread_id": "PRRT_1", "body": ""},
+                {"thread_id": "PRRT_1", "body": ""},
             ],
         });
 
@@ -37,8 +37,9 @@ mod review_thread_boundary_tests {
             &mut NoopExecutionObserver,
         );
 
-        assert!(result.failed);
-        assert_eq!(result.posts[0]["reason"], "review_thread_reply_limit_exceeded");
+        assert!(!result.failed);
+        assert_eq!(result.posts.as_array().unwrap().len(), 2);
+        assert_eq!(result.posts[1]["reason"], "duplicate_review_thread");
     }
 
     #[test]

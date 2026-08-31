@@ -743,7 +743,6 @@ if [ "$1 $2 $3 $4 $5 $6 $7" = "--ask-for-approval never exec --sandbox workspace
     exit 3
   fi
   printf 'fn value() -> i32 { 4 }\n' > src.rs
-  git add -- src.rs
   printf '{"summary":"resolved conflict","review_thread_replies":[]}\n' > "$out"
   printf 'conflict resolved\n'
   exit 0

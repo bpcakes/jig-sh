@@ -186,10 +186,7 @@ fn dispatch_workflow(
         due_count: 1,
         ..DispatchStep::default()
     };
-    let isolated_task = workflow
-        .codex_task
-        .as_ref()
-        .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
+    let blocks_on_retained_worktree = workflow.blocks_on_retained_worktree();
     let attention_scope = if workflow
         .codex_task
         .as_ref()
@@ -204,7 +201,7 @@ fn dispatch_workflow(
         due_at_ms,
         workflow.lease_ttl_seconds,
         attention_scope,
-        isolated_task,
+        blocks_on_retained_worktree,
     ) {
         Ok(claim) => claim,
         Err(error) => {

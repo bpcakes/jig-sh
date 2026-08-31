@@ -33,7 +33,7 @@ mod push_error_tests {
     }
 
     #[test]
-    fn commit_and_push_refuses_an_unresolved_merge_index() {
+    fn commit_and_push_refuses_unresolved_conflict_markers_after_parent_staging() {
         let _env = crate::test_env::lock_env();
         let repo = tempdir().unwrap();
         crate::test_env::TestRepoBuilder::new(repo.path())
@@ -81,14 +81,14 @@ mod push_error_tests {
         .unwrap_err();
 
         let PrPushError::Step(PrRepairStepError::Failed(error)) = error else {
-            panic!("unresolved index must be an ordinary pre-push failure");
+            panic!("unresolved conflict markers must be an ordinary pre-push failure");
         };
         assert!(
-            error.to_string().contains("unresolved merge entries"),
+            format!("{error:#}").contains("conflict marker"),
             "{error:#}"
         );
         assert_eq!(git(&["rev-parse", "HEAD"]), head_before);
-        assert!(!git(&["ls-files", "--unmerged"]).is_empty());
+        assert!(git(&["ls-files", "--unmerged"]).is_empty());
     }
 
     #[test]

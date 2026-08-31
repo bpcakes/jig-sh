@@ -237,6 +237,14 @@ impl ResolvedWorkflow {
         }
     }
 
+    pub(super) fn blocks_on_retained_worktree(&self) -> bool {
+        self.kind == PR_MANAGER_KIND
+            || self
+                .codex_task
+                .as_ref()
+                .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree)
+    }
+
     pub(super) fn value(&self) -> Value {
         json!({
             "id": self.id,
@@ -699,6 +707,19 @@ mod tests {
             workflow_with_checkout("scheduled", CodexTaskCheckout::Worktree).run_policy(),
             WorkflowRunPolicy::SingleTick
         );
+    }
+
+    #[test]
+    fn isolated_tasks_and_pr_managers_block_on_retained_worktrees() {
+        let isolated = workflow_with_checkout("isolated", CodexTaskCheckout::Worktree);
+        let shared = workflow_with_checkout("shared", CodexTaskCheckout::Repo);
+        let mut pr_manager = workflow_with_checkout("pr-manager", CodexTaskCheckout::Repo);
+        pr_manager.kind = PR_MANAGER_KIND.into();
+        pr_manager.codex_task = None;
+
+        assert!(isolated.blocks_on_retained_worktree());
+        assert!(pr_manager.blocks_on_retained_worktree());
+        assert!(!shared.blocks_on_retained_worktree());
     }
 
     #[test]

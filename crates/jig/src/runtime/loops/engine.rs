@@ -721,45 +721,46 @@ pub(super) fn acknowledge_occurrence(
         &mut crate::execution::NoopExecutionObserver,
     )?;
     let mut occurrence_store = OccurrenceStore::new(ctx);
-    let (occurrence, changed) = match occurrence_store.acknowledge(occurrence_id)? {
+    let (acknowledgement, receipt_id) =
+        occurrence_store.acknowledge_and_then(occurrence_id, |occurrence, changed| {
+            record_receipt(
+                ctx,
+                ReceiptInput {
+                    tool_name: LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL,
+                    args: json!({
+                        "occurrence": occurrence_id,
+                    }),
+                    invoked_command_key: None,
+                    plan_id: None,
+                    started_at_ms: started,
+                    ended_at_ms: now_ms(),
+                    exit_status: 0,
+                    stdout: "",
+                    stderr: "",
+                    evidence: Some(json!({
+                        "kind": "loop_acknowledge_occurrence",
+                        "schema_version": 1,
+                        "occurrence": occurrence,
+                        "changed": changed,
+                    })),
+                    session_override: None,
+                    collect_git_metadata: true,
+                    collect_worktree_fingerprint: true,
+                    worktree_fingerprint_override: None,
+                },
+            )
+        })?;
+    let (occurrence, changed) = match acknowledgement {
         OccurrenceAcknowledgement::Acknowledged(occurrence) => (occurrence, true),
         OccurrenceAcknowledgement::AlreadyAcknowledged(occurrence) => (occurrence, false),
     };
-    let ended = now_ms();
-    let evidence = json!({
-        "kind": "loop_acknowledge_occurrence",
-        "schema_version": 1,
-        "occurrence": occurrence,
-        "changed": changed,
-    });
-    let receipt_id = record_receipt(
-        ctx,
-        ReceiptInput {
-            tool_name: LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL,
-            args: json!({
-                "occurrence": occurrence_id,
-            }),
-            invoked_command_key: None,
-            plan_id: None,
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status: 0,
-            stdout: "",
-            stderr: "",
-            evidence: Some(evidence.clone()),
-            session_override: None,
-            collect_git_metadata: true,
-            collect_worktree_fingerprint: true,
-            worktree_fingerprint_override: None,
-        },
-    )?;
 
     Ok(json!({
         "ok": true,
         "command": "loop acknowledge-occurrence",
         "receipt_id": receipt_id,
         "occurrence_id": occurrence_id,
-        "occurrence": evidence["occurrence"],
+        "occurrence": occurrence,
         "changed": changed,
     }))
 }

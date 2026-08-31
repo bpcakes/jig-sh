@@ -77,10 +77,7 @@ impl ManualOccurrenceGuard {
         item_key: &str,
         ctx: &crate::context::RepoContext,
     ) -> Result<ManualOccurrenceStart> {
-        let block_retained_worktree = workflow
-            .codex_task
-            .as_ref()
-            .is_some_and(|task| task.checkout == CodexTaskCheckout::Worktree);
+        let block_retained_worktree = workflow.blocks_on_retained_worktree();
         let attention_scope = if workflow
             .codex_task
             .as_ref()

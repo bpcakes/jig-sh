@@ -31,6 +31,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Keep PR-manager Git staging and commits parent-owned across workspace-write conflict repairs, collapse duplicate review-thread intents before mutation, roll back occurrence acknowledgement when receipt publication fails, and apply retained-worktree backpressure consistently to PR-manager workflows.
 - Keep receipt journal reads, locks, and appends beneath no-follow repository directory capabilities after unattended workers run; scope PR-manager post-commit whitespace checks to worker-authored history after any clean base merge; and document safe malformed-lease recovery.
 - Bound each loop renewal lock attempt by the remaining lease cancellation window, share one deadline across the schedule ledger's ordered locks, preserve late terminal worker evidence after stale reconciliation, and label manual loop runs by their start time instead of the Unix epoch.
 - Reject symlinked ancestors across loop schedule and managed worktree roots, reject dangling `.git` redirection, scrub repository-selecting environment from GitHub CLI calls, preserve cancellation classification through shared-checkout preflight, and bound all review-thread update and reconciliation requests under one aggregate budget.
