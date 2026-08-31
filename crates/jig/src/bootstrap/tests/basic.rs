@@ -112,11 +112,7 @@ fn add_managed_manifest_path(repo: &Path, relative: &str) {
 
 fn footprint_adopt_opts(repo: &Path, template: &Path, minimal: bool, force: bool) -> AdoptOpts {
     AdoptOpts {
-        // macOS exposes temporary directories through `/var`, while
-        // canonical paths use `/private/var`. Normalize the fixture root so
-        // the adoption helper recognizes it as the destination it may safely
-        // initialize as a Git worktree.
-        path: fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf()),
+        path: repo.to_path_buf(),
         template: Some(template.display().to_string()),
         template_mode: None,
         vcs_ref: None,
