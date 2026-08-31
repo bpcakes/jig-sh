@@ -106,13 +106,14 @@ esac
             default_branch: "main".into(),
             value: json!({}),
         };
+        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
-            &ctx,
+            &mut client,
             &repository,
             7,
             &mut RepositoryPermissionCache::default(),
-            &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap();
 
@@ -145,7 +146,6 @@ esac
             r#"#!/bin/sh
 case "$*" in
   *"api graphql "*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":11,"nodes":[{"id":"comment-11","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  *"collaborators/visitor/permission"*) printf '%s\n' '{"permission":"read"}' ;;
   *) exit 2 ;;
 esac
 "#,
@@ -162,19 +162,86 @@ esac
             default_branch: "main".into(),
             value: json!({}),
         };
+        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
-            &ctx,
+            &mut client,
             &repository,
             7,
             &mut RepositoryPermissionCache::default(),
-            &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap();
 
         assert_eq!(snapshot["page_info"]["truncated"], true);
         assert_eq!(snapshot["nodes"][0]["comments"]["truncated"], true);
         assert_eq!(snapshot["summary"]["trusted_unresolved"], 0);
+        assert_eq!(
+            client.budget_snapshot()["request_count"],
+            1,
+            "truncated comment history must not trigger permission lookups"
+        );
+    }
+
+    #[test]
+    fn snapshot_budget_bounds_composed_github_work() {
+        let timeout = CommandTimeout::from_seconds(60).unwrap();
+        let mut request_budget = GithubSnapshotBudget::new(timeout);
+        for _ in 0..GITHUB_SNAPSHOT_REQUEST_LIMIT {
+            request_budget.reserve_request().unwrap();
+        }
+        assert!(
+            request_budget
+                .reserve_request()
+                .unwrap_err()
+                .to_string()
+                .contains("request budget")
+        );
+
+        let mut byte_budget = GithubSnapshotBudget::new(timeout);
+        byte_budget.response_bytes = GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT - 1;
+        let one_byte = GhOutput {
+            status_code: Some(0),
+            stdout: "a".into(),
+            stderr: String::new(),
+        };
+        byte_budget.record_response(&one_byte).unwrap();
+        assert_eq!(
+            byte_budget.response_bytes,
+            GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT
+        );
+        assert!(
+            byte_budget
+                .record_response(&one_byte)
+                .unwrap_err()
+                .to_string()
+                .contains("response budget")
+        );
+
+        let mut review_budget = GithubSnapshotBudget::new(timeout);
+        review_budget.review_item_count = GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT - 1;
+        review_budget.reserve_review_items(1).unwrap();
+        assert_eq!(
+            review_budget.review_item_count,
+            GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT
+        );
+        assert!(
+            review_budget
+                .reserve_review_items(1)
+                .unwrap_err()
+                .to_string()
+                .contains("review budget")
+        );
+
+        let mut expired_budget = GithubSnapshotBudget::new(timeout);
+        expired_budget.started_at = Instant::now() - expired_budget.timeout;
+        assert!(
+            expired_budget
+                .reserve_request()
+                .unwrap_err()
+                .to_string()
+                .contains("deadline")
+        );
     }
 
     #[cfg(unix)]
@@ -210,13 +277,14 @@ printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{
             default_branch: "main".into(),
             value: json!({}),
         };
+        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let snapshot = review_threads_snapshot(
-            &ctx,
+            &mut client,
             &repository,
             7,
             &mut RepositoryPermissionCache::default(),
-            &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap();
 
@@ -264,30 +332,17 @@ esac
             value: json!({}),
         };
         let mut cache = RepositoryPermissionCache::default();
+        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
 
         let maintainer = cache
-            .author_snapshot(
-                &ctx,
-                &repository,
-                Some("maintainer"),
-                &mut crate::execution::NoopExecutionObserver,
-            )
+            .author_snapshot(&mut client, &repository, Some("maintainer"))
             .unwrap();
         let visitor = cache
-            .author_snapshot(
-                &ctx,
-                &repository,
-                Some("visitor"),
-                &mut crate::execution::NoopExecutionObserver,
-            )
+            .author_snapshot(&mut client, &repository, Some("visitor"))
             .unwrap();
         let missing = cache
-            .author_snapshot(
-                &ctx,
-                &repository,
-                Some("example[bot]"),
-                &mut crate::execution::NoopExecutionObserver,
-            )
+            .author_snapshot(&mut client, &repository, Some("example[bot]"))
             .unwrap();
 
         assert_eq!(maintainer["trusted"], true);

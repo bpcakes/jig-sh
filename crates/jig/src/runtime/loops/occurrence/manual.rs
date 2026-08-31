@@ -82,7 +82,7 @@ impl OccurrenceStore {
         })
     }
 
-    fn stage_manual(
+    pub(super) fn stage_manual(
         &mut self,
         occurrence_id: &str,
         owner: &str,

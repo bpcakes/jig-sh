@@ -8,17 +8,12 @@ struct RepositoryPermissionCache {
 impl RepositoryPermissionCache {
     fn author_snapshot(
         &mut self,
-        ctx: &RepoContext,
+        client: &mut GithubSnapshotClient<'_>,
         repository: &RepositorySnapshot,
         login: Option<&str>,
-        observer: &mut dyn ExecutionControl,
     ) -> Result<Value> {
         let Some(login) = login.filter(|login| !login.is_empty()) else {
-            return Ok(json!({
-                "login": Value::Null,
-                "permission": Value::Null,
-                "trusted": false,
-            }));
+            return Ok(untrusted_author_snapshot(None));
         };
         if let Some(cached) = self.by_login.get(login) {
             return Ok(cached.clone());
@@ -28,15 +23,13 @@ impl RepositoryPermissionCache {
             "repos/{}/{}/collaborators/{encoded_login}/permission",
             repository.owner, repository.name
         );
-        let output = run_gh(
-            ctx,
+        let output = client.output(
             vec![
                 OsString::from("api"),
                 OsString::from("--method"),
                 OsString::from("GET"),
                 OsString::from(endpoint),
             ],
-            observer,
         )?;
         let permission = match output.status_code {
             Some(0) => parse_gh_json(&output.stdout, "gh collaborator permission")?
@@ -54,6 +47,14 @@ impl RepositoryPermissionCache {
         self.by_login.insert(login.to_string(), snapshot.clone());
         Ok(snapshot)
     }
+}
+
+fn untrusted_author_snapshot(login: Option<&str>) -> Value {
+    json!({
+        "login": login,
+        "permission": Value::Null,
+        "trusted": false,
+    })
 }
 
 fn permission_is_trusted(permission: &str) -> bool {

@@ -3,6 +3,8 @@ use tempfile::tempdir;
 use super::*;
 use crate::runtime::loops::state::{LOOP_CACHE_DIR, LOOP_RUNTIME_DIR, with_exclusive_file_lock};
 
+#[path = "tests/manual_evidence.rs"]
+mod manual_evidence;
 #[path = "tests/pruning.rs"]
 mod pruning;
 #[path = "tests/renewal_diagnostics.rs"]
@@ -11,7 +13,6 @@ mod renewal_diagnostics;
 mod review_constraints;
 #[path = "tests/schema_migration.rs"]
 mod schema_migration;
-
 #[test]
 fn occurrence_claim_is_single_use_and_owner_checked() {
     let temp = tempdir().unwrap();
@@ -236,9 +237,9 @@ fn reconciled_unexecuted_claim_can_be_abandoned_and_reopened() {
         .abandon_unexecuted(&claim.occurrence_id, &claim.owner)
         .unwrap();
 
-    assert_eq!(abandoned.status, OccurrenceStatus::Running);
-    assert_eq!(abandoned.finished_at_ms, None);
-    assert_eq!(abandoned.error, None);
+    assert_eq!(abandoned.status, OccurrenceStatus::NeedsAttention);
+    assert_eq!(abandoned.finished_at_ms, Some(3_000));
+    assert_eq!(abandoned.error.as_deref(), Some(STALE_RECONCILIATION_ERROR));
     let OccurrenceClaim::Acquired(retried) = store.claim_at("nightly", 100, 2, 4_000).unwrap()
     else {
         panic!("a reconciled but unexecuted occurrence must be claimable again");

@@ -494,15 +494,10 @@ impl OccurrenceStore {
             let record = store.occurrences.get(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
-            let claim_state = require_unexecuted_owner(record, owner)?;
-            let mut removed = store.occurrences.remove(occurrence_id).ok_or_else(|| {
+            require_unexecuted_owner(record, owner)?;
+            let removed = store.occurrences.remove(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
-            if claim_state == UnexecutedClaimState::StaleReconciled {
-                removed.status = OccurrenceStatus::Running;
-                removed.finished_at_ms = None;
-                removed.error = None;
-            }
             Ok(removed)
         })
     }
@@ -635,16 +630,7 @@ fn require_running_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()>
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UnexecutedClaimState {
-    Running,
-    StaleReconciled,
-}
-
-fn require_unexecuted_owner(
-    record: &ScheduleOccurrence,
-    owner: &str,
-) -> Result<UnexecutedClaimState> {
+fn require_unexecuted_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()> {
     if record.owner != owner {
         bail!(
             "Scheduled occurrence '{}' is owned by another dispatcher",
@@ -658,10 +644,8 @@ fn require_unexecuted_owner(
         && record.worktree.is_none()
         && record.error.as_deref() == Some(STALE_RECONCILIATION_ERROR);
     match record.status {
-        OccurrenceStatus::Running => Ok(UnexecutedClaimState::Running),
-        OccurrenceStatus::NeedsAttention if reconciled_without_worker_evidence => {
-            Ok(UnexecutedClaimState::StaleReconciled)
-        }
+        OccurrenceStatus::Running => Ok(()),
+        OccurrenceStatus::NeedsAttention if reconciled_without_worker_evidence => Ok(()),
         _ => bail!(
             "Scheduled occurrence '{}' is already {}",
             record.occurrence_id,
@@ -698,7 +682,12 @@ fn mark_expired_claim(
             None => "scheduled task claim expired before its terminal result was recorded; worker result is ambiguous".into(),
         }));
     } else {
-        record.error = Some(STALE_RECONCILIATION_ERROR.into());
+        record.error = Some(match record.error.take() {
+            Some(staged_error) => bounded_error(&format!(
+                "{STALE_RECONCILIATION_ERROR}; staged occurrence evidence: {staged_error}"
+            )),
+            None => STALE_RECONCILIATION_ERROR.into(),
+        });
     }
 }
 

@@ -1,10 +1,11 @@
 use std::ffi::{OsStr, OsString};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
+use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
 };
@@ -22,6 +23,10 @@ const PR_CHECK_FIELDS: &str =
 const PR_LIST_LIMIT: usize = 100;
 const PR_LIST_FETCH_LIMIT: usize = PR_LIST_LIMIT + 1;
 const REVIEW_THREAD_PAGE_LIMIT: usize = 10;
+const GITHUB_SNAPSHOT_REQUEST_LIMIT: usize = 256;
+const GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT: usize = 16 * 1024 * 1024;
+const GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT: usize = 10_000;
+const GITHUB_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 include!("github/trust.rs");
 include!("github/review_threads.rs");
@@ -41,10 +46,10 @@ pub(super) fn github_pr_status_snapshot(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let observed_at_ms = now_ms();
-    let repository = repository_snapshot(ctx, observer)?;
+    let mut client = GithubSnapshotClient::new(ctx, observer);
+    let repository = repository_snapshot(&mut client)?;
     let pr_list_fetch_limit = PR_LIST_FETCH_LIMIT.to_string();
-    let raw_prs = gh_json(
-        ctx,
+    let raw_prs = client.json(
         os_args([
             "pr",
             "list",
@@ -56,7 +61,6 @@ pub(super) fn github_pr_status_snapshot(
             PR_LIST_FIELDS,
         ]),
         &[0],
-        observer,
     )?;
     let raw_prs = raw_prs
         .as_array()
@@ -66,27 +70,154 @@ pub(super) fn github_pr_status_snapshot(
     let mut pull_requests = Vec::new();
     let mut permissions = RepositoryPermissionCache::default();
     for raw_pr in raw_prs.iter().take(PR_LIST_LIMIT) {
-        if observer.cancelled() {
+        if client.cancelled() {
             return Err(ExecutionCommandError::Cancelled.into_anyhow());
         }
         pull_requests.push(pull_request_snapshot(
-            ctx,
+            &mut client,
             &repository,
             raw_pr,
             &mut permissions,
-            observer,
         )?);
     }
 
     let summary = summary_for_pull_requests(&pull_requests, PR_LIST_LIMIT, pr_list_truncated);
+    let budget = client.budget_snapshot();
     Ok(json!({
             "kind": "github_pr_status_snapshot",
             "schema_version": 1,
             "observed_at_ms": observed_at_ms,
             "repository": repository.value,
             "summary": summary,
+            "budget": budget,
             "pull_requests": pull_requests,
     }))
+}
+
+struct GithubSnapshotClient<'a> {
+    ctx: &'a RepoContext,
+    observer: &'a mut dyn ExecutionControl,
+    budget: GithubSnapshotBudget,
+}
+
+impl<'a> GithubSnapshotClient<'a> {
+    fn new(ctx: &'a RepoContext, observer: &'a mut dyn ExecutionControl) -> Self {
+        Self {
+            ctx,
+            observer,
+            budget: GithubSnapshotBudget::new(ctx.command_timeout()),
+        }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.observer.cancelled()
+    }
+
+    fn json(&mut self, args: Vec<OsString>, allowed_statuses: &[i32]) -> Result<Value> {
+        let command_label = command_label(&args);
+        let output = self.output(args)?;
+        let status = output.status_code.unwrap_or(-1);
+        if !allowed_statuses.contains(&status) {
+            return Err(output.into_error(&command_label));
+        }
+        parse_gh_json(&output.stdout, &command_label)
+    }
+
+    fn output(&mut self, args: Vec<OsString>) -> Result<GhOutput> {
+        let timeout = self.budget.reserve_request()?;
+        let output = run_gh_with_timeout(self.ctx, args, timeout, self.observer)?;
+        self.budget.record_response(&output)?;
+        Ok(output)
+    }
+
+    fn reserve_review_items(&mut self, count: usize) -> Result<()> {
+        self.budget.reserve_review_items(count)
+    }
+
+    fn budget_snapshot(&self) -> Value {
+        self.budget.snapshot()
+    }
+}
+
+struct GithubSnapshotBudget {
+    started_at: Instant,
+    timeout: Duration,
+    request_count: usize,
+    response_bytes: usize,
+    review_item_count: usize,
+}
+
+impl GithubSnapshotBudget {
+    fn new(command_timeout: CommandTimeout) -> Self {
+        Self {
+            started_at: Instant::now(),
+            timeout: command_timeout.duration().min(GITHUB_SNAPSHOT_TIMEOUT),
+            request_count: 0,
+            response_bytes: 0,
+            review_item_count: 0,
+        }
+    }
+
+    fn reserve_request(&mut self) -> Result<CommandTimeout> {
+        if self.request_count >= GITHUB_SNAPSHOT_REQUEST_LIMIT {
+            bail!("GitHub PR snapshot exceeded its {GITHUB_SNAPSHOT_REQUEST_LIMIT}-request budget");
+        }
+        let remaining = self
+            .timeout
+            .checked_sub(self.started_at.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                anyhow!(
+                    "GitHub PR snapshot exceeded its {}-second deadline",
+                    self.timeout.as_secs()
+                )
+            })?;
+        self.request_count += 1;
+        let seconds = remaining.as_secs();
+        if seconds == 0 {
+            bail!(
+                "GitHub PR snapshot exceeded its {}-second deadline",
+                self.timeout.as_secs()
+            );
+        }
+        CommandTimeout::from_seconds(seconds)
+            .ok_or_else(|| anyhow!("GitHub PR snapshot produced an invalid request timeout"))
+    }
+
+    fn record_response(&mut self, output: &GhOutput) -> Result<()> {
+        let bytes = output.stdout.len().saturating_add(output.stderr.len());
+        let total = self.response_bytes.saturating_add(bytes);
+        if total > GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT {
+            bail!(
+                "GitHub PR snapshot exceeded its {GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT}-byte response budget"
+            );
+        }
+        self.response_bytes = total;
+        Ok(())
+    }
+
+    fn reserve_review_items(&mut self, count: usize) -> Result<()> {
+        let total = self.review_item_count.saturating_add(count);
+        if total > GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT {
+            bail!(
+                "GitHub PR snapshot exceeded its {GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT}-item review budget"
+            );
+        }
+        self.review_item_count = total;
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Value {
+        json!({
+            "request_count": self.request_count,
+            "request_limit": GITHUB_SNAPSHOT_REQUEST_LIMIT,
+            "response_bytes": self.response_bytes,
+            "response_byte_limit": GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT,
+            "review_item_count": self.review_item_count,
+            "review_item_limit": GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT,
+            "timeout_seconds": self.timeout.as_secs(),
+        })
+    }
 }
 
 struct RepositorySnapshot {
@@ -96,12 +227,8 @@ struct RepositorySnapshot {
     value: Value,
 }
 
-fn repository_snapshot(
-    ctx: &RepoContext,
-    observer: &mut dyn ExecutionControl,
-) -> Result<RepositorySnapshot> {
-    let raw = gh_json(
-        ctx,
+fn repository_snapshot(client: &mut GithubSnapshotClient<'_>) -> Result<RepositorySnapshot> {
+    let raw = client.json(
         os_args([
             "repo",
             "view",
@@ -109,7 +236,6 @@ fn repository_snapshot(
             "nameWithOwner,name,owner,url,defaultBranchRef",
         ]),
         &[0],
-        observer,
     )?;
     let owner = raw
         .pointer("/owner/login")
@@ -124,7 +250,7 @@ fn repository_snapshot(
     let default_branch = raw
         .pointer("/defaultBranchRef/name")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| ctx.default_branch())
+        .unwrap_or_else(|| client.ctx.default_branch())
         .to_string();
     let name_with_owner = raw
         .get("nameWithOwner")
@@ -147,18 +273,17 @@ fn repository_snapshot(
 }
 
 fn pull_request_snapshot(
-    ctx: &RepoContext,
+    client: &mut GithubSnapshotClient<'_>,
     repository: &RepositorySnapshot,
     raw_pr: &Value,
     permissions: &mut RepositoryPermissionCache,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let number = raw_pr
         .get("number")
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("gh pr list returned a PR without a numeric number"))?;
-    let checks = checks_snapshot(ctx, number, observer)?;
-    let review_threads = review_threads_snapshot(ctx, repository, number, permissions, observer)?;
+    let checks = checks_snapshot(client, number)?;
+    let review_threads = review_threads_snapshot(client, repository, number, permissions)?;
     let base_ref = raw_pr
         .get("baseRefName")
         .and_then(Value::as_str)
@@ -206,22 +331,14 @@ fn pull_request_snapshot(
     }))
 }
 
-fn checks_snapshot(
-    ctx: &RepoContext,
-    pr_number: u64,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    let output = run_gh(
-        ctx,
-        os_args([
-            "pr",
-            "checks",
-            &pr_number.to_string(),
-            "--json",
-            PR_CHECK_FIELDS,
-        ]),
-        observer,
-    )?;
+fn checks_snapshot(client: &mut GithubSnapshotClient<'_>, pr_number: u64) -> Result<Value> {
+    let output = client.output(os_args([
+        "pr",
+        "checks",
+        &pr_number.to_string(),
+        "--json",
+        PR_CHECK_FIELDS,
+    ]))?;
     let checks = match output.status_code {
         Some(0 | 8) => parse_gh_json(&output.stdout, "gh pr checks")?,
         Some(1) if output.stderr.to_lowercase().contains("no checks") => json!([]),
@@ -447,14 +564,6 @@ pub(super) fn gh_json_with_timeout(
         ));
     }
     parse_gh_json(&output.stdout, &command_label).map_err(ExecutionCommandError::failed)
-}
-
-fn run_gh(
-    ctx: &RepoContext,
-    args: Vec<OsString>,
-    observer: &mut dyn ExecutionControl,
-) -> std::result::Result<GhOutput, ExecutionCommandError> {
-    run_gh_with_timeout(ctx, args, ctx.command_timeout(), observer)
 }
 
 fn run_gh_with_timeout(

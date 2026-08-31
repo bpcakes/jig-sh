@@ -23,8 +23,10 @@ use crate::runtime::worker_runner::{
 use crate::state::now_ms;
 
 use super::github;
+#[cfg(test)]
+use super::state::LOOP_CACHE_DIR;
 use super::state::{
-    AttemptRecord, AttemptStore, LOOP_CACHE_DIR, LeaseAcquire, LeaseGuard, LeaseStore,
+    AttemptRecord, AttemptStore, LOOP_RUNTIME_DIR, LeaseAcquire, LeaseGuard, LeaseStore,
 };
 use super::workflow::{
     ResolvedWorkflow, UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowTick,
@@ -322,8 +324,24 @@ fn handle_actionable_pr(
             AdditionalCancellationControl::new(execution.observer, &branch_lease_cancelled);
         run_pr_repair(&repair, pull_request, &mut branch_control)
     };
+    finalize_pr_repair_outcome(&repair, attempt_store, outcome, lease_guard)
+}
+
+fn finalize_pr_repair_outcome<L: serde::Serialize>(
+    repair: &PrRepairContext<'_, L>,
+    attempt_store: &mut AttemptStore,
+    outcome: PrRepairOutcome,
+    mut lease_guard: LeaseGuard,
+) -> Result<Value> {
+    let cleanup_authority_error = lease_guard.refresh().err();
+    let action = record_pr_repair_outcome(
+        repair,
+        attempt_store,
+        outcome,
+        cleanup_authority_error.as_ref(),
+    )?;
     let release_error = lease_guard.finish().err();
-    record_pr_repair_outcome(&repair, attempt_store, outcome, release_error.as_ref())
+    Ok(with_branch_lease_result(action, release_error.as_ref()))
 }
 
 include!("pr_manager/outcome.rs");

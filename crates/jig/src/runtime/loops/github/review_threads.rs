@@ -1,11 +1,10 @@
 const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 10;
 
 fn review_threads_snapshot(
-    ctx: &RepoContext,
+    client: &mut GithubSnapshotClient<'_>,
     repository: &RepositorySnapshot,
     pr_number: u64,
     permissions: &mut RepositoryPermissionCache,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let mut nodes = Vec::new();
     let mut has_next_page = true;
@@ -14,7 +13,7 @@ fn review_threads_snapshot(
     let mut truncated = false;
 
     while has_next_page {
-        if observer.cancelled() {
+        if client.cancelled() {
             return Err(ExecutionCommandError::Cancelled.into_anyhow());
         }
         if page_count >= REVIEW_THREAD_PAGE_LIMIT {
@@ -22,7 +21,7 @@ fn review_threads_snapshot(
             break;
         }
         page_count += 1;
-        let page = review_thread_page(ctx, repository, pr_number, cursor.as_deref(), observer)?;
+        let page = review_thread_page(client, repository, pr_number, cursor.as_deref())?;
         let connection = page
             .pointer("/data/repository/pullRequest/reviewThreads")
             .ok_or_else(|| anyhow!("GitHub GraphQL response did not include reviewThreads"))?;
@@ -31,7 +30,7 @@ fn review_threads_snapshot(
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("GitHub GraphQL reviewThreads.nodes was not an array"))?;
         for thread in page_nodes {
-            let thread = normalize_review_thread(ctx, repository, thread, permissions, observer)?;
+            let thread = normalize_review_thread(client, repository, thread, permissions)?;
             truncated |= thread
                 .pointer("/comments/truncated")
                 .and_then(Value::as_bool)
@@ -68,18 +67,15 @@ fn review_threads_snapshot(
 }
 
 fn review_thread_page(
-    ctx: &RepoContext,
+    client: &mut GithubSnapshotClient<'_>,
     repository: &RepositorySnapshot,
     pr_number: u64,
     cursor: Option<&str>,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    Ok(gh_json(
-        ctx,
+    client.json(
         review_thread_page_args(repository, pr_number, cursor),
         &[0],
-        observer,
-    )?)
+    )
 }
 
 fn review_thread_page_args(
@@ -167,9 +163,8 @@ struct ReviewThreadComments {
 }
 
 fn review_thread_comments(
-    ctx: &RepoContext,
+    client: &mut GithubSnapshotClient<'_>,
     thread: &Value,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<ReviewThreadComments> {
     let thread_id = thread
         .get("id")
@@ -201,7 +196,7 @@ fn review_thread_comments(
     let mut truncated = false;
 
     while has_previous_page {
-        if observer.cancelled() {
+        if client.cancelled() {
             return Err(ExecutionCommandError::Cancelled.into_anyhow());
         }
         if page_count >= REVIEW_THREAD_COMMENT_PAGE_LIMIT {
@@ -212,7 +207,7 @@ fn review_thread_comments(
             truncated = true;
             break;
         };
-        let page = review_thread_comment_page(ctx, thread_id, before, observer)?;
+        let page = review_thread_comment_page(client, thread_id, before)?;
         let observed_id = page.pointer("/data/node/id").and_then(Value::as_str);
         let comments = page
             .pointer("/data/node/comments")
@@ -258,13 +253,11 @@ fn review_thread_comments(
 }
 
 fn review_thread_comment_page(
-    ctx: &RepoContext,
+    client: &mut GithubSnapshotClient<'_>,
     thread_id: &str,
     before: &str,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    Ok(gh_json(
-        ctx,
+    client.json(
         vec![
             OsString::from("api"),
             OsString::from("graphql"),
@@ -276,8 +269,7 @@ fn review_thread_comment_page(
             OsString::from(format!("commentsBefore={before}")),
         ],
         &[0],
-        observer,
-    )?)
+    )
 }
 
 const fn review_thread_comments_query() -> &'static str {
@@ -310,21 +302,21 @@ query($threadId: ID!, $commentsBefore: String) {
 }
 
 fn normalize_review_thread(
-    ctx: &RepoContext,
+    client: &mut GithubSnapshotClient<'_>,
     repository: &RepositorySnapshot,
     thread: &Value,
     permissions: &mut RepositoryPermissionCache,
-    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let comments_snapshot = review_thread_comments(ctx, thread, observer)?;
+    let comments_snapshot = review_thread_comments(client, thread)?;
+    client.reserve_review_items(1_usize.saturating_add(comments_snapshot.nodes.len()))?;
     let mut comments = Vec::new();
     for comment in &comments_snapshot.nodes {
-        let author = permissions.author_snapshot(
-            ctx,
-            repository,
-            comment.pointer("/author/login").and_then(Value::as_str),
-            observer,
-        )?;
+        let login = comment.pointer("/author/login").and_then(Value::as_str);
+        let author = if comments_snapshot.truncated {
+            untrusted_author_snapshot(login)
+        } else {
+            permissions.author_snapshot(client, repository, login)?
+        };
         comments.push(json!({
             "id": comment.get("id").cloned().unwrap_or(Value::Null),
             "url": comment.get("url").cloned().unwrap_or(Value::Null),

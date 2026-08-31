@@ -634,7 +634,10 @@ schedule = "* * * * *"
     let deferred = dispatcher.join().unwrap().unwrap();
     assert_eq!(deferred["status"], "deferred", "{deferred:#}");
     assert_eq!(deferred["actions"][0]["status"], "deferred", "{deferred:#}");
-    assert_eq!(deferred["actions"][0]["occurrence"]["status"], "running");
+    assert_eq!(
+        deferred["actions"][0]["occurrence"]["status"], "needs_attention",
+        "removed dispatch evidence must preserve the stale state that actually existed"
+    );
     assert_eq!(deferred["deferred_count"], 1, "{deferred:#}");
     assert_eq!(deferred["needs_attention_count"], 0, "{deferred:#}");
     let occurrences = OccurrenceStore::new(&ctx);

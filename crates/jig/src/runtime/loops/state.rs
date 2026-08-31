@@ -221,6 +221,7 @@ pub(super) struct LeaseGuard {
     stop: Option<Sender<()>>,
     renewal: Option<JoinHandle<Result<()>>>,
     renewal_failed: Arc<AtomicBool>,
+    ttl_seconds: u64,
     release_pending: bool,
 }
 
@@ -302,12 +303,19 @@ impl LeaseGuard {
             stop: Some(stop),
             renewal: Some(renewal),
             renewal_failed,
+            ttl_seconds,
             release_pending: true,
         })
     }
 
     pub(super) fn renewal_failed(&self) -> bool {
         self.renewal_failed.load(Ordering::Acquire)
+    }
+
+    pub(super) fn refresh(&mut self) -> Result<()> {
+        self.store
+            .renew(&self.key, &self.owner, self.ttl_seconds)
+            .map(|_| ())
     }
 
     pub(super) fn finish(mut self) -> Result<()> {

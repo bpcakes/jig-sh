@@ -147,6 +147,10 @@ esac
     assert_eq!(output["observed"]["summary"]["open_pr_count"], 1);
     assert_eq!(output["observed"]["summary"]["pr_list_limit"], 100);
     assert_eq!(output["observed"]["summary"]["pr_list_truncated"], false);
+    assert_eq!(output["observed"]["budget"]["request_count"], 5);
+    assert_eq!(output["observed"]["budget"]["request_limit"], 256);
+    assert_eq!(output["observed"]["budget"]["review_item_count"], 2);
+    assert_eq!(output["observed"]["budget"]["review_item_limit"], 10_000);
     assert_eq!(output["observed"]["summary"]["pending_check_pr_count"], 1);
     assert_eq!(
         output["observed"]["summary"]["unresolved_review_thread_count"],

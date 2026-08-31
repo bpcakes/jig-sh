@@ -74,7 +74,7 @@ mod review_round4_tests {
     }
 
     #[test]
-    fn workflow_ids_cannot_escape_the_pr_worktree_cache() {
+    fn workflow_ids_cannot_escape_the_durable_pr_worktree_root() {
         let temp = tempdir().unwrap();
         crate::test_env::TestRepoBuilder::new(temp.path())
             .required_commands(Vec::<String>::new())
@@ -82,7 +82,10 @@ mod review_round4_tests {
         let ctx = RepoContext::load_from(temp.path()).unwrap();
 
         let root = pr_worktree_root(&ctx, &workflow().id);
-        let expected_parent = temp.path().join(LOOP_CACHE_DIR).join("worktrees");
+        let expected_parent = temp
+            .path()
+            .join(LOOP_RUNTIME_DIR)
+            .join("worktrees/prs");
 
         assert_eq!(root.parent(), Some(expected_parent.as_path()));
         assert_eq!(
@@ -112,7 +115,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::WorkerCancelled {
@@ -120,7 +123,6 @@ mod review_round4_tests {
                 worker_receipt_id: "receipt-worker".into(),
                 worktree: worktree.clone(),
             },
-            None,
         )
         .unwrap();
         let completion = WorkflowCompletion::from_actions(std::slice::from_ref(&action));
@@ -139,6 +141,89 @@ mod review_round4_tests {
             Some(worktree.to_string_lossy().as_ref())
         );
         assert!(attempts.snapshot().unwrap().is_empty());
+    }
+
+    #[test]
+    fn release_failure_does_not_overwrite_prior_cleanup_authority_loss() {
+        let authority_error = anyhow!("cleanup authority was lost");
+        let release_error = anyhow!("lease release also failed");
+        let action = branch_lease_cleanup_attention(
+            json!({"status": "failed", "error": "worker did not start"}),
+            &authority_error,
+        );
+
+        let action = with_branch_lease_result(action, Some(&release_error));
+
+        assert_eq!(action["attention_kind"], "branch_lease_lost_before_cleanup");
+        assert_eq!(action["lease_error"], authority_error.to_string());
+        assert_eq!(action["lease_release_error"], release_error.to_string());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pr_worktree_cleanup_runs_before_branch_lease_release() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_lock = crate::test_env::lock_env();
+        let (temp, ctx, worktree, head) = repair_worktree_fixture();
+        let lease_path = temp.path().join(LOOP_CACHE_DIR).join("leases.json");
+        let observed = temp.path().join("lease-observed-during-cleanup");
+        let git = temp.path().join("lease-checking-git");
+        fs::write(
+            &git,
+            r#"#!/bin/sh
+case "$*" in
+  *"worktree remove"*)
+    grep -q 'branch:repair/example' "$JIG_TEST_LEASE_PATH" || exit 42
+    printf observed > "$JIG_TEST_LEASE_OBSERVED"
+    ;;
+esac
+exec git "$@"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&git).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&git, permissions).unwrap();
+        let _git = crate::test_env::EnvVarGuard::set(crate::bootstrap::GIT_BIN_ENV, git.as_os_str());
+        let _lease_path = crate::test_env::EnvVarGuard::set("JIG_TEST_LEASE_PATH", lease_path.as_os_str());
+        let _observed = crate::test_env::EnvVarGuard::set("JIG_TEST_LEASE_OBSERVED", observed.as_os_str());
+        let workflow = workflow();
+        let mut item = item();
+        item.head_sha = head;
+        let mut leases = LeaseStore::new(&ctx);
+        let LeaseAcquire::Acquired(lease) = leases.acquire("branch:repair/example", 60).unwrap()
+        else {
+            panic!("expected branch lease acquisition");
+        };
+        let guard = LeaseGuard::start(leases.clone(), "branch:repair/example", &lease, 60).unwrap();
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
+
+        let action = finalize_pr_repair_outcome(
+            &repair,
+            &mut AttemptStore::new(&ctx),
+            PrRepairOutcome::PreExecutionFailed {
+                error: anyhow!("worker did not start"),
+                worktree: Some(worktree.clone()),
+                worker_receipt_id: None,
+            },
+            guard,
+        )
+        .unwrap();
+
+        assert_eq!(action["worktree_retained"], false, "{action:#}");
+        assert!(!worktree.exists());
+        assert!(observed.is_file(), "Git wrapper never observed cleanup");
+        assert!(matches!(
+            leases.acquire("branch:repair/example", 60).unwrap(),
+            LeaseAcquire::Acquired(_)
+        ));
     }
 
     #[test]
@@ -162,7 +247,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::WorkerCancelled {
@@ -170,7 +255,6 @@ mod review_round4_tests {
                 worker_receipt_id: "receipt-worker".into(),
                 worktree: worktree.clone(),
             },
-            None,
         )
         .unwrap();
         let completion = pr_manager_completion(std::slice::from_ref(&action));
@@ -186,7 +270,7 @@ mod review_round4_tests {
     }
 
     #[test]
-    fn pre_start_cancellation_retains_worktree_after_branch_lease_loss() {
+    fn pre_start_cancellation_retains_worktree_without_cleanup_authority() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
             crate::bootstrap::GIT_BIN_ENV,
@@ -262,7 +346,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::PreExecutionFailed {
@@ -270,7 +354,6 @@ mod review_round4_tests {
                 worktree: Some(worktree.clone()),
                 worker_receipt_id: Some("receipt-worker".into()),
             },
-            None,
         )
         .unwrap();
         let completion = pr_manager_completion(std::slice::from_ref(&action));
@@ -307,7 +390,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
@@ -315,7 +398,6 @@ mod review_round4_tests {
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: worktree.clone(),
             },
-            None,
         )
         .unwrap();
 
@@ -362,7 +444,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
@@ -370,7 +452,6 @@ mod review_round4_tests {
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: worktree.clone(),
             },
-            None,
         )
         .unwrap();
 
@@ -403,7 +484,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
@@ -411,7 +492,6 @@ mod review_round4_tests {
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: worktree.clone(),
             },
-            None,
         )
         .unwrap();
 
@@ -422,7 +502,7 @@ mod review_round4_tests {
     }
 
     #[test]
-    fn failed_worker_retains_clean_worktree_after_branch_lease_loss() {
+    fn failed_worker_retains_unchanged_worktree_without_cleanup_authority() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
             crate::bootstrap::GIT_BIN_ENV,
@@ -491,7 +571,7 @@ mod review_round4_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::Completed(json!({
@@ -501,7 +581,6 @@ mod review_round4_tests {
                 "worker_receipt_id": "receipt-worker",
                 "push": {"final_head": "pushed-head"},
             })),
-            None,
         )
         .unwrap();
 
@@ -525,7 +604,7 @@ mod review_round4_tests {
 
         let failed_worktree = temp.path().join("failed-pr-worktree");
         std::fs::create_dir(&failed_worktree).unwrap();
-        let failed = record_pr_repair_outcome(
+        let failed = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
             PrRepairOutcome::WorkerFailed {
@@ -533,7 +612,6 @@ mod review_round4_tests {
                 worker_receipt_id: None,
                 worktree: failed_worktree.clone(),
             },
-            None,
         )
         .unwrap();
 

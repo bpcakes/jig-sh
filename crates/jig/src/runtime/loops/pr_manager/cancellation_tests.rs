@@ -81,11 +81,10 @@ mod cancellation_tests {
         };
         assert!(detail.contains("git fetch was cancelled before it started"));
         assert!(worktree.is_none());
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempt_store,
             action_result,
-            None,
         )
         .unwrap();
         let completion = pr_manager_completion(std::slice::from_ref(&action));
@@ -139,7 +138,7 @@ mod cancellation_tests {
             codex_home: None,
         };
 
-        let action = record_pr_repair_outcome(
+        let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempt_store,
             PrRepairOutcome::Completed(json!({
@@ -147,7 +146,6 @@ mod cancellation_tests {
                 "status": "cancelled_after_commit",
                 "push": {"final_head": "pushed-head"},
             })),
-            None,
         )
         .unwrap();
 

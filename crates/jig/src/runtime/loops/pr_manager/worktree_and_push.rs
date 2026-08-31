@@ -166,8 +166,8 @@ fn pr_worktree_root(ctx: &RepoContext, workflow_id: &str) -> PathBuf {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     ctx.root()
-        .join(LOOP_CACHE_DIR)
-        .join("worktrees")
+        .join(LOOP_RUNTIME_DIR)
+        .join("worktrees/prs")
         .join(workflow_key)
 }
 
@@ -589,6 +589,10 @@ fn with_attempt(mut action: Value, attempt: AttemptRecord) -> Value {
 
 fn with_branch_lease_result(mut action: Value, release_error: Option<&anyhow::Error>) -> Value {
     if let Some(release_error) = release_error {
+        if action.get("lease_error").is_some() {
+            action["lease_release_error"] = json!(format!("{release_error:#}"));
+            return action;
+        }
         let completed_error = action["error"].as_str().map(str::to_string);
         action["completed_status"] = action["status"].clone();
         if let Some(completed_error) = completed_error.as_deref() {

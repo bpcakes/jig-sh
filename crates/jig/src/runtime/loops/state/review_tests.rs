@@ -70,6 +70,33 @@ fn lease_guard_cannot_finalize_after_another_owner_reacquires_the_key() {
 }
 
 #[test]
+fn lease_guard_refresh_refuses_cleanup_authority_after_reacquisition() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = LeaseStore::new(&ctx);
+    let LeaseAcquire::Acquired(first) = store.acquire("branch:repair/example", 60).unwrap() else {
+        panic!("expected first lease acquisition");
+    };
+    let mut guard = LeaseGuard::start(store.clone(), "branch:repair/example", &first, 60).unwrap();
+    store
+        .release("branch:repair/example", &first.owner)
+        .unwrap();
+    let LeaseAcquire::Acquired(replacement) = store.acquire("branch:repair/example", 60).unwrap()
+    else {
+        panic!("expected replacement lease acquisition");
+    };
+
+    let error = guard.refresh().unwrap_err().to_string();
+
+    assert!(error.contains("owned by another worker"), "{error}");
+    let LeaseAcquire::Held(current) = store.acquire("branch:repair/example", 60).unwrap() else {
+        panic!("replacement lease must remain held");
+    };
+    assert_eq!(current.owner, replacement.owner);
+}
+
+#[test]
 fn release_rejects_an_expired_lease() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());
