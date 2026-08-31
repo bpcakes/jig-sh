@@ -273,7 +273,11 @@ mod cancellation_tests {
         let resolution = validate_review_thread_resolution_state(
             json!({
                 "data": {
-                    "node": {"id": "PRRT_1", "isResolved": false}
+                    "node": {
+                        "id": "PRRT_1",
+                        "isResolved": false,
+                        "comments": {"totalCount": 0, "nodes": []}
+                    }
                 }
             }),
             "PRRT_1",
@@ -628,8 +632,18 @@ esac
         let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
         let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
 
-        let response =
-            resolve_review_thread(&ctx, "PRRT_1", &mut observer, &mut budget).unwrap();
+        let response = resolve_review_thread(
+            &ctx,
+            "PRRT_1",
+            &ReviewThreadWitness::default(),
+            None,
+            &mut observer,
+            &mut budget,
+        )
+        .unwrap();
+        let ReviewThreadResolution::Resolved(response) = response else {
+            panic!("unchanged review thread should resolve");
+        };
 
         assert_eq!(response["_jig"]["reconciled"], true);
         assert_eq!(

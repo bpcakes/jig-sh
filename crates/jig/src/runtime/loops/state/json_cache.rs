@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::Component;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -48,7 +49,7 @@ pub(super) fn with_json_cache_lock_until<T, S>(
 where
     S: Default + DeserializeOwned + Serialize,
 {
-    let cache = CacheDirectory::open(root, dir)?;
+    let cache = StateDirectory::open(root, dir)?;
     let lock_name = cache_file_name(dir, lock_path)?;
     let data_name = cache_file_name(dir, data_path)?;
     cache.with_lock_until(&lock_name, lock_path, deadline, || {
@@ -72,7 +73,7 @@ pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
 where
     S: Clone + Default + DeserializeOwned + Serialize,
 {
-    let cache = CacheDirectory::open(root, dir)?;
+    let cache = StateDirectory::open(root, dir)?;
     let lock_name = cache_file_name(dir, lock_path)?;
     let data_name = cache_file_name(dir, data_path)?;
     cache.with_lock_until(&lock_name, lock_path, deadline, || {
@@ -83,6 +84,10 @@ where
         cache.write_json(&data_name, data_path, &store)?;
         match after_commit(&result) {
             Ok(effect) => Ok((result, effect)),
+            Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error
+                .context(
+                    "Committed loop state was retained because its receipt append may have landed",
+                )),
             Err(error) => match cache.write_json(&data_name, data_path, &rollback) {
                 Ok(()) => Err(error),
                 Err(rollback_error) => Err(error.context(format!(
@@ -102,7 +107,7 @@ pub(super) fn read_json_cache_or_default_with_cancellation<T>(
 where
     T: Default + DeserializeOwned,
 {
-    let Some(cache) = CacheDirectory::open_existing(root, dir)? else {
+    let Some(cache) = StateDirectory::open_existing(root, dir)? else {
         return Ok(T::default());
     };
     let data_name = cache_file_name(dir, data_path)?;
@@ -119,7 +124,7 @@ pub(super) fn read_json_cache_locked_until<T>(
 where
     T: Default + DeserializeOwned,
 {
-    let cache = CacheDirectory::open(root, dir)?;
+    let cache = StateDirectory::open(root, dir)?;
     let lock_name = cache_file_name(dir, lock_path)?;
     let data_name = cache_file_name(dir, data_path)?;
     cache.with_lock_until(&lock_name, lock_path, deadline, || {
@@ -149,7 +154,7 @@ pub(super) fn replace_unparsable_json_cache<T>(
 where
     T: Default + DeserializeOwned + Serialize,
 {
-    let cache = CacheDirectory::open(root, dir)?;
+    let cache = StateDirectory::open(root, dir)?;
     let lock_name = cache_file_name(dir, lock_path)?;
     let data_name = cache_file_name(dir, data_path)?;
     cache.with_lock_until(&lock_name, lock_path, loop_state_lock_deadline(), || {
@@ -165,12 +170,12 @@ where
     })
 }
 
-struct CacheDirectory {
+pub(in crate::runtime::loops) struct StateDirectory {
     directory: Dir,
 }
 
-impl CacheDirectory {
-    fn open(root: &Path, cache_dir: &Path) -> Result<Self> {
+impl StateDirectory {
+    pub(in crate::runtime::loops) fn open(root: &Path, cache_dir: &Path) -> Result<Self> {
         Self::open_with_creation(root, cache_dir, true)?.ok_or_else(|| {
             anyhow!(
                 "Failed to create loop cache directory {}",
@@ -179,7 +184,10 @@ impl CacheDirectory {
         })
     }
 
-    fn open_existing(root: &Path, cache_dir: &Path) -> Result<Option<Self>> {
+    pub(in crate::runtime::loops) fn open_existing(
+        root: &Path,
+        cache_dir: &Path,
+    ) -> Result<Option<Self>> {
         Self::open_with_creation(root, cache_dir, false)
     }
 
@@ -213,7 +221,7 @@ impl CacheDirectory {
         Ok(Some(Self { directory }))
     }
 
-    fn with_lock_until<T>(
+    pub(in crate::runtime::loops) fn with_lock_until<T>(
         &self,
         lock_name: &OsStr,
         lock_path: &Path,
@@ -245,7 +253,7 @@ impl CacheDirectory {
         result
     }
 
-    fn read_json_or_default<T>(
+    pub(in crate::runtime::loops) fn read_json_or_default<T>(
         &self,
         data_name: &OsStr,
         data_path: &Path,
@@ -276,7 +284,11 @@ impl CacheDirectory {
             .with_context(|| format!("Failed to parse {}", data_path.display()))
     }
 
-    fn reclaim_orphaned_temps(&self, data_name: &OsStr, data_path: &Path) -> Result<()> {
+    pub(in crate::runtime::loops) fn reclaim_orphaned_temps(
+        &self,
+        data_name: &OsStr,
+        data_path: &Path,
+    ) -> Result<()> {
         let prefix_path = Path::new(data_name).with_extension("tmp-");
         let prefix = prefix_path
             .file_name()
@@ -370,9 +382,109 @@ impl CacheDirectory {
             },
         }
     }
+
+    pub(in crate::runtime::loops) fn exists(
+        &self,
+        data_name: &OsStr,
+        data_path: &Path,
+    ) -> Result<bool> {
+        open_optional_regular_file(&self.directory, data_name, data_path).map(|file| file.is_some())
+    }
+
+    pub(in crate::runtime::loops) fn read_json<T>(
+        &self,
+        data_name: &OsStr,
+        data_path: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        ensure_status_active(cancelled)?;
+        let Some(mut file) = open_optional_regular_file(&self.directory, data_name, data_path)?
+        else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
+        loop {
+            ensure_status_active(cancelled)?;
+            let read = file
+                .read(&mut chunk)
+                .with_context(|| format!("Failed to read {}", data_path.display()))?;
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+        ensure_status_active(cancelled)?;
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("Failed to parse {}", data_path.display()))
+            .map(Some)
+    }
+
+    pub(in crate::runtime::loops) fn write_json_durable<T: Serialize>(
+        &self,
+        data_name: &OsStr,
+        data_path: &Path,
+        value: &T,
+    ) -> Result<()> {
+        let _ = self.exists(data_name, data_path)?;
+        let tmp_name = Path::new(data_name).with_extension(format!("tmp-{}", Ulid::new()));
+        let tmp_path = data_path.parent().unwrap_or(data_path).join(&tmp_name);
+        let result = (|| {
+            let mut tmp = open_regular_file(
+                &self.directory,
+                tmp_name.as_os_str(),
+                true,
+                true,
+                true,
+                &tmp_path,
+            )?;
+            tmp.write_all(
+                &serde_json::to_vec_pretty(value).context("Failed to encode loop state JSON")?,
+            )
+            .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+            tmp.sync_all()
+                .with_context(|| format!("Failed to sync {}", tmp_path.display()))?;
+            drop(tmp);
+            self.directory
+                .rename(&tmp_name, &self.directory, data_name)
+                .with_context(|| {
+                    format!(
+                        "Failed to replace loop state file {} with {}",
+                        data_path.display(),
+                        tmp_path.display()
+                    )
+                })?;
+            self.directory
+                .open(".")
+                .and_then(|directory| directory.sync_all())
+                .with_context(|| {
+                    format!(
+                        "Failed to sync loop state directory {}",
+                        data_path.parent().unwrap_or(data_path).display()
+                    )
+                })
+        })();
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => match self.directory.remove_file(&tmp_name) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) if cleanup_error.kind() == io::ErrorKind::NotFound => Err(error),
+                Err(cleanup_error) => Err(error.context(format!(
+                    "Failed to remove temporary loop state file {}: {cleanup_error}",
+                    tmp_path.display()
+                ))),
+            },
+        }
+    }
 }
 
-fn cache_file_name(cache_dir: &Path, path: &Path) -> Result<OsString> {
+pub(in crate::runtime::loops) fn cache_file_name(
+    cache_dir: &Path,
+    path: &Path,
+) -> Result<OsString> {
     if path.parent() != Some(cache_dir) {
         bail!(
             "Loop cache file {} is not directly inside {}",
@@ -538,7 +650,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let data_path = temp.path().join("attempts.json");
         fs::create_dir(&data_path).unwrap();
-        let cache = CacheDirectory::open(temp.path(), temp.path()).unwrap();
+        let cache = StateDirectory::open(temp.path(), temp.path()).unwrap();
 
         let error = cache
             .write_json(
@@ -560,5 +672,42 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("attempts.tmp-")
         }));
+    }
+
+    #[test]
+    fn compensating_cache_retains_commit_when_receipt_may_have_landed() {
+        let temp = tempdir().unwrap();
+        let data_path = temp.path().join("attempts.json");
+        let lock_path = temp.path().join("attempts.lock");
+
+        let error = with_json_cache_lock_compensating_until(
+            temp.path(),
+            temp.path(),
+            &lock_path,
+            &data_path,
+            loop_state_lock_deadline(),
+            |state: &mut BTreeMap<String, String>| {
+                state.insert("ExampleProject".into(), "cleared".into());
+                Ok(())
+            },
+            |_| -> Result<()> { Err(crate::state::receipt_append_may_have_landed_for_test()) },
+        )
+        .unwrap_err();
+
+        let state = read_json_cache_or_default_with_cancellation::<BTreeMap<String, String>>(
+            temp.path(),
+            temp.path(),
+            &data_path,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(
+            state.get("ExampleProject").map(String::as_str),
+            Some("cleared")
+        );
+        assert!(
+            format!("{error:#}").contains("receipt append may have landed"),
+            "{error:#}"
+        );
     }
 }

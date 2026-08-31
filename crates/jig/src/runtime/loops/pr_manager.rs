@@ -1,11 +1,17 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, OpenOptions},
+};
 use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -741,7 +747,9 @@ fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
     Ok(value)
 }
 
+include!("pr_manager/review_thread_witness.rs");
 include!("pr_manager/review_threads.rs");
+include!("pr_manager/worktree_identity.rs");
 include!("pr_manager/worktree_and_push.rs");
 include!("pr_manager/push_error_tests.rs");
 include!("pr_manager/review_round4_tests.rs");

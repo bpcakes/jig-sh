@@ -85,6 +85,55 @@ mod preparation_tests {
     }
 
     #[test]
+    fn registered_pr_worktree_rejects_a_forged_gitfile() {
+        let _guard = lock_env();
+        let repo = tempdir().unwrap();
+        TestRepoBuilder::new(repo.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "fixture@example.com"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "fixture"]);
+        let ctx = RepoContext::load_from(repo.path()).unwrap();
+        let workflow = workflow(60);
+        let item = item(git(&["rev-parse", "HEAD"]));
+        let worktree = pr_worktree_path(&ctx, &workflow, &item);
+        fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+        git(&[
+            "worktree",
+            "add",
+            "--detach",
+            worktree.to_str().unwrap(),
+            "HEAD",
+        ]);
+        assert!(
+            pr_worktree_is_registered(&ctx, &worktree, &mut NoopExecutionObserver).unwrap()
+        );
+
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", repo.path().join(".git").display()),
+        )
+        .unwrap();
+
+        assert!(
+            !pr_worktree_is_registered(&ctx, &worktree, &mut NoopExecutionObserver).unwrap()
+        );
+        assert!(worktree.join(".git").is_file());
+    }
+
+    #[test]
     fn cancellation_after_worktree_add_defers_cleanup_to_finalization() {
         let _guard = lock_env();
         let repo = tempdir().unwrap();

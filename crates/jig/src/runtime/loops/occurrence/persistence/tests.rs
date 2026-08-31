@@ -94,6 +94,27 @@ fn compensation_reports_both_the_effect_and_rollback_failures() {
 }
 
 #[test]
+fn compensation_retains_state_when_receipt_append_may_have_landed() {
+    let rolled_back = std::cell::Cell::new(false);
+
+    let error = compensate_after_commit(
+        "committed",
+        |_| -> Result<()> { Err(crate::state::receipt_append_may_have_landed_for_test()) },
+        || {
+            rolled_back.set(true);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+
+    assert!(!rolled_back.get());
+    assert!(
+        format!("{error:#}").contains("receipt append may have landed"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn durable_directory_creation_builds_missing_parent_chain() {
     let temp = tempfile::tempdir().unwrap();
     let nested = temp.path().join(".agent/runtime/loop");
@@ -146,13 +167,41 @@ fn durable_write_rejects_a_non_file_destination_without_leaving_a_temp_file() {
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("is not a regular file"), "{error}");
+    assert!(
+        error.contains("without following links") || error.contains("is not a regular file"),
+        "{error}"
+    );
     let leftovers = fs::read_dir(temp.path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .filter(|name| name.to_string_lossy().starts_with("schedule.tmp-"))
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn locked_schedule_publication_stays_on_opened_directory_after_path_swap() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let redirected = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    let moved = temp.path().join("opened-loop-directory");
+
+    persistence
+        .with_locked(|store| {
+            fs::rename(&persistence.dir, &moved).unwrap();
+            symlink(redirected.path(), &persistence.dir).unwrap();
+            store.schema_version = SCHEDULE_SCHEMA_VERSION;
+            Ok(())
+        })
+        .unwrap();
+
+    assert!(moved.join(SCHEDULE_FILE_NAME).is_file());
+    assert!(fs::read_dir(redirected.path()).unwrap().next().is_none());
 }
 
 #[test]
@@ -171,8 +220,9 @@ fn read_only_rechecks_durable_state_when_marker_follows_initial_miss() {
         occurrences: BTreeMap::new(),
     };
 
+    let directories = ScheduleDirectories::open(&persistence, false).unwrap();
     let resolved = persistence
-        .resolve_read_only(None, Some(marker), &|| false)
+        .resolve_read_only(&directories, None, Some(marker), &|| false)
         .unwrap();
 
     assert!(resolved == durable);

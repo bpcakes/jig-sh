@@ -38,8 +38,11 @@ use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
 use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
 pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
+#[cfg(test)]
+pub(crate) use journal::receipt_append_may_have_landed_for_test;
 pub(crate) use journal::{
-    receipt_record_id, with_receipt_journal_writer, with_receipt_journal_writer_until,
+    receipt_append_may_have_landed, receipt_record_id, with_receipt_journal_writer,
+    with_receipt_journal_writer_until,
 };
 pub(crate) use target_evidence::TargetReceiptStatus;
 use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};

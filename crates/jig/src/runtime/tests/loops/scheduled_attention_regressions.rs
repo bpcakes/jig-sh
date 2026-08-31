@@ -238,7 +238,7 @@ JSON
     printf '%s\n' '[{"bucket":"fail","completedAt":"2026-08-30T10:01:00Z","description":"failed","event":"pull_request","link":"https://example.invalid/check/1","name":"test","startedAt":"2026-08-30T10:00:00Z","state":"FAILURE","workflow":"ci"}]'
     ;;
   "api graphql")
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
     ;;
   *) exit 2 ;;
 esac
@@ -357,7 +357,7 @@ JSON
     printf '%s\n' '[{"bucket":"fail","completedAt":"2026-08-30T10:01:00Z","description":"failed","event":"pull_request","link":"https://example.invalid/check/1","name":"test","startedAt":"2026-08-30T10:00:00Z","state":"FAILURE","workflow":"ci"}]'
     ;;
   "api graphql")
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
     ;;
   *) exit 2 ;;
 esac

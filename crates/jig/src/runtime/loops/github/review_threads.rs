@@ -11,6 +11,9 @@ fn review_threads_snapshot(
     let mut cursor = None;
     let mut page_count = 0;
     let mut truncated = false;
+    let mut total_count = None;
+    let mut thread_ids = BTreeSet::new();
+    let mut cursors = BTreeSet::new();
 
     while has_next_page {
         if client.cancelled() {
@@ -29,13 +32,36 @@ fn review_threads_snapshot(
             .get("nodes")
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("GitHub GraphQL reviewThreads.nodes was not an array"))?;
+        let observed_total = connection
+            .get("totalCount")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("GitHub GraphQL reviewThreads.totalCount was missing"))?;
+        if total_count.replace(observed_total).is_some_and(|total| total != observed_total) {
+            truncated = true;
+            break;
+        }
         for thread in page_nodes {
+            let Some(thread_id) = thread
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+            else {
+                truncated = true;
+                break;
+            };
+            if !thread_ids.insert(thread_id.to_string()) {
+                truncated = true;
+                break;
+            }
             let thread = normalize_review_thread(client, repository, thread, permissions)?;
             truncated |= thread
                 .pointer("/comments/truncated")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
             nodes.push(thread);
+        }
+        if truncated {
+            break;
         }
         has_next_page = connection
             .pointer("/pageInfo/hasNextPage")
@@ -46,19 +72,29 @@ fn review_threads_snapshot(
             .and_then(Value::as_str)
             .filter(|cursor| !cursor.is_empty())
             .map(ToOwned::to_owned);
-        if has_next_page && next_cursor.is_none() {
-            truncated = true;
-            cursor = None;
-            break;
+        if has_next_page {
+            let Some(next_cursor) = next_cursor.as_ref() else {
+                truncated = true;
+                cursor = None;
+                break;
+            };
+            if !cursors.insert(next_cursor.clone()) {
+                truncated = true;
+                break;
+            }
         }
         cursor = next_cursor;
     }
+
+    truncated |= has_next_page
+        || total_count.is_some_and(|total_count| total_count != nodes.len() as u64);
 
     Ok(json!({
         "summary": review_thread_summary(&nodes),
         "nodes": nodes,
         "page_info": {
             "page_count": page_count,
+            "total_count": total_count,
             "truncated": truncated,
             "has_next_page": has_next_page,
             "end_cursor": cursor,
@@ -108,6 +144,7 @@ query($owner: String!, $name: String!, $number: Int!, $threadsAfter: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: 100, after: $threadsAfter) {
+        totalCount
         pageInfo {
           hasNextPage
           endCursor

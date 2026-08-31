@@ -108,7 +108,7 @@ JSON
     ;;
   "api graphql")
     cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":"cursor-1"},"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src/lib.rs","line":42,"startLine":null,"originalLine":40,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_1","url":"https://github.com/acme/widgets/pull/7#discussion_r1","body":"Please add a test","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{"login":"reviewer"}}]}}]}}}}}
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":"cursor-1"},"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src/lib.rs","line":42,"startLine":null,"originalLine":40,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_1","url":"https://github.com/acme/widgets/pull/7#discussion_r1","body":"Please add a test","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{"login":"reviewer"}}]}}]}}}}}
 JSON
     ;;
   "api --method")
@@ -274,12 +274,19 @@ JSON
   "api graphql")
     case "$*" in
       *ReviewThreadState*)
-        cat <<'JSON'
-{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[]}}}}}}}}
+        if [ -f .agent/.cache/gh-replied ]; then
+          cat <<'JSON'
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":2,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_REPLY"}}]}}}}}}}}
 JSON
+        else
+          cat <<'JSON'
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":1,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1"}}]}}}}}}}}
+JSON
+        fi
         ;;
       *addPullRequestReviewThreadReply*)
         printf 'reply %s\n' "$*" >> gh-mutations.log
+        : > .agent/.cache/gh-replied
         cat <<'JSON'
 {{"data":{{"addPullRequestReviewThreadReply":{{"comment":{{"id":"PRRC_REPLY","url":"https://github.com/acme/demo/pull/7#discussion_r2"}}}}}}}}
 JSON
@@ -292,7 +299,7 @@ JSON
         ;;
       *)
         cat <<'JSON'
-{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[{{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src.rs","line":1,"startLine":null,"originalLine":1,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{{"totalCount":1,"nodes":[{{"id":"PRRC_1","url":"https://github.com/acme/demo/pull/7#discussion_r1","body":"Please fix this failing path","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{{"login":"reviewer"}}}}]}}}}]}}}}}}}}}}
+{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{"totalCount":1,"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[{{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src.rs","line":1,"startLine":null,"originalLine":1,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{{"totalCount":1,"nodes":[{{"id":"PRRC_1","url":"https://github.com/acme/demo/pull/7#discussion_r1","body":"Please fix this failing path","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{{"login":"reviewer"}}}}]}}}}]}}}}}}}}}}
 JSON
         ;;
     esac
@@ -581,7 +588,7 @@ JSON
         ;;
       *)
         cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src.rs","line":1,"startLine":null,"originalLine":1,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_1","url":"https://github.com/acme/demo/pull/7#discussion_r1","body":"First thread","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{"login":"reviewer"}}]}},{"id":"PRRT_2","isResolved":false,"isOutdated":false,"path":"src.rs","line":2,"startLine":null,"originalLine":2,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_2","url":"https://github.com/acme/demo/pull/7#discussion_r2","body":"Second thread","createdAt":"2026-07-08T10:04:00Z","updatedAt":"2026-07-08T10:04:00Z","author":{"login":"reviewer"}}]}},{"id":"PRRT_3","isResolved":false,"isOutdated":false,"path":"src.rs","line":3,"startLine":null,"originalLine":3,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_3","url":"https://github.com/acme/demo/pull/7#discussion_r3","body":"Third thread","createdAt":"2026-07-08T10:05:00Z","updatedAt":"2026-07-08T10:05:00Z","author":{"login":"reviewer"}}]}}]}}}}}
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":3,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src.rs","line":1,"startLine":null,"originalLine":1,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_1","url":"https://github.com/acme/demo/pull/7#discussion_r1","body":"First thread","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{"login":"reviewer"}}]}},{"id":"PRRT_2","isResolved":false,"isOutdated":false,"path":"src.rs","line":2,"startLine":null,"originalLine":2,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_2","url":"https://github.com/acme/demo/pull/7#discussion_r2","body":"Second thread","createdAt":"2026-07-08T10:04:00Z","updatedAt":"2026-07-08T10:04:00Z","author":{"login":"reviewer"}}]}},{"id":"PRRT_3","isResolved":false,"isOutdated":false,"path":"src.rs","line":3,"startLine":null,"originalLine":3,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_3","url":"https://github.com/acme/demo/pull/7#discussion_r3","body":"Third thread","createdAt":"2026-07-08T10:05:00Z","updatedAt":"2026-07-08T10:05:00Z","author":{"login":"reviewer"}}]}}]}}}}}
 JSON
         ;;
     esac
@@ -709,7 +716,7 @@ JSON
     ;;
   "api graphql")
     cat <<'JSON'
-{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}}}}}}}}}}
+{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{"totalCount":0,"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[]}}}}}}}}}}
 JSON
     ;;
   *)

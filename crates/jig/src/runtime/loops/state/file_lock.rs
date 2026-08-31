@@ -1,17 +1,25 @@
+#[cfg(test)]
 use std::ffi::OsStr;
+#[cfg(test)]
 use std::path::{Component, Path};
+#[cfg(test)]
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use anyhow::{Context, Result, anyhow, bail};
+#[cfg(test)]
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+#[cfg(test)]
 use cap_std::{
     ambient_authority,
     fs::{Dir, OpenOptions},
 };
+#[cfg(test)]
 use fs4::fs_std::FileExt;
 
 pub(in crate::runtime::loops) const LOOP_STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
 const LOOP_STATE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(in crate::runtime::loops) fn loop_state_lock_deadline() -> Instant {
@@ -27,6 +35,7 @@ pub(in crate::runtime::loops) fn with_exclusive_file_lock<T>(
     with_exclusive_file_lock_until(dir, dir, lock_path, loop_state_lock_deadline(), action)
 }
 
+#[cfg(test)]
 pub(in crate::runtime::loops) fn with_exclusive_file_lock_until<T>(
     root: &Path,
     dir: &Path,
@@ -62,6 +71,7 @@ pub(in crate::runtime::loops) fn with_exclusive_file_lock_until<T>(
     result
 }
 
+#[cfg(test)]
 fn open_lock_directory(root: &Path, dir: &Path) -> Result<Dir> {
     let relative = dir.strip_prefix(root).with_context(|| {
         format!(
@@ -94,6 +104,7 @@ fn open_lock_directory(root: &Path, dir: &Path) -> Result<Dir> {
     Ok(directory)
 }
 
+#[cfg(test)]
 fn direct_child_name<'a>(dir: &Path, path: &'a Path) -> Result<&'a OsStr> {
     if path.parent() != Some(dir) {
         bail!(
@@ -106,6 +117,7 @@ fn direct_child_name<'a>(dir: &Path, path: &'a Path) -> Result<&'a OsStr> {
         .ok_or_else(|| anyhow!("Loop state lock path has no file name: {}", path.display()))
 }
 
+#[cfg(test)]
 fn open_lock_file(directory: &Dir, name: &OsStr, path: &Path) -> Result<std::fs::File> {
     let mut options = OpenOptions::new();
     options

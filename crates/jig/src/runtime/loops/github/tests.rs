@@ -133,7 +133,7 @@ case "$*" in
     printf '%s\n' '{"data":{"node":{"id":"thread-1","comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"comment-1","body":"trusted original","author":{"login":"maintainer"}}]}}}}'
     ;;
   *"api graphql "*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":true,"startCursor":"older"},"nodes":[{"id":"comment-2","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":true,"startCursor":"older"},"nodes":[{"id":"comment-2","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
     ;;
   *"collaborators/maintainer/permission"*) printf '%s\n' '{"permission":"write"}' ;;
   *"collaborators/visitor/permission"*) printf '%s\n' '{"permission":"read"}' ;;
@@ -192,7 +192,7 @@ esac
             &gh,
             r#"#!/bin/sh
 case "$*" in
-  *"api graphql "*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":11,"nodes":[{"id":"comment-11","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  *"api graphql "*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":11,"nodes":[{"id":"comment-11","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
   *) exit 2 ;;
 esac
 "#,
@@ -335,7 +335,7 @@ case "$*" in
   *"pr list"*) printf '%s\n' "$JIG_TEST_PR_LIST" ;;
   *"pr checks"*) printf '%s\n' '[]' ;;
   *"api graphql"*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
     ;;
   *) exit 2 ;;
 esac
@@ -381,7 +381,7 @@ esac
         fs::write(
             &gh,
             r#"#!/bin/sh
-printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":0,"nodes":[]}}],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}}'
+printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":0,"nodes":[]}}],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}}'
 "#,
         )
         .unwrap();
@@ -410,6 +410,62 @@ printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{
         assert_eq!(snapshot["page_info"]["page_count"], 1);
         assert_eq!(snapshot["page_info"]["truncated"], true);
         assert_eq!(snapshot["page_info"]["has_next_page"], true);
+        assert_eq!(snapshot["nodes"].as_array().unwrap().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn changing_review_thread_total_marks_the_snapshot_incomplete() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .config("")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("fixture-gh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+case "$*" in
+  *"threadsAfter=cursor-1"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":2,"nodes":[{"id":"thread-2","isResolved":false,"comments":{"totalCount":0,"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    ;;
+  *)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":0,"nodes":[]}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}}'
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh, permissions).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let repository = RepositorySnapshot {
+            owner: "ExampleProject".into(),
+            name: "ExampleVault".into(),
+            default_branch: "main".into(),
+            value: json!({}),
+        };
+        let mut observer = crate::execution::NoopExecutionObserver;
+        let mut client = GithubSnapshotClient::new(&ctx, &mut observer);
+
+        let snapshot = review_threads_snapshot(
+            &mut client,
+            &repository,
+            7,
+            &mut RepositoryPermissionCache::default(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot["page_info"]["page_count"], 2);
+        assert_eq!(snapshot["page_info"]["truncated"], true);
         assert_eq!(snapshot["nodes"].as_array().unwrap().len(), 1);
     }
 

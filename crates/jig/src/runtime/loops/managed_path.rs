@@ -20,28 +20,6 @@ pub(super) fn inspect_managed_directory(
     walk_managed_directory(root, directory, description, false)
 }
 
-pub(super) fn inspect_managed_file(root: &Path, path: &Path, description: &str) -> Result<bool> {
-    let parent = path
-        .parent()
-        .with_context(|| format!("{description} has no parent: {}", path.display()))?;
-    if !inspect_managed_directory(root, parent, description)? {
-        return Ok(false);
-    }
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(true),
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            bail!("Managed {description} is a symlink: {}", path.display())
-        }
-        Ok(_) => bail!(
-            "Managed {description} is not a regular file: {}",
-            path.display()
-        ),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error)
-            .with_context(|| format!("Failed to inspect managed {description} {}", path.display())),
-    }
-}
-
 fn walk_managed_directory(
     root: &Path,
     directory: &Path,

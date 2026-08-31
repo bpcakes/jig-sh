@@ -21,6 +21,9 @@ pub(crate) use plans::{
 };
 #[cfg(test)]
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
+pub(crate) use receipts::receipt_append_may_have_landed;
+#[cfg(test)]
+pub(crate) use receipts::receipt_append_may_have_landed_for_test;
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ReusableWorkCheckEvidence, ReusableWorkCheckQuery,
     TargetReceiptStatus, ToolReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence,

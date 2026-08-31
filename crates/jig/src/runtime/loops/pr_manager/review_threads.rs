@@ -73,7 +73,7 @@ fn post_review_thread_updates(
         .get("review_thread_replies")
         .and_then(Value::as_array)
         .unwrap_or(&empty);
-    let allowed_thread_ids = observed_review_thread_ids(pull_request);
+    let thread_witnesses = observed_review_thread_witnesses(pull_request);
     let mut posts = Vec::new();
     let mut handled_thread_ids = BTreeSet::new();
     let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
@@ -118,9 +118,9 @@ fn post_review_thread_updates(
                 "resolve_skip_reason": Value::Null,
             }));
             continue;
-        }
+        };
 
-        if !allowed_thread_ids.contains(thread_id) {
+        let Some(thread_witness) = thread_witnesses.get(thread_id) else {
             posts.push(json!({
                 "thread_id": thread_id,
                 "status": "skipped",
@@ -139,7 +139,7 @@ fn post_review_thread_updates(
                 "resolve_skip_reason": Value::Null,
             }));
             continue;
-        }
+        };
 
         let mut thread_failed = false;
         let mut reply_error = Value::Null;
@@ -187,8 +187,24 @@ fn post_review_thread_updates(
             resolve_skip_reason = Value::String("reply_failed".into());
             None
         } else if resolve {
-            match resolve_review_thread(ctx, thread_id, observer, &mut budget) {
-                Ok(response) => Some(response),
+            let reply_comment_id = reply_response
+                .as_ref()
+                .and_then(|value| value.pointer("/data/addPullRequestReviewThreadReply/comment/id"))
+                .and_then(Value::as_str);
+            match resolve_review_thread(
+                ctx,
+                thread_id,
+                thread_witness,
+                reply_comment_id,
+                observer,
+                &mut budget,
+            ) {
+                Ok(ReviewThreadResolution::Resolved(response)) => Some(response),
+                Ok(ReviewThreadResolution::Changed) => {
+                    resolve_skipped = true;
+                    resolve_skip_reason = Value::String("review_thread_changed".into());
+                    None
+                }
                 Err(
                     ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
                 ) => {
@@ -253,31 +269,6 @@ fn post_review_thread_updates(
     }
 }
 
-fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
-    actionable_review_threads(pull_request)
-        .filter_map(|thread| thread.get("id").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
-}
-
-fn actionable_review_threads(pull_request: &Value) -> impl Iterator<Item = &Value> {
-    pull_request
-        .pointer("/review_threads/nodes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|thread| {
-            thread
-                .get("has_trusted_comment")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                && !thread
-                    .get("is_resolved")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-        })
-}
-
 fn post_review_thread_reply(
     ctx: &RepoContext,
     thread_id: &str,
@@ -331,16 +322,23 @@ fn post_review_thread_reply(
 fn resolve_review_thread(
     ctx: &RepoContext,
     thread_id: &str,
+    witness: &ReviewThreadWitness,
+    reply_comment_id: Option<&str>,
     observer: &mut dyn ExecutionControl,
     budget: &mut ReviewThreadUpdateBudget,
-) -> std::result::Result<Value, ExecutionCommandError> {
+) -> std::result::Result<ReviewThreadResolution, ExecutionCommandError> {
     let state = review_thread_resolution_state(ctx, thread_id, observer, budget)?;
     if state
         .pointer("/data/node/isResolved")
         .and_then(Value::as_bool)
         == Some(true)
     {
-        return Ok(reconciled_resolve_response(thread_id));
+        return Ok(ReviewThreadResolution::Resolved(
+            reconciled_resolve_response(thread_id),
+        ));
+    }
+    if !review_thread_matches_witness(&state, witness, reply_comment_id) {
+        return Ok(ReviewThreadResolution::Changed);
     }
     let timeout = budget.reserve_request(ctx.command_timeout())?;
     let result = github::gh_json_with_timeout(
@@ -358,7 +356,7 @@ fn resolve_review_thread(
         observer,
     )
     .and_then(validate_resolve_mutation_response);
-    reconcile_resolve_mutation(ctx, thread_id, result, budget)
+    reconcile_resolve_mutation(ctx, thread_id, result, budget).map(ReviewThreadResolution::Resolved)
 }
 
 fn review_thread_reply_marker(thread_id: &str, repair_version: &str) -> String {
@@ -577,7 +575,17 @@ fn validate_review_thread_resolution_state(
     let is_resolved = value
         .pointer("/data/node/isResolved")
         .and_then(Value::as_bool);
-    if observed_id != Some(thread_id) || is_resolved.is_none() {
+    let comment_count = value
+        .pointer("/data/node/comments/totalCount")
+        .and_then(Value::as_u64);
+    let comments = value
+        .pointer("/data/node/comments/nodes")
+        .and_then(Value::as_array);
+    if observed_id != Some(thread_id)
+        || is_resolved.is_none()
+        || comment_count.is_none()
+        || comments.is_none()
+    {
         return Err(ExecutionCommandError::failed(anyhow!(
             "GitHub review thread resolution query returned an invalid payload for {thread_id}"
         )));
@@ -771,6 +779,12 @@ query ReviewThreadState($threadId: ID!) {
     ... on PullRequestReviewThread {
       id
       isResolved
+      comments(last: 1) {
+        totalCount
+        nodes {
+          id
+        }
+      }
     }
   }
 }

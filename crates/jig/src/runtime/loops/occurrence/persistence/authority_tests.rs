@@ -324,7 +324,7 @@ fn checkout_replica_directory_cannot_redirect_schedule_writes_through_a_symlink(
     let error = persistence.with_locked(|_| Ok(())).unwrap_err();
 
     assert!(
-        error.to_string().contains("component is a symlink"),
+        error.to_string().contains("without following links"),
         "{error:#}"
     );
     assert!(fs::read_dir(redirected.path()).unwrap().next().is_none());
@@ -347,7 +347,7 @@ fn checkout_replica_ancestor_cannot_redirect_schedule_writes_through_a_symlink()
     let error = persistence.with_locked(|_| Ok(())).unwrap_err();
 
     assert!(
-        error.to_string().contains("component is a symlink"),
+        error.to_string().contains("without following links"),
         "{error:#}"
     );
     assert!(

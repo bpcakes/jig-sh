@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::fs::File;
+#[cfg(test)]
 use std::io::Read;
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
@@ -30,9 +32,10 @@ mod persistence;
 
 #[cfg(test)]
 pub(super) use file_lock::with_exclusive_file_lock;
-pub(super) use file_lock::{
-    LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline, with_exclusive_file_lock_until,
-};
+pub(super) use file_lock::{LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline};
+pub(in crate::runtime::loops) use json_cache::StateDirectory;
+#[cfg(test)]
+pub(in crate::runtime::loops) use json_cache::cache_file_name;
 use persistence::JsonStatePersistence;
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
@@ -534,6 +537,7 @@ where
     Ok(read_json_if_exists_with_cancellation(path, cancelled)?.unwrap_or_default())
 }
 
+#[cfg(test)]
 pub(super) fn read_json_if_exists_with_cancellation<T>(
     path: &Path,
     cancelled: &dyn Fn() -> bool,

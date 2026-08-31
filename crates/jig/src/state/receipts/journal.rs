@@ -24,6 +24,38 @@ pub(crate) struct ReceiptJournalWriter<'a> {
     state_dir: &'a Dir,
 }
 
+#[derive(Debug)]
+struct ReceiptAppendMayHaveLanded {
+    source: io::Error,
+}
+
+impl std::fmt::Display for ReceiptAppendMayHaveLanded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Receipt journal append may have landed before publication failed: {}",
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for ReceiptAppendMayHaveLanded {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+pub(crate) fn receipt_append_may_have_landed(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ReceiptAppendMayHaveLanded>().is_some()
+}
+
+#[cfg(test)]
+pub(crate) fn receipt_append_may_have_landed_for_test() -> anyhow::Error {
+    anyhow::Error::new(ReceiptAppendMayHaveLanded {
+        source: io::Error::other("injected post-write failure"),
+    })
+}
+
 pub(crate) fn with_receipt_journal_writer<T>(
     ctx: &RepoContext,
     operation: impl FnOnce(&ReceiptJournalWriter<'_>) -> Result<T>,
@@ -43,15 +75,17 @@ pub(crate) fn with_receipt_journal_writer_until<T>(
     operation: impl FnOnce(&ReceiptJournalWriter<'_>) -> Result<T>,
 ) -> Result<T> {
     let directories = ReceiptJournalDirectories::open(ctx.root())?;
-    let legacy_lock = open_optional_regular_file(
+    // Create the legacy-locked inode before taking either lock. Older runtimes lock the
+    // journal itself, so skipping this lock on the first append would leave no common
+    // serialization point during the cache-lock cutover.
+    let legacy_lock = open_regular_file(
         &directories.state,
         "receipts.jsonl",
         true,
+        true,
         "receipt journal",
     )?;
-    if let Some(file) = &legacy_lock {
-        lock_exclusive_until(file, "legacy receipt journal", deadline, cancelled)?;
-    }
+    lock_exclusive_until(&legacy_lock, "legacy receipt journal", deadline, cancelled)?;
     let lock = open_regular_file(
         &directories.locks,
         "receipts.jsonl.lock",
@@ -97,6 +131,8 @@ fn lock_exclusive_until(
 
 impl ReceiptJournalWriter<'_> {
     pub(crate) fn append<T: Serialize>(&self, value: &T) -> Result<()> {
+        let mut record = serde_json::to_vec(value)?;
+        record.push(b'\n');
         let mut file = open_regular_file(
             self.state_dir,
             "receipts.jsonl",
@@ -104,9 +140,10 @@ impl ReceiptJournalWriter<'_> {
             true,
             "receipt journal",
         )?;
-        serde_json::to_writer(&mut file, value)?;
-        file.write_all(b"\n")?;
-        file.sync_data()?;
+        file.write_all(&record)
+            .map_err(|source| anyhow::Error::new(ReceiptAppendMayHaveLanded { source }))?;
+        file.sync_data()
+            .map_err(|source| anyhow::Error::new(ReceiptAppendMayHaveLanded { source }))?;
         Ok(())
     }
 
@@ -293,15 +330,22 @@ mod tests {
     }
 
     #[test]
-    fn successful_receipt_append_releases_both_locks_by_drop() {
+    fn first_receipt_append_holds_and_releases_both_cutover_locks() {
         let temp = tempfile::tempdir().unwrap();
         TestRepoBuilder::new(temp.path()).write();
         let journal_path = temp.path().join(".agent/state/receipts.jsonl");
-        fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
-        fs::write(&journal_path, b"").unwrap();
         let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-        with_receipt_journal_writer(&ctx, |writer| writer.append(&json!({"id": 1}))).unwrap();
+        with_receipt_journal_writer(&ctx, |writer| {
+            let competing_legacy = StdOpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&journal_path)
+                .unwrap();
+            assert!(!competing_legacy.try_lock_exclusive().unwrap());
+            writer.append(&json!({"id": 1}))
+        })
+        .unwrap();
 
         let journal = StdOpenOptions::new()
             .read(true)

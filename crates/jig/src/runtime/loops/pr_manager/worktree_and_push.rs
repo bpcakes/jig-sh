@@ -62,7 +62,13 @@ fn prepare_worktree(
         });
     }
     let result = (|| {
-        if worktree.join(".git").exists() {
+        if existed_before_preflight {
+            if !pr_worktree_is_registered(ctx, &worktree, observer)? {
+                return Err(PrRepairStepError::failed(anyhow!(
+                    "Refusing to reuse untrusted PR repair directory {}: it is not an authenticated registered worktree",
+                    worktree.display()
+                )));
+            }
             clean_reused_worktree(ctx, &worktree, observer)?;
             git_checked(
                 ctx,
@@ -227,24 +233,6 @@ impl<'a> PrWorktreeCleanup<'a> {
         self.refresh("removal")?;
         self.with_control(|ctx, observer| remove_pr_worktree(ctx, worktree, force, observer))
     }
-}
-
-fn pr_worktree_is_registered(
-    ctx: &RepoContext,
-    worktree: &Path,
-    observer: &mut dyn ExecutionControl,
-) -> Result<bool> {
-    let listing = git_stdout(
-        ctx,
-        ctx.root(),
-        ["worktree", "list", "--porcelain"],
-        observer,
-    )
-    .map_err(pr_step_error)?;
-    Ok(listing.lines().any(|line| {
-        line.strip_prefix("worktree ")
-            .is_some_and(|candidate| Path::new(candidate) == worktree)
-    }))
 }
 
 fn is_git_object_id(value: &str) -> bool {

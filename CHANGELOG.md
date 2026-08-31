@@ -31,6 +31,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Keep every locked schedule read, cleanup, and durable publication on retained no-follow directory capabilities; authenticate existing PR-manager worktrees before destructive reuse; require stable review-thread pagination and an unchanged comment witness before resolution; and serialize first receipt appends with legacy writers while retaining state when a receipt append may already have landed.
 - Reserve task and PR worktree paths in owner-checked occurrence state before Git can create or reuse them, open schedule locks through no-follow directory capabilities, and serialize PR attempt decisions with compensating attempt repairs.
 - Make repo-root workspace-write tasks mutually exclusive with every managed-worktree occurrence and block them while any retained task or PR evidence remains reachable below that writable root.
 - Preserve each workflow's latest scheduled occurrence as a non-prunable dispatch watermark, and keep PR-worktree inspection and removal behind repeated branch-lease validation with renewal-loss cancellation.

@@ -699,7 +699,7 @@ mod tests {
                         "id": "trusted-thread",
                         "is_resolved": false,
                         "has_trusted_comment": true,
-                        "comments": { "nodes": [
+                        "comments": { "total_count": 2, "nodes": [
                             {
                                 "body": "Trusted reviewer feedback",
                                 "author": { "login": "maintainer", "permission": "write", "trusted": true },
@@ -715,7 +715,7 @@ mod tests {
                         "id": "resolved-trusted-thread",
                         "is_resolved": true,
                         "has_trusted_comment": true,
-                        "comments": { "nodes": [{
+                        "comments": { "total_count": 1, "nodes": [{
                             "body": "Resolved trusted feedback",
                             "author": { "login": "maintainer", "permission": "write", "trusted": true },
                         }]},

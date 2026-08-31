@@ -20,6 +20,7 @@ mod review_thread_boundary_tests {
                 "id": "PRRT_1",
                 "is_resolved": false,
                 "has_trusted_comment": true,
+                "comments": {"total_count": 0, "nodes": []},
             }]},
         });
         let worker_output = json!({
@@ -79,8 +80,8 @@ esac
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let pull_request = json!({
             "review_threads": { "nodes": [
-                {"id": "PRRT_1", "is_resolved": false, "has_trusted_comment": true},
-                {"id": "PRRT_2", "is_resolved": false, "has_trusted_comment": true},
+                {"id": "PRRT_1", "is_resolved": false, "has_trusted_comment": true, "comments": {"total_count": 0, "nodes": []}},
+                {"id": "PRRT_2", "is_resolved": false, "has_trusted_comment": true, "comments": {"total_count": 0, "nodes": []}},
             ]},
         });
         let worker_output = json!({
@@ -170,5 +171,106 @@ esac
             "<!-- jig-pr-manager:review-reply:PRRT_1:example-head -->"
         ));
         assert!(captured.len() > 256 * 1_024);
+    }
+
+    #[test]
+    fn resolution_witness_rejects_feedback_added_after_worker_snapshot() {
+        let witness = ReviewThreadWitness {
+            comment_count: 1,
+            latest_comment_id: Some("PRRC_ORIGINAL".into()),
+        };
+        let changed = json!({
+            "data": {"node": {
+                "id": "PRRT_1",
+                "isResolved": false,
+                "comments": {
+                    "totalCount": 2,
+                    "nodes": [{"id": "PRRC_NEW_FEEDBACK"}],
+                },
+            }},
+        });
+
+        assert!(!review_thread_matches_witness(&changed, &witness, None));
+        assert!(review_thread_matches_witness(
+            &json!({
+                "data": {"node": {
+                    "id": "PRRT_1",
+                    "isResolved": false,
+                    "comments": {
+                        "totalCount": 2,
+                        "nodes": [{"id": "PRRC_JIG_REPLY"}],
+                    },
+                }},
+            }),
+            &witness,
+            Some("PRRC_JIG_REPLY"),
+        ));
+    }
+
+    #[test]
+    fn changed_review_thread_is_skipped_before_resolution_mutation() {
+        let _guard = lock_env();
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let calls = temp.path().join("gh-calls");
+        let gh = temp.path().join("gh-changed-thread.sh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$JIG_TEST_GH_CALLS"
+case "$*" in
+  *"query=mutation"*) exit 9 ;;
+  *"ReviewThreadState"*)
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":2,"nodes":[{"id":"PRRC_NEW"}]}}}}'
+    ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let _calls = EnvVarGuard::set("JIG_TEST_GH_CALLS", calls.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let pull_request = json!({
+            "review_threads": {"nodes": [{
+                "id": "PRRT_1",
+                "is_resolved": false,
+                "has_trusted_comment": true,
+                "comments": {
+                    "total_count": 1,
+                    "nodes": [{"id": "PRRC_ORIGINAL"}],
+                },
+            }]},
+        });
+        let worker_output = json!({
+            "review_thread_replies": [{
+                "thread_id": "PRRT_1",
+                "body": "",
+                "resolve": true,
+            }],
+        });
+
+        let result = post_review_thread_updates(
+            &ctx,
+            &pull_request,
+            &worker_output,
+            "example-head",
+            &mut NoopExecutionObserver,
+        );
+
+        assert!(!result.failed, "{}", result.posts);
+        assert_eq!(result.posts[0]["resolved"], false);
+        assert_eq!(result.posts[0]["resolve_skipped"], true);
+        assert_eq!(
+            result.posts[0]["resolve_skip_reason"],
+            "review_thread_changed"
+        );
+        let calls = fs::read_to_string(calls).unwrap();
+        assert!(calls.contains("ReviewThreadState"), "{calls}");
+        assert!(!calls.contains("resolveReviewThread(input"), "{calls}");
     }
 }
