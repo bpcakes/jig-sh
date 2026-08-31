@@ -21,7 +21,7 @@ use crate::git_receipts::{
 };
 use crate::tool_defs::tool;
 
-use super::jsonl::{RawJsonlRecord, append_jsonl, read_receipts_reverse, scan_jsonl_raw};
+use super::jsonl::{RawJsonlRecord, read_receipts_reverse, scan_jsonl_raw};
 use super::privacy::{
     redact_repository_root, redact_repository_root_in_value, repository_root_spellings,
 };

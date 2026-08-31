@@ -107,7 +107,6 @@ fn record_receipt_inner(
     target: Option<TargetReceiptMetadata>,
     cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<String> {
-    ensure_state_layout(ctx)?;
     let mut git_metadata = receipt_git_metadata(
         ctx,
         input.collect_git_metadata,
@@ -185,7 +184,7 @@ fn record_receipt_inner(
             .map(|value| redact_repository_root(&value, &root_spellings)),
     };
     let receipt_id = receipt.id.clone();
-    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt)?;
+    with_receipt_journal_writer(ctx, |writer| writer.append(&receipt))?;
     Ok(receipt_id)
 }
 

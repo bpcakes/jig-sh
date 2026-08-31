@@ -750,8 +750,15 @@ esac
         let _marker = EnvVarGuard::set("JIG_TEST_CANCEL_MARKER", marker.as_os_str());
         let mut observer = MarkerCancellation(marker);
 
-        let push =
-            commit_and_push(&ctx, &worktree, "repair/example", &base_head, &mut observer).unwrap();
+        let push = commit_and_push(
+            &ctx,
+            &worktree,
+            "repair/example",
+            &base_head,
+            &base_head,
+            &mut observer,
+        )
+        .unwrap();
 
         let final_head = checked_git(&worktree, &["rev-parse", "HEAD"]);
         let remote_head = checked_git(

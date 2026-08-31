@@ -205,6 +205,46 @@ fn protected_authority_is_commit_point_when_replica_publication_fails() {
 }
 
 #[test]
+fn protected_initialization_marker_prevents_replica_promotion_when_the_ledger_is_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    persistence.with_locked(|_| Ok(())).unwrap();
+    let protected = persistence.protected_authority().unwrap().unwrap().clone();
+    let mut forged = ScheduleFile::default();
+    forged.occurrences.insert(
+        "scheduled:forged:100".into(),
+        super::super::ScheduleOccurrence {
+            occurrence_id: "scheduled:forged:100".into(),
+            workflow_id: "forged".into(),
+            scheduled_at_ms: 100,
+            owner: "worker-controlled".into(),
+            claim_expires_at_ms: 200,
+            started_at_ms: 100,
+            uses_shared_checkout: Some(true),
+            finished_at_ms: None,
+            acknowledged_at_ms: None,
+            status: super::super::OccurrenceStatus::Running,
+            worker_receipt_id: None,
+            worktree: None,
+            error: None,
+        },
+    );
+    write_json_durable(&persistence.root, &persistence.path, &forged).unwrap();
+    fs::remove_file(&protected.path).unwrap();
+
+    let error = persistence
+        .read_locked(|store| Ok(store.clone()))
+        .err()
+        .expect("a protected initialization marker must make a missing ledger fail closed");
+
+    assert!(error.to_string().contains("missing"), "{error:#}");
+    assert!(!protected.path.exists());
+}
+
+#[test]
 fn authority_resolution_does_not_execute_the_configured_git_binary() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();

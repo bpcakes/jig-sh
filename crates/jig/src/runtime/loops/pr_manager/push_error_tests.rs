@@ -75,6 +75,7 @@ mod push_error_tests {
             repo.path(),
             "other",
             &head_before,
+            &head_before,
             &mut NoopExecutionObserver,
         )
         .unwrap_err();
@@ -126,6 +127,7 @@ mod push_error_tests {
             repo.path(),
             "repair/example",
             &base_head,
+            &base_head,
             &mut NoopExecutionObserver,
         )
         .unwrap_err();
@@ -134,6 +136,77 @@ mod push_error_tests {
             error,
             PrPushError::Step(PrRepairStepError::Failed(_))
         ));
+    }
+
+    #[test]
+    fn commit_and_push_checks_only_changes_after_the_pre_worker_merge() {
+        let _env = crate::test_env::lock_env();
+        let repo = tempdir().unwrap();
+        let remote_parent = tempdir().unwrap();
+        let remote = remote_parent.path().join("origin.git");
+        crate::test_env::TestRepoBuilder::new(repo.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let git = |cwd: &Path, args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(repo.path(), &["init"]);
+        git(
+            repo.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        git(repo.path(), &["config", "user.name", "Fixture"]);
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-m", "observed head"]);
+        let observed_head = git(repo.path(), &["rev-parse", "HEAD"]);
+        git(remote_parent.path(), &["init", "--bare", "origin.git"]);
+        git(
+            repo.path(),
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(
+            repo.path(),
+            &["push", "origin", "HEAD:refs/heads/repair/example"],
+        );
+
+        std::fs::write(repo.path().join("base.txt"), "pre-existing whitespace \n").unwrap();
+        git(repo.path(), &["add", "base.txt"]);
+        git(repo.path(), &["commit", "-m", "merge base"]);
+        let validation_head = git(repo.path(), &["rev-parse", "HEAD"]);
+        std::fs::write(repo.path().join("repair.txt"), "valid repair\n").unwrap();
+        git(repo.path(), &["add", "repair.txt"]);
+        git(repo.path(), &["commit", "-m", "worker repair"]);
+        let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+        let push = commit_and_push(
+            &ctx,
+            repo.path(),
+            "repair/example",
+            &observed_head,
+            &validation_head,
+            &mut NoopExecutionObserver,
+        )
+        .unwrap();
+
+        assert_eq!(push["pushed"], true);
+        assert_eq!(
+            git(
+                remote_parent.path(),
+                &[
+                    "--git-dir",
+                    "origin.git",
+                    "rev-parse",
+                    "refs/heads/repair/example",
+                ],
+            ),
+            git(repo.path(), &["rev-parse", "HEAD"])
+        );
     }
 
     #[derive(Clone, Copy)]
@@ -214,6 +287,7 @@ mod push_error_tests {
             &ctx,
             repo.path(),
             "repair/example",
+            &observed_head,
             &observed_head,
             &mut NoopExecutionObserver,
         )

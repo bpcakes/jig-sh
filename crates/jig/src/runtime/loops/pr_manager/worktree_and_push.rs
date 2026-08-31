@@ -257,6 +257,7 @@ fn commit_and_push(
     worktree: &Path,
     head_ref: &str,
     base_head: &str,
+    validation_head: &str,
     observer: &mut dyn ExecutionControl,
 ) -> PrPushResult<Value> {
     let unmerged = git_stdout(ctx, worktree, ["ls-files", "--unmerged"], observer)?;
@@ -294,7 +295,13 @@ fn commit_and_push(
     git_checked(
         ctx,
         worktree,
-        ["diff", "--check", base_head.trim(), &final_head, "--"],
+        [
+            "diff",
+            "--check",
+            validation_head.trim(),
+            &final_head,
+            "--",
+        ],
         observer,
     )?;
 
