@@ -59,25 +59,14 @@ pub(crate) fn with_receipt_journal_writer_until<T>(
         true,
         "receipt journal lock",
     )?;
-    if let Err(error) = lock_exclusive_until(&lock, "receipt journal", deadline, cancelled) {
-        if let Some(file) = &legacy_lock {
-            let _ = FileExt::unlock(file);
-        }
-        return Err(error);
-    }
+    lock_exclusive_until(&lock, "receipt journal", deadline, cancelled)?;
 
     let writer = ReceiptJournalWriter {
         state_dir: &directories.state,
     };
-    let result = operation(&writer);
-    let legacy_unlock = legacy_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
-    let unlock = FileExt::unlock(&lock);
-    match (result, legacy_unlock, unlock) {
-        (Ok(value), Ok(()), Ok(())) => Ok(value),
-        (Err(error), _, _) => Err(error),
-        (Ok(_), Err(error), _) => Err(error).context("Failed to unlock legacy receipt journal"),
-        (Ok(_), Ok(()), Err(error)) => Err(error).context("Failed to unlock receipt journal"),
-    }
+    // The file handles are the lock guards. Dropping them releases advisory locks on every
+    // return path without letting fallible post-operation cleanup reclassify a durable append.
+    operation(&writer)
 }
 
 fn lock_exclusive_until(
@@ -301,6 +290,35 @@ mod tests {
         .to_string();
 
         assert!(error.contains("cancelled while waiting"), "{error}");
+    }
+
+    #[test]
+    fn successful_receipt_append_releases_both_locks_by_drop() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let journal_path = temp.path().join(".agent/state/receipts.jsonl");
+        fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        fs::write(&journal_path, b"").unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        with_receipt_journal_writer(&ctx, |writer| writer.append(&json!({"id": 1}))).unwrap();
+
+        let journal = StdOpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&journal_path)
+            .unwrap();
+        let lock = StdOpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(
+                temp.path()
+                    .join(".agent/.cache/state-locks/receipts.jsonl.lock"),
+            )
+            .unwrap();
+        assert!(journal.try_lock_exclusive().unwrap());
+        assert!(lock.try_lock_exclusive().unwrap());
+        assert_eq!(fs::read(&journal_path).unwrap(), b"{\"id\":1}\n");
     }
 
     #[test]
