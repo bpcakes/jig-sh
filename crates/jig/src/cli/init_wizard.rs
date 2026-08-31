@@ -7,15 +7,19 @@ use crate::bootstrap::{
     self, InitOpts, ScaffoldDb, ScaffoldFrontend, ScaffoldPreset, parse_scaffold_frontend,
 };
 
-pub(super) fn prepare_init_interaction(opts: &mut InitOpts) -> Result<()> {
-    bootstrap::merge_init_answer_file_for_interaction(&mut opts.answers)?;
+pub(super) fn prepare_init_interaction(
+    opts: &mut InitOpts,
+) -> Result<bootstrap::PreparedInitAnswers> {
+    let mut prepared = prepare_init_answers(opts)?;
+    prepared.move_effective_to(&mut opts.answers)?;
     let terminals_available = io::stdin().is_terminal() && io::stderr().is_terminal();
     let stdin = io::stdin();
     let stderr = io::stderr();
     let mut input = stdin.lock();
     let mut output = stderr.lock();
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
-    prepare_merged_init_interaction(opts, policy, &mut input, &mut output)
+    prepare_merged_init_interaction(opts, &mut prepared, policy, &mut input, &mut output)?;
+    Ok(prepared)
 }
 
 pub(super) fn preflight_init_package_manager(opts: &InitOpts) -> Result<()> {
@@ -26,10 +30,11 @@ fn preflight_init_package_manager_with(
     opts: &InitOpts,
     available: impl FnOnce(&str) -> bool,
 ) -> Result<()> {
-    if !matches!(
-        opts.scaffold.preset,
-        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-    ) {
+    if !opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_web_package_manager)
+    {
         return Ok(());
     }
     let package_manager = opts.answers.web_package_manager.as_deref().unwrap_or("bun");
@@ -46,10 +51,12 @@ fn prepare_init_interaction_with_io<R: BufRead, W: Write>(
     opts: &mut InitOpts,
     input: &mut R,
     output: &mut W,
-) -> Result<()> {
-    bootstrap::merge_init_answer_file_for_interaction(&mut opts.answers)?;
+) -> Result<bootstrap::PreparedInitAnswers> {
+    let mut prepared = prepare_init_answers(opts)?;
+    prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, true);
-    prepare_merged_init_interaction(opts, policy, input, output)
+    prepare_merged_init_interaction(opts, &mut prepared, policy, input, output)?;
+    Ok(prepared)
 }
 
 #[cfg(test)]
@@ -58,10 +65,27 @@ fn prepare_init_interaction_with_terminal<R: BufRead, W: Write>(
     terminals_available: bool,
     input: &mut R,
     output: &mut W,
-) -> Result<()> {
-    bootstrap::merge_init_answer_file_for_interaction(&mut opts.answers)?;
+) -> Result<bootstrap::PreparedInitAnswers> {
+    let mut prepared = prepare_init_answers(opts)?;
+    prepared.move_effective_to(&mut opts.answers)?;
     let policy = InitInteractionPolicy::resolve(opts, terminals_available);
-    prepare_merged_init_interaction(opts, policy, input, output)
+    prepare_merged_init_interaction(opts, &mut prepared, policy, input, output)?;
+    Ok(prepared)
+}
+
+fn prepare_init_answers(opts: &InitOpts) -> Result<bootstrap::PreparedInitAnswers> {
+    bootstrap::prepare_init_answers_for_interaction(&opts.answers).map_err(|error| {
+        if let Some(preset @ (ScaffoldPreset::RustLibrary | ScaffoldPreset::RustCli)) =
+            opts.scaffold.preset
+        {
+            anyhow::anyhow!(
+                "Failed to prepare --preset {} answers: {error:#}",
+                preset.as_str()
+            )
+        } else {
+            error
+        }
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,11 +113,13 @@ impl InitInteractionPolicy {
 
 fn prepare_merged_init_interaction<R: BufRead, W: Write>(
     opts: &mut InitOpts,
+    prepared: &mut bootstrap::PreparedInitAnswers,
     policy: InitInteractionPolicy,
     input: &mut R,
     output: &mut W,
 ) -> Result<()> {
     opts.scaffold.normalize_minimal_harness_shape(&opts.answers);
+    prepared.validate_selected_preset(&opts.scaffold, &opts.answers)?;
     opts.scaffold.validate_init_invariants(&opts.answers)?;
     match policy {
         InitInteractionPolicy::Interactive => {
@@ -106,6 +132,7 @@ fn prepare_merged_init_interaction<R: BufRead, W: Write>(
             validate_project_shape_resolved(opts, non_terminal)?;
         }
     }
+    prepared.validate_selected_preset(&opts.scaffold, &opts.answers)?;
     opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
     opts.scaffold.validate_init_invariants(&opts.answers)
 }
@@ -114,18 +141,30 @@ fn apply_project_shape_defaults(opts: &mut InitOpts) -> Result<()> {
     if opts.scaffold.preset.is_none() {
         opts.scaffold.preset = Some(ScaffoldPreset::RustReact);
     }
-    if matches!(
-        opts.scaffold.preset,
-        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-    ) {
+    if opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_database_choice)
+    {
         opts.scaffold.db.get_or_insert(ScaffoldDb::None);
-        if !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty() {
-            opts.scaffold
-                .frontends
-                .push(parse_scaffold_frontend("web").map_err(|error| anyhow::anyhow!(error))?);
-        }
     }
-    if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
+    if opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_frontend_choice)
+        && !opts.scaffold.has_frontends()
+        && opts.answers.frontend_apps.is_empty()
+    {
+        opts.scaffold
+            .frontends
+            .push(parse_scaffold_frontend("web").map_err(|error| anyhow::anyhow!(error))?);
+    }
+    if opts
+        .scaffold
+        .preset
+        .is_some_and(ScaffoldPreset::requires_go_module)
+        && opts.answers.go_module.is_none()
+    {
         opts.answers.go_module = Some(default_go_module_for_init(opts));
     }
     Ok(())
@@ -139,22 +178,23 @@ fn validate_project_shape_resolved(opts: &InitOpts, non_terminal: bool) -> Resul
     };
     let Some(preset) = opts.scaffold.preset else {
         bail!(
-            "Init cannot prompt because {mode}; pass an application preset with explicit database and frontend choices, pass --preset harness-only, or use --defaults"
+            "Init cannot prompt because {mode}; pass --preset rust-react with explicit database and frontend choices, pass --preset go-react with explicit database, frontend, and Go module choices, pass --preset harness-only, --preset rust-library, or --preset rust-cli, or use --defaults"
         );
     };
-    if matches!(preset, ScaffoldPreset::RustReact | ScaffoldPreset::GoReact) {
-        if opts.scaffold.db.is_none() {
-            bail!(
-                "Init cannot prompt because {mode}; the selected application preset requires an explicit --db choice, or use --defaults"
-            );
-        }
-        if !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty() {
-            bail!(
-                "Init cannot prompt because {mode}; the selected application preset requires --frontend/--frontends or frontend_apps in --answers-file, or use --defaults"
-            );
-        }
+    if preset.requires_database_choice() && opts.scaffold.db.is_none() {
+        bail!(
+            "Init cannot prompt because {mode}; the selected application preset requires an explicit --db choice, or use --defaults"
+        );
     }
-    if preset == ScaffoldPreset::GoReact && opts.answers.go_module.is_none() {
+    if preset.requires_frontend_choice()
+        && !opts.scaffold.has_frontends()
+        && opts.answers.frontend_apps.is_empty()
+    {
+        bail!(
+            "Init cannot prompt because {mode}; the selected application preset requires --frontend/--frontends or frontend_apps in --answers-file, or use --defaults"
+        );
+    }
+    if preset.requires_go_module() && opts.answers.go_module.is_none() {
         bail!(
             "Init cannot prompt because {mode}; --preset go-react requires --go-module <module>, or use --defaults"
         );
@@ -183,30 +223,36 @@ fn guide_project_shape<R: BufRead, W: Write>(
             ScaffoldChoice::HarnessOnly => {
                 opts.scaffold.preset = Some(ScaffoldPreset::HarnessOnly);
             }
+            ScaffoldChoice::RustLibrary => {
+                opts.scaffold.preset = Some(ScaffoldPreset::RustLibrary);
+            }
+            ScaffoldChoice::RustCli => {
+                opts.scaffold.preset = Some(ScaffoldPreset::RustCli);
+            }
         }
     }
 
-    if !matches!(
-        opts.scaffold.preset,
-        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-    ) {
+    let Some(preset) = opts.scaffold.preset else {
         return Ok(());
-    }
-    let needs_frontends = !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty();
-    if !printed_header && (opts.scaffold.db.is_none() || needs_frontends) {
+    };
+    let needs_database = preset.requires_database_choice() && opts.scaffold.db.is_none();
+    let needs_frontends = preset.requires_frontend_choice()
+        && !opts.scaffold.has_frontends()
+        && opts.answers.frontend_apps.is_empty();
+    if !printed_header && (needs_database || needs_frontends) {
         print_project_shape_header(output, &metadata)?;
     }
-    if opts.scaffold.db.is_none() {
+    if needs_database {
         opts.scaffold.db = Some(prompt_database(
             input,
             output,
-            opts.scaffold.preset == Some(ScaffoldPreset::GoReact),
+            preset == ScaffoldPreset::GoReact,
         )?);
     }
     if needs_frontends {
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
     }
-    if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
+    if preset.requires_go_module() && opts.answers.go_module.is_none() {
         let default = default_go_module_for_init(opts);
         opts.answers.go_module = Some(prompt_go_module(input, output, &default)?);
     }
@@ -227,6 +273,16 @@ fn print_project_shape_header<W: Write>(
         output,
         "  3. go-react — Go 1.26, chi, Huma, pgx/sqlc/Goose, and React."
     )?;
+    writeln!(
+        output,
+        "  4. rust-library — {}",
+        ScaffoldPreset::RustLibrary.descriptor().summary()
+    )?;
+    writeln!(
+        output,
+        "  5. rust-cli — {}",
+        ScaffoldPreset::RustCli.descriptor().summary()
+    )?;
     Ok(())
 }
 
@@ -235,6 +291,8 @@ enum ScaffoldChoice {
     RustReact,
     HarnessOnly,
     GoReact,
+    RustLibrary,
+    RustCli,
 }
 
 fn prompt_scaffold_choice<R: BufRead, W: Write>(
@@ -245,7 +303,7 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
         let answer = prompt_line(
             input,
             output,
-            "Scaffold an app? [1 rust-react / 2 harness-only / 3 go-react] (1): ",
+            "Project shape? [1 rust-react / 2 harness-only / 3 go-react / 4 rust-library / 5 rust-cli] (1): ",
             "1",
             "project scaffold",
         )?;
@@ -257,9 +315,11 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
                 return Ok(ScaffoldChoice::HarnessOnly);
             }
             "3" | "go" | "go-react" => return Ok(ScaffoldChoice::GoReact),
+            "4" | "rust-library" => return Ok(ScaffoldChoice::RustLibrary),
+            "5" | "rust-cli" => return Ok(ScaffoldChoice::RustCli),
             _ => writeln!(
                 output,
-                "  Enter 1, 2, 3, rust-react, harness-only, or go-react."
+                "  Enter 1, 2, 3, 4, 5, rust-react, harness-only, go-react, rust-library, or rust-cli."
             )?,
         }
     }
@@ -481,3 +541,15 @@ impl InitPresetMetadata {
 #[cfg(test)]
 #[path = "init_wizard_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "init_wizard_rust_library_tests.rs"]
+mod rust_library_tests;
+
+#[cfg(test)]
+#[path = "init_wizard_rust_cli_tests.rs"]
+mod rust_cli_tests;
+
+#[cfg(test)]
+#[path = "init_wizard_discovery_tests.rs"]
+mod discovery_tests;

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::answers::AnswerInput;
+use super::answers::{AnswerInput, PreparedInitAnswers};
 use super::git::init_git_repo_with_validation;
 use super::init_transaction::InitMutationTransaction;
 use super::initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
@@ -28,11 +28,22 @@ struct PreparedInit {
     progress: CliProgress,
 }
 
+#[cfg(test)]
 pub(crate) fn run_init(opts: InitOpts) -> Result<InitReport> {
-    execute_init(prepare_init(opts)?)
+    execute_init(prepare_init(opts, None)?)
 }
 
-fn prepare_init(mut opts: InitOpts) -> Result<PreparedInit> {
+pub(crate) fn run_prepared_init(
+    opts: InitOpts,
+    prepared_answers: PreparedInitAnswers,
+) -> Result<InitReport> {
+    execute_init(prepare_init(opts, Some(prepared_answers))?)
+}
+
+fn prepare_init(
+    mut opts: InitOpts,
+    prepared_answers: Option<PreparedInitAnswers>,
+) -> Result<PreparedInit> {
     let invocation_cwd = bootstrap_invocation_cwd()?;
     let destination = path::resolve_init_destination(&opts.path, &invocation_cwd)?;
     // This first validation deliberately precedes answer loading and template
@@ -44,12 +55,39 @@ fn prepare_init(mut opts: InitOpts) -> Result<PreparedInit> {
     progress.step("validate destination", "empty directory or --force");
     progress.log_blocked_on_err(validate_init_destination(&destination, opts.force))?;
     progress.step("read init answers", "--answers-file and CLI precedence");
-    let answer_input =
-        progress.log_blocked_on_err(AnswerInput::from_opts_at(&opts.answers, &invocation_cwd))?;
-    let mut answers = progress.log_blocked_on_err(answer_input.effective_opts(&opts.answers))?;
-    opts.scaffold.normalize_minimal_harness_shape(&answers);
-    progress.log_blocked_on_err(opts.scaffold.validate_init_invariants(&answers))?;
-    opts.scaffold.apply_init_answer_defaults(&mut answers);
+    let prepared_answers = match prepared_answers {
+        Some(prepared) => prepared,
+        None => {
+            let mut prepared = progress.log_blocked_on_err(
+                PreparedInitAnswers::from_opts_at(&opts.answers, &invocation_cwd).map_err(
+                    |error| {
+                        if let Some(
+                            preset @ (super::ScaffoldPreset::RustLibrary
+                            | super::ScaffoldPreset::RustCli),
+                        ) = opts.scaffold.preset
+                        {
+                            anyhow::anyhow!(
+                                "Failed to prepare --preset {} answers: {error:#}",
+                                preset.as_str()
+                            )
+                        } else {
+                            error
+                        }
+                    },
+                ),
+            )?;
+            progress.log_blocked_on_err(prepared.move_effective_to(&mut opts.answers))?;
+            prepared
+        }
+    };
+    opts.scaffold.normalize_minimal_harness_shape(&opts.answers);
+    progress.log_blocked_on_err(
+        prepared_answers.validate_selected_preset(&opts.scaffold, &opts.answers),
+    )?;
+    progress.log_blocked_on_err(opts.scaffold.validate_init_invariants(&opts.answers))?;
+    opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
+    let answer_input = progress.log_blocked_on_err(prepared_answers.into_input())?;
+    let mut answers = opts.answers;
     let scaffold_plan = progress.log_blocked_on_err(scaffold::InitScaffoldPlan::from_opts(
         &opts.scaffold,
         &answers,

@@ -28,6 +28,7 @@ pub(super) use rust_file_loc::{
 
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
+const RUST_WORKSPACE_COMPONENT: &str = "workspace";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
@@ -53,6 +54,22 @@ const DEFAULT_AFFECTED_IGNORE: &[&str] = &[
     "LICENSE.*",
     ".github/**",
 ];
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum RepositoryProjectionHint {
+    #[default]
+    Backend,
+    RustWorkspace,
+}
+
+impl RepositoryProjectionHint {
+    pub(super) const fn rust_component_id(self) -> &'static str {
+        match self {
+            Self::Backend => BACKEND_COMPONENT,
+            Self::RustWorkspace => RUST_WORKSPACE_COMPONENT,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RepositoryRenderModel {
@@ -118,6 +135,10 @@ impl AuthoredRepositoryModel {
             .into_iter()
             .collect()
     }
+
+    pub(super) fn rust_workspace_guidance_enabled(&self) -> bool {
+        rust_workspace_guidance_enabled(&self.components)
+    }
 }
 
 #[derive(Serialize)]
@@ -137,7 +158,10 @@ impl RepositoryRenderModel {
         }
         let mut builder = ModelBuilder::new(answers)?;
         builder.add_repository_component()?;
-        builder.add_backend_component()?;
+        match answers.repository_projection_hint() {
+            RepositoryProjectionHint::Backend => builder.add_backend_component()?,
+            RepositoryProjectionHint::RustWorkspace => builder.add_rust_workspace_component()?,
+        }
         builder.add_frontend_components()?;
         builder.finish()
     }
@@ -356,6 +380,23 @@ impl RepositoryRenderModel {
             })
         })
     }
+
+    pub(super) fn rust_workspace_guidance_enabled(&self) -> bool {
+        rust_workspace_guidance_enabled(&self.components)
+    }
+}
+
+fn rust_workspace_guidance_enabled(components: &[ComponentSpec]) -> bool {
+    let has_neutral_workspace = components.iter().any(|component| {
+        component.id.as_str() == RUST_WORKSPACE_COMPONENT
+            && component.root == "."
+            && component.adapters.iter().any(|adapter| adapter == "rust")
+    });
+    let has_backend_identity = components.iter().any(|component| {
+        component.id.as_str() == BACKEND_COMPONENT
+            || component.tags.iter().any(|tag| tag == "backend")
+    });
+    has_neutral_workspace && !has_backend_identity
 }
 
 fn component_root_input(root: &str) -> String {
@@ -458,6 +499,36 @@ impl<'a> ModelBuilder<'a> {
                 |_| true,
             )?;
         }
+        Ok(())
+    }
+
+    fn add_rust_workspace_component(&mut self) -> Result<()> {
+        if self.answers.backend_language().is_go() {
+            bail!("the neutral Rust workspace projection requires Rust answers");
+        }
+        if self.answers.sqlx_enabled() {
+            bail!("the neutral Rust workspace projection does not include SQLx state");
+        }
+        if self.answers.frontend_harness_enabled() {
+            bail!("the neutral Rust workspace projection does not include frontend state");
+        }
+
+        let mut component = ComponentSpec::new(component_id(RUST_WORKSPACE_COMPONENT)?, ".");
+        component.description = Some("Repository Rust workspace.".into());
+        component.tags = vec!["workspace".into()];
+        component.adapters = vec!["rust".into()];
+        component.provenance = provenance(&[
+            ("id", FieldProvenance::Inferred),
+            ("root", FieldProvenance::Inferred),
+            ("adapters", FieldProvenance::Inferred),
+        ]);
+        self.insert_component(component)?;
+        self.add_adapter_actions(
+            RUST_WORKSPACE_COMPONENT,
+            "rust",
+            CommandScope::Component,
+            |_| true,
+        )?;
         Ok(())
     }
 

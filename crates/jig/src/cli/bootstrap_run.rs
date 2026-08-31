@@ -10,14 +10,14 @@ use crate::{bootstrap, context::RepoContext, runtime};
 
 pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool) -> Result<()> {
     bootstrap::preflight_init_destination(&opts)?;
-    prepare_init_interaction(&mut opts)?;
+    let prepared_answers = prepare_init_interaction(&mut opts)?;
     preflight_init_package_manager(&opts)?;
     let vault_setup = prepare_bootstrap_vault(
         BootstrapVaultIntent::from_requested(!opts.no_vault),
         BootstrapInputMode::from_flags(opts.no_input, opts.defaults),
         BootstrapVaultCommand::Init,
     )?;
-    let mut output = bootstrap::run_init(opts)?;
+    let mut output = bootstrap::run_prepared_init(opts, prepared_answers)?;
     let vault = ensure_bootstrap_vault(output.destination(), vault_setup)?;
     output.attach_vault(vault)?;
     if json_output {

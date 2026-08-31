@@ -226,12 +226,17 @@ fn doctor_reports_invalid_configured_repo_root() {
             .unwrap()
             .contains("JIG_REPO_ROOT does not contain .jig.toml")
     );
-    assert!(
-            check_by_id(&output, "repo")["fix"]
-                .as_str()
-                .unwrap()
-                .contains("init <path> --preset harness-only --repo-name <name> --sqlx-enabled false --no-input --no-vault")
-        );
+    let fix = check_by_id(&output, "repo")["fix"].as_str().unwrap();
+    for expected in [
+        "init <path> --preset rust-react --db none --frontend web --no-input --no-vault",
+        "init <path> --preset harness-only --repo-name <name> --sqlx-enabled false --no-input --no-vault",
+        "init <path> --preset go-react --db none --frontend web --go-module example.com/<name> --no-input --no-vault",
+        "init <path> --preset rust-library --no-input --no-vault",
+        "init <path> --preset rust-cli --no-input --no-vault",
+    ] {
+        assert!(fix.contains(expected), "missing {expected:?} from {fix}");
+    }
+    assert!(fix.contains("interactively to choose the same five shapes"));
 }
 
 #[cfg(unix)]

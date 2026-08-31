@@ -195,21 +195,9 @@ pub(super) fn os_path_bytes(path: &Path) -> Result<Vec<u8>> {
 pub(super) fn create_payload_symlink(
     path: &Path,
     target: &Path,
-    target_is_directory: bool,
+    _target_is_directory: bool,
 ) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let _ = target_is_directory;
-        std::os::unix::fs::symlink(target, path)?;
-    }
-    #[cfg(windows)]
-    {
-        if target_is_directory {
-            std::os::windows::fs::symlink_dir(target, path)?;
-        } else {
-            std::os::windows::fs::symlink_file(target, path)?;
-        }
-    }
+    std::os::unix::fs::symlink(target, path)?;
     sync_parent(path)
 }
 

@@ -24,7 +24,7 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
                 false,
                 "missing",
                 error.to_string(),
-            ).with_fix("Run `scripts/jig adopt . --repo-name <name> --sqlx-enabled false` from the repository root, or run `scripts/jig init <path> --preset harness-only --repo-name <name> --sqlx-enabled false --no-input --no-vault` to create a new repo."));
+            ).with_fix("Run `scripts/jig adopt . --repo-name <name> --sqlx-enabled false` from the repository root. To create a new repo, choose one prompt-free shape: `scripts/jig init <path> --preset rust-react --db none --frontend web --no-input --no-vault`; `scripts/jig init <path> --preset harness-only --repo-name <name> --sqlx-enabled false --no-input --no-vault`; `scripts/jig init <path> --preset go-react --db none --frontend web --go-module example.com/<name> --no-input --no-vault`; `scripts/jig init <path> --preset rust-library --no-input --no-vault`; or `scripts/jig init <path> --preset rust-cli --no-input --no-vault`. Run `scripts/jig init <path>` interactively to choose the same five shapes."));
             return Ok(output(None, checks));
         }
     };

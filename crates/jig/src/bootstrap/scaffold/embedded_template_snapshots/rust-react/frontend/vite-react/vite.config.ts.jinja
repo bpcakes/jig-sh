@@ -23,7 +23,7 @@ const apiOrigin =
   // A current Jig session owns its namespaced topology. API_ORIGIN remains the
   // direct-Vite override when no managed API was selected.
   firstNonEmpty(process.env.JIG_DEV_API_ORIGIN, process.env.API_ORIGIN) ??
-  "http://api.<<[ repo_dns_label ]>>.localhost:1355";
+  "http://api.<<[ repo_dns_label ]>>.<<[ dev_tld ]>>:<<[ dev_proxy_port ]>>";
 
 export default defineConfig({
   plugins: [

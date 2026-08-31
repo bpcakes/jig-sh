@@ -89,7 +89,7 @@ fn initial_notes(
     };
     if scaffold_plan.is_some() {
         notes.push(
-            "Scaffolded application code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite app code."
+            "Scaffolded project code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite project code."
                 .into(),
         );
     }
@@ -509,20 +509,19 @@ impl ScaffoldOpts {
                 actual.as_str()
             );
         }
+        let has_project_scaffold = self
+            .preset
+            .is_some_and(ScaffoldPreset::has_project_scaffold);
         if answers.harness_footprint == Some(HarnessFootprint::Minimal)
-            && (matches!(
-                self.preset,
-                Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
-            )
+            && (has_project_scaffold
                 || self.db.is_some()
                 || self.has_frontends()
                 || answers.go_module.is_some())
         {
-            let scaffold = if self.preset == Some(ScaffoldPreset::GoReact) {
-                "Go React"
-            } else {
-                "Rust React"
-            };
+            let scaffold = self
+                .preset
+                .and_then(ScaffoldPreset::project_scaffold_label)
+                .unwrap_or("Rust React");
             bail!(
                 "Init cannot combine harness_footprint = \"minimal\" with a {scaffold} scaffold; remove the preset and its backend/frontend options, or use harness_footprint = \"full\""
             );
@@ -534,7 +533,11 @@ impl ScaffoldOpts {
                 "--preset harness-only cannot be combined with --db, --go-module, --frontend, or --frontends; remove the scaffold flags or use an application preset"
             );
         }
-        if self.preset != Some(ScaffoldPreset::GoReact) && answers.go_module.is_some() {
+        if !self
+            .preset
+            .is_some_and(ScaffoldPreset::supports_go_module)
+            && answers.go_module.is_some()
+        {
             bail!("--go-module requires --preset go-react");
         }
         if self.preset == Some(ScaffoldPreset::GoReact) {
@@ -609,7 +612,9 @@ impl ScaffoldOpts {
     }
 
     pub(crate) fn apply_init_answer_defaults(&self, answers: &mut AnswerOpts) {
-        if self.preset == Some(ScaffoldPreset::HarnessOnly)
+        if self
+            .preset
+            .is_some_and(|preset| !preset.supports_database())
             && should_default_init_sqlx_disabled(answers)
         {
             answers.sqlx_enabled = Some(false);

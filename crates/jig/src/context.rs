@@ -901,7 +901,7 @@ mod validation;
 use validation::*;
 pub(crate) use validation::{
     config_app_dirs_match, default_codex_marketplace_plugins, is_reserved_git_metadata_component,
-    validate_schema_docs_dir, validate_web_package_manager,
+    validate_dev_proxy_settings, validate_schema_docs_dir, validate_web_package_manager,
 };
 
 mod repository_root;

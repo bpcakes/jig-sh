@@ -634,6 +634,174 @@ marketplaces = []
 }
 
 #[test]
+fn rust_library_init_has_exact_json_and_human_process_summaries() {
+    let template_parent = tempdir().unwrap();
+    let template = template_parent.path().join("ExampleProject-template");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--local", "--no-hardlinks"])
+        .arg(&workspace)
+        .arg(&template)
+        .status()
+        .unwrap();
+    assert!(clone.success());
+
+    let destinations = tempdir().unwrap();
+    let json_destination = destinations.path().join("ExampleLibraryJson");
+    let json_output = jig()
+        .args([
+            "--json",
+            "init",
+            json_destination.to_str().unwrap(),
+            "--preset",
+            "rust-library",
+            "--template",
+            template.to_str().unwrap(),
+            "--template-mode",
+            "committed",
+            "--no-input",
+            "--no-vault",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        json_output.status.success(),
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        json_output.status,
+        String::from_utf8_lossy(&json_output.stdout),
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let json_report: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(json_report["ok"], true);
+    assert_eq!(json_report["scaffold"]["preset"], "rust-library");
+    assert_eq!(json_report["scaffold"]["db"], "none");
+    assert_eq!(json_report["scaffold"]["frontends"], json!([]));
+    assert_eq!(
+        json_report["scaffold"]["files_created"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert!(
+        json_report["next_steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|step| step.as_str() != Some("scripts/jig dev"))
+    );
+    let notes = json_report["notes"].as_array().unwrap();
+    assert!(notes.iter().any(|note| {
+        note.as_str()
+            .is_some_and(|note| note.contains("Scaffolded project code is project-owned"))
+    }));
+    assert!(notes.iter().all(|note| {
+        !note
+            .as_str()
+            .is_some_and(|note| note.contains("Scaffolded application code"))
+    }));
+    let config = fs::read_to_string(json_destination.join(".jig.toml")).unwrap();
+    let config = toml::from_str::<toml::Value>(&config).unwrap();
+    assert_eq!(config["dev"]["proxy_port"].as_integer(), Some(1355));
+    assert_eq!(config["dev"]["https_port"].as_integer(), Some(1443));
+    assert_eq!(config["dev"]["https"].as_bool(), Some(false));
+    assert_eq!(config["dev"]["http2"].as_bool(), Some(true));
+    assert_eq!(config["dev"]["lan"].as_bool(), Some(false));
+    assert_eq!(config["dev"]["tld"].as_str(), Some("localhost"));
+    assert_eq!(config["dev"]["workspace_discovery"].as_bool(), Some(false));
+
+    for check in ["contract", "agent-map", "agent-guides"] {
+        let output = jig()
+            .current_dir(&json_destination)
+            .args(["check", check])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "jig check {check} failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let human_destination = destinations.path().join("ExampleLibraryHuman");
+    let human_output = jig()
+        .args([
+            "init",
+            human_destination.to_str().unwrap(),
+            "--preset",
+            "rust-library",
+            "--template",
+            template.to_str().unwrap(),
+            "--template-mode",
+            "committed",
+            "--no-input",
+            "--no-vault",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        human_output.status.success(),
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        human_output.status,
+        String::from_utf8_lossy(&human_output.stdout),
+        String::from_utf8_lossy(&human_output.stderr)
+    );
+    let human = String::from_utf8(human_output.stdout).unwrap();
+    assert!(human.contains("scaffold: rust-library for examplelibraryhuman (db: none)"));
+    assert!(human.contains("scaffold files: 5 created, 0 modified, 0 unchanged"));
+    assert!(human.contains("Scaffolded project code is project-owned"));
+    assert!(!human.contains("Scaffolded application code"));
+    assert!(!human.contains("frontends:"));
+    assert!(!human.contains("scripts/jig dev"));
+}
+
+#[test]
+fn forbidden_rust_library_answers_fail_before_template_vault_and_publication() {
+    let temp = tempdir().unwrap();
+    let answers = temp.path().join("answers.toml");
+    fs::write(&answers, "unexpected_shape_authority = true\n").unwrap();
+    let destination = temp.path().join("ExampleLibrary");
+
+    let output = jig()
+        .env_remove("JIG_VAULT_PASSPHRASE")
+        .args([
+            "--json",
+            "init",
+            destination.to_str().unwrap(),
+            "--preset",
+            "rust-library",
+            "--answers-file",
+            answers.to_str().unwrap(),
+            "--template",
+            "/missing/ExampleProject-template",
+            "--no-input",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.contains("rust-library"), "{message}");
+    assert!(message.contains("unexpected_shape_authority"), "{message}");
+    assert!(!message.contains("JIG_VAULT_PASSPHRASE"), "{message}");
+    assert!(
+        !message.contains("Failed to inspect template source"),
+        "{message}"
+    );
+    assert!(!destination.exists());
+}
+
+include!("cli_json_parts/rust_cli.rs");
+include!("cli_json_parts/rust_only_acceptance.rs");
+
+#[test]
 fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
     let repo = tempdir().unwrap();
     let vault = tempdir().unwrap();

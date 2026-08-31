@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Add the explicit `rust-library` init preset for a virtual Rust 2024 workspace with one documented, non-publishable library crate and no application, database, frontend, or dev-app state.
 - Add the contract-v6 agent-native repository model with checked-in components, actions, profiles, affected-selection policy, immutable content-addressed run plans, durable target runs, and target/profile evidence gates.
 - Add `jig check` selectors with `--profile`, `--affected`, `--explain`, and `--fail-fast`, plus repository-aware `jig info` subjects and `jig migration add`.
 - Add the `go-react` scaffold preset, `jig-go` repository adapter, Go test workflow, Huma/Chi API skeleton, optional PostgreSQL/sqlc/Goose integration, and generated React client-contract checks.
@@ -31,6 +32,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Preserve validated scalar `[dev]` settings across init/update rendering and keep generated Vite fallback origins aligned with the configured proxy port and private TLD.
 - Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy without imposing scaffold-only CI selectors, reject symlink-redirection in Go component roots, and make generated Go CI resolve nested component module authorities, observe vendored modules and SQL inputs, and reserve Linux for Docker-backed PostgreSQL tests.
 - Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
 - Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.

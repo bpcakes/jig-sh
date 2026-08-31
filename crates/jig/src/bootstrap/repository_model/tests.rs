@@ -3,9 +3,13 @@ use std::fs;
 use tempfile::TempDir;
 
 use super::*;
+use crate::backend::BackendLanguage;
+use crate::bootstrap::AnswerOpts;
+use crate::bootstrap::answers::AnswerResolution;
 
 mod go_workflow;
 mod rust_file_loc;
+mod rust_workspace;
 
 pub(super) fn answers(contents: &str) -> RenderAnswers {
     let temp = TempDir::new().unwrap();
@@ -24,6 +28,23 @@ fn scaffold_answers(contents: &str) -> RenderAnswers {
     let mut answers = answers(contents);
     answers.enable_scaffolded_frontend_contracts();
     answers
+}
+
+fn rust_workspace_answers() -> RenderAnswers {
+    let destination = TempDir::new().unwrap();
+    let opts = AnswerOpts {
+        repo_name: Some("ExampleProject".into()),
+        backend_language: Some(BackendLanguage::Rust),
+        repository_projection_hint: RepositoryProjectionHint::RustWorkspace,
+        sqlx_enabled: Some(false),
+        schema_dump_enabled: Some(false),
+        rust_crate_roots: vec!["crates".into()],
+        ..AnswerOpts::default()
+    };
+    AnswerResolution::from_opts(&opts, destination.path(), false)
+        .unwrap()
+        .into_parts()
+        .0
 }
 
 #[test]
@@ -679,74 +700,4 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     assert_eq!(rerendered.default_check_profile.as_str(), "ci");
 }
 
-#[test]
-fn authored_mixed_go_postgres_model_defaults_its_owned_migration_directory() {
-    let api = ComponentSpec {
-        adapters: vec!["go".into(), "go-postgres".into()],
-        ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
-    };
-    let worker = ComponentSpec {
-        adapters: vec!["rust".into()],
-        ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
-    };
-    let mut api_test = ActionSpec::new(
-        target_id("api", "test").unwrap(),
-        ActionIntent::Check,
-        ActionRunner::command("api_test_command"),
-    );
-    api_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
-    let mut worker_test = ActionSpec::new(
-        target_id("worker", "test").unwrap(),
-        ActionIntent::Check,
-        ActionRunner::command("worker_test_command"),
-    );
-    worker_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
-    let authored = RepositoryRenderModel {
-        affected_ignore: Vec::new(),
-        components: vec![api, worker],
-        actions: vec![api_test, worker_test],
-        profiles: vec![ProfileSpec::new(
-            ProfileId::parse("ci").unwrap(),
-            vec![
-                target_id("api", "test").unwrap(),
-                target_id("worker", "test").unwrap(),
-            ],
-        )],
-        default_check_profile: ProfileId::parse("ci").unwrap(),
-        required_commands: vec!["api_test_command".into(), "worker_test_command".into()],
-        tools: Vec::new(),
-        commands: BTreeMap::from([
-            ("api_test_command".into(), "go test ./...".into()),
-            (
-                "worker_test_command".into(),
-                "cargo test -p example-worker".into(),
-            ),
-        ]),
-    };
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("answers.toml");
-    fs::write(
-        &path,
-        format!(
-            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-            authored.authored_toml().unwrap(),
-            authored.commands_toml().unwrap()
-        ),
-    )
-    .unwrap();
-
-    let answers = RenderAnswers::from_answers_file(&path).unwrap();
-    let rendered = serde_json::to_value(&answers).unwrap();
-
-    assert!(answers.go_backend_enabled());
-    assert!(answers.rust_backend_enabled());
-    assert_eq!(
-        answers.migration_dir(),
-        Some(crate::backend::GO_POSTGRES_MIGRATION_DIR)
-    );
-    assert_eq!(
-        rendered["migration_dir"],
-        crate::backend::GO_POSTGRES_MIGRATION_DIR
-    );
-    assert_eq!(rendered["rust_migration_dir"], serde_json::Value::Null);
-}
+include!("tests/authored_workflows.rs");

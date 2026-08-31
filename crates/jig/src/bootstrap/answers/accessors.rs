@@ -40,4 +40,10 @@ impl RenderAnswers {
     pub(in crate::bootstrap) const fn backend_language(&self) -> BackendLanguage {
         self.backend_language
     }
+
+    pub(in crate::bootstrap) const fn repository_projection_hint(
+        &self,
+    ) -> RepositoryProjectionHint {
+        self.repository_projection_hint
+    }
 }

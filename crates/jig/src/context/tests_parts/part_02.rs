@@ -836,20 +836,20 @@ web_package_manager = "/tmp/run-anything"
 }
 
 #[test]
-fn template_dev_defaults_match_runtime_defaults() {
+fn template_dev_settings_are_rendered_from_answer_authority() {
     let template = include_str!("../../../../../templates/project/.jig.toml.jinja");
-    let defaults = DevConfig::default();
 
-    assert!(template.contains(&format!("proxy_port = {}", defaults.proxy_port)));
-    assert!(template.contains(&format!("https_port = {}", defaults.https_port.unwrap())));
-    assert!(template.contains(&format!("https = {}", defaults.https)));
-    assert!(template.contains(&format!("http2 = {}", defaults.http2)));
-    assert!(template.contains(&format!("lan = {}", defaults.lan)));
-    assert!(template.contains(&format!(r#"tld = "{}""#, defaults.tld)));
-    assert!(template.contains(&format!(
-        "workspace_discovery = {}",
-        defaults.workspace_discovery
-    )));
+    for placeholder in [
+        "proxy_port = <<[ dev.proxy_port ]>>",
+        "https_port = <<[ dev.https_port ]>>",
+        "https = <<[ dev.https ]>>",
+        "http2 = <<[ dev.http2 ]>>",
+        "lan = <<[ dev.lan ]>>",
+        "tld = \"<<[ dev.tld | replace",
+        "workspace_discovery = <<[ dev.workspace_discovery ]>>",
+    ] {
+        assert!(template.contains(placeholder), "missing {placeholder}");
+    }
 }
 
 #[test]
