@@ -263,18 +263,24 @@ printf '%s\n' '{"summary":"repaired checks","review_thread_replies":[]}' > "$out
 "#,
     );
     let git_path = bin.path().join("git-unconfirmed-push.sh");
+    let git_state = bin.path().join("git-unconfirmed-push.state");
     write_codex_stub(
         &git_path,
         r#"#!/bin/sh
 case "$*" in
-  *" push origin HEAD:refs/heads/codex/widgets") exit 9 ;;
-  *" ls-remote --exit-code origin refs/heads/codex/widgets") exit 10 ;;
+  *" push --force-with-lease=refs/heads/codex/widgets:"*" origin HEAD:refs/heads/codex/widgets") exit 9 ;;
+  *" ls-remote --exit-code origin refs/heads/codex/widgets")
+    if [ -e "$JIG_TEST_GIT_STATE" ]; then exit 10; fi
+    : > "$JIG_TEST_GIT_STATE"
+    exec git "$@"
+    ;;
   *) exec git "$@" ;;
 esac
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _git = EnvVarGuard::set("JIG_GIT_BIN", git_path.as_os_str());
+    let _git_state = EnvVarGuard::set("JIG_TEST_GIT_STATE", git_state.as_os_str());
     let _run_log = EnvVarGuard::set("JIG_TEST_RUN_LOG", run_log.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();

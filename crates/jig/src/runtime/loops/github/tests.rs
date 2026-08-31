@@ -65,6 +65,68 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn review_comment_history_pages_back_to_older_trusted_feedback() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .config("")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("fixture-gh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+case "$*" in
+  *"threadId=thread-1"*)
+    printf '%s\n' '{"data":{"node":{"id":"thread-1","comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"comment-1","body":"trusted original","author":{"login":"maintainer"}}]}}}}'
+    ;;
+  *"api graphql "*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":true,"startCursor":"older"},"nodes":[{"id":"comment-2","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    ;;
+  *"collaborators/maintainer/permission"*) printf '%s\n' '{"permission":"write"}' ;;
+  *"collaborators/visitor/permission"*) printf '%s\n' '{"permission":"read"}' ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh, permissions).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let repository = RepositorySnapshot {
+            owner: "ExampleProject".into(),
+            name: "ExampleVault".into(),
+            default_branch: "main".into(),
+            value: json!({}),
+        };
+
+        let snapshot = review_threads_snapshot(
+            &ctx,
+            &repository,
+            7,
+            &mut RepositoryPermissionCache::default(),
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+
+        let comments = &snapshot["nodes"][0]["comments"];
+        assert_eq!(comments["truncated"], false, "{snapshot:#}");
+        assert_eq!(comments["page_count"], 2);
+        assert_eq!(comments["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(comments["nodes"][0]["id"], "comment-1");
+        assert_eq!(snapshot["nodes"][0]["has_trusted_comment"], true);
+        assert_eq!(snapshot["summary"]["trusted_unresolved"], 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn incomplete_review_comment_history_marks_the_snapshot_truncated() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt as _;

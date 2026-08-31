@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_worktree_pins_the_observed_head_when_the_remote_branch_advances() {
+    fn pr_worktree_rejects_remote_head_changes_since_the_snapshot() {
         let _env_lock = lock_env();
         let repo = tempdir().unwrap();
         let origin_parent = tempdir().unwrap();
@@ -404,8 +404,12 @@ mod tests {
         git(&["config", "user.name", "Fixture"]);
         git(&["add", "."]);
         git(&["commit", "-m", "initial"]);
-        git(&["branch", "repair/example"]);
-        let observed_head = git(&["rev-parse", "repair/example"]);
+        let rewind_head = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-b", "repair/example"]);
+        fs::write(repo.path().join("observed.txt"), "observed remote head\n").unwrap();
+        git(&["add", "observed.txt"]);
+        git(&["commit", "-m", "observed head"]);
+        let observed_head = git(&["rev-parse", "HEAD"]);
         let clone = Command::new("git")
             .args([
                 "clone",
@@ -417,7 +421,6 @@ mod tests {
             .unwrap();
         assert!(clone.status.success(), "{clone:?}");
         git(&["remote", "add", "origin", origin.to_str().unwrap()]);
-        git(&["checkout", "repair/example"]);
         fs::write(repo.path().join("advanced.txt"), "new remote head\n").unwrap();
         git(&["add", "advanced.txt"]);
         git(&["commit", "-m", "advance branch"]);
@@ -445,30 +448,45 @@ mod tests {
             title: "Repair example".into(),
             base_ref: "main".into(),
             head_ref: "repair/example".into(),
-            head_sha: observed_head.clone(),
+            head_sha: observed_head,
             reasons: vec!["failing_checks".into()],
         };
 
-        let worktree = prepare_worktree(
+        let advanced = prepare_worktree(
             &ctx,
             &workflow,
             &item,
             &mut crate::execution::NoopExecutionObserver,
         )
-        .unwrap();
-        let worktree_head = Command::new("git")
-            .current_dir(&worktree)
-            .args(["rev-parse", "HEAD"])
+        .unwrap_err();
+        let PrRepairStepError::Failed(advanced) = advanced.source else {
+            panic!("a changed remote head must be a preparation failure");
+        };
+        assert!(format!("{advanced:#}").contains("changed after the GitHub snapshot"));
+
+        let rewind = Command::new("git")
+            .args([
+                "--git-dir",
+                origin.to_str().unwrap(),
+                "update-ref",
+                "refs/heads/repair/example",
+                &rewind_head,
+            ])
             .output()
             .unwrap();
-
-        assert!(worktree_head.status.success(), "{worktree_head:?}");
-        assert_eq!(
-            String::from_utf8(worktree_head.stdout)
-                .unwrap()
-                .trim(),
-            observed_head
-        );
+        assert!(rewind.status.success(), "{rewind:?}");
+        let rewound = prepare_worktree(
+            &ctx,
+            &workflow,
+            &item,
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err();
+        let PrRepairStepError::Failed(rewound) = rewound.source else {
+            panic!("a rewound remote head must be a preparation failure");
+        };
+        assert!(format!("{rewound:#}").contains("changed after the GitHub snapshot"));
+        assert!(!pr_worktree_path(&ctx, &workflow, &item).exists());
     }
 
     #[test]

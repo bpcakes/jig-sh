@@ -31,6 +31,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Make PR-manager repair publication compare-and-swap the exact GitHub-observed remote head, reject non-descendant worker history, and page nested review comments backward so older trusted feedback cannot disappear behind GitHub's per-connection limit.
 - Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy without imposing scaffold-only CI selectors, reject symlink-redirection in Go component roots, and make generated Go CI resolve nested component module authorities, observe vendored modules and SQL inputs, and reserve Linux for Docker-backed PostgreSQL tests.
 - Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
 - Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.

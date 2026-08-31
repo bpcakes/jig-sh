@@ -26,7 +26,8 @@ fn prepare_worktree(
             ctx.root(),
             ["cat-file", "-e", &expected_head],
             observer,
-        )
+        )?;
+        require_remote_head(ctx, ctx.root(), &head_ref, &item.head_sha, observer)
     })();
     if let Err(error) = preflight {
         return Err(cleanup_failed_worktree_preparation(
@@ -242,6 +243,29 @@ fn remote_branch_ref(branch: &str) -> String {
     format!("refs/heads/{branch}")
 }
 
+fn require_remote_head(
+    ctx: &RepoContext,
+    cwd: &Path,
+    remote_ref: &str,
+    expected_head: &str,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<()> {
+    let stdout = git_stdout(
+        ctx,
+        cwd,
+        ["ls-remote", "--exit-code", "origin", remote_ref],
+        observer,
+    )?;
+    let observed = remote_head_from_ls_remote(stdout.as_bytes(), remote_ref)
+        .ok_or_else(|| PrRepairStepError::failed(anyhow!("Remote ref {remote_ref} was not found")))?;
+    if observed != expected_head {
+        return Err(PrRepairStepError::failed(anyhow!(
+            "Remote ref {remote_ref} changed after the GitHub snapshot: expected {expected_head}, found {observed}"
+        )));
+    }
+    Ok(())
+}
+
 fn commit_and_push(
     ctx: &RepoContext,
     worktree: &Path,
@@ -288,13 +312,35 @@ fn commit_and_push(
         observer,
     )?;
 
-    let push_ref = format!("HEAD:refs/heads/{head_ref}");
-    let push_args = ["push", "origin", &push_ref];
+    let ancestry = git_output(
+        ctx,
+        worktree,
+        [
+            "merge-base",
+            "--is-ancestor",
+            base_head.trim(),
+            final_head.as_str(),
+        ],
+        observer,
+    )?;
+    if !ancestry.status.success() {
+        return Err(PrRepairStepError::failed(git_error(
+            "PR repair head does not descend from the observed head",
+            ancestry,
+        ))
+        .into());
+    }
+
+    let remote_ref = remote_branch_ref(head_ref);
+    let expected_remote_head = base_head.trim();
+    let lease = format!("--force-with-lease={remote_ref}:{expected_remote_head}");
+    let push_ref = format!("HEAD:{remote_ref}");
+    let push_args = ["push", &lease, "origin", &push_ref];
     let push_result = git_execution_output(worktree, push_args, ctx.command_timeout(), observer);
     let push_error = match push_result {
         Ok(push) if push.status.success() => None,
         Ok(push) => Some(PrPushError::Ambiguous {
-            error: git_error("git push failed without force", push),
+            error: git_error("git push with expected-head lease failed", push),
             final_head: final_head.clone(),
         }),
         Err(error) => Some(pr_push_execution_error(error, &final_head)),
