@@ -4,51 +4,20 @@ pub(super) fn require_ignored_task_worktree_root(
     ctx: &RepoContext,
     observer: &mut dyn ExecutionControl,
 ) -> Result<()> {
-    require_ignored_runtime_path(
+    super::super::pre_execution::require_ignored_runtime_path(
         ctx,
         Path::new(LOOP_RUNTIME_DIR),
         "Loop runtime root",
-        "worktree",
+        "worktree checkout",
         observer,
     )?;
-    require_ignored_runtime_path(
+    super::super::pre_execution::require_ignored_runtime_path(
         ctx,
         &Path::new(LOOP_RUNTIME_DIR).join("worktrees/tasks"),
         "Codex task worktree path",
-        "worktree",
+        "worktree checkout",
         observer,
     )
-}
-
-pub(super) fn require_ignored_runtime_path(
-    ctx: &RepoContext,
-    path: &Path,
-    description: &str,
-    checkout: &str,
-    observer: &mut dyn ExecutionControl,
-) -> Result<()> {
-    let output = git_output(
-        ctx,
-        ctx.root(),
-        [
-            OsString::from("check-ignore"),
-            OsString::from("--quiet"),
-            OsString::from("--"),
-            path.as_os_str().to_os_string(),
-        ],
-        observer,
-    )?;
-    match output.status.code() {
-        Some(0) => Ok(()),
-        Some(1) => bail!(
-            "{description} is not ignored by Git: {}; refresh the managed .gitignore with `scripts/jig update --recopy` before using {checkout} checkout",
-            path.display()
-        ),
-        _ => Err(git_error(
-            &format!("Failed to verify that the {description} is ignored"),
-            output,
-        )),
-    }
 }
 
 pub(super) fn unexecuted_task_failure(

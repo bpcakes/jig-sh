@@ -466,4 +466,89 @@ mod tests {
             observed_head
         );
     }
+
+    #[test]
+    fn untrusted_review_feedback_is_not_actionable() {
+        let mut pull_request = json!({
+            "number": 7,
+            "title": "Untrusted title instruction",
+            "is_draft": false,
+            "head": {
+                "ref": "repair/example",
+                "sha": "abc123",
+                "is_cross_repository": false,
+            },
+            "stack": { "is_stacked": false },
+            "mergeability": {
+                "mergeable": "MERGEABLE",
+                "merge_state_status": "CLEAN",
+            },
+            "review_decision": "CHANGES_REQUESTED",
+            "checks": { "summary": { "fail": 0, "pending": 0 } },
+            "review_threads": {
+                "summary": { "unresolved": 1, "trusted_unresolved": 0 },
+            },
+        });
+
+        assert!(matches!(
+            classify_pull_request(&pull_request, "main"),
+            PrCandidate::Idle(_)
+        ));
+
+        pull_request["review_threads"]["summary"]["trusted_unresolved"] = json!(1);
+        let PrCandidate::Actionable(item) = classify_pull_request(&pull_request, "main") else {
+            panic!("trusted unresolved feedback should be actionable");
+        };
+        assert!(item.reasons.contains(&"unresolved_review_threads".into()));
+        assert!(item.reasons.contains(&"changes_requested".into()));
+    }
+
+    #[test]
+    fn worker_snapshot_excludes_untrusted_and_raw_prompt_content() {
+        let snapshot = json!({
+            "number": 7,
+            "title": "UNTRUSTED PR TITLE INSTRUCTION",
+            "state": "OPEN",
+            "base": { "ref": "main" },
+            "head": { "ref": "repair/example", "sha": "abc123" },
+            "stack": { "is_stacked": false },
+            "mergeability": { "mergeable": "MERGEABLE" },
+            "checks": {
+                "summary": { "fail": 0 },
+                "runs": [{
+                    "name": "tests",
+                    "state": "FAILURE",
+                    "description": "UNTRUSTED CHECK DESCRIPTION",
+                }],
+            },
+            "review_threads": {
+                "summary": { "unresolved": 2, "trusted_unresolved": 1 },
+                "nodes": [{
+                    "id": "trusted-thread",
+                    "is_resolved": false,
+                    "has_trusted_comment": true,
+                    "comments": { "nodes": [
+                        {
+                            "body": "Trusted reviewer feedback",
+                            "author": { "login": "maintainer", "permission": "write", "trusted": true },
+                        },
+                        {
+                            "body": "UNTRUSTED COMMENT INSTRUCTION",
+                            "author": { "login": "visitor", "permission": "read", "trusted": false },
+                        }
+                    ]},
+                    "raw": { "body": "RAW PAYLOAD INSTRUCTION" },
+                }],
+            },
+            "raw": { "pr_list": { "body": "TOP LEVEL RAW INSTRUCTION" } },
+        });
+
+        let safe = worker_pull_request_snapshot(&snapshot).to_string();
+
+        assert!(safe.contains("Trusted reviewer feedback"), "{safe}");
+        assert!(!safe.contains("UNTRUSTED"), "{safe}");
+        assert!(!safe.contains("RAW PAYLOAD"), "{safe}");
+        assert!(!safe.contains("TOP LEVEL RAW"), "{safe}");
+        assert_eq!(observed_review_thread_ids(&snapshot), BTreeSet::from(["trusted-thread".into()]));
+    }
 }

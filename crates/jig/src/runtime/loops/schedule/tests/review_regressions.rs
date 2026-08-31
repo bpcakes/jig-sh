@@ -10,7 +10,7 @@ use super::super::super::engine::{status_at_with_cancellation, tick_with_observe
 use super::super::super::occurrence::{
     OccurrenceAttentionScope, OccurrenceFinish, OccurrenceOutcome,
 };
-use super::super::super::state::{AttemptStore, LOOP_RUNTIME_DIR};
+use super::super::super::state::{AttemptStore, LOOP_RUNTIME_DIR, LeaseStore};
 use super::super::{NoopExecutionObserver, OccurrenceStore, dispatch_workflow, list_workflows};
 use crate::command::{LoopStatusRequest, LoopTickRequest};
 use crate::context::RepoContext;
@@ -195,6 +195,113 @@ fn status_uses_its_snapshot_clock_for_attempt_backoff() {
     .unwrap();
 
     assert_eq!(output["waiting_attempts"], serde_json::json!([]));
+}
+
+#[test]
+fn workflow_status_selector_filters_attempt_and_lease_sections() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "example-other"
+kind = "noop_status"
+"#
+        ),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflows = list_workflows(&ctx).unwrap();
+    let selected = workflows
+        .iter()
+        .find(|workflow| workflow.id == "noop-status")
+        .unwrap();
+    let other = workflows
+        .iter()
+        .find(|workflow| workflow.id == "example-other")
+        .unwrap();
+    let mut attempts = AttemptStore::new(&ctx);
+    for _ in 0..selected.max_attempts {
+        attempts
+            .record_attempt_for_transition(selected, "ExampleProject", None, None, "failed")
+            .unwrap();
+    }
+    for _ in 0..other.max_attempts {
+        attempts
+            .record_attempt_for_transition(other, "ExampleVault", None, None, "failed")
+            .unwrap();
+    }
+    let mut leases = LeaseStore::new(&ctx);
+    leases.acquire(&selected.lease_key(), 60).unwrap();
+    leases.acquire(&other.lease_key(), 60).unwrap();
+
+    let output = status_at_with_cancellation(
+        &ctx,
+        LoopStatusRequest {
+            workflow: Some(selected.id.clone()),
+        },
+        &|| false,
+        u64::MAX,
+    )
+    .unwrap();
+
+    assert_eq!(
+        output["workflows"].as_array().unwrap().len(),
+        1,
+        "{output:#}"
+    );
+    assert_eq!(
+        output["attempts"].as_array().unwrap().len(),
+        1,
+        "{output:#}"
+    );
+    assert_eq!(output["attempts"][0]["workflow_id"], selected.id);
+    assert_eq!(output["leases"].as_array().unwrap().len(), 1, "{output:#}");
+    assert_eq!(output["leases"][0]["key"], selected.lease_key());
+    assert_eq!(
+        output["needs_attention"]["exhausted_attempts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "{output:#}"
+    );
+}
+
+#[test]
+fn non_codex_tick_refuses_to_create_an_unignored_loop_runtime() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let init = std::process::Command::new("git")
+        .current_dir(temp.path())
+        .arg("init")
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+    fs::write(temp.path().join(".gitignore"), "").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = tick_with_observer(
+        &ctx,
+        LoopTickRequest {
+            workflow: Some("noop-status".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        },
+        &mut NoopExecutionObserver,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Loop runtime root is not ignored")
+    );
+    assert!(!temp.path().join(LOOP_RUNTIME_DIR).exists());
 }
 
 #[test]

@@ -47,7 +47,7 @@ where
             output,
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn git_output<I, S>(

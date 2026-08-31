@@ -50,6 +50,7 @@ fn dispatch_due_at_with_observer(
 ) -> Result<Value> {
     let started = now_ms();
     let workflows = list_workflows(ctx)?;
+    super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
     let disposable_recovery = prepare_disposable_state_for_dispatch(ctx)?;
     let mut occurrences = OccurrenceStore::new(ctx);
     let reconciled = occurrences.reconcile_stale()?;
@@ -443,9 +444,9 @@ fn abandon_unexecuted_tick_failure(
     } = details;
     match guard.abandon_unexecuted() {
         Ok(finalization) => {
-            // See the workflow-lease deferral path above: a persisted
-            // abandonment intentionally suppresses the renewer's expected
-            // post-removal ownership-loss diagnostic.
+            // Renewal is stopped and joined before this owner-checked transition.
+            // Successful abandonment therefore proves that the claim was still ours;
+            // an earlier transient renewal diagnostic does not make it ambiguous.
             record_unexecuted_failure(
                 &mut step,
                 workflow,

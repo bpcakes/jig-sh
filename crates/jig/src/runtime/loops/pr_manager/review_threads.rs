@@ -172,6 +172,12 @@ fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .filter(|thread| {
+            thread
+                .get("has_trusted_comment")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .filter_map(|thread| thread.get("id").and_then(Value::as_str))
         .map(str::to_string)
         .collect()

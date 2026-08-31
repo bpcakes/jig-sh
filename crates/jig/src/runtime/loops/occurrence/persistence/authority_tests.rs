@@ -4,7 +4,7 @@ use std::process::Command;
 use super::*;
 use crate::context::RepoContext;
 use crate::runtime::loops::state::read_json_or_default;
-use crate::test_env::TestRepoBuilder;
+use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 #[test]
 fn mutation_runs_only_after_schedule_authority_is_published() {
@@ -78,6 +78,74 @@ fn protected_ledger_ignores_a_forged_checkout_replica() {
         SCHEDULE_INITIALIZATION_SCHEMA_VERSION
     );
     assert_eq!(marker.state_path, SCHEDULE_STATE_PATH);
+}
+
+#[test]
+fn protected_authority_is_commit_point_when_replica_publication_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    persistence.with_locked(|_| Ok(())).unwrap();
+    fs::remove_file(&persistence.path).unwrap();
+    fs::create_dir(&persistence.path).unwrap();
+
+    persistence
+        .with_locked(|store| {
+            store.occurrences.insert(
+                "scheduled:example:100".into(),
+                super::super::ScheduleOccurrence {
+                    occurrence_id: "scheduled:example:100".into(),
+                    workflow_id: "example".into(),
+                    scheduled_at_ms: 100,
+                    owner: "fixture-owner".into(),
+                    claim_expires_at_ms: 200,
+                    started_at_ms: 100,
+                    uses_shared_checkout: Some(false),
+                    finished_at_ms: Some(150),
+                    acknowledged_at_ms: None,
+                    status: super::super::OccurrenceStatus::Succeeded,
+                    worker_receipt_id: Some("receipt_fixture".into()),
+                    worktree: None,
+                    error: None,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+
+    let protected = persistence.protected_authority().unwrap().unwrap();
+    let authoritative: ScheduleFile = read_json_or_default(&protected.path).unwrap();
+    assert!(
+        authoritative
+            .occurrences
+            .contains_key("scheduled:example:100")
+    );
+
+    fs::remove_dir(&persistence.path).unwrap();
+    persistence.with_locked(|_| Ok(())).unwrap();
+    assert_eq!(
+        fs::read(&protected.path).unwrap(),
+        fs::read(&persistence.path).unwrap()
+    );
+}
+
+#[test]
+fn authority_resolution_does_not_execute_the_configured_git_binary() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let _git = EnvVarGuard::set(
+        crate::bootstrap::GIT_BIN_ENV,
+        "authority-probe-must-not-run",
+    );
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let persistence = SchedulePersistence::new(&ctx);
+
+    assert!(persistence.protected_authority().unwrap().is_some());
 }
 
 #[cfg(unix)]

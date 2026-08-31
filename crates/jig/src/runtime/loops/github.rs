@@ -23,6 +23,8 @@ const PR_LIST_LIMIT: usize = 100;
 const PR_LIST_FETCH_LIMIT: usize = PR_LIST_LIMIT + 1;
 const REVIEW_THREAD_PAGE_LIMIT: usize = 10;
 
+include!("github/trust.rs");
+
 pub(super) fn github_pr_status_tick(
     ctx: &RepoContext,
     observer: &mut dyn ExecutionControl,
@@ -61,11 +63,18 @@ pub(super) fn github_pr_status_snapshot(
     let pr_list_truncated = raw_prs.len() > PR_LIST_LIMIT;
 
     let mut pull_requests = Vec::new();
+    let mut permissions = RepositoryPermissionCache::default();
     for raw_pr in raw_prs.iter().take(PR_LIST_LIMIT) {
         if observer.cancelled() {
             return Err(ExecutionCommandError::Cancelled.into_anyhow());
         }
-        pull_requests.push(pull_request_snapshot(ctx, &repository, raw_pr, observer)?);
+        pull_requests.push(pull_request_snapshot(
+            ctx,
+            &repository,
+            raw_pr,
+            &mut permissions,
+            observer,
+        )?);
     }
 
     let summary = summary_for_pull_requests(&pull_requests, PR_LIST_LIMIT, pr_list_truncated);
@@ -140,6 +149,7 @@ fn pull_request_snapshot(
     ctx: &RepoContext,
     repository: &RepositorySnapshot,
     raw_pr: &Value,
+    permissions: &mut RepositoryPermissionCache,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let number = raw_pr
@@ -147,7 +157,7 @@ fn pull_request_snapshot(
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("gh pr list returned a PR without a numeric number"))?;
     let checks = checks_snapshot(ctx, number, observer)?;
-    let review_threads = review_threads_snapshot(ctx, repository, number, observer)?;
+    let review_threads = review_threads_snapshot(ctx, repository, number, permissions, observer)?;
     let base_ref = raw_pr
         .get("baseRefName")
         .and_then(Value::as_str)
@@ -278,6 +288,7 @@ fn review_threads_snapshot(
     ctx: &RepoContext,
     repository: &RepositorySnapshot,
     pr_number: u64,
+    permissions: &mut RepositoryPermissionCache,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let mut nodes = Vec::new();
@@ -303,7 +314,15 @@ fn review_threads_snapshot(
             .get("nodes")
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("GitHub GraphQL reviewThreads.nodes was not an array"))?;
-        nodes.extend(page_nodes.iter().map(normalize_review_thread));
+        for thread in page_nodes {
+            nodes.push(normalize_review_thread(
+                ctx,
+                repository,
+                thread,
+                permissions,
+                observer,
+            )?);
+        }
         has_next_page = connection
             .pointer("/pageInfo/hasNextPage")
             .and_then(Value::as_bool)
@@ -401,8 +420,42 @@ query($owner: String!, $name: String!, $number: Int!, $threadsAfter: String) {
 "
 }
 
-fn normalize_review_thread(thread: &Value) -> Value {
-    json!({
+fn normalize_review_thread(
+    ctx: &RepoContext,
+    repository: &RepositorySnapshot,
+    thread: &Value,
+    permissions: &mut RepositoryPermissionCache,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    let mut comments = Vec::new();
+    for comment in thread
+        .pointer("/comments/nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let author = permissions.author_snapshot(
+            ctx,
+            repository,
+            comment.pointer("/author/login").and_then(Value::as_str),
+            observer,
+        )?;
+        comments.push(json!({
+            "id": comment.get("id").cloned().unwrap_or(Value::Null),
+            "url": comment.get("url").cloned().unwrap_or(Value::Null),
+            "body": comment.get("body").cloned().unwrap_or(Value::Null),
+            "createdAt": comment.get("createdAt").cloned().unwrap_or(Value::Null),
+            "updatedAt": comment.get("updatedAt").cloned().unwrap_or(Value::Null),
+            "author": author,
+        }));
+    }
+    let has_trusted_comment = comments.iter().any(|comment| {
+        comment
+            .pointer("/author/trusted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    Ok(json!({
         "id": thread.get("id").cloned().unwrap_or(Value::Null),
         "is_resolved": thread.get("isResolved").cloned().unwrap_or(Value::Null),
         "is_outdated": thread.get("isOutdated").cloned().unwrap_or(Value::Null),
@@ -422,10 +475,11 @@ fn normalize_review_thread(thread: &Value) -> Value {
         },
         "comments": {
             "total_count": thread.pointer("/comments/totalCount").cloned().unwrap_or(Value::Null),
-            "nodes": thread.pointer("/comments/nodes").cloned().unwrap_or_else(|| json!([])),
+            "nodes": comments,
         },
+        "has_trusted_comment": has_trusted_comment,
         "raw": thread,
-    })
+    }))
 }
 
 fn review_thread_summary(threads: &[Value]) -> Value {
@@ -434,6 +488,7 @@ fn review_thread_summary(threads: &[Value]) -> Value {
     let mut outdated = 0;
     let mut viewer_can_reply = 0;
     let mut viewer_can_resolve = 0;
+    let mut trusted_unresolved = 0;
 
     for thread in threads {
         if thread
@@ -444,6 +499,13 @@ fn review_thread_summary(threads: &[Value]) -> Value {
             resolved += 1;
         } else {
             unresolved += 1;
+            if thread
+                .get("has_trusted_comment")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                trusted_unresolved += 1;
+            }
         }
         if thread
             .get("is_outdated")
@@ -472,6 +534,7 @@ fn review_thread_summary(threads: &[Value]) -> Value {
         "total": threads.len(),
         "resolved": resolved,
         "unresolved": unresolved,
+        "trusted_unresolved": trusted_unresolved,
         "outdated": outdated,
         "viewer_can_reply": viewer_can_reply,
         "viewer_can_resolve": viewer_can_resolve,
@@ -661,88 +724,4 @@ fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-    use std::time::{Duration, Instant};
-
-    use serde_json::json;
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn summary_surfaces_pr_list_truncation() {
-        let pull_requests = (0..PR_LIST_LIMIT)
-            .map(|number| {
-                json!({
-                    "number": number,
-                    "mergeability": {
-                        "mergeable": "MERGEABLE",
-                    },
-                    "checks": {
-                        "summary": {
-                            "fail": 0,
-                            "pending": 0,
-                        },
-                    },
-                    "review_threads": {
-                        "summary": {
-                            "unresolved": 0,
-                        },
-                    },
-                    "stack": {
-                        "is_stacked": false,
-                    },
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let summary = summary_for_pull_requests(&pull_requests, PR_LIST_LIMIT, true);
-
-        assert_eq!(summary["open_pr_count"], PR_LIST_LIMIT);
-        assert_eq!(summary["pr_list_limit"], PR_LIST_LIMIT);
-        assert_eq!(summary["pr_list_truncated"], true);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn gh_execution_honors_in_flight_cancellation() {
-        struct CancelAfterStart(PathBuf);
-
-        impl crate::execution::ExecutionObserver for CancelAfterStart {}
-
-        impl crate::execution::ExecutionCancellation for CancelAfterStart {
-            fn cancelled(&self) -> bool {
-                self.0.exists()
-            }
-        }
-
-        let temp = tempdir().unwrap();
-        crate::test_env::TestRepoBuilder::new(temp.path())
-            .config("")
-            .required_commands(Vec::<String>::new())
-            .write();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let marker = temp.path().join("gh-started");
-        let mut observer = CancelAfterStart(marker.clone());
-        let started = Instant::now();
-
-        let error = run_gh_with_program(
-            &ctx,
-            vec![
-                OsString::from("-c"),
-                OsString::from("printf started > \"$1\"; sleep 30"),
-                OsString::from("fixture-shell"),
-                marker.into_os_string(),
-            ],
-            OsStr::new("sh"),
-            &mut observer,
-        )
-        .err()
-        .expect("cancelled gh command should fail")
-        .to_string();
-
-        assert!(error.contains("cancelled"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
-}
+include!("github/tests.rs");

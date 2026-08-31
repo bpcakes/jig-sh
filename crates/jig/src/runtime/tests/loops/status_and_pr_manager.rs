@@ -111,6 +111,9 @@ JSON
 {"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":"cursor-1"},"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"src/lib.rs","line":42,"startLine":null,"originalLine":40,"originalStartLine":null,"subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"viewerCanReply":true,"viewerCanResolve":true,"viewerCanUnresolve":false,"resolvedBy":null,"comments":{"totalCount":1,"nodes":[{"id":"PRRC_1","url":"https://github.com/acme/widgets/pull/7#discussion_r1","body":"Please add a test","createdAt":"2026-07-08T10:03:00Z","updatedAt":"2026-07-08T10:03:00Z","author":{"login":"reviewer"}}]}}]}}}}}
 JSON
     ;;
+  "api --method")
+    printf '%s\n' '{"permission":"write"}'
+    ;;
   *)
     echo "unexpected gh args: $*" >&2
     exit 2
@@ -156,6 +159,16 @@ esac
     assert_eq!(
         output["observed"]["pull_requests"][0]["review_threads"]["nodes"][0]["id"],
         "PRRT_1"
+    );
+    assert_eq!(
+        output["observed"]["pull_requests"][0]["review_threads"]["nodes"][0]["comments"]
+            ["nodes"][0]["author"]["permission"],
+        "write"
+    );
+    assert_eq!(
+        output["observed"]["pull_requests"][0]["review_threads"]["summary"]
+            ["trusted_unresolved"],
+        1
     );
     assert_eq!(
         output["observed"]["pull_requests"][0]["stack"]["is_stacked"],
@@ -279,6 +292,9 @@ JSON
 JSON
         ;;
     esac
+    ;;
+  "api --method")
+    printf '%s\n' '{{"permission":"write"}}'
     ;;
   *)
     echo "unexpected gh args: $*" >&2
@@ -566,6 +582,9 @@ JSON
         ;;
     esac
     ;;
+  "api --method")
+    printf '%s\n' '{"permission":"write"}'
+    ;;
   *)
     echo "unexpected gh args: $*" >&2
     exit 2
@@ -720,6 +739,7 @@ if [ "$1 $2 $3 $4 $5 $6 $7" = "--ask-for-approval never exec --sandbox workspace
     exit 3
   fi
   printf 'fn value() -> i32 { 4 }\n' > src.rs
+  git add -- src.rs
   printf '{"summary":"resolved conflict","review_thread_replies":[]}\n' > "$out"
   printf 'conflict resolved\n'
   exit 0

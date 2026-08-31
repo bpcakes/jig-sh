@@ -317,14 +317,19 @@ impl SchedulePersistence {
                 false,
             )?;
         }
-        self.ensure_initialization_marker_at(
+        let public_marker = self.ensure_initialization_marker_at(
             &self.initialized_path,
             "loop schedule initialization marker",
             SCHEDULE_INITIALIZATION_SCHEMA_VERSION,
             SCHEDULE_STATE_PATH,
             protected.is_some(),
-        )?;
-        Ok(())
+        );
+        if protected.is_some() {
+            // The checkout marker is a repairable replica once protected authority exists.
+            // A later authoritative access retries this publication.
+            return Ok(());
+        }
+        public_marker
     }
 
     fn ensure_initialization_marker_at(
@@ -428,7 +433,6 @@ impl SchedulePersistence {
     }
 
     fn write_durable_schedule(&self, store: &ScheduleFile) -> Result<()> {
-        write_json_durable(&self.path, store)?;
         if let Some(authority) = self.protected_authority()? {
             write_json_durable(&authority.path, store)?;
             self.ensure_initialization_marker_at(
@@ -438,8 +442,12 @@ impl SchedulePersistence {
                 PROTECTED_SCHEDULE_STATE_PATH,
                 false,
             )?;
+            // Protected Git metadata is the commit point. The checkout copy is a
+            // compatibility/diagnostic replica and is repaired on later writes.
+            let _ = write_json_durable(&self.path, store);
+            return Ok(());
         }
-        Ok(())
+        write_json_durable(&self.path, store)
     }
 }
 

@@ -40,6 +40,12 @@ pub(super) struct LeaseRecord {
     expires_at_ms: u64,
 }
 
+impl LeaseRecord {
+    pub(super) fn matches_key(&self, key: &str) -> bool {
+        self.key == key
+    }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct LeaseFile {
     leases: BTreeMap<String, LeaseRecord>,
@@ -353,6 +359,10 @@ pub(super) struct AttemptRecord {
 }
 
 impl AttemptRecord {
+    pub(super) fn belongs_to(&self, workflow_id: &str) -> bool {
+        self.workflow_id == workflow_id
+    }
+
     pub(super) const fn in_backoff(&self, now_ms: u64) -> bool {
         !self.exhausted && self.next_eligible_ms > now_ms
     }

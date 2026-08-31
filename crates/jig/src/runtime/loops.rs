@@ -11,6 +11,7 @@ mod github;
 mod noop;
 mod occurrence;
 mod pr_manager;
+mod pre_execution;
 mod renewal;
 mod schedule;
 mod state;

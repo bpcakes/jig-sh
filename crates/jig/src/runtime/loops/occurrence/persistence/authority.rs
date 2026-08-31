@@ -1,13 +1,12 @@
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-
-use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 
 use super::path_exists;
 
 const PROTECTED_SCHEDULE_DIR: &str = "jig/loop";
+const MAX_GITDIR_FILE_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Debug)]
 pub(super) struct ProtectedScheduleAuthority {
@@ -23,32 +22,7 @@ pub(super) fn resolve_protected_schedule_authority(
     if !path_exists(&repo_root.join(".git"), "Git metadata entry")? {
         return Ok(None);
     }
-    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
-    command
-        .current_dir(repo_root)
-        .arg("--no-replace-objects")
-        .args(["rev-parse", "--absolute-git-dir"]);
-    scrub_known_repository_git_environment(&mut command);
-    let output = command
-        .output()
-        .context("Failed to resolve the repository Git metadata directory")?;
-    if !output.status.success() {
-        let limit = output.stderr.len().min(4_000);
-        let stderr = String::from_utf8_lossy(&output.stderr[..limit]);
-        bail!(
-            "Failed to resolve the repository Git metadata directory: {}",
-            stderr.trim()
-        );
-    }
-    let stdout =
-        String::from_utf8(output.stdout).context("Git metadata directory output was not UTF-8")?;
-    let git_dir = PathBuf::from(stdout.trim());
-    if !git_dir.is_absolute() || !git_dir.is_dir() {
-        bail!(
-            "Git reported an invalid metadata directory: {}",
-            git_dir.display()
-        );
-    }
+    let git_dir = resolve_git_metadata_directory(repo_root)?;
     let dir = git_dir.join(PROTECTED_SCHEDULE_DIR);
     Ok(Some(ProtectedScheduleAuthority {
         path: dir.join("schedule.json"),
@@ -56,4 +30,61 @@ pub(super) fn resolve_protected_schedule_authority(
         lock_path: dir.join("schedule.lock"),
         dir,
     }))
+}
+
+fn resolve_git_metadata_directory(repo_root: &Path) -> Result<PathBuf> {
+    let dot_git = repo_root.join(".git");
+    let metadata = fs::symlink_metadata(&dot_git)
+        .with_context(|| format!("Failed to inspect Git metadata entry {}", dot_git.display()))?;
+    let git_dir = if metadata.file_type().is_dir() {
+        dot_git
+    } else if metadata.file_type().is_file() {
+        if metadata.len() > MAX_GITDIR_FILE_BYTES {
+            bail!(
+                "Git metadata pointer is too large at {} ({} bytes; maximum {MAX_GITDIR_FILE_BYTES})",
+                dot_git.display(),
+                metadata.len()
+            );
+        }
+        let pointer = fs::read_to_string(&dot_git).with_context(|| {
+            format!("Failed to read Git metadata pointer {}", dot_git.display())
+        })?;
+        let pointer = pointer.trim_end_matches(['\r', '\n']);
+        if pointer.contains(['\r', '\n']) {
+            bail!(
+                "Git metadata pointer contains multiple lines at {}",
+                dot_git.display()
+            );
+        }
+        let path = pointer
+            .strip_prefix("gitdir: ")
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Invalid Git metadata pointer at {}", dot_git.display())
+            })?;
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            path
+        } else {
+            repo_root.join(path)
+        }
+    } else {
+        bail!(
+            "Git metadata entry must be a directory or regular pointer file: {}",
+            dot_git.display()
+        );
+    };
+    let git_dir = fs::canonicalize(&git_dir).with_context(|| {
+        format!(
+            "Failed to resolve the repository Git metadata directory {}",
+            git_dir.display()
+        )
+    })?;
+    if !git_dir.is_dir() {
+        bail!(
+            "Resolved Git metadata path is not a directory: {}",
+            git_dir.display()
+        );
+    }
+    Ok(git_dir)
 }

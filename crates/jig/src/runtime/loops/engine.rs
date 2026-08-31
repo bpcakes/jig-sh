@@ -1,10 +1,7 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::cancellation::ensure_status_collection_active;
-use crate::command::{
-    LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopStatusRequest, LoopTickRequest,
-};
+use crate::command::{LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopTickRequest};
 use crate::context::RepoContext;
 use crate::execution::{AdditionalCancellationControl, ExecutionControl};
 use crate::state::{ReceiptInput, now_ms, record_receipt, record_receipt_with_cancellation};
@@ -21,7 +18,12 @@ use super::{codex_task, github, noop, pr_manager};
 
 mod manual_occurrence;
 mod runtime_state;
+mod status;
 mod unexecuted;
+
+pub(super) use status::status_with_cancellation;
+#[cfg(test)]
+pub(super) use status::{status, status_at_with_cancellation};
 
 use manual_occurrence::ManualOccurrenceGuard;
 use runtime_state::{TickRuntimeState, append_tick_error};
@@ -204,6 +206,9 @@ fn tick_with_execution(
             backoff_seconds: request.backoff_seconds,
         },
     )?;
+    if execution.manual {
+        super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
+    }
     let mut lease_store = LeaseStore::new(ctx);
     let mut attempt_store = AttemptStore::new(ctx);
 
@@ -500,115 +505,6 @@ fn tick_with_execution(
     })
 }
 
-#[cfg(test)]
-pub(super) fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
-    status_with_cancellation(ctx, request, &|| false)
-}
-
-pub(super) fn status_with_cancellation(
-    ctx: &RepoContext,
-    request: LoopStatusRequest,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    status_at_with_cancellation(ctx, request, cancelled, now_ms())
-}
-
-pub(super) fn status_at_with_cancellation(
-    ctx: &RepoContext,
-    request: LoopStatusRequest,
-    cancelled: &dyn Fn() -> bool,
-    checked_at_ms: u64,
-) -> Result<Value> {
-    ensure_status_active(cancelled)?;
-    let resolved_workflows = if let Some(workflow) = request.workflow.as_deref() {
-        vec![resolve_workflow(
-            ctx,
-            Some(workflow),
-            TuningOverrides {
-                lease_ttl_seconds: None,
-                max_attempts: None,
-                backoff_seconds: None,
-            },
-        )?]
-    } else {
-        list_workflows(ctx)?
-    };
-    ensure_status_active(cancelled)?;
-
-    let attempts = AttemptStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;
-    ensure_status_active(cancelled)?;
-    let attempt_sections =
-        AttemptSections::new_with_cancellation(&attempts, checked_at_ms, cancelled)?;
-    ensure_status_active(cancelled)?;
-    let leases = LeaseStore::new(ctx).active_leases_read_only_with_cancellation(cancelled)?;
-    ensure_status_active(cancelled)?;
-    let mut occurrences =
-        OccurrenceStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;
-    if request.workflow.is_some() {
-        let workflow_id = &resolved_workflows[0].id;
-        occurrences.retain(|record| record.workflow_id == *workflow_id);
-    }
-    ensure_status_active(cancelled)?;
-    let mut schedule_state_errors = Vec::new();
-    let workflows = resolved_workflows
-        .into_iter()
-        .map(|workflow| {
-            let mut value = workflow.value();
-            if let Some(schedule) = workflow.schedule.as_ref() {
-                let latest = OccurrenceStore::latest_for_workflow(&occurrences, &workflow.id);
-                match schedule.window(
-                    checked_at_ms,
-                    latest.as_ref().map(|record| record.scheduled_at_ms),
-                ) {
-                    Ok(window) => {
-                        value["schedule_state"] = json!({
-                            "due_at_ms": window.due_at_ms,
-                            "next_at_ms": window.next_at_ms,
-                            "last_scheduled_at_ms": latest.as_ref().map(|record| record.scheduled_at_ms),
-                            "last_status": latest.as_ref().map(|record| record.status.as_str()),
-                        });
-                    }
-                    Err(error) => {
-                        let error = format!("Failed to evaluate workflow schedule: {error:#}");
-                        value["schedule_state_error"] = error.clone().into();
-                        schedule_state_errors.push(json!({
-                            "kind": "workflow_schedule",
-                            "workflow_id": workflow.id,
-                            "error": error,
-                        }));
-                    }
-                }
-            }
-            value
-        })
-        .collect::<Vec<_>>();
-    let scheduled_needs_attention = occurrences
-        .iter()
-        .filter(|record| record.requires_attention_at(checked_at_ms))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    Ok(json!({
-        "ok": schedule_state_errors.is_empty(),
-        "command": "loop status",
-        "workflows": workflows,
-        "leases": leases,
-        "attempts": attempts,
-        "scheduled_occurrences": occurrences,
-        "waiting_attempts": attempt_sections.waiting,
-        "state_error_count": schedule_state_errors.len(),
-        "state_errors": schedule_state_errors,
-        "needs_attention": {
-            "exhausted_attempts": attempt_sections.needs_attention,
-            "scheduled_occurrences": scheduled_needs_attention,
-        },
-    }))
-}
-
-fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
-    ensure_status_collection_active(cancelled)
-}
-
 fn run_workflow_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
@@ -755,6 +651,10 @@ pub(super) fn acknowledge_occurrence(
     if occurrence_id.is_empty() {
         bail!("--occurrence must not be empty");
     }
+    super::pre_execution::require_ignored_loop_runtime_root(
+        ctx,
+        &mut crate::execution::NoopExecutionObserver,
+    )?;
     let mut occurrence_store = OccurrenceStore::new(ctx);
     let (occurrence, changed) = match occurrence_store.acknowledge(occurrence_id)? {
         OccurrenceAcknowledgement::Acknowledged(occurrence) => (occurrence, true),

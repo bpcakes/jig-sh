@@ -37,8 +37,7 @@ mod pre_execution;
 
 use checkout::{PreparedCheckout, TaskOutcome};
 use pre_execution::{
-    CheckoutPreparationFailure, require_ignored_runtime_path, require_ignored_task_worktree_root,
-    unexecuted_task_failure,
+    CheckoutPreparationFailure, require_ignored_task_worktree_root, unexecuted_task_failure,
 };
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
@@ -452,11 +451,11 @@ fn prepare_checkout(
                 "Scheduled Codex task was cancelled before shared-checkout preflight"
             )));
         }
-        require_ignored_runtime_path(
+        super::pre_execution::require_ignored_runtime_path(
             ctx,
             Path::new(LOOP_RUNTIME_DIR),
             "Codex task runtime path",
-            "repo",
+            "repo checkout",
             observer,
         )?;
         match repo_task_has_changes(ctx, ctx.root(), observer) {

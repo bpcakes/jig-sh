@@ -157,18 +157,18 @@ fn classify_pull_request(pull_request: &Value, default_branch: &str) -> PrCandid
         .pointer("/checks/summary/pending")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    if pull_request
-        .pointer("/review_threads/summary/unresolved")
+    let trusted_unresolved_threads = pull_request
+        .pointer("/review_threads/summary/trusted_unresolved")
         .and_then(Value::as_u64)
-        .unwrap_or(0)
-        > 0
-    {
+        .unwrap_or(0);
+    if trusted_unresolved_threads > 0 {
         reasons.push("unresolved_review_threads".to_string());
     }
     if pull_request
         .get("review_decision")
         .and_then(Value::as_str)
         .is_some_and(|value| value.eq_ignore_ascii_case("CHANGES_REQUESTED"))
+        && trusted_unresolved_threads > 0
     {
         reasons.push("changes_requested".to_string());
     }
