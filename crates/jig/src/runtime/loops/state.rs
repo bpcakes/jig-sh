@@ -98,6 +98,17 @@ impl LeaseStore {
     }
 
     #[cfg(test)]
+    pub(super) fn revoke_for_test(&mut self, key: &str) -> Result<()> {
+        self.with_locked(|store| {
+            store
+                .leases
+                .remove(key)
+                .map(|_| ())
+                .ok_or_else(|| anyhow!("Test lease is no longer held: {key}"))
+        })
+    }
+
+    #[cfg(test)]
     fn release_at(&mut self, key: &str, owner: &str, now: u64) -> Result<()> {
         self.release_with_clock(key, owner, || now)
     }

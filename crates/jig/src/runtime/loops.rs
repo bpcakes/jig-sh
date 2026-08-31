@@ -21,6 +21,11 @@ mod workflow_state;
 #[cfg(test)]
 pub(in crate::runtime) use schedule::dispatch_due_at;
 
+#[cfg(test)]
+pub(in crate::runtime) fn revoke_lease_for_test(ctx: &RepoContext, key: &str) -> Result<()> {
+    state::LeaseStore::new(ctx).revoke_for_test(key)
+}
+
 pub(super) fn dispatch_with_observer(
     ctx: &RepoContext,
     command: LoopCommand,

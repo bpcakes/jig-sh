@@ -336,7 +336,7 @@ fn scheduled_pr_manager_preserves_branch_lease_loss_after_start_as_attention() {
     let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
     fs::write(
         temp.path().join(".jig.toml"),
-        format!("{config}lease_ttl_seconds = 1\n"),
+        format!("{config}lease_ttl_seconds = 10\n"),
     )
     .unwrap();
     setup_origin_with_pr_branch(temp.path());
@@ -363,7 +363,7 @@ JSON
 esac
 "#,
     );
-    let leases = temp.path().join(".agent/.cache/loop/leases.json");
+    let worker_started = temp.path().join(".agent/.cache/pr-manager-worker-started");
     let codex_path = bin.path().join("codex-pr-cancel-stub.sh");
     write_codex_stub(
         &codex_path,
@@ -371,20 +371,37 @@ esac
 set -eu
 cat >/dev/null
 printf '\n// partial scheduled repair\n' >> src.rs
-printf '%s\n' '{"leases":{}}' > "$JIG_TEST_LEASES"
+: > "$JIG_TEST_BRANCH_WORKER_STARTED"
 while :; do sleep 1; done
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
-    let _leases = EnvVarGuard::set("JIG_TEST_LEASES", leases.as_os_str());
+    let _worker_started = EnvVarGuard::set(
+        "JIG_TEST_BRANCH_WORKER_STARTED",
+        worker_started.as_os_str(),
+    );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let dispatch_at = fixed_dispatch_time();
+    let repo_root = temp.path().to_path_buf();
+    let revoker = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !worker_started.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not reach the branch-lease test boundary"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let ctx = RepoContext::load_from(&repo_root).unwrap();
+        crate::runtime::loops::revoke_lease_for_test(&ctx, "branch:codex/widgets").unwrap();
+    });
 
     let first = crate::runtime::loops::dispatch_due_at(&ctx, dispatch_at).unwrap();
+    revoker.join().unwrap();
 
     let dispatch_action = &first["actions"][0];
     let worker_action = &dispatch_action["tick"]["actions"][0];
-    assert_eq!(first["status"], "failed", "{first:#}");
+    assert_eq!(first["status"], "needs_attention", "{first:#}");
     assert_eq!(first["needs_attention_count"], 1, "{first:#}");
     assert_eq!(dispatch_action["occurrence"]["status"], "needs_attention");
     assert_eq!(dispatch_action["tick"]["actions"].as_array().unwrap().len(), 1);
