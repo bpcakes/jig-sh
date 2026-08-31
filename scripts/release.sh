@@ -9,13 +9,17 @@ PACKAGE_NAME="jig-sh"
 PUBLISH_PACKAGE_NAMES=(
   "jig-contract"
   "jig-core"
+  "jig-file-budget"
+  "jig-owned-process"
   "jig-rust"
   "jig-sqlx"
   "jig-typescript"
+  "jig-go"
   "jig-features"
   "jig-vault"
   "jig-dev-proxy"
   "jig-tui"
+  "jig-vault-tui"
   "jig-status-tui"
   "jig-codex-tui"
   "jig-ui"
@@ -87,13 +91,17 @@ crate_dir_for_package() {
   case "$1" in
     jig-contract) printf '%s\n' "crates/jig-contract" ;;
     jig-core) printf '%s\n' "crates/jig-core" ;;
+    jig-file-budget) printf '%s\n' "crates/jig-file-budget" ;;
+    jig-owned-process) printf '%s\n' "crates/jig-owned-process" ;;
     jig-rust) printf '%s\n' "crates/jig-rust" ;;
     jig-sqlx) printf '%s\n' "crates/jig-sqlx" ;;
     jig-typescript) printf '%s\n' "crates/jig-typescript" ;;
+    jig-go) printf '%s\n' "crates/jig-go" ;;
     jig-features) printf '%s\n' "crates/jig-features" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
+    jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
     jig-status-tui) printf '%s\n' "crates/jig-status-tui" ;;
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
