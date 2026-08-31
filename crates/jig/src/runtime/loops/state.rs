@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
     Arc,
@@ -26,17 +26,14 @@ use super::workflow::ResolvedWorkflow;
 mod file_lock;
 mod json_cache;
 mod lease_renewal;
+mod persistence;
 
 #[cfg(test)]
 pub(super) use file_lock::with_exclusive_file_lock;
 pub(super) use file_lock::{
     LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline, with_exclusive_file_lock_until,
 };
-use json_cache::{
-    read_json_cache_or_default_with_cancellation, recover_unparsable_json_cache,
-    validate_json_cache, with_json_cache_lock, with_json_cache_lock_until,
-    with_json_cache_read_lock,
-};
+use persistence::JsonStatePersistence;
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
 pub(super) const LOOP_RUNTIME_DIR: &str = ".agent/runtime/loop";
@@ -55,7 +52,7 @@ impl LeaseRecord {
     }
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct LeaseFile {
     leases: BTreeMap<String, LeaseRecord>,
 }
@@ -67,20 +64,13 @@ pub(super) enum LeaseAcquire {
 
 #[derive(Clone)]
 pub(super) struct LeaseStore {
-    root: PathBuf,
-    dir: PathBuf,
-    path: PathBuf,
-    lock_path: PathBuf,
+    persistence: JsonStatePersistence,
 }
 
 impl LeaseStore {
     pub(super) fn new(ctx: &RepoContext) -> Self {
-        let dir = ctx.root().join(LOOP_CACHE_DIR);
         Self {
-            root: ctx.root().to_path_buf(),
-            path: dir.join("leases.json"),
-            lock_path: dir.join("leases.lock"),
-            dir,
+            persistence: JsonStatePersistence::new(ctx, "leases"),
         }
     }
 
@@ -157,20 +147,20 @@ impl LeaseStore {
         &self,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<LeaseRecord>> {
-        let mut store = read_json_cache_or_default_with_cancellation::<LeaseFile>(
-            &self.root, &self.dir, &self.path, cancelled,
-        )?;
+        let mut store = self
+            .persistence
+            .read_only_with_cancellation::<LeaseFile>(cancelled)?;
         ensure_status_active(cancelled)?;
         store.prune_expired(now_ms());
         Ok(store.leases.into_values().collect())
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut LeaseFile) -> Result<T>) -> Result<T> {
-        with_json_cache_lock(&self.root, &self.dir, &self.lock_path, &self.path, action)
+        self.persistence.with_locked(action)
     }
 
     fn validate_parseable(&self) -> Result<()> {
-        validate_json_cache::<LeaseFile>(&self.root, &self.dir, &self.lock_path, &self.path)
+        self.persistence.validate::<LeaseFile>()
     }
 }
 
@@ -386,26 +376,19 @@ impl AttemptSections {
     }
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct AttemptFile {
     attempts: BTreeMap<String, AttemptRecord>,
 }
 
 pub(super) struct AttemptStore {
-    root: PathBuf,
-    dir: PathBuf,
-    path: PathBuf,
-    lock_path: PathBuf,
+    persistence: JsonStatePersistence,
 }
 
 impl AttemptStore {
     pub(super) fn new(ctx: &RepoContext) -> Self {
-        let dir = ctx.root().join(LOOP_CACHE_DIR);
         Self {
-            root: ctx.root().to_path_buf(),
-            path: dir.join("attempts.json"),
-            lock_path: dir.join("attempts.lock"),
-            dir,
+            persistence: JsonStatePersistence::new(ctx, "attempts"),
         }
     }
 
@@ -474,12 +457,12 @@ impl AttemptStore {
         &self,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<AttemptRecord>> {
-        Ok(read_json_cache_or_default_with_cancellation::<AttemptFile>(
-            &self.root, &self.dir, &self.path, cancelled,
-        )?
-        .attempts
-        .into_values()
-        .collect())
+        Ok(self
+            .persistence
+            .read_only_with_cancellation::<AttemptFile>(cancelled)?
+            .attempts
+            .into_values()
+            .collect())
     }
 
     pub(super) fn clear_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<bool> {
@@ -496,33 +479,28 @@ impl AttemptStore {
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
-        with_json_cache_lock(&self.root, &self.dir, &self.lock_path, &self.path, action)
+        self.persistence.with_locked(action)
     }
 
     fn with_read_lock<T>(&self, action: impl FnOnce(&AttemptFile) -> Result<T>) -> Result<T> {
-        with_json_cache_read_lock(&self.root, &self.dir, &self.lock_path, &self.path, action)
+        self.persistence.with_read_lock(action)
     }
 
     fn recover_unparsable(&self) -> Result<bool> {
-        recover_unparsable_json_cache::<AttemptFile>(
-            &self.root,
-            &self.dir,
-            &self.lock_path,
-            &self.path,
-        )
+        self.persistence.recover_unparsable::<AttemptFile>()
     }
 }
 
 #[derive(Debug)]
-pub(super) struct DisposableStateRecovery {
+pub(super) struct CoordinationStateRecovery {
     pub(super) attempt_cache_reset: bool,
 }
 
-pub(super) fn prepare_disposable_state_for_dispatch(
+pub(super) fn prepare_coordination_state_for_dispatch(
     ctx: &RepoContext,
-) -> Result<DisposableStateRecovery> {
+) -> Result<CoordinationStateRecovery> {
     LeaseStore::new(ctx).validate_parseable()?;
-    Ok(DisposableStateRecovery {
+    Ok(CoordinationStateRecovery {
         attempt_cache_reset: AttemptStore::new(ctx).recover_unparsable()?,
     })
 }
@@ -693,13 +671,14 @@ mod tests {
         write_loop_fixture_repo(temp.path());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let store = AttemptStore::new(&ctx);
-        fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        let path = store.persistence.legacy_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         let original = b"{\n  \"attempts\": {}\n}\n";
-        fs::write(&store.path, original).unwrap();
+        fs::write(path, original).unwrap();
 
         assert!(store.get("workflow", "item").unwrap().is_none());
         assert!(store.snapshot().unwrap().is_empty());
-        assert_eq!(fs::read(&store.path).unwrap(), original);
+        assert_eq!(fs::read(path).unwrap(), original);
     }
 
     #[test]

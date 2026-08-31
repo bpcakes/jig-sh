@@ -508,7 +508,7 @@ lease_ttl_seconds = 1
         &codex_path,
         r#"#!/bin/sh
 cat >/dev/null
-rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/leases.json"
+rm -f "$JIG_TEST_LEASE_PATH"
 sleep 1
 touch "$JIG_TEST_TASK_COMPLETION_MARKER"
 printf 'task complete\n'
@@ -516,6 +516,8 @@ printf 'task complete\n'
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let lease_path = temp.path().join(".git/jig/loop/leases.json");
+    let _lease_path = EnvVarGuard::set("JIG_TEST_LEASE_PATH", lease_path.as_os_str());
     let _completion = EnvVarGuard::set(
         "JIG_TEST_TASK_COMPLETION_MARKER",
         completion_marker.as_os_str(),

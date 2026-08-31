@@ -16,7 +16,7 @@ use super::occurrence::{
     OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish,
     OccurrenceGuard, OccurrenceStatus, OccurrenceStore, ScheduleOccurrence,
 };
-use super::state::prepare_disposable_state_for_dispatch;
+use super::state::prepare_coordination_state_for_dispatch;
 use super::workflow::{
     CodexTaskCheckout, ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows,
     loop_status_is_success, resolve_workflow,
@@ -51,15 +51,15 @@ fn dispatch_due_at_with_observer(
     let started = now_ms();
     let workflows = list_workflows(ctx)?;
     super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
-    let disposable_recovery = prepare_disposable_state_for_dispatch(ctx)?;
+    let coordination_recovery = prepare_coordination_state_for_dispatch(ctx)?;
     let mut occurrences = OccurrenceStore::new(ctx);
     let reconciled = occurrences.reconcile_stale()?;
     let mut actions = Vec::new();
     let mut summary = DispatchSummary::default();
-    if disposable_recovery.attempt_cache_reset {
+    if coordination_recovery.attempt_cache_reset {
         summary.include_state_errors(vec![json!({
             "kind": "attempts_reset",
-            "error": "Malformed disposable loop attempt state was reset before dispatch",
+            "error": "Malformed loop attempt coordination state was reset before dispatch",
         })]);
     }
 

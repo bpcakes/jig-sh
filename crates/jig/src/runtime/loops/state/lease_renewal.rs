@@ -49,13 +49,8 @@ impl LeaseStore {
         deadline: Instant,
         now: impl FnOnce() -> u64,
     ) -> Result<LeaseRecord> {
-        with_json_cache_lock_until(
-            &self.root,
-            &self.dir,
-            &self.lock_path,
-            &self.path,
-            deadline,
-            |store: &mut LeaseFile| {
+        self.persistence
+            .with_locked_until(deadline, |store: &mut LeaseFile| {
                 let now = now();
                 let lease = store.leases.get_mut(key).ok_or_else(|| {
                     RenewalOwnershipLost::new(format!("Loop lease is no longer held: {key}"))
@@ -74,7 +69,6 @@ impl LeaseStore {
                 }
                 lease.expires_at_ms = now.saturating_add(ttl_seconds.saturating_mul(1_000));
                 Ok(lease.clone())
-            },
-        )
+            })
     }
 }

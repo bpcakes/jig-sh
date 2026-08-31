@@ -76,6 +76,24 @@ fn durable_publish_stops_before_replace_when_file_sync_fails() {
 }
 
 #[test]
+fn compensation_reports_both_the_effect_and_rollback_failures() {
+    let error = compensate_after_commit(
+        "committed",
+        |_| -> Result<()> { anyhow::bail!("receipt publication failed") },
+        || anyhow::bail!("rollback publication failed"),
+    )
+    .unwrap_err();
+    let detail = format!("{error:#}");
+
+    assert!(detail.contains("receipt publication failed"), "{detail}");
+    assert!(
+        detail.contains("Failed to roll back committed loop schedule state"),
+        "{detail}"
+    );
+    assert!(detail.contains("rollback publication failed"), "{detail}");
+}
+
+#[test]
 fn durable_directory_creation_builds_missing_parent_chain() {
     let temp = tempfile::tempdir().unwrap();
     let nested = temp.path().join(".agent/runtime/loop");

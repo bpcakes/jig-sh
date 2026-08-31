@@ -16,6 +16,7 @@ use super::*;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+#[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
     root: &Path,
     dir: &Path,
@@ -95,23 +96,24 @@ where
     cache.read_json_or_default(&data_name, data_path, cancelled)
 }
 
-pub(super) fn validate_json_cache<T>(
-    root: &Path,
-    dir: &Path,
-    lock_path: &Path,
-    data_path: &Path,
-) -> Result<()>
-where
-    T: Default + DeserializeOwned,
-{
-    with_json_cache_read_lock::<_, T>(root, dir, lock_path, data_path, |_| Ok(()))
-}
-
 pub(super) fn recover_unparsable_json_cache<T>(
     root: &Path,
     dir: &Path,
     lock_path: &Path,
     data_path: &Path,
+) -> Result<bool>
+where
+    T: Default + DeserializeOwned + Serialize,
+{
+    replace_unparsable_json_cache(root, dir, lock_path, data_path, T::default())
+}
+
+pub(super) fn replace_unparsable_json_cache<T>(
+    root: &Path,
+    dir: &Path,
+    lock_path: &Path,
+    data_path: &Path,
+    replacement: T,
 ) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
@@ -124,7 +126,7 @@ where
         match cache.read_json_or_default::<T>(&data_name, data_path, &|| false) {
             Ok(_) => Ok(false),
             Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
-                cache.write_json(&data_name, data_path, &T::default())?;
+                cache.write_json(&data_name, data_path, &replacement)?;
                 Ok(true)
             }
             Err(error) => Err(error),

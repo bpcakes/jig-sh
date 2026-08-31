@@ -181,15 +181,9 @@ impl SchedulePersistence {
             let result = action(&mut store)?;
             validate_durable_schedule(&store, &self.path)?;
             self.write_durable_schedule(&store)?;
-            match after_commit(&result) {
-                Ok(effect) => Ok((result, effect)),
-                Err(error) => match self.write_durable_schedule(&rollback) {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(error.context(format!(
-                        "Failed to roll back committed loop schedule state: {rollback_error:#}"
-                    ))),
-                },
-            }
+            compensate_after_commit(result, after_commit, || {
+                self.write_durable_schedule(&rollback)
+            })
         })
     }
 
@@ -565,6 +559,22 @@ impl SchedulePersistence {
             return Ok(());
         }
         write_json_durable(&self.root, &self.path, store)
+    }
+}
+
+fn compensate_after_commit<T, U>(
+    result: T,
+    after_commit: impl FnOnce(&T) -> Result<U>,
+    rollback: impl FnOnce() -> Result<()>,
+) -> Result<(T, U)> {
+    match after_commit(&result) {
+        Ok(effect) => Ok((result, effect)),
+        Err(error) => match rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(error.context(format!(
+                "Failed to roll back committed loop schedule state: {rollback_error:#}"
+            ))),
+        },
     }
 }
 

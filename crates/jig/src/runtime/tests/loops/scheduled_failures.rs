@@ -41,13 +41,15 @@ fn scheduled_lease_failure_preserves_worker_receipt_and_retained_worktree() {
         &codex_path,
         r#"#!/bin/sh
 cat >/dev/null
-rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/leases.json"
+rm -f "$JIG_TEST_LEASE_PATH"
 sleep 1
 printf 'task complete\n'
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let lease_path = temp.path().join(".git/jig/loop/leases.json");
+    let _lease_path = EnvVarGuard::set("JIG_TEST_LEASE_PATH", lease_path.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = dispatch_loop(&ctx);
@@ -131,13 +133,15 @@ fn post_work_state_failure_preserves_successful_worker_evidence() {
 set -eu
 cat >/dev/null
 printf 'retained worker change\n' > worker-result.txt
-mkdir -p "$JIG_TEST_TASK_REPO/.agent/.cache/loop"
-printf 'not JSON\n' > "$JIG_TEST_TASK_REPO/.agent/.cache/loop/attempts.json"
+printf 'not JSON\n' > "$JIG_TEST_ATTEMPTS_PATH"
 printf 'task complete\n'
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let attempts_path = temp.path().join(".git/jig/loop/attempts.json");
+    let _attempts_path =
+        EnvVarGuard::set("JIG_TEST_ATTEMPTS_PATH", attempts_path.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = dispatch_loop(&ctx);

@@ -3,6 +3,7 @@ mod review_round4_tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::runtime::loops::authority::resolve_protected_loop_authority;
     use crate::runtime::loops::workflow::{WorkflowCompletion, WorkflowOutcome};
 
     fn workflow() -> ResolvedWorkflow {
@@ -166,7 +167,11 @@ mod review_round4_tests {
 
         let _env_lock = crate::test_env::lock_env();
         let (temp, ctx, worktree, head) = repair_worktree_fixture();
-        let lease_path = temp.path().join(LOOP_CACHE_DIR).join("leases.json");
+        let lease_path = resolve_protected_loop_authority(temp.path())
+            .unwrap()
+            .expect("Git fixture needs protected loop authority")
+            .dir
+            .join("leases.json");
         let observed = temp.path().join("lease-observed-during-cleanup");
         let git = temp.path().join("lease-checking-git");
         fs::write(

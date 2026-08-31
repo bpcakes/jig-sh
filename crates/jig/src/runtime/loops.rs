@@ -5,6 +5,7 @@ use crate::command::{LoopCommand, LoopStatusRequest};
 use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 
+mod authority;
 mod codex_task;
 mod engine;
 mod github;
