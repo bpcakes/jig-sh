@@ -186,6 +186,62 @@ mod review_round4_tests {
     }
 
     #[test]
+    fn pre_start_cancellation_retains_worktree_after_branch_lease_loss() {
+        let _env_lock = crate::test_env::lock_env();
+        let _git = crate::test_env::EnvVarGuard::set(
+            crate::bootstrap::GIT_BIN_ENV,
+            std::ffi::OsStr::new("git"),
+        );
+        let (_temp, ctx, worktree, head) = repair_worktree_fixture();
+        let workflow = workflow();
+        let mut item = item();
+        item.head_sha = head;
+        let mut attempts = AttemptStore::new(&ctx);
+        let lease = json!({"owner": "test"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
+        let release_error = anyhow!("branch lease belongs to another dispatcher");
+
+        let action = record_pr_repair_outcome(
+            &repair,
+            &mut attempts,
+            PrRepairOutcome::WorkerCancelled {
+                before_start: true,
+                worker_receipt_id: "receipt-worker".into(),
+                worktree: worktree.clone(),
+            },
+            Some(&release_error),
+        )
+        .unwrap();
+        let completion = pr_manager_completion(std::slice::from_ref(&action));
+
+        assert_eq!(action["status"], "needs_attention");
+        assert_eq!(
+            action["attention_kind"],
+            "branch_lease_lost_before_cleanup"
+        );
+        assert_eq!(action["unexecuted_reason"], "cancelled_before_start");
+        assert_eq!(action["worktree_retained"], true);
+        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert!(worktree.exists());
+        assert_eq!(completion.outcome, WorkflowOutcome::NeedsAttention);
+        assert_eq!(
+            completion.execution,
+            WorkflowExecution::Unexecuted(UnexecutedReason::CancelledBeforeStart)
+        );
+        assert_eq!(
+            completion.worktree.as_deref(),
+            Some(worktree.to_string_lossy().as_ref())
+        );
+        assert!(attempts.snapshot().unwrap().is_empty());
+    }
+
+    #[test]
     fn pre_execution_failure_cleans_the_worktree_without_consuming_an_attempt() {
         let _env_lock = crate::test_env::lock_env();
         let _git = crate::test_env::EnvVarGuard::set(
@@ -362,6 +418,54 @@ mod review_round4_tests {
         assert_eq!(action["status"], "failed");
         assert_eq!(action["worktree_retained"], false);
         assert!(!worktree.exists());
+        assert_eq!(attempts.snapshot().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn failed_worker_retains_clean_worktree_after_branch_lease_loss() {
+        let _env_lock = crate::test_env::lock_env();
+        let _git = crate::test_env::EnvVarGuard::set(
+            crate::bootstrap::GIT_BIN_ENV,
+            std::ffi::OsStr::new("git"),
+        );
+        let (_temp, ctx, worktree, head) = repair_worktree_fixture();
+        let workflow = workflow();
+        let mut item = item();
+        item.head_sha = head;
+        let mut attempts = AttemptStore::new(&ctx);
+        let lease = json!({"owner": "test"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+        };
+        let release_error = anyhow!("branch lease belongs to another dispatcher");
+
+        let action = record_pr_repair_outcome(
+            &repair,
+            &mut attempts,
+            PrRepairOutcome::WorkerFailed {
+                error: anyhow!("worker output was malformed"),
+                worker_receipt_id: Some("receipt-worker".into()),
+                worktree: worktree.clone(),
+            },
+            Some(&release_error),
+        )
+        .unwrap();
+
+        assert_eq!(action["status"], "needs_attention");
+        assert_eq!(
+            action["attention_kind"],
+            "branch_lease_lost_after_start"
+        );
+        assert_eq!(action["completed_status"], "failed");
+        assert_eq!(action["completed_error"], "worker output was malformed");
+        assert_eq!(action["lease_error"], release_error.to_string());
+        assert_eq!(action["worktree_retained"], true);
+        assert_eq!(action["worker_receipt_id"], "receipt-worker");
+        assert!(worktree.exists());
         assert_eq!(attempts.snapshot().unwrap().len(), 1);
     }
 

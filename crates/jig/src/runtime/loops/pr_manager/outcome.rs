@@ -101,10 +101,10 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 repair,
                 attempt_store,
                 &error,
-                release_error,
                 Some(&worktree),
                 worker_receipt_id.as_deref(),
             );
+            let action = with_branch_lease_result(action, release_error);
             Ok(finalize_failed_pr_worktree(repair, action))
         }
     }
@@ -135,29 +135,29 @@ fn unexecuted_pr_action<L: serde::Serialize>(
     release_error: Option<&anyhow::Error>,
     reason: UnexecutedReason,
 ) -> Value {
-    let error = release_error.map_or_else(
-        || detail.to_string(),
-        |release_error| {
-            format!(
-                "{detail}; branch lease renewal or release also failed: {release_error:#}"
-            )
-        },
-    );
     let mut action = pr_worker_action(
         repair.item,
         repair.lease,
         repair.codex_home,
         "failed",
-        &error,
+        detail,
         worktree,
         worker_receipt_id,
     );
     action["unexecuted_reason"] = json!(reason.as_str());
     if let Some(worktree) = worktree {
+        if let Some(release_error) = release_error {
+            return branch_lease_cleanup_attention(action, release_error);
+        }
         match remove_pr_worktree(repair.repo, worktree, true) {
             Ok(()) => action["worktree_retained"] = json!(false),
             Err(cleanup_error) => return worktree_cleanup_attention(action, cleanup_error),
         }
+    } else if let Some(release_error) = release_error {
+        action["lease_error"] = json!(format!("{release_error:#}"));
+        action["error"] = json!(format!(
+            "{detail}; branch lease renewal or release also failed: {release_error:#}"
+        ));
     }
     action
 }
@@ -166,7 +166,6 @@ fn failed_pr_repair_action<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     attempt_store: &mut AttemptStore,
     error: &anyhow::Error,
-    release_error: Option<&anyhow::Error>,
     worktree: Option<&Path>,
     worker_receipt_id: Option<&str>,
 ) -> Value {
@@ -175,14 +174,7 @@ fn failed_pr_repair_action<L: serde::Serialize>(
         repair.lease,
         repair.codex_home,
         "failed",
-        &release_error.map_or_else(
-            || format!("{error:#}"),
-            |release_error| {
-                format!(
-                    "{error:#}; branch lease renewal or release also failed: {release_error:#}"
-                )
-            },
-        ),
+        &format!("{error:#}"),
         worktree,
         worker_receipt_id,
     );
@@ -367,6 +359,27 @@ fn worktree_cleanup_attention(mut action: Value, cleanup_error: anyhow::Error) -
             "PR repair worktree cleanup failed: {cleanup_error}; completed action: {completed_error}"
         ),
         None => format!("PR repair worktree cleanup failed: {cleanup_error}"),
+    });
+    action
+}
+
+fn branch_lease_cleanup_attention(mut action: Value, release_error: &anyhow::Error) -> Value {
+    let completed_error = action["error"].as_str().map(str::to_string);
+    action["completed_status"] = action["status"].clone();
+    if let Some(completed_error) = completed_error.as_deref() {
+        action["completed_error"] = json!(completed_error);
+    }
+    action["status"] = json!("needs_attention");
+    action["attention_kind"] = json!("branch_lease_lost_before_cleanup");
+    action["worktree_retained"] = json!(true);
+    action["lease_error"] = json!(format!("{release_error:#}"));
+    action["error"] = json!(match completed_error {
+        Some(completed_error) => format!(
+            "PR repair did not start, but its worktree could not be safely removed after branch lease authority was lost: {release_error:#}; completed action: {completed_error}"
+        ),
+        None => format!(
+            "PR repair did not start, but its worktree could not be safely removed after branch lease authority was lost: {release_error:#}"
+        ),
     });
     action
 }

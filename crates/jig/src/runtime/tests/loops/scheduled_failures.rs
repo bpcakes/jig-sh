@@ -158,7 +158,7 @@ printf 'task complete\n'
 
 #[cfg(unix)]
 #[test]
-fn scheduled_dispatch_fails_closed_after_durable_ledger_loss() {
+fn scheduled_dispatch_fails_closed_after_worker_deletes_checkout_authority() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let bin = tempdir().unwrap();
@@ -176,11 +176,16 @@ schedule = "* * * * *""#,
     );
     let codex_path = bin.path().join("codex-task-stub.sh");
     let completion_marker = bin.path().join("scheduled-worker-completed");
+    let start_log = bin.path().join("scheduled-worker-starts");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
 cat >/dev/null
-rm -f "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json"
+printf 'started\n' >> "$JIG_TEST_TASK_START_LOG"
+rm -f \
+  "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json" \
+  "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.initialized" \
+  "$JIG_TEST_TASK_REPO/.agent/.cache/loop/schedule.json"
 sleep 1
 touch "$JIG_TEST_TASK_COMPLETION_MARKER"
 printf 'task complete\n'
@@ -192,6 +197,7 @@ printf 'task complete\n'
         "JIG_TEST_TASK_COMPLETION_MARKER",
         completion_marker.as_os_str(),
     );
+    let _starts = EnvVarGuard::set("JIG_TEST_TASK_START_LOG", start_log.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = dispatch_loop(&ctx);
@@ -224,6 +230,23 @@ printf 'task complete\n'
     assert!(
         !completion_marker.exists(),
         "worker should be terminated as soon as occurrence renewal fails"
+    );
+    assert_eq!(fs::read_to_string(&start_log).unwrap(), "started\n");
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("Initialized loop schedule state is missing"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(&start_log).unwrap(),
+        "started\n",
+        "the protected Git-metadata witness must prevent a duplicate worker start"
     );
 }
 

@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use ulid::Ulid;
 
+use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
 
 use super::{SCHEDULE_SCHEMA_VERSION, ScheduleFile, migrate_schedule_schema, validate_schema};
@@ -17,6 +19,7 @@ use crate::runtime::loops::state::{
 
 const SCHEDULE_STATE_PATH: &str = ".agent/runtime/loop/schedule.json";
 const SCHEDULE_INITIALIZATION_SCHEMA_VERSION: u32 = 1;
+const PROTECTED_SCHEDULE_MARKER_PATH: &str = "jig/loop/schedule.initialized";
 
 #[derive(Serialize)]
 struct ScheduleInitializationMarker<'a> {
@@ -33,12 +36,15 @@ pub(super) struct SchedulePersistence {
     legacy_dir: PathBuf,
     legacy_path: PathBuf,
     legacy_lock_path: PathBuf,
+    protected_initialized_path: std::result::Result<Option<PathBuf>, String>,
 }
 
 impl SchedulePersistence {
     pub(super) fn new(ctx: &RepoContext) -> Self {
         let dir = ctx.root().join(LOOP_RUNTIME_DIR);
         let legacy_dir = ctx.root().join(LOOP_CACHE_DIR);
+        let protected_initialized_path =
+            resolve_protected_initialization_path(ctx.root()).map_err(|error| format!("{error:#}"));
         Self {
             path: dir.join("schedule.json"),
             initialized_path: dir.join("schedule.initialized"),
@@ -47,6 +53,7 @@ impl SchedulePersistence {
             legacy_path: legacy_dir.join("schedule.json"),
             legacy_lock_path: legacy_dir.join("schedule.lock"),
             legacy_dir,
+            protected_initialized_path,
         }
     }
 
@@ -119,7 +126,7 @@ impl SchedulePersistence {
                     validate_durable_schedule(&store, &self.path)?;
                     write_json_durable(&self.path, &store)?;
                 }
-                self.ensure_initialization_marker()?;
+                self.ensure_initialization_markers()?;
                 self.write_legacy_marker()?;
                 let result = action(&mut store)?;
                 validate_durable_schedule(&store, &self.path)?;
@@ -143,7 +150,7 @@ impl SchedulePersistence {
                     let store = self.read_durable(durable_required, &|| false)?;
                     let durable_exists = store.is_some();
                     if durable_exists {
-                        self.ensure_initialization_marker()?;
+                        self.ensure_initialization_markers()?;
                     }
                     let store = store.unwrap_or_default();
                     Ok((action(&store)?, durable_exists))
@@ -174,7 +181,7 @@ impl SchedulePersistence {
         )?
         else {
             if self.read_durable(false, &|| false)?.is_some() {
-                self.ensure_initialization_marker()?;
+                self.ensure_initialization_markers()?;
                 self.write_legacy_marker()?;
             }
             return Ok(());
@@ -188,7 +195,7 @@ impl SchedulePersistence {
                     self.path.display()
                 );
             };
-            self.ensure_initialization_marker()?;
+            self.ensure_initialization_markers()?;
             if marker_schema != legacy.schema_version {
                 write_json_durable(&self.legacy_path, &legacy)?;
             }
@@ -208,7 +215,7 @@ impl SchedulePersistence {
         } else {
             write_json_durable(&self.path, &legacy)?;
         }
-        self.ensure_initialization_marker()?;
+        self.ensure_initialization_markers()?;
         self.write_legacy_marker()
     }
 
@@ -229,10 +236,16 @@ impl SchedulePersistence {
     }
 
     fn durable_state_expected(&self) -> Result<bool> {
-        Ok(path_exists(
+        let public_marker = path_exists(
             &self.initialized_path,
             "loop schedule initialization marker",
-        )? || path_exists(&self.path, "loop schedule state")?)
+        )?;
+        let durable_state = path_exists(&self.path, "loop schedule state")?;
+        let protected_marker = match self.protected_initialization_path()? {
+            Some(path) => path_exists(path, "protected loop schedule initialization marker")?,
+            None => false,
+        };
+        Ok(public_marker || durable_state || protected_marker)
     }
 
     fn read_durable(
@@ -256,21 +269,72 @@ impl SchedulePersistence {
             .transpose()
     }
 
-    fn ensure_initialization_marker(&self) -> Result<()> {
-        if path_exists(
+    fn ensure_initialization_markers(&self) -> Result<()> {
+        self.ensure_initialization_marker_at(
             &self.initialized_path,
             "loop schedule initialization marker",
-        )? {
+        )?;
+        if let Some(path) = self.protected_initialization_path()? {
+            self.ensure_initialization_marker_at(
+                path,
+                "protected loop schedule initialization marker",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn ensure_initialization_marker_at(&self, path: &Path, description: &str) -> Result<()> {
+        if path_exists(path, description)? {
             return Ok(());
         }
         write_json_durable(
-            &self.initialized_path,
+            path,
             &ScheduleInitializationMarker {
                 schema_version: SCHEDULE_INITIALIZATION_SCHEMA_VERSION,
                 state_path: SCHEDULE_STATE_PATH,
             },
         )
     }
+
+    fn protected_initialization_path(&self) -> Result<Option<&Path>> {
+        self.protected_initialized_path
+            .as_ref()
+            .map(Option::as_deref)
+            .map_err(|error| anyhow::anyhow!(error.clone()))
+    }
+}
+
+fn resolve_protected_initialization_path(repo_root: &Path) -> Result<Option<PathBuf>> {
+    if !path_exists(&repo_root.join(".git"), "Git metadata entry")? {
+        return Ok(None);
+    }
+    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    command
+        .current_dir(repo_root)
+        .arg("--no-replace-objects")
+        .args(["rev-parse", "--absolute-git-dir"]);
+    scrub_known_repository_git_environment(&mut command);
+    let output = command
+        .output()
+        .context("Failed to resolve the repository Git metadata directory")?;
+    if !output.status.success() {
+        let limit = output.stderr.len().min(4_000);
+        let stderr = String::from_utf8_lossy(&output.stderr[..limit]);
+        bail!(
+            "Failed to resolve the repository Git metadata directory: {}",
+            stderr.trim()
+        );
+    }
+    let stdout =
+        String::from_utf8(output.stdout).context("Git metadata directory output was not UTF-8")?;
+    let git_dir = PathBuf::from(stdout.trim());
+    if !git_dir.is_absolute() || !git_dir.is_dir() {
+        bail!(
+            "Git reported an invalid metadata directory: {}",
+            git_dir.display()
+        );
+    }
+    Ok(Some(git_dir.join(PROTECTED_SCHEDULE_MARKER_PATH)))
 }
 
 fn path_exists(path: &Path, description: &str) -> Result<bool> {
@@ -548,6 +612,71 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn git_repository_publishes_a_protected_initialization_witness() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let output = Command::new("git")
+            .current_dir(temp.path())
+            .args(["init"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let persistence = SchedulePersistence::new(&ctx);
+
+        persistence.with_locked(|_| Ok(())).unwrap();
+
+        let protected = persistence
+            .protected_initialization_path()
+            .unwrap()
+            .expect("Git repositories need an out-of-checkout authority witness");
+        assert!(protected.is_file(), "{}", protected.display());
+        assert!(persistence.path.is_file());
+        assert!(persistence.initialized_path.is_file());
+        assert!(persistence.legacy_path.is_file());
+    }
+
+    #[test]
+    fn linked_worktree_uses_its_own_protected_initialization_witness() {
+        let container = tempfile::tempdir().unwrap();
+        let main = container.path().join("main");
+        let linked = container.path().join("linked");
+        fs::create_dir(&main).unwrap();
+        TestRepoBuilder::new(&main).write();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "fixture@example.com"],
+            vec!["config", "user.name", "Fixture"],
+            vec!["add", "."],
+            vec!["commit", "-m", "fixture"],
+        ] {
+            let output = Command::new("git")
+                .current_dir(&main)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        let output = Command::new("git")
+            .current_dir(&main)
+            .args(["worktree", "add", "--detach", linked.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+
+        let main_ctx = RepoContext::load_from(&main).unwrap();
+        let linked_ctx = RepoContext::load_from(&linked).unwrap();
+        let main_persistence = SchedulePersistence::new(&main_ctx);
+        let linked_persistence = SchedulePersistence::new(&linked_ctx);
+        let main_witness = main_persistence.protected_initialization_path().unwrap();
+        let linked_witness = linked_persistence.protected_initialization_path().unwrap();
+
+        assert!(main_witness.is_some());
+        assert!(linked_witness.is_some());
+        assert_ne!(main_witness, linked_witness);
     }
 
     #[test]

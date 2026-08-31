@@ -204,6 +204,10 @@ This section is part of the renderer answers round trip: `jig update --recopy` p
 
 ## `loop` Shape
 
+Git repositories publish a schedule-initialization witness below the checkout's worktree-specific Git metadata directory. Codex `workspace-write` protects Git metadata, so a repo-mode worker that removes the ledger, its adjacent marker, and the legacy migration marker still leaves enough authority for later dispatches to fail closed instead of rerunning the occurrence.
+
+PR-manager branch-lease loss is phase-sensitive but always fail-closed around a prepared checkout. Loss after a worker failure retains even an otherwise clean checkout; loss before worker start retains the checkout as `needs_attention` instead of racing a new lease owner by force-removing that shared path.
+
 The default `noop-status` workflow is read-only and does not invoke Codex. Configured `github_pr_status` workflows inspect GitHub without Codex, while `pr_manager` workflows may run an unattended `codex exec` worker to repair an eligible pull request:
 
 ```toml
