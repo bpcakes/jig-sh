@@ -356,6 +356,58 @@ mod tests {
         assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 3);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unknown_final_repository_head_requires_attention_and_a_dispatch_stop() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _env_lock = lock_env();
+        let (temp, ctx, _path) = fixture();
+        let receipt_journal = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        let git = temp.path().join("git-final-head-fails.sh");
+        fs::write(
+            &git,
+            r#"#!/bin/sh
+case " $* " in
+  *" status --porcelain=v1 "*) exit 0 ;;
+  *" ls-files --stage "*) exit 0 ;;
+  *" rev-parse HEAD "*) exit 7 ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&git).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&git, permissions).unwrap();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+        let checkout = PreparedCheckout::Repo {
+            path: temp.path().to_path_buf(),
+            initial_head: "initial-head".into(),
+            receipt_journal,
+        };
+
+        let completion = checkout.finish(TaskOutcome::Succeeded, &ctx, None);
+
+        assert_eq!(
+            completion.report.repository_revision_state(),
+            RepositoryRevisionState::Unknown
+        );
+        assert!(completion.report.repository_requires_attention());
+        assert!(
+            completion
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("checkout HEAD"))
+        );
+        assert!(
+            completion
+                .report
+                .repository_revision_state()
+                .requires_dispatch_stop()
+        );
+    }
+
     #[test]
     fn absent_receipt_journal_remains_valid_without_a_worker_receipt() {
         let _env_lock = lock_env();

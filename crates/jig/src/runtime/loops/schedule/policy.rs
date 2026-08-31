@@ -6,7 +6,7 @@ use super::super::engine::WorkflowLeaseDisposition;
 use super::super::occurrence::OccurrenceOutcome;
 #[cfg(test)]
 use super::super::workflow::WorkflowExecution;
-use super::super::workflow::WorkflowOutcome;
+use super::super::workflow::{RepositoryRevisionState, WorkflowOutcome};
 
 #[derive(Default)]
 pub(super) struct DispatchStep {
@@ -17,7 +17,7 @@ pub(super) struct DispatchStep {
     pub(super) deferred_count: u64,
     pub(super) skipped_count: u64,
     pub(super) failed_count: u64,
-    pub(super) repository_revision_changed: bool,
+    pub(super) repository_revision: RepositoryRevisionState,
 }
 
 #[derive(Default)]
@@ -41,7 +41,7 @@ impl DispatchSummary {
         self.deferred_count += step.deferred_count;
         self.skipped_count += step.skipped_count;
         self.failed_count += step.failed_count;
-        self.repository_revision_changed |= step.repository_revision_changed;
+        self.repository_revision_changed |= step.repository_revision.changed();
         self.include_state_errors(step.state_errors.iter().cloned());
     }
 
@@ -231,6 +231,7 @@ mod tests {
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
                 execution: WorkflowExecution::Executed,
+                repository_revision: RepositoryRevisionState::NotApplicable,
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: Some("worker failed".into()),
@@ -280,6 +281,7 @@ mod tests {
             completion: WorkflowCompletion {
                 outcome: WorkflowOutcome::Succeeded,
                 execution: WorkflowExecution::Executed,
+                repository_revision: RepositoryRevisionState::NotApplicable,
                 worker_receipt_id: Some("receipt-worker".into()),
                 worktree: Some("/tmp/retained-worktree".into()),
                 error: None,

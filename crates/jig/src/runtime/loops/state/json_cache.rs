@@ -90,12 +90,20 @@ fn reclaim_orphaned_json_cache_temps(path: &Path) -> Result<()> {
             .as_encoded_bytes()
             .starts_with(prefix.as_encoded_bytes())
         {
-            fs::remove_file(entry.path()).with_context(|| {
+            let file_type = entry.file_type().with_context(|| {
                 format!(
-                    "Failed to reclaim loop cache temporary file {}",
+                    "Failed to inspect loop cache temporary entry {}",
                     entry.path().display()
                 )
             })?;
+            if file_type.is_file() || file_type.is_symlink() {
+                fs::remove_file(entry.path()).with_context(|| {
+                    format!(
+                        "Failed to reclaim loop cache temporary file {}",
+                        entry.path().display()
+                    )
+                })?;
+            }
         }
     }
     Ok(())
@@ -162,6 +170,26 @@ mod tests {
 
         assert!(!orphan.exists());
         assert!(data_path.exists());
+    }
+
+    #[test]
+    fn locked_cache_access_ignores_non_file_temp_entries() {
+        let temp = tempdir().unwrap();
+        let data_path = temp.path().join("attempts.json");
+        let lock_path = temp.path().join("attempts.lock");
+        let unrelated_directory = temp.path().join("attempts.tmp-ExampleDirectory");
+        fs::create_dir(&unrelated_directory).unwrap();
+
+        with_json_cache_lock::<_, BTreeMap<String, String>>(
+            temp.path(),
+            &lock_path,
+            &data_path,
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert!(unrelated_directory.is_dir());
+        assert!(data_path.is_file());
     }
 
     #[test]

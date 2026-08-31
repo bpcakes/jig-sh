@@ -34,6 +34,7 @@ mod push_error_tests {
 
     #[test]
     fn commit_and_push_refuses_an_unresolved_merge_index() {
+        let _env = crate::test_env::lock_env();
         let repo = tempdir().unwrap();
         crate::test_env::TestRepoBuilder::new(repo.path())
             .required_commands(Vec::<String>::new())
@@ -91,6 +92,7 @@ mod push_error_tests {
 
     #[test]
     fn commit_and_push_refuses_conflict_markers_already_committed_by_the_worker() {
+        let _env = crate::test_env::lock_env();
         let repo = tempdir().unwrap();
         crate::test_env::TestRepoBuilder::new(repo.path())
             .required_commands(Vec::<String>::new())

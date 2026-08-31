@@ -16,6 +16,7 @@ mod renewal;
 mod schedule;
 mod state;
 mod workflow;
+mod workflow_state;
 
 #[cfg(test)]
 pub(in crate::runtime) use schedule::dispatch_due_at;

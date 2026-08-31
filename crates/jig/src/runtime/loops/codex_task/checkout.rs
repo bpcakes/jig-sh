@@ -12,7 +12,8 @@ use crate::execution::NoopExecutionObserver;
 use crate::state::{receipt_record_id, with_receipt_journal_writer};
 
 use super::{
-    WORKER_RECEIPT_PATH, git_is_dirty, git_stdout, remove_worktree, repo_task_has_changes,
+    RepositoryRevisionState, WORKER_RECEIPT_PATH, git_is_dirty, git_stdout, remove_worktree,
+    repo_task_has_changes,
 };
 
 const MAX_VERIFIED_RECEIPT_BASELINE_BYTES: u64 = 64 * 1024 * 1024;
@@ -64,16 +65,31 @@ impl CheckoutReport {
     }
 
     pub(super) fn repository_requires_attention(&self) -> bool {
-        matches!(
-            self,
+        self.repository_revision_state() == RepositoryRevisionState::Unknown
+            || matches!(
+                self,
+                Self::Repository {
+                    receipt_append_valid: Some(false) | None,
+                    ..
+                }
+            )
+    }
+
+    pub(super) fn repository_revision_state(&self) -> RepositoryRevisionState {
+        match self {
             Self::Repository {
-                dirty: Some(true) | None,
+                dirty: Some(false),
+                head_changed: Some(false),
                 ..
-            } | Self::Repository {
-                receipt_append_valid: Some(false) | None,
+            } => RepositoryRevisionState::Unchanged,
+            Self::Repository {
+                dirty: Some(false),
+                head_changed: Some(true),
                 ..
-            }
-        )
+            } => RepositoryRevisionState::Changed,
+            Self::Repository { .. } => RepositoryRevisionState::Unknown,
+            Self::Worktree { .. } => RepositoryRevisionState::NotApplicable,
+        }
     }
 
     pub(super) fn retained_worktree(&self) -> Option<String> {

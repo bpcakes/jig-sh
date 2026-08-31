@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
 
 use super::schedule::ScheduleSpec;
+pub(super) use super::workflow_state::{
+    RepositoryRevisionState, UnexecutedReason, WorkflowExecution, WorkflowOutcome,
+};
 
 pub(super) const CODEX_TASK_KIND: &str = "codex_task";
 pub(super) const DEFAULT_WORKFLOW_ID: &str = "noop-status";
@@ -44,56 +47,14 @@ impl WorkflowTick {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum WorkflowOutcome {
-    #[default]
-    Succeeded,
-    Failed,
-    NeedsAttention,
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct WorkflowCompletion {
     pub(super) outcome: WorkflowOutcome,
     pub(super) execution: WorkflowExecution,
+    pub(super) repository_revision: RepositoryRevisionState,
     pub(super) worker_receipt_id: Option<String>,
     pub(super) worktree: Option<String>,
     pub(super) error: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum WorkflowExecution {
-    #[default]
-    Executed,
-    Unexecuted(UnexecutedReason),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum UnexecutedReason {
-    BlockedByActiveOccurrence,
-    BlockedByAttention,
-    CancelledBeforeStart,
-    PreExecutionError,
-}
-
-impl UnexecutedReason {
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::BlockedByActiveOccurrence => "blocked_by_active_occurrence",
-            Self::BlockedByAttention => "blocked_by_attention",
-            Self::CancelledBeforeStart => "cancelled_before_start",
-            Self::PreExecutionError => "pre_execution_error",
-        }
-    }
-}
-
-impl WorkflowExecution {
-    pub(super) const fn unexecuted_reason(self) -> Option<UnexecutedReason> {
-        match self {
-            Self::Executed => None,
-            Self::Unexecuted(reason) => Some(reason),
-        }
-    }
 }
 
 impl WorkflowCompletion {
@@ -112,6 +73,7 @@ impl WorkflowCompletion {
         Self {
             outcome,
             execution: WorkflowExecution::Executed,
+            repository_revision: RepositoryRevisionState::NotApplicable,
             worker_receipt_id: evidence
                 .and_then(|action| action["worker_receipt_id"].as_str())
                 .map(str::to_string),
@@ -492,6 +454,7 @@ mod tests {
             WorkflowCompletion {
                 outcome: WorkflowOutcome::Failed,
                 execution: WorkflowExecution::Executed,
+                repository_revision: RepositoryRevisionState::NotApplicable,
                 worker_receipt_id: Some("receipt_failed".into()),
                 worktree: None,
                 error: Some("worker failed".into()),

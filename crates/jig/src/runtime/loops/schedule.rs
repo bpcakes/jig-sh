@@ -65,12 +65,12 @@ fn dispatch_due_at_with_observer(
 
     for workflow in workflows {
         let step = dispatch_workflow(ctx, &mut occurrences, &workflow, dispatch_at_ms, observer);
-        let repository_revision_changed = step.repository_revision_changed;
+        let stop_for_repository_revision = step.repository_revision.requires_dispatch_stop();
         summary.include(&step);
         if let Some(action) = step.action {
             actions.push(action);
         }
-        if repository_revision_changed {
+        if stop_for_repository_revision {
             break;
         }
     }
@@ -307,17 +307,7 @@ fn dispatch_workflow(
             );
         }
     };
-    step.repository_revision_changed = workflow
-        .codex_task
-        .as_ref()
-        .is_some_and(|task| task.checkout == CodexTaskCheckout::Repo)
-        && tick
-            .value()
-            .and_then(|value| value.get("actions"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|action| action.pointer("/checkout/head_changed") == Some(&Value::Bool(true)));
+    step.repository_revision = tick.completion().repository_revision;
     step.state_errors = scheduled_tick_state_errors(&tick, &workflow.id, &claim.occurrence_id);
     if tick.workflow_was_unexecuted() && tick.completion().worktree.is_none() {
         let error = tick

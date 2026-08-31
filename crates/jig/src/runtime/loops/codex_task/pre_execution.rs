@@ -64,6 +64,7 @@ pub(super) fn unexecuted_task_failure(
                 WorkflowOutcome::Failed
             },
             execution: WorkflowExecution::Unexecuted(reason),
+            repository_revision: RepositoryRevisionState::NotApplicable,
             worker_receipt_id: None,
             worktree: retained_worktree,
             error: Some(error),

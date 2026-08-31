@@ -374,6 +374,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(tick.actions[0]["reason"], "incomplete_github_snapshot");
+        assert_eq!(
+            tick.completion.execution,
+            WorkflowExecution::Unexecuted(UnexecutedReason::PreExecutionError)
+        );
         assert_eq!(attempts.snapshot().unwrap().len(), 1);
     }
 

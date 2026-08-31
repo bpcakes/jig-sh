@@ -67,7 +67,11 @@ fn pr_manager_tick_from_snapshot(
         ));
     };
     if let Some(action) = incomplete_snapshot_action(&observed, pull_requests) {
-        return Ok(WorkflowTick::from_actions(observed, vec![action]));
+        let actions = vec![action];
+        let completion = pr_manager_completion(&actions);
+        return Ok(WorkflowTick::with_completion(
+            observed, actions, completion,
+        ));
     }
     let default_branch = observed
         .pointer("/repository/default_branch")
@@ -196,6 +200,7 @@ fn incomplete_snapshot_action(observed: &Value, pull_requests: &[Value]) -> Opti
         "kind": "pr_manager_observation",
         "status": "failed",
         "reason": "incomplete_github_snapshot",
+        "unexecuted_reason": UnexecutedReason::PreExecutionError.as_str(),
         "pr_list_truncated": pr_list_truncated,
         "review_thread_prs_truncated": truncated_review_threads,
         "error": "PR manager refused to mutate attempts or branches from an incomplete GitHub snapshot",

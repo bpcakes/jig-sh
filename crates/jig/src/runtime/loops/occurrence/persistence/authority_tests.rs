@@ -1,10 +1,13 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use super::*;
 use crate::context::RepoContext;
 use crate::runtime::loops::state::read_json_or_default;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
+use fs4::fs_std::FileExt;
 
 #[test]
 fn mutation_runs_only_after_schedule_authority_is_published() {
@@ -45,6 +48,42 @@ fn git_repository_publishes_a_protected_ledger_and_lock() {
         fs::read(&protected.path).unwrap(),
         fs::read(&persistence.path).unwrap()
     );
+}
+
+#[test]
+fn legacy_migration_waits_for_the_protected_authority_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    let protected = persistence.protected_authority().unwrap().unwrap().clone();
+    fs::create_dir_all(&protected.dir).unwrap();
+    write_json_durable(&persistence.legacy_path, &ScheduleFile::default()).unwrap();
+    let authority_lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&protected.lock_path)
+        .unwrap();
+    authority_lock.lock_exclusive().unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let migrating = thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        persistence.read_locked(|store| Ok(store.clone()))
+    });
+    started_rx.recv().unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    assert!(
+        !protected.path.exists(),
+        "legacy migration published protected state without owning its lock"
+    );
+
+    FileExt::unlock(&authority_lock).unwrap();
+    migrating.join().unwrap().unwrap();
+    assert!(protected.path.is_file());
 }
 
 #[test]
@@ -146,6 +185,29 @@ fn authority_resolution_does_not_execute_the_configured_git_binary() {
     let persistence = SchedulePersistence::new(&ctx);
 
     assert!(persistence.protected_authority().unwrap().is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn symbolic_link_git_metadata_is_rejected_as_mutable_redirection() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let metadata = temp.path().join("git-metadata");
+    fs::rename(temp.path().join(".git"), &metadata).unwrap();
+    symlink(&metadata, temp.path().join(".git")).unwrap();
+    git(temp.path(), &["rev-parse", "--git-dir"]);
+
+    let error = resolve_protected_schedule_authority(temp.path()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("must be a directory or regular pointer file"),
+        "{error:#}"
+    );
 }
 
 #[cfg(unix)]

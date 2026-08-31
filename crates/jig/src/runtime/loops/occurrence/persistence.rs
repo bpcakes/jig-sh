@@ -122,27 +122,19 @@ impl SchedulePersistence {
         &self,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
     ) -> Result<T> {
-        self.with_legacy_migration_lock(|| {
+        self.with_schedule_locks(|| {
             let durable_required = self.durable_state_expected()?;
-            let (authority_dir, authority_lock) = self.authority_lock()?;
-            ensure_durable_directory(authority_dir)?;
-            ensure_durable_directory(&self.dir)?;
-            let result = with_exclusive_file_lock(authority_dir, authority_lock, || {
-                remove_orphaned_schedule_temps(authority_dir)?;
-                remove_orphaned_schedule_temps(&self.dir)?;
-                let durable = self.read_durable(durable_required, &|| false)?;
-                let mut store = durable.unwrap_or_default();
-                if !durable_required || self.protected_authority_needs_state()? {
-                    validate_durable_schedule(&store, &self.path)?;
-                    self.write_durable_schedule(&store)?;
-                }
-                self.ensure_initialization_markers()?;
-                self.write_legacy_marker()?;
-                let result = action(&mut store)?;
+            let durable = self.read_durable(durable_required, &|| false)?;
+            let mut store = durable.unwrap_or_default();
+            if !durable_required || self.protected_authority_needs_state()? {
                 validate_durable_schedule(&store, &self.path)?;
                 self.write_durable_schedule(&store)?;
-                Ok(result)
-            })?;
+            }
+            self.ensure_initialization_markers()?;
+            self.write_legacy_marker()?;
+            let result = action(&mut store)?;
+            validate_durable_schedule(&store, &self.path)?;
+            self.write_durable_schedule(&store)?;
             Ok(result)
         })
     }
@@ -151,26 +143,18 @@ impl SchedulePersistence {
         &self,
         action: impl FnOnce(&ScheduleFile) -> Result<T>,
     ) -> Result<T> {
-        self.with_legacy_migration_lock(|| {
+        self.with_schedule_locks(|| {
             let durable_required = self.durable_state_expected()?;
-            let (authority_dir, authority_lock) = self.authority_lock()?;
-            ensure_durable_directory(authority_dir)?;
-            ensure_durable_directory(&self.dir)?;
-            let (result, durable_exists) =
-                with_exclusive_file_lock(authority_dir, authority_lock, || {
-                    remove_orphaned_schedule_temps(authority_dir)?;
-                    remove_orphaned_schedule_temps(&self.dir)?;
-                    let store = self.read_durable(durable_required, &|| false)?;
-                    let durable_exists = store.is_some();
-                    if let Some(store) = store.as_ref() {
-                        if self.protected_authority_needs_state()? {
-                            self.write_durable_schedule(store)?;
-                        }
-                        self.ensure_initialization_markers()?;
-                    }
-                    let store = store.unwrap_or_default();
-                    Ok((action(&store)?, durable_exists))
-                })?;
+            let store = self.read_durable(durable_required, &|| false)?;
+            let durable_exists = store.is_some();
+            if let Some(store) = store.as_ref() {
+                if self.protected_authority_needs_state()? {
+                    self.write_durable_schedule(store)?;
+                }
+                self.ensure_initialization_markers()?;
+            }
+            let store = store.unwrap_or_default();
+            let result = action(&store)?;
             if durable_exists {
                 self.write_legacy_marker()?;
             }
@@ -178,12 +162,22 @@ impl SchedulePersistence {
         })
     }
 
-    fn with_legacy_migration_lock<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
+    fn with_schedule_locks<T>(&self, action: impl FnOnce() -> Result<T>) -> Result<T> {
         ensure_durable_directory(&self.legacy_dir)?;
         with_exclusive_file_lock(&self.legacy_dir, &self.legacy_lock_path, || {
             remove_orphaned_schedule_temps(&self.legacy_dir)?;
-            self.ensure_legacy_migrated_locked()?;
-            action()
+            let (authority_dir, authority_lock) = self.authority_lock()?;
+            ensure_durable_directory(authority_dir)?;
+            ensure_durable_directory(&self.dir)?;
+            with_exclusive_file_lock(authority_dir, authority_lock, || {
+                remove_orphaned_schedule_temps(authority_dir)?;
+                remove_orphaned_schedule_temps(&self.dir)?;
+                // Keep one lock order for every mutating access: the legacy cache lock
+                // first, then the protected authority lock. Migration may publish the
+                // authoritative ledger, so it belongs inside both locks.
+                self.ensure_legacy_migrated_locked()?;
+                action()
+            })
         })
     }
 

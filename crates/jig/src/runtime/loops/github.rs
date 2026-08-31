@@ -326,10 +326,17 @@ fn review_threads_snapshot(
             .pointer("/pageInfo/hasNextPage")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        cursor = connection
+        let next_cursor = connection
             .pointer("/pageInfo/endCursor")
             .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
             .map(ToOwned::to_owned);
+        if has_next_page && next_cursor.is_none() {
+            truncated = true;
+            cursor = None;
+            break;
+        }
+        cursor = next_cursor;
     }
 
     Ok(json!({

@@ -9,7 +9,7 @@ use tempfile::tempdir;
 
 use super::super::engine::{ScheduledTick, WorkflowLeaseDisposition};
 use super::super::state::{LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
-use super::super::workflow::{WorkflowCompletion, WorkflowOutcome};
+use super::super::workflow::{RepositoryRevisionState, WorkflowCompletion, WorkflowOutcome};
 use super::{
     DispatchStep, DispatchSummary, NoopExecutionObserver, OccurrenceStore, RunSummary,
     RunTickDisposition, ScheduleSpec, abandon_unexecuted_start_failure, dispatch_due_at,
@@ -138,6 +138,29 @@ fn failed_workflow_keeps_a_separate_tick_receipt_error() {
         errors[0]["error"],
         "Failed to record loop tick receipt: disk full"
     );
+}
+
+#[test]
+fn tick_receipt_failure_preserves_the_typed_repository_revision_cutoff() {
+    let tick = ScheduledTick::Errored {
+        value: None,
+        completion: WorkflowCompletion {
+            repository_revision: RepositoryRevisionState::Changed,
+            ..WorkflowCompletion::default()
+        },
+        lease_disposition: WorkflowLeaseDisposition::Acquired,
+        state_errors: Vec::new(),
+        error: "Failed to record loop tick receipt: disk full".into(),
+        post_work_error: Some("Failed to record loop tick receipt: disk full".into()),
+    };
+
+    assert!(
+        tick.completion()
+            .repository_revision
+            .requires_dispatch_stop()
+    );
+    assert!(tick.completion().repository_revision.changed());
+    assert!(tick.value().is_none());
 }
 
 #[test]

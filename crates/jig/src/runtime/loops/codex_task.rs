@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 
 use super::state::LOOP_RUNTIME_DIR;
 use super::workflow::{
-    CodexTaskCheckout, CodexTaskSettings, ResolvedWorkflow, UnexecutedReason, WorkflowCompletion,
-    WorkflowExecution, WorkflowOutcome, WorkflowTick,
+    CodexTaskCheckout, CodexTaskSettings, RepositoryRevisionState, ResolvedWorkflow,
+    UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowOutcome, WorkflowTick,
 };
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
@@ -164,9 +164,11 @@ pub(super) fn codex_task_tick(
                 CheckoutTermination::Completed,
                 worker_error,
             );
+            let repository_revision = checkout.report.repository_revision_state();
             let completion = WorkflowCompletion {
                 outcome,
                 execution: WorkflowExecution::Executed,
+                repository_revision,
                 worker_receipt_id: Some(worker.worker_receipt_id().to_owned()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -218,6 +220,7 @@ pub(super) fn codex_task_tick(
                 termination,
                 Some(format!("Scheduled Codex task was cancelled{timing}")),
             );
+            let repository_revision = checkout.report.repository_revision_state();
             let completion = WorkflowCompletion {
                 outcome,
                 execution: if before_start {
@@ -225,6 +228,7 @@ pub(super) fn codex_task_tick(
                 } else {
                     WorkflowExecution::Executed
                 },
+                repository_revision,
                 worker_receipt_id: Some(worker_receipt_id.clone()),
                 worktree: checkout.report.retained_worktree(),
                 error: error.clone(),
@@ -274,6 +278,7 @@ pub(super) fn codex_task_tick(
                 termination,
                 Some(format!("{error:#}")),
             );
+            let repository_revision = checkout.report.repository_revision_state();
             let retained_worktree = checkout.report.retained_worktree();
             let completion = WorkflowCompletion {
                 outcome,
@@ -282,6 +287,7 @@ pub(super) fn codex_task_tick(
                 } else {
                     WorkflowExecution::Executed
                 },
+                repository_revision,
                 worker_receipt_id: worker_receipt_id.clone(),
                 worktree: retained_worktree,
                 error: error.clone(),
