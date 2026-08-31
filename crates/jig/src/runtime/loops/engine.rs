@@ -223,6 +223,7 @@ fn tick_with_execution(
     let mut completion = WorkflowCompletion::default();
     let mut tick_error = None;
     let mut manual_occurrence = None;
+    let mut manual_receipt_guard = None;
 
     if !workflow.enabled {
         status = "disabled";
@@ -325,11 +326,34 @@ fn tick_with_execution(
                         ));
                     }
                 }
-                if let Some(manual_guard) = manual_guard {
-                    let (occurrence, error) = manual_guard.complete_tick(&mut completion);
-                    manual_occurrence = occurrence;
-                    if let Some(error) = error {
-                        append_tick_error(&mut tick_error, error);
+                if let Some(mut manual_guard) = manual_guard {
+                    if ManualOccurrenceGuard::completion_requires_retention(&completion) {
+                        let (occurrence, error) = manual_guard.complete_tick(&mut completion);
+                        manual_occurrence = occurrence;
+                        if let Some(error) = error {
+                            append_tick_error(&mut tick_error, error);
+                        }
+                    } else {
+                        match manual_guard.stage_tick(&mut completion) {
+                            Ok(Some(occurrence)) => manual_occurrence = Some(occurrence),
+                            Ok(None) => manual_receipt_guard = Some(manual_guard),
+                            Err(error) => {
+                                completion.outcome = WorkflowOutcome::NeedsAttention;
+                                let error = format!(
+                                    "Failed to stage manual loop occurrence before receipt publication: {error:#}"
+                                );
+                                match &mut completion.error {
+                                    Some(existing) => existing.push_str(&format!("; {error}")),
+                                    None => completion.error = Some(error.clone()),
+                                }
+                                let (_occurrence, finalization_error) =
+                                    manual_guard.complete_tick(&mut completion);
+                                append_tick_error(&mut tick_error, error);
+                                if let Some(error) = finalization_error {
+                                    append_tick_error(&mut tick_error, error);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -417,6 +441,12 @@ fn tick_with_execution(
     let mut post_work_error = release_warning
         .as_ref()
         .map(|error| format!("Loop workflow lease renewal or release failed: {error}"));
+    let receipt_cancelled = || {
+        observer.cancelled()
+            || manual_receipt_guard
+                .as_ref()
+                .is_some_and(ManualOccurrenceGuard::renewal_failed)
+    };
     let receipt_id = match record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
@@ -445,11 +475,22 @@ fn tick_with_execution(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
-        &|| observer.cancelled(),
+        &receipt_cancelled,
     ) {
         Ok(receipt_id) => receipt_id,
         Err(error) => {
-            let error = format!("Failed to record loop tick receipt: {error:#}");
+            let mut error = format!("Failed to record loop tick receipt: {error:#}");
+            if let Some(manual_guard) = manual_receipt_guard.take() {
+                completion.outcome = WorkflowOutcome::NeedsAttention;
+                match &mut completion.error {
+                    Some(existing) => existing.push_str(&format!("; {error}")),
+                    None => completion.error = Some(error.clone()),
+                }
+                let (_occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
+                if let Some(finalization_error) = finalization_error {
+                    error.push_str(&format!("; {finalization_error}"));
+                }
+            }
             append_tick_error(&mut post_work_error, error.clone());
             return Ok(ScheduledTick::Errored {
                 value: None,
@@ -461,6 +502,30 @@ fn tick_with_execution(
             });
         }
     };
+
+    if let Some(manual_guard) = manual_receipt_guard.take() {
+        let (_occurrence, finalization_error) = manual_guard.complete_tick(&mut completion);
+        let unexpected_attention =
+            (completion.outcome == WorkflowOutcome::NeedsAttention).then(|| {
+                completion.error.clone().unwrap_or_else(|| {
+                    "Manual loop occurrence required attention after receipt publication".into()
+                })
+            });
+        if let Some(error) = finalization_error.or(unexpected_attention) {
+            let error = format!(
+                "Manual loop occurrence could not be cleanly finalized after receipt {receipt_id}: {error}"
+            );
+            append_tick_error(&mut post_work_error, error.clone());
+            return Ok(ScheduledTick::Errored {
+                value: None,
+                completion,
+                lease_disposition,
+                state_errors,
+                post_work_error,
+                error,
+            });
+        }
+    }
 
     let value = json!({
         "ok": loop_status_is_success(status),

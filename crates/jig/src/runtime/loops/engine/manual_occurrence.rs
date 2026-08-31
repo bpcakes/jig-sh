@@ -154,21 +154,26 @@ impl ManualOccurrenceGuard {
         self.guard.renewal_failed()
     }
 
+    pub(super) fn completion_requires_retention(completion: &WorkflowCompletion) -> bool {
+        completion.outcome == WorkflowOutcome::NeedsAttention || completion.worktree.is_some()
+    }
+
+    pub(super) fn stage_tick(
+        &mut self,
+        completion: &mut WorkflowCompletion,
+    ) -> Result<Option<ScheduleOccurrence>> {
+        let occurrence = self.guard.stage_manual(occurrence_finish(completion))?;
+        if occurrence.status.as_str() == "running" {
+            return Ok(None);
+        }
+        apply_occurrence_attention(completion, &occurrence);
+        Ok(Some(occurrence))
+    }
+
     pub(super) fn finish(self, completion: &WorkflowCompletion) -> Result<OccurrenceFinalization> {
-        let retain =
-            completion.outcome == WorkflowOutcome::NeedsAttention || completion.worktree.is_some();
         self.guard.finish_manual(
-            OccurrenceFinish {
-                outcome: match completion.outcome {
-                    WorkflowOutcome::Succeeded => OccurrenceOutcome::Succeeded,
-                    WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
-                    WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
-                },
-                worker_receipt_id: completion.worker_receipt_id.as_deref(),
-                worktree: completion.worktree.as_deref(),
-                error: completion.error.as_deref(),
-            },
-            retain,
+            occurrence_finish(completion),
+            Self::completion_requires_retention(completion),
         )
     }
 
@@ -185,12 +190,7 @@ impl ManualOccurrenceGuard {
                 if occurrence.status.as_str() == "running" {
                     return (None, error);
                 }
-                if occurrence.requires_attention_at(crate::state::now_ms()) {
-                    completion.outcome = WorkflowOutcome::NeedsAttention;
-                    if completion.error.is_none() {
-                        completion.error = occurrence.error.clone();
-                    }
-                }
+                apply_occurrence_attention(completion, &occurrence);
                 (Some(occurrence), error)
             }
             Err(error) => (
@@ -199,6 +199,31 @@ impl ManualOccurrenceGuard {
                     "Failed to finalize manual loop occurrence: {error:#}"
                 )),
             ),
+        }
+    }
+}
+
+fn occurrence_finish(completion: &WorkflowCompletion) -> OccurrenceFinish<'_> {
+    OccurrenceFinish {
+        outcome: match completion.outcome {
+            WorkflowOutcome::Succeeded => OccurrenceOutcome::Succeeded,
+            WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
+            WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
+        },
+        worker_receipt_id: completion.worker_receipt_id.as_deref(),
+        worktree: completion.worktree.as_deref(),
+        error: completion.error.as_deref(),
+    }
+}
+
+fn apply_occurrence_attention(
+    completion: &mut WorkflowCompletion,
+    occurrence: &ScheduleOccurrence,
+) {
+    if occurrence.requires_attention_at(crate::state::now_ms()) {
+        completion.outcome = WorkflowOutcome::NeedsAttention;
+        if completion.error.is_none() {
+            completion.error = occurrence.error.clone();
         }
     }
 }

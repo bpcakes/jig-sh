@@ -193,6 +193,27 @@ mod tests {
     }
 
     #[test]
+    fn receipt_baseline_exhausts_its_bounded_retry_budget() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (_temp, ctx, _path) = fixture();
+        append_runtime_receipt(&ctx).unwrap();
+        let mut attempts = 0;
+
+        let error = ReceiptJournalBaseline::capture_with(&ctx, || {
+            attempts += 1;
+            append_runtime_receipt(&ctx).unwrap();
+        });
+        let error = match error {
+            Ok(_) => panic!("every receipt snapshot should be invalidated"),
+            Err(error) => error,
+        };
+
+        assert_eq!(attempts, RECEIPT_SNAPSHOT_ATTEMPTS);
+        assert!(format!("{error:#}").contains("changed during all 3 snapshot attempts"));
+    }
+
+    #[test]
     fn receipt_append_verification_does_not_hold_the_writer_lock() {
         use std::sync::mpsc;
         use std::time::Duration;

@@ -91,6 +91,47 @@ printf 'task complete\n' > "$out"
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
 }
 
+#[test]
+fn manual_tick_receipt_failure_preserves_attention_and_blocks_reentry() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let receipt_path = temp.path().join(".agent/state/receipts.jsonl");
+    fs::create_dir_all(&receipt_path).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("noop-status".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap_err();
+
+    assert!(format!("{error:#}").contains("Failed to record loop tick receipt"));
+    fs::remove_dir_all(&receipt_path).unwrap();
+    let blocked = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("noop-status".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap();
+
+    assert_eq!(blocked["status"], "needs_attention", "{blocked:#}");
+    assert_eq!(blocked["actions"][0]["reason"], "manual_occurrence_blocked");
+    let occurrence = &blocked["actions"][0]["occurrence"];
+    assert_eq!(occurrence["status"], "needs_attention");
+    assert!(occurrence["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("Failed to record loop tick receipt")));
+}
+
 #[cfg(unix)]
 #[test]
 fn tick_and_run_report_attention_owned_by_another_workflow() {

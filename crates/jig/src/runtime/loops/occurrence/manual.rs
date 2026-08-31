@@ -4,6 +4,14 @@ use super::*;
 pub(super) const MANUAL_OCCURRENCE_SCHEDULED_AT_MS: u64 = 0;
 
 impl OccurrenceGuard {
+    pub(in crate::runtime::loops) fn stage_manual(
+        &mut self,
+        finish: OccurrenceFinish<'_>,
+    ) -> Result<ScheduleOccurrence> {
+        self.store
+            .stage_manual(&self.occurrence_id, &self.owner, finish)
+    }
+
     pub(in crate::runtime::loops) fn finish_manual(
         self,
         finish: OccurrenceFinish<'_>,
@@ -71,6 +79,30 @@ impl OccurrenceStore {
                     .remove(occurrence_id)
                     .ok_or_else(|| anyhow::anyhow!("Loop occurrence not found: {occurrence_id}"))
             }
+        })
+    }
+
+    fn stage_manual(
+        &mut self,
+        occurrence_id: &str,
+        owner: &str,
+        finish: OccurrenceFinish<'_>,
+    ) -> Result<ScheduleOccurrence> {
+        self.with_locked(|store| {
+            let now = now_ms();
+            let record = store
+                .occurrences
+                .get_mut(occurrence_id)
+                .ok_or_else(|| anyhow::anyhow!("Loop occurrence not found: {occurrence_id}"))?;
+            require_running_owner(record, owner)?;
+            if record.claim_expires_at_ms <= now {
+                mark_expired_claim(record, now, Some(&finish));
+                return Ok(record.clone());
+            }
+            record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
+            record.worktree = finish.worktree.map(str::to_string);
+            record.error = finish.error.map(bounded_error);
+            Ok(record.clone())
         })
     }
 }

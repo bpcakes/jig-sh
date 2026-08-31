@@ -324,6 +324,8 @@ per-manifest-tool discovery, calls, and response shapes. The bounded
 
 ## Runtime State
 
+A clean manual loop tick keeps its durable occurrence live through loop-tick receipt publication and removes it only after that receipt commits. If receipt publication fails, the same occurrence becomes `needs_attention` with available execution evidence and continues to backpressure manual and scheduled reentry.
+
 `.agent/state/*.jsonl` is runtime-owned append-only memory during normal operation. Generated repos may back up, inspect, or remove these files intentionally, but application code should not edit individual records in place. Runtime-owned maintenance commands may perform validated whole-stream rewrites with recovery artifacts. Generated `.gitattributes` marks those JSONL files with `merge=union` to reduce avoidable merge conflicts between independent append-only records.
 
 Current JSONL state files:
