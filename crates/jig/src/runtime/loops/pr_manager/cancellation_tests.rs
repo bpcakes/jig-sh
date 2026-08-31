@@ -81,7 +81,6 @@ mod cancellation_tests {
         };
         assert!(detail.contains("git fetch was cancelled before it started"));
         assert!(worktree.is_none());
-
         let action = record_pr_repair_outcome(
             &repair,
             &mut attempt_store,
@@ -90,21 +89,15 @@ mod cancellation_tests {
         )
         .unwrap();
         let completion = pr_manager_completion(std::slice::from_ref(&action));
-
         assert_eq!(action["status"], "failed");
-        assert_eq!(
-            action["unexecuted_reason"],
-            UnexecutedReason::CancelledBeforeStart.as_str()
-        );
+        assert_eq!(action["unexecuted_reason"], "cancelled_before_start");
         assert!(
-            action["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("git fetch was cancelled"))
+            action["error"].as_str().unwrap().contains("git fetch was cancelled")
         );
-        assert_eq!(
+        assert!(matches!(
             completion.execution,
             WorkflowExecution::Unexecuted(UnexecutedReason::CancelledBeforeStart)
-        );
+        ));
         assert!(attempt_store.snapshot().unwrap().is_empty());
     }
 
@@ -804,5 +797,4 @@ esac
                 .contains("confirmed at")
         );
     }
-
 }
