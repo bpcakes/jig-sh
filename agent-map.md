@@ -8,8 +8,6 @@ Fast jump index for agent-facing guidance in this repository.
 
 ## Nested guides
 
-- [.agent/.cache/adopt/backups/01M1A5GSHHY88EJP3MM2XW7B4T](./.agent/.cache/adopt/backups/01M1A5GSHHY88EJP3MM2XW7B4T/AGENTS.md)
-- [.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF](./.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/AGENTS.md)
 - [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
