@@ -315,13 +315,12 @@ fn review_threads_snapshot(
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("GitHub GraphQL reviewThreads.nodes was not an array"))?;
         for thread in page_nodes {
-            nodes.push(normalize_review_thread(
-                ctx,
-                repository,
-                thread,
-                permissions,
-                observer,
-            )?);
+            let thread = normalize_review_thread(ctx, repository, thread, permissions, observer)?;
+            truncated |= thread
+                .pointer("/comments/truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            nodes.push(thread);
         }
         has_next_page = connection
             .pointer("/pageInfo/hasNextPage")
@@ -352,23 +351,36 @@ fn review_thread_page(
     cursor: Option<&str>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
+    Ok(gh_json(
+        ctx,
+        review_thread_page_args(repository, pr_number, cursor),
+        &[0],
+        observer,
+    )?)
+}
+
+fn review_thread_page_args(
+    repository: &RepositorySnapshot,
+    pr_number: u64,
+    cursor: Option<&str>,
+) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("api"),
         OsString::from("graphql"),
         OsString::from("-f"),
         OsString::from(format!("query={}", review_threads_query())),
-        OsString::from("-F"),
+        OsString::from("-f"),
         OsString::from(format!("owner={}", repository.owner)),
-        OsString::from("-F"),
+        OsString::from("-f"),
         OsString::from(format!("name={}", repository.name)),
         OsString::from("-F"),
         OsString::from(format!("number={pr_number}")),
     ];
     if let Some(cursor) = cursor {
-        args.push(OsString::from("-F"));
+        args.push(OsString::from("-f"));
         args.push(OsString::from(format!("threadsAfter={cursor}")));
     }
-    Ok(gh_json(ctx, args, &[0], observer)?)
+    args
 }
 
 const fn review_threads_query() -> &'static str {
@@ -399,7 +411,7 @@ query($owner: String!, $name: String!, $number: Int!, $threadsAfter: String) {
           resolvedBy {
             login
           }
-          comments(last: 10) {
+          comments(last: 100) {
             totalCount
             nodes {
               id
@@ -449,12 +461,18 @@ fn normalize_review_thread(
             "author": author,
         }));
     }
-    let has_trusted_comment = comments.iter().any(|comment| {
-        comment
-            .pointer("/author/trusted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    });
+    let total_count = thread
+        .pointer("/comments/totalCount")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("GitHub review thread did not include comments.totalCount"))?;
+    let comments_truncated = total_count > comments.len() as u64;
+    let has_trusted_comment = !comments_truncated
+        && comments.iter().any(|comment| {
+            comment
+                .pointer("/author/trusted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        });
     Ok(json!({
         "id": thread.get("id").cloned().unwrap_or(Value::Null),
         "is_resolved": thread.get("isResolved").cloned().unwrap_or(Value::Null),
@@ -474,7 +492,8 @@ fn normalize_review_thread(
             "login": thread.pointer("/resolvedBy/login").cloned().unwrap_or(Value::Null),
         },
         "comments": {
-            "total_count": thread.pointer("/comments/totalCount").cloned().unwrap_or(Value::Null),
+            "total_count": total_count,
+            "truncated": comments_truncated,
             "nodes": comments,
         },
         "has_trusted_comment": has_trusted_comment,

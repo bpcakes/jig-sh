@@ -482,6 +482,11 @@ fn prepare_checkout(
         });
     }
 
+    if observer.cancelled() {
+        return Err(CheckoutPreparationFailure::cancelled(anyhow!(
+            "Scheduled Codex task was cancelled before worktree preflight"
+        )));
+    }
     let digest = Sha256::digest(format!("{}\0{item_key}", workflow.id).as_bytes());
     let name = digest
         .iter()
@@ -499,7 +504,13 @@ fn prepare_checkout(
             anyhow!("Codex task worktree already exists: {}", path.display()),
         ));
     }
-    require_ignored_task_worktree_root(ctx, observer)?;
+    if let Err(error) = require_ignored_task_worktree_root(ctx, observer) {
+        return Err(if observer.cancelled() {
+            CheckoutPreparationFailure::cancelled(error)
+        } else {
+            CheckoutPreparationFailure::new(error)
+        });
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -508,7 +519,13 @@ fn prepare_checkout(
             )
         })?;
     }
-    let initial_head = git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer)?;
+    let initial_head = match git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer) {
+        Ok(initial_head) => initial_head,
+        Err(error) if observer.cancelled() => {
+            return Err(CheckoutPreparationFailure::cancelled(error));
+        }
+        Err(error) => return Err(CheckoutPreparationFailure::new(error)),
+    };
     let output = match git_output(
         ctx,
         ctx.root(),
@@ -523,16 +540,27 @@ fn prepare_checkout(
     ) {
         Ok(output) => output,
         Err(error) => {
+            let cancelled = observer.cancelled();
             let mut cleanup_observer = NoopExecutionObserver;
             let cleanup = remove_worktree(ctx, ctx.root(), &path, true, &mut cleanup_observer);
-            return Err(checkout_preparation_error(&path, error, cleanup.err()));
+            return Err(checkout_preparation_error(
+                &path,
+                error,
+                cleanup.err(),
+                cancelled,
+            ));
         }
     };
     if !output.status.success() {
         let error = git_error("Failed to create Codex task worktree", output);
         let mut cleanup_observer = NoopExecutionObserver;
         let cleanup = remove_worktree(ctx, ctx.root(), &path, true, &mut cleanup_observer);
-        return Err(checkout_preparation_error(&path, error, cleanup.err()));
+        return Err(checkout_preparation_error(
+            &path,
+            error,
+            cleanup.err(),
+            false,
+        ));
     }
     Ok(PreparedCheckout::Worktree {
         repo_root: ctx.root().to_path_buf(),
@@ -704,6 +732,7 @@ fn checkout_preparation_error(
     path: &Path,
     error: anyhow::Error,
     cleanup_error: Option<anyhow::Error>,
+    cancelled: bool,
 ) -> CheckoutPreparationFailure {
     match fs::symlink_metadata(path) {
         Ok(_) => {
@@ -720,7 +749,11 @@ fn checkout_preparation_error(
             CheckoutPreparationFailure::retained(path, error)
         }
         Err(inspect_error) if inspect_error.kind() == std::io::ErrorKind::NotFound => {
-            CheckoutPreparationFailure::new(error)
+            if cancelled {
+                CheckoutPreparationFailure::cancelled(error)
+            } else {
+                CheckoutPreparationFailure::new(error)
+            }
         }
         Err(inspect_error) => {
             let error = match cleanup_error {

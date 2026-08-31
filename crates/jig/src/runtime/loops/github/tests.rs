@@ -39,6 +39,82 @@ mod tests {
         assert_eq!(encode_path_segment("example[bot]"), "example%5Bbot%5D");
     }
 
+    #[test]
+    fn review_thread_graphql_uses_raw_string_variables() {
+        let repository = RepositorySnapshot {
+            owner: "8451".into(),
+            name: "2048".into(),
+            default_branch: "main".into(),
+            value: json!({}),
+        };
+        let args = review_thread_page_args(&repository, 7, Some("123456"))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        for value in ["owner=8451", "name=2048", "threadsAfter=123456"] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["-f", value]),
+                "{value} must remain a GraphQL string: {args:?}"
+            );
+            assert!(!args.windows(2).any(|pair| pair == ["-F", value]));
+        }
+        assert!(args.windows(2).any(|pair| pair == ["-F", "number=7"]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incomplete_review_comment_history_marks_the_snapshot_truncated() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .config("")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("fixture-gh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+case "$*" in
+  *"api graphql "*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":11,"nodes":[{"id":"comment-11","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  *"collaborators/visitor/permission"*) printf '%s\n' '{"permission":"read"}' ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh, permissions).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let repository = RepositorySnapshot {
+            owner: "ExampleProject".into(),
+            name: "ExampleVault".into(),
+            default_branch: "main".into(),
+            value: json!({}),
+        };
+
+        let snapshot = review_threads_snapshot(
+            &ctx,
+            &repository,
+            7,
+            &mut RepositoryPermissionCache::default(),
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot["page_info"]["truncated"], true);
+        assert_eq!(snapshot["nodes"][0]["comments"]["truncated"], true);
+        assert_eq!(snapshot["summary"]["trusted_unresolved"], 0);
+    }
+
     #[cfg(unix)]
     #[test]
     fn collaborator_permission_lookup_fails_closed_for_non_writers_and_missing_actors() {

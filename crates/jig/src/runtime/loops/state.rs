@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -11,7 +11,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use ulid::Ulid;
 
@@ -22,8 +21,10 @@ use crate::state::now_ms;
 use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval, run_with_wait};
 use super::workflow::ResolvedWorkflow;
 
+mod file_lock;
 mod json_cache;
 
+pub(super) use file_lock::with_exclusive_file_lock;
 use json_cache::{
     recover_unparsable_json_cache, validate_json_cache, with_json_cache_lock,
     with_json_cache_read_lock,
@@ -538,27 +539,6 @@ pub(super) fn prepare_disposable_state_for_dispatch(
     Ok(DisposableStateRecovery {
         attempt_cache_reset: AttemptStore::new(ctx).recover_unparsable()?,
     })
-}
-
-pub(super) fn with_exclusive_file_lock<T>(
-    dir: &Path,
-    lock_path: &Path,
-    action: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(lock_path)
-        .with_context(|| format!("Failed to open loop state lock {}", lock_path.display()))?;
-    lock.lock_exclusive()
-        .with_context(|| format!("Failed to lock {}", lock_path.display()))?;
-
-    let result = action();
-    drop(lock);
-    result
 }
 
 pub(super) fn read_json_or_default<T>(path: &Path) -> Result<T>

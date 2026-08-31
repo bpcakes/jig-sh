@@ -22,6 +22,8 @@ use crate::test_env::TestRepoBuilder;
 
 #[path = "tests/review_regressions.rs"]
 mod review_regressions;
+#[path = "tests/review_round14.rs"]
+mod review_round14;
 
 #[test]
 fn schedule_window_coalesces_missed_occurrences() {

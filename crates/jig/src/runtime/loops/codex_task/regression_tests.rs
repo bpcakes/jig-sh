@@ -317,6 +317,50 @@ esac
     assert!(retry.contains("worktree already exists"), "{retry}");
 }
 
+#[cfg(unix)]
+#[test]
+fn cancelled_worktree_add_with_clean_cleanup_preserves_the_cancelled_reason() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = lock_env();
+    let repo = tempdir().unwrap();
+    TestRepoBuilder::new(repo.path())
+        .required_commands(Vec::<String>::new())
+        .write();
+    let git = repo.path().join("git-cancelled-clean-add");
+    fs::write(
+        &git,
+        r#"#!/bin/sh
+set -eu
+case " $* " in
+  *" check-ignore --quiet -- "*) exit 0 ;;
+  *" rev-parse HEAD "*) printf 'initial-head\n' ;;
+  *" worktree add "*) : > add-started; sleep 60 ;;
+  *" worktree remove "*) exit 0 ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+    let mut observer = CancelWhenPresent(repo.path().join("add-started"));
+
+    let failure = prepare_checkout(
+        &ctx,
+        &test_worktree_workflow(),
+        "item-1",
+        CodexTaskCheckout::Worktree,
+        &mut observer,
+    )
+    .err()
+    .expect("cancelled worktree add must fail preparation");
+
+    assert_eq!(failure.reason(), UnexecutedReason::CancelledBeforeStart);
+    assert!(failure.retained_worktree().is_none());
+}
+
 fn test_worktree_workflow() -> ResolvedWorkflow {
     ResolvedWorkflow {
         id: "test-task".into(),

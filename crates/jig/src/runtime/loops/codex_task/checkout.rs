@@ -374,7 +374,7 @@ fn capture_prefix(path: &Path, source: &File, byte_len: u64) -> Result<[u8; 32]>
     }
     let digest = hasher.finalize().into();
     if byte_len > 0 {
-        file.seek(SeekFrom::End(-1))
+        file.seek(SeekFrom::Start(byte_len - 1))
             .with_context(|| format!("Failed to inspect {}", path.display()))?;
         let mut last = [0_u8; 1];
         file.read_exact(&mut last)
@@ -527,6 +527,16 @@ mod tests {
         let receipt_id = append_runtime_receipt(&ctx).unwrap();
         baseline.verify(&ctx, Some(&receipt_id)).unwrap();
         assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    fn prefix_termination_check_ignores_a_concurrent_partial_append() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("receipts.jsonl");
+        fs::write(&path, b"{}\npartial-append").unwrap();
+        let file = File::open(&path).unwrap();
+
+        capture_prefix(&path, &file, 3).unwrap();
     }
 
     #[cfg(unix)]

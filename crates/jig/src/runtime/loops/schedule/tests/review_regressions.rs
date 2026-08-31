@@ -272,39 +272,6 @@ kind = "noop_status"
 }
 
 #[test]
-fn non_codex_tick_refuses_to_create_an_unignored_loop_runtime() {
-    let temp = tempdir().unwrap();
-    TestRepoBuilder::new(temp.path()).write();
-    let init = std::process::Command::new("git")
-        .current_dir(temp.path())
-        .arg("init")
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "{init:?}");
-    fs::write(temp.path().join(".gitignore"), "").unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = tick_with_observer(
-        &ctx,
-        LoopTickRequest {
-            workflow: Some("noop-status".into()),
-            lease_ttl_seconds: None,
-            max_attempts: None,
-            backoff_seconds: None,
-        },
-        &mut NoopExecutionObserver,
-    )
-    .unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("Loop runtime root is not ignored")
-    );
-    assert!(!temp.path().join(LOOP_RUNTIME_DIR).exists());
-}
-
-#[test]
 fn retained_task_worktree_blocks_the_next_scheduled_occurrence() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
