@@ -199,6 +199,7 @@ mod tests {
             "head": {
                 "ref": "codex/widgets",
                 "sha": "abc123",
+                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
                 "is_cross_repository": false,
             },
             "stack": {
@@ -221,7 +222,11 @@ mod tests {
             },
         });
 
-        match classify_pull_request(&pull_request, "trunk") {
+        match classify_pull_request(
+            &pull_request,
+            "trunk",
+            Some("ExampleProject/ExampleVault"),
+        ) {
             PrCandidate::Actionable(item) => assert_eq!(item.base_ref, "trunk"),
             PrCandidate::Skip(_) | PrCandidate::Idle(_) | PrCandidate::Pending(_) => {
                 panic!("expected actionable PR candidate")
@@ -238,6 +243,7 @@ mod tests {
             "head": {
                 "ref": "codex/widgets",
                 "sha": "abc123",
+                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
                 "is_cross_repository": false,
             },
             "stack": {
@@ -261,7 +267,11 @@ mod tests {
             },
         });
 
-        match classify_pull_request(&pull_request, "main") {
+        match classify_pull_request(
+            &pull_request,
+            "main",
+            Some("ExampleProject/ExampleVault"),
+        ) {
             PrCandidate::Pending(item) => {
                 assert_eq!(item.item_key, "pr-7");
                 assert_eq!(item.pending_checks, 1);
@@ -270,6 +280,57 @@ mod tests {
                 panic!("expected pending PR candidate")
             }
         }
+    }
+
+    #[test]
+    fn classify_requires_an_exact_same_repository_head_identity() {
+        let mut pull_request = json!({
+            "number": 7,
+            "is_draft": false,
+            "head": {
+                "ref": "repair/example",
+                "sha": "abc123",
+                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                "is_cross_repository": false,
+            },
+            "stack": {"is_stacked": false},
+            "mergeability": {"mergeable": "MERGEABLE", "merge_state_status": "CLEAN"},
+            "checks": {"summary": {"fail": 0, "pending": 0}},
+            "review_threads": {"summary": {"trusted_unresolved": 0}},
+        });
+
+        assert!(matches!(
+            classify_pull_request(
+                &pull_request,
+                "main",
+                Some("ExampleProject/ExampleVault"),
+            ),
+            PrCandidate::Idle(_)
+        ));
+
+        for malformed in [Value::Null, json!("false"), json!(0)] {
+            pull_request["head"]["is_cross_repository"] = malformed;
+            let PrCandidate::Skip(action) = classify_pull_request(
+                &pull_request,
+                "main",
+                Some("ExampleProject/ExampleVault"),
+            ) else {
+                panic!("malformed cross-repository metadata must fail closed");
+            };
+            assert_eq!(action["reason"], "unverified_head_repository");
+        }
+
+        pull_request["head"]["is_cross_repository"] = json!(false);
+        pull_request["head"]["repository"]["nameWithOwner"] =
+            json!("AnotherProject/ExampleVault");
+        let PrCandidate::Skip(action) = classify_pull_request(
+            &pull_request,
+            "main",
+            Some("ExampleProject/ExampleVault"),
+        ) else {
+            panic!("a mismatched head repository must be skipped");
+        };
+        assert_eq!(action["reason"], "cross_repository_pr");
     }
 
     #[test]
@@ -344,7 +405,10 @@ mod tests {
             .unwrap();
         let observed = json!({
             "summary": {"pr_list_truncated": false},
-            "repository": {"default_branch": "main"},
+            "repository": {
+                "default_branch": "main",
+                "name_with_owner": "ExampleProject/ExampleVault",
+            },
             "pull_requests": [{
                 "number": 7,
                 "review_threads": {"page_info": {"truncated": true}},
@@ -405,7 +469,10 @@ mod tests {
             .unwrap();
         let observed = json!({
             "summary": {"pr_list_truncated": false},
-            "repository": {"default_branch": "main"},
+            "repository": {
+                "default_branch": "main",
+                "name_with_owner": "ExampleProject/ExampleVault",
+            },
             "pull_requests": [
                 {
                     "number": 7,
@@ -413,7 +480,12 @@ mod tests {
                 },
                 {
                     "number": 8,
-                    "head": {"ref": "repair/healthy", "sha": "healthy-head"},
+                    "head": {
+                        "ref": "repair/healthy",
+                        "sha": "healthy-head",
+                        "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                        "is_cross_repository": false,
+                    },
                     "checks": {"summary": {"fail": 0, "pending": 0}},
                     "review_threads": {
                         "page_info": {"truncated": false},
@@ -562,6 +634,7 @@ mod tests {
             "head": {
                 "ref": "repair/example",
                 "sha": "abc123",
+                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
                 "is_cross_repository": false,
             },
             "stack": { "is_stacked": false },
@@ -577,12 +650,20 @@ mod tests {
         });
 
         assert!(matches!(
-            classify_pull_request(&pull_request, "main"),
+            classify_pull_request(
+                &pull_request,
+                "main",
+                Some("ExampleProject/ExampleVault"),
+            ),
             PrCandidate::Idle(_)
         ));
 
         pull_request["review_threads"]["summary"]["trusted_unresolved"] = json!(1);
-        let PrCandidate::Actionable(item) = classify_pull_request(&pull_request, "main") else {
+        let PrCandidate::Actionable(item) = classify_pull_request(
+            &pull_request,
+            "main",
+            Some("ExampleProject/ExampleVault"),
+        ) else {
             panic!("trusted unresolved feedback should be actionable");
         };
         assert!(item.reasons.contains(&"unresolved_review_threads".into()));

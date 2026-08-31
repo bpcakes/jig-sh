@@ -41,8 +41,10 @@ pub(super) fn dispatch_with_observer(
             engine::status_with_cancellation(ctx, request, &|| observer.cancelled())
         }
         LoopCommand::Run(request) => schedule::run_until_with_observer(ctx, request, observer),
-        LoopCommand::ClearAttempt(request) => engine::clear_attempt(ctx, request),
-        LoopCommand::AcknowledgeOccurrence(request) => engine::acknowledge_occurrence(ctx, request),
+        LoopCommand::ClearAttempt(request) => engine::clear_attempt(ctx, request, observer),
+        LoopCommand::AcknowledgeOccurrence(request) => {
+            engine::acknowledge_occurrence(ctx, request, observer)
+        }
     }
 }
 

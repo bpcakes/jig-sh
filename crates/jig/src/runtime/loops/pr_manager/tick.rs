@@ -77,6 +77,10 @@ fn pr_manager_tick_from_snapshot(
         .pointer("/repository/default_branch")
         .and_then(Value::as_str)
         .unwrap_or_else(|| ctx.default_branch());
+    let expected_repository = observed
+        .pointer("/repository/name_with_owner")
+        .and_then(Value::as_str)
+        .filter(|repository| !repository.is_empty());
 
     let mut actions = Vec::new();
     for pull_request in pull_requests {
@@ -92,7 +96,7 @@ fn pr_manager_tick_from_snapshot(
             actions.push(action);
             continue;
         }
-        let candidate = classify_pull_request(pull_request, default_branch);
+        let candidate = classify_pull_request(pull_request, default_branch, expected_repository);
         match candidate {
             PrCandidate::Skip(action) => actions.push(action),
             PrCandidate::Idle(item) => {

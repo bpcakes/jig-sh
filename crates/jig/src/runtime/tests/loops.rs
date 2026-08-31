@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs;
 #[cfg(unix)]
 use std::path::Path;
@@ -22,6 +23,28 @@ use crate::tool_defs::LOOP_TICK_TOOL;
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 use super::*;
+
+struct CancelAfterEntryObserver {
+    checks: Cell<usize>,
+}
+
+impl crate::execution::ExecutionObserver for CancelAfterEntryObserver {}
+
+impl crate::execution::ExecutionCancellation for CancelAfterEntryObserver {
+    fn cancelled(&self) -> bool {
+        let checks = self.checks.get();
+        self.checks.set(checks + 1);
+        checks > 0
+    }
+}
+
+impl CancelAfterEntryObserver {
+    fn new() -> Self {
+        Self {
+            checks: Cell::new(0),
+        }
+    }
+}
 
 include!("loops/task_and_engine.rs");
 include!("loops/checkout_regressions.rs");

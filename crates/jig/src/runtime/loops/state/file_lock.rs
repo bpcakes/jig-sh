@@ -13,6 +13,7 @@ pub(in crate::runtime::loops) fn loop_state_lock_deadline() -> Instant {
     Instant::now() + LOOP_STATE_LOCK_TIMEOUT
 }
 
+#[cfg(test)]
 pub(in crate::runtime::loops) fn with_exclusive_file_lock<T>(
     dir: &Path,
     lock_path: &Path,

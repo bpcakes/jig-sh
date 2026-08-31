@@ -10,6 +10,14 @@ fn loop_acknowledge_occurrence_resolves_attention_without_reopening_the_schedule
     assert_eq!(output["changed"], true);
     assert_eq!(output["occurrence"]["status"], "acknowledged");
     assert!(output["receipt_id"].as_str().is_some());
+    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|receipt| receipt["id"] == output["receipt_id"])
+        .unwrap();
+    assert_eq!(receipt["changed_paths"], json!([]));
+    assert!(receipt["worktree_fingerprint"].is_null());
 
     let repeated = acknowledge_occurrence(&ctx).unwrap();
     assert_eq!(repeated["changed"], false);
@@ -25,6 +33,37 @@ fn loop_acknowledge_occurrence_resolves_attention_without_reopening_the_schedule
             .as_array()
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn loop_acknowledge_occurrence_honors_cancellation_after_dispatch_entry() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    write_occurrence(&temp, "needs_attention");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterEntryObserver::new();
+
+    let error = crate::runtime::dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::AcknowledgeOccurrence(
+            LoopAcknowledgeOccurrenceRequest {
+                occurrence: "nightly@100".into(),
+            },
+        )),
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancel"), "{error}");
+    let schedule: serde_json::Value = serde_json::from_slice(
+        &fs::read(temp.path().join(".agent/runtime/loop/schedule.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        schedule["occurrences"]["nightly@100"]["status"],
+        "needs_attention"
     );
 }
 

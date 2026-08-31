@@ -106,7 +106,16 @@ fn post_review_thread_updates(
                 "reason": "duplicate_review_thread",
                 "detail": "worker returned more than one update intent for the same review thread",
                 "replied": false,
+                "reply_comment_id": Value::Null,
+                "reply_url": Value::Null,
+                "reply_reconciled": false,
+                "reply_error": Value::Null,
                 "resolved": false,
+                "is_resolved": Value::Null,
+                "resolve_reconciled": false,
+                "resolve_error": Value::Null,
+                "resolve_skipped": false,
+                "resolve_skip_reason": Value::Null,
             }));
             continue;
         }
@@ -120,9 +129,11 @@ fn post_review_thread_updates(
                 "replied": false,
                 "reply_comment_id": Value::Null,
                 "reply_url": Value::Null,
+                "reply_reconciled": false,
                 "reply_error": Value::Null,
                 "resolved": false,
                 "is_resolved": Value::Null,
+                "resolve_reconciled": false,
                 "resolve_error": Value::Null,
                 "resolve_skipped": false,
                 "resolve_skip_reason": Value::Null,

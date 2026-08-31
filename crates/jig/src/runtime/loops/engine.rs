@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::command::{LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopTickRequest};
 use crate::context::RepoContext;
 use crate::execution::{AdditionalCancellationControl, ExecutionControl};
-use crate::state::{ReceiptInput, now_ms, record_receipt, record_receipt_with_cancellation};
+use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
 use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStore};
@@ -152,7 +152,7 @@ pub(super) fn tick_with_observer(
         request,
         started,
         TickExecution {
-            item_key: format!("manual-{started}"),
+            item_key: started.to_string(),
             manual: true,
         },
         observer,
@@ -617,7 +617,11 @@ fn actions_include_waiting(actions: &[Value]) -> bool {
     })
 }
 
-pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest) -> Result<Value> {
+pub(super) fn clear_attempt(
+    ctx: &RepoContext,
+    request: LoopClearAttemptRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let started = now_ms();
     let workflow_id = request.workflow.trim();
     let item_key = request.item.trim();
@@ -626,6 +630,9 @@ pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest)
     }
     if item_key.is_empty() {
         bail!("--item must not be empty");
+    }
+    if observer.cancelled() {
+        bail!("Execution was cancelled before clearing loop attempt state");
     }
     let workflow_configured = ctx
         .loop_workflows()
@@ -665,7 +672,7 @@ pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest)
         "item_key": item_key,
         "cleared": cleared,
     });
-    let receipt_id = record_receipt(
+    let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: LOOP_CLEAR_ATTEMPT_TOOL,
@@ -682,10 +689,11 @@ pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest)
             stderr: "",
             evidence: Some(evidence.clone()),
             session_override: None,
-            collect_git_metadata: true,
-            collect_worktree_fingerprint: true,
+            collect_git_metadata: false,
+            collect_worktree_fingerprint: false,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )?;
 
     Ok(json!({
@@ -710,20 +718,21 @@ fn removed_workflow_value(workflow_id: &str) -> Value {
 pub(super) fn acknowledge_occurrence(
     ctx: &RepoContext,
     request: LoopAcknowledgeOccurrenceRequest,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let occurrence_id = request.occurrence.trim();
     if occurrence_id.is_empty() {
         bail!("--occurrence must not be empty");
     }
-    super::pre_execution::require_ignored_loop_runtime_root(
-        ctx,
-        &mut crate::execution::NoopExecutionObserver,
-    )?;
+    super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
     let mut occurrence_store = OccurrenceStore::new(ctx);
     let (acknowledgement, receipt_id) =
         occurrence_store.acknowledge_and_then(occurrence_id, |occurrence, changed| {
-            record_receipt(
+            if observer.cancelled() {
+                bail!("Execution was cancelled before recording occurrence acknowledgement");
+            }
+            record_receipt_with_cancellation(
                 ctx,
                 ReceiptInput {
                     tool_name: LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL,
@@ -744,10 +753,14 @@ pub(super) fn acknowledge_occurrence(
                         "changed": changed,
                     })),
                     session_override: None,
-                    collect_git_metadata: true,
-                    collect_worktree_fingerprint: true,
+                    // The schedule locks stay held until receipt publication so
+                    // rollback cannot overwrite a concurrent state change. Keep
+                    // Git inspection outside this short commit boundary.
+                    collect_git_metadata: false,
+                    collect_worktree_fingerprint: false,
                     worktree_fingerprint_override: None,
                 },
+                &|| observer.cancelled(),
             )
         })?;
     let (occurrence, changed) = match acknowledgement {

@@ -50,6 +50,7 @@ impl LeaseStore {
         now: impl FnOnce() -> u64,
     ) -> Result<LeaseRecord> {
         with_json_cache_lock_until(
+            &self.root,
             &self.dir,
             &self.lock_path,
             &self.path,

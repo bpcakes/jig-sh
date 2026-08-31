@@ -4,6 +4,30 @@ use super::super::*;
 use super::write_loop_fixture_repo;
 
 #[test]
+fn manual_occurrence_namespace_cannot_collide_with_a_numeric_schedule_instant() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+
+    let OccurrenceClaim::Acquired(claim) = store
+        .claim_manual(
+            "nightly",
+            "100",
+            60,
+            OccurrenceAttentionScope::Workflow,
+            false,
+        )
+        .unwrap()
+    else {
+        panic!("expected manual occurrence claim");
+    };
+
+    assert_eq!(claim.occurrence_id, "nightly@manual:100");
+    assert_ne!(claim.occurrence_id, "nightly@100");
+}
+
+#[test]
 fn stale_reconciliation_preserves_staged_manual_diagnostics() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());

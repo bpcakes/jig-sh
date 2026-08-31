@@ -1,4 +1,6 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
@@ -7,6 +9,30 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 use super::*;
+
+#[cfg(unix)]
+#[test]
+fn loop_cache_directory_symlink_cannot_redirect_parent_state_mutations() {
+    let temp = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let cache_parent = temp.path().join(".agent/.cache");
+    fs::create_dir_all(&cache_parent).unwrap();
+    let outside_temp = outside.path().join("leases.tmp-ExampleOutside");
+    fs::write(&outside_temp, b"outside").unwrap();
+    symlink(outside.path(), cache_parent.join("loop")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = match LeaseStore::new(&ctx).acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("a symlinked loop cache must be rejected"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("without following links"), "{error}");
+    assert_eq!(fs::read(&outside_temp).unwrap(), b"outside");
+    assert!(!outside.path().join("leases.json").exists());
+    assert!(!outside.path().join("leases.lock").exists());
+}
 
 #[test]
 fn dispatch_preflight_fails_closed_for_lease_corruption_and_recovers_attempts() {

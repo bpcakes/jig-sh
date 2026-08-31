@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+#[cfg(test)]
+use std::fs;
+use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -25,13 +27,15 @@ mod file_lock;
 mod json_cache;
 mod lease_renewal;
 
+#[cfg(test)]
+pub(super) use file_lock::with_exclusive_file_lock;
 pub(super) use file_lock::{
-    LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline, with_exclusive_file_lock,
-    with_exclusive_file_lock_until,
+    LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline, with_exclusive_file_lock_until,
 };
 use json_cache::{
-    recover_unparsable_json_cache, validate_json_cache, with_json_cache_lock,
-    with_json_cache_lock_until, with_json_cache_read_lock,
+    read_json_cache_or_default_with_cancellation, recover_unparsable_json_cache,
+    validate_json_cache, with_json_cache_lock, with_json_cache_lock_until,
+    with_json_cache_read_lock,
 };
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
@@ -63,6 +67,7 @@ pub(super) enum LeaseAcquire {
 
 #[derive(Clone)]
 pub(super) struct LeaseStore {
+    root: PathBuf,
     dir: PathBuf,
     path: PathBuf,
     lock_path: PathBuf,
@@ -72,6 +77,7 @@ impl LeaseStore {
     pub(super) fn new(ctx: &RepoContext) -> Self {
         let dir = ctx.root().join(LOOP_CACHE_DIR);
         Self {
+            root: ctx.root().to_path_buf(),
             path: dir.join("leases.json"),
             lock_path: dir.join("leases.lock"),
             dir,
@@ -151,18 +157,20 @@ impl LeaseStore {
         &self,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<LeaseRecord>> {
-        let mut store = read_json_or_default_with_cancellation::<LeaseFile>(&self.path, cancelled)?;
+        let mut store = read_json_cache_or_default_with_cancellation::<LeaseFile>(
+            &self.root, &self.dir, &self.path, cancelled,
+        )?;
         ensure_status_active(cancelled)?;
         store.prune_expired(now_ms());
         Ok(store.leases.into_values().collect())
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut LeaseFile) -> Result<T>) -> Result<T> {
-        with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
+        with_json_cache_lock(&self.root, &self.dir, &self.lock_path, &self.path, action)
     }
 
     fn validate_parseable(&self) -> Result<()> {
-        validate_json_cache::<LeaseFile>(&self.dir, &self.lock_path, &self.path)
+        validate_json_cache::<LeaseFile>(&self.root, &self.dir, &self.lock_path, &self.path)
     }
 }
 
@@ -384,6 +392,7 @@ struct AttemptFile {
 }
 
 pub(super) struct AttemptStore {
+    root: PathBuf,
     dir: PathBuf,
     path: PathBuf,
     lock_path: PathBuf,
@@ -393,6 +402,7 @@ impl AttemptStore {
     pub(super) fn new(ctx: &RepoContext) -> Self {
         let dir = ctx.root().join(LOOP_CACHE_DIR);
         Self {
+            root: ctx.root().to_path_buf(),
             path: dir.join("attempts.json"),
             lock_path: dir.join("attempts.lock"),
             dir,
@@ -464,12 +474,12 @@ impl AttemptStore {
         &self,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<AttemptRecord>> {
-        Ok(
-            read_json_or_default_with_cancellation::<AttemptFile>(&self.path, cancelled)?
-                .attempts
-                .into_values()
-                .collect(),
-        )
+        Ok(read_json_cache_or_default_with_cancellation::<AttemptFile>(
+            &self.root, &self.dir, &self.path, cancelled,
+        )?
+        .attempts
+        .into_values()
+        .collect())
     }
 
     pub(super) fn clear_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<bool> {
@@ -486,15 +496,20 @@ impl AttemptStore {
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
-        with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
+        with_json_cache_lock(&self.root, &self.dir, &self.lock_path, &self.path, action)
     }
 
     fn with_read_lock<T>(&self, action: impl FnOnce(&AttemptFile) -> Result<T>) -> Result<T> {
-        with_json_cache_read_lock(&self.dir, &self.lock_path, &self.path, action)
+        with_json_cache_read_lock(&self.root, &self.dir, &self.lock_path, &self.path, action)
     }
 
     fn recover_unparsable(&self) -> Result<bool> {
-        recover_unparsable_json_cache::<AttemptFile>(&self.dir, &self.lock_path, &self.path)
+        recover_unparsable_json_cache::<AttemptFile>(
+            &self.root,
+            &self.dir,
+            &self.lock_path,
+            &self.path,
+        )
     }
 }
 
@@ -512,6 +527,7 @@ pub(super) fn prepare_disposable_state_for_dispatch(
     })
 }
 
+#[cfg(test)]
 pub(super) fn read_json_or_default<T>(path: &Path) -> Result<T>
 where
     T: Default + DeserializeOwned,
@@ -519,6 +535,7 @@ where
     read_json_or_default_with_cancellation(path, &|| false)
 }
 
+#[cfg(test)]
 pub(super) fn read_json_or_default_with_cancellation<T>(
     path: &Path,
     cancelled: &dyn Fn() -> bool,

@@ -33,7 +33,7 @@ impl OccurrenceStore {
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
         self.claim_id_with_constraints_at(
-            format!("{workflow_id}@{item_key}"),
+            format!("{workflow_id}@manual:{item_key}"),
             workflow_id,
             MANUAL_OCCURRENCE_SCHEDULED_AT_MS,
             ttl_seconds,

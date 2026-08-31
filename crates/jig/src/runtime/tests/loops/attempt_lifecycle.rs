@@ -332,6 +332,33 @@ fn loop_clear_attempt_rejects_empty_workflow_key() {
     assert!(error.contains("--workflow must not be empty"));
 }
 
+#[test]
+fn loop_clear_attempt_honors_cancellation_after_dispatch_entry() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    write_attempt(&temp, 3, u64::MAX, true);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterEntryObserver::new();
+
+    let error = crate::runtime::dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
+            workflow: "noop-status".into(),
+            item: "item-1".into(),
+        })),
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancel"), "{error}");
+    let attempts: serde_json::Value = serde_json::from_slice(
+        &fs::read(temp.path().join(".agent/.cache/loop/attempts.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(attempts["attempts"].get("noop-status:item-1").is_some());
+}
+
 fn write_attempt(temp: &tempfile::TempDir, attempts: u32, next_eligible_ms: u64, exhausted: bool) {
     write_attempt_for_workflow(
         temp,

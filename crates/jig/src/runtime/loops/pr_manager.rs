@@ -80,7 +80,11 @@ struct PrPendingItem {
     pending_checks: u64,
 }
 
-fn classify_pull_request(pull_request: &Value, default_branch: &str) -> PrCandidate {
+fn classify_pull_request(
+    pull_request: &Value,
+    default_branch: &str,
+    expected_repository: Option<&str>,
+) -> PrCandidate {
     let pr_number = pull_request
         .get("number")
         .and_then(Value::as_u64)
@@ -103,16 +107,34 @@ fn classify_pull_request(pull_request: &Value, default_branch: &str) -> PrCandid
             "PR base is not the repository default branch",
         ));
     }
-    if pull_request
+    let cross_repository = pull_request
         .pointer("/head/is_cross_repository")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+        .and_then(Value::as_bool);
+    let head_repository = pull_request
+        .pointer("/head/repository/nameWithOwner")
+        .and_then(Value::as_str)
+        .filter(|repository| !repository.is_empty());
+    let same_repository = expected_repository
+        .zip(head_repository)
+        .is_some_and(|(expected, observed)| expected.eq_ignore_ascii_case(observed));
+    if cross_repository != Some(false) || !same_repository {
+        let explicitly_cross_repository = cross_repository == Some(true)
+            || expected_repository
+                .zip(head_repository)
+                .is_some_and(|(expected, observed)| !expected.eq_ignore_ascii_case(observed));
         return PrCandidate::Skip(skip_action(
             pr_number,
             &item_key,
-            "cross_repository_pr",
-            "PR head branch is in another repository",
+            if explicitly_cross_repository {
+                "cross_repository_pr"
+            } else {
+                "unverified_head_repository"
+            },
+            if explicitly_cross_repository {
+                "PR head branch is in another repository"
+            } else {
+                "PR head repository identity was missing or malformed, so its branch is not proven writable through origin"
+            },
         ));
     }
     if head_ref.is_empty() {
