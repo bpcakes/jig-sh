@@ -84,6 +84,7 @@ fn git_state_migrates_legacy_leases_and_attempts_to_protected_authority() {
         .unwrap();
     git_init(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    prepare_coordination_state_for_dispatch(&ctx).unwrap();
 
     let mut leases = LeaseStore::new(&ctx);
     let LeaseAcquire::Held(migrated) = leases.acquire("workflow:ExampleProject", 60).unwrap()

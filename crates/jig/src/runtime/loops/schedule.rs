@@ -158,15 +158,20 @@ fn dispatch_workflow(
             "status": "disabled",
         }));
     }
-    let known_occurrences = match occurrences.snapshot() {
-        Ok(occurrences) => occurrences,
-        Err(error) => {
-            return DispatchStep::failure(
-                &workflow.id,
-                format!("Failed to refresh scheduled occurrence state: {error:#}"),
-            );
-        }
-    };
+    // Reconciliation above establishes/migrates the authoritative ledger. The
+    // window projection only needs an atomic snapshot; taking both schedule
+    // locks here would turn every configured workflow into another mutating
+    // coordination pass before the claim's actual compare-and-set.
+    let known_occurrences =
+        match occurrences.snapshot_read_only_with_cancellation(&|| observer.cancelled()) {
+            Ok(occurrences) => occurrences,
+            Err(error) => {
+                return DispatchStep::failure(
+                    &workflow.id,
+                    format!("Failed to refresh scheduled occurrence state: {error:#}"),
+                );
+            }
+        };
     let latest = OccurrenceStore::latest_for_workflow(&known_occurrences, &workflow.id);
     let window = match schedule.window(
         dispatch_at_ms,

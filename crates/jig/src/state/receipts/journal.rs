@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
@@ -15,12 +17,29 @@ use crate::context::RepoContext;
 
 use super::super::records::ReceiptRecord;
 
+const RECEIPT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const RECEIPT_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 pub(crate) struct ReceiptJournalWriter<'a> {
     state_dir: &'a Dir,
 }
 
 pub(crate) fn with_receipt_journal_writer<T>(
     ctx: &RepoContext,
+    operation: impl FnOnce(&ReceiptJournalWriter<'_>) -> Result<T>,
+) -> Result<T> {
+    with_receipt_journal_writer_until(
+        ctx,
+        Instant::now() + RECEIPT_LOCK_TIMEOUT,
+        &|| false,
+        operation,
+    )
+}
+
+pub(crate) fn with_receipt_journal_writer_until<T>(
+    ctx: &RepoContext,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
     operation: impl FnOnce(&ReceiptJournalWriter<'_>) -> Result<T>,
 ) -> Result<T> {
     let directories = ReceiptJournalDirectories::open(ctx.root())?;
@@ -31,8 +50,7 @@ pub(crate) fn with_receipt_journal_writer<T>(
         "receipt journal",
     )?;
     if let Some(file) = &legacy_lock {
-        file.lock_exclusive()
-            .context("Failed to lock legacy receipt journal")?;
+        lock_exclusive_until(file, "legacy receipt journal", deadline, cancelled)?;
     }
     let lock = open_regular_file(
         &directories.locks,
@@ -41,11 +59,11 @@ pub(crate) fn with_receipt_journal_writer<T>(
         true,
         "receipt journal lock",
     )?;
-    if let Err(error) = lock.lock_exclusive() {
+    if let Err(error) = lock_exclusive_until(&lock, "receipt journal", deadline, cancelled) {
         if let Some(file) = &legacy_lock {
             let _ = FileExt::unlock(file);
         }
-        return Err(error).context("Failed to lock receipt journal");
+        return Err(error);
     }
 
     let writer = ReceiptJournalWriter {
@@ -59,6 +77,32 @@ pub(crate) fn with_receipt_journal_writer<T>(
         (Err(error), _, _) => Err(error),
         (Ok(_), Err(error), _) => Err(error).context("Failed to unlock legacy receipt journal"),
         (Ok(_), Ok(()), Err(error)) => Err(error).context("Failed to unlock receipt journal"),
+    }
+}
+
+fn lock_exclusive_until(
+    file: &File,
+    description: &str,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    loop {
+        if cancelled() {
+            bail!("Execution was cancelled while waiting for {description} lock");
+        }
+        match file.try_lock_exclusive() {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("Failed to lock {description}"));
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("Timed out waiting for {description} lock before its operation deadline");
+        }
+        thread::sleep(RECEIPT_LOCK_POLL_INTERVAL.min(remaining));
     }
 }
 
@@ -186,13 +230,78 @@ pub(crate) fn receipt_record_id(record: &[u8]) -> Result<String> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
+    use std::fs::OpenOptions as StdOpenOptions;
     use std::os::unix::fs::symlink;
 
     use serde_json::json;
 
     use super::*;
     use crate::test_env::TestRepoBuilder;
+
+    #[test]
+    fn receipt_lock_wait_honors_its_operation_deadline() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let lock_path = temp
+            .path()
+            .join(".agent/.cache/state-locks/receipts.jsonl.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let owner = StdOpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        assert!(owner.try_lock_exclusive().unwrap());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let error = with_receipt_journal_writer_until(&ctx, Instant::now(), &|| false, |_| Ok(()))
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("Timed out waiting for receipt journal lock"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn receipt_lock_wait_honors_cancellation() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let lock_path = temp
+            .path()
+            .join(".agent/.cache/state-locks/receipts.jsonl.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let owner = StdOpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        assert!(owner.try_lock_exclusive().unwrap());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let checks = Cell::new(0);
+
+        let error = with_receipt_journal_writer_until(
+            &ctx,
+            Instant::now() + Duration::from_secs(1),
+            &|| {
+                let observed = checks.get();
+                checks.set(observed + 1);
+                observed > 0
+            },
+            |_| Ok(()),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("cancelled while waiting"), "{error}");
+    }
 
     #[test]
     fn receipt_append_rejects_a_symlinked_journal() {

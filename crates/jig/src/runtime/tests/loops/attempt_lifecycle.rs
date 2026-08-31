@@ -295,6 +295,38 @@ fn loop_clear_attempt_preserves_removed_alias_identity_and_records_receipt() {
 }
 
 #[test]
+fn loop_clear_attempt_restores_state_when_receipt_publication_fails() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    write_attempt(&temp, 3, u64::MAX, true);
+    fs::create_dir_all(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
+            workflow: "noop-status".into(),
+            item: "item-1".into(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Failed to open receipt journal without following links"),
+        "{error}"
+    );
+    let status = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
+    )
+    .unwrap();
+    assert_eq!(status["attempts"][0]["workflow_id"], "noop-status");
+    assert_eq!(status["attempts"][0]["item_key"], "item-1");
+    assert_eq!(status["attempts"][0]["attempts"], 3);
+}
+
+#[test]
 fn loop_clear_attempt_rejects_empty_item_key() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

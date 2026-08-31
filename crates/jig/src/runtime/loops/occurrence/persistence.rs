@@ -156,9 +156,12 @@ impl SchedulePersistence {
     pub(super) fn with_locked_compensating<T, U>(
         &self,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
-        after_commit: impl FnOnce(&T) -> Result<U>,
+        after_commit: impl FnOnce(&T, Instant) -> Result<U>,
     ) -> Result<(T, U)> {
-        self.with_locked_compensating_until(loop_state_lock_deadline(), action, after_commit)
+        let deadline = loop_state_lock_deadline();
+        self.with_locked_compensating_until(deadline, action, |result| {
+            after_commit(result, deadline)
+        })
     }
 
     fn with_locked_compensating_until<T, U>(

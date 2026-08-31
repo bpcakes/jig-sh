@@ -84,6 +84,46 @@ mod tests {
     }
 
     #[test]
+    fn receipt_append_without_a_reported_worker_receipt_is_rejected() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (_temp, ctx, _path) = fixture();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        append_runtime_receipt(&ctx).unwrap();
+
+        let error = baseline.verify(&ctx, None).unwrap_err();
+
+        assert!(
+            error.to_string().contains("expected no receipt append"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn partial_worker_receipt_append_is_rejected() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (_temp, ctx, path) = fixture();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"{\"id\":\"receipt-worker\"}")
+            .unwrap();
+
+        let error = baseline
+            .verify(&ctx, Some("receipt-worker"))
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("appended receipt record is unterminated"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn prefix_termination_check_ignores_a_concurrent_partial_append() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("receipts.jsonl");

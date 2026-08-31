@@ -53,30 +53,43 @@ where
     let data_name = cache_file_name(dir, data_path)?;
     cache.with_lock_until(&lock_name, lock_path, deadline, || {
         cache.reclaim_orphaned_temps(&data_name, data_path)?;
-        let mut store = cache.read_json_or_default(&data_name, data_path, &|| false)?;
+        let mut store: S = cache.read_json_or_default(&data_name, data_path, &|| false)?;
         let result = action(&mut store)?;
         cache.write_json(&data_name, data_path, &store)?;
         Ok(result)
     })
 }
 
-pub(super) fn with_json_cache_read_lock<T, S>(
+pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
     root: &Path,
     dir: &Path,
     lock_path: &Path,
     data_path: &Path,
-    action: impl FnOnce(&S) -> Result<T>,
-) -> Result<T>
+    deadline: Instant,
+    action: impl FnOnce(&mut S) -> Result<T>,
+    after_commit: impl FnOnce(&T) -> Result<U>,
+) -> Result<(T, U)>
 where
-    S: Default + DeserializeOwned,
+    S: Clone + Default + DeserializeOwned + Serialize,
 {
     let cache = CacheDirectory::open(root, dir)?;
     let lock_name = cache_file_name(dir, lock_path)?;
     let data_name = cache_file_name(dir, data_path)?;
-    cache.with_lock_until(&lock_name, lock_path, loop_state_lock_deadline(), || {
+    cache.with_lock_until(&lock_name, lock_path, deadline, || {
         cache.reclaim_orphaned_temps(&data_name, data_path)?;
-        let store = cache.read_json_or_default(&data_name, data_path, &|| false)?;
-        action(&store)
+        let mut store: S = cache.read_json_or_default(&data_name, data_path, &|| false)?;
+        let rollback = store.clone();
+        let result = action(&mut store)?;
+        cache.write_json(&data_name, data_path, &store)?;
+        match after_commit(&result) {
+            Ok(effect) => Ok((result, effect)),
+            Err(error) => match cache.write_json(&data_name, data_path, &rollback) {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(error.context(format!(
+                    "Failed to roll back committed loop state: {rollback_error:#}"
+                ))),
+            },
+        }
     })
 }
 
@@ -484,23 +497,21 @@ mod tests {
     }
 
     #[test]
-    fn read_locked_cache_access_does_not_rewrite_the_cache() {
+    fn read_only_cache_access_does_not_rewrite_the_cache() {
         let temp = tempdir().unwrap();
         let data_path = temp.path().join("attempts.json");
-        let lock_path = temp.path().join("attempts.lock");
         let original = b"{\n  \"example\": \"value\"\n}\n";
         fs::write(&data_path, original).unwrap();
 
-        let value = with_json_cache_read_lock::<_, BTreeMap<String, String>>(
+        let value = read_json_cache_or_default_with_cancellation::<BTreeMap<String, String>>(
             temp.path(),
             temp.path(),
-            &lock_path,
             &data_path,
-            |store| Ok(store.get("example").cloned()),
+            &|| false,
         )
         .unwrap();
 
-        assert_eq!(value.as_deref(), Some("value"));
+        assert_eq!(value.get("example").map(String::as_str), Some("value"));
         assert_eq!(fs::read(&data_path).unwrap(), original);
     }
 

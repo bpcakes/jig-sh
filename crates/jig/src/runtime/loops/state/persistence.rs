@@ -9,7 +9,8 @@ use crate::runtime::loops::authority::{ProtectedLoopAuthority, resolve_protected
 
 use super::json_cache::{
     read_json_cache_or_default_with_cancellation, recover_unparsable_json_cache,
-    replace_unparsable_json_cache, with_json_cache_lock_until, with_json_cache_read_lock,
+    replace_unparsable_json_cache, with_json_cache_lock_compensating_until,
+    with_json_cache_lock_until,
 };
 use super::{LOOP_CACHE_DIR, loop_state_lock_deadline};
 
@@ -96,32 +97,38 @@ impl JsonStatePersistence {
         )
     }
 
-    pub(super) fn with_read_lock<T, S>(&self, action: impl FnOnce(&S) -> Result<T>) -> Result<T>
+    pub(super) fn with_locked_compensating<T, U, S>(
+        &self,
+        action: impl FnOnce(&mut S) -> Result<T>,
+        after_commit: impl FnOnce(&T, Instant) -> Result<U>,
+    ) -> Result<(T, U)>
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
+        let deadline = loop_state_lock_deadline();
         let Some(protected) = self.protected()? else {
-            return with_json_cache_read_lock(
+            return with_json_cache_lock_compensating_until(
                 &self.legacy.root,
                 &self.legacy.dir,
                 &self.legacy.lock_path,
                 &self.legacy.path,
+                deadline,
                 action,
+                |result| after_commit(result, deadline),
             );
         };
-        let snapshot = self.read_protected::<S>(protected, &|| false)?;
-        if !snapshot.is_initialized()? {
-            self.ensure_initialized::<S>(protected, loop_state_lock_deadline())?;
-        }
-        with_json_cache_read_lock(
+        self.ensure_initialized::<S>(protected, deadline)?;
+        with_json_cache_lock_compensating_until(
             &protected.root,
             &protected.dir,
             &protected.lock_path,
             &protected.path,
-            |primary: &ProtectedState<S>| {
+            deadline,
+            |primary: &mut ProtectedState<S>| {
                 primary.require_initialized()?;
-                action(&primary.state)
+                action(&mut primary.state)
             },
+            |result| after_commit(result, deadline),
         )
     }
 

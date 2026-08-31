@@ -10,7 +10,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -446,11 +446,16 @@ impl AttemptStore {
 
     pub(super) fn get(&self, workflow_id: &str, item_key: &str) -> Result<Option<AttemptRecord>> {
         let key = format!("{workflow_id}:{item_key}");
-        self.with_read_lock(|store| Ok(store.attempts.get(&key).cloned()))
+        Ok(self
+            .persistence
+            .read_only_with_cancellation::<AttemptFile>(&|| false)?
+            .attempts
+            .get(&key)
+            .cloned())
     }
 
     pub(super) fn snapshot(&self) -> Result<Vec<AttemptRecord>> {
-        self.with_read_lock(|store| Ok(store.attempts.values().cloned().collect()))
+        self.snapshot_read_only_with_cancellation(&|| false)
     }
 
     pub(super) fn snapshot_read_only_with_cancellation(
@@ -469,21 +474,26 @@ impl AttemptStore {
         Ok(self.take_attempt(workflow_id, item_key)?.is_some())
     }
 
-    pub(super) fn take_attempt(
+    pub(super) fn clear_attempt_and_then<T>(
         &mut self,
         workflow_id: &str,
         item_key: &str,
-    ) -> Result<Option<AttemptRecord>> {
+        after_commit: impl FnOnce(bool, Instant) -> Result<T>,
+    ) -> Result<(bool, T)> {
+        let key = format!("{workflow_id}:{item_key}");
+        self.persistence.with_locked_compensating(
+            |store: &mut AttemptFile| Ok(store.attempts.remove(&key).is_some()),
+            |cleared, deadline| after_commit(*cleared, deadline),
+        )
+    }
+
+    fn take_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<Option<AttemptRecord>> {
         let key = format!("{workflow_id}:{item_key}");
         self.with_locked(|store| Ok(store.attempts.remove(&key)))
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
         self.persistence.with_locked(action)
-    }
-
-    fn with_read_lock<T>(&self, action: impl FnOnce(&AttemptFile) -> Result<T>) -> Result<T> {
-        self.persistence.with_read_lock(action)
     }
 
     fn recover_unparsable(&self) -> Result<bool> {

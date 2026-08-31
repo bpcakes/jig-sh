@@ -33,7 +33,7 @@ pub(crate) use receipts::{
 };
 pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
-    record_receipt_with_cancellation,
+    record_receipt_with_cancellation, record_receipt_with_cancellation_until,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
