@@ -1,4 +1,3 @@
-// agentic-loc-exception: retain the generated Go/Rust stack matrix in one end-to-end scaffold contract test module.
 
 #[test]
 fn rust_react_dev_answer_authority_reaches_config_and_vite_fallback() {
@@ -455,11 +454,18 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
                 && !workflow.contains("go-version-file: \".go-version\""),
             "{workflow_name} must not refer to the retired Go version file"
         );
+        let expected_root_filters = usize::from(workflow_name == "go-tests.yml") * 2;
         assert_eq!(
             workflow.matches(r#"- "**""#).count(),
-            2,
-            "{workflow_name} must track every input beneath the root Go component"
+            expected_root_filters,
+            "{workflow_name} has the wrong root-path filtering contract"
         );
+        if workflow_name == "repo-policy.yml" {
+            assert!(
+                workflow.contains("JIG_PUSH_BEFORE: ${{ github.event.before }}"),
+                "repository policy must run universally and bind push comparison authority"
+            );
+        }
         assert!(workflow.contains(
             "cache-dependency-path: |\n            go.mod\n            go.sum\n            go.work\n            go.work.sum\n            **/go.mod"
         ));
@@ -479,7 +485,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         ] {
             assert_eq!(
                 workflow.matches(&format!(r#"- "{path}""#)).count(),
-                2,
+                expected_root_filters,
                 "{workflow_name} must track adapter input {path} on pull requests and pushes"
             );
         }
@@ -487,9 +493,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             workflow
                 .matches(r#"- "internal/database/migrations/**""#)
                 .count(),
-            2
+            expected_root_filters
         );
-        assert_eq!(workflow.matches(r#"- "**/*.sql""#).count(), 2);
+        assert_eq!(
+            workflow.matches(r#"- "**/*.sql""#).count(),
+            expected_root_filters
+        );
     }
 
     let go_tests =
@@ -673,7 +682,10 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
                 .join(workflow_name),
         )
         .unwrap();
-        assert_eq!(workflow.matches(r#"- "database/migrations/**""#).count(), 2);
+        assert_eq!(
+            workflow.matches(r#"- "database/migrations/**""#).count(),
+            usize::from(workflow_name == "go-tests.yml") * 2
+        );
         assert!(!workflow.contains(r#"- "internal/database/migrations/**""#));
     }
 
@@ -771,14 +783,15 @@ export async function createClient({ output }) {
         .unwrap();
         assert!(workflow.contains("version=\"$(scripts/jig info go-version)\""));
         assert!(!workflow.contains("go-version-file: go.mod"));
+        let expected_path_filters = usize::from(workflow_name == "go-tests.yml") * 2;
         assert_eq!(
             workflow.matches(r#"- "services/api/**""#).count(),
-            2,
+            expected_path_filters,
             "{workflow_name} must follow the authored Go component root"
         );
         assert_eq!(
             workflow.matches(r#"- "shared/proto/**""#).count(),
-            2,
+            expected_path_filters,
             "{workflow_name} must track declared inputs outside the Go component root"
         );
         assert!(!workflow.contains(r#"- "**""#));
@@ -795,161 +808,4 @@ export async function createClient({ output }) {
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert!(go_tests.contains("scripts/jig check api:sqlc"));
     assert!(!go_tests.contains("postgres-integration:"));
-}
-
-#[test]
-fn go_browser_scaffold_honors_the_authored_backend_root() {
-    let planning_root = tempdir().unwrap();
-    let plan = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::Postgres),
-            frontends: vec![ScaffoldFrontend {
-                name: "web".into(),
-                kind: ScaffoldFrontendKind::Spa,
-                custom_default_name: false,
-            }],
-            frontend_list: Vec::new(),
-        },
-        &AnswerOpts {
-            repo_name: Some("demo".into()),
-            go_module: Some("example.com/demo".into()),
-            scaffold_go_component_roots: vec!["services/api".into()],
-            migration_dir: Some("services/api/internal/database/migrations".into()),
-            ..AnswerOpts::default()
-        },
-        planning_root.path(),
-    )
-    .unwrap()
-    .unwrap();
-
-    let rendered = plan.render_files().unwrap();
-    let contents = |path: &str| {
-        rendered
-            .iter()
-            .find(|file| file.relative == path)
-            .unwrap_or_else(|| panic!("missing rendered {path}"))
-            .contents
-            .as_str()
-    };
-    for path in [
-        "services/api/.env.example",
-        "services/api/go.mod",
-        "services/api/cmd/api/main.go",
-        "services/api/cmd/openapi/main.go",
-        "services/api/sqlc.yaml",
-        "services/api/internal/database/database.go",
-    ] {
-        assert!(
-            rendered.iter().any(|file| file.relative == path),
-            "missing nested Go component output {path}"
-        );
-    }
-    for path in [".env.example", "go.mod", "cmd/api/main.go", "sqlc.yaml"] {
-        assert!(
-            rendered.iter().all(|file| file.relative != path),
-            "Go component output escaped to the repository root: {path}"
-        );
-    }
-    let output_paths = plan.output_paths();
-    assert!(
-        output_paths
-            .iter()
-            .any(|path| path == Path::new("services/api/go.mod"))
-    );
-    assert!(
-        output_paths
-            .iter()
-            .all(|path| path != Path::new("go.mod"))
-    );
-    assert!(rendered.iter().any(|file| file.relative == "openapi/public.json"));
-    let postgres_script = contents("scripts/test-postgres.sh");
-    assert!(postgres_script.contains(r#"go -C "services/api" test -count=1"#));
-    let httpapi_test = contents("services/api/internal/httpapi/httpapi_test.go");
-    assert!(httpapi_test.contains(
-        r#"filepath.FromSlash("../../../../openapi/public.json")"#
-    ));
-    let workflow = contents(".github/workflows/e2e.yml");
-    assert_eq!(workflow.matches(r#"- "services/api/**""#).count(), 2);
-    assert_eq!(
-        workflow
-            .matches(r#"- "services/api/internal/database/migrations/**""#)
-            .count(),
-        2
-    );
-    assert!(!workflow.contains(r#"- "cmd/**""#));
-    assert!(!workflow.contains(r#"- "internal/**""#));
-    assert!(!workflow.contains(r#"- "**""#));
-
-    let playwright = contents("web/playwright.config.ts");
-    assert!(playwright.contains(r#"path.resolve(repoRoot, "services/api")"#));
-    assert!(playwright.contains("cwd: backendRoot"));
-    let contracts = contents("scripts/contracts.mjs");
-    assert!(contracts.contains(r#"resolve(repoRoot, "services/api")"#));
-    assert!(contracts.contains(r#"join(backendRoot, "go.mod")"#));
-    assert!(contracts.contains(
-        r#"run("go", ["run", "./cmd/openapi", "--output", document], backendRoot)"#
-    ));
-
-    let mut defaults = AnswerOpts::default();
-    plan.apply_answer_defaults(&mut defaults);
-    assert_eq!(
-        defaults.migration_dir.as_deref(),
-        Some("services/api/internal/database/migrations")
-    );
-    assert_eq!(defaults.dev_apps[0].dir.as_deref(), Some("services/api"));
-    let bootstrap = defaults.bootstrap_command.unwrap();
-    assert!(bootstrap.contains("(cd services/api && go mod tidy)"));
-    assert!(bootstrap.contains("(cd services/api && if [ -z"));
-    assert!(bootstrap.contains(
-        "(cd services/api && go tool sqlc generate && go run ./cmd/api --bootstrap-database)"
-    ));
-}
-
-#[test]
-fn go_react_rejects_missing_module_sqlite_and_admin() {
-    let planning_root = tempdir().unwrap();
-    let missing_module = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::None),
-            ..ScaffoldOpts::default()
-        },
-        &AnswerOpts::default(),
-        planning_root.path(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(missing_module.contains("--go-module"));
-
-    let sqlite = ScaffoldOpts {
-        preset: Some(ScaffoldPreset::GoReact),
-        db: Some(ScaffoldDb::Sqlite),
-        ..ScaffoldOpts::default()
-    }
-    .validate_init_invariants(&AnswerOpts {
-        go_module: Some("example.com/demo".into()),
-        ..AnswerOpts::default()
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(sqlite.contains("does not support --db sqlite"));
-
-    let admin = ScaffoldOpts {
-        preset: Some(ScaffoldPreset::GoReact),
-        db: Some(ScaffoldDb::None),
-        frontends: vec![ScaffoldFrontend {
-            name: "admin".into(),
-            kind: ScaffoldFrontendKind::Admin,
-            custom_default_name: false,
-        }],
-        frontend_list: Vec::new(),
-    }
-    .validate_init_invariants(&AnswerOpts {
-        go_module: Some("example.com/demo".into()),
-        ..AnswerOpts::default()
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(admin.contains("separate privileged API and client boundary"));
 }

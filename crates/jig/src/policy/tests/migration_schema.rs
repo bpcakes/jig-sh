@@ -188,6 +188,7 @@ fn v6_repository_schema_failure_preserves_the_generator_exit_and_output() {
                 selectors: vec!["api:schema".into()],
                 profile: None,
                 affected_base: None,
+                comparison: None,
                 explain: false,
                 fail_fast: false,
                 tool: crate::command::ToolRequest::new(None, false),
@@ -626,108 +627,4 @@ fn schema_check_preserves_pre_start_cancellation() {
     .unwrap_err();
 
     assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_tracked_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(
-        temp.path().join("crates/app/src/large.rs"),
-        "fn example() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: false,
-            changed_against: None,
-            all: true,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/large.rs"))
-    );
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_staged_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(
-        temp.path().join("crates/app/src/staged.rs"),
-        "fn staged() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: true,
-            changed_against: None,
-            all: false,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/staged.rs"))
-    );
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_changed_against_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(temp.path().join("crates/app/src/lib.rs"), "fn small() {}\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let base = super::git_text(temp.path(), &["rev-parse", "HEAD"]).unwrap();
-    fs::write(
-        temp.path().join("crates/app/src/large.rs"),
-        "fn changed() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "large", "-q"]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: false,
-            changed_against: Some(base.trim().to_string()),
-            all: false,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/large.rs"))
-    );
 }

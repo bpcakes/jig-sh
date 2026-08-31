@@ -9,10 +9,12 @@ impl InitMutationTransaction {
         if self.is_privately_staged() {
             return Ok(());
         }
+        let authored_seed_paths = staged.authored_seed_paths();
         let mut planned = staged
             .active_paths
             .iter()
             .chain(staged.retirement_paths.iter())
+            .chain(authored_seed_paths.iter())
             .chain(reserved_output_paths)
             .cloned()
             .collect::<BTreeSet<_>>();

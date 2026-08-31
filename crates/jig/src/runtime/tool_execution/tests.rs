@@ -6,6 +6,115 @@ use tempfile::tempdir;
 use super::*;
 use crate::test_env::TestRepoBuilder;
 
+fn prepared_native_input(
+    policy: PolicyPreparationV1,
+    comparison: ComparisonPreparationV1,
+) -> PreparedNativeInputV1 {
+    PreparedNativeInputV1 {
+        schema_version: PreparedNativeInputV1::SCHEMA_VERSION,
+        view: jig_contract::CurrentViewV1::Worktree,
+        request: jig_contract::ComparisonRequestV1::MergeBaseRef {
+            requested_ref: "main".into(),
+        },
+        configuration: jig_contract::NativeFileBudgetConfigV1::default(),
+        policy_source: jig_contract::PolicySourceV1 {
+            path: ".jig/file-budget.toml".into(),
+        },
+        work_plan_id: None,
+        policy,
+        comparison,
+    }
+}
+
+fn native_context<'a>(
+    ctx: &'a RepoContext,
+    prepared_input: &'a PreparedNativeInputV1,
+    target: &'a TargetId,
+) -> NativeActionContext<'a> {
+    NativeActionContext {
+        repository: ctx,
+        prepared_input,
+        deadline: std::time::Instant::now() + std::time::Duration::from_secs(1),
+        cancelled: &not_cancelled,
+        run_id: "run_example",
+        target,
+        work_plan_id: None,
+    }
+}
+
+fn not_cancelled() -> bool {
+    false
+}
+
+#[test]
+fn invalid_policy_precedes_comparison_unavailability_in_typed_native_results() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+    let target: TargetId = "repo:file-budget".parse().unwrap();
+    let prepared = prepared_native_input(
+        PolicyPreparationV1::InvalidPolicy {
+            policy_raw_digest: Some("sha256:raw".into()),
+            reason: jig_contract::PolicyPreparationFailureV1::Invalid,
+            diagnostics_count: 3,
+            diagnostics_digest: "sha256:diagnostics".into(),
+            diagnostics_preview: vec![jig_contract::PreparedDiagnosticV1 {
+                severity: jig_contract::FindingSeverity::Error,
+                code: "file_budget.policy_invalid".into(),
+                message: "invalid policy".into(),
+                path: Some(".jig/file-budget.toml".into()),
+            }],
+        },
+        ComparisonPreparationV1::ComparisonUnavailable {
+            reason: jig_contract::ComparisonPreparationFailureV1 {
+                code: "merge_base_unavailable".into(),
+                message: "missing baseline".into(),
+                failure_digest: "sha256:failure".into(),
+            },
+            attempted_object_ids: Vec::new(),
+        },
+    );
+
+    let result = run_prepared_native_action(native_context(&ctx, &prepared, &target)).unwrap();
+    assert_eq!(result.conclusion, RunConclusion::Failure);
+    assert_eq!(result.finding_count, 3);
+    assert!(result.findings_truncated);
+    assert_eq!(
+        result.findings[0].code.as_deref(),
+        Some("file_budget.policy_invalid")
+    );
+    assert_eq!(result.findings_digest, "sha256:diagnostics");
+}
+
+#[test]
+fn valid_policy_with_unavailable_comparison_is_blocked_not_failed() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+    let target: TargetId = "repo:file-budget".parse().unwrap();
+    let prepared = prepared_native_input(
+        PolicyPreparationV1::Ready {
+            policy_raw_digest: "sha256:raw".into(),
+            policy_semantic_digest: "sha256:semantic".into(),
+        },
+        ComparisonPreparationV1::ComparisonUnavailable {
+            reason: jig_contract::ComparisonPreparationFailureV1 {
+                code: "merge_base_unavailable".into(),
+                message: "missing baseline".into(),
+                failure_digest: "sha256:failure".into(),
+            },
+            attempted_object_ids: Vec::new(),
+        },
+    );
+
+    let result = run_prepared_native_action(native_context(&ctx, &prepared, &target)).unwrap();
+    assert_eq!(result.conclusion, RunConclusion::Blocked);
+    assert_eq!(
+        result.findings[0].code.as_deref(),
+        Some("file_budget.baseline_unavailable")
+    );
+}
+
 fn write_v6_alias_repo(
     root: &std::path::Path,
     config_prefix: &str,

@@ -1,5 +1,3 @@
-// agentic-loc-exception: durable run replay, leases, cancellation, and result invariants remain co-located for atomicity audits.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};

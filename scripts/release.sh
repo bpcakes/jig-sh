@@ -631,7 +631,10 @@ run_ci_checks() {
   else
     base_ref="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
   fi
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check rust-file-loc --changed-against "$base_ref"
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check repo:file-budget \
+    --comparison-exact-tree "$base_ref" \
+    --comparison-provenance explicit \
+    --no-receipt
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check no-mod-rs
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-map
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-guides

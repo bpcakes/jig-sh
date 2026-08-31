@@ -1,5 +1,3 @@
-// agentic-loc-exception: legacy answer normalization remains centralized during contract-v5 rollout.
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -9,7 +7,8 @@ use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
 use super::repository_model::{
-    AuthoredRepositoryModel, RepositoryProjectionHint, frontend_component_id,
+    AuthoredRepositoryModel, RepositoryProjectionHint, action_uses_managed_rust_file_loc_checker,
+    frontend_component_id,
 };
 use super::{
     AnswerOpts, DevApp, DevSettingsAnswers, FrontendApp, GENERATED_NODE_VERSION, ScaffoldOpts,
@@ -410,42 +409,6 @@ impl RenderAnswers {
         Ok(answers)
     }
 
-    pub(super) const fn authored_repository(&self) -> Option<&AuthoredRepositoryModel> {
-        self.authored_repository.as_ref()
-    }
-
-    pub(super) const fn authored_repository_commands(&self) -> &BTreeMap<String, String> {
-        &self.authored_repository_commands
-    }
-
-    pub(super) fn default_branch(&self) -> &str {
-        &self.default_branch
-    }
-
-    pub(super) fn template_source_url(&self) -> &str {
-        &self.template_source_url
-    }
-
-    pub(super) fn frontend_apps(&self) -> &[FrontendApp] {
-        &self.frontend_apps
-    }
-
-    pub(super) fn frontend_workspace_roots(&self) -> &[String] {
-        &self.frontend_workspace_roots
-    }
-
-    pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
-        self.harness_footprint
-    }
-
-    pub(super) const fn backend_language(&self) -> BackendLanguage {
-        self.backend_language
-    }
-
-    pub(super) const fn repository_projection_hint(&self) -> RepositoryProjectionHint {
-        self.repository_projection_hint
-    }
-
     fn authored_repository_has_adapter(&self, expected: &str) -> Option<bool> {
         self.authored_repository.as_ref().map(|repository| {
             repository
@@ -686,6 +649,8 @@ impl RenderAnswers {
 mod raw_answers;
 use raw_answers::*;
 
+mod file_budget;
+
 fn inherit_repository_command(destination: &mut Option<String>, commands: &toml::Table, key: &str) {
     if destination.is_none() {
         *destination = commands
@@ -739,7 +704,8 @@ fn loaded_repository_model_is_custom(
 
     let mut generated_raw = raw.clone();
     generated_raw.repository = None;
-    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None) else {
+    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None, None)
+    else {
         return true;
     };
     let Ok(generated) =
@@ -761,8 +727,11 @@ fn resolve_render_answers(
         .flatten()
         .filter(AuthoredRepositoryModel::is_complete)
         .filter(|_| authored_repository_commands.is_some());
-    let mut answers =
-        raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
+    let mut answers = raw.resolve_with_authored_repository(
+        default_repo_name,
+        authored_repository,
+        authored_repository_commands.as_ref(),
+    )?;
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()
     {
@@ -902,30 +871,11 @@ pub(super) fn web_run_command(package_manager: &str) -> &'static str {
     }
 }
 
-fn normalize_generated_gate_root(value: &str, label: &str) -> Result<String> {
-    let normalized = normalize_portable_repo_path(value, label)?;
-    if normalized.chars().any(|character| {
-        character.is_control() || matches!(character, '*' | '?' | '[' | ']' | '{' | '}')
-    }) {
-        bail!(
-            "{label} '{value}' cannot be represented safely as a literal generated gate path; control characters and glob metacharacters (*, ?, [, ], {{, }}) are unsupported"
-        );
-    }
-    let pattern = if normalized == "." {
-        "**".to_string()
-    } else {
-        format!("{normalized}/**")
-    };
-    validate_gate_path_pattern("generated-policy", label, &pattern).with_context(|| {
-        format!("{label} '{value}' cannot be represented safely as a generated gate path")
-    })?;
-    Ok(normalized)
-}
+mod generated_gate;
+pub(super) use generated_gate::frontend_gate_key;
+use generated_gate::normalize_generated_gate_root;
 
-pub(super) fn frontend_gate_key(name: &str) -> String {
-    name.to_ascii_lowercase().replace('-', "_")
-}
-
+mod accessors;
 mod serialization;
 use serialization::*;
 

@@ -22,7 +22,14 @@ pub(in crate::cli) const ROOT_VALUE_OPTIONS: &[&str] = &[
     "--__launcher-profile",
     "--__launcher-repo-root",
 ];
-pub(in crate::cli) const CHECK_VALUE_OPTIONS: &[&str] = &["--plan-id", "--profile", "--affected"];
+pub(in crate::cli) const CHECK_VALUE_OPTIONS: &[&str] = &[
+    "--plan-id",
+    "--profile",
+    "--affected",
+    "--comparison-base",
+    "--comparison-exact-tree",
+    "--comparison-provenance",
+];
 
 pub(in crate::cli) fn normalize_external_check_global_flags(
     mut args: Vec<OsString>,
@@ -245,7 +252,6 @@ pub(in crate::cli) fn moved_check_command_hint(error: &clap::Error) -> Option<St
         ("schema-check", "jig check schema"),
         ("contract-check", "jig check contract"),
         ("check-agent-guides", "jig check agent-guides"),
-        ("check-rust-file-loc", "jig check rust-file-loc"),
         ("check-no-mod-rs", "jig check no-mod-rs"),
         (
             "check-migration-immutability",

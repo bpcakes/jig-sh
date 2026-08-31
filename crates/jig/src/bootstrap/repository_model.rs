@@ -1,5 +1,3 @@
-// agentic-loc-exception: keep contract-v6 repository projection, provenance, and validation in one auditable model boundary.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
@@ -14,6 +12,19 @@ use sha2::{Digest, Sha256};
 use super::FrontendApp;
 use super::answers::RenderAnswers;
 use super::source_inputs::FRONTEND_SHARED_INPUTS;
+
+mod file_budget;
+mod rust_file_loc;
+
+use file_budget::add_file_budget_action;
+pub(super) use file_budget::generated_file_budget_action;
+#[cfg(test)]
+pub(in crate::bootstrap) use rust_file_loc::generated_legacy_rust_file_loc_action;
+use rust_file_loc::refresh_managed_rust_file_loc_command;
+pub(super) use rust_file_loc::{
+    RUST_FILE_LOC_COMMAND_KEY, action_uses_managed_rust_file_loc_checker,
+    is_generated_rust_file_loc_command,
+};
 
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
@@ -143,7 +154,7 @@ struct AuthoredCommands<'a> {
 impl RepositoryRenderModel {
     pub(super) fn from_answers(answers: &RenderAnswers) -> Result<Self> {
         if let Some(authored) = answers.authored_repository() {
-            return Self::from_authored(authored, answers.authored_repository_commands());
+            return Self::from_authored(answers, authored, answers.authored_repository_commands());
         }
         let mut builder = ModelBuilder::new(answers)?;
         builder.add_repository_component()?;
@@ -156,10 +167,16 @@ impl RepositoryRenderModel {
     }
 
     fn from_authored(
+        answers: &RenderAnswers,
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> Result<Self> {
-        let commands = authored_commands.clone();
+        let mut commands = authored_commands.clone();
+        refresh_managed_rust_file_loc_command(
+            &authored.actions,
+            &mut commands,
+            answers.default_branch(),
+        );
         let mut required_commands = BTreeSet::new();
         let mut tools = BTreeMap::new();
         for action in &authored.actions {
@@ -217,7 +234,7 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> bool {
-        self.affected_ignore == authored.affected_ignore
+        let current = self.affected_ignore == authored.affected_ignore
             && self.components == authored.components
             && self.actions == authored.actions
             && self.profiles == authored.profiles
@@ -225,7 +242,8 @@ impl RepositoryRenderModel {
             && self
                 .commands
                 .iter()
-                .all(|(key, value)| authored_commands.get(key) == Some(value))
+                .all(|(key, value)| authored_commands.get(key) == Some(value));
+        current || file_budget::matches_legacy_projection(self, authored, authored_commands)
     }
 
     pub(super) fn authored_toml(&self) -> Result<String> {
@@ -280,6 +298,10 @@ impl RepositoryRenderModel {
             .map(|component| component_root_input(&component.root))
             .collect::<BTreeSet<_>>();
         collapse_all_input(paths)
+    }
+
+    pub(super) fn file_budget_policy_toml(&self) -> Result<Option<String>> {
+        file_budget::render_seed_policy(self)
     }
 
     fn backend_ci_input_paths(&self, adapters: &[&str], aliases: &[&str]) -> Vec<String> {
@@ -427,6 +449,9 @@ impl<'a> ModelBuilder<'a> {
         ]);
         self.insert_component(component)?;
         self.add_adapter_actions(REPO_COMPONENT, "jig", CommandScope::Component, |_| true)?;
+        if !self.answers.is_minimal_footprint() {
+            add_file_budget_action(self)?;
+        }
         Ok(())
     }
 
@@ -458,9 +483,6 @@ impl<'a> ModelBuilder<'a> {
             CommandScope::Component,
             |_| true,
         )?;
-        if !self.answers.backend_language().is_go() {
-            self.add_rust_file_loc_action()?;
-        }
         if adapters.iter().any(|adapter| adapter == "sqlx") {
             let schema_dump_enabled = self.answers.schema_dump_enabled();
             let migration_add_enabled = self.answers.migration_add_enabled();
@@ -507,48 +529,7 @@ impl<'a> ModelBuilder<'a> {
             CommandScope::Component,
             |_| true,
         )?;
-        self.add_rust_file_loc_action()?;
         Ok(())
-    }
-
-    fn add_rust_file_loc_action(&mut self) -> Result<()> {
-        let action_id = "rust-file-loc";
-        let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
-        let command = format!(
-            "scripts/check-rust-file-loc.sh {}",
-            crate::shell::quote(self.answers.default_branch())
-        );
-        self.insert_command(&command_key, &command)?;
-        let mut action = ActionSpec::new(
-            target_id(REPO_COMPONENT, action_id)?,
-            ActionIntent::Check,
-            ActionRunner::command(command_key.clone()),
-        );
-        action.description = Some("Enforce the changed-file Rust source size policy.".into());
-        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        action.inputs = vec![
-            "**/*.rs".into(),
-            "Cargo.toml".into(),
-            "Cargo.lock".into(),
-            "rust-toolchain*".into(),
-            ".cargo/**".into(),
-            "scripts/check-rust-file-loc.sh".into(),
-        ];
-        action.legacy_aliases = vec!["jig.rust_file_loc".into()];
-        action.provenance = provenance(&[
-            ("target", FieldProvenance::Inherited),
-            ("intent", FieldProvenance::Inherited),
-            ("effects", FieldProvenance::Inherited),
-            ("runner", FieldProvenance::Inferred),
-            ("inputs", FieldProvenance::Inherited),
-            ("legacy_aliases", FieldProvenance::Inherited),
-        ]);
-        self.insert_tool(
-            "jig.rust_file_loc",
-            "Enforce the changed-file Rust source size policy.",
-            Some(&command_key),
-        )?;
-        self.insert_action(action)
     }
 
     fn add_frontend_components(&mut self) -> Result<()> {
@@ -945,7 +926,9 @@ impl CommandScope {
     }
 }
 
-include!("repository_model/frontend.rs");
+mod frontend;
+pub(super) use frontend::frontend_component_id;
+use frontend::*;
 
 include!("repository_model/ids.rs");
 

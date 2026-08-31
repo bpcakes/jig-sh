@@ -495,6 +495,16 @@ pub(super) struct ReceiptRecord {
     pub(super) input_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) findings: Vec<Finding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) finding_count: Option<u64>,
+    #[serde(default)]
+    pub(super) findings_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) findings_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) evaluated_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) valid_until_ms: Option<u64>,
     pub(super) changed_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) changed_path_count: Option<usize>,

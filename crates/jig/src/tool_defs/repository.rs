@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use jig_contract::{ActionArguments, ActionEffect, RunPlan, RunResult, RunStatus};
+use jig_contract::{
+    ActionArguments, ActionEffect, ComparisonRequestV1, RunPlan, RunResult, RunStatus,
+};
 use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -140,6 +142,10 @@ pub(crate) struct PlanRunArgs {
     pub(crate) profile: Option<String>,
     #[serde(default)]
     pub(crate) affected_base: Option<String>,
+    #[serde(default)]
+    pub(crate) comparison: Option<ComparisonRequestV1>,
+    #[serde(default)]
+    pub(crate) work_plan_id: Option<String>,
     #[serde(default)]
     pub(crate) arguments: BTreeMap<String, ActionArguments>,
 }
@@ -321,5 +327,35 @@ mod tests {
             parsed.arguments["api:migration-add"].name.as_deref(),
             Some("create_examples")
         );
+    }
+
+    #[test]
+    fn plan_schema_accepts_closed_comparison_and_work_plan_authority() {
+        let value = json!({
+            "comparison": {
+                "kind": "strict_inventory",
+                "reason": "explicit_check"
+            },
+            "work_plan_id": "plan_example"
+        });
+        let schema = RepositoryTool::PlanRun.descriptor()["inputSchema"].clone();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+
+        assert!(validator.is_valid(&value));
+        assert!(!validator.is_valid(&json!({
+            "comparison": {
+                "kind": "strict_inventory",
+                "reason": "explicit_check",
+                "unexpected": true
+            }
+        })));
+        let parsed = serde_json::from_value::<PlanRunArgs>(value).unwrap();
+        assert_eq!(parsed.work_plan_id.as_deref(), Some("plan_example"));
+        assert!(matches!(
+            parsed.comparison,
+            Some(ComparisonRequestV1::StrictInventory {
+                reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck
+            })
+        ));
     }
 }

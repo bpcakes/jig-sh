@@ -22,6 +22,8 @@ pub(crate) struct TargetReceiptStatus {
     pub(crate) diff_summary: String,
     pub(crate) worktree_fingerprint: Option<String>,
     pub(crate) worktree_fingerprint_error: Option<String>,
+    pub(crate) valid_until_ms: Option<u64>,
+    pub(crate) requires_time_validity: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -255,6 +257,8 @@ mod tests {
             diff_summary: String::new(),
             worktree_fingerprint: None,
             worktree_fingerprint_error: None,
+            valid_until_ms: None,
+            requires_time_validity: false,
         }
     }
 

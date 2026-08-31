@@ -1,4 +1,6 @@
-fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
+use super::*;
+
+pub(super) fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
     let id = frontend_component_id(&app.name)?;
     let mut component = ComponentSpec::new(id, &app.dir);
     component.description = Some(format!("Frontend application '{}'.", app.name));
@@ -14,7 +16,7 @@ fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
     Ok(component)
 }
 
-pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
+pub(in crate::bootstrap) fn frontend_component_id(name: &str) -> Result<ComponentId> {
     let normalized = name.to_ascii_lowercase();
     if matches!(normalized.as_str(), REPO_COMPONENT | BACKEND_COMPONENT) {
         bail!(
@@ -39,7 +41,11 @@ pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
         .with_context(|| format!("Invalid frontend app name '{name}' for repository identity"))
 }
 
-fn frontend_inputs(root: &str, inputs: &[&str], workspace_roots: &[String]) -> Vec<String> {
+pub(super) fn frontend_inputs(
+    root: &str,
+    inputs: &[&str],
+    workspace_roots: &[String],
+) -> Vec<String> {
     let mut resolved = inputs
         .iter()
         .map(|input| {
@@ -65,7 +71,7 @@ fn frontend_inputs(root: &str, inputs: &[&str], workspace_roots: &[String]) -> V
     resolved
 }
 
-fn aggregate_frontend_inputs(
+pub(super) fn aggregate_frontend_inputs(
     apps: &[FrontendApp],
     inputs: &[&str],
     workspace_roots: &[String],
@@ -77,7 +83,7 @@ fn aggregate_frontend_inputs(
         .collect()
 }
 
-fn frontend_contract_inputs(
+pub(super) fn frontend_contract_inputs(
     include_public_artifacts: bool,
     workspace_roots: &[String],
 ) -> Vec<String> {
@@ -107,7 +113,7 @@ fn frontend_contract_inputs(
     inputs
 }
 
-fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {
+pub(super) fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {
     entries
         .iter()
         .map(|(field, source)| ((*field).into(), *source))

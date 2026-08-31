@@ -233,6 +233,8 @@ depends_on = [{ component = "api", action = "generate" }]
             selectors: vec!["api:verify-generated".into(), "web:verify-generated".into()],
             profile: None,
             affected_base: None,
+            comparison: None,
+            work_plan_id: None,
         },
         Default::default(),
     )
@@ -370,6 +372,7 @@ checks = ["jig.a_fail", "jig.z_later"]
                 selectors: Vec::new(),
                 profile: None,
                 affected_base: None,
+                comparison: None,
                 explain: false,
                 fail_fast,
                 tool: crate::command::ToolRequest::new(None, true),

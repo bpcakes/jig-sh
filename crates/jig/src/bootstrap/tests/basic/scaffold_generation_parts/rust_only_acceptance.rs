@@ -146,7 +146,7 @@ fn assert_rust_only_generated_repository(case: RustOnlyAcceptanceCase) {
         "agent-map.md".to_string(),
         "scripts/jig".to_string(),
         "scripts/install-jig.sh".to_string(),
-        "scripts/check-rust-file-loc.sh".to_string(),
+        ".jig/file-budget.toml".to_string(),
     ] {
         assert!(destination.join(&path).is_file(), "missing {path}");
     }
@@ -171,6 +171,7 @@ fn assert_rust_only_generated_repository(case: RustOnlyAcceptanceCase) {
         "yarn.lock".to_string(),
         "scripts/contracts.mjs".to_string(),
         "scripts/check-webapps.sh".to_string(),
+        "scripts/check-rust-file-loc.sh".to_string(),
         ".github/workflows/webapp-checks.yml".to_string(),
         ".github/workflows/release.yml".to_string(),
         format!("crates/{}-db", case.package),
@@ -313,7 +314,7 @@ fn assert_rust_only_generated_repository(case: RustOnlyAcceptanceCase) {
             "test-locked",
             jig_contract::tool::TEST_LOCKED,
         ),
-        ("repo", "rust-file-loc", "jig.rust_file_loc"),
+        ("repo", "file-budget", jig_contract::tool::FILE_BUDGET),
     ] {
         let action = contract["actions"]
             .as_array()

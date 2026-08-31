@@ -1,5 +1,3 @@
-// agentic-loc-exception: MCP lifecycle tests share one server fixture and durable repository-run polling helpers.
-
 use super::*;
 use std::process::Command;
 use std::thread;

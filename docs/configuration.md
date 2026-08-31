@@ -26,6 +26,25 @@ The file contains both public settings and the private `_src_path` / `_commit` f
 
 `.agent/jig-managed-paths.json` is the deletion-authority boundary for adopt and full update. It contains a strict, sorted list of the current active template-owned paths and lists itself. A missing manifest authorizes no cleanup and blocks full `jig update`; run `jig adopt . --write` with the current footprint to establish it. A full update adopts the selected template's contract epoch and renders the manifest and launcher for that epoch together. The narrow `jig update <repo> --launcher-only --force` migration may repair only `scripts/jig` and `scripts/install-jig.sh` without a manifest when both existing files match recognizable generated Jig signatures; it never creates ownership metadata or retires paths. The repair requires a non-empty `_src_path`, preserves the repository's supported contract epoch in the launcher, and atomically seeds the currently running, compatibility-proven Jig binary into the managed runtime cache; if seeding fails, both published scripts are restored. Repair always renders the two scripts from the running binary's embedded templates. When `.jig.toml` records another template source, the command warns that source-specific launcher customizations will be replaced until the next full update. This seed is a migration bridge: legacy `_commit` or product-tag metadata may point to a runtime that predates compatibility probes, so `doctor` reports the optional full migration to the current contract while the proven seed is available. A full-to-minimal transition from an older manifest-less harness must establish full ownership first. Invalid, traversal-bearing, duplicate, unsorted, non-regular, or symlinked manifests fail closed even under `--force`.
 
+The rendered `.jig/file-budget.toml` is different from those managed paths: it
+is seeded only when missing and is never entered in the managed-path manifest.
+An existing regular policy is preserved byte for byte during adopt and update;
+a symlink or other non-regular entry fails closed. The generated
+`repo:file-budget` action, alias, and default-profile membership are ordinary
+authored repository-model choices after the initial render. Recopy preserves
+their replacement or removal. Only an exact historical generated Rust LOC
+action is compatibility-upgraded to the native action; a customized action or
+Bash checker is treated as authored state.
+
+Mutating adoption and full update require a Git worktree and publish through a
+durable repository transaction stored below Git's resolved `jig` metadata
+path. The journal records verified preimages, staged payloads, ordered progress,
+and the commit decision. A later invocation rolls back an interrupted
+uncommitted transaction or finishes cleanup for a committed one before doing
+new work. If a path was changed by another writer, recovery does not overwrite
+those bytes: it stops, preserves the foreign version and a recovery bundle, and
+reports manual recovery guidance.
+
 Launcher-only repair resolves Bash, Python 3, and its standard POSIX helper
 commands only from root-owned, non-writable PATH entries; root-owned sticky
 ancestors such as the Nix store are accepted. This prevents a writable ambient
@@ -124,9 +143,11 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
-Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the bounded prefix captured before termination remains in the receipt for diagnosis. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while receipt evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contract 6 writes configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
+Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the bounded prefix captured before termination remains in the receipt for diagnosis. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while receipt evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contracts 6 and 7 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions remain configured commands even when their launcher selector also begins with `scripts/jig check`.
 
-## Contract-v6 Repository Model
+Full-harness templates seed `.jig/file-budget.toml` once and declare the language-neutral native `repo:file-budget` action. The repository-owned policy defines governed paths, exact physical-line and byte budgets, exclusions, and bounded expiring waivers; Jig supplies deterministic Git comparison, evaluation, findings, and evidence. Use `scripts/jig check repo:file-budget` for the authored action or `scripts/jig file-budget check|audit|explain|validate` for direct diagnostics. A repository may replace or remove the action, its `jig.file_budget` compatibility alias, or its verification-profile membership without changing the contract schema.
+
+## Contract-v7 Repository Model
 
 `[repository]` is the reviewed source of workspace identity. Its generated records are repeated as `components`, `actions`, `profiles`, and `default_check_profile` in `.agent/jig-contract.json`; runtime loading rejects a mismatch.
 
@@ -167,11 +188,125 @@ planning and execution require a Git worktree:
 the immutable plan identity, affected-path selection, and evidence freshness all
 derive from Git state rather than a best-effort filesystem snapshot.
 
+## File-Budget Policy And Diagnostics
+
+Contract-v7 repositories can declare a read-only native action whose runner is
+`{ kind = "native", operation = "jig.file_budget" }`. Its canonical policy is
+the authored UTF-8 TOML file `.jig/file-budget.toml`. The action should declare
+`inputs = ["**"]`: contract v7 applies that repository-wide pattern to the
+file-budget target itself, including hidden source paths, without selecting
+unrelated sibling actions. Repositories may replace or remove the authored
+action; the direct diagnostic family remains available independently.
+
+Policy version 1 is strict and accepts only `version`, `rules`, `exclusions`,
+and `waivers`. A compact example is:
+
+```toml
+version = 1
+
+[[rules]]
+id = "application-source"
+category = "source"
+include = ["**/*.rs", "**/*.ts", "**/*.tsx"]
+exclude = ["src/fixtures/**"]
+notice_lines = 400
+warn_lines = 500
+max_lines = 800
+max_bytes = 262144
+
+[[exclusions]]
+pattern = "clients/generated/**"
+kind = "generated"
+reason = "Regenerated from checked-in API authority"
+
+[[waivers]]
+id = "legacy-parser-split"
+rule = "application-source"
+path = "src/legacy/parser.rs"
+ceiling_lines = 940
+reason = "Parser extraction is tracked separately"
+expires = 2026-11-30
+```
+
+Each current path must match at most one effective rule; rule order never
+chooses a winner. Rules require at least one include and at least one line or
+byte maximum. Optional notice and warning thresholds must be ordered below the
+corresponding maximum. Top-level exclusion kinds are `generated`, `vendored`,
+or `policy`; rule-local exclusions only remove that rule's match. Patterns are
+repository-relative forward-slash globs and cannot escape the repository or
+target `.git`, `.agent/**`, the policy file, or contract authority. The entire
+`.agent/**` tree is outside the version-1 candidate universe.
+
+A waiver names one exact path and rule, has at least one finite line or byte
+ceiling, gives a reason, and expires after the named UTC calendar date. Jig
+observes every waiver target independently of the changed-file set, so an
+unrelated change cannot hide a missing, unsupported, or newly unmatched target.
+Active waivers remain visible in findings and receipt evidence. Removing a
+historical waiver does not grandfather its remaining debt.
+
+Measurement is byte-oriented and streaming. An empty file has zero lines; each
+LF terminates one physical line; a non-empty final segment without LF adds one.
+CRLF therefore counts as one line. Bytes are exact selected-view content bytes.
+UTF-8 validity, NUL bytes, comments, and blank lines do not change counting.
+Matched symlinks, gitlinks, special files, changed-during-read files, incomplete
+Git scope, and exhausted resource ceilings block rather than pass.
+
+Use the built-in leaf diagnostics without creating a run or receipt:
+
+- `scripts/jig file-budget check`
+- `scripts/jig file-budget audit [--strict] [--tracked-only]`
+- `scripts/jig file-budget explain PATH`
+- `scripts/jig file-budget validate [--staged]`
+
+`check` and `explain` accept zero or one of `--base REF`, `--exact-tree OID
+--provenance explicit|push_before`, `--staged`, or `--strict-inventory`, plus
+hard-capped `--max-candidates` and `--max-total-bytes` diagnostic overrides.
+With history, zero selectors use the configured default-branch merge base; an
+unborn repository uses its hash-format-correct empty tree. Audit inventories
+tracked and nonignored untracked regular files unless `--tracked-only` is set,
+and is informational unless `--strict` is set. `--json` emits
+`jig.file_budget/report-v1`. Direct exits are 0 for pass/informational audit, 1
+for policy violations, 2 for invalid invocation or policy, and 3 for blocked,
+cancelled, or timed-out authority.
+
+CI should invoke the authored action and pass comparison authority explicitly,
+for example `scripts/jig check repo:file-budget \
+--comparison-exact-tree "$BEFORE" --comparison-provenance push_before`. Jig
+does not inspect provider environment variables.
+An all-zero push-before identity resolves to the correct empty tree. A missing
+nonzero identity gets one 60-second, depth-one exact-object fetch from `origin`
+without updating refs, tags, or `FETCH_HEAD`, then blocks unless the checked-in
+native configuration explicitly selected authenticated strict-inventory
+fallback. Pull-request callers can use `--base REF` merge-base authority. The
+same tagged comparison object is available to `jig.plan_run` MCP clients.
+
 Generated frontend commands use `scripts/check-webapps.sh check-one` so `web:test` validates only the `web` component while preserving dependency setup and coverage enforcement. Fresh Rust/React and Go/React scaffolds also declare repository-wide contract-drift and public-boundary targets because the same transaction creates their `scripts/contracts.mjs` implementation. Adoption of an existing frontend does not infer those scaffold-specific targets merely from app presence; an existing authored v6 repository model remains authoritative on recopy. A declared contract target fails immediately when its runner file is missing instead of producing empty success evidence. Aggregate `jig.typescript_*` tools remain compatibility actions and are not members of the default profile.
 
 Contracts that declare `"kind": "native"` tools require a runtime that supports the repository contract epoch. Use `scripts/jig`; it probes the repository, required tools, and requested build profile before selecting any development, cached, PATH, or newly installed binary.
 
 `jig adopt --json` includes a `detection_report` object that records inferred values before rendering. It contains `summary`, `scope`, `repo_name`, `default_branch`, `rust_crate_roots`, `sqlx_enabled`, `rust_migration_dir`, `rust_migration_dirs`, `rust_sqlx_metadata_dir`, `web_package_manager`, `frontend_apps`, `ci_github_runner`, `signals`, and `warnings`. Adopt previews by default with `render_mode = "preview"`; pass `--write` to apply the rendered managed files with `render_mode = "copy"`. Pass `--minimal` to render only `.jig.toml` and `.agent/` scaffolding (no scripts, workflows, or agent context files); the render stores `harness_footprint = "minimal"` and the JSON report includes `harness_footprint`. Minimal renders retain frontend and dev metadata but omit TypeScript commands, tools, gates, scripts, workflows, and package validation until a full re-adopt. Package-manager lockfiles are reported and applied only when the full frontend harness is enabled. Scan warnings include up to 19 concrete entries plus an omission notice when more were found. `rust_migration_dirs` is informational; only `rust_migration_dir` is applied. When SQLx is detected without migration or metadata directories, adopt warns and synthesizes the default `migrations` and `.sqlx` paths unless overridden.
+
+Full-harness adoption also reports `adoption_profile.file_budget`. The bounded
+preview classifies and measures candidate files using the existing authored
+policy or the policy that would be seeded, and reports extensions, proposed
+rules and exclusions, current debt, recognized legacy exception markers, and
+any native resource-ceiling proposal. New or increased over-budget debt carrying
+a legacy marker requires an explicit policy waiver. Drafts deliberately leave
+`reason` and `expires` null and set `authorization = "human_required"`; preview
+remains read-only, while `adopt --write` refuses all mutation until a human adds
+the waiver to `.jig/file-budget.toml`.
+
+Migration from the former generated Rust checker is deliberately two-update.
+The first update seeds or preserves the authored policy, upgrades exact
+generated action authority, records a bounded identity-only legacy asset record,
+and retains the existing file. Commit that update and run `scripts/jig check
+repo:file-budget`. A later update retires the recognized file only when the
+latest successful native receipt still matches the exact current source,
+configuration, policy, comparison, evaluation, and any waiver-validity
+deadline. Missing, failed, stale, or expired evidence keeps the file and the
+update report provides the same rerun command. Unknown bytes, a non-executable
+or non-regular file, and customized action authority are preserved rather than
+deleted. Current templates and binaries contain no legacy checker source.
 
 ## Accepted Key Summary
 

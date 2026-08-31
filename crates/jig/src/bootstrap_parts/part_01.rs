@@ -640,6 +640,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         scaffolded_frontend_contracts: false,
         scaffolded_go_postgres_integration: false,
         init_transaction: None,
+        use_update_transaction: opts.write,
         progress,
     })?;
     if opts.write {
@@ -683,6 +684,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
             &copy_result.render_preview.generated_gates,
             &copy_result.render_preview.managed_files,
             &copy_result.render_preview.retired_managed_files,
+            &copy_result.render_preview.file_budget,
             &opts.answers,
             &answer_shape,
         ),

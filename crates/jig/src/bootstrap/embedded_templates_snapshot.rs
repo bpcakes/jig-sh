@@ -56,6 +56,10 @@ pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.jig.toml.jinja")),
     },
     EmbeddedTemplateFile {
+        relative_path: ".jig/file-budget.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.jig/file-budget.toml.jinja")),
+    },
+    EmbeddedTemplateFile {
         relative_path: ".mcp.json.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.mcp.json.jinja")),
     },
@@ -66,10 +70,6 @@ pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
     EmbeddedTemplateFile {
         relative_path: "agent-map.md.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/agent-map.md.jinja")),
-    },
-    EmbeddedTemplateFile {
-        relative_path: "scripts/check-rust-file-loc.sh.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/scripts/check-rust-file-loc.sh.jinja")),
     },
     EmbeddedTemplateFile {
         relative_path: "scripts/check-webapp-scripts.mjs.jinja",

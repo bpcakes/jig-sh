@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
-    ActionArguments, ActionEffect, ActionIntent, ActionRunner, PlannedTarget, ProfileId, RunPlan,
-    SelectionReason, SourceIdentity, TargetId,
+    ActionArguments, ActionEffect, ActionIntent, ActionRunner, ComparisonRequestV1,
+    NativeActionConfigurationV1, PlannedTarget, ProfileId, RunPlan, SelectionReason,
+    SourceIdentity, TargetId,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -15,6 +16,7 @@ use crate::{
     },
 };
 
+use super::native_input::prepare_file_budget_input_v1;
 use super::{
     RepositoryCatalog,
     affected::{
@@ -30,6 +32,8 @@ pub(crate) struct PlanRunRequest {
     pub(crate) selectors: Vec<String>,
     pub(crate) profile: Option<String>,
     pub(crate) affected_base: Option<String>,
+    pub(crate) comparison: Option<ComparisonRequestV1>,
+    pub(crate) work_plan_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,7 +93,9 @@ fn plan_run_with_policy(
     if changed_paths.is_some() && current_source_identity(ctx)? != source {
         bail!("repository source changed while resolving affected paths; plan again");
     }
-    plan_run_with_source_and_paths(
+    let comparison_request = request.comparison.clone();
+    let work_plan_id = request.work_plan_id.clone();
+    let mut plan = plan_run_with_source_and_paths(
         catalog,
         request,
         source,
@@ -97,7 +103,34 @@ fn plan_run_with_policy(
         &observed_input_paths,
         arguments,
         policy,
-    )
+    )?;
+    if catalog.contract_version() >= super::FILE_BUDGET_CONTRACT_VERSION {
+        for target in &mut plan.targets {
+            let ActionRunner::Native {
+                operation,
+                configuration,
+            } = &target.runner
+            else {
+                continue;
+            };
+            if operation != jig_contract::tool::FILE_BUDGET {
+                continue;
+            }
+            let configuration = configuration
+                .as_ref()
+                .and_then(NativeActionConfigurationV1::as_file_budget)
+                .expect("v7 file-budget catalog runners have normalized configuration")
+                .clone();
+            target.prepared_native_input = Some(prepare_file_budget_input_v1(
+                ctx,
+                comparison_request.clone(),
+                configuration,
+                work_plan_id.clone(),
+            )?);
+        }
+        plan.id = plan_digest(&plan)?;
+    }
+    Ok(plan)
 }
 
 fn current_source_identity(ctx: &RepoContext) -> Result<SourceIdentity> {
@@ -186,6 +219,16 @@ pub(crate) fn validate_run_plan(
             selectors: plan.selectors.clone(),
             profile: plan.profile.as_ref().map(ToString::to_string),
             affected_base: plan.affected_base.clone(),
+            comparison: plan
+                .targets
+                .iter()
+                .find_map(|target| target.prepared_native_input.as_ref())
+                .map(|input| input.request.clone()),
+            work_plan_id: plan
+                .targets
+                .iter()
+                .find_map(|target| target.prepared_native_input.as_ref())
+                .and_then(|input| input.work_plan_id.clone()),
         },
         arguments,
         policy,
@@ -295,7 +338,11 @@ fn plan_run_with_source_and_paths(
             target,
             action.intent,
             action.runner.clone(),
-            conservative_action_input_digest(action, &source.worktree_fingerprint),
+            conservative_action_input_digest(
+                catalog.contract_version(),
+                action,
+                &source.worktree_fingerprint,
+            )?,
         );
         planned.arguments = arguments.get(&planned.target).cloned().unwrap_or_default();
         planned.effects.clone_from(&action.effects);
@@ -383,7 +430,7 @@ fn bind_action_arguments<'a>(
             .expect("selected targets must exist in the repository catalog");
         let requires_name = matches!(
             &action.runner,
-            ActionRunner::Native { operation }
+            ActionRunner::Native { operation, .. }
                 if jig_features::native_tool_requires_name(operation)
         );
         let supplied = arguments.get(target).and_then(|args| args.name.as_deref());
@@ -528,10 +575,7 @@ pub(crate) fn target_input_digest(
     let action = catalog
         .action(target)
         .ok_or_else(|| anyhow::anyhow!("target '{target}' is not defined"))?;
-    Ok(conservative_action_input_digest(
-        action,
-        worktree_fingerprint,
-    ))
+    conservative_action_input_digest(catalog.contract_version(), action, worktree_fingerprint)
 }
 
 /// Binds a target receipt to both its declared inputs and the repository-wide
@@ -539,11 +583,16 @@ pub(crate) fn target_input_digest(
 /// not a per-target artifact-cache key: any observed source change invalidates
 /// the receipt even when it falls outside the target's selection patterns.
 fn conservative_action_input_digest(
+    contract_version: u32,
     action: &jig_contract::ActionSpec,
     worktree_fingerprint: &str,
-) -> String {
+) -> Result<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"jig-target-input-v1\0");
+    if contract_version < super::FILE_BUDGET_CONTRACT_VERSION {
+        hasher.update(b"jig-target-input-v1\0");
+    } else {
+        hasher.update(b"jig-target-input-v2\0");
+    }
     hasher.update(action.target.to_string().as_bytes());
     hasher.update([0]);
     hasher.update(worktree_fingerprint.as_bytes());
@@ -551,7 +600,14 @@ fn conservative_action_input_digest(
         hasher.update([0]);
         hasher.update(input.as_bytes());
     }
-    format!("sha256:{:x}", hasher.finalize())
+    if contract_version >= super::FILE_BUDGET_CONTRACT_VERSION {
+        let runner = serde_json::to_vec(&action.runner)
+            .context("Failed to canonicalize native target input authority")?;
+        hasher.update([0]);
+        hasher.update((runner.len() as u64).to_be_bytes());
+        hasher.update(runner);
+    }
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 struct BoundedSelectionReasons {

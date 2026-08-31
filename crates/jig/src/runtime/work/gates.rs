@@ -1,4 +1,3 @@
-// agentic-loc-exception: gate orchestration stays cohesive with dependency and receipt evaluation.
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -117,7 +116,23 @@ impl GateFreshness {
         match self {
             Self::Fresh => "receipt matches current worktree fingerprint",
             Self::Missing => "no receipt exists for this gate",
+            Self::Stale
+                if receipt.is_some_and(|receipt| {
+                    receipt
+                        .valid_until_ms()
+                        .is_some_and(|boundary| crate::state::now_ms() >= boundary)
+                }) =>
+            {
+                "receipt time validity has expired"
+            }
             Self::Stale => "receipt was recorded for a different worktree fingerprint",
+            Self::Unknown
+                if receipt.is_some_and(|receipt| {
+                    receipt.requires_time_validity() && receipt.valid_until_ms().is_none()
+                }) =>
+            {
+                "receipt requires time validity but recorded no boundary"
+            }
             Self::Unknown
                 if receipt
                     .and_then(GateReceiptView::worktree_fingerprint)
@@ -148,123 +163,8 @@ struct EvaluatedReceipt {
     diff_summary: Option<String>,
     receipt_worktree_fingerprint_error: Option<String>,
     current_worktree_fingerprint_error: Option<String>,
-}
-
-impl EvaluatedReceipt {
-    fn new<T: GateReceiptView>(
-        receipt: Option<&T>,
-        freshness_receipt: Option<&T>,
-        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
-    ) -> Self {
-        let freshness = gate_freshness(freshness_receipt, current_fingerprint);
-        let freshness_reason = freshness
-            .reason(freshness_receipt, current_fingerprint)
-            .to_string();
-        Self::with_freshness(
-            receipt,
-            freshness_receipt,
-            current_fingerprint,
-            freshness,
-            freshness_reason,
-        )
-    }
-
-    fn with_freshness<T: GateReceiptView>(
-        receipt: Option<&T>,
-        freshness_receipt: Option<&T>,
-        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
-        freshness: GateFreshness,
-        freshness_reason: String,
-    ) -> Self {
-        let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
-            gate_changed_paths(freshness_receipt);
-        Self {
-            receipt_id: receipt.map(|receipt| receipt.receipt_id().to_string()),
-            freshness_receipt_id: freshness_receipt.map(|receipt| receipt.receipt_id().to_string()),
-            exit_status: receipt.map(GateReceiptView::exit_status),
-            ended_at_ms: receipt.map(GateReceiptView::ended_at_ms),
-            freshness,
-            freshness_reason,
-            changed_paths,
-            changed_path_count,
-            changed_paths_truncated,
-            changed_paths_digest,
-            diff_summary: freshness_receipt.map(|receipt| receipt.diff_summary().to_string()),
-            receipt_worktree_fingerprint_error: freshness_receipt
-                .and_then(GateReceiptView::worktree_fingerprint_error)
-                .map(str::to_string),
-            current_worktree_fingerprint_error: current_fingerprint.error.clone(),
-        }
-    }
-
-    fn scoped(
-        status: &crate::state::WorkCheckGateReceiptStatus,
-        current: &GateScopeEvaluation,
-    ) -> Self {
-        let evidence = &status.evidence;
-        let (freshness, freshness_reason) =
-            if let Some(error) = status.batch.worktree_fingerprint_error.as_deref() {
-                (
-                    GateFreshness::Unknown,
-                    format!("work-check batch could not prove a stable worktree: {error}"),
-                )
-            } else if let Some(error) = current.error() {
-                (
-                    GateFreshness::Unknown,
-                    format!("current gate scope could not be collected: {error}"),
-                )
-            } else if evidence.gate_signature != current.gate_signature() {
-                (
-                    GateFreshness::Stale,
-                    "gate policy or execution definition changed since the receipt".into(),
-                )
-            } else {
-                match (
-                    evidence.scope_fingerprint.as_deref(),
-                    current.scope_fingerprint(),
-                ) {
-                    (Some(receipt), Some(current)) if receipt == current => (
-                        GateFreshness::Fresh,
-                        "receipt matches the current gate-scoped fingerprint".into(),
-                    ),
-                    (Some(_), Some(_)) => (
-                        GateFreshness::Stale,
-                        "receipt was recorded for a different gate-scoped fingerprint".into(),
-                    ),
-                    _ => (
-                        GateFreshness::Unknown,
-                        "gate-scoped freshness could not be determined".into(),
-                    ),
-                }
-            };
-        Self {
-            receipt_id: evidence
-                .tool_receipt_id
-                .clone()
-                .or_else(|| Some(status.batch.receipt_id.clone())),
-            freshness_receipt_id: Some(status.batch.receipt_id.clone()),
-            exit_status: match evidence.status.as_str() {
-                "executed" | "failed" | "cancelled" => evidence.exit_status,
-                "reused" | "not_applicable" => Some(0),
-                "unknown" => None,
-                _ => None,
-            },
-            ended_at_ms: Some(status.batch.ended_at_ms),
-            freshness,
-            freshness_reason,
-            changed_paths: evidence.changed_paths.clone(),
-            changed_path_count: evidence.changed_path_count,
-            changed_paths_truncated: evidence.changed_paths_truncated,
-            changed_paths_digest: evidence.changed_paths_digest.clone(),
-            diff_summary: Some(status.batch.diff_summary.clone()),
-            receipt_worktree_fingerprint_error: status
-                .batch
-                .worktree_fingerprint_error
-                .clone()
-                .or_else(|| evidence.scope_error.clone()),
-            current_worktree_fingerprint_error: current.error().map(str::to_string),
-        }
-    }
+    valid_until_ms: Option<u64>,
+    requires_time_validity: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -369,7 +269,7 @@ impl GateEvaluation {
                 let receipt = &gate.receipt;
                 let evidence = gate.evidence.as_ref();
                 let current = &gate.current_scope;
-                json!({
+                let mut value = json!({
                     "id": gate.id,
                     "kind": "check",
                     "required": gate.required,
@@ -410,7 +310,10 @@ impl GateEvaluation {
                     "source_plan_id": evidence.and_then(|evidence| evidence.source_plan_id.as_deref()),
                     "source_batch_receipt_id": evidence.and_then(|evidence| evidence.source_batch_receipt_id.as_deref()),
                     "source_tool_receipt_id": evidence.and_then(|evidence| evidence.source_tool_receipt_id.as_deref()),
-                })
+                });
+                value["valid_until_ms"] = json!(receipt.valid_until_ms);
+                value["requires_time_validity"] = json!(receipt.requires_time_validity);
+                value
             }
             Self::Evidence(gate) => gate.to_value(),
             Self::CodexReview(gate) => {
@@ -442,6 +345,8 @@ impl GateEvaluation {
                     "parse_error": evidence.and_then(WorkReviewReceiptEvidence::parse_error),
                     "receipt_worktree_fingerprint_error": receipt.receipt_worktree_fingerprint_error,
                     "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
+                    "valid_until_ms": receipt.valid_until_ms,
+                    "requires_time_validity": receipt.requires_time_validity,
                 })
             }
             Self::Unsupported(gate) => {
@@ -504,6 +409,8 @@ impl GateEvaluation {
             "changed_paths_digest": receipt.changed_paths_digest,
             "diff_summary": receipt.diff_summary,
             "ended_at_ms": receipt.ended_at_ms.unwrap_or(0),
+            "valid_until_ms": receipt.valid_until_ms,
+            "requires_time_validity": receipt.requires_time_validity,
         });
         if let Self::Check(gate) = self {
             value["applicability"] = json!(

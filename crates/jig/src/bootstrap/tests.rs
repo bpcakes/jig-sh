@@ -1,9 +1,10 @@
-// agentic-loc-exception: bootstrap integration coverage shares repository-wide fixture helpers.
 use tempfile::{TempDir, tempdir};
 
-use super::path;
 use super::*;
 use crate::test_env::{EnvVarGuard, lock_env};
+
+mod adopt_fixture;
+use adopt_fixture::{run_adopt, write_test_crate_guide};
 
 const CURRENT_GENERATED_LAUNCHER_TEMPLATE: &str =
     include_str!("embedded_template_snapshots/scripts/jig.jinja");
@@ -621,26 +622,28 @@ fn staged_current_contract_requires_repository_scoped_runtime_scripts() {
 }
 
 #[test]
-fn launcher_repair_requires_the_complete_render_answer_shape() {
+fn launcher_repair_derives_legacy_sqlx_shape_from_the_authored_model() {
     let repo = tempdir().unwrap();
     let answers = fs::read_to_string(template_repo_root().join(".jig.toml")).unwrap();
-    let incomplete = answers
+    let without_sqlx_projection = answers
         .lines()
         .filter(|line| !line.starts_with("sqlx_enabled ="))
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
-    fs::write(repo.path().join(".jig.toml"), &incomplete).unwrap();
+    fs::write(repo.path().join(".jig.toml"), &without_sqlx_projection).unwrap();
 
     assert!(RepoContext::validate_config_file(repo.path()).is_ok());
-    assert!(!launcher_only_repair_answers_are_valid(repo.path()));
-
-    fs::write(
-        repo.path().join(".jig.toml"),
-        format!("sqlx_enabled = false\n{incomplete}"),
-    )
-    .unwrap();
     assert!(launcher_only_repair_answers_are_valid(repo.path()));
+
+    let without_repo_name = without_sqlx_projection
+        .lines()
+        .filter(|line| !line.starts_with("repo_name ="))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(repo.path().join(".jig.toml"), without_repo_name).unwrap();
+    assert!(!launcher_only_repair_answers_are_valid(repo.path()));
 }
 
 #[test]
@@ -867,11 +870,6 @@ fn init_git_repo_for_test(path: &Path) {
     git(path, ["init", "-b", "main"]).unwrap();
     git(path, ["config", "user.name", "Fixture"]).unwrap();
     git(path, ["config", "user.email", "fixture@example.com"]).unwrap();
-}
-
-fn write_test_crate_guide(repo: &Path) {
-    fs::create_dir_all(repo.join("crates/api")).unwrap();
-    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
 }
 
 fn with_test_build_template_pin_policy<T>(

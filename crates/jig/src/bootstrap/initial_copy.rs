@@ -9,10 +9,12 @@ use toml::{Table, Value as TomlValue};
 
 use super::AnswerOpts;
 use super::InitMutationTransaction;
+use super::adoption_file_budget::preview_adoption_file_budget;
 use super::answers::{
     AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers,
     has_go_postgres_integration_script,
 };
+use super::file_budget_lifecycle::prepare_legacy_migration;
 use super::gate_preview::generated_gates;
 use super::renderer::{RenderStageRequest, stage_render};
 use super::sync::ApplyRenderReport;
@@ -20,6 +22,7 @@ use super::sync::{ApplyRenderConflictPolicy, ApplyRenderOptions, apply_staged_re
 use super::template_source::PreparedTemplateSource;
 #[cfg(test)]
 use super::template_source::PrivateAnswerOverrides;
+use super::update_transaction::{RepositoryUpdateLock, RepositoryUpdateTransaction};
 #[cfg(test)]
 use super::{TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY};
 use crate::bootstrap::path::validate_portable_planned_file_collisions;
@@ -48,6 +51,7 @@ pub(super) struct BootstrapCopyRequest<'a> {
     pub(super) scaffolded_frontend_contracts: bool,
     pub(super) scaffolded_go_postgres_integration: bool,
     pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
+    pub(super) use_update_transaction: bool,
     pub(super) progress: CliProgress,
 }
 
@@ -70,6 +74,7 @@ pub(super) struct AdoptionRenderPreview {
     pub(super) generated_gates: Vec<String>,
     pub(super) managed_files: Vec<String>,
     pub(super) retired_managed_files: Vec<String>,
+    pub(super) file_budget: JsonValue,
 }
 
 pub(super) fn render_and_copy_bootstrap_template(
@@ -120,7 +125,7 @@ pub(super) fn render_and_copy_bootstrap_template(
             .progress
             .log_blocked_on_err(validate_frontend_app_scripts(request.destination, &answers))?;
     }
-    let staged = stage_render(RenderStageRequest {
+    let mut staged = stage_render(RenderStageRequest {
         template: request.template,
         answers: &answers,
         seed_repo_path: request.seed_repo_path,
@@ -130,12 +135,36 @@ pub(super) fn render_and_copy_bootstrap_template(
         contract_version: None,
         progress: request.progress,
     })?;
+    let no_prior_paths = BTreeSet::new();
+    let prior_paths = request.prior_managed_paths.unwrap_or(&no_prior_paths);
+    let lifecycle = prepare_legacy_migration(request.destination, &mut staged, prior_paths)?;
+    if let Some(command) = lifecycle.rerun_command {
+        request.progress.info(
+            "migration",
+            format!("{}; run `{command}`", lifecycle.reason),
+        );
+    }
+    let file_budget_preview = if request.seed_repo_path.is_some() {
+        preview_adoption_file_budget(request.destination, &staged)?
+    } else {
+        super::adoption_file_budget::AdoptionFileBudgetPreview {
+            report: JsonValue::Null,
+            human_required: false,
+        }
+    };
+    if file_budget_preview.human_required && !request.dry_run {
+        bail!(
+            "Adoption requires human-authored file-budget waivers. No files were changed. Review adoption_profile.file_budget.required_waivers, add a reason and expiry to {}, then retry adoption.",
+            super::staged_render::FILE_BUDGET_POLICY_PATH
+        );
+    }
     let staged_context = RepoContext::load_from_root(staged.destination.clone())?;
     let render_preview = AdoptionRenderPreview::from_staged_render(
         &answers,
         &staged_context,
         &staged.active_paths,
         &staged.retirement_paths,
+        file_budget_preview.report,
     )?;
     request
         .progress
@@ -153,7 +182,23 @@ pub(super) fn render_and_copy_bootstrap_template(
         transaction.plan_staged_render(&staged, &request.reserved_output_paths)?;
     }
 
-    let apply_report = apply_staged_render(
+    let update_lock = request
+        .use_update_transaction
+        .then(|| RepositoryUpdateLock::acquire(request.destination))
+        .transpose()?;
+    let mut update_transaction = update_lock
+        .as_ref()
+        .map(|lock| {
+            RepositoryUpdateTransaction::prepare(
+                lock,
+                request.destination,
+                &staged,
+                false,
+                lifecycle.proof.clone(),
+            )
+        })
+        .transpose()?;
+    let apply_result = apply_staged_render(
         &staged,
         request.destination,
         ApplyRenderOptions {
@@ -171,8 +216,23 @@ pub(super) fn render_and_copy_bootstrap_template(
             backup_root: request.backup_root.as_deref(),
             progress: request.progress,
             init_transaction: request.init_transaction,
+            update_transaction: update_transaction.as_mut(),
         },
-    )?;
+    );
+    let apply_report = match apply_result {
+        Ok(report) => {
+            if let Some(transaction) = update_transaction.take() {
+                transaction.commit()?;
+            }
+            report
+        }
+        Err(error) => {
+            return Err(match update_transaction.take() {
+                Some(transaction) => transaction.finish_failed(error),
+                None => error,
+            });
+        }
+    };
 
     if answers.has_legacy_dev_command() {
         notes.push(
@@ -212,6 +272,7 @@ impl AdoptionRenderPreview {
         staged_context: &RepoContext,
         active_paths: &BTreeSet<PathBuf>,
         retirement_paths: &BTreeSet<PathBuf>,
+        file_budget: JsonValue,
     ) -> Result<Self> {
         Ok(Self {
             generated_gates: generated_gates(staged_context, answers)?,
@@ -223,6 +284,7 @@ impl AdoptionRenderPreview {
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
+            file_budget,
         })
     }
 }

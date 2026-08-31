@@ -12,8 +12,6 @@ use crate::{
     runtime::{Action, handle_key},
 };
 
-// agentic-loc-exception: shared picker fixtures keep the remaining interaction tests readable; projection rendering cases live in tests/projection_rendering.rs.
-
 const PROJECTION_TOLERANCE: f64 = 1e-9;
 
 #[test]

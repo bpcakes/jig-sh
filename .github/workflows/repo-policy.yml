@@ -10,8 +10,8 @@ on:
       - "rust-toolchain.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
+      - ".jig/file-budget.toml"
       - "scripts/jig"
-      - "scripts/check-rust-file-loc.sh"
       - "scripts/install-jig.sh"
       - ".github/workflows/repo-policy.yml"
   push:
@@ -25,8 +25,8 @@ on:
       - "rust-toolchain.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
+      - ".jig/file-budget.toml"
       - "scripts/jig"
-      - "scripts/check-rust-file-loc.sh"
       - "scripts/install-jig.sh"
       - ".github/workflows/repo-policy.yml"
   merge_group:
@@ -62,10 +62,16 @@ jobs:
         run: |
           scripts/jig check no-mod-rs
 
-  rust-file-loc:
-    name: Enforce agentic-first Rust file size policy
-    runs-on: ubuntu-latest
+  file-budget:
+    name: Enforce repository file budgets (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -78,7 +84,32 @@ jobs:
           rustflags: ""
       - name: Build current Jig binary
         run: cargo build -p jig-sh --bin jig --locked
-      - name: Check Rust file LOC policy
+      - name: Check repository file-budget policy
         env:
           JIG_DEV_BIN: target/debug/jig
-        run: scripts/check-rust-file-loc.sh master
+          JIG_EVENT_NAME: ${{ github.event_name }}
+          JIG_PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          JIG_PUSH_BEFORE: ${{ github.event.before }}
+          JIG_MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          case "$JIG_EVENT_NAME" in
+            pull_request)
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$JIG_PULL_REQUEST_BASE" \
+                --comparison-provenance explicit
+              ;;
+            push)
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$JIG_PUSH_BEFORE" \
+                --comparison-provenance push_before
+              ;;
+            merge_group)
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$JIG_MERGE_GROUP_BASE" \
+                --comparison-provenance explicit
+              ;;
+            *)
+              scripts/jig check repo:file-budget
+              ;;
+          esac

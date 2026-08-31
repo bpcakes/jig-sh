@@ -40,7 +40,7 @@ pub(crate) fn native_migration_backend(
         .filter(|action| {
             matches!(
                 &action.runner,
-                ActionRunner::Native { operation } if operation == tool::MIGRATION_ADD
+                ActionRunner::Native { operation, .. } if operation == tool::MIGRATION_ADD
             )
         })
         .collect::<Vec<_>>();

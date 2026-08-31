@@ -16,7 +16,7 @@ Runtime seeding selects Bash and its helper-command path as one platform policy.
 
 Jig also specifies the separate open [`jig.status-provider/v1`](status-provider.md) protocol. It lets a project-specific inspector, including a closed-source provider, publish software-rewrite observations to Jig or any other consumer through a committed JSON Schema. The status-provider protocol is not a command in `.agent/jig-contract.json`, and its major version is independent of the generated command contract's `contract_version`.
 
-Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v6 is the current compatibility epoch, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` namespace remain CLI-only.
+Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v7 is the current compatibility epoch. Contract v6 remains supported with its original component-aggregate affected selection, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` namespace remain CLI-only.
 
 CLI commands print human-readable output by default. Long-running human-mode commands collect bounded child-output previews, phase changes, and periodic heartbeats while supervised work runs, then make a deadline-bounded best-effort write of that progress to stderr after supervised execution returns and before any restored terminating signal is redelivered. A stalled presentation sink may therefore lose the remaining preview, but it cannot indefinitely delay command completion or signal retirement. Because delivery is deferred, heartbeat wording is historical (for example, a phase “reached 25s”) rather than a claim that it is still running when rendered. The deferred boundary keeps transport backpressure from suspending timeout, cancellation, or cleanup and preserves already-collected progress during ordinary interruption. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, `scripts/jig work status --json`, or `scripts/jig work evidence --json`); JSON mode disables that human progress output. Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document, and `scripts/jig mcp` always reserves stdout for MCP framing. `scripts/jig prompt get` prints the bare rendered body without `--json` and the standard `prompt get` command envelope with it. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. `scripts/jig work start --print-plan-id` remains a shell-capture override that prints only the new plan id. Human text, TUI presentation, and `--print-plan-id` output are for terminal use and are not stable machine-readable contract output; automation should pass `--json` or use MCP tools.
 
@@ -36,7 +36,7 @@ The schema-version 3 `reason_code` values are `agent_readiness_unknown`, `bootst
 
 An invalid or stale `JIG_REPO_ROOT` remains a blocker for workflows that use strict repository lookup, including the primary `proxy run` workflow. Workflows using tolerant optional-context lookup instead ignore the invalid override, quietly try the current directory, and fall back to no repository when appropriate. When that lookup recovers a valid current repository, the inventory uses it for `dev` and vault readiness even though `repo.name` and `repo.root` remain null because the explicit override is invalid.
 
-Bootstrap command JSON is also runtime-owned. `scripts/jig init --json`, `scripts/jig adopt --json`, and `scripts/jig update --json` include a `render_report` object that summarizes created, modified, unchanged, conflict, backup, managed-block, and todo items for human review. When `jig init --json` runs a project scaffold, its sibling `scaffold` object reports the scaffold preset, sanitized `repo_name`, nullable `repo_name_sanitized_from`, `db`, `frontends[].{name,dir,kind,role}`, `frontend_notices` for bare custom names that are not preset shorthands, and `files_created` / `files_modified` / `files_unchanged` separately from template-managed file counts in `render_report`. Generated shadcn React frontends carry a same-contract-epoch `ui` provenance object describing the system, CLI version, preset, primitive base, style, and Tailwind major. `scripts/jig adopt` previews by default with `render_mode = "preview"` and only applies managed files with `render_mode = "copy"` when `--write` is supplied. `scripts/jig init`, `scripts/jig adopt`, and `scripts/jig update` print human summaries by default; pass `--json` for the full structured reports. Automation should treat those reports as runtime diagnostics governed by the contract epoch, not as tool entries in `.agent/jig-contract.json`.
+Bootstrap command JSON is also runtime-owned. `scripts/jig init --json`, `scripts/jig adopt --json`, and `scripts/jig update --json` include a `render_report` object that summarizes created, modified, unchanged, conflict, backup, managed-block, authored-seed, and todo items for human review. When `jig init --json` runs a project scaffold, its sibling `scaffold` object reports the scaffold preset, sanitized `repo_name`, nullable `repo_name_sanitized_from`, `db`, `frontends[].{name,dir,kind,role}`, `frontend_notices` for bare custom names that are not preset shorthands, and `files_created` / `files_modified` / `files_unchanged` separately from template-managed file counts in `render_report`. Generated shadcn React frontends carry a same-contract-epoch `ui` provenance object describing the system, CLI version, preset, primitive base, style, and Tailwind major. `scripts/jig adopt` previews by default with `render_mode = "preview"` and only applies managed files with `render_mode = "copy"` when `--write` is supplied. Its runtime-owned `adoption_profile.file_budget` reports bounded policy classification, debt, legacy markers, waiver drafts, and whether human authorization is required; write mode fails before mutation while such a draft remains incomplete. Full-update JSON includes `legacy_file_budget_migration`, whose status, recognized generation, reason, and optional exact rerun command describe whether a known Bash checker was retained, retired, absent, or preserved as authored state. `scripts/jig init`, `scripts/jig adopt`, and `scripts/jig update` print human summaries by default; pass `--json` for the full structured reports. Automation should treat those reports as runtime diagnostics governed by the contract epoch, not as tool entries in `.agent/jig-contract.json`.
 
 Agent-guide check JSON keeps `missing_guides` as an empty compatibility field in this contract version and includes `missing_guides_note` to explain that placeholder backend-level `AGENTS.md` files are no longer required. Existing Rust crate and Go package guide files are validated when present. Consumers should stop treating `missing_guides` as the guide-coverage gate; use `missing_sections` and `missing_entry_ref` for existing-guide quality issues.
 
@@ -78,7 +78,7 @@ Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are re
 
 - `contract_version`: version of the generated tool manifest and command surface
 
-Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
+Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Version `7` adds typed native file-budget configuration and durable prepared native inputs, and makes non-empty action inputs target-local for affected selection. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection, and version 6 retains its original repository behavior. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
 
 Breaking `contract_version` changes include:
 
@@ -194,8 +194,8 @@ Target identity is always an object with separate `component` and `action`
 fields in JSON. Human output renders its canonical `component:action` text.
 
 `jig check --explain` returns `command: "check plan"`, `executed: false`, and a
-`plan` object without running a command or writing a receipt. A plan uses run
-plan schema version 2 and includes its derived `id`, configuration digest, source identity,
+`plan` object without running a command or writing a receipt. A newly written
+plan uses run-plan schema version 3 and includes its derived `id`, configuration digest, source identity,
 normalized selectors or profile, sorted targets, selection reasons, declared
 effects, input digests, and dependency execution layers. Bare `jig check` uses
 the default verification profile. An action selector such as `test` matches
@@ -205,6 +205,45 @@ Profiles and explicit selectors are mutually exclusive. Contract-6 legacy
 aliases must not parse as canonical action, target, or wildcard selectors;
 canonical selector meaning therefore cannot be shadowed by an alias.
 
+For a selected contract-v7 action that still uses the built-in
+`jig.file_budget` runner, the target also carries one bounded
+`prepared_native_input`. It independently records authenticated policy and
+comparison preparation, current view, the original typed comparison request,
+fully defaulted checked-in resource ceilings and fallback policy, and optional
+work-plan identity. Planning resolves this authority only after selection;
+unrelated targets and command replacements do not require it. Submitted plans
+are replay-authenticated before durable acceptance, while an accepted worker
+uses the persisted object IDs rather than resolving symbolic refs again.
+Schema-2 plans and pre-native target records remain readable with the new field
+absent.
+
+When that prepared input is ready, `jig.file_budget` executes in-process and
+returns ordinary normalized target findings with source `jig.file_budget`, a
+complete finding count and digest, bounded previews and human output, an
+evaluation digest, comparison object identities, `evaluated_at_ms`, and the
+earliest active-waiver `valid_until_ms`. Invalid policy preparation is a policy
+failure; unavailable comparison authority, incomplete scope, unsupported file
+types, mutation during reads, and exhausted resource bounds are blocked. The
+engine measures arbitrary regular bytes and LF-delimited physical lines without
+UTF-8 or binary heuristics and does not follow symlinks.
+
+The independent `jig file-budget check|audit|explain|validate` family always
+uses the built-in implementation and creates no run or receipt, even when the
+checked-in action was replaced or removed. Its JSON output schema is
+`jig.file_budget/report-v1`; its stable exits distinguish success/informational
+audit (0), policy violations (1), invalid invocation or policy (2), and blocked
+authority (3). Repository `jig check` planning accepts the same explicit
+`--comparison-base`, `--comparison-exact-tree OID --comparison-provenance
+explicit|push_before`, `--comparison-staged`, and
+`--comparison-strict-inventory` vocabulary for native checks. The prefix keeps
+repository comparison authority distinct from flags owned by configured
+checker commands. Exact-tree
+authority is never converted into a merge base. Push adapters must pass the
+event's exact before identity rather than relying on ambient provider variables;
+an unavailable nonzero before identity receives one bounded exact-object fetch
+attempt and otherwise follows the authenticated checked-in block-or-inventory
+fallback policy.
+
 The configuration digest canonicalizes repository execution authority: the
 parsed generated contract model, effective command bindings, backend migration
 settings, and configured execution limits. Comments, formatting, and unrelated
@@ -213,7 +252,7 @@ The separate source identity remains a conservative snapshot of all
 non-`.agent/` repository source, so editing `.jig.toml` still requires planning
 again even when the resolved execution authority is unchanged.
 
-On contract 6, `--affected BASE` narrows that ordinary selector/profile
+On contract 6 and later, `--affected BASE` narrows that ordinary selector/profile
 candidate set. Jig safely resolves the explicit Git revision, compares the
 merge base with `HEAD`, unions staged, unstaged, and untracked paths, excludes
 all `.agent/` harness/runtime metadata, and sorts the result. Ignored `.env` and
@@ -238,7 +277,11 @@ precedence so an ignore cannot shadow a declared dependency. Generated policy
 classifies named repository guidance, documentation, license files, hosted-CI
 metadata, and dotenv presence as non-selecting unless an action declares them;
 arbitrary fixtures plus build and source-discovery authority remain
-fail-closed. Reverse component dependencies propagate only under the checked-in
+fail-closed. Contract v7 matches a non-empty action input directly to its owning
+target, while contract v6 retains component-aggregate matching. Actions without
+inputs retain component-root fallback behavior. This lets a repository-wide
+`"**"` action cover hidden and ordinary source paths without selecting unrelated
+sibling actions in the same component. Reverse component dependencies propagate only under the checked-in
 `propagate_affected_to_dependents` policy. Action dependencies expand afterward.
 Every retained target records a deterministic preview of its candidate and
 affected reasons. The preview is capped at 100 reasons per target; when more
@@ -262,6 +305,24 @@ named v2–v5 check commands without planning flags retain their prior single-to
 response. `--fail-fast` is explicit; aggregate selection otherwise collects
 every target failure it can execute. Receipt options are accepted on either
 side of external target selectors.
+
+Current full-harness repositories own `.jig/file-budget.toml` and expose the
+language-neutral `repo:file-budget` native action. `scripts/jig check
+repo:file-budget` therefore uses the same selector, affected-planning, receipt,
+and evidence path as every other repository action while Jig supplies the
+versioned evaluator. The checked-in policy owns path matching, line and byte
+budgets, exclusions, and bounded waivers. Repositories may replace or remove the
+action, its `jig.file_budget` compatibility alias, or profile membership.
+Direct diagnostics live under `scripts/jig file-budget`: `check` evaluates an
+explicit comparison, `audit` inventories current files, `explain` reports one
+path, and `validate` checks policy structure and waiver targets.
+
+Contracts 2–5 that declare `jig.rust_file_loc` remain readable and executable
+through their declared command authority. The compatibility projection does
+not restore Rust-specific native LOC dispatch or checker-specific flags. A
+contract-v7 recopy migrates exact generated authority to `repo:file-budget`;
+the bounded two-update lifecycle can recognize and retire a generated checker
+without retaining its source in the binary.
 
 Every planned execution appends lifecycle events to `runs.jsonl`: one queued
 event owns the accepted immutable plan, followed by running/target events and
@@ -288,7 +349,8 @@ action:
   one durable run. Its `kind` discriminator determines whether `id` or `run_id`
   is required.
 - `jig.plan_run` resolves explicit `selectors`, a mutually exclusive `profile`,
-  optional `affected_base`, and closed per-target `arguments` through the same
+  optional `affected_base`, optional typed `comparison`, optional
+  `work_plan_id`, and closed per-target `arguments` through the same
   deterministic planner as the CLI. Effectful actions require explicit
   selectors. Native actions that need a name bind it into the immutable plan;
   unsupported or unselected-target arguments are rejected. Planning does not
@@ -336,7 +398,7 @@ Current JSONL state files:
 
 State readers should tolerate missing files by treating them as empty. JSONL readers should ignore blank lines and fail loudly on malformed nonblank records. Session-start records retain their durable write-time summary, but `summary.recent_sessions` contains shallow event references whose nested `summary` is `null`; historical records that recursively embedded older summaries remain readable. Canonical session readers collapse duplicate IDs with identical event envelopes, as can arise after a line-union merge, and reject the same ID with a conflicting envelope.
 
-Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, and normalized `findings`; older records deserialize with those fields absent. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Configured-command timeout, await, cleanup, and capture failures use `evidence.kind = "supervised_command"`, `status = "error"`, and retain the diagnostic in the failed stderr preview. Cancellation after spawn uses the same evidence kind with `status = "cancelled"`; cancellation before spawn records no child receipt, and a work-check batch references only children that actually started. Older receipts without the new evidence or path-summary fields remain readable. Worker-run evidence includes additive `stdout_truncated` and `stderr_truncated` booleans because Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
+Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, normalized `findings`, complete `finding_count`/`findings_truncated`/`findings_digest` metadata, `evaluated_at_ms`, and `valid_until_ms`; older records deserialize with those fields absent. A validity boundary is fresh only while `now_ms < valid_until_ms`, so equality is expired. That boundary is enforced, not merely displayed, by direct target status, work-check batch and scoped evidence, reusable and latest evidence, and archive protection. Historical receipts without the field retain their prior semantics, except new file-budget evidence proving active waivers without a required boundary is unknown rather than indefinitely fresh. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Configured-command timeout, await, cleanup, and capture failures use `evidence.kind = "supervised_command"`, `status = "error"`, and retain the diagnostic in the failed stderr preview. Cancellation after spawn uses the same evidence kind with `status = "cancelled"`; cancellation before spawn records no child receipt, and a work-check batch references only children that actually started. Older receipts without the new evidence or path-summary fields remain readable. Worker-run evidence includes additive `stdout_truncated` and `stderr_truncated` booleans because Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
 
 The active-session pointer is cache state, currently resolved through git as `jig-current-session.txt` and falling back under `.agent/.cache/`. Generated repos should not treat that path as a durable JSONL record.
 
@@ -359,7 +421,7 @@ Structured work commands use the `jig.work_*` CLI and MCP namespace, but state-o
 
 ## Work Gates
 
-`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. A target gate matches only that exact target. A profile gate requires every current profile target from one run; receipts from separate runs are not combined. `scripts/jig work check --plan-id ...` resolves all evidence gates to exact targets, executes their union in one run, and links every target receipt to the work plan. Contract-v6 templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
+`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. A target gate matches only that exact target. A profile gate requires every current profile target from one run; receipts from separate runs are not combined. `scripts/jig work check --plan-id ...` resolves all evidence gates to exact targets, executes their union in one run, and links every target receipt to the work plan. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
 
 Contract 5 and later check gates may declare strict `paths`, `paths_ignore`, and `reuse` policy. Work-plan open records an immutable commit or empty-tree baseline. Scoped checks compare that baseline with the current staged, unstaged, untracked, and committed inputs; their evidence records applicability, gate signature, scope fingerprint, and bounded changed-path metadata. A non-applicable gate closes with explicit evidence rather than a synthetic pass. Reuse is opt-in and accepts only a direct successful execution with the exact current gate and input identity; failed, cancelled, malformed, mutating, or transitively reused batches supersede older proof instead of revealing it. `work check --gate ID` forces a named check to execute while retaining its applicability facts.
 

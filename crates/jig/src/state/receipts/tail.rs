@@ -126,8 +126,37 @@ fn record_receipt_inner(
             }
         }
     }
-    let (run_id, target_id, config_digest, input_digest, findings) = target.map_or_else(
-        || (None, None, None, None, Vec::new()),
+    let evidence_valid_until_ms = input
+        .evidence
+        .as_ref()
+        .and_then(|evidence| evidence.get("valid_until_ms"))
+        .and_then(Value::as_u64);
+    let (
+        run_id,
+        target_id,
+        config_digest,
+        input_digest,
+        findings,
+        finding_count,
+        findings_truncated,
+        findings_digest,
+        evaluated_at_ms,
+        target_valid_until_ms,
+    ) = target.map_or_else(
+        || {
+            (
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
+        },
         |metadata| {
             (
                 Some(metadata.run_id),
@@ -135,6 +164,11 @@ fn record_receipt_inner(
                 Some(metadata.config_digest),
                 Some(metadata.input_digest),
                 metadata.findings,
+                metadata.finding_count,
+                metadata.findings_truncated,
+                metadata.findings_digest,
+                metadata.evaluated_at_ms,
+                metadata.valid_until_ms,
             )
         },
     );
@@ -168,6 +202,11 @@ fn record_receipt_inner(
         config_digest,
         input_digest,
         findings,
+        finding_count,
+        findings_truncated,
+        findings_digest,
+        evaluated_at_ms,
+        valid_until_ms: target_valid_until_ms.or(evidence_valid_until_ms),
         changed_paths: git_metadata.changed_paths,
         changed_path_count: git_metadata.changed_path_count,
         changed_paths_truncated: git_metadata.changed_paths_truncated,
@@ -279,6 +318,11 @@ fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
         diff_summary,
         worktree_fingerprint: receipt.worktree_fingerprint.clone(),
         worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
+        valid_until_ms: receipt.valid_until_ms,
+        requires_time_validity: receipt
+            .evidence
+            .as_ref()
+            .is_some_and(evidence_requires_time_validity),
     }
 }
 
@@ -303,7 +347,21 @@ fn target_receipt_status(
         diff_summary: tool.diff_summary,
         worktree_fingerprint: tool.worktree_fingerprint,
         worktree_fingerprint_error: tool.worktree_fingerprint_error,
+        valid_until_ms: tool.valid_until_ms,
+        requires_time_validity: tool.requires_time_validity,
     }
+}
+
+fn evidence_requires_time_validity(evidence: &Value) -> bool {
+    evidence
+        .get("requires_time_validity")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || evidence
+            .get("file_budget")
+            .and_then(|value| value.get("active_waiver_count"))
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
 }
 
 fn work_review_receipt_status(receipt: &ReceiptRecord) -> WorkReviewReceiptStatus {
@@ -325,6 +383,11 @@ fn work_review_receipt_status(receipt: &ReceiptRecord) -> WorkReviewReceiptStatu
         diff_summary,
         worktree_fingerprint: receipt.worktree_fingerprint.clone(),
         worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
+        valid_until_ms: receipt.valid_until_ms,
+        requires_time_validity: receipt
+            .evidence
+            .as_ref()
+            .is_some_and(evidence_requires_time_validity),
     }
 }
 

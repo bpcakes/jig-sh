@@ -1,4 +1,3 @@
-// agentic-loc-exception: related configuration parsing regressions remain grouped for auditability.
 #[test]
 fn codex_review_gate_validates_fail_on_and_severity() {
     let temp = tempdir().unwrap();

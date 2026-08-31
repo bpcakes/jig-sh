@@ -59,17 +59,6 @@ fn parses_check_namespace_commands() {
         other => panic!("expected check fmt command, got {other:?}"),
     }
 
-    let rust_file_loc = Cli::try_parse_from(["jig", "check", "rust-file-loc", "--all"]).unwrap();
-    match rust_file_loc.command {
-        CommandKind::Check(CheckOpts {
-            command: Some(CheckCommand::RustFileLoc(opts)),
-            ..
-        }) => {
-            assert!(opts.all);
-        }
-        other => panic!("expected check rust-file-loc command, got {other:?}"),
-    }
-
     let ts_typecheck = Cli::try_parse_from([
         "jig",
         "check",
@@ -127,6 +116,15 @@ fn parses_agent_native_check_selections() {
     assert!(matches!(
         bare.command,
         CommandKind::Check(CheckOpts { command: None, .. })
+    ));
+
+    let file_budget = Cli::try_parse_from(["jig", "check", "repo:file-budget"]).unwrap();
+    assert!(matches!(
+        file_budget.command,
+        CommandKind::Check(CheckOpts {
+            command: Some(CheckCommand::Selectors(ref selectors)),
+            ..
+        }) if selectors.as_slice() == ["repo:file-budget"]
     ));
 
     let exact =
