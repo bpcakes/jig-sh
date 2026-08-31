@@ -7,72 +7,6 @@ thread_local! {
     static MERGE_BASE_RESOLUTION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
-#[allow(dead_code, reason = "staged native file-budget exact-tree provenances")]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum ExactTreeProvenanceV1 {
-    Explicit,
-    WorkPlan,
-    PushBefore,
-    UnbornWorktree,
-}
-
-#[allow(dead_code, reason = "staged native file-budget inventory reasons")]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum StrictInventoryReasonV1 {
-    ExplicitAudit,
-    ExplicitCheck,
-}
-
-#[allow(dead_code, reason = "staged native file-budget comparison requests")]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ComparisonRequestV1 {
-    MergeBaseRef {
-        requested_ref: String,
-    },
-    ExactTree {
-        requested_oid: String,
-        provenance: ExactTreeProvenanceV1,
-    },
-    IndexAgainstHead,
-    StrictInventory {
-        reason: StrictInventoryReasonV1,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ResolvedComparisonV1 {
-    MergeBase {
-        requested_ref: String,
-        resolved_ref_oid: String,
-        head_oid: String,
-        merge_base_oid: String,
-    },
-    ExactTree {
-        requested_oid: String,
-        peeled_commit_oid: Option<String>,
-        tree_oid: String,
-        provenance: ExactTreeProvenanceV1,
-    },
-    IndexAgainstHead {
-        head_or_empty_oid: String,
-    },
-    StrictInventory {
-        reason: StrictInventoryReasonV1,
-    },
-}
-
-impl ResolvedComparisonV1 {
-    #[allow(dead_code, reason = "staged native file-budget baseline accessor")]
-    pub(crate) fn baseline_oid(&self) -> Option<&str> {
-        match self {
-            Self::MergeBase { merge_base_oid, .. } => Some(merge_base_oid),
-            Self::ExactTree { tree_oid, .. } => Some(tree_oid),
-            Self::IndexAgainstHead { head_or_empty_oid } => Some(head_or_empty_oid),
-            Self::StrictInventory { .. } => None,
-        }
-    }
-}
-
 pub(crate) fn resolve_comparison_v1(
     root: &Path,
     request: ComparisonRequestV1,
@@ -142,7 +76,10 @@ fn resolve_comparison_inner(
             Ok(ResolvedComparisonV1::IndexAgainstHead { head_or_empty_oid })
         }
         ComparisonRequestV1::StrictInventory { reason } => {
-            Ok(ResolvedComparisonV1::StrictInventory { reason })
+            Ok(ResolvedComparisonV1::StrictInventory {
+                reason,
+                fallback_from: None,
+            })
         }
     }
 }

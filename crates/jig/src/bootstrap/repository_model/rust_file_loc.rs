@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-use jig_contract::{ActionEffect, ActionIntent, ActionRunner, ActionSpec, FieldProvenance};
+use jig_contract::{
+    ActionEffect, ActionIntent, ActionRunner, ActionSpec, FieldProvenance, ResultParser,
+};
 
-use super::{CommandScope, ModelBuilder, REPO_COMPONENT, provenance, target_id};
+use super::{REPO_COMPONENT, provenance, target_id};
 
 pub(super) const RUST_FILE_LOC_ACTION: &str = "rust-file-loc";
 pub(in crate::bootstrap) const RUST_FILE_LOC_COMMAND_KEY: &str = "repo_rust_file_loc_command";
@@ -50,6 +51,35 @@ pub(in crate::bootstrap) fn is_generated_rust_file_loc_command(command: &str) ->
         })
 }
 
+pub(in crate::bootstrap) fn generated_legacy_rust_file_loc_action() -> anyhow::Result<ActionSpec> {
+    let mut action = ActionSpec::new(
+        target_id(REPO_COMPONENT, RUST_FILE_LOC_ACTION)?,
+        ActionIntent::Check,
+        ActionRunner::command(RUST_FILE_LOC_COMMAND_KEY),
+    );
+    action.description = Some("Enforce the changed-file Rust source size policy.".into());
+    action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+    action.inputs = vec![
+        "**/*.rs".into(),
+        "Cargo.toml".into(),
+        "Cargo.lock".into(),
+        "rust-toolchain*".into(),
+        ".cargo/**".into(),
+        "scripts/check-rust-file-loc.sh".into(),
+    ];
+    action.legacy_aliases = vec!["jig.rust_file_loc".into()];
+    action.provenance = provenance(&[
+        ("target", FieldProvenance::Inherited),
+        ("intent", FieldProvenance::Inherited),
+        ("effects", FieldProvenance::Inherited),
+        ("runner", FieldProvenance::Inferred),
+        ("inputs", FieldProvenance::Inherited),
+        ("legacy_aliases", FieldProvenance::Inherited),
+    ]);
+    debug_assert_eq!(action.result_parser, ResultParser::ExitCode);
+    Ok(action)
+}
+
 fn canonical_shell_literal(argument: &str) -> Option<String> {
     let value = if let Some(inner) = argument
         .strip_prefix('\'')
@@ -85,44 +115,4 @@ fn rust_file_loc_command(default_branch: &str) -> String {
         "{RUST_FILE_LOC_SCRIPT} {}",
         crate::shell::quote(default_branch)
     )
-}
-
-impl ModelBuilder<'_> {
-    pub(super) fn add_rust_file_loc_action(&mut self) -> Result<()> {
-        let action_id = RUST_FILE_LOC_ACTION;
-        let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
-        debug_assert_eq!(command_key, RUST_FILE_LOC_COMMAND_KEY);
-        let command = rust_file_loc_command(self.answers.default_branch());
-        self.insert_command(&command_key, &command)?;
-        let mut action = ActionSpec::new(
-            target_id(REPO_COMPONENT, action_id)?,
-            ActionIntent::Check,
-            ActionRunner::command(command_key.clone()),
-        );
-        action.description = Some("Enforce the changed-file Rust source size policy.".into());
-        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        action.inputs = vec![
-            "**/*.rs".into(),
-            "Cargo.toml".into(),
-            "Cargo.lock".into(),
-            "rust-toolchain*".into(),
-            ".cargo/**".into(),
-            "scripts/check-rust-file-loc.sh".into(),
-        ];
-        action.legacy_aliases = vec!["jig.rust_file_loc".into()];
-        action.provenance = provenance(&[
-            ("target", FieldProvenance::Inherited),
-            ("intent", FieldProvenance::Inherited),
-            ("effects", FieldProvenance::Inherited),
-            ("runner", FieldProvenance::Inferred),
-            ("inputs", FieldProvenance::Inherited),
-            ("legacy_aliases", FieldProvenance::Inherited),
-        ]);
-        self.insert_tool(
-            "jig.rust_file_loc",
-            "Enforce the changed-file Rust source size policy.",
-            Some(&command_key),
-        )?;
-        self.insert_action(action)
-    }
 }

@@ -283,7 +283,14 @@ fn execute_parallel_target(
                 let started_at_ms = now_ms();
                 let label = format!("Repository target '{}'", planned.target);
                 let phase = ExecutionPhase::start(control, &label, position);
-                let capture = run_target_capture(ctx, catalog, planned, control);
+                let capture = run_target_capture(
+                    ctx,
+                    catalog,
+                    &run.result.run_id,
+                    run.work_plan_id.as_deref(),
+                    planned,
+                    control,
+                );
                 let phase = phase.complete_owned();
                 ParallelTargetExecution::completed(started_at_ms, capture, phase)
             }

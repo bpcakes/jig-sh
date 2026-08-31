@@ -67,11 +67,13 @@ use template_source::{
 };
 
 mod adopt_infer;
+mod adoption_file_budget;
 mod answers;
 #[cfg(test)]
 pub(crate) use crate::backend::BackendLanguage;
 mod crate_classification;
 mod embedded_templates;
+mod file_budget_lifecycle;
 mod file_copy;
 mod gate_preview;
 mod git;
@@ -95,6 +97,7 @@ mod staged_render;
 mod sync;
 mod template_source;
 mod update;
+mod update_transaction;
 
 pub(crate) use launcher_repair_cache::LAUNCHER_REPAIR_SEED_STAMP_HEADER;
 use launcher_repair_cache::{

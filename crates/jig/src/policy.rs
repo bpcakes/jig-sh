@@ -1,5 +1,3 @@
-// agentic-loc-exception: policy dispatch and repository-wide check implementations remain co-located for consistent Git boundary handling.
-
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -207,7 +205,7 @@ pub(crate) fn validate_contract(
                         errors.push(format!("Target {}: {error}.", action.target));
                     }
                 }
-                jig_contract::ActionRunner::Native { operation } => {
+                jig_contract::ActionRunner::Native { operation, .. } => {
                     if !jig_features::is_supported_native_tool(operation) {
                         errors.push(format!(
                             "Target {} references unsupported native operation {operation}.",
@@ -253,7 +251,7 @@ pub(crate) fn validate_contract(
             ));
         }
         let native_operation = alias_action.and_then(|action| match &action.runner {
-            jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+            jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
             jig_contract::ActionRunner::Command { .. } => None,
         });
         let admission_name = native_operation.unwrap_or(&tool.name);
@@ -285,7 +283,7 @@ pub(crate) fn validate_contract(
                 }
             }
             kind::COMMAND => {
-                if let Some(jig_contract::ActionRunner::Native { operation }) =
+                if let Some(jig_contract::ActionRunner::Native { operation, .. }) =
                     alias_action.map(|action| &action.runner)
                 {
                     errors.push(format!(
@@ -347,7 +345,7 @@ pub(crate) fn validate_contract(
             .as_ref()
             .and_then(|catalog| catalog.action_for_alias(&name))
             .and_then(|action| match &action.runner {
-                jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+                jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
                 jig_contract::ActionRunner::Command { .. } => None,
             });
         if tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation) {

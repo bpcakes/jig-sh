@@ -2,55 +2,9 @@ name: Repo Policy
 
 on:
   pull_request:
-    paths:
-[% if go_ci_workflow_enabled %]
-[% for path in go_ci_input_paths %]
-      - <<[ path | tojson ]>>
-[% endfor %]
-[% if go_sqlc_ci_enabled %]
-      - <<[ (migration_dir ~ "/**") | tojson ]>>
-[% endif %]
-[% endif %]
-[% if rust_backend_enabled %]
-[% for path in rust_ci_input_paths %]
-      - <<[ path | tojson ]>>
-[% endfor %]
-[% endif %]
-      - ".jig.toml"
-      - ".agent/jig-contract.json"
-      - "scripts/jig"
-      - "scripts/check-rust-file-loc.sh"
-      - "scripts/install-jig.sh"
-[% if sqlx_enabled %]
-      - <<[ (migration_dir ~ "/**") | tojson ]>>
-[% endif %]
-      - ".github/workflows/repo-policy.yml"
   push:
     branches:
       - <<[ default_branch | tojson ]>>
-    paths:
-[% if go_ci_workflow_enabled %]
-[% for path in go_ci_input_paths %]
-      - <<[ path | tojson ]>>
-[% endfor %]
-[% if go_sqlc_ci_enabled %]
-      - <<[ (migration_dir ~ "/**") | tojson ]>>
-[% endif %]
-[% endif %]
-[% if rust_backend_enabled %]
-[% for path in rust_ci_input_paths %]
-      - <<[ path | tojson ]>>
-[% endfor %]
-[% endif %]
-      - ".jig.toml"
-      - ".agent/jig-contract.json"
-      - "scripts/jig"
-      - "scripts/check-rust-file-loc.sh"
-      - "scripts/install-jig.sh"
-[% if sqlx_enabled %]
-      - <<[ (migration_dir ~ "/**") | tojson ]>>
-[% endif %]
-      - ".github/workflows/repo-policy.yml"
   merge_group:
     types:
       - checks_requested
@@ -129,10 +83,11 @@ jobs:
       - name: Detect disallowed mod.rs files
         run: |
           scripts/jig check no-mod-rs
+[% endif %]
 
-[% if rust_file_loc_ci_enabled %]
-  rust-file-loc:
-    name: Enforce agentic-first Rust file size policy
+[% if file_budget_ci_enabled %]
+  file-budget:
+    name: Enforce repository file budgets
     runs-on: <<[ ci_github_runner | tojson ]>>
     defaults:
       run:
@@ -147,10 +102,38 @@ jobs:
         with:
           cache: false
           rustflags: ""
-      - name: Check Rust file LOC policy
-        run: scripts/jig check repo:rust-file-loc
+      - name: Check repository file-budget policy
+        env:
+          JIG_EVENT_NAME: ${{ github.event_name }}
+          JIG_PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          JIG_PUSH_BEFORE: ${{ github.event.before }}
+          JIG_MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+
+          case "$JIG_EVENT_NAME" in
+            pull_request)
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$JIG_PULL_REQUEST_BASE" \
+                --comparison-provenance explicit
+              ;;
+            push)
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$JIG_PUSH_BEFORE" \
+                --comparison-provenance push_before
+              ;;
+            merge_group)
+              scripts/jig check repo:file-budget \
+                --comparison-exact-tree "$JIG_MERGE_GROUP_BASE" \
+                --comparison-provenance explicit
+              ;;
+            *)
+              scripts/jig check repo:file-budget
+              ;;
+          esac
 [% endif %]
 
+[% if rust_backend_enabled %]
 [% if sqlx_enabled %]
   sqlx-unchecked-queries:
     name: Verify non-test SQLx queries are compile-time checked

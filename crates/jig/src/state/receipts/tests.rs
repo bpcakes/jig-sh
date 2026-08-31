@@ -202,6 +202,36 @@ fn receipt_archive_refuses_to_drop_protection_when_evidence_indexing_overflows()
 }
 
 #[test]
+fn archive_protection_does_not_preserve_expired_target_evidence_as_current() {
+    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
+    let evidence_targets = BTreeMap::from([(
+        "verify".to_string(),
+        BTreeSet::from(["repo:file-budget".parse().unwrap()]),
+    )]);
+    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+    let mut expired = test_receipt(
+        "receipt_expired",
+        "plan_open",
+        "jig.target_run",
+        10,
+        json!({}),
+    );
+    expired.run_id = Some("run_expired".into());
+    expired.target = Some("repo:file-budget".parse().unwrap());
+    expired.valid_until_ms = Some(0);
+    expired.evidence = Some(json!({"requires_time_validity": true}));
+    index.observe(
+        &expired,
+        &open_plan_ids,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+    );
+
+    assert!(index.protected_receipt_ids().unwrap().is_empty());
+}
+
+#[test]
 fn receipt_protection_matches_successful_legacy_batch_lookup() {
     let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
     let check_gate_tools = BTreeSet::from([tool::TEST.to_string()]);
@@ -514,6 +544,11 @@ fn test_receipt(
         config_digest: None,
         input_digest: None,
         findings: Vec::new(),
+        finding_count: None,
+        findings_truncated: false,
+        findings_digest: None,
+        evaluated_at_ms: None,
+        valid_until_ms: None,
         changed_paths: Vec::new(),
         changed_path_count: None,
         changed_paths_truncated: false,
@@ -530,6 +565,134 @@ fn raw_receipt(id: &str, ended_at_ms: u64, extra: &str) -> String {
     format!(
         r#"{{"id":"{id}","session_id":null,"plan_id":null,"tool_name":"jig.test","args":{{}},"started_at_ms":0,"ended_at_ms":{ended_at_ms},"exit_status":0,"stdout_preview":"","stderr_preview":"","changed_paths":[],"diff_stat":{{"files":0,"insertions":0,"deletions":0}}{extra}}}"#
     )
+}
+
+#[test]
+fn receipts_without_native_result_or_time_fields_keep_legacy_defaults() {
+    let receipt: ReceiptRecord = serde_json::from_str(&raw_receipt("legacy", 42, "")).unwrap();
+    assert_eq!(receipt.finding_count, None);
+    assert!(!receipt.findings_truncated);
+    assert_eq!(receipt.findings_digest, None);
+    assert_eq!(receipt.evaluated_at_ms, None);
+    assert_eq!(receipt.valid_until_ms, None);
+}
+
+fn reusable_time_fixture(valid_until_ms: u64) -> bool {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = crate::context::RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+    let direct_receipt_id = record_receipt(
+        &ctx,
+        ReceiptInput {
+            tool_name: "jig.test",
+            args: json!({}),
+            invoked_command_key: None,
+            plan_id: Some("plan_source".into()),
+            started_at_ms: 1,
+            ended_at_ms: 2,
+            exit_status: 0,
+            stdout: "",
+            stderr: "",
+            evidence: Some(json!({
+                "valid_until_ms": valid_until_ms,
+                "requires_time_validity": true,
+            })),
+            session_override: None,
+            collect_git_metadata: false,
+            collect_worktree_fingerprint: false,
+            worktree_fingerprint_override: Some(Ok("worktree".into())),
+        },
+    )
+    .unwrap();
+    let gate = WorkCheckGateEvidence {
+        gate_id: "gate".into(),
+        tool: "jig.test".into(),
+        status: "executed".into(),
+        applicability: "applicable".into(),
+        required: true,
+        paths: Some(vec!["src/**".into()]),
+        paths_ignore: Vec::new(),
+        reuse: true,
+        forced: false,
+        gate_signature: "signature".into(),
+        baseline_oid: Some("baseline".into()),
+        reason: "executed".into(),
+        changed_paths: vec!["src/lib.rs".into()],
+        changed_path_count: 1,
+        changed_paths_truncated: false,
+        changed_paths_digest: Some("sha256:paths".into()),
+        matching_paths: vec!["src/lib.rs".into()],
+        matching_path_count: 1,
+        matching_paths_truncated: false,
+        matching_paths_digest: Some("sha256:matching".into()),
+        scope_fingerprint: Some("scope".into()),
+        scope_error: None,
+        tool_receipt_id: Some(direct_receipt_id.clone()),
+        exit_status: Some(0),
+        source_plan_id: None,
+        source_batch_receipt_id: None,
+        source_tool_receipt_id: None,
+        valid_until_ms: Some(valid_until_ms),
+        requires_time_validity: true,
+    };
+    record_receipt(
+        &ctx,
+        ReceiptInput {
+            tool_name: tool::WORK_CHECK,
+            args: json!({
+                "gates": ["gate"],
+                "tools": ["jig.test"],
+                "receipt_ids": [direct_receipt_id],
+            }),
+            invoked_command_key: None,
+            plan_id: Some("plan_source".into()),
+            started_at_ms: 3,
+            ended_at_ms: 4,
+            exit_status: 0,
+            stdout: "",
+            stderr: "",
+            evidence: Some(
+                serde_json::to_value(WorkCheckBatchEvidence {
+                    schema: WORK_CHECK_EVIDENCE_SCHEMA.into(),
+                    changed_paths: vec!["src/lib.rs".into()],
+                    changed_path_count: 1,
+                    changed_paths_truncated: false,
+                    changed_paths_digest: Some("sha256:paths".into()),
+                    valid_until_ms: Some(valid_until_ms),
+                    requires_time_validity: true,
+                    gates: vec![gate],
+                })
+                .unwrap(),
+            ),
+            session_override: None,
+            collect_git_metadata: false,
+            collect_worktree_fingerprint: false,
+            worktree_fingerprint_override: Some(Ok("worktree".into())),
+        },
+    )
+    .unwrap();
+
+    !reusable_work_check_evidence_batch_with_cancellation(
+        &ctx,
+        "plan_current",
+        &[ReusableWorkCheckQuery {
+            gate_id: "gate".into(),
+            tool: "jig.test".into(),
+            gate_signature: "signature".into(),
+            scope_fingerprint: "scope".into(),
+        }],
+        &|| false,
+    )
+    .unwrap()
+    .is_empty()
+}
+
+#[test]
+fn reusable_work_check_evidence_rejects_expired_time_authority() {
+    assert!(!reusable_time_fixture(0));
+    assert!(reusable_time_fixture(u64::MAX));
+    assert!(time_validity_is_current(Some(42), true, 41));
+    assert!(!time_validity_is_current(Some(42), true, 42));
 }
 
 fn run_git(root: &Path, args: &[&str]) {

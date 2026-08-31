@@ -118,13 +118,13 @@ fn parses_agent_native_check_selections() {
         CommandKind::Check(CheckOpts { command: None, .. })
     ));
 
-    let loc = Cli::try_parse_from(["jig", "check", "rust-file-loc"]).unwrap();
+    let file_budget = Cli::try_parse_from(["jig", "check", "repo:file-budget"]).unwrap();
     assert!(matches!(
-        loc.command,
+        file_budget.command,
         CommandKind::Check(CheckOpts {
             command: Some(CheckCommand::Selectors(ref selectors)),
             ..
-        }) if selectors.as_slice() == ["rust-file-loc"]
+        }) if selectors.as_slice() == ["repo:file-budget"]
     ));
 
     let exact =

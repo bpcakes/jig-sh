@@ -135,6 +135,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 .as_ref()
                 .is_some_and(scaffold::InitScaffoldPlan::scaffolds_go_postgres_integration),
             init_transaction: Some(&mut transaction),
+            use_update_transaction: false,
             progress,
         })?;
         let scaffold_report = if let Some(plan) = &scaffold_plan {

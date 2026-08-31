@@ -65,7 +65,11 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
             "expected one {heading:?} heading\n\n{summary}"
         );
     }
-    assert!(summary.contains("sqlx       ready"));
+    assert!(
+        summary
+            .lines()
+            .any(|line| line.trim_start().starts_with("sqlx") && line.contains("ready"))
+    );
 }
 
 #[test]

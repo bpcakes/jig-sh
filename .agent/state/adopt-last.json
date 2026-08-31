@@ -1,0 +1,121 @@
+{
+  "apply_report": {
+    "active_managed_paths": [
+      ".agent/.cache/.gitignore",
+      ".agent/PLANS.md",
+      ".agent/jig-contract.json",
+      ".agent/jig-legacy-assets.json",
+      ".agent/jig-managed-paths.json",
+      ".agent/plans/.gitkeep",
+      ".agent/state/.gitkeep",
+      ".gitattributes",
+      ".github/workflows/agent-map-check.yml",
+      ".github/workflows/repo-policy.yml",
+      ".github/workflows/rust-tests.yml",
+      ".gitignore",
+      ".jig.toml",
+      ".mcp.json",
+      "AGENTS.md",
+      "agent-map.md",
+      "scripts/check-rust-file-loc.sh",
+      "scripts/install-jig.sh",
+      "scripts/jig",
+      "scripts/new-checkout.sh"
+    ],
+    "authored_files_preserved": [
+      ".jig/file-budget.toml"
+    ],
+    "authored_files_seeded": [],
+    "backups": [
+      {
+        "backup_path": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/.agent/jig-contract.json",
+        "path": ".agent/jig-contract.json"
+      },
+      {
+        "backup_path": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/.github/workflows/repo-policy.yml",
+        "path": ".github/workflows/repo-policy.yml"
+      },
+      {
+        "backup_path": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/.github/workflows/rust-tests.yml",
+        "path": ".github/workflows/rust-tests.yml"
+      },
+      {
+        "backup_path": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/.jig.toml",
+        "path": ".jig.toml"
+      },
+      {
+        "backup_path": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/AGENTS.md",
+        "path": "AGENTS.md"
+      },
+      {
+        "backup_path": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/agent-map.md",
+        "path": "agent-map.md"
+      }
+    ],
+    "conflicts": [
+      {
+        "detail": "destination differs from the rendered template-managed path",
+        "kind": "modified_managed_path",
+        "path": ".agent/jig-contract.json"
+      },
+      {
+        "detail": "destination differs from the rendered template-managed path",
+        "kind": "modified_managed_path",
+        "path": ".github/workflows/repo-policy.yml"
+      },
+      {
+        "detail": "destination differs from the rendered template-managed path",
+        "kind": "modified_managed_path",
+        "path": ".github/workflows/rust-tests.yml"
+      },
+      {
+        "detail": "destination differs from the rendered template-managed path",
+        "kind": "modified_managed_path",
+        "path": ".jig.toml"
+      },
+      {
+        "detail": "destination differs from the rendered template-managed path",
+        "kind": "modified_managed_path",
+        "path": "agent-map.md"
+      }
+    ],
+    "dry_run": false,
+    "files_created": [],
+    "files_modified": [
+      ".agent/jig-contract.json",
+      ".github/workflows/repo-policy.yml",
+      ".github/workflows/rust-tests.yml",
+      ".jig.toml",
+      "AGENTS.md",
+      "agent-map.md"
+    ],
+    "files_removed": [],
+    "files_unchanged": [
+      ".agent/.cache/.gitignore",
+      ".agent/PLANS.md",
+      ".agent/jig-legacy-assets.json",
+      ".agent/plans/.gitkeep",
+      ".agent/state/.gitkeep",
+      ".gitattributes",
+      ".github/workflows/agent-map-check.yml",
+      ".gitignore",
+      ".mcp.json",
+      "scripts/check-rust-file-loc.sh",
+      "scripts/install-jig.sh",
+      "scripts/jig",
+      "scripts/new-checkout.sh",
+      ".agent/jig-managed-paths.json"
+    ],
+    "managed_blocks_inserted": [],
+    "managed_blocks_rendered": [],
+    "retired_managed_paths": []
+  },
+  "backup_root": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume/.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF",
+  "canonical_receipt_path": ".agent/.cache/adopt/adopt-last.json",
+  "command": "adopt",
+  "created_at_unix": 1788121598,
+  "destination": "/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume",
+  "legacy_receipt_deprecated": true,
+  "legacy_receipt_path": ".agent/state/adopt-last.json",
+  "undo_hint": "Use apply_report.backups to restore modified or removed files, then delete paths listed in apply_report.files_created if you want to undo this adopt write. Delete backup_root when those backups are no longer needed."
+}

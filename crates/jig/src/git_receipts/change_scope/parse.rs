@@ -14,6 +14,7 @@ pub(in crate::git_receipts) struct RawDiffEntry {
 #[derive(Debug, Eq, PartialEq)]
 pub(in crate::git_receipts) struct IndexStageEntry {
     pub(in crate::git_receipts) mode: String,
+    pub(in crate::git_receipts) oid: String,
     pub(in crate::git_receipts) stage: String,
     pub(in crate::git_receipts) path: Vec<u8>,
 }
@@ -108,6 +109,7 @@ pub(in crate::git_receipts) fn parse_index_stage_z(
         }
         entries.push(IndexStageEntry {
             mode: mode.to_owned(),
+            oid: oid.to_ascii_lowercase(),
             stage: stage.to_owned(),
             path: path.to_vec(),
         });

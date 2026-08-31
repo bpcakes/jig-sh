@@ -1,95 +1,675 @@
 {
-  "contract_version": 5,
+  "contract_version": 7,
   "tool_namespace": "jig",
+
   "required_commands": [
-    "bootstrap_command",
-    "rust_fmt_check_command",
-    "rust_clippy_command",
-    "rust_test_command",
-    "rust_test_locked_command",
-    "rust_file_loc_command",
-    "rust_core_test_command",
-    "rust_frontend_test_command",
-    "rust_vault_test_command",
-    "rust_process_test_command"
-  ],
+  "api_clippy_command",
+  "api_fmt_command",
+  "api_test_command",
+  "api_test_locked_command",
+  "repo_bootstrap_command",
+  "rust_core_test_command",
+  "rust_frontend_test_command",
+  "rust_process_test_command",
+  "rust_vault_test_command"
+],
   "tools": [
-    {
-      "name": "jig.bootstrap",
-      "kind": "command",
-      "description": "Run the configured project bootstrap command.",
-      "command": "bootstrap_command"
+  {
+    "command": "repo_bootstrap_command",
+    "description": "Prepare repository dependencies and local tooling.",
+    "kind": "command",
+    "name": "jig.bootstrap"
+  },
+  {
+    "command": "api_clippy_command",
+    "description": "Run Rust Clippy with repository policy.",
+    "kind": "command",
+    "name": "jig.clippy"
+  },
+  {
+    "command": null,
+    "description": "Validate the checked-in Jig repository contract.",
+    "kind": "native",
+    "name": "jig.contract_check"
+  },
+  {
+    "command": null,
+    "description": "Enforce repository-owned source file budgets.",
+    "kind": "native",
+    "name": "jig.file_budget"
+  },
+  {
+    "command": "api_fmt_command",
+    "description": "Check Rust formatting.",
+    "kind": "command",
+    "name": "jig.fmt_check"
+  },
+  {
+    "command": "rust_core_test_command",
+    "description": "Run the source repository\u0027s fast core Rust test partition.",
+    "kind": "command",
+    "name": "jig.source_core_test"
+  },
+  {
+    "command": "api_fmt_command",
+    "description": "Check Rust formatting.",
+    "kind": "command",
+    "name": "jig.source_fmt_check"
+  },
+  {
+    "command": "rust_frontend_test_command",
+    "description": "Run the source repository\u0027s generated-frontend Rust test partition.",
+    "kind": "command",
+    "name": "jig.source_frontend_test"
+  },
+  {
+    "command": "rust_process_test_command",
+    "description": "Run the source repository\u0027s process and signal Rust test partition.",
+    "kind": "command",
+    "name": "jig.source_process_test"
+  },
+  {
+    "command": "api_test_command",
+    "description": "Run Rust tests.",
+    "kind": "command",
+    "name": "jig.source_test"
+  },
+  {
+    "command": "rust_vault_test_command",
+    "description": "Run the source repository\u0027s vault Rust test partition.",
+    "kind": "command",
+    "name": "jig.source_vault_test"
+  },
+  {
+    "command": "api_test_command",
+    "description": "Run Rust tests.",
+    "kind": "command",
+    "name": "jig.test"
+  },
+  {
+    "command": "api_test_locked_command",
+    "description": "Run Rust tests using the locked dependency graph.",
+    "kind": "command",
+    "name": "jig.test_locked"
+  }
+],
+  "affected_ignore": [
+  ".env",
+  ".env.*",
+  "**/.env",
+  "**/.env.*",
+  "README.md",
+  "**/README.md",
+  "AGENTS.md",
+  "**/AGENTS.md",
+  "agent-map.md",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "CODE_OF_CONDUCT.md",
+  "SECURITY.md",
+  "docs/**",
+  "LICENSE",
+  "LICENSE.*",
+  ".github/**"
+],
+  "components": [
+  {
+    "adapters": [
+      "rust"
+    ],
+    "description": "Primary application backend.",
+    "id": "api",
+    "propagate_affected_to_dependents": true,
+    "provenance": {
+      "adapters": "inferred",
+      "id": "inferred",
+      "root": "inferred"
     },
-    {
-      "name": "jig.fmt_check",
-      "kind": "command",
-      "description": "Run the configured format check command.",
-      "command": "rust_fmt_check_command"
+    "root": ".",
+    "tags": [
+      "backend"
+    ]
+  },
+  {
+    "adapters": [
+      "jig"
+    ],
+    "description": "Repository-wide Jig policy and compatibility actions.",
+    "id": "repo",
+    "provenance": {
+      "adapters": "inherited",
+      "id": "inferred",
+      "root": "inferred"
     },
-    {
-      "name": "jig.clippy",
-      "kind": "command",
-      "description": "Run the configured clippy command.",
-      "command": "rust_clippy_command"
+    "root": ".",
+    "tags": [
+      "repository"
+    ]
+  }
+],
+  "actions": [
+  {
+    "description": "Run Rust Clippy with repository policy.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/Cargo.toml",
+      "**/Cargo.lock",
+      "**/*.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "**/rust-toolchain",
+      "**/rust-toolchain.toml",
+      ".cargo/**",
+      "**/.cargo/**",
+      "rustfmt.toml",
+      ".rustfmt.toml",
+      "**/rustfmt.toml",
+      "**/.rustfmt.toml",
+      "clippy.toml",
+      ".clippy.toml",
+      "**/clippy.toml",
+      "**/.clippy.toml"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.clippy"
+    ],
+    "provenance": {
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "overridden",
+      "target": "inherited"
     },
-    {
-      "name": "jig.test",
-      "kind": "command",
-      "description": "Run the configured default test command.",
-      "command": "rust_test_command"
+    "runner": {
+      "command": "api_clippy_command",
+      "kind": "command"
     },
-    {
-      "name": "jig.test_locked",
-      "kind": "command",
-      "description": "Run the configured locked test command.",
-      "command": "rust_test_locked_command"
-    },
-    {
-      "name": "jig.rust_file_loc",
-      "kind": "command",
-      "description": "Enforce the changed-file Rust source size policy.",
-      "command": "rust_file_loc_command"
-    },
-    {
-      "name": "jig.source_fmt_check",
-      "kind": "command",
-      "description": "Run the source repository's complete Rust formatting checks.",
-      "command": "rust_fmt_check_command"
-    },
-    {
-      "name": "jig.source_test",
-      "kind": "command",
-      "description": "Run the source repository's partitioned Rust test suite.",
-      "command": "rust_test_command"
-    },
-    {
-      "name": "jig.source_core_test",
-      "kind": "command",
-      "description": "Run the source repository's fast core Rust test partition.",
-      "command": "rust_core_test_command"
-    },
-    {
-      "name": "jig.source_frontend_test",
-      "kind": "command",
-      "description": "Run the source repository's generated-frontend Rust test partition.",
-      "command": "rust_frontend_test_command"
-    },
-    {
-      "name": "jig.source_vault_test",
-      "kind": "command",
-      "description": "Run the source repository's vault Rust test partition.",
-      "command": "rust_vault_test_command"
-    },
-    {
-      "name": "jig.source_process_test",
-      "kind": "command",
-      "description": "Run the source repository's process and signal Rust test partition.",
-      "command": "rust_process_test_command"
-    },
-    {
-      "name": "jig.contract_check",
-      "kind": "native",
-      "description": "Run the native Jig contract check."
+    "target": {
+      "action": "clippy",
+      "component": "api"
     }
-  ]
+  },
+  {
+    "description": "Check Rust formatting.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/Cargo.toml",
+      "**/Cargo.lock",
+      "**/*.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "**/rust-toolchain",
+      "**/rust-toolchain.toml",
+      ".cargo/**",
+      "**/.cargo/**",
+      "rustfmt.toml",
+      ".rustfmt.toml",
+      "**/rustfmt.toml",
+      "**/.rustfmt.toml",
+      "clippy.toml",
+      ".clippy.toml",
+      "**/clippy.toml",
+      "**/.clippy.toml"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.fmt_check",
+      "jig.source_fmt_check"
+    ],
+    "provenance": {
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "overridden",
+      "target": "inherited"
+    },
+    "runner": {
+      "command": "api_fmt_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "fmt",
+      "component": "api"
+    }
+  },
+  {
+    "depends_on": [
+      {
+        "action": "clippy",
+        "component": "api"
+      },
+      {
+        "action": "fmt",
+        "component": "api"
+      },
+      {
+        "action": "contract",
+        "component": "repo"
+      },
+      {
+        "action": "file-budget",
+        "component": "repo"
+      }
+    ],
+    "description": "Run Rust tests.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/Cargo.toml",
+      "**/Cargo.lock",
+      "**/*.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "**/rust-toolchain",
+      "**/rust-toolchain.toml",
+      ".cargo/**",
+      "**/.cargo/**",
+      "rustfmt.toml",
+      ".rustfmt.toml",
+      "**/rustfmt.toml",
+      "**/.rustfmt.toml",
+      "clippy.toml",
+      ".clippy.toml",
+      "**/clippy.toml",
+      "**/.clippy.toml"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.test",
+      "jig.source_test"
+    ],
+    "provenance": {
+      "depends_on": "declared",
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "overridden",
+      "target": "inherited"
+    },
+    "runner": {
+      "command": "api_test_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "test",
+      "component": "api"
+    }
+  },
+  {
+    "description": "Run Rust tests using the locked dependency graph.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/Cargo.toml",
+      "**/Cargo.lock",
+      "**/*.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "**/rust-toolchain",
+      "**/rust-toolchain.toml",
+      ".cargo/**",
+      "**/.cargo/**",
+      "rustfmt.toml",
+      ".rustfmt.toml",
+      "**/rustfmt.toml",
+      "**/.rustfmt.toml",
+      "clippy.toml",
+      ".clippy.toml",
+      "**/clippy.toml",
+      "**/.clippy.toml"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.test_locked"
+    ],
+    "provenance": {
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "overridden",
+      "target": "inherited"
+    },
+    "runner": {
+      "command": "api_test_locked_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "test-locked",
+      "component": "api"
+    }
+  },
+  {
+    "description": "Prepare repository dependencies and local tooling.",
+    "effects": [
+      "worktree",
+      "process",
+      "external"
+    ],
+    "intent": "operate",
+    "legacy_aliases": [
+      "jig.bootstrap"
+    ],
+    "provenance": {
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "overridden",
+      "target": "inherited"
+    },
+    "runner": {
+      "command": "repo_bootstrap_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "bootstrap",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Validate the checked-in Jig repository contract.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      ".jig.toml",
+      "scripts/jig"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.contract_check"
+    ],
+    "provenance": {
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "overridden",
+      "target": "inherited"
+    },
+    "runner": {
+      "kind": "native",
+      "operation": "jig.contract_check"
+    },
+    "target": {
+      "action": "contract",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Enforce repository-owned source file budgets.",
+    "effects": [
+      "read_only"
+    ],
+    "inputs": [
+      "**"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.file_budget"
+    ],
+    "provenance": {
+      "effects": "inherited",
+      "inputs": "inherited",
+      "intent": "inherited",
+      "legacy_aliases": "inherited",
+      "runner": "inherited",
+      "target": "inherited"
+    },
+    "runner": {
+      "configuration": {
+        "kind": "file_budget",
+        "max_candidates": 10000,
+        "max_total_bytes": 268435456,
+        "missing_comparison": "block"
+      },
+      "kind": "native",
+      "operation": "jig.file_budget"
+    },
+    "target": {
+      "action": "file-budget",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run the source repository\u0027s fast core Rust test partition.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      "nextest.toml",
+      ".config/nextest.toml",
+      ".jig.toml",
+      "templates/**",
+      "scripts/**",
+      "examples/**",
+      "tests/**"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.source_core_test"
+    ],
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "legacy_aliases": "declared",
+      "runner": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "command": "rust_core_test_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "source-core-test",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run the source repository\u0027s generated-frontend Rust test partition.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/jig/src/bootstrap.rs",
+      "crates/jig/src/bootstrap/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      "nextest.toml",
+      ".config/nextest.toml",
+      ".jig.toml",
+      "templates/**",
+      "scripts/test-rust-partition.sh",
+      "tests/fixtures/**"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.source_frontend_test"
+    ],
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "legacy_aliases": "declared",
+      "runner": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "command": "rust_frontend_test_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "source-frontend-test",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run the source repository\u0027s process and signal Rust test partition.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/jig-owned-process/**",
+      "crates/jig-dev-proxy/**",
+      "crates/jig/src/main.rs",
+      "crates/jig/src/cli.rs",
+      "crates/jig/src/runtime.rs",
+      "crates/jig/src/codex.rs",
+      "crates/jig/src/codex/**",
+      "crates/jig/src/dev_proxy.rs",
+      "crates/jig/src/dev_proxy/**",
+      "crates/jig/src/cli/codex*.rs",
+      "crates/jig/src/cli/dev*.rs",
+      "crates/jig/src/doctor/signal_session.rs",
+      "crates/jig/tests/codex_launcher.rs",
+      "crates/jig/tests/dev_lifecycle.rs",
+      "crates/jig/tests/dev_sigint.rs",
+      "crates/jig/tests/dev_sigint_parts/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      "nextest.toml",
+      ".config/nextest.toml",
+      ".jig.toml",
+      "scripts/test-rust-partition.sh"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.source_process_test"
+    ],
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "legacy_aliases": "declared",
+      "runner": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "command": "rust_process_test_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "source-process-test",
+      "component": "repo"
+    }
+  },
+  {
+    "description": "Run the source repository\u0027s vault Rust test partition.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/jig-vault/**",
+      "crates/jig-vault-tui/**",
+      "crates/jig-tui/**",
+      "crates/jig/src/cli.rs",
+      "crates/jig/src/**/vault*.rs",
+      "crates/jig/src/**/vault/**",
+      "crates/jig/src/command/vault.rs",
+      "crates/jig/src/runtime.rs",
+      "crates/jig/tests/vault_*.rs",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      "nextest.toml",
+      ".config/nextest.toml",
+      ".jig.toml",
+      "templates/**",
+      "scripts/test-rust-partition.sh"
+    ],
+    "intent": "check",
+    "legacy_aliases": [
+      "jig.source_vault_test"
+    ],
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "legacy_aliases": "declared",
+      "runner": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "command": "rust_vault_test_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "source-vault-test",
+      "component": "repo"
+    }
+  }
+],
+  "profiles": [
+  {
+    "description": "Default repository verification targets.",
+    "id": "verify",
+    "provenance": {
+      "id": "inferred",
+      "targets": "inherited"
+    },
+    "targets": [
+      {
+        "action": "clippy",
+        "component": "api"
+      },
+      {
+        "action": "fmt",
+        "component": "api"
+      },
+      {
+        "action": "test",
+        "component": "api"
+      },
+      {
+        "action": "contract",
+        "component": "repo"
+      },
+      {
+        "action": "file-budget",
+        "component": "repo"
+      }
+    ]
+  }
+],
+  "default_check_profile": "verify"
+
 }

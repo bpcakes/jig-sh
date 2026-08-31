@@ -1,14 +1,13 @@
-// agentic-loc-exception: repository projection cases share one authored-answer fixture and compare the complete v6 contract surface.
-
 use std::fs;
 
 use tempfile::TempDir;
 
 use super::*;
 
+mod go_workflow;
 mod rust_file_loc;
 
-fn answers(contents: &str) -> RenderAnswers {
+pub(super) fn answers(contents: &str) -> RenderAnswers {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("answers.toml");
     fs::write(
@@ -566,12 +565,12 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     worker_test
         .legacy_aliases
         .push(jig_contract::tool::TEST_LOCKED.into());
-    let mut worker_loc = ActionSpec::new(
-        target_id("worker", "rust-file-loc").unwrap(),
+    let mut worker_budget = ActionSpec::new(
+        target_id("worker", "line-budget").unwrap(),
         ActionIntent::Check,
-        ActionRunner::command("worker_loc_command"),
+        ActionRunner::command("worker_budget_command"),
     );
-    worker_loc.effects = vec![jig_contract::ActionEffect::ReadOnly];
+    worker_budget.effects = vec![jig_contract::ActionEffect::ReadOnly];
     let profile = ProfileSpec::new(
         ProfileId::parse("ci").unwrap(),
         vec![api_test.target.clone(), worker_test.target.clone()],
@@ -579,13 +578,13 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     let authored = RepositoryRenderModel {
         affected_ignore: vec!["docs/**".into()],
         components: vec![api, worker],
-        actions: vec![api_test, worker_test, worker_loc],
+        actions: vec![api_test, worker_test, worker_budget],
         profiles: vec![profile],
         default_check_profile: ProfileId::parse("ci").unwrap(),
         required_commands: vec![
             "api_test_command".into(),
             "worker_test_command".into(),
-            "worker_loc_command".into(),
+            "worker_budget_command".into(),
         ],
         tools: Vec::new(),
         commands: BTreeMap::from([
@@ -595,8 +594,8 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
                 "cargo test -p example-worker".into(),
             ),
             (
-                "worker_loc_command".into(),
-                "scripts/check-worker-loc.sh".into(),
+                "worker_budget_command".into(),
+                "scripts/check-worker-budget.sh".into(),
             ),
         ]),
     };
@@ -667,15 +666,15 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
             .iter()
             .map(|action| action.target.to_string())
             .collect::<Vec<_>>(),
-        ["api:test", "worker:test", "worker:rust-file-loc"]
+        ["api:test", "worker:test", "worker:line-budget"]
     );
     assert_eq!(
         rerendered.commands["worker_test_command"],
         "cargo test -p example-worker"
     );
     assert_eq!(
-        rerendered.commands["worker_loc_command"],
-        "scripts/check-worker-loc.sh"
+        rerendered.commands["worker_budget_command"],
+        "scripts/check-worker-budget.sh"
     );
     assert_eq!(rerendered.default_check_profile.as_str(), "ci");
 }
@@ -750,148 +749,4 @@ fn authored_mixed_go_postgres_model_defaults_its_owned_migration_directory() {
         crate::backend::GO_POSTGRES_MIGRATION_DIR
     );
     assert_eq!(rendered["rust_migration_dir"], serde_json::Value::Null);
-}
-
-#[test]
-fn authored_go_workflow_renders_exact_targets_from_its_capability_aliases() {
-    for (action_ids, add_aliases, read_only, add_foreign_fmt, expected) in [
-        (
-            ["format", "vet", "verify"],
-            true,
-            true,
-            false,
-            [Some("api:format"), Some("api:vet"), Some("api:verify")],
-        ),
-        (
-            ["fmt", "lint", "test-locked"],
-            true,
-            true,
-            true,
-            [Some("api:fmt"), Some("api:lint"), Some("api:test-locked")],
-        ),
-        (
-            ["fmt", "lint", "test-locked"],
-            false,
-            true,
-            false,
-            [None, None, None],
-        ),
-        (
-            ["fmt", "lint", "test-locked"],
-            true,
-            false,
-            false,
-            [None, None, None],
-        ),
-    ] {
-        let component = ComponentSpec {
-            adapters: vec!["go".into()],
-            ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
-        };
-        let mut actions = action_ids
-            .into_iter()
-            .zip([
-                jig_contract::tool::FMT_CHECK,
-                jig_contract::tool::LINT,
-                jig_contract::tool::TEST_LOCKED,
-            ])
-            .map(|(action_id, alias)| {
-                let mut action = ActionSpec::new(
-                    target_id("api", action_id).unwrap(),
-                    ActionIntent::Check,
-                    ActionRunner::command(format!("go_{action_id}_command")),
-                );
-                action.effects = if read_only {
-                    vec![
-                        jig_contract::ActionEffect::ReadOnly,
-                        jig_contract::ActionEffect::Process,
-                    ]
-                } else {
-                    vec![jig_contract::ActionEffect::Worktree]
-                };
-                if add_aliases {
-                    action.legacy_aliases.push(alias.into());
-                }
-                action.inputs = vec!["shared/proto/**".into()];
-                action
-            })
-            .collect::<Vec<_>>();
-        let mut components = vec![component];
-        if add_foreign_fmt {
-            components.push(ComponentSpec {
-                adapters: vec!["rust".into()],
-                ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
-            });
-            let mut action = ActionSpec::new(
-                target_id("worker", "fmt").unwrap(),
-                ActionIntent::Check,
-                ActionRunner::command("rust_fmt_command"),
-            );
-            action.effects = vec![
-                jig_contract::ActionEffect::ReadOnly,
-                jig_contract::ActionEffect::Process,
-            ];
-            actions.push(action);
-        }
-        let targets = actions
-            .iter()
-            .map(|action| action.target.clone())
-            .collect::<Vec<_>>();
-        let commands = actions
-            .iter()
-            .map(|action| {
-                let ActionRunner::Command { command, .. } = &action.runner else {
-                    unreachable!()
-                };
-                (command.to_string(), "true".to_string())
-            })
-            .collect::<BTreeMap<_, _>>();
-        let authored = RepositoryRenderModel {
-            affected_ignore: Vec::new(),
-            components,
-            profiles: vec![ProfileSpec::new(ProfileId::parse("ci").unwrap(), targets)],
-            default_check_profile: ProfileId::parse("ci").unwrap(),
-            required_commands: commands.keys().cloned().collect(),
-            tools: Vec::new(),
-            commands,
-            actions: std::mem::take(&mut actions),
-        };
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-                authored.authored_toml().unwrap(),
-                authored.commands_toml().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let answers = RenderAnswers::from_answers_file(&path).unwrap();
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-        assert!(
-            model
-                .go_ci_input_paths()
-                .contains(&"services/api/**".into())
-        );
-        assert_eq!(
-            model
-                .go_ci_input_paths()
-                .contains(&"shared/proto/**".into()),
-            add_aliases
-        );
-        assert_eq!(
-            [
-                answers.go_fmt_ci_target(),
-                answers.go_lint_ci_target(),
-                answers.go_test_locked_ci_target(),
-            ],
-            expected.map(|target| target.map(str::to_owned))
-        );
-        assert_eq!(
-            answers.go_ci_workflow_enabled(),
-            expected.iter().all(Option::is_some)
-        );
-    }
 }

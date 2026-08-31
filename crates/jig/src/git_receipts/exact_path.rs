@@ -84,7 +84,7 @@ fn observe_exact_paths_inner(
             CurrentViewV1::Index => observe_index_path(path, entries, &intent_to_add),
             CurrentViewV1::Inventory => {
                 if entries.is_empty() {
-                    ExactCurrentPathStateV1::Missing
+                    map_inspected_worktree_path(inspect_worktree_path(root, path)?)
                 } else {
                     observe_tracked_worktree_path(root, path, entries, &intent_to_add, &sparse)?
                 }

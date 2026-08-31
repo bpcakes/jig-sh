@@ -33,6 +33,10 @@ impl RepoScan {
         scan
     }
 
+    pub(in crate::bootstrap) fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+
     const fn new() -> Self {
         Self {
             files: Vec::new(),

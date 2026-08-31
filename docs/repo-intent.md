@@ -26,7 +26,13 @@ The harness was extracted from the durable parts of an existing application work
 
 Generated or adopted repos receive assets such as `.jig.toml`, `.mcp.json`, `AGENTS.md`, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and workflows.
 
-Generated repos use `scripts/jig` as the execution backend. In contract v6, `scripts/jig mcp` exposes the resolved repository catalog through bounded inspect, plan, execute, and cancel operations. Contracts v2 through v5 retain their declared command tools over MCP.
+Full harnesses also seed the authored `.jig/file-budget.toml` policy once and
+generate a repository-wide native `repo:file-budget` action. The policy is not
+a template-managed path, so later renders preserve local policy and catalog
+choices. Exact generated legacy Rust LOC checkers migrate through retained
+native proof before retirement; modified copies remain project-owned.
+
+Generated repos use `scripts/jig` as the execution backend. In contract v6 and later, `scripts/jig mcp` exposes the resolved repository catalog through bounded inspect, plan, execute, and cancel operations. Contracts v2 through v5 retain their declared command tools over MCP.
 
 The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
@@ -37,7 +43,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 - agent tooling doctor/bootstrap commands for Codex-side Jig skills
 - receipt metadata collection, including git changed paths and diff stats
 
-The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 6`, with explicit components, actions, profiles, adapter provenance, component-scoped command runners, and compatibility `jig.*` aliases. Contract versions 2 through 5 remain readable through the legacy repository projection.
+The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 7`, with explicit components, actions, profiles, adapter provenance, component-scoped command runners, compatibility `jig.*` aliases, typed native configuration, and target-local matching for non-empty action inputs. Contract v6 remains readable with component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
 
 The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. The `jig` runtime configures and safely executes providers and exposes a versioned aggregate through `jig status`; `crates/jig-status-tui` presents that aggregate without importing runtime internals. The Codex-home launcher is a separate CLI-owned feature and presentation crate rather than launch policy inferred from status observations. Provider caching and general implementation launchability policy remain later milestones.
 
@@ -85,6 +91,13 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 - `adopt` renders the harness into an existing repo while preserving repo-owned root `AGENTS.md` content.
 - `update` re-renders managed paths from stored template metadata and refuses to overwrite changed managed files unless forced.
 
+Adoption and full update use a Git-metadata transaction journal so an
+interrupted process can distinguish rollback from committed cleanup on the next
+invocation. Recovery verifies file identity before restoring anything and
+preserves concurrent foreign writes for manual resolution. Adoption's
+file-budget preview is read-only and refuses write mode when legacy debt needs a
+human-authored waiver.
+
 `crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. Repository execution resolves a checked-in target to its configured command or closed native runner, records target-attributed receipts, and returns structured results. Legacy contracts still resolve their manifest tool to a command key and retain the previous response shape.
 
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It also owns the Rust source of truth for the open status-provider protocol but does not execute providers, load repositories, or aggregate their observations.
@@ -101,7 +114,7 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
-`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. The transport surface stays fixed for the server lifetime, while catalog inspection, planning, and execution reload current repository authority before reusing the same planner, executor, and append-only state as the CLI.
+`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 and later it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. The transport surface stays fixed for the server lifetime, while catalog inspection, planning, and execution reload current repository authority before reusing the same planner, executor, and append-only state as the CLI.
 
 `crates/jig/src/state/` stores append-only JSONL records:
 
@@ -137,6 +150,11 @@ The current session pointer is cache state, not part of the durable JSONL record
 **Repo-specific ownership stays local.** The harness provides workflow and policy defaults, while application code, business rules, crate ownership, and schema dump details stay with the downstream repo.
 
 **Template updates should be conservative.** Update flows preserve root `AGENTS.md` custom content, avoid implicit template source switching, and refuse to overwrite changed managed files without `--force`.
+
+**Authored policy is seeded, not managed.** File-budget defaults give a new repo
+a useful starting point without granting future templates deletion or
+replacement authority over `.jig/file-budget.toml`, action replacements,
+aliases, or profile membership.
 
 **Dogfooding matters.** Runtime changes are expected to be validated through the same `scripts/jig` launcher, MCP contract, and receipt paths generated repos use.
 

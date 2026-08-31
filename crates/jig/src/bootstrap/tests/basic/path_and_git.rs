@@ -1,5 +1,3 @@
-// agentic-loc-exception: bootstrap path and Git isolation cases share process-environment guards and transactional fixtures.
-
 use super::*;
 
 #[test]

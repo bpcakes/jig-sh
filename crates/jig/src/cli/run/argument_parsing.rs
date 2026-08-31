@@ -22,7 +22,14 @@ pub(in crate::cli) const ROOT_VALUE_OPTIONS: &[&str] = &[
     "--__launcher-profile",
     "--__launcher-repo-root",
 ];
-pub(in crate::cli) const CHECK_VALUE_OPTIONS: &[&str] = &["--plan-id", "--profile", "--affected"];
+pub(in crate::cli) const CHECK_VALUE_OPTIONS: &[&str] = &[
+    "--plan-id",
+    "--profile",
+    "--affected",
+    "--comparison-base",
+    "--comparison-exact-tree",
+    "--comparison-provenance",
+];
 
 pub(in crate::cli) fn normalize_external_check_global_flags(
     mut args: Vec<OsString>,

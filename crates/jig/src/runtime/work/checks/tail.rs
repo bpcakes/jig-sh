@@ -60,6 +60,8 @@ fn gate_evidence_from_scope(
         source_plan_id: reusable.map(|source| source.source_plan_id.clone()),
         source_batch_receipt_id: reusable.map(|source| source.source_batch_receipt_id.clone()),
         source_tool_receipt_id: reusable.map(|source| source.source_tool_receipt_id.clone()),
+        valid_until_ms: reusable.and_then(|source| source.valid_until_ms),
+        requires_time_validity: reusable.is_some_and(|source| source.requires_time_validity),
     }
 }
 
@@ -112,6 +114,96 @@ fn fingerprint_error(stage: &str, error: Option<&str>) -> String {
     match error {
         Some(error) => format!("Failed to collect worktree fingerprint {stage}: {error}"),
         None => format!("Failed to collect worktree fingerprint {stage}"),
+    }
+}
+
+fn result_time_validity(result: &Value) -> (Option<u64>, bool) {
+    let nested_result = result.get("result");
+    let run = result.get("run");
+    let nested_run = nested_result.and_then(|value| value.get("run"));
+    let objects = [Some(result), nested_result, run, nested_run];
+    let direct = objects
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.get("valid_until_ms").and_then(Value::as_u64));
+    let targets = objects.into_iter().flatten().flat_map(|value| {
+        value
+            .get("targets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|target| target.get("valid_until_ms").and_then(Value::as_u64))
+    });
+    let valid_until_ms = direct.chain(targets).min();
+    let requires_time_validity = objects.into_iter().flatten().any(|value| {
+        value
+            .get("requires_time_validity")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) || valid_until_ms.is_some();
+    (valid_until_ms, requires_time_validity)
+}
+
+fn revalidate_gate_scopes(
+    ctx: &RepoContext,
+    plan_id: &str,
+    initial: &[(crate::context::WorkCheckGate, GateScopeEvaluation)],
+    cancelled: &dyn Fn() -> bool,
+) -> std::result::Result<(), String> {
+    if initial.is_empty() {
+        return Ok(());
+    }
+    let final_context = PlanGateContext::load_with_cancellation(ctx, plan_id, cancelled)
+        .map_err(|error| format!("Failed to reload work gate scopes after checks: {error:#}"))?;
+    for (gate, before) in initial {
+        let after = final_context.evaluate_with_cancellation(ctx, gate, cancelled);
+        if &after != before {
+            return Err(format!(
+                "work gate '{}' scope changed during work check; rerun after repository inputs settle",
+                gate.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use serde_json::json;
+
+    use super::{EMPTY_CHECK_SELECTION_MESSAGE, result_time_validity};
+
+    #[test]
+    fn empty_selection_guidance_is_truthful_for_legacy_and_current_contracts() {
+        assert!(EMPTY_CHECK_SELECTION_MESSAGE.contains("check gate"));
+        assert!(EMPTY_CHECK_SELECTION_MESSAGE.contains("--gate"));
+        assert!(EMPTY_CHECK_SELECTION_MESSAGE.contains("--tool"));
+        assert!(!EMPTY_CHECK_SELECTION_MESSAGE.contains("required"));
+        assert!(!EMPTY_CHECK_SELECTION_MESSAGE.contains("optional"));
+    }
+
+    #[test]
+    fn batch_validity_uses_the_earliest_nested_target_boundary() {
+        assert_eq!(
+            result_time_validity(&json!({
+                "run": {
+                    "targets": [
+                        {"valid_until_ms": 80},
+                        {"valid_until_ms": 40}
+                    ]
+                }
+            })),
+            (Some(40), true)
+        );
+        assert_eq!(
+            result_time_validity(&json!({
+                "result": {
+                    "run": {"targets": [{"valid_until_ms": 60}]},
+                    "valid_until_ms": 50
+                }
+            })),
+            (Some(50), true)
+        );
     }
 }
 

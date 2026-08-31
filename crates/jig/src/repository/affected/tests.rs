@@ -79,6 +79,27 @@ fn generated_root_fixture() -> RepositoryCatalog {
     .unwrap()
 }
 
+fn mixed_repository_component_fixture(contract_version: u32) -> RepositoryCatalog {
+    let repo = ComponentSpec::new(ComponentId::parse("repo").unwrap(), ".");
+    let file_budget_target: TargetId = "repo:file-budget".parse().unwrap();
+    let docs_target: TargetId = "repo:docs".parse().unwrap();
+    let mut file_budget = check_action(file_budget_target.clone(), "file_budget_command");
+    file_budget.inputs.push("**".into());
+    let mut docs = check_action(docs_target.clone(), "docs_command");
+    docs.inputs.push("docs/**".into());
+    let profile_id = ProfileId::parse("verify").unwrap();
+    let profile = ProfileSpec::new(profile_id.clone(), vec![file_budget_target, docs_target]);
+    RepositoryCatalog::from_native(
+        contract_version,
+        "sha256:config",
+        &[repo],
+        &[file_budget, docs],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap()
+}
+
 fn check_action(target: TargetId, command: &str) -> ActionSpec {
     let mut action = ActionSpec::new(target, ActionIntent::Check, ActionRunner::command(command));
     action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
@@ -173,6 +194,30 @@ fn target_input_matcher_retains_target_local_ownership_without_changing_legacy_s
     assert_eq!(
         target_names(&selected(&catalog, &["packages/shared/value.txt"])),
         ["api:test", "shared:test", "web:test"]
+    );
+}
+
+#[test]
+fn contract_v7_nonempty_inputs_select_only_the_matching_target() {
+    let catalog = mixed_repository_component_fixture(7);
+
+    assert_eq!(
+        target_names(&selected(&catalog, &["src/lib.rs"])),
+        ["repo:file-budget"]
+    );
+    assert_eq!(
+        target_names(&selected(&catalog, &[".hidden-policy"])),
+        ["repo:file-budget"]
+    );
+}
+
+#[test]
+fn contract_v6_retains_component_aggregate_input_selection() {
+    let catalog = mixed_repository_component_fixture(6);
+
+    assert_eq!(
+        target_names(&selected(&catalog, &["src/lib.rs"])),
+        ["repo:docs", "repo:file-budget"]
     );
 }
 

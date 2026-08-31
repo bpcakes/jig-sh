@@ -184,22 +184,34 @@ fn exact_directory_observation_does_not_expand_tracked_descendants() {
             },
         ]
     );
-    for view in [CurrentViewV1::Index, CurrentViewV1::Inventory] {
-        assert_eq!(
-            observe_exact_paths_v1(temp.path(), view, &requested).unwrap(),
-            [
-                ExactCurrentPathFactV1 {
-                    path: "src".to_owned(),
-                    state: ExactCurrentPathStateV1::Missing,
+    assert_eq!(
+        observe_exact_paths_v1(temp.path(), CurrentViewV1::Index, &requested).unwrap(),
+        [
+            ExactCurrentPathFactV1 {
+                path: "src".to_owned(),
+                state: ExactCurrentPathStateV1::Missing,
+            },
+            ExactCurrentPathFactV1 {
+                path: "src/one.rs".to_owned(),
+                state: ExactCurrentPathStateV1::Regular,
+            },
+        ]
+    );
+    assert_eq!(
+        observe_exact_paths_v1(temp.path(), CurrentViewV1::Inventory, &requested).unwrap(),
+        [
+            ExactCurrentPathFactV1 {
+                path: "src".to_owned(),
+                state: ExactCurrentPathStateV1::Unsupported {
+                    reason: ScopeIssueKindV1::EmbeddedRepository,
                 },
-                ExactCurrentPathFactV1 {
-                    path: "src/one.rs".to_owned(),
-                    state: ExactCurrentPathStateV1::Regular,
-                },
-            ],
-            "view {view:?}"
-        );
-    }
+            },
+            ExactCurrentPathFactV1 {
+                path: "src/one.rs".to_owned(),
+                state: ExactCurrentPathStateV1::Regular,
+            },
+        ]
+    );
 }
 
 #[cfg(unix)]

@@ -199,7 +199,7 @@ targets = [
     write_open_plan(root);
 }
 
-pub(super) fn write_non_rust_file_loc_fixture_repo(root: &Path) {
+pub(super) fn write_non_rust_file_budget_fixture_repo(root: &Path) {
     fs::create_dir_all(root.join(".agent")).unwrap();
     fs::create_dir_all(root.join("web")).unwrap();
     fs::create_dir_all(root.join("docs")).unwrap();

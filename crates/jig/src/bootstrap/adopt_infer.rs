@@ -391,6 +391,12 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
     inference
 }
 
+pub(super) fn adoption_candidate_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let scan = RepoScan::collect(root, &mut warnings);
+    (scan.files().to_vec(), warnings)
+}
+
 fn infer_application_contracts_enabled(
     root: &Path,
     scan: &RepoScan,

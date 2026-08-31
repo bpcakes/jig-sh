@@ -1,4 +1,54 @@
 #[test]
+fn adoption_previews_legacy_budget_debt_and_refuses_unauthorized_mutation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(repo.join("src")).unwrap();
+    init_git_repo_for_test(&repo);
+    fs::write(
+        repo.join("src/legacy.rs"),
+        format!(
+            "// agentic-loc-exception: inherited file\n{}",
+            "fn legacy_item() {}\n".repeat(900)
+        ),
+    )
+    .unwrap();
+
+    let mut preview_opts = footprint_adopt_opts(&repo, template.path(), false, false);
+    preview_opts.write = false;
+    let preview = run_adopt(preview_opts).unwrap();
+    let budget = &preview["adoption_profile"]["file_budget"];
+    assert_eq!(budget["enabled"], true);
+    assert_eq!(budget["policy"], "seed_once");
+    assert_eq!(budget["candidate_count"], 1);
+    assert_eq!(budget["current_debt_file_count"], 1);
+    assert_eq!(budget["legacy_marker_count"], 1);
+    assert_eq!(budget["human_authorization_required"], true);
+    assert_eq!(budget["required_waivers"][0]["path"], "src/legacy.rs");
+    assert_eq!(
+        budget["required_waivers"][0]["authorization"],
+        "human_required"
+    );
+    assert!(budget["required_waivers"][0]["reason"].is_null());
+    assert!(budget["required_waivers"][0]["expires"].is_null());
+
+    let before = regular_file_tree_snapshot(&repo);
+    let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, false))
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("Adoption requires human-authored file-budget waivers"),
+        "{error}"
+    );
+    assert!(error.contains("No files were changed"), "{error}");
+    assert_eq!(regular_file_tree_snapshot(&repo), before);
+    assert!(!repo.join(".jig.toml").exists());
+    assert!(!repo.join(".jig/file-budget.toml").exists());
+}
+
+#[test]
 fn custom_template_cannot_stage_reserved_git_metadata_path() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -8,6 +58,7 @@ fn custom_template_cannot_stage_reserved_git_metadata_path() {
     fs::write(&custom_template, "managed git config\n").unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
+    init_git_repo_for_test(&repo);
     fs::write(repo.join("project-sentinel"), "project-owned\n").unwrap();
     let repo_before = regular_file_tree_snapshot(&repo);
 

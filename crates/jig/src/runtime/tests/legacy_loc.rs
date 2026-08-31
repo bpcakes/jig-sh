@@ -44,6 +44,7 @@ checks = ["jig.rust_file_loc"]
                 selectors: vec!["repo:rust-file-loc".into()],
                 profile: None,
                 affected_base: None,
+                comparison: None,
                 explain: false,
                 fail_fast: false,
                 tool: crate::command::ToolRequest::new(None, false),

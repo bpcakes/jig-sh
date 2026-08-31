@@ -80,7 +80,7 @@ fn resolve_schema_check_action<'a>(
             .ok_or_else(|| anyhow::anyhow!("native schema target '{target}' is not declared"))?;
         if !matches!(
             &action.runner,
-            ActionRunner::Native { operation } if operation == tool::SCHEMA_CHECK
+            ActionRunner::Native { operation, .. } if operation == tool::SCHEMA_CHECK
         ) {
             bail!(
                 "target '{}' does not use the native schema-check runner",
@@ -93,7 +93,7 @@ fn resolve_schema_check_action<'a>(
     let mut matches = ctx.action_specs().iter().filter(|action| {
         matches!(
             &action.runner,
-            ActionRunner::Native { operation } if operation == tool::SCHEMA_CHECK
+            ActionRunner::Native { operation, .. } if operation == tool::SCHEMA_CHECK
         )
     });
     let Some(action) = matches.next() else {

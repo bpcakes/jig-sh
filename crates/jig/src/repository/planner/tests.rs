@@ -1,14 +1,20 @@
 use std::collections::BTreeMap;
+use std::fs;
+use std::process::Command;
 
 use jig_contract::{
     ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId,
-    ComponentSpec, ManifestTool, ProfileId, ProfileSpec, SelectionReason, SourceIdentity, TargetId,
+    ComponentSpec, ManifestTool, PlannedTarget, ProfileId, ProfileSpec, RunPlan, SelectionReason,
+    SourceIdentity, TargetId,
 };
+use serde_json::json;
+use tempfile::{TempDir, tempdir};
 
 use super::{
     MAX_SELECTION_REASONS, PlanRunRequest, PlanningPolicy, plan_run_with_source,
     plan_run_with_source_and_paths,
 };
+use crate::context::RepoContext;
 use crate::repository::RepositoryCatalog;
 
 fn fixture() -> RepositoryCatalog {
@@ -47,6 +53,121 @@ fn fixture() -> RepositoryCatalog {
 
 fn source() -> SourceIdentity {
     SourceIdentity::new(Some("abc123".into()), "worktree")
+}
+
+fn git(root: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn v7_file_budget_repository() -> (TempDir, RepoContext, RepositoryCatalog) {
+    let temp = tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".agent")).unwrap();
+    fs::create_dir_all(temp.path().join(".jig")).unwrap();
+    fs::create_dir_all(temp.path().join("docs")).unwrap();
+    fs::write(temp.path().join("docs/example.md"), "# Example\n").unwrap();
+    fs::write(temp.path().join("source.rs"), "fn example() {}\n").unwrap();
+    fs::write(
+        temp.path().join(".jig/file-budget.toml"),
+        "version=1\n[[rules]]\nid=\"source\"\ninclude=[\"**\"]\nmax_lines=100\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+docs_command = "printf 'docs ok\n'"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "repo"
+root = "."
+
+[[repository.actions]]
+target = { component = "repo", action = "file-budget" }
+intent = "check"
+effects = ["read_only"]
+runner = { kind = "native", operation = "jig.file_budget" }
+inputs = ["**"]
+
+[[repository.actions]]
+target = { component = "repo", action = "docs" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "docs_command" }
+inputs = ["docs/**"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  { component = "repo", action = "file-budget" },
+  { component = "repo", action = "docs" },
+]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 7,
+            "tool_namespace": "jig",
+            "required_commands": ["docs_command"],
+            "tools": [],
+            "components": [{"id": "repo", "root": "."}],
+            "actions": [
+                {
+                    "target": {"component": "repo", "action": "file-budget"},
+                    "intent": "check",
+                    "effects": ["read_only"],
+                    "runner": {"kind": "native", "operation": "jig.file_budget"},
+                    "inputs": ["**"]
+                },
+                {
+                    "target": {"component": "repo", "action": "docs"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "docs_command"},
+                    "inputs": ["docs/**"]
+                }
+            ],
+            "profiles": [{
+                "id": "verify",
+                "targets": [
+                    {"component": "repo", "action": "file-budget"},
+                    {"component": "repo", "action": "docs"}
+                ]
+            }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    git(temp.path(), &["init", "-q", "-b", "main"]);
+    git(temp.path(), &["config", "user.name", "Jig Test"]);
+    git(
+        temp.path(),
+        &["config", "user.email", "jig@example.invalid"],
+    );
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-q", "-m", "fixture"]);
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+    let catalog = RepositoryCatalog::from_context(&ctx).unwrap();
+    (temp, ctx, catalog)
 }
 
 #[test]
@@ -496,4 +617,130 @@ fn action_dependency_cycles_are_reported_with_the_targets() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("action dependency cycle among: api:lint, api:test"));
+}
+
+fn prepared_file_budget_target(plan: &RunPlan) -> &PlannedTarget {
+    plan.targets
+        .iter()
+        .find(|target| target.target.to_string() == "repo:file-budget")
+        .expect("fixture plan contains file-budget target")
+}
+
+fn reidentify(plan: &mut RunPlan) {
+    plan.id = super::plan_digest(plan).unwrap();
+}
+
+#[test]
+fn v7_planning_is_lazy_and_persists_bounded_native_authority() {
+    let (_temp, ctx, catalog) = v7_file_budget_repository();
+    let plan = super::plan_run(&ctx, &catalog, PlanRunRequest::default()).unwrap();
+    let prepared = prepared_file_budget_target(&plan)
+        .prepared_native_input
+        .as_ref()
+        .unwrap();
+
+    assert_eq!(prepared.schema_version, 1);
+    assert_eq!(prepared.policy_source.path, ".jig/file-budget.toml");
+    assert!(matches!(
+        prepared.policy,
+        jig_contract::PolicyPreparationV1::Ready { .. }
+    ));
+    assert!(matches!(
+        prepared.comparison,
+        jig_contract::ComparisonPreparationV1::Ready {
+            comparison: jig_contract::ResolvedComparisonV1::MergeBase { .. }
+        }
+    ));
+
+    fs::remove_file(ctx.root().join(".jig/file-budget.toml")).unwrap();
+    let docs_only = super::plan_run(
+        &ctx,
+        &RepositoryCatalog::from_context(&ctx).unwrap(),
+        PlanRunRequest {
+            selectors: vec!["repo:docs".into()],
+            ..PlanRunRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(docs_only.targets.len(), 1);
+    assert!(docs_only.targets[0].prepared_native_input.is_none());
+}
+
+#[test]
+fn untrusted_prepared_native_authority_is_replayed_exactly() {
+    let (_temp, ctx, catalog) = v7_file_budget_repository();
+    let plan = super::plan_run(&ctx, &catalog, PlanRunRequest::default()).unwrap();
+
+    let mut altered_tree = plan.clone();
+    let prepared = altered_tree
+        .targets
+        .iter_mut()
+        .find_map(|target| target.prepared_native_input.as_mut())
+        .unwrap();
+    let jig_contract::ComparisonPreparationV1::Ready { comparison } = &mut prepared.comparison
+    else {
+        panic!("expected ready comparison");
+    };
+    let jig_contract::ResolvedComparisonV1::MergeBase { merge_base_oid, .. } = comparison else {
+        panic!("expected merge-base comparison");
+    };
+    *merge_base_oid = "0".repeat(40);
+    reidentify(&mut altered_tree);
+    let error = super::validate_run_plan(&ctx, &catalog, &altered_tree)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("stale"), "{error}");
+
+    let mut altered_policy = plan.clone();
+    let prepared = altered_policy
+        .targets
+        .iter_mut()
+        .find_map(|target| target.prepared_native_input.as_mut())
+        .unwrap();
+    let jig_contract::PolicyPreparationV1::Ready {
+        policy_semantic_digest,
+        ..
+    } = &mut prepared.policy
+    else {
+        panic!("expected ready policy");
+    };
+    *policy_semantic_digest = "sha256:forged".into();
+    reidentify(&mut altered_policy);
+    let error = super::validate_run_plan(&ctx, &catalog, &altered_policy)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("stale"), "{error}");
+
+    let mut altered_configuration = plan;
+    let prepared = altered_configuration
+        .targets
+        .iter_mut()
+        .find_map(|target| target.prepared_native_input.as_mut())
+        .unwrap();
+    prepared.configuration.max_candidates += 1;
+    reidentify(&mut altered_configuration);
+    let error = super::validate_run_plan(&ctx, &catalog, &altered_configuration)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("stale"), "{error}");
+}
+
+#[test]
+fn policy_bytes_are_part_of_submitted_plan_freshness() {
+    let (_temp, ctx, catalog) = v7_file_budget_repository();
+    let plan = super::plan_run(&ctx, &catalog, PlanRunRequest::default()).unwrap();
+    fs::write(
+        ctx.root().join(".jig/file-budget.toml"),
+        "version=1\n[[rules]]\nid=\"source\"\ninclude=[\"**\"]\nmax_lines=101\n",
+    )
+    .unwrap();
+
+    let error =
+        super::validate_run_plan(&ctx, &RepositoryCatalog::from_context(&ctx).unwrap(), &plan)
+            .unwrap_err()
+            .to_string();
+    assert!(
+        error.contains("stale") || error.contains("changed"),
+        "{error}"
+    );
 }

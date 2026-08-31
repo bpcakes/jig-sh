@@ -1,4 +1,3 @@
-// agentic-loc-exception: receipt validation and append-only persistence remain one auditable boundary.
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -13,6 +12,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+#[cfg(test)]
+use jig_contract::StrictInventoryReasonV1;
+use jig_contract::{
+    ComparisonRequestV1, CurrentViewV1, ExactTreeProvenanceV1, ResolvedComparisonV1,
+};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
@@ -30,6 +34,7 @@ use jig_owned_process::{
 
 mod change_scope;
 mod comparison;
+mod content;
 mod exact_path;
 mod process;
 mod scope;
@@ -37,6 +42,7 @@ mod worktree;
 
 pub(crate) use change_scope::*;
 pub(crate) use comparison::*;
+pub(crate) use content::*;
 pub(crate) use exact_path::*;
 use process::*;
 use scope::*;
@@ -258,6 +264,31 @@ pub(crate) fn resolve_git_commit(root: &Path, reference: &str) -> Result<String>
 
 pub(crate) fn resolve_empty_tree_for_unborn_repository(root: &Path) -> Result<Option<String>> {
     resolve_empty_tree_for_unborn_repository_inner(root, GitReceiptCollection::Blocking)
+}
+
+/// Makes one narrow attempt to obtain an exact push-before object without
+/// updating refs, tags, or FETCH_HEAD. Resolution and authentication remain a
+/// separate step after this object transfer.
+pub(crate) fn fetch_exact_push_before_object_v1(root: &Path, oid: &str) -> Result<()> {
+    GitReceiptCollection::Blocking
+        .git_bounded_output_with_timeout(
+            root,
+            &[
+                "--no-replace-objects",
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--depth=1",
+                "origin",
+                oid,
+            ],
+            "git fetch exact push-before object",
+            MAX_GIT_ERROR_PREVIEW_BYTES as usize,
+            "push-before-fetch",
+            Duration::from_secs(60),
+        )
+        .map(|_| ())
 }
 
 fn resolve_empty_tree_for_unborn_repository_inner(
@@ -682,56 +713,14 @@ fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Re
     parse_diff_stat_output(&stdout)
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct BoundedChangedPaths {
-    preview: Vec<String>,
-    total: usize,
-    truncated: bool,
-    digest: String,
-}
-
-fn bounded_changed_paths(mut paths: Vec<String>) -> BoundedChangedPaths {
-    paths.sort();
-    paths.dedup();
-
-    let total = paths.len();
-    let digest = changed_paths_digest(&paths);
-    paths.truncate(MAX_RECEIPT_CHANGED_PATHS);
-
-    BoundedChangedPaths {
-        truncated: total > paths.len(),
-        preview: paths,
-        total,
-        digest,
-    }
-}
-
-fn changed_paths_digest(paths: &[String]) -> String {
-    let mut digest = Sha256::new();
-    digest.update(CHANGED_PATHS_DIGEST_DOMAIN);
-    digest.update((paths.len() as u64).to_be_bytes());
-    for path in paths {
-        let bytes = path.as_bytes();
-        digest.update((bytes.len() as u64).to_be_bytes());
-        digest.update(bytes);
-    }
-    format!("sha256:{:x}", digest.finalize())
-}
-
-pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Blocking)
-}
-
-pub(crate) fn repo_worktree_fingerprint_with_cancellation(
-    root: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Cancellable(cancelled))
-}
-
-pub(crate) fn is_git_receipt_collection_cancellation(error: &anyhow::Error) -> bool {
-    error.is::<GitReceiptCollectionCancelled>()
-}
+mod tail;
+use tail::bounded_changed_paths;
+#[cfg(test)]
+use tail::changed_paths_digest;
+pub(crate) use tail::{
+    is_git_receipt_collection_cancellation, parse_diff_stat_output, repo_worktree_fingerprint,
+    repo_worktree_fingerprint_with_cancellation,
+};
 
 #[derive(Clone, Copy)]
 enum GitReceiptCollection<'a> {
@@ -771,6 +760,18 @@ impl GitReceiptCollection<'_> {
         git_bounded_proof_output(root, args, label, limit, proof_kind, self)
     }
 
+    fn git_bounded_output_with_timeout(
+        self,
+        root: &Path,
+        args: &[&str],
+        label: &str,
+        limit: usize,
+        proof_kind: &str,
+        timeout: Duration,
+    ) -> Result<Output> {
+        git_bounded_proof_output_with_timeout(root, args, label, limit, proof_kind, self, timeout)
+    }
+
     fn git_hash_file(self, root: &Path, full_path: &Path) -> Result<String> {
         match self {
             Self::Blocking => git_hash_file(root, full_path),
@@ -791,29 +792,6 @@ impl std::fmt::Display for GitReceiptCollectionCancelled {
 }
 
 impl std::error::Error for GitReceiptCollectionCancelled {}
-
-pub(crate) fn parse_diff_stat_output(stdout: &str) -> Result<DiffStat> {
-    let mut diff_stat = DiffStat::default();
-    for (index, line) in stdout.lines().enumerate() {
-        let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() != 3 {
-            bail!("Unexpected git diff --numstat line {}: {}", index + 1, line);
-        }
-        diff_stat.files += 1;
-        diff_stat.insertions += parse_numstat_count(fields[0], index + 1, "insertions")?;
-        diff_stat.deletions += parse_numstat_count(fields[1], index + 1, "deletions")?;
-    }
-    Ok(diff_stat)
-}
-
-fn parse_numstat_count(field: &str, line_number: usize, kind: &str) -> Result<u64> {
-    if field == "-" {
-        return Ok(0);
-    }
-    field.parse::<u64>().with_context(|| {
-        format!("Invalid git diff --numstat {kind} count on line {line_number}: {field}")
-    })
-}
 
 #[cfg(test)]
 mod tests;

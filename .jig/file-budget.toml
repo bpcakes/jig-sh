@@ -1,0 +1,9 @@
+version = 1
+
+[[rules]]
+id = "rust-source"
+category = "source"
+include = ["**/*.rs"]
+notice_lines = 400
+warn_lines = 500
+max_lines = 800

@@ -1,5 +1,9 @@
 use super::*;
-use crate::bootstrap::repository_model::rust_file_loc::RUST_FILE_LOC_COMMAND_KEY;
+use crate::bootstrap::AnswerOpts;
+use crate::bootstrap::answers::{AnswerInput, AnswerResolution};
+use crate::bootstrap::repository_model::rust_file_loc::{
+    RUST_FILE_LOC_COMMAND_KEY, generated_legacy_rust_file_loc_action,
+};
 
 fn reload_authored_answers(model: &RepositoryRenderModel) -> RenderAnswers {
     let temp = TempDir::new().unwrap();
@@ -20,167 +24,198 @@ fn reload_authored_model(model: &RepositoryRenderModel) -> RepositoryRenderModel
     RepositoryRenderModel::from_answers(&reload_authored_answers(model)).unwrap()
 }
 
-#[test]
-fn same_target_custom_loc_runner_returns_root_authority_to_authored_components() {
-    let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
-    let action = authored
-        .actions
-        .iter_mut()
-        .find(|action| action.target.to_string() == "repo:rust-file-loc")
-        .unwrap();
-    action.runner = ActionRunner::command("custom_loc_command");
-    authored
-        .required_commands
-        .retain(|command| command != "repo_rust_file_loc_command");
-    authored.required_commands.push("custom_loc_command".into());
-    authored.commands.remove("repo_rust_file_loc_command");
-    authored.commands.insert(
-        "custom_loc_command".into(),
-        "scripts/check-authored-loc.sh".into(),
-    );
-
+fn reload_managed_model(model: &RepositoryRenderModel) -> RepositoryRenderModel {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("answers.toml");
     fs::write(
         &path,
         format!(
             "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\nrust_crate_roots = [\"crates\"]\n{}\n{}",
-            authored.authored_toml().unwrap(),
-            authored.commands_toml().unwrap()
+            model.authored_toml().unwrap(),
+            model.commands_toml().unwrap()
         ),
     )
     .unwrap();
+    let input = AnswerInput::from_file(&path).unwrap();
+    let resolution =
+        AnswerResolution::from_input(input, &AnswerOpts::default(), temp.path(), false).unwrap();
+    let (answers, _) = resolution.into_parts();
+    RepositoryRenderModel::from_answers(&answers).unwrap()
+}
 
-    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
-    assert_eq!(
-        serde_json::to_value(&reloaded).unwrap()["rust_crate_roots"],
-        serde_json::json!(["."])
+#[test]
+fn same_target_authored_file_budget_runner_survives_model_round_trip() {
+    let initial = answers("rust_crate_roots = [\"crates\"]\n");
+    let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
+    let action = authored
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "repo:file-budget")
+        .unwrap();
+    action.runner = ActionRunner::command("custom_file_budget_command");
+    authored
+        .required_commands
+        .push("custom_file_budget_command".into());
+    authored.commands.insert(
+        "custom_file_budget_command".into(),
+        "scripts/check-authored-budget.sh".into(),
     );
-    let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
-    let loc = rerendered
+
+    let rerendered = reload_authored_model(&authored);
+    let budget = rerendered
         .actions
         .iter()
-        .find(|action| action.target.to_string() == "repo:rust-file-loc")
+        .find(|action| action.target.to_string() == "repo:file-budget")
         .unwrap();
-    assert_eq!(loc.runner, ActionRunner::command("custom_loc_command"));
     assert_eq!(
-        rerendered.commands["custom_loc_command"],
-        "scripts/check-authored-loc.sh"
+        budget.runner,
+        ActionRunner::command("custom_file_budget_command")
+    );
+    assert_eq!(
+        rerendered.commands["custom_file_budget_command"],
+        "scripts/check-authored-budget.sh"
     );
 }
 
 #[test]
-fn same_key_authored_checker_mode_survives_model_round_trip() {
-    for command in [
-        "scripts/check-rust-file-loc.sh --all",
-        "scripts/check-rust-file-loc.sh main>/tmp/loc.log",
-        "scripts/check-rust-file-loc.sh main;notify",
-    ] {
-        let initial = answers("rust_crate_roots = [\"crates\"]\n");
-        let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
-        authored
-            .commands
-            .insert(RUST_FILE_LOC_COMMAND_KEY.into(), command.into());
-
-        let reloaded_answers = reload_authored_answers(&authored);
-        assert_eq!(reloaded_answers.rust_crate_roots(), ["crates"]);
-        let reloaded = RepositoryRenderModel::from_answers(&reloaded_answers).unwrap();
-
-        assert_eq!(reloaded.commands[RUST_FILE_LOC_COMMAND_KEY], command);
-    }
-}
-
-#[test]
-fn authored_loc_action_alias_and_profile_choices_survive_model_round_trip() {
+fn authored_file_budget_action_alias_and_profile_choices_survive_model_round_trip() {
     let generated =
         RepositoryRenderModel::from_answers(&answers("rust_crate_roots = [\"crates\"]\n")).unwrap();
-    let loc_target = target_id("repo", "rust-file-loc").unwrap();
+    let budget_target = target_id("repo", "file-budget").unwrap();
 
     let mut action_removed = generated.clone();
     action_removed
         .actions
-        .retain(|action| action.target != loc_target);
+        .retain(|action| action.target != budget_target);
     for profile in &mut action_removed.profiles {
-        profile.targets.retain(|target| target != &loc_target);
+        profile.targets.retain(|target| target != &budget_target);
     }
-    action_removed.commands.remove(RUST_FILE_LOC_COMMAND_KEY);
     let action_removed = reload_authored_model(&action_removed);
     assert!(
         action_removed
             .actions
             .iter()
-            .all(|action| action.target != loc_target)
+            .all(|action| action.target != budget_target)
     );
     assert!(
-        !action_removed
-            .commands
-            .contains_key(RUST_FILE_LOC_COMMAND_KEY)
+        action_removed
+            .tools
+            .iter()
+            .all(|tool| tool.name != "jig.file_budget")
     );
 
     let mut alias_removed = generated.clone();
     alias_removed
         .actions
         .iter_mut()
-        .find(|action| action.target == loc_target)
+        .find(|action| action.target == budget_target)
         .unwrap()
         .legacy_aliases
         .clear();
     let alias_removed = reload_authored_model(&alias_removed);
-    let loc = alias_removed
+    let budget = alias_removed
         .actions
         .iter()
-        .find(|action| action.target == loc_target)
+        .find(|action| action.target == budget_target)
         .unwrap();
-    assert!(loc.legacy_aliases.is_empty());
+    assert!(budget.legacy_aliases.is_empty());
     assert!(
         alias_removed
             .tools
             .iter()
-            .all(|tool| tool.name != "jig.rust_file_loc")
+            .all(|tool| tool.name != "jig.file_budget")
     );
 
     let mut profile_removed = generated;
     for profile in &mut profile_removed.profiles {
-        profile.targets.retain(|target| target != &loc_target);
+        profile.targets.retain(|target| target != &budget_target);
     }
     let profile_removed = reload_authored_model(&profile_removed);
     assert!(
         profile_removed
             .profiles
             .iter()
-            .all(|profile| !profile.targets.contains(&loc_target))
+            .all(|profile| !profile.targets.contains(&budget_target))
     );
     assert!(
         profile_removed
             .actions
             .iter()
-            .any(|action| action.target == loc_target)
+            .any(|action| action.target == budget_target)
     );
 }
 
 #[test]
-fn default_branch_change_does_not_discard_managed_checker_roots() {
+fn exact_generated_legacy_action_upgrades_to_native_file_budget() {
     let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let authored = RepositoryRenderModel::from_answers(&initial).unwrap();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("answers.toml");
-    fs::write(
-        &path,
-        format!(
-            "repo_name = \"ExampleProject\"\ndefault_branch = \"master\"\nsqlx_enabled = false\nschema_dump_enabled = false\nrust_crate_roots = [\"crates\"]\n{}\n{}",
-            authored.authored_toml().unwrap(),
-            authored.commands_toml().unwrap()
-        ),
-    )
-    .unwrap();
+    let mut legacy = RepositoryRenderModel::from_answers(&initial).unwrap();
+    let budget_target = target_id("repo", "file-budget").unwrap();
+    let legacy_target = target_id("repo", "rust-file-loc").unwrap();
+    legacy
+        .actions
+        .retain(|action| action.target != budget_target);
+    legacy
+        .actions
+        .push(generated_legacy_rust_file_loc_action().unwrap());
+    legacy
+        .actions
+        .sort_by(|left, right| left.target.cmp(&right.target));
+    for profile in &mut legacy.profiles {
+        profile.targets.retain(|target| target != &budget_target);
+        profile.targets.push(legacy_target.clone());
+        profile.targets.sort();
+        profile.targets.dedup();
+    }
+    legacy.commands.insert(
+        RUST_FILE_LOC_COMMAND_KEY.into(),
+        "scripts/check-rust-file-loc.sh main".into(),
+    );
 
-    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
-    assert_eq!(reloaded.default_branch(), "master");
-    assert_eq!(reloaded.rust_crate_roots(), ["crates"]);
-    let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
+    let upgraded = reload_managed_model(&legacy);
+    assert!(
+        upgraded
+            .actions
+            .iter()
+            .any(|action| action == &generated_file_budget_action().unwrap())
+    );
+    assert!(
+        upgraded
+            .actions
+            .iter()
+            .all(|action| action.target != legacy_target)
+    );
+    assert!(!upgraded.commands.contains_key(RUST_FILE_LOC_COMMAND_KEY));
+}
+
+#[test]
+fn customized_legacy_checker_is_preserved_as_authored_authority() {
+    let initial = answers("rust_crate_roots = [\"crates\"]\n");
+    let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
+    let budget_target = target_id("repo", "file-budget").unwrap();
+    let mut legacy = generated_legacy_rust_file_loc_action().unwrap();
+    legacy.runner = ActionRunner::command(RUST_FILE_LOC_COMMAND_KEY);
+    authored
+        .actions
+        .retain(|action| action.target != budget_target);
+    authored.actions.push(legacy.clone());
+    authored
+        .actions
+        .sort_by(|left, right| left.target.cmp(&right.target));
+    for profile in &mut authored.profiles {
+        profile.targets.retain(|target| target != &budget_target);
+        profile.targets.push(legacy.target.clone());
+        profile.targets.sort();
+        profile.targets.dedup();
+    }
+    authored.commands.insert(
+        RUST_FILE_LOC_COMMAND_KEY.into(),
+        "scripts/check-rust-file-loc.sh --all".into(),
+    );
+
+    let rerendered = reload_authored_model(&authored);
+    assert!(rerendered.actions.iter().any(|action| action == &legacy));
     assert_eq!(
         rerendered.commands[RUST_FILE_LOC_COMMAND_KEY],
-        "scripts/check-rust-file-loc.sh master"
+        "scripts/check-rust-file-loc.sh --all"
     );
 }

@@ -16,7 +16,6 @@
     ".mcp.json",
     "AGENTS.md",
     "agent-map.md",
-    "scripts/check-rust-file-loc.sh",
     "scripts/install-jig.sh",
     "scripts/jig",
     "scripts/new-checkout.sh"

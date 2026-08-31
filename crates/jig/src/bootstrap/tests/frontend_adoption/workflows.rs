@@ -434,7 +434,8 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
     assert!(checker.contains(r#"[ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]"#));
 
     let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
-    assert!(policy.contains("run: scripts/jig check repo:rust-file-loc"));
+    assert!(policy.contains("scripts/jig check repo:file-budget"));
+    assert!(policy.contains("JIG_PUSH_BEFORE: ${{ github.event.before }}"));
     assert!(!policy.contains(&format!("origin/{default_branch}")));
 }
 

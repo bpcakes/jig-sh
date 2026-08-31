@@ -1,5 +1,3 @@
-// agentic-loc-exception: repository execution evidence and cancellation cases share one durable-run fixture boundary.
-
 use super::*;
 
 #[derive(Default)]
@@ -507,6 +505,7 @@ fn repository_affected_check_rejects_legacy_contracts_before_git_resolution() {
                 selectors: Vec::new(),
                 profile: None,
                 affected_base: Some("missing-ref".into()),
+                comparison: None,
                 explain: true,
                 fail_fast: false,
                 tool: crate::command::ToolRequest::new(None, true),
@@ -599,6 +598,7 @@ fn wide_parallel_layer_keeps_the_bounded_worker_pool_busy() {
                 selectors: Vec::new(),
                 profile: None,
                 affected_base: None,
+                comparison: None,
                 explain: false,
                 fail_fast: false,
                 tool: crate::command::ToolRequest::new(None, true),

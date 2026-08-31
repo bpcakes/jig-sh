@@ -1,4 +1,6 @@
-use clap::{Args, Subcommand};
+use anyhow::{Result, bail};
+use clap::{ArgGroup, Args, Subcommand, ValueEnum};
+use jig_contract::{ComparisonRequestV1, ExactTreeProvenanceV1, StrictInventoryReasonV1};
 
 use crate::tool_defs;
 
@@ -67,6 +69,8 @@ pub(crate) struct CheckOpts {
         help = "Stop scheduling checks after the first failed target"
     )]
     pub(crate) fail_fast: bool,
+    #[command(flatten)]
+    pub(crate) comparison: CheckComparisonOpts,
     #[command(subcommand)]
     pub(crate) command: Option<CheckCommand>,
 }
@@ -91,6 +95,101 @@ impl CheckOpts {
             && self.affected.is_none()
             && !self.explain
             && !self.fail_fast
+    }
+}
+
+#[derive(Args, Clone, Debug, Default)]
+#[command(group(
+    ArgGroup::new("check_comparison_selector")
+        .args(["comparison_base", "comparison_exact_tree", "comparison_staged", "comparison_strict_inventory"])
+        .multiple(false)
+))]
+pub(crate) struct CheckComparisonOpts {
+    #[arg(
+        long = "comparison-base",
+        global = true,
+        value_name = "GIT_REF",
+        help = "Compare native repository checks with the merge base of this ref"
+    )]
+    pub(crate) comparison_base: Option<String>,
+    #[arg(
+        long = "comparison-exact-tree",
+        global = true,
+        value_name = "OID",
+        requires = "comparison_provenance",
+        help = "Compare native repository checks directly with this commit or tree"
+    )]
+    pub(crate) comparison_exact_tree: Option<String>,
+    #[arg(
+        long = "comparison-provenance",
+        global = true,
+        value_name = "KIND",
+        requires = "comparison_exact_tree",
+        help = "State the authority carried by --comparison-exact-tree"
+    )]
+    pub(crate) comparison_provenance: Option<CheckExactTreeProvenance>,
+    #[arg(
+        long = "comparison-staged",
+        global = true,
+        help = "Use index-against-HEAD authority for native repository checks"
+    )]
+    pub(crate) comparison_staged: bool,
+    #[arg(
+        long = "comparison-strict-inventory",
+        global = true,
+        help = "Use explicit exhaustive inventory authority for native repository checks"
+    )]
+    pub(crate) comparison_strict_inventory: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum CheckExactTreeProvenance {
+    #[value(name = "explicit")]
+    Explicit,
+    #[value(name = "push_before")]
+    PushBefore,
+}
+
+impl CheckComparisonOpts {
+    pub(crate) fn request(&self) -> Result<Option<ComparisonRequestV1>> {
+        let selector_count = usize::from(self.comparison_base.is_some())
+            + usize::from(self.comparison_exact_tree.is_some())
+            + usize::from(self.comparison_staged)
+            + usize::from(self.comparison_strict_inventory);
+        if selector_count > 1 {
+            bail!(
+                "--comparison-base, --comparison-exact-tree, --comparison-staged, and --comparison-strict-inventory are mutually exclusive"
+            );
+        }
+        if self.comparison_exact_tree.is_some() != self.comparison_provenance.is_some() {
+            bail!("--comparison-exact-tree and --comparison-provenance must be supplied together");
+        }
+        if let Some(requested_ref) = &self.comparison_base {
+            return Ok(Some(ComparisonRequestV1::MergeBaseRef {
+                requested_ref: requested_ref.clone(),
+            }));
+        }
+        if let Some(requested_oid) = &self.comparison_exact_tree {
+            let provenance = match self
+                .comparison_provenance
+                .expect("comparison provenance was validated above")
+            {
+                CheckExactTreeProvenance::Explicit => ExactTreeProvenanceV1::Explicit,
+                CheckExactTreeProvenance::PushBefore => ExactTreeProvenanceV1::PushBefore,
+            };
+            return Ok(Some(ComparisonRequestV1::ExactTree {
+                requested_oid: requested_oid.clone(),
+                provenance,
+            }));
+        }
+        if self.comparison_staged {
+            return Ok(Some(ComparisonRequestV1::IndexAgainstHead));
+        }
+        Ok(self
+            .comparison_strict_inventory
+            .then_some(ComparisonRequestV1::StrictInventory {
+                reason: StrictInventoryReasonV1::ExplicitCheck,
+            }))
     }
 }
 

@@ -8,6 +8,9 @@ Fast jump index for agent-facing guidance in this repository.
 
 ## Nested guides
 
+- [.agent/.cache/adopt/backups/01M1A5GSHHY88EJP3MM2XW7B4T](./.agent/.cache/adopt/backups/01M1A5GSHHY88EJP3MM2XW7B4T/AGENTS.md)
+- [.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF](./.agent/.cache/adopt/backups/01M1A5MBF26BAE3FE6DCGCD2EF/AGENTS.md)
+- [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
 - [crates/jig-dev-proxy](./crates/jig-dev-proxy/AGENTS.md)
@@ -19,11 +22,10 @@ Fast jump index for agent-facing guidance in this repository.
 - [crates/jig-sqlx](./crates/jig-sqlx/AGENTS.md)
 - [crates/jig-status-tui](./crates/jig-status-tui/AGENTS.md)
 - [crates/jig-tui](./crates/jig-tui/AGENTS.md)
-- [crates/jig-codex-tui](./crates/jig-codex-tui/AGENTS.md)
 - [crates/jig-typescript](./crates/jig-typescript/AGENTS.md)
 - [crates/jig-ui](./crates/jig-ui/AGENTS.md)
-- [crates/jig-vault](./crates/jig-vault/AGENTS.md)
 - [crates/jig-vault-tui](./crates/jig-vault-tui/AGENTS.md)
+- [crates/jig-vault](./crates/jig-vault/AGENTS.md)
 - [crates/jig](./crates/jig/AGENTS.md)
 
 ## Suggested usage pattern

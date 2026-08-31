@@ -93,6 +93,8 @@ pub(crate) const INFO: RootCommand =
 pub(crate) const DEV: RootCommand = command(cli_command::DEV, RootCommandCategory::Develop, 100);
 pub(crate) const CHECK: RootCommand =
     command(cli_command::CHECK, RootCommandCategory::Develop, 110);
+pub(crate) const FILE_BUDGET: RootCommand =
+    command(cli_command::FILE_BUDGET, RootCommandCategory::Develop, 115);
 pub(crate) const STATUS: RootCommand =
     command(cli_command::STATUS, RootCommandCategory::Develop, 120);
 pub(crate) const UI: RootCommand = command(cli_command::UI, RootCommandCategory::Develop, 130);
@@ -144,8 +146,31 @@ pub(crate) const MCP: RootCommand =
     command(cli_command::MCP, RootCommandCategory::AgentAutomation, 540);
 
 pub(crate) const ALL: &[RootCommand] = &[
-    INIT, PRESETS, ADOPT, UPDATE, BOOTSTRAP, SETUP, DOCTOR, INFO, DEV, CHECK, STATUS, UI, WORK,
-    LOOP, MIGRATION, SQLX, VAULT, PROXY, PROMPT, AGENT, CODEX, AGENT_MAP, STATE, MCP,
+    INIT,
+    PRESETS,
+    ADOPT,
+    UPDATE,
+    BOOTSTRAP,
+    SETUP,
+    DOCTOR,
+    INFO,
+    DEV,
+    CHECK,
+    FILE_BUDGET,
+    STATUS,
+    UI,
+    WORK,
+    LOOP,
+    MIGRATION,
+    SQLX,
+    VAULT,
+    PROXY,
+    PROMPT,
+    AGENT,
+    CODEX,
+    AGENT_MAP,
+    STATE,
+    MCP,
 ];
 
 pub(crate) fn categorized_help() -> String {

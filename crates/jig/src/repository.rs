@@ -1,5 +1,3 @@
-// agentic-loc-exception: repository catalog normalization and validation remain together as one contract-authority boundary.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -22,7 +20,13 @@ pub(crate) use planner::{
     validate_current_repository_authority, validate_run_plan, validate_run_plan_source,
 };
 
+mod native_input;
+pub(crate) use native_input::{prepare_file_budget_input_v1, read_policy_bytes};
+
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
+pub(crate) const FILE_BUDGET_CONTRACT_VERSION: u32 = 7;
+pub(crate) const FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1: u64 = 250_000;
+pub(crate) const FILE_BUDGET_MAX_TOTAL_BYTES_HARD_CAP_V1: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum SelectorPart<T> {
@@ -266,6 +270,8 @@ impl RepositoryCatalog {
         let mut aliases = BTreeMap::new();
         let mut target_aliases = BTreeMap::new();
         for action in action_specs {
+            let mut action = action.clone();
+            normalize_native_configuration(contract_version, &mut action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(
                     "target '{}' references unknown component '{}'",
@@ -291,7 +297,7 @@ impl RepositoryCatalog {
             if action.timeout_seconds.is_some()
                 && matches!(
                     &action.runner,
-                    ActionRunner::Native { operation } if operation != tool::SCHEMA_CHECK
+                    ActionRunner::Native { operation, .. } if operation != tool::SCHEMA_CHECK
                 )
             {
                 bail!(
@@ -473,6 +479,69 @@ impl RepositoryCatalog {
     pub(crate) fn aliases_for_target(&self, target: &TargetId) -> &[String] {
         self.target_aliases.get(target).map_or(&[], Vec::as_slice)
     }
+}
+
+fn normalize_native_configuration(contract_version: u32, action: &mut ActionSpec) -> Result<()> {
+    let ActionRunner::Native {
+        operation,
+        configuration,
+    } = &mut action.runner
+    else {
+        return Ok(());
+    };
+    if contract_version < FILE_BUDGET_CONTRACT_VERSION {
+        if operation == tool::FILE_BUDGET || configuration.is_some() {
+            bail!(
+                "target '{}' uses file-budget native contract data that requires contract version {FILE_BUDGET_CONTRACT_VERSION} or later",
+                action.target
+            );
+        }
+        return Ok(());
+    }
+    if operation != tool::FILE_BUDGET {
+        if configuration.is_some() {
+            bail!(
+                "target '{}' configures native operation '{operation}', but version 1 native configuration is only valid for '{}'",
+                action.target,
+                tool::FILE_BUDGET
+            );
+        }
+        return Ok(());
+    }
+    if configuration.is_none() {
+        *configuration = Some(jig_contract::NativeActionConfigurationV1::file_budget(
+            jig_contract::NativeFileBudgetConfigV1::default(),
+        ));
+    }
+    if action.inputs.is_empty() {
+        action.inputs.push("**".to_owned());
+    }
+    if action.inputs.as_slice() != ["**"] {
+        bail!(
+            "target '{}' must declare exactly inputs = [\"**\"] so policy and hidden governed paths cannot bypass the built-in file budget",
+            action.target
+        );
+    }
+    let config = configuration
+        .as_ref()
+        .and_then(jig_contract::NativeActionConfigurationV1::as_file_budget)
+        .expect("the only version 1 native configuration variant is file_budget");
+    if config.max_candidates == 0 || config.max_candidates > FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1
+    {
+        bail!(
+            "target '{}' max_candidates must be between 1 and {FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1}",
+            action.target
+        );
+    }
+    if config.max_total_bytes == 0
+        || config.max_total_bytes > FILE_BUDGET_MAX_TOTAL_BYTES_HARD_CAP_V1
+    {
+        bail!(
+            "target '{}' max_total_bytes must be between 1 and {FILE_BUDGET_MAX_TOTAL_BYTES_HARD_CAP_V1}",
+            action.target
+        );
+    }
+    Ok(())
 }
 
 fn validate_action_working_directories(root: &Path, actions: &[ActionSpec]) -> Result<()> {
@@ -688,167 +757,8 @@ fn register_aliases(
     Ok(())
 }
 
-fn legacy_action(tool: &ManifestTool, target: TargetId) -> Result<ActionSpec> {
-    let (intent, effects) = match tool.name.as_str() {
-        tool::BOOTSTRAP => (
-            ActionIntent::Operate,
-            vec![
-                ActionEffect::Worktree,
-                ActionEffect::Process,
-                ActionEffect::External,
-            ],
-        ),
-        tool::MIGRATION_ADD | tool::SCHEMA_DUMP => (
-            ActionIntent::Generate,
-            vec![ActionEffect::Worktree, ActionEffect::Process],
-        ),
-        _ => (
-            ActionIntent::Check,
-            vec![ActionEffect::ReadOnly, ActionEffect::Process],
-        ),
-    };
-    let runner = match tool.kind.as_str() {
-        kind::COMMAND => ActionRunner::command(tool.command.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("legacy command tool '{}' has no command key", tool.name)
-        })?),
-        kind::NATIVE => ActionRunner::native(&tool.name),
-        other => bail!("legacy tool '{}' has unsupported kind '{other}'", tool.name),
-    };
-    let mut action = ActionSpec::new(target, intent, runner);
-    action.description = Some(tool.description.clone());
-    action.effects = effects;
-    Ok(action)
-}
-
-fn legacy_default_targets(
-    actions: &BTreeMap<TargetId, ActionSpec>,
-    aliases: &BTreeMap<String, TargetId>,
-    configured_checks: &[String],
-) -> Result<Vec<TargetId>> {
-    if !configured_checks.is_empty() {
-        let mut targets = BTreeSet::new();
-        for alias in configured_checks {
-            let Some(target) = aliases.get(alias) else {
-                bail!("configured legacy check tool '{alias}' has no repository target");
-            };
-            let action = &actions[target];
-            if action.intent != ActionIntent::Check
-                || !action.effects.contains(&ActionEffect::ReadOnly)
-            {
-                // Legacy work gates historically included `jig.schema_dump`
-                // under kind = "check". Keep that one known compatibility
-                // action addressable, but never silently discard a different
-                // configured target whose effects cannot run in verification.
-                if alias == tool::SCHEMA_DUMP {
-                    continue;
-                }
-                bail!(
-                    "configured legacy check tool '{alias}' is not a read-only check and cannot be included in the default verification profile"
-                );
-            }
-            targets.insert(target.clone());
-        }
-        return Ok(targets.into_iter().collect());
-    }
-
-    Ok(actions
-        .values()
-        .filter(|action| {
-            action.intent == ActionIntent::Check
-                && action.effects.contains(&ActionEffect::ReadOnly)
-                && !action
-                    .legacy_aliases
-                    .iter()
-                    .any(|alias| alias == tool::TEST_LOCKED)
-        })
-        .map(|action| action.target.clone())
-        .collect())
-}
-
-fn unique_legacy_action_id(tool_name: &str, occupied: &BTreeSet<ActionId>) -> Result<ActionId> {
-    let base = known_legacy_action_id(tool_name)
-        .map_or_else(|| sanitize_legacy_action_id(tool_name), str::to_owned);
-    let candidate = ActionId::parse(&base)?;
-    if !occupied.contains(&candidate) {
-        return Ok(candidate);
-    }
-
-    let digest = full_digest(tool_name);
-    for suffix_len in (12..=60).step_by(4) {
-        let suffix = &digest[..suffix_len];
-        let max_base_len = 64 - suffix.len() - 1;
-        let shortened = base
-            .get(..base.len().min(max_base_len))
-            .unwrap_or(&base)
-            .trim_end_matches(['-', '_']);
-        let candidate = ActionId::parse(format!("{shortened}-{suffix}"))?;
-        if !occupied.contains(&candidate) {
-            return Ok(candidate);
-        }
-    }
-
-    bail!("legacy tool '{tool_name}' exhausted deterministic action-id collision fallbacks")
-}
-
-fn known_legacy_action_id(tool_name: &str) -> Option<&'static str> {
-    match tool_name {
-        tool::FMT_CHECK => Some("fmt"),
-        tool::CONTRACT_CHECK => Some("contract"),
-        tool::TEST_LOCKED => Some("test-locked"),
-        tool::TYPESCRIPT_BUILD => Some("typescript-build"),
-        tool::TYPESCRIPT_COVERAGE => Some("typescript-coverage"),
-        tool::TYPESCRIPT_LINT => Some("typescript-lint"),
-        tool::TYPESCRIPT_TYPECHECK => Some("typescript-typecheck"),
-        tool::SCHEMA_CHECK => Some("schema"),
-        tool::SCHEMA_DUMP => Some("schema-dump"),
-        tool::SQLX_CHECK => Some("sqlx"),
-        tool::SQLC_CHECK => Some("sqlc"),
-        tool::MIGRATION_ADD => Some("migration-add"),
-        tool::AGENT_DOCTOR => Some("agent-doctor"),
-        tool::BOOTSTRAP => Some("bootstrap"),
-        tool::CLIPPY => Some("clippy"),
-        tool::LINT => Some("lint"),
-        tool::TEST => Some("test"),
-        _ => None,
-    }
-}
-
-fn sanitize_legacy_action_id(tool_name: &str) -> String {
-    let source = tool_name.strip_prefix("jig.").unwrap_or(tool_name);
-    let mut value = String::new();
-    let mut last_was_separator = false;
-    for character in source.chars() {
-        let normalized = character.to_ascii_lowercase();
-        if normalized.is_ascii_lowercase() || normalized.is_ascii_digit() {
-            value.push(normalized);
-            last_was_separator = false;
-        } else if !last_was_separator && !value.is_empty() {
-            value.push('-');
-            last_was_separator = true;
-        }
-    }
-    let value = value.trim_matches('-');
-    if value.is_empty() {
-        return format!("tool-{}", short_digest(tool_name));
-    }
-    if value.len() <= 64 {
-        return value.to_owned();
-    }
-    let suffix = short_digest(tool_name);
-    let prefix = value
-        .get(..64 - suffix.len() - 1)
-        .unwrap_or(value)
-        .trim_end_matches('-');
-    format!("{prefix}-{suffix}")
-}
-
-fn short_digest(value: &str) -> String {
-    full_digest(value)[..12].to_owned()
-}
-
-fn full_digest(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
-}
+mod legacy;
+use legacy::*;
 
 #[cfg(test)]
 mod tests;

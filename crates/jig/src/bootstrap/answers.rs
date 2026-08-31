@@ -1,5 +1,3 @@
-// agentic-loc-exception: legacy answer normalization remains centralized during contract-v5 rollout.
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -10,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use super::repository_model::{
     AuthoredRepositoryModel, action_uses_managed_rust_file_loc_checker, frontend_component_id,
-    is_rust_file_loc_action,
 };
 use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
@@ -600,13 +597,6 @@ impl RenderAnswers {
             .unwrap_or_else(|| self.backend_language == BackendLanguage::Rust)
     }
 
-    pub(super) fn rust_file_loc_ci_enabled(&self) -> bool {
-        self.authored_repository.as_ref().map_or_else(
-            || self.rust_backend_enabled(),
-            |repository| repository.actions.iter().any(is_rust_file_loc_action),
-        )
-    }
-
     pub(super) fn go_postgres_enabled(&self) -> bool {
         self.authored_repository_has_adapter("go-postgres")
             .unwrap_or_else(|| self.backend_language.is_go() && self.go_database.is_postgres())
@@ -725,6 +715,8 @@ impl RenderAnswers {
 
 mod raw_answers;
 use raw_answers::*;
+
+mod file_budget;
 
 fn inherit_repository_command(destination: &mut Option<String>, commands: &toml::Table, key: &str) {
     if destination.is_none() {
@@ -946,29 +938,9 @@ pub(super) fn web_run_command(package_manager: &str) -> &'static str {
     }
 }
 
-fn normalize_generated_gate_root(value: &str, label: &str) -> Result<String> {
-    let normalized = normalize_portable_repo_path(value, label)?;
-    if normalized.chars().any(|character| {
-        character.is_control() || matches!(character, '*' | '?' | '[' | ']' | '{' | '}')
-    }) {
-        bail!(
-            "{label} '{value}' cannot be represented safely as a literal generated gate path; control characters and glob metacharacters (*, ?, [, ], {{, }}) are unsupported"
-        );
-    }
-    let pattern = if normalized == "." {
-        "**".to_string()
-    } else {
-        format!("{normalized}/**")
-    };
-    validate_gate_path_pattern("generated-policy", label, &pattern).with_context(|| {
-        format!("{label} '{value}' cannot be represented safely as a generated gate path")
-    })?;
-    Ok(normalized)
-}
-
-pub(super) fn frontend_gate_key(name: &str) -> String {
-    name.to_ascii_lowercase().replace('-', "_")
-}
+mod generated_gate;
+pub(super) use generated_gate::frontend_gate_key;
+use generated_gate::normalize_generated_gate_root;
 
 mod accessors;
 mod serialization;

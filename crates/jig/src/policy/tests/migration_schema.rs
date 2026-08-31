@@ -188,6 +188,7 @@ fn v6_repository_schema_failure_preserves_the_generator_exit_and_output() {
                 selectors: vec!["api:schema".into()],
                 profile: None,
                 affected_base: None,
+                comparison: None,
                 explain: false,
                 fail_fast: false,
                 tool: crate::command::ToolRequest::new(None, false),

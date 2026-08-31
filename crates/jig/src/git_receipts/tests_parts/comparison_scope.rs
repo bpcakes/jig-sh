@@ -160,6 +160,7 @@ fn comparison_resolution_preserves_requested_peeled_tree_and_merge_base_identiti
         .unwrap(),
         ResolvedComparisonV1::StrictInventory {
             reason: StrictInventoryReasonV1::ExplicitAudit,
+            fallback_from: None,
         }
     );
 }
@@ -415,17 +416,18 @@ fn index_inventory_and_exact_observations_use_the_requested_current_view() {
     .unwrap();
     let inventory_scope = capture_scope_v1(root, &inventory, CurrentViewV1::Inventory).unwrap();
     assert!(inventory_scope.complete, "{inventory_scope:#?}");
-    assert_eq!(inventory_scope.entries.len(), 3);
-    assert!(
-        inventory_scope
-            .entries
-            .iter()
-            .all(|entry| entry.kind == FileChangeKindV1::Unchanged)
+    assert_eq!(inventory_scope.entries.len(), 4);
+    assert_eq!(
+        entry(&inventory_scope, "untracked.txt").kind,
+        FileChangeKindV1::Untracked
     );
+    assert!(inventory_scope.entries.iter().all(|entry| {
+        entry.current_path == "untracked.txt" || entry.kind == FileChangeKindV1::Unchanged
+    }));
     let inventory_facts = observe_exact_paths_v1(root, CurrentViewV1::Inventory, &paths).unwrap();
     assert_eq!(
         fact(&inventory_facts, "untracked.txt").state,
-        ExactCurrentPathStateV1::Missing
+        ExactCurrentPathStateV1::Regular
     );
 }
 

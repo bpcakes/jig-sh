@@ -12,6 +12,7 @@ fn run_repository_target(ctx: &RepoContext, selector: &str) -> Value {
             affected: None,
             explain: false,
             fail_fast: false,
+            comparison: crate::cli::CheckComparisonOpts::default(),
             command: Some(crate::cli::CheckCommand::Selectors(vec![selector.into()])),
         }),
     )
@@ -55,9 +56,9 @@ fn repository_command_failures_mark_the_compatibility_response_not_ok() {
 }
 
 #[test]
-fn non_rust_file_loc_action_uses_generic_planning_receipts_and_evidence() {
+fn non_rust_file_budget_action_uses_generic_planning_receipts_and_evidence() {
     let temp = tempdir().unwrap();
-    write_non_rust_file_loc_fixture_repo(temp.path());
+    write_non_rust_file_budget_fixture_repo(temp.path());
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();

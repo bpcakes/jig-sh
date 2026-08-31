@@ -180,6 +180,15 @@ pub(super) fn select_affected_targets(
         .filter(|path| REPOSITORY_AUTHORITY_INPUTS.contains(&path.as_str()))
         .cloned()
         .collect::<BTreeSet<_>>();
+    if catalog.contract_version() >= 7 {
+        return select_target_local_affected(
+            catalog,
+            candidates,
+            &matchers,
+            paths,
+            authority_paths,
+        );
+    }
     let (mut direct, mut unclaimed_paths) =
         directly_affected_components(catalog, &matchers, &paths);
     for path in &authority_paths {
@@ -224,6 +233,124 @@ pub(super) fn select_affected_targets(
         }
     }
     Ok(selected)
+}
+
+fn select_target_local_affected(
+    catalog: &RepositoryCatalog,
+    candidates: TargetSelection,
+    matchers: &TargetInputMatcherV1,
+    paths: BTreeSet<String>,
+    authority_paths: BTreeSet<String>,
+) -> Result<TargetSelection> {
+    let mut direct_targets = BTreeMap::<TargetId, BTreeSet<String>>::new();
+    let mut direct_components = BTreeMap::<ComponentId, BTreeSet<String>>::new();
+    let mut unclaimed_paths = BTreeSet::new();
+    for path in paths {
+        if authority_paths.contains(&path) {
+            continue;
+        }
+        let mut targets = matchers.matching_targets(&path);
+        if targets.is_empty() {
+            targets = most_specific_inputless_targets(catalog, &path);
+        }
+        if targets.is_empty() {
+            unclaimed_paths.insert(path);
+            continue;
+        }
+        for target in targets {
+            direct_components
+                .entry(target.component.clone())
+                .or_default()
+                .insert(path.clone());
+            direct_targets
+                .entry(target)
+                .or_default()
+                .insert(path.clone());
+        }
+    }
+    let direct_batches = direct_targets
+        .into_iter()
+        .map(|(target, paths)| {
+            SelectionReasonBatch::from_reasons(
+                paths
+                    .into_iter()
+                    .map(|path| SelectionReason::DirectInput { path }),
+            )
+            .map(|batch| (target, batch))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let unclaimed_batch = (!unclaimed_paths.is_empty())
+        .then(|| {
+            SelectionReasonBatch::from_reasons(
+                unclaimed_paths
+                    .into_iter()
+                    .map(|path| SelectionReason::UnclaimedInput { path }),
+            )
+        })
+        .transpose()?;
+    let propagated = affected_reason_batches(catalog, direct_components)?.propagated;
+
+    let mut selected = TargetSelection::new();
+    for (target, mut reasons) in candidates {
+        let mut affected = !authority_paths.is_empty() || unclaimed_batch.is_some();
+        for path in &authority_paths {
+            reasons.insert(SelectionReason::DirectInput { path: path.clone() });
+        }
+        if let Some(batch) = &unclaimed_batch {
+            reasons.attach(batch);
+        }
+        if let Some(batch) = direct_batches.get(&target) {
+            affected = true;
+            reasons.attach(batch);
+        }
+        if let Some(batches) = propagated.get(&target.component) {
+            affected = true;
+            for batch in batches {
+                reasons.attach(batch);
+            }
+        }
+        if affected {
+            selected.insert(target, reasons);
+        }
+    }
+    Ok(selected)
+}
+
+fn most_specific_inputless_targets(catalog: &RepositoryCatalog, path: &str) -> BTreeSet<TargetId> {
+    let inputless_by_component = catalog
+        .actions()
+        .filter(|action| action.inputs.is_empty())
+        .fold(
+            BTreeMap::<ComponentId, BTreeSet<TargetId>>::new(),
+            |mut map, action| {
+                map.entry(action.target.component.clone())
+                    .or_default()
+                    .insert(action.target.clone());
+                map
+            },
+        );
+    let maximum_depth = catalog
+        .components()
+        .filter(|component| {
+            inputless_by_component.contains_key(&component.id)
+                && root_contains(&component.root, path)
+        })
+        .map(|component| root_depth(&component.root))
+        .max();
+    catalog
+        .components()
+        .filter(|component| {
+            Some(root_depth(&component.root)) == maximum_depth
+                && root_contains(&component.root, path)
+        })
+        .flat_map(|component| {
+            inputless_by_component
+                .get(&component.id)
+                .into_iter()
+                .flatten()
+                .cloned()
+        })
+        .collect()
 }
 
 fn validate_component_root(component: &ComponentSpec) -> Result<()> {

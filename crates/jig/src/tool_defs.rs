@@ -81,6 +81,7 @@ pub(crate) mod cli_command {
     pub(crate) const DEV_STATUS: &str = "status";
     pub(crate) const DEV_STOP: &str = "stop";
     pub(crate) const DOCTOR: &str = "doctor";
+    pub(crate) const FILE_BUDGET: &str = "file-budget";
     pub(crate) const GENERATE_SQLX_UNCHECKED_QUERIES_TODO: &str =
         "generate-sqlx-unchecked-queries-todo";
     pub(crate) const INFO: &str = "info";

@@ -13,6 +13,7 @@ impl AdoptInference {
         generated_gates: &[String],
         managed_files: &[String],
         retired_managed_files: &[String],
+        file_budget: &JsonValue,
         explicit_answers: &AnswerOpts,
         answer_shape: &AnswerInputShape,
     ) -> JsonValue {
@@ -21,6 +22,7 @@ impl AdoptInference {
             "generated_gates": generated_gates,
             "managed_files": managed_files,
             "retired_managed_files": retired_managed_files,
+            "file_budget": file_budget,
             "frontend_profiles": self.frontend_profiles,
             "frontend_workspace_roots": self.frontend_workspace_roots,
             "repo_topology": self.repo_topology.report(),

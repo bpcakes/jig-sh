@@ -1,20 +1,21 @@
 use anyhow::{Result, bail};
+use clap::ValueEnum;
 
 use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts, DevLaunchOpts, DevOpts,
-    DevStatusOpts, DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts,
-    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
-    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
-    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
-    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
-    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
-    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
-    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
-    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    CheckComparisonOpts, CheckExactTreeProvenance, CheckMigrationImmutabilityOpts, CheckOpts,
+    CheckTargetOpts, DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
+    GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts, LoopCommand, LoopRunOpts,
+    LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts,
+    ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts,
+    ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
+    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
+    StateCompactCommand, StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand,
+    StateExportReceiptsOpts, StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts,
+    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
+    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -49,31 +50,42 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
             mut affected,
             mut explain,
             mut fail_fast,
+            mut comparison,
             command,
         } = opts;
 
-        match command {
-            None => Ok(Self::Repository(command::RepositoryCheckRequest {
-                selectors: Vec::new(),
-                profile,
-                affected_base: affected,
-                explain,
-                fail_fast,
-                tool: tool.into(),
-            })),
+        let command = match command {
             Some(CheckCommand::Selectors(selectors)) => {
-                let selectors = normalize_external_check_args(
+                Some(CheckCommand::Selectors(normalize_external_check_args(
                     selectors,
                     &mut tool,
                     &mut profile,
                     &mut affected,
                     &mut explain,
                     &mut fail_fast,
-                )?;
+                    &mut comparison,
+                )?))
+            }
+            command => command,
+        };
+        let comparison = comparison.request()?;
+
+        match command {
+            None => Ok(Self::Repository(command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile,
+                affected_base: affected,
+                comparison,
+                explain,
+                fail_fast,
+                tool: tool.into(),
+            })),
+            Some(CheckCommand::Selectors(selectors)) => {
                 Ok(Self::Repository(command::RepositoryCheckRequest {
                     selectors,
                     profile,
                     affected_base: affected,
+                    comparison,
                     explain,
                     fail_fast,
                     tool: tool.into(),
@@ -82,6 +94,7 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
             Some(command)
                 if profile.is_some()
                     || affected.is_some()
+                    || comparison.is_some()
                     || explain
                     || fail_fast
                     || command.has_additional_selectors() =>
@@ -94,6 +107,7 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                     selectors,
                     profile,
                     affected_base: affected,
+                    comparison,
                     explain,
                     fail_fast,
                     tool: merge_tool_opts(tool, child.tool)?.into(),
@@ -108,71 +122,7 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
     }
 }
 
-fn normalize_external_check_args(
-    raw: Vec<String>,
-    tool: &mut ToolOpts,
-    profile: &mut Option<String>,
-    affected: &mut Option<String>,
-    explain: &mut bool,
-    fail_fast: &mut bool,
-) -> Result<Vec<String>> {
-    let mut selectors = Vec::new();
-    let mut args = raw.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--no-receipt" => tool.no_receipt = true,
-            "--explain" => *explain = true,
-            "--fail-fast" => *fail_fast = true,
-            "--plan-id" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--plan-id requires a value"))?;
-                set_external_value(&mut tool.plan_id, value, "--plan-id")?;
-            }
-            "--profile" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--profile requires a value"))?;
-                set_external_value(profile, value, "--profile")?;
-            }
-            "--affected" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--affected requires a value"))?;
-                set_external_value(affected, value, "--affected")?;
-            }
-            _ if arg.starts_with("--plan-id=") => set_external_value(
-                &mut tool.plan_id,
-                arg["--plan-id=".len()..].to_owned(),
-                "--plan-id",
-            )?,
-            _ if arg.starts_with("--profile=") => {
-                set_external_value(profile, arg["--profile=".len()..].to_owned(), "--profile")?
-            }
-            _ if arg.starts_with("--affected=") => set_external_value(
-                affected,
-                arg["--affected=".len()..].to_owned(),
-                "--affected",
-            )?,
-            _ if arg.starts_with('-') => anyhow::bail!("unknown check option '{arg}'"),
-            _ => selectors.push(arg),
-        }
-    }
-    if tool.no_receipt && tool.plan_id.is_some() {
-        anyhow::bail!("--no-receipt cannot be combined with --plan-id");
-    }
-    Ok(selectors)
-}
-
-fn set_external_value(target: &mut Option<String>, value: String, option: &str) -> Result<()> {
-    if value.is_empty() {
-        anyhow::bail!("{option} requires a non-empty value");
-    }
-    if target.replace(value).is_some() {
-        anyhow::bail!("{option} cannot be used more than once");
-    }
-    Ok(())
-}
+include!("command_conversion/external_check.rs");
 
 fn direct_check_command(
     command: CheckCommand,

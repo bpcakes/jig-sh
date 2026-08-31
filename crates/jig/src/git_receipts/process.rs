@@ -93,10 +93,38 @@ pub(super) fn git_bounded_proof_output(
     proof_kind: &str,
     collection: GitReceiptCollection<'_>,
 ) -> Result<Output> {
+    git_bounded_proof_output_with_timeout(
+        root,
+        args,
+        label,
+        limit,
+        proof_kind,
+        collection,
+        Duration::MAX,
+    )
+}
+
+pub(super) fn git_bounded_proof_output_with_timeout(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+    limit: usize,
+    proof_kind: &str,
+    collection: GitReceiptCollection<'_>,
+    timeout: Duration,
+) -> Result<Output> {
     collection.ensure_active()?;
     let mut command = Command::new("git");
     command.current_dir(root).args(args);
-    git_bounded_proof_command_output(root, &mut command, label, limit, proof_kind, collection)
+    git_bounded_proof_command_output_with_timeout(
+        root,
+        &mut command,
+        label,
+        limit,
+        proof_kind,
+        collection,
+        timeout,
+    )
 }
 
 pub(super) fn git_bounded_proof_command_stdout(
@@ -121,6 +149,26 @@ pub(super) fn git_bounded_proof_command_output(
     proof_kind: &str,
     collection: GitReceiptCollection<'_>,
 ) -> Result<Output> {
+    git_bounded_proof_command_output_with_timeout(
+        root,
+        command,
+        label,
+        limit,
+        proof_kind,
+        collection,
+        Duration::MAX,
+    )
+}
+
+pub(super) fn git_bounded_proof_command_output_with_timeout(
+    root: &Path,
+    command: &mut Command,
+    label: &str,
+    limit: usize,
+    proof_kind: &str,
+    collection: GitReceiptCollection<'_>,
+    timeout: Duration,
+) -> Result<Output> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -129,7 +177,7 @@ pub(super) fn git_bounded_proof_command_output(
     let mut observer = GitReceiptProcessObserver { collection };
     let output = match run_owned_process_tree_with_output_policy_and_observer(
         command,
-        Duration::MAX,
+        timeout,
         ProcessOutputLimits {
             stdout: limit,
             stderr: MAX_GIT_ERROR_PREVIEW_BYTES as usize,

@@ -1,12 +1,9 @@
-
 #[test]
-// agentic-loc-exception: retain the end-to-end generated-stack contract in one readable test.
 fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     let destination = temp.path().join("my-app");
-
     let output = run_init(InitOpts {
         path: destination.clone(),
         scaffold: ScaffoldOpts {
@@ -32,7 +29,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         },
     })
     .unwrap();
-
     let next_steps = output["next_steps"].as_array().unwrap();
     let database_config = next_steps
         .iter()
@@ -46,7 +42,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         .position(|step| step.as_str() == Some("scripts/jig setup"))
         .unwrap();
     assert!(database_config < setup);
-
     let context = crate::context::RepoContext::load_from(&destination).unwrap();
     let agent_map_check = crate::policy::run_check(
         &context,
@@ -69,7 +64,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             .unwrap()
             .is_empty()
     );
-
     let agent_guides_check =
         crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
     assert_eq!(agent_guides_check["ok"], true);
@@ -489,7 +483,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             "repo-policy.yml",
             &[
                 "no-mod-rs",
-                "rust-file-loc",
+                "file-budget",
                 "sqlx-unchecked-queries",
                 "migration-immutability",
             ][..],
@@ -499,14 +493,21 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             fs::read_to_string(destination.join(".github/workflows").join(workflow_name)).unwrap();
         let workflow = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
         for event in ["pull_request", "push"] {
-            assert!(
-                workflow["on"][event]["paths"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|path| path == "**"),
-                "{workflow_name} must derive Rust component paths from repository authority"
-            );
+            if workflow_name == "repo-policy.yml" {
+                assert!(
+                    workflow["on"][event]["paths"].is_null(),
+                    "repository policy must not hide source or policy changes behind path filters"
+                );
+            } else {
+                assert!(
+                    workflow["on"][event]["paths"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|path| path == "**"),
+                    "{workflow_name} must derive Rust component paths from repository authority"
+                );
+            }
         }
         for job in jobs {
             assert_eq!(workflow["jobs"][job]["runs-on"], "macos-14");
@@ -706,7 +707,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             .unwrap();
     assert!(admin_overview.contains("useSuspenseQuery(appStatusQueryOptions)"));
     assert!(admin_overview.contains("useQueryErrorResetBoundary()"));
-
     let agent_map = fs::read_to_string(destination.join("agent-map.md")).unwrap();
     for guide in [
         "crates/my-app/AGENTS.md",
@@ -716,7 +716,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     ] {
         assert!(agent_map.contains(guide), "agent map is missing {guide}");
     }
-
     let root_gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
     assert!(root_gitignore.contains("/my_app.db\n"));
     assert!(root_gitignore.contains("/my_app.db-*\n"));
@@ -745,7 +744,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         .unwrap(),
         "my_app.db\nmy_app.db-wal\nmy_app.db-shm\nmy_app.db-journal\nmy_app.db-jig-migrate.lock"
     );
-
     let api_main = fs::read_to_string(destination.join("apps/my-app-api/src/main.rs")).unwrap();
     assert!(api_main.contains("use anyhow::Context;"));
     assert!(api_main.contains("use ::my_app as app_crate;"));
@@ -936,7 +934,6 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(http_agents.contains("Never depend on `my-app-admin-http`"));
     let app_agents = fs::read_to_string(destination.join("crates/my-app/AGENTS.md")).unwrap();
     assert!(app_agents.contains("Parse environment configuration once at startup"));
-
     let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(answers.contains("repo_name = \"my-app\""));
     assert!(answers.contains("sqlx_enabled = true"));

@@ -1359,6 +1359,7 @@ dependencies = [
  "jig-core",
  "jig-dev-proxy",
  "jig-features",
+ "jig-file-budget",
  "jig-owned-process",
  "jig-status-tui",
  "jig-tui",

@@ -12,3 +12,55 @@ target/
 # Cloudflare Pages deploy staging
 site/
 .wrangler/
+
+# BEGIN JIG MANAGED BLOCK
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Rust
+target/
+
+# Default local SQLite database and transient sidecars
+/jig_sh.db
+/jig_sh.db-*
+
+
+
+# JavaScript and TypeScript
+node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+coverage/
+dist/
+build/
+.vite/
+.turbo/
+.astro/
+.contract-stage-*/
+.contract-client-stage-*/
+
+# Jig local runtime cache. Keep durable agent state tracked.
+.agent/.cache/*
+!.agent/.cache/.gitignore
+.agent/tmp/
+
+# Local logs and scratch files
+*.log
+tmp/
+temp/
+# END JIG MANAGED BLOCK

@@ -24,6 +24,14 @@ if [ "$1" = "clone" ]; then
   cp -R "{template}/." "$4"
   exit 0
 fi
+if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then
+  printf '{repo}\n'
+  exit 0
+fi
+if [ "$1" = "rev-parse" ] && [ "$2" = "--git-path" ]; then
+  printf '.git/jig\n'
+  exit 0
+fi
 if [ "$1" = "rev-parse" ]; then
   printf '{fake_commit}\n'
   exit 0
@@ -32,6 +40,7 @@ exit 0
 "#,
             log_path = log_path.display(),
             template = template.path().display(),
+            repo = repo.display(),
             fake_commit = fake_commit,
         ),
     )

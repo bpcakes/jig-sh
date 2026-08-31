@@ -27,7 +27,7 @@ use super::super::support::ensure_state_layout;
 use super::{
     IndexedTargetReceipts, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, parse_raw_receipt,
     receipt_arg_strings, receipt_args_has_receipt_ids, target_receipt_status,
-    validate_receipt_stream,
+    time_validity_is_current, validate_receipt_stream,
 };
 
 #[derive(Debug)]
@@ -514,17 +514,21 @@ fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvid
 struct LatestReceipt {
     id: String,
     worker_receipt_id: Option<String>,
+    valid_until_ms: Option<u64>,
+    requires_time_validity: bool,
 }
 
 #[derive(Clone, Debug)]
 struct ProtectedWorkCheck {
     id: String,
     receipt_ids: Vec<String>,
+    valid_until_ms: Option<u64>,
+    requires_time_validity: bool,
 }
 
 #[derive(Debug, Default)]
 struct ProtectedCheckReceipts {
-    direct_receipt_id: Option<String>,
+    direct_receipt: Option<LatestReceipt>,
     exact_work_check: Option<ProtectedWorkCheck>,
     legacy_work_check: Option<ProtectedWorkCheck>,
 }
@@ -535,6 +539,7 @@ pub(super) struct ReceiptProtectionIndex {
     latest_check_by_plan_gate: BTreeMap<(String, String), ProtectedWorkCheck>,
     latest_review_by_plan_gate: BTreeMap<(String, String), LatestReceipt>,
     target_evidence: BTreeMap<(String, String), IndexedTargetReceipts>,
+    now_ms: u64,
 }
 
 impl ReceiptProtectionIndex {
@@ -555,6 +560,7 @@ impl ReceiptProtectionIndex {
             .collect();
         Self {
             target_evidence,
+            now_ms: super::now_ms(),
             ..Self::default()
         }
     }
@@ -586,7 +592,7 @@ impl ReceiptProtectionIndex {
             self.checks.insert(
                 (plan_id.clone(), receipt.tool_name.clone()),
                 ProtectedCheckReceipts {
-                    direct_receipt_id: Some(receipt.id.clone()),
+                    direct_receipt: Some(latest_receipt(receipt, None)),
                     ..ProtectedCheckReceipts::default()
                 },
             );
@@ -608,6 +614,11 @@ impl ReceiptProtectionIndex {
                         .and_then(|evidence| evidence.get("worker_receipt_id"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    valid_until_ms: receipt.valid_until_ms,
+                    requires_time_validity: receipt
+                        .evidence
+                        .as_ref()
+                        .is_some_and(super::evidence_requires_time_validity),
                 },
             );
         }
@@ -627,6 +638,11 @@ impl ReceiptProtectionIndex {
                     ProtectedWorkCheck {
                         id: receipt.id.clone(),
                         receipt_ids: Vec::new(),
+                        valid_until_ms: receipt.valid_until_ms,
+                        requires_time_validity: receipt
+                            .evidence
+                            .as_ref()
+                            .is_some_and(super::evidence_requires_time_validity),
                     },
                 );
             }
@@ -657,6 +673,15 @@ impl ReceiptProtectionIndex {
                         ProtectedWorkCheck {
                             id: receipt.id.clone(),
                             receipt_ids,
+                            valid_until_ms: [receipt.valid_until_ms, gate.valid_until_ms]
+                                .into_iter()
+                                .flatten()
+                                .min(),
+                            requires_time_validity: gate.requires_time_validity
+                                || receipt
+                                    .evidence
+                                    .as_ref()
+                                    .is_some_and(super::evidence_requires_time_validity),
                         },
                     );
                 }
@@ -677,21 +702,26 @@ impl ReceiptProtectionIndex {
                 else {
                     continue;
                 };
-                let Some(direct_receipt_id) = check.direct_receipt_id.as_ref() else {
+                let Some(direct_receipt) = check.direct_receipt.as_ref() else {
                     continue;
                 };
                 // A work-check receipt configured as its own direct gate
                 // cannot also be the later batch proving itself.
-                if direct_receipt_id == &receipt.id {
+                if direct_receipt.id == receipt.id {
                     continue;
                 }
                 let batch = ProtectedWorkCheck {
                     id: receipt.id.clone(),
                     receipt_ids: receipt_ids.clone(),
+                    valid_until_ms: receipt.valid_until_ms,
+                    requires_time_validity: receipt
+                        .evidence
+                        .as_ref()
+                        .is_some_and(super::evidence_requires_time_validity),
                 };
                 if receipt_ids
                     .iter()
-                    .any(|receipt_id| receipt_id == direct_receipt_id)
+                    .any(|receipt_id| receipt_id == &direct_receipt.id)
                 {
                     check.exact_work_check = Some(batch);
                 } else if !has_receipt_ids {
@@ -700,51 +730,9 @@ impl ReceiptProtectionIndex {
             }
         }
     }
-
-    pub(super) fn protected_receipt_ids(&self) -> Result<BTreeSet<String>> {
-        let mut protected = BTreeSet::new();
-        for check in self.checks.values() {
-            let Some(direct_receipt_id) = &check.direct_receipt_id else {
-                continue;
-            };
-            protected.insert(direct_receipt_id.clone());
-            if let Some(work_check) = check
-                .exact_work_check
-                .as_ref()
-                .or(check.legacy_work_check.as_ref())
-            {
-                protected.insert(work_check.id.clone());
-                protected.extend(work_check.receipt_ids.iter().cloned());
-            }
-        }
-        for work_check in self.latest_check_by_plan_gate.values() {
-            protected.insert(work_check.id.clone());
-            protected.extend(work_check.receipt_ids.iter().cloned());
-        }
-        for receipt in self.latest_review_by_plan_gate.values() {
-            protected.insert(receipt.id.clone());
-            if let Some(worker_receipt_id) = &receipt.worker_receipt_id {
-                protected.insert(worker_receipt_id.clone());
-            }
-        }
-        for ((plan_id, gate_id), receipts) in &self.target_evidence {
-            if let Some(error) = receipts.error() {
-                bail!(
-                    "cannot safely archive target evidence for plan '{plan_id}' gate '{gate_id}': {error}"
-                );
-            }
-            if let Some(group) = receipts.selected() {
-                protected.extend(
-                    group
-                        .receipts
-                        .values()
-                        .map(|receipt| receipt.receipt_id.clone()),
-                );
-            }
-        }
-        Ok(protected)
-    }
 }
+
+include!("archive/protection.rs");
 
 pub(in crate::state) fn parse_archive_before_ms(value: &str) -> Result<u64> {
     let value = value.trim();

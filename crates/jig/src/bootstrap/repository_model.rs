@@ -1,5 +1,3 @@
-// agentic-loc-exception: keep contract-v6 repository projection, provenance, and validation in one auditable model boundary.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
@@ -15,12 +13,17 @@ use super::FrontendApp;
 use super::answers::RenderAnswers;
 use super::source_inputs::FRONTEND_SHARED_INPUTS;
 
+mod file_budget;
 mod rust_file_loc;
 
+use file_budget::add_file_budget_action;
+pub(super) use file_budget::generated_file_budget_action;
+#[cfg(test)]
+pub(in crate::bootstrap) use rust_file_loc::generated_legacy_rust_file_loc_action;
 use rust_file_loc::refresh_managed_rust_file_loc_command;
 pub(super) use rust_file_loc::{
     RUST_FILE_LOC_COMMAND_KEY, action_uses_managed_rust_file_loc_checker,
-    is_generated_rust_file_loc_command, is_rust_file_loc_action,
+    is_generated_rust_file_loc_command,
 };
 
 const REPO_COMPONENT: &str = "repo";
@@ -207,7 +210,7 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> bool {
-        self.affected_ignore == authored.affected_ignore
+        let current = self.affected_ignore == authored.affected_ignore
             && self.components == authored.components
             && self.actions == authored.actions
             && self.profiles == authored.profiles
@@ -215,7 +218,8 @@ impl RepositoryRenderModel {
             && self
                 .commands
                 .iter()
-                .all(|(key, value)| authored_commands.get(key) == Some(value))
+                .all(|(key, value)| authored_commands.get(key) == Some(value));
+        current || file_budget::matches_legacy_projection(self, authored, authored_commands)
     }
 
     pub(super) fn authored_toml(&self) -> Result<String> {
@@ -270,6 +274,10 @@ impl RepositoryRenderModel {
             .map(|component| component_root_input(&component.root))
             .collect::<BTreeSet<_>>();
         collapse_all_input(paths)
+    }
+
+    pub(super) fn file_budget_policy_toml(&self) -> Result<Option<String>> {
+        file_budget::render_seed_policy(self)
     }
 
     fn backend_ci_input_paths(&self, adapters: &[&str], aliases: &[&str]) -> Vec<String> {
@@ -400,6 +408,9 @@ impl<'a> ModelBuilder<'a> {
         ]);
         self.insert_component(component)?;
         self.add_adapter_actions(REPO_COMPONENT, "jig", CommandScope::Component, |_| true)?;
+        if !self.answers.is_minimal_footprint() {
+            add_file_budget_action(self)?;
+        }
         Ok(())
     }
 
@@ -431,9 +442,6 @@ impl<'a> ModelBuilder<'a> {
             CommandScope::Component,
             |_| true,
         )?;
-        if !self.answers.backend_language().is_go() {
-            self.add_rust_file_loc_action()?;
-        }
         if adapters.iter().any(|adapter| adapter == "sqlx") {
             let schema_dump_enabled = self.answers.schema_dump_enabled();
             let migration_add_enabled = self.answers.migration_add_enabled();
@@ -847,121 +855,9 @@ impl CommandScope {
     }
 }
 
-fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
-    let id = frontend_component_id(&app.name)?;
-    let mut component = ComponentSpec::new(id, &app.dir);
-    component.description = Some(format!("Frontend application '{}'.", app.name));
-    component.tags = vec!["frontend".into(), app.role.clone()];
-    component.depends_on = vec![component_id(BACKEND_COMPONENT)?];
-    component.adapters = vec!["typescript".into()];
-    component.provenance = provenance(&[
-        ("id", FieldProvenance::Inferred),
-        ("root", FieldProvenance::Declared),
-        ("depends_on", FieldProvenance::Inferred),
-        ("adapters", FieldProvenance::Inferred),
-    ]);
-    Ok(component)
-}
-
-pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
-    let normalized = name.to_ascii_lowercase();
-    if matches!(normalized.as_str(), REPO_COMPONENT | BACKEND_COMPONENT) {
-        bail!(
-            "Frontend app name '{name}' resolves to reserved repository component id '{normalized}'; choose a different frontend name"
-        );
-    }
-    let value = if normalized.len() <= 64 {
-        normalized
-    } else {
-        let digest = format!("{:x}", Sha256::digest(normalized.as_bytes()));
-        let mut end = 51;
-        while !normalized.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!(
-            "{}-{}",
-            normalized[..end].trim_end_matches('-'),
-            &digest[..12]
-        )
-    };
-    component_id(&value)
-        .with_context(|| format!("Invalid frontend app name '{name}' for repository identity"))
-}
-
-fn frontend_inputs(root: &str, inputs: &[&str], workspace_roots: &[String]) -> Vec<String> {
-    let mut resolved = inputs
-        .iter()
-        .map(|input| {
-            if root == "." {
-                (*input).to_owned()
-            } else {
-                format!("{root}/{input}")
-            }
-        })
-        .collect::<Vec<_>>();
-    resolved.extend(
-        FRONTEND_SHARED_INPUTS
-            .iter()
-            .map(|input| (*input).to_owned()),
-    );
-    resolved.extend(
-        workspace_roots
-            .iter()
-            .map(|root| component_root_input(root)),
-    );
-    resolved.sort();
-    resolved.dedup();
-    resolved
-}
-
-fn aggregate_frontend_inputs(
-    apps: &[FrontendApp],
-    inputs: &[&str],
-    workspace_roots: &[String],
-) -> Vec<String> {
-    apps.iter()
-        .flat_map(|app| frontend_inputs(&app.dir, inputs, workspace_roots))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn frontend_contract_inputs(
-    include_public_artifacts: bool,
-    workspace_roots: &[String],
-) -> Vec<String> {
-    let mut inputs = FRONTEND_SHARED_INPUTS
-        .iter()
-        .copied()
-        .chain([
-            "Cargo.toml",
-            "**/Cargo.toml",
-            "**/*.rs",
-            "go.mod",
-            "**/go.mod",
-            "**/*.go",
-        ])
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    inputs.extend(
-        workspace_roots
-            .iter()
-            .map(|root| component_root_input(root)),
-    );
-    if include_public_artifacts {
-        inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
-    }
-    inputs.sort();
-    inputs.dedup();
-    inputs
-}
-
-fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {
-    entries
-        .iter()
-        .map(|(field, source)| ((*field).into(), *source))
-        .collect()
-}
+mod frontend;
+pub(super) use frontend::frontend_component_id;
+use frontend::*;
 
 include!("repository_model/ids.rs");
 

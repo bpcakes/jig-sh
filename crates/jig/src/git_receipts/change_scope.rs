@@ -12,14 +12,6 @@ thread_local! {
     static SCOPE_RENAME_LIMIT_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-#[allow(dead_code, reason = "staged native file-budget current views")]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum CurrentViewV1 {
-    Worktree,
-    Index,
-    Inventory,
-}
-
 #[allow(dead_code, reason = "staged native file-budget change kinds")]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum FileChangeKindV1 {
@@ -112,6 +104,20 @@ pub(crate) fn capture_scope_v1_with_cancellation(
     )
 }
 
+pub(crate) fn capture_all_current_scope_v1_with_cancellation(
+    root: &Path,
+    view: CurrentViewV1,
+    include_untracked: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ScopeSnapshotV1> {
+    capture_inventory_scope(
+        root,
+        view,
+        include_untracked,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
 pub(crate) fn capture_affected_paths_v1(
     root: &Path,
     comparison: &ResolvedComparisonV1,
@@ -183,7 +189,7 @@ fn capture_scope_inner(
             )
         }
         (ResolvedComparisonV1::StrictInventory { .. }, CurrentViewV1::Inventory) => {
-            capture_inventory_scope(root, collection)
+            capture_inventory_scope(root, CurrentViewV1::Inventory, true, collection)
         }
         _ => bail!("comparison strategy and current view are incompatible"),
     }
@@ -227,6 +233,8 @@ fn capture_changed_scope(
 
 fn capture_inventory_scope(
     root: &Path,
+    view: CurrentViewV1,
+    include_untracked: bool,
     collection: GitReceiptCollection<'_>,
 ) -> Result<ScopeSnapshotV1> {
     let output = scope_git_output(
@@ -244,8 +252,13 @@ fn capture_inventory_scope(
         collection,
     )?;
     let mut issues = rename_diagnostics(&output.stderr);
-    let (sparse, sparse_issues) = sparse_index_paths(root, collection)?;
-    issues.extend(sparse_issues);
+    let sparse = if view == CurrentViewV1::Index {
+        BTreeSet::new()
+    } else {
+        let (sparse, sparse_issues) = sparse_index_paths(root, collection)?;
+        issues.extend(sparse_issues);
+        sparse
+    };
     let (intent_to_add, intent_issues) = intent_to_add_paths(root, collection)?;
     issues.extend(intent_issues);
     let mut entries = Vec::new();
@@ -269,7 +282,7 @@ fn capture_inventory_scope(
             ));
             continue;
         }
-        if sparse.contains(&path) {
+        if view != CurrentViewV1::Index && sparse.contains(&path) {
             issues.push(scope_issue(
                 ScopeIssueKindV1::Sparse,
                 Some(path),
@@ -285,26 +298,40 @@ fn capture_inventory_scope(
             ));
             continue;
         }
-        match inspect_worktree_path(root, &path)? {
-            InspectedWorktreePath::Regular => entries.push(ScopeEntryV1 {
+        if view == CurrentViewV1::Index {
+            entries.push(ScopeEntryV1 {
                 kind: FileChangeKindV1::Unchanged,
                 current_path: path,
-                current_source: CurrentSourceV1::WorktreePath,
+                current_source: CurrentSourceV1::IndexBlob {
+                    oid: entry.oid.clone(),
+                },
                 baseline: None,
-            }),
-            InspectedWorktreePath::Missing => issues.push(scope_issue(
-                ScopeIssueKindV1::MissingWorktreeEntry,
-                Some(path),
-                "tracked inventory path is missing from the worktree",
-            )),
-            InspectedWorktreePath::Unsupported(kind) => issues.push(scope_issue(
-                kind,
-                Some(path),
-                "tracked inventory path is unsupported in the worktree",
-            )),
+            });
+        } else {
+            match inspect_worktree_path(root, &path)? {
+                InspectedWorktreePath::Regular => entries.push(ScopeEntryV1 {
+                    kind: FileChangeKindV1::Unchanged,
+                    current_path: path,
+                    current_source: CurrentSourceV1::WorktreePath,
+                    baseline: None,
+                }),
+                InspectedWorktreePath::Missing => issues.push(scope_issue(
+                    ScopeIssueKindV1::MissingWorktreeEntry,
+                    Some(path),
+                    "tracked inventory path is missing from the worktree",
+                )),
+                InspectedWorktreePath::Unsupported(kind) => issues.push(scope_issue(
+                    kind,
+                    Some(path),
+                    "tracked inventory path is unsupported in the worktree",
+                )),
+            }
         }
     }
-    finish_snapshot(CurrentViewV1::Inventory, entries, issues)
+    if include_untracked && view != CurrentViewV1::Index {
+        append_untracked_entries(root, collection, &mut entries, &mut issues)?;
+    }
+    finish_snapshot(view, entries, issues)
 }
 
 fn append_raw_entry(
@@ -755,35 +782,4 @@ fn scope_issue(
     }
 }
 
-fn scope_git_output(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    collection: GitReceiptCollection<'_>,
-) -> Result<Output> {
-    collection.git_bounded_output(
-        root,
-        args,
-        label,
-        gate_scope_diff_output_limit(),
-        "comparison-scope",
-    )
-}
-
-fn scope_rename_limit() -> usize {
-    #[cfg(test)]
-    if let Some(limit) = SCOPE_RENAME_LIMIT_OVERRIDE.get() {
-        return limit;
-    }
-    MAX_SCOPE_RENAME_CANDIDATES_V1
-}
-
-#[cfg(test)]
-pub(super) fn with_scope_rename_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
-    SCOPE_RENAME_LIMIT_OVERRIDE.with(|override_limit| {
-        let previous = override_limit.replace(Some(limit));
-        let result = operation();
-        override_limit.set(previous);
-        result
-    })
-}
+include!("change_scope/tail.rs");

@@ -14,6 +14,7 @@ mod bootstrap_run;
 mod check;
 mod codex;
 mod codex_run;
+mod file_budget;
 mod init_wizard;
 mod loops;
 mod migration;
@@ -28,10 +29,11 @@ mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{
-    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts,
-    CheckTargetOpts,
+    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckExactTreeProvenance,
+    CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
 };
 pub(crate) use codex::CodexCommand;
+pub(crate) use file_budget::FileBudgetCommand;
 pub(crate) use loops::{
     LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
@@ -93,7 +95,7 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,no-mod-rs,migration-immutability,sqlx-unchecked-non-test";
 
@@ -298,6 +300,13 @@ pub(crate) enum CommandKind {
         after_help = check::CHECK_AFTER_HELP
     )]
     Check(CheckOpts),
+    /// Run built-in file-budget diagnostics without creating a run or receipt.
+    #[command(
+        name = root_commands::FILE_BUDGET.name,
+        display_order = root_commands::FILE_BUDGET.display_order,
+        subcommand
+    )]
+    FileBudget(FileBudgetCommand),
     /// Aggregate local repo, work, loop, and configured status-provider observations.
     #[command(
         name = root_commands::STATUS.name,

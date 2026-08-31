@@ -23,6 +23,8 @@ fn passing_check(id: &str, receipt_id: &str) -> GateEvaluation {
             diff_summary: None,
             receipt_worktree_fingerprint_error: None,
             current_worktree_fingerprint_error: None,
+            valid_until_ms: None,
+            requires_time_validity: false,
         },
     })
 }

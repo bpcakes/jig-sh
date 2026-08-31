@@ -1,5 +1,3 @@
-// agentic-loc-exception: CLI dispatch remains centralized while contract-v5 compatibility settles.
-
 use std::ffi::OsString;
 use std::io::Write;
 use std::process;
@@ -145,6 +143,7 @@ impl CommandKind {
                 (tool_defs::cli_command::CHECK, CapabilityOnly)
             }
             Self::Check(_) => (tool_defs::cli_command::CHECK, Repository),
+            Self::FileBudget(_) => (tool_defs::cli_command::FILE_BUDGET, Repository),
             Self::Status(_) => (tool_defs::cli_command::STATUS, Repository),
             Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
             Self::Work(_) => (tool_defs::cli_command::WORK, Repository),
@@ -353,6 +352,9 @@ fn run_command(cli: Cli) -> Result<()> {
                 json_output,
                 HumanOutput::Check,
             )
+        }
+        CommandKind::FileBudget(command) => {
+            super::file_budget::run_file_budget_command(command, json_output)
         }
         CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
         CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),

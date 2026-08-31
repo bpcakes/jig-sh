@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use jig_contract::ComparisonRequestV1;
+
 use super::ToolRequest;
 
 #[derive(Debug)]
@@ -32,6 +34,7 @@ pub(crate) struct RepositoryCheckRequest {
     pub(crate) selectors: Vec<String>,
     pub(crate) profile: Option<String>,
     pub(crate) affected_base: Option<String>,
+    pub(crate) comparison: Option<ComparisonRequestV1>,
     pub(crate) explain: bool,
     pub(crate) fail_fast: bool,
     pub(crate) tool: ToolRequest,

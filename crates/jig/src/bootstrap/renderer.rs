@@ -1,4 +1,3 @@
-// agentic-loc-exception: staged rendering and contract validation share one transactional boundary.
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
@@ -18,6 +17,7 @@ use super::path::{
 };
 use super::preview_seed::seed_preview_workspace;
 use super::repository_model::RepositoryRenderModel;
+use super::staged_render::FILE_BUDGET_POLICY_PATH;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
 use crate::progress::CliProgress;
@@ -103,6 +103,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         None,
         request.contract_version,
     ))?;
+    let authored_seed_paths = take_authored_seed_paths(&mut active_paths, request.answers);
     if !request.answers.is_minimal_footprint() {
         request
             .progress
@@ -143,7 +144,9 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
     request
         .progress
-        .log_blocked_on_err(validate_portable_planned_file_collisions(&active_paths))?;
+        .log_blocked_on_err(validate_portable_planned_file_collisions(
+            active_paths.iter().chain(authored_seed_paths.iter()),
+        ))?;
     request
         .progress
         .log_blocked_on_err(managed_paths::write_manifest(&destination, &active_paths))?;
@@ -312,6 +315,18 @@ pub(super) fn stage_selected_render(
         active_paths,
         retirement_paths: BTreeSet::new(),
     })
+}
+
+fn take_authored_seed_paths(
+    active_paths: &mut BTreeSet<PathBuf>,
+    answers: &RenderAnswers,
+) -> BTreeSet<PathBuf> {
+    let policy = PathBuf::from(FILE_BUDGET_POLICY_PATH);
+    if answers.is_minimal_footprint() || !active_paths.remove(&policy) {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([policy])
+    }
 }
 
 fn render_template_files(
@@ -735,8 +750,8 @@ fn render_context(
         JsonValue::Bool(answers.rust_backend_enabled()),
     );
     context.insert(
-        "rust_file_loc_ci_enabled".into(),
-        JsonValue::Bool(answers.rust_file_loc_ci_enabled()),
+        "file_budget_ci_enabled".into(),
+        JsonValue::Bool(answers.file_budget_ci_enabled()),
     );
     context.insert(
         "go_postgres_enabled".into(),
@@ -811,6 +826,7 @@ fn render_context(
         let repository = repository.expect("contract v6 always resolves a repository model");
         let repository_toml = repository.authored_toml()?;
         let repository_commands_toml = repository.commands_toml()?;
+        let file_budget_policy_toml = repository.file_budget_policy_toml()?.unwrap_or_default();
         context.insert(
             "frontend_contracts_enabled".into(),
             JsonValue::Bool(repository.frontend_contracts_enabled()),
@@ -820,6 +836,10 @@ fn render_context(
         context.insert(
             "repository_commands_toml".into(),
             repository_commands_toml.into(),
+        );
+        context.insert(
+            "file_budget_policy_toml".into(),
+            file_budget_policy_toml.into(),
         );
     }
     context.insert(
@@ -839,128 +859,8 @@ fn render_context(
     Ok(JsonValue::Object(context))
 }
 
-fn repo_dirs_intersect(left: &str, right: &str) -> bool {
-    left == "."
-        || right == "."
-        || left == right
-        || left
-            .strip_prefix(right)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left)
-            .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-fn collect_template_paths(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    collect_template_paths_recursive(root, &mut paths)?;
-    paths.sort();
-    Ok(paths)
-}
-
-fn collect_template_paths_recursive(current: &Path, paths: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in
-        fs::read_dir(current).with_context(|| format!("Failed to read {}", current.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_template_paths_recursive(&path, paths)?;
-        } else if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(TEMPLATE_SUFFIX))
-        {
-            paths.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn output_relative_path(relative_template: &Path) -> Result<PathBuf> {
-    let file_name = relative_template
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid template path: {}", relative_template.display()))?;
-    let output_name = file_name.strip_suffix(TEMPLATE_SUFFIX).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Template path must end with {TEMPLATE_SUFFIX}: {}",
-            relative_template.display()
-        )
-    })?;
-    let relative = relative_template.with_file_name(output_name);
-    validate_no_reserved_git_metadata_components(&relative)?;
-    Ok(relative)
-}
-
-fn write_rendered_file(destination: &Path, relative: &Path, contents: &[u8]) -> Result<()> {
-    let path = destination.join(relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    remove_existing_symlink(&path)?;
-    fs::write(&path, contents).with_context(|| format!("Failed to write {}", path.display()))?;
-    set_rendered_permissions(&path, relative)
-}
-
-fn remove_existing_symlink(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => fs::remove_file(path)
-            .with_context(|| format!("Failed to remove symlink {}", path.display())),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("Failed to stat {}", path.display())),
-    }
-}
-
-fn run_post_render_tasks(destination: &Path) -> Result<()> {
-    set_scripts_executable(destination)?;
-    crate::policy::write_agent_map(destination, Path::new(managed_paths::AGENT_MAP_PATH))
-}
-
-#[cfg(unix)]
-fn set_rendered_permissions(path: &Path, relative: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    if managed_paths::is_executable_script(relative) {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_rendered_permissions(_path: &Path, _relative: &Path) -> Result<()> {
-    Ok(())
-}
-
-fn set_scripts_executable(destination: &Path) -> Result<()> {
-    for relative in executable_script_paths(destination)? {
-        set_rendered_permissions(&destination.join(&relative), &relative)?;
-    }
-    Ok(())
-}
-
-fn executable_script_paths(destination: &Path) -> Result<Vec<PathBuf>> {
-    let scripts_dir = destination.join("scripts");
-    if !scripts_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(&scripts_dir)
-        .with_context(|| format!("Failed to read {}", scripts_dir.display()))?
-    {
-        let entry = entry?;
-        let relative = PathBuf::from("scripts").join(entry.file_name());
-        if managed_paths::is_executable_script(&relative) {
-            paths.push(relative);
-        }
-    }
-    Ok(paths)
-}
+mod tail;
+use tail::*;
 
 #[cfg(test)]
 #[path = "renderer_tests.rs"]

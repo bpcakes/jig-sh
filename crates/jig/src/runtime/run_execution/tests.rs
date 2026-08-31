@@ -378,6 +378,68 @@ fn a_run_that_only_skips_targets_does_not_report_success() {
     );
 }
 
+fn plan_with_prepared_work_plans(work_plan_ids: &[Option<&str>]) -> RunPlan {
+    let targets = work_plan_ids
+        .iter()
+        .enumerate()
+        .map(|(index, work_plan_id)| {
+            let mut target = PlannedTarget::new(
+                format!("repo:file-budget-{index}").parse().unwrap(),
+                jig_contract::ActionIntent::Check,
+                ActionRunner::native(jig_contract::tool::FILE_BUDGET),
+                "sha256:input",
+            );
+            target.prepared_native_input = Some(jig_contract::PreparedNativeInputV1 {
+                schema_version: jig_contract::PreparedNativeInputV1::SCHEMA_VERSION,
+                view: jig_contract::CurrentViewV1::Inventory,
+                request: jig_contract::ComparisonRequestV1::StrictInventory {
+                    reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck,
+                },
+                configuration: jig_contract::NativeFileBudgetConfigV1::default(),
+                policy_source: jig_contract::PolicySourceV1 {
+                    path: ".jig/file-budget.toml".into(),
+                },
+                work_plan_id: work_plan_id.map(str::to_owned),
+                policy: jig_contract::PolicyPreparationV1::Ready {
+                    policy_raw_digest: "sha256:raw".into(),
+                    policy_semantic_digest: "sha256:semantic".into(),
+                },
+                comparison: jig_contract::ComparisonPreparationV1::Ready {
+                    comparison: jig_contract::ResolvedComparisonV1::StrictInventory {
+                        reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck,
+                        fallback_from: None,
+                    },
+                },
+            });
+            target
+        })
+        .collect();
+    RunPlan::new(
+        "plan_example",
+        "sha256:config",
+        jig_contract::SourceIdentity::new(None, "sha256:worktree"),
+        targets,
+        Vec::new(),
+    )
+}
+
+#[test]
+fn execution_only_confirms_prepared_work_plan_identity() {
+    let plan = plan_with_prepared_work_plans(&[Some("plan_alpha")]);
+    validate_prepared_work_plan_identity(&plan, Some("plan_alpha")).unwrap();
+
+    let mismatch = validate_prepared_work_plan_identity(&plan, Some("plan_beta"))
+        .unwrap_err()
+        .to_string();
+    assert!(mismatch.contains("prepared for work_plan_id"), "{mismatch}");
+
+    let inconsistent = plan_with_prepared_work_plans(&[Some("plan_alpha"), None]);
+    let error = validate_prepared_work_plan_identity(&inconsistent, Some("plan_alpha"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("inconsistent"), "{error}");
+}
+
 #[test]
 fn an_accepted_run_becomes_blocked_when_its_worker_stops() {
     let temp = tempdir().unwrap();

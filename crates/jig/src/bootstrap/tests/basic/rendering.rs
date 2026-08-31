@@ -438,6 +438,7 @@ fn apply_staged_render_does_not_rewrite_preserved_files() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -488,6 +489,7 @@ fn apply_staged_render_writes_the_managed_path_manifest_last() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -531,6 +533,7 @@ fn apply_staged_render_reports_managed_block_insertions_only_when_inserted() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -550,6 +553,7 @@ fn apply_staged_render_reports_managed_block_insertions_only_when_inserted() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -596,6 +600,7 @@ fn apply_staged_render_allows_root_agents_managed_block_update_without_force() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -640,6 +645,7 @@ fn apply_staged_render_hard_fails_on_blocking_ancestors_before_preview_or_write(
                 backup_root: None,
                 progress: CliProgress::new("test"),
                 init_transaction: None,
+                update_transaction: None,
             },
         )
         .unwrap_err()
@@ -709,6 +715,7 @@ fn apply_staged_render_rejects_reserved_git_metadata_aliases_before_any_operatio
                     backup_root: None,
                     progress: CliProgress::new("test"),
                     init_transaction: None,
+                    update_transaction: None,
                 },
             )
             .unwrap_err()
@@ -792,6 +799,7 @@ fn apply_staged_render_rejects_active_and_retired_directory_leaves_before_any_op
                 backup_root: None,
                 progress: CliProgress::new("test"),
                 init_transaction: None,
+                update_transaction: None,
             },
         )
         .unwrap_err()
@@ -849,6 +857,7 @@ fn apply_staged_render_retires_leaf_symlink_without_touching_its_target() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -900,6 +909,7 @@ fn apply_staged_render_rejects_unsafe_backup_leaves_before_managed_mutation() {
                 backup_root: Some(&destination.path().join("backups")),
                 progress: CliProgress::new("test"),
                 init_transaction: None,
+                update_transaction: None,
             },
         )
         .unwrap_err()
@@ -958,6 +968,7 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
             backup_root: Some(&backup_root),
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap_err()
@@ -971,60 +982,6 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
     assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
 }
 
-#[cfg(unix)]
-#[test]
-fn rendered_conflicts_detects_executable_bit_changes() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let rendered = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    write_answers_fixture(rendered.path(), Some(true));
-    fs::create_dir_all(rendered.path().join("scripts")).unwrap();
-    fs::create_dir_all(destination.path().join("scripts")).unwrap();
-    fs::write(rendered.path().join("scripts/jig"), "same").unwrap();
-    fs::write(destination.path().join("scripts/jig"), "same").unwrap();
-    fs::set_permissions(
-        rendered.path().join("scripts/jig"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    fs::set_permissions(
-        destination.path().join("scripts/jig"),
-        fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
-
-    let conflicts = rendered_conflicts(rendered.path(), destination.path()).unwrap();
-    assert_eq!(conflicts, vec!["scripts/jig"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn rendered_conflicts_detects_file_replacing_symlink() {
-    let rendered = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    write_answers_fixture(rendered.path(), Some(true));
-    fs::create_dir_all(rendered.path().join("scripts")).unwrap();
-    fs::create_dir_all(destination.path().join("scripts")).unwrap();
-    fs::write(rendered.path().join("scripts/jig"), "same").unwrap();
-    fs::write(destination.path().join("scripts/target"), "same").unwrap();
-    create_symlink(Path::new("target"), &destination.path().join("scripts/jig")).unwrap();
-
-    let conflicts = rendered_conflicts(rendered.path(), destination.path()).unwrap();
-    assert_eq!(conflicts, vec!["scripts/jig"]);
-}
-
-#[test]
-fn rendered_conflicts_detects_blocking_ancestor_file() {
-    let rendered = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    write_answers_fixture(rendered.path(), Some(true));
-    fs::create_dir_all(rendered.path().join("scripts")).unwrap();
-    fs::write(rendered.path().join("scripts/jig"), "rendered").unwrap();
-    fs::write(destination.path().join("scripts"), "blocking file").unwrap();
-
-    let conflicts = rendered_conflicts(rendered.path(), destination.path()).unwrap();
-    assert_eq!(conflicts, vec!["scripts"]);
-}
+include!("rendering/leaf_conflicts.rs");
 
 mod guide_preview;

@@ -575,11 +575,27 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
             "adopt-force",
         ] {
             let temp = tempdir().unwrap();
+            let main = temp.path().join("main");
+            fs::create_dir_all(&main).unwrap();
+            init_git_repo_for_test(&main);
+            git(&main, ["commit", "--allow-empty", "-m", "fixture"]).unwrap();
             let repo = temp.path().join("repo");
-            fs::create_dir_all(&repo).unwrap();
+            git(
+                &main,
+                [
+                    "worktree",
+                    "add",
+                    "--quiet",
+                    "-b",
+                    "fixture-worktree",
+                    repo.to_str().unwrap(),
+                ],
+            )
+            .unwrap();
             run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
 
-            fs::write(repo.join(".git"), "gitdir: ../main/.git/worktrees/demo\n").unwrap();
+            assert!(repo.join(".git").is_file());
+            let git_metadata_before = fs::read_to_string(repo.join(".git")).unwrap();
             fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
             let existing_backup = repo.join(".agent/.cache/adopt/backups/existing");
             fs::create_dir_all(&existing_backup).unwrap();
@@ -626,7 +642,7 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
             );
             assert_eq!(
                 fs::read_to_string(repo.join(".git")).unwrap(),
-                "gitdir: ../main/.git/worktrees/demo\n",
+                git_metadata_before,
                 "{alias}/{mode}: linked-worktree metadata changed"
             );
             assert_eq!(
