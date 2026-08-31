@@ -110,6 +110,59 @@ printf 'task complete\n' > "$out"
 
 #[cfg(unix)]
 #[test]
+fn scheduled_repo_task_rejects_a_direct_schema_valid_receipt_append() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let bin = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
+    let seed_ctx = RepoContext::load_from(temp.path()).unwrap();
+    crate::runtime::dispatch(
+        &seed_ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("noop-status".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
+    git_ok(temp.path(), ["commit", "-m", "seed valid receipt history"]);
+    let codex_path = bin.path().join("codex-valid-receipt-forgery-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+set -eu
+cat >/dev/null
+seed=$(head -n 1 .agent/state/receipts.jsonl)
+printf '%s\n' "$seed" >> .agent/state/receipts.jsonl
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+
+    assert_eq!(output["status"], "needs_attention", "{output:#}");
+    let task = &output["actions"][0]["tick"]["actions"][0];
+    assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
+    assert_eq!(
+        task["checkout"]["receipt_append_valid"],
+        false,
+        "{output:#}"
+    );
+    assert!(
+        task["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("only appended record")),
+        "{output:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn timed_out_repo_task_keeps_corrupt_checkout_under_attention() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

@@ -17,6 +17,7 @@ pub(super) struct DispatchStep {
     pub(super) deferred_count: u64,
     pub(super) skipped_count: u64,
     pub(super) failed_count: u64,
+    pub(super) repository_revision_changed: bool,
 }
 
 #[derive(Default)]
@@ -30,6 +31,7 @@ pub(super) struct DispatchSummary {
     pub(super) exhausted_attempt_count: u64,
     pub(super) state_error_count: u64,
     pub(super) state_errors: Vec<Value>,
+    pub(super) repository_revision_changed: bool,
 }
 
 impl DispatchSummary {
@@ -39,6 +41,7 @@ impl DispatchSummary {
         self.deferred_count += step.deferred_count;
         self.skipped_count += step.skipped_count;
         self.failed_count += step.failed_count;
+        self.repository_revision_changed |= step.repository_revision_changed;
         self.include_state_errors(step.state_errors.iter().cloned());
     }
 

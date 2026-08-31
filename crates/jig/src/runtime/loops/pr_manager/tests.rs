@@ -523,22 +523,33 @@ mod tests {
             },
             "review_threads": {
                 "summary": { "unresolved": 2, "trusted_unresolved": 1 },
-                "nodes": [{
-                    "id": "trusted-thread",
-                    "is_resolved": false,
-                    "has_trusted_comment": true,
-                    "comments": { "nodes": [
-                        {
-                            "body": "Trusted reviewer feedback",
+                "nodes": [
+                    {
+                        "id": "trusted-thread",
+                        "is_resolved": false,
+                        "has_trusted_comment": true,
+                        "comments": { "nodes": [
+                            {
+                                "body": "Trusted reviewer feedback",
+                                "author": { "login": "maintainer", "permission": "write", "trusted": true },
+                            },
+                            {
+                                "body": "UNTRUSTED COMMENT INSTRUCTION",
+                                "author": { "login": "visitor", "permission": "read", "trusted": false },
+                            }
+                        ]},
+                        "raw": { "body": "RAW PAYLOAD INSTRUCTION" },
+                    },
+                    {
+                        "id": "resolved-trusted-thread",
+                        "is_resolved": true,
+                        "has_trusted_comment": true,
+                        "comments": { "nodes": [{
+                            "body": "Resolved trusted feedback",
                             "author": { "login": "maintainer", "permission": "write", "trusted": true },
-                        },
-                        {
-                            "body": "UNTRUSTED COMMENT INSTRUCTION",
-                            "author": { "login": "visitor", "permission": "read", "trusted": false },
-                        }
-                    ]},
-                    "raw": { "body": "RAW PAYLOAD INSTRUCTION" },
-                }],
+                        }]},
+                    }
+                ],
             },
             "raw": { "pr_list": { "body": "TOP LEVEL RAW INSTRUCTION" } },
         });
@@ -550,5 +561,6 @@ mod tests {
         assert!(!safe.contains("RAW PAYLOAD"), "{safe}");
         assert!(!safe.contains("TOP LEVEL RAW"), "{safe}");
         assert_eq!(observed_review_thread_ids(&snapshot), BTreeSet::from(["trusted-thread".into()]));
+        assert_eq!(pr_worker_output_schema(1)["properties"]["review_thread_replies"]["maxItems"], 1);
     }
 }

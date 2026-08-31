@@ -19,7 +19,29 @@ fn post_review_thread_updates(
         .and_then(Value::as_array)
         .unwrap_or(&empty);
     let allowed_thread_ids = observed_review_thread_ids(pull_request);
+    let actionable_reply_count = replies
+        .iter()
+        .filter_map(|reply| reply.get("thread_id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|thread_id| allowed_thread_ids.contains(*thread_id))
+        .count();
+    if actionable_reply_count > allowed_thread_ids.len() {
+        return ReviewThreadPostResult {
+            posts: json!([{
+                "thread_id": Value::Null,
+                "status": "failed",
+                "reason": "review_thread_reply_limit_exceeded",
+                "detail": format!(
+                    "worker returned {actionable_reply_count} actionable review thread intents for {} observed actionable threads",
+                    allowed_thread_ids.len()
+                ),
+            }]),
+            failed: true,
+            cancelled: false,
+        };
+    }
     let mut posts = Vec::new();
+    let mut handled_thread_ids = BTreeSet::new();
     let mut failed = false;
     let mut cancelled = false;
     for reply in replies {
@@ -41,6 +63,18 @@ fn post_review_thread_updates(
             .get("resolve")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+
+        if !handled_thread_ids.insert(thread_id) {
+            posts.push(json!({
+                "thread_id": thread_id,
+                "status": "skipped",
+                "reason": "duplicate_review_thread",
+                "detail": "worker returned more than one update intent for the same review thread",
+                "replied": false,
+                "resolved": false,
+            }));
+            continue;
+        }
 
         if !allowed_thread_ids.contains(thread_id) {
             posts.push(json!({
@@ -167,6 +201,13 @@ fn post_review_thread_updates(
 }
 
 fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
+    actionable_review_threads(pull_request)
+        .filter_map(|thread| thread.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn actionable_review_threads(pull_request: &Value) -> impl Iterator<Item = &Value> {
     pull_request
         .pointer("/review_threads/nodes")
         .and_then(Value::as_array)
@@ -177,10 +218,11 @@ fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
                 .get("has_trusted_comment")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
+                && !thread
+                    .get("is_resolved")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
         })
-        .filter_map(|thread| thread.get("id").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
 }
 
 fn post_review_thread_reply(

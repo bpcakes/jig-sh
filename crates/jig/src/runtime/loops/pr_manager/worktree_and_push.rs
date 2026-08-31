@@ -486,21 +486,7 @@ fn worker_pull_request_snapshot(pull_request: &Value) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let trusted_threads = pull_request
-        .pointer("/review_threads/nodes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|thread| {
-            thread
-                .get("has_trusted_comment")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                && !thread
-                    .get("is_resolved")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-        })
+    let trusted_threads = actionable_review_threads(pull_request)
         .map(|thread| {
             let comments = thread
                 .pointer("/comments/nodes")

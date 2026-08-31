@@ -476,8 +476,10 @@ fn prepare_checkout(
                 });
             }
         }
+        let initial_head = git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer)?;
         return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
+            initial_head,
             receipt_journal: checkout::ReceiptJournalBaseline::capture(ctx)?,
         });
     }

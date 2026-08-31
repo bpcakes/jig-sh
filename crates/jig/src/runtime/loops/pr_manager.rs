@@ -452,7 +452,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         None
     };
     let prompt = pr_worker_prompt(repair.repo, repair.item, pull_request, merge.as_ref());
-    let output_schema = pr_worker_output_schema();
+    let output_schema = pr_worker_output_schema(observed_review_thread_ids(pull_request).len());
     let worker = match run_codex_exec(
         repair.repo,
         CodexExecRequest {
@@ -629,7 +629,7 @@ fn post_commit_cancellation_error(repair_version: &str) -> String {
     )
 }
 
-fn pr_worker_output_schema() -> Value {
+fn pr_worker_output_schema(max_review_thread_replies: usize) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -642,6 +642,7 @@ fn pr_worker_output_schema() -> Value {
             "review_thread_replies": {
                 "type": "array",
                 "description": "GitHub review thread reply intents for Jig to post outside the sandbox.",
+                "maxItems": max_review_thread_replies,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,

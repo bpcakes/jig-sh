@@ -65,9 +65,13 @@ fn dispatch_due_at_with_observer(
 
     for workflow in workflows {
         let step = dispatch_workflow(ctx, &mut occurrences, &workflow, dispatch_at_ms, observer);
+        let repository_revision_changed = step.repository_revision_changed;
         summary.include(&step);
         if let Some(action) = step.action {
             actions.push(action);
+        }
+        if repository_revision_changed {
+            break;
         }
     }
 
@@ -93,6 +97,7 @@ fn dispatch_due_at_with_observer(
         "exhausted_attempt_count": summary.exhausted_attempt_count,
         "state_error_count": summary.state_error_count,
         "state_errors": summary.state_errors,
+        "repository_revision_changed": summary.repository_revision_changed,
         "reconciled_occurrences": reconciled,
         "actions": actions,
     });
@@ -131,6 +136,7 @@ fn dispatch_due_at_with_observer(
         "exhausted_attempt_count": summary.exhausted_attempt_count,
         "state_error_count": summary.state_error_count,
         "state_errors": evidence["state_errors"],
+        "repository_revision_changed": evidence["repository_revision_changed"],
         "reconciled_occurrences": evidence["reconciled_occurrences"],
         "actions": evidence["actions"],
     }))
@@ -301,6 +307,17 @@ fn dispatch_workflow(
             );
         }
     };
+    step.repository_revision_changed = workflow
+        .codex_task
+        .as_ref()
+        .is_some_and(|task| task.checkout == CodexTaskCheckout::Repo)
+        && tick
+            .value()
+            .and_then(|value| value.get("actions"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|action| action.pointer("/checkout/head_changed") == Some(&Value::Bool(true)));
     step.state_errors = scheduled_tick_state_errors(&tick, &workflow.id, &claim.occurrence_id);
     if tick.workflow_was_unexecuted() && tick.completion().worktree.is_none() {
         let error = tick
