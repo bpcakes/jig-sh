@@ -126,7 +126,7 @@ jig_capability_only_requested() {
           check)
             ;;
           # jig-repository-scope-subcommands-begin
-          agent | agent-map | bootstrap | dev | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration | migration-add | prompt | proxy | schema-dump | setup | sqlx | state | status | ui | vault | work)
+          agent | agent-map | bootstrap | dev | file-budget | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration | migration-add | prompt | proxy | schema-dump | setup | sqlx | state | status | ui | vault | work)
             # jig-repository-scope-subcommands-end
             return 1
             ;;
@@ -256,12 +256,10 @@ resolve_mcp_binary() {
     "Run a normal Jig command once to populate the cache:" \
     "  scripts/jig check contract" \
     "" >&2
-
   printf '%s\n' \
     "For the jig-sh source checkout, build and select the development binary explicitly:" \
     "  cargo build -p jig-sh --bin jig" \
     "  JIG_DEV_BIN=target/debug/jig scripts/jig mcp" >&2
-
   exit 1
 }
 
