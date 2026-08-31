@@ -291,6 +291,7 @@ fn pull_request_snapshot(
         .and_then(Value::as_str)
         .unwrap_or("");
     let base_is_default_branch = base_ref == repository.default_branch;
+    let head_repository_name_with_owner = head_repository_name_with_owner(raw_pr);
 
     Ok(json!({
         "number": number,
@@ -310,6 +311,7 @@ fn pull_request_snapshot(
             "sha": raw_pr.get("headRefOid").cloned().unwrap_or(Value::Null),
             "repository": raw_pr.get("headRepository").cloned().unwrap_or(Value::Null),
             "owner": raw_pr.get("headRepositoryOwner").cloned().unwrap_or(Value::Null),
+            "repository_name_with_owner": head_repository_name_with_owner,
             "is_cross_repository": raw_pr.get("isCrossRepository").cloned().unwrap_or(Value::Null),
         },
         "stack": {
@@ -333,6 +335,30 @@ fn pull_request_snapshot(
     }))
 }
 
+fn head_repository_name_with_owner(raw_pr: &Value) -> Option<String> {
+    let owner = raw_pr
+        .pointer("/headRepositoryOwner/login")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty());
+    let name = raw_pr
+        .pointer("/headRepository/name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    owner
+        .zip(name)
+        .map(|(owner, name)| format!("{owner}/{name}"))
+        .or_else(|| {
+            raw_pr
+                .pointer("/headRepository/nameWithOwner")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn checks_snapshot(client: &mut GithubSnapshotClient<'_>, pr_number: u64) -> Result<Value> {
     let output = client.output(os_args([
         "pr",
@@ -343,7 +369,11 @@ fn checks_snapshot(client: &mut GithubSnapshotClient<'_>, pr_number: u64) -> Res
     ]))?;
     let checks = match output.status_code {
         Some(0 | 8) => parse_gh_json(&output.stdout, "gh pr checks")?,
-        Some(1) if output.stderr.to_lowercase().contains("no checks") => json!([]),
+        Some(1) => match parse_gh_json(&output.stdout, "gh pr checks") {
+            Ok(checks) if checks.is_array() => checks,
+            _ if output.stderr.to_lowercase().contains("no checks") => json!([]),
+            _ => return Err(output.into_error("gh pr checks")),
+        },
         _ => return Err(output.into_error("gh pr checks")),
     };
     let checks = checks

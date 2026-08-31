@@ -2,6 +2,7 @@
 struct ReviewThreadWitness {
     comment_count: u64,
     latest_comment_id: Option<String>,
+    reply_generation: String,
 }
 
 enum ReviewThreadResolution {
@@ -23,15 +24,70 @@ fn observed_review_thread_witnesses(
                 .and_then(|comment| comment.get("id"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            let reply_generation = review_reply_generation(thread);
             Some((
                 id,
                 ReviewThreadWitness {
                     comment_count,
                     latest_comment_id,
+                    reply_generation,
                 },
             ))
         })
         .collect()
+}
+
+fn review_reply_generation(thread: &Value) -> String {
+    let mut digest = Sha256::new();
+    for comment in thread
+        .pointer("/comments/nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|comment| {
+            comment
+                .pointer("/author/trusted")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && !comment
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("<!-- jig-pr-manager:review-reply:"))
+        })
+    {
+        for field in ["id", "updatedAt", "body"] {
+            let value = comment
+                .get(field)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .as_bytes();
+            digest.update((value.len() as u64).to_be_bytes());
+            digest.update(value);
+        }
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn review_thread_reply_marker(
+    thread_id: &str,
+    repair_version: &str,
+    witness: &ReviewThreadWitness,
+    body: &str,
+) -> String {
+    let mut digest = Sha256::new();
+    for value in [
+        thread_id.as_bytes(),
+        repair_version.as_bytes(),
+        witness.reply_generation.as_bytes(),
+        body.trim().as_bytes(),
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value);
+    }
+    format!(
+        "<!-- jig-pr-manager:review-reply:v2:{:x} -->",
+        digest.finalize()
+    )
 }
 
 fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {

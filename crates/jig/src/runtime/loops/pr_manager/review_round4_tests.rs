@@ -123,7 +123,7 @@ mod review_round4_tests {
             PrRepairOutcome::WorkerCancelled {
                 before_start: false,
                 worker_receipt_id: "receipt-worker".into(),
-                worktree: worktree.clone(),
+                worktree: PreparedPrWorktree::Created(worktree.clone()),
             },
         )
         .unwrap();
@@ -217,7 +217,7 @@ exec git "$@"
             &mut AttemptStore::new(&ctx),
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("worker did not start"),
-                worktree: Some(worktree.clone()),
+                worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
                 worker_receipt_id: None,
             },
             guard,
@@ -319,7 +319,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut AttemptStore::new(&ctx),
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("worker did not start"),
-                worktree: Some(worktree.clone()),
+                worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
                 worker_receipt_id: None,
             },
             guard,
@@ -360,7 +360,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             PrRepairOutcome::WorkerCancelled {
                 before_start: true,
                 worker_receipt_id: "receipt-worker".into(),
-                worktree: worktree.clone(),
+                worktree: PreparedPrWorktree::Created(worktree.clone()),
             },
         )
         .unwrap();
@@ -406,7 +406,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             PrRepairOutcome::WorkerCancelled {
                 before_start: true,
                 worker_receipt_id: "receipt-worker".into(),
-                worktree: worktree.clone(),
+                worktree: PreparedPrWorktree::Created(worktree.clone()),
             },
             Some(&release_error),
             &mut cleanup,
@@ -462,7 +462,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
             &mut attempts,
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("worker process could not start"),
-                worktree: Some(worktree.clone()),
+                worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
                 worker_receipt_id: Some("receipt-worker".into()),
             },
         )

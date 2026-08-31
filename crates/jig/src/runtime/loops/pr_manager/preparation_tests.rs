@@ -232,7 +232,10 @@ exit "$status"
         let PrRepairOutcome::Cancelled { worktree, .. } = &outcome else {
             panic!("post-add cancellation should remain an unexecuted cancellation");
         };
-        assert_eq!(worktree.as_deref(), Some(expected_worktree.as_path()));
+        assert_eq!(
+            worktree.as_ref().map(PreparedPrWorktree::path),
+            Some(expected_worktree.as_path())
+        );
         assert!(expected_worktree.exists());
         assert_eq!(
             occurrences.snapshot().unwrap()[0].worktree.as_deref(),
@@ -294,7 +297,7 @@ exit "$status"
             &mut AttemptStore::new(&ctx),
             PrRepairOutcome::PreExecutionFailed {
                 error: anyhow!("injected preparation failure"),
-                worktree: Some(worktree.clone()),
+                worktree: Some(PreparedPrWorktree::Created(worktree.clone())),
                 worker_receipt_id: None,
             },
         )
@@ -305,6 +308,48 @@ exit "$status"
         assert_eq!(action["unexecuted_reason"], "pre_execution_error");
         assert_eq!(action["worktree_retained"], true);
         assert!(worktree.join("partial-evidence").is_file());
+    }
+
+    #[test]
+    fn preexisting_repair_worktree_survives_an_unexecuted_retry() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = workflow(60);
+        let item = item("a".repeat(40));
+        let worktree = pr_worktree_path(&ctx, &workflow, &item);
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(worktree.join("retained-repair"), "human evidence\n").unwrap();
+        let lease = json!({"owner": "fixture-owner"});
+        let repair = PrRepairContext {
+            repo: &ctx,
+            workflow: &workflow,
+            item: &item,
+            lease: &lease,
+            codex_home: None,
+            worktree_reservation: None,
+        };
+
+        let action = record_pr_repair_outcome_under_branch_lease(
+            &repair,
+            &mut AttemptStore::new(&ctx),
+            PrRepairOutcome::PreExecutionFailed {
+                error: anyhow!("fetch failed before the retry could reuse the worktree"),
+                worktree: Some(PreparedPrWorktree::Retained(worktree.clone())),
+                worker_receipt_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(action["status"], "needs_attention", "{action:#}");
+        assert_eq!(
+            action["attention_kind"],
+            "preexisting_repair_worktree_retained"
+        );
+        assert_eq!(action["worktree_retained"], true);
+        assert!(worktree.join("retained-repair").is_file());
     }
 
     #[test]
@@ -435,7 +480,13 @@ exec "$JIG_TEST_REAL_GIT" "$@"
         replacement.join().unwrap();
 
         assert_eq!(
-            action["attention_kind"], "branch_lease_lost_before_cleanup",
+            action["attention_kind"], "branch_lease_lost_after_start",
+            "{action:#}"
+        );
+        assert!(
+            action["completed_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("pre-existing repair worktree was retained")),
             "{action:#}"
         );
         assert_eq!(action["worktree_retained"], true, "{action:#}");

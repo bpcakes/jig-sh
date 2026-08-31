@@ -306,9 +306,8 @@ set -eu
 case "$*" in
   *ReviewThreadState*)
     if [ -f remote-reply ]; then
-      cat <<'JSON'
-{"data":{"node":{"id":"PRRT_1","comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":"cursor-1"},"nodes":[{"id":"PRRC_REMOTE","url":"https://example.invalid/reply","body":"<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->","viewerDidAuthor":true}]}}}}
-JSON
+      marker=$(tail -n 1 remote-marker)
+      printf '%s\n' "{\"data\":{\"node\":{\"id\":\"PRRT_1\",\"comments\":{\"pageInfo\":{\"hasPreviousPage\":false,\"startCursor\":\"cursor-1\"},\"nodes\":[{\"id\":\"PRRC_REMOTE\",\"url\":\"https://example.invalid/reply\",\"body\":\"$marker\",\"viewerDidAuthor\":true}]}}}}"
     else
       cat <<'JSON'
 {"data":{"node":{"id":"PRRT_1","comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}
@@ -316,6 +315,14 @@ JSON
     fi
     ;;
   *addPullRequestReviewThreadReply*)
+    body_file=''
+    for arg in "$@"; do
+      case "$arg" in
+        body=@*) body_file=${arg#body=@} ;;
+      esac
+    done
+    test -n "$body_file"
+    tail -n 1 "$body_file" > remote-marker
     printf 'mutation\n' >> mutation.log
     : > remote-reply
     : > mutation-started
@@ -333,6 +340,7 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+        let witness = ReviewThreadWitness::default();
         let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
 
         let response = post_review_thread_reply(
@@ -340,6 +348,7 @@ esac
             "PRRT_1",
             "Addressed in the pushed repair.",
             "pushed-head",
+            &witness,
             &mut observer,
             &mut budget,
         )
@@ -353,44 +362,6 @@ esac
         assert_eq!(
             fs::read_to_string(temp.path().join("mutation.log")).unwrap(),
             "mutation\n"
-        );
-    }
-
-    #[test]
-    fn review_reply_marker_uses_githubs_direct_viewer_authorship_fact() {
-        let marker = "<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->";
-        let spoofed = json!({
-            "data": {
-                "node": {
-                    "comments": {"nodes": [{
-                        "id": "PRRC_SPOOFED",
-                        "url": "https://example.invalid/spoofed",
-                        "body": marker,
-                        "author": null,
-                        "viewerDidAuthor": false,
-                    }]}
-                }
-            }
-        });
-        let owned = json!({
-            "data": {
-                "node": {
-                    "comments": {"nodes": [{
-                        "id": "PRRC_OWNED",
-                        "url": "https://example.invalid/owned",
-                        "body": marker,
-                        "author": null,
-                        "viewerDidAuthor": true,
-                    }]}
-                }
-            }
-        });
-
-        assert!(review_thread_comment_with_marker(&spoofed, marker).is_none());
-        assert_eq!(
-            review_thread_comment_with_marker(&owned, marker)
-                .and_then(|comment| comment["id"].as_str()),
-            Some("PRRC_OWNED")
         );
     }
 

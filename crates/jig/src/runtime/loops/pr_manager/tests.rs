@@ -199,7 +199,8 @@ mod tests {
             "head": {
                 "ref": "codex/widgets",
                 "sha": "abc123",
-                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                "repository": {"name": "ExampleVault"},
+                "repository_name_with_owner": "ExampleProject/ExampleVault",
                 "is_cross_repository": false,
             },
             "stack": {
@@ -243,7 +244,8 @@ mod tests {
             "head": {
                 "ref": "codex/widgets",
                 "sha": "abc123",
-                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                "repository": {"name": "ExampleVault"},
+                "repository_name_with_owner": "ExampleProject/ExampleVault",
                 "is_cross_repository": false,
             },
             "stack": {
@@ -290,7 +292,8 @@ mod tests {
             "head": {
                 "ref": "repair/example",
                 "sha": "abc123",
-                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                "repository": {"name": "ExampleVault"},
+                "repository_name_with_owner": "ExampleProject/ExampleVault",
                 "is_cross_repository": false,
             },
             "stack": {"is_stacked": false},
@@ -321,7 +324,7 @@ mod tests {
         }
 
         pull_request["head"]["is_cross_repository"] = json!(false);
-        pull_request["head"]["repository"]["nameWithOwner"] =
+        pull_request["head"]["repository_name_with_owner"] =
             json!("AnotherProject/ExampleVault");
         let PrCandidate::Skip(action) = classify_pull_request(
             &pull_request,
@@ -484,7 +487,8 @@ mod tests {
                     "head": {
                         "ref": "repair/healthy",
                         "sha": "healthy-head",
-                        "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                        "repository": {"name": "ExampleVault"},
+                        "repository_name_with_owner": "ExampleProject/ExampleVault",
                         "is_cross_repository": false,
                     },
                     "checks": {"summary": {"fail": 0, "pending": 0}},
@@ -638,7 +642,8 @@ mod tests {
             "head": {
                 "ref": "repair/example",
                 "sha": "abc123",
-                "repository": {"nameWithOwner": "ExampleProject/ExampleVault"},
+                "repository": {"name": "ExampleVault"},
+                "repository_name_with_owner": "ExampleProject/ExampleVault",
                 "is_cross_repository": false,
             },
             "stack": { "is_stacked": false },

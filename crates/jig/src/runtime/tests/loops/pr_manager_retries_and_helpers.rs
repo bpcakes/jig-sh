@@ -34,6 +34,7 @@ JSON
       cat <<'JSON'
 [{"bucket":"fail","completedAt":"2026-07-08T10:01:00Z","description":"still failing","event":"pull_request","link":"https://github.com/acme/demo/actions/1","name":"test","startedAt":"2026-07-08T10:00:00Z","state":"FAILURE","workflow":"ci"}]
 JSON
+      exit 1
     fi
     ;;
   "api graphql")
@@ -284,7 +285,7 @@ fn loop_tick_pr_manager_continues_after_blocked_candidate() {
     let cache = temp.path().join(".agent/.cache/loop");
     fs::create_dir_all(&cache).unwrap();
     fs::write(
-        cache.join("leases.json"),
+        cache.join("branch_leases.json"),
         serde_json::to_vec_pretty(&json!({
             "leases": {
                 "branch:codex/blocked": {

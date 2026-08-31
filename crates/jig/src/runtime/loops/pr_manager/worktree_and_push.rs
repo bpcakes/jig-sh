@@ -4,7 +4,7 @@ fn prepare_worktree(
     item: &PrWorkItem,
     worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
-) -> std::result::Result<PathBuf, PrWorktreePreparationError> {
+) -> std::result::Result<PreparedPrWorktree, PrWorktreePreparationError> {
     let worktree = pr_worktree_path(ctx, workflow, item);
     let existed_before_preflight = match inspect_managed_directory(
         ctx.root(),
@@ -18,7 +18,7 @@ fn prepare_worktree(
                     "Failed to inspect PR repair worktree {}",
                     worktree.display()
                 ))),
-                worktree: Some(worktree),
+                worktree: Some(PreparedPrWorktree::Retained(worktree)),
             });
         }
     };
@@ -48,7 +48,8 @@ fn prepare_worktree(
     if let Err(error) = preflight {
         return Err(PrWorktreePreparationError {
             source: error,
-            worktree: existed_before_preflight.then_some(worktree),
+            worktree: existed_before_preflight
+                .then_some(PreparedPrWorktree::Retained(worktree)),
         });
     }
     if let Some(reservation) = worktree_reservation
@@ -58,7 +59,8 @@ fn prepare_worktree(
             source: PrRepairStepError::failed(
                 error.context("Failed to reserve the PR repair worktree in occurrence state"),
             ),
-            worktree: existed_before_preflight.then_some(worktree),
+            worktree: existed_before_preflight
+                .then_some(PreparedPrWorktree::Retained(worktree)),
         });
     }
     let result = (|| {
@@ -110,18 +112,44 @@ fn prepare_worktree(
         Ok(())
     })();
     match result {
-        Ok(()) => Ok(worktree),
+        Ok(()) => Ok(if existed_before_preflight {
+            PreparedPrWorktree::Retained(worktree)
+        } else {
+            PreparedPrWorktree::Created(worktree)
+        }),
         Err(error) => Err(PrWorktreePreparationError {
             source: error,
-            worktree: Some(worktree),
+            worktree: Some(if existed_before_preflight {
+                PreparedPrWorktree::Retained(worktree)
+            } else {
+                PreparedPrWorktree::Created(worktree)
+            }),
         }),
+    }
+}
+
+#[derive(Clone, Debug)]
+enum PreparedPrWorktree {
+    Created(PathBuf),
+    Retained(PathBuf),
+}
+
+impl PreparedPrWorktree {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Created(path) | Self::Retained(path) => path,
+        }
+    }
+
+    const fn created_by_current_attempt(&self) -> bool {
+        matches!(self, Self::Created(_))
     }
 }
 
 #[derive(Debug)]
 struct PrWorktreePreparationError {
     source: PrRepairStepError,
-    worktree: Option<PathBuf>,
+    worktree: Option<PreparedPrWorktree>,
 }
 
 enum PrCleanupLease<'a> {

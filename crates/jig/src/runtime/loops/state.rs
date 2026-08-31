@@ -77,6 +77,12 @@ impl LeaseStore {
         }
     }
 
+    pub(super) fn new_repository(ctx: &RepoContext) -> Self {
+        Self {
+            persistence: JsonStatePersistence::new_repository(ctx, "branch_leases"),
+        }
+    }
+
     pub(super) fn acquire(&mut self, key: &str, ttl_seconds: u64) -> Result<LeaseAcquire> {
         self.with_locked(|store| {
             let now = now_ms();

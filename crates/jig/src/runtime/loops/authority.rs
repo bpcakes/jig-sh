@@ -30,6 +30,73 @@ pub(super) fn resolve_protected_loop_authority(
     Ok(Some(ProtectedLoopAuthority { root, dir }))
 }
 
+pub(super) fn resolve_protected_repository_authority(
+    repo_root: &Path,
+) -> Result<Option<ProtectedLoopAuthority>> {
+    let Some(worktree_authority) = resolve_protected_loop_authority(repo_root)? else {
+        return Ok(None);
+    };
+    let root = resolve_common_git_directory(&worktree_authority.root)?;
+    let dir = root.join(PROTECTED_LOOP_DIR);
+    Ok(Some(ProtectedLoopAuthority { root, dir }))
+}
+
+fn resolve_common_git_directory(git_dir: &Path) -> Result<PathBuf> {
+    let common_pointer = git_dir.join("commondir");
+    let metadata = match fs::symlink_metadata(&common_pointer) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(git_dir.to_path_buf());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to inspect common Git metadata pointer {}",
+                    common_pointer.display()
+                )
+            });
+        }
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_GITDIR_FILE_BYTES {
+        bail!(
+            "Common Git metadata pointer must be a bounded regular file: {}",
+            common_pointer.display()
+        );
+    }
+    let pointer = fs::read_to_string(&common_pointer).with_context(|| {
+        format!(
+            "Failed to read common Git metadata pointer {}",
+            common_pointer.display()
+        )
+    })?;
+    let pointer = pointer.trim_end_matches(['\r', '\n']);
+    if pointer.is_empty() || pointer.contains(['\r', '\n']) {
+        bail!(
+            "Common Git metadata pointer is empty or contains multiple lines at {}",
+            common_pointer.display()
+        );
+    }
+    let pointer = PathBuf::from(pointer);
+    let common_dir = if pointer.is_absolute() {
+        pointer
+    } else {
+        git_dir.join(pointer)
+    };
+    let common_dir = fs::canonicalize(&common_dir).with_context(|| {
+        format!(
+            "Failed to resolve the common Git metadata directory {}",
+            common_dir.display()
+        )
+    })?;
+    if !common_dir.is_dir() {
+        bail!(
+            "Resolved common Git metadata path is not a directory: {}",
+            common_dir.display()
+        );
+    }
+    Ok(common_dir)
+}
+
 fn resolve_git_metadata_directory(
     repo_root: &Path,
     dot_git: PathBuf,

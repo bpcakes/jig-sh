@@ -1,6 +1,7 @@
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -269,6 +270,35 @@ kind = "noop_status"
         1,
         "{output:#}"
     );
+}
+
+#[test]
+fn pr_manager_status_includes_repository_branch_leases() {
+    let temp = tempdir().unwrap();
+    let config = "[[loop.workflows]]\nid = \"pr-manager\"\nkind = \"pr_manager\"";
+    TestRepoBuilder::new(temp.path()).config(config).write();
+    let git = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(git.status.success(), "{git:?}");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut branch_leases = LeaseStore::new_repository(&ctx);
+    branch_leases.acquire("branch:repair/example", 60).unwrap();
+
+    let output = status_at_with_cancellation(
+        &ctx,
+        LoopStatusRequest {
+            workflow: Some("pr-manager".into()),
+        },
+        &|| false,
+        u64::MAX,
+    )
+    .unwrap();
+
+    assert_eq!(output["leases"].as_array().unwrap().len(), 1, "{output:#}");
+    assert_eq!(output["leases"][0]["key"], "branch:repair/example");
 }
 
 #[test]

@@ -151,6 +151,7 @@ fn post_review_thread_updates(
                 thread_id,
                 body,
                 repair_version,
+                thread_witness,
                 observer,
                 &mut budget,
             ) {
@@ -274,10 +275,11 @@ fn post_review_thread_reply(
     thread_id: &str,
     body: &str,
     repair_version: &str,
+    witness: &ReviewThreadWitness,
     observer: &mut dyn ExecutionControl,
     budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    let marker = review_thread_reply_marker(thread_id, repair_version);
+    let marker = review_thread_reply_marker(thread_id, repair_version, witness, body);
     if let Some(comment) =
         review_thread_reply_comment(ctx, thread_id, &marker, observer, budget)?
     {
@@ -357,10 +359,6 @@ fn resolve_review_thread(
     )
     .and_then(validate_resolve_mutation_response);
     reconcile_resolve_mutation(ctx, thread_id, result, budget).map(ReviewThreadResolution::Resolved)
-}
-
-fn review_thread_reply_marker(thread_id: &str, repair_version: &str) -> String {
-    format!("<!-- jig-pr-manager:review-reply:{thread_id}:{repair_version} -->")
 }
 
 fn review_thread_reply_comment(

@@ -148,6 +148,8 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let body = format!("review reply begins\n{}\nreview reply ends", "x".repeat(256 * 1_024));
+        let witness = ReviewThreadWitness::default();
+        let marker = review_thread_reply_marker("PRRT_1", "example-head", &witness, &body);
         let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
 
         let response = post_review_thread_reply(
@@ -155,6 +157,7 @@ esac
             "PRRT_1",
             &body,
             "example-head",
+            &witness,
             &mut NoopExecutionObserver,
             &mut budget,
         )
@@ -167,10 +170,91 @@ esac
         let captured = fs::read_to_string(temp.path().join("captured-reply")).unwrap();
         assert!(captured.starts_with("review reply begins\n"));
         assert!(captured.contains("review reply ends"));
-        assert!(captured.ends_with(
-            "<!-- jig-pr-manager:review-reply:PRRT_1:example-head -->"
-        ));
+        assert!(captured.ends_with(&marker));
         assert!(captured.len() > 256 * 1_024);
+    }
+
+    #[test]
+    fn reply_marker_binds_feedback_generation_and_response_intent() {
+        let first = json!({
+            "comments": {"nodes": [{
+                "id": "COMMENT_1",
+                "updatedAt": "2026-09-01T10:00:00Z",
+                "body": "Please add a regression test",
+                "author": {"trusted": true},
+            }]},
+        });
+        let later = json!({
+            "comments": {"nodes": [
+                {
+                    "id": "COMMENT_1",
+                    "updatedAt": "2026-09-01T10:00:00Z",
+                    "body": "Please add a regression test",
+                    "author": {"trusted": true},
+                },
+                {
+                    "id": "COMMENT_2",
+                    "updatedAt": "2026-09-01T11:00:00Z",
+                    "body": "Please cover the cancellation path too",
+                    "author": {"trusted": true},
+                },
+            ]},
+        });
+        let first = ReviewThreadWitness {
+            reply_generation: review_reply_generation(&first),
+            ..ReviewThreadWitness::default()
+        };
+        let later = ReviewThreadWitness {
+            reply_generation: review_reply_generation(&later),
+            ..ReviewThreadWitness::default()
+        };
+
+        let original = review_thread_reply_marker("PRRT_1", "same-head", &first, "Done.");
+        assert_eq!(
+            original,
+            review_thread_reply_marker("PRRT_1", "same-head", &first, "Done.")
+        );
+        assert_ne!(
+            original,
+            review_thread_reply_marker("PRRT_1", "same-head", &later, "Done.")
+        );
+        assert_ne!(
+            original,
+            review_thread_reply_marker("PRRT_1", "same-head", &first, "Added more coverage.")
+        );
+    }
+
+    #[test]
+    fn reply_reconciliation_requires_githubs_viewer_authorship_fact() {
+        let marker = review_thread_reply_marker(
+            "PRRT_1",
+            "pushed-head",
+            &ReviewThreadWitness::default(),
+            "Addressed.",
+        );
+        let spoofed = json!({
+            "data": {"node": {"comments": {"nodes": [{
+                "id": "PRRC_SPOOFED",
+                "url": "https://example.invalid/spoofed",
+                "body": marker,
+                "viewerDidAuthor": false,
+            }]}}}
+        });
+        let owned = json!({
+            "data": {"node": {"comments": {"nodes": [{
+                "id": "PRRC_OWNED",
+                "url": "https://example.invalid/owned",
+                "body": marker,
+                "viewerDidAuthor": true,
+            }]}}}
+        });
+
+        assert!(review_thread_comment_with_marker(&spoofed, &marker).is_none());
+        assert_eq!(
+            review_thread_comment_with_marker(&owned, &marker)
+                .and_then(|comment| comment["id"].as_str()),
+            Some("PRRC_OWNED")
+        );
     }
 
     #[test]
@@ -178,6 +262,7 @@ esac
         let witness = ReviewThreadWitness {
             comment_count: 1,
             latest_comment_id: Some("PRRC_ORIGINAL".into()),
+            ..ReviewThreadWitness::default()
         };
         let changed = json!({
             "data": {"node": {

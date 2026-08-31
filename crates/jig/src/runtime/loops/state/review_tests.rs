@@ -67,6 +67,63 @@ fn dispatch_preflight_fails_closed_for_lease_corruption_and_recovers_attempts() 
 }
 
 #[test]
+fn branch_leases_are_shared_across_linked_worktrees() {
+    let container = tempdir().unwrap();
+    let main = container.path().join("main");
+    let linked = container.path().join("linked");
+    fs::create_dir(&main).unwrap();
+    write_loop_fixture_repo(&main);
+    for args in [
+        &["init"][..],
+        &["config", "user.email", "fixture@example.com"],
+        &["config", "user.name", "Fixture"],
+        &["add", "."],
+        &["commit", "-m", "fixture"],
+    ] {
+        let output = Command::new("git")
+            .current_dir(&main)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+    }
+    let output = Command::new("git")
+        .current_dir(&main)
+        .args(["worktree", "add", "--detach", linked.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let main_ctx = RepoContext::load_from(&main).unwrap();
+    let linked_ctx = RepoContext::load_from(&linked).unwrap();
+    let mut main_branches = LeaseStore::new_repository(&main_ctx);
+    let LeaseAcquire::Acquired(branch_lease) =
+        main_branches.acquire("branch:repair/example", 60).unwrap()
+    else {
+        panic!("main worktree should acquire the repository branch lease");
+    };
+    let mut linked_branches = LeaseStore::new_repository(&linked_ctx);
+    let LeaseAcquire::Held(observed) = linked_branches
+        .acquire("branch:repair/example", 60)
+        .unwrap()
+    else {
+        panic!("linked worktree must observe the repository branch lease");
+    };
+
+    assert_eq!(observed.owner, branch_lease.owner);
+    let mut main_workflows = LeaseStore::new(&main_ctx);
+    let mut linked_workflows = LeaseStore::new(&linked_ctx);
+    assert!(matches!(
+        main_workflows.acquire("workflow:fixture", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    assert!(matches!(
+        linked_workflows.acquire("workflow:fixture", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+}
+
+#[test]
 fn git_state_migrates_legacy_leases_and_attempts_to_protected_authority() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());

@@ -34,7 +34,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
         PrRepairOutcome::Cancelled { detail, worktree } => Ok(cancelled_before_start_action(
             repair,
             &detail,
-            worktree.as_deref(),
+            worktree.as_ref(),
             None,
             cleanup_authority_error,
             cleanup,
@@ -70,7 +70,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 "branch": repair.item.head_ref,
                 "head_sha": repair.item.head_sha,
                 "reasons": repair.item.reasons,
-                "worktree": worktree,
+                "worktree": worktree.path(),
                 "lease": repair.lease,
                 "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                 "worker_receipt_id": worker_receipt_id,
@@ -85,7 +85,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
         } => Ok(unexecuted_pr_action(
             repair,
             &format!("{error:#}"),
-            worktree.as_deref(),
+            worktree.as_ref(),
             worker_receipt_id.as_deref(),
             cleanup_authority_error,
             UnexecutedReason::PreExecutionError,
@@ -122,7 +122,7 @@ fn record_pr_repair_outcome_under_branch_lease<L: serde::Serialize>(
 fn cancelled_before_start_action<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     detail: &str,
-    worktree: Option<&Path>,
+    worktree: Option<&PreparedPrWorktree>,
     worker_receipt_id: Option<&str>,
     cleanup_authority_error: Option<&anyhow::Error>,
     cleanup: &mut PrWorktreeCleanup<'_>,
@@ -141,7 +141,7 @@ fn cancelled_before_start_action<L: serde::Serialize>(
 fn unexecuted_pr_action<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     detail: &str,
-    worktree: Option<&Path>,
+    worktree: Option<&PreparedPrWorktree>,
     worker_receipt_id: Option<&str>,
     cleanup_authority_error: Option<&anyhow::Error>,
     reason: UnexecutedReason,
@@ -153,15 +153,24 @@ fn unexecuted_pr_action<L: serde::Serialize>(
         repair.codex_home,
         "failed",
         detail,
-        worktree,
+        worktree.map(PreparedPrWorktree::path),
         worker_receipt_id,
     );
     action["unexecuted_reason"] = json!(reason.as_str());
     if let Some(worktree) = worktree {
+        if !worktree.created_by_current_attempt() {
+            action["status"] = json!("needs_attention");
+            action["attention_kind"] = json!("preexisting_repair_worktree_retained");
+            action["worktree_retained"] = json!(true);
+            action["error"] = json!(format!(
+                "{detail}; the pre-existing repair worktree was retained because this attempt did not create it"
+            ));
+            return with_branch_lease_result(action, cleanup_authority_error);
+        }
         if let Some(authority_error) = cleanup_authority_error {
             return branch_lease_cleanup_attention(action, authority_error);
         }
-        match cleanup.cleanup_candidate(worktree) {
+        match cleanup.cleanup_candidate(worktree.path()) {
             Ok(_) => action["worktree_retained"] = json!(false),
             Err(cleanup_error) => return worktree_cleanup_attention(action, cleanup_error),
         }
@@ -392,11 +401,11 @@ enum PrRepairOutcome {
     Completed(Value),
     Cancelled {
         detail: String,
-        worktree: Option<PathBuf>,
+        worktree: Option<PreparedPrWorktree>,
     },
     PreExecutionFailed {
         error: anyhow::Error,
-        worktree: Option<PathBuf>,
+        worktree: Option<PreparedPrWorktree>,
         worker_receipt_id: Option<String>,
     },
     WorkerFailed {
@@ -407,7 +416,7 @@ enum PrRepairOutcome {
     WorkerCancelled {
         before_start: bool,
         worker_receipt_id: String,
-        worktree: PathBuf,
+        worktree: PreparedPrWorktree,
     },
 }
 

@@ -39,6 +39,19 @@ mod tests {
         assert_eq!(encode_path_segment("example[bot]"), "example%5Bbot%5D");
     }
 
+    #[test]
+    fn head_repository_identity_uses_the_fields_emitted_by_gh() {
+        let raw = json!({
+            "headRepository": {"id": "repo-1", "name": "ExampleVault"},
+            "headRepositoryOwner": {"login": "ExampleProject"},
+        });
+
+        assert_eq!(
+            head_repository_name_with_owner(&raw).as_deref(),
+            Some("ExampleProject/ExampleVault")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn gh_commands_scrub_repository_redirects_but_keep_authentication() {

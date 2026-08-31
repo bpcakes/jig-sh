@@ -5,7 +5,10 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::context::RepoContext;
-use crate::runtime::loops::authority::{ProtectedLoopAuthority, resolve_protected_loop_authority};
+use crate::runtime::loops::authority::{
+    ProtectedLoopAuthority, resolve_protected_loop_authority,
+    resolve_protected_repository_authority,
+};
 
 use super::json_cache::{
     read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
@@ -45,10 +48,22 @@ pub(super) struct JsonStatePersistence {
 
 impl JsonStatePersistence {
     pub(super) fn new(ctx: &RepoContext, name: &str) -> Self {
+        Self::new_with_authority(ctx, name, resolve_protected_loop_authority)
+    }
+
+    pub(super) fn new_repository(ctx: &RepoContext, name: &str) -> Self {
+        Self::new_with_authority(ctx, name, resolve_protected_repository_authority)
+    }
+
+    fn new_with_authority(
+        ctx: &RepoContext,
+        name: &str,
+        resolve: fn(&std::path::Path) -> Result<Option<ProtectedLoopAuthority>>,
+    ) -> Self {
         let legacy_dir = ctx.root().join(LOOP_CACHE_DIR);
         let legacy = JsonLocation::new(ctx.root().to_path_buf(), legacy_dir, name);
         let protected_state_path = format!("jig/loop/{name}.json");
-        let protected = resolve_protected_loop_authority(ctx.root())
+        let protected = resolve(ctx.root())
             .map(|authority| authority.map(|authority| protected_location(authority, name)))
             .map_err(|error| format!("{error:#}"));
         Self {

@@ -53,6 +53,11 @@ pub(in crate::runtime::loops) fn status_at_with_cancellation(
     if let Some(workflow) = selected_workflow {
         leases.retain(|lease| lease.matches_key(&workflow.lease_key()));
     }
+    if selected_workflow.is_none_or(|workflow| workflow.kind == PR_MANAGER_KIND) {
+        leases.extend(
+            LeaseStore::new_repository(ctx).active_leases_read_only_with_cancellation(cancelled)?,
+        );
+    }
     ensure_status_active(cancelled)?;
     let mut occurrences =
         OccurrenceStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;

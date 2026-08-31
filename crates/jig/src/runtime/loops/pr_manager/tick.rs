@@ -1,7 +1,7 @@
 pub(super) fn pr_manager_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
-    lease_store: &mut LeaseStore,
+    _lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
     worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
@@ -38,10 +38,11 @@ pub(super) fn pr_manager_tick(
             ));
         }
     };
+    let mut branch_leases = LeaseStore::new_repository(ctx);
     pr_manager_tick_from_snapshot(
         ctx,
         workflow,
-        lease_store,
+        &mut branch_leases,
         attempt_store,
         observed,
         PrManagerExecution {

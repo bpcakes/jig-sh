@@ -120,7 +120,7 @@ fn classify_pull_request(
         .pointer("/head/is_cross_repository")
         .and_then(Value::as_bool);
     let head_repository = pull_request
-        .pointer("/head/repository/nameWithOwner")
+        .pointer("/head/repository_name_with_owner")
         .and_then(Value::as_str)
         .filter(|repository| !repository.is_empty());
     let same_repository = expected_repository
@@ -475,9 +475,10 @@ fn run_pr_repair<L: serde::Serialize>(
 fn run_pr_repair_in_worktree<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
     pull_request: &Value,
-    worktree: &Path,
+    prepared_worktree: &PreparedPrWorktree,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<PrRepairOutcome> {
+    let worktree = prepared_worktree.path();
     let base_head = git_stdout(repair.repo, worktree, ["rev-parse", "HEAD"], observer)?;
     let merge = if repair
         .item
@@ -531,7 +532,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             if failure.is_some_and(CodexExecFailure::worker_was_unexecuted) {
                 return Ok(PrRepairOutcome::PreExecutionFailed {
                     error,
-                    worktree: Some(worktree.to_path_buf()),
+                    worktree: Some(prepared_worktree.clone()),
                     worker_receipt_id,
                 });
             }
@@ -550,7 +551,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                 return Ok(PrRepairOutcome::WorkerCancelled {
                     before_start,
                     worker_receipt_id,
-                    worktree: worktree.to_path_buf(),
+                    worktree: prepared_worktree.clone(),
                 });
             }
         },
