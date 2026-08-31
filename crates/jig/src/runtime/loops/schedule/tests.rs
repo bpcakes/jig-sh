@@ -361,6 +361,65 @@ schedule = "* * * * *"
 }
 
 #[test]
+fn abandonment_state_failure_still_counts_the_due_work_as_skipped() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+"#
+        ),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = list_workflows(&ctx)
+        .unwrap()
+        .into_iter()
+        .find(|workflow| workflow.id == "scheduled-noop")
+        .unwrap();
+    let mut occurrences = OccurrenceStore::new(&ctx);
+    let super::OccurrenceClaim::Acquired(claim) = occurrences
+        .claim(&workflow.id, 100, workflow.lease_ttl_seconds)
+        .unwrap()
+    else {
+        panic!("expected occurrence claim");
+    };
+    fs::write(
+        temp.path().join(".agent/runtime/loop/schedule.json"),
+        "not JSON\n",
+    )
+    .unwrap();
+
+    let step = abandon_unexecuted_start_failure(
+        DispatchStep {
+            due_count: 1,
+            ..DispatchStep::default()
+        },
+        &mut occurrences,
+        &workflow,
+        &claim,
+        200,
+        "injected start failure".into(),
+    );
+
+    assert_eq!(step.executed_count, 0);
+    assert_eq!(step.skipped_count, 1);
+    assert_eq!(step.failed_count, 1);
+    assert!(
+        step.action.as_ref().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("abandoning the unexecuted occurrence also failed")
+    );
+}
+
+#[test]
 fn dispatcher_persistently_fails_while_occurrence_needs_attention() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();

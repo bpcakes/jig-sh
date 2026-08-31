@@ -158,7 +158,7 @@ printf 'task complete\n'
 
 #[cfg(unix)]
 #[test]
-fn scheduled_dispatch_fails_closed_after_worker_deletes_checkout_authority() {
+fn scheduled_dispatch_ignores_worker_forged_checkout_schedule_replica() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let bin = tempdir().unwrap();
@@ -174,6 +174,15 @@ kind = "noop_status"
 schedule = "* * * * *""#,
         true,
     );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace("schedule = \"* * * * *\"", "schedule = \"0 0 1 1 *\""),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["add", ".jig.toml"]);
+    git_ok(temp.path(), ["commit", "-m", "stabilize fixture schedule"]);
     let codex_path = bin.path().join("codex-task-stub.sh");
     let completion_marker = bin.path().join("scheduled-worker-completed");
     let start_log = bin.path().join("scheduled-worker-starts");
@@ -182,10 +191,11 @@ schedule = "* * * * *""#,
         r#"#!/bin/sh
 cat >/dev/null
 printf 'started\n' >> "$JIG_TEST_TASK_START_LOG"
-rm -f \
-  "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json" \
-  "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.initialized" \
-  "$JIG_TEST_TASK_REPO/.agent/.cache/loop/schedule.json"
+printf '%s\n' '{"schema_version":4,"occurrences":{}}' \
+  > "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json"
+printf '%s\n' 'not valid marker JSON' \
+  > "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.initialized"
+rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/schedule.json"
 sleep 1
 touch "$JIG_TEST_TASK_COMPLETION_MARKER"
 printf 'task complete\n'
@@ -202,51 +212,26 @@ printf 'task complete\n'
 
     let output = dispatch_loop(&ctx);
 
-    assert_eq!(output["ok"], false, "{output:#}");
-    assert_eq!(output["failed_count"], 2, "{output:#}");
-    assert_eq!(output["executed_count"], 1, "{output:#}");
+    assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["failed_count"], 0, "{output:#}");
+    assert_eq!(output["executed_count"], 2, "{output:#}");
     assert_eq!(output["actions"][0]["workflow_id"], "broken-state");
-    assert_eq!(output["actions"][0]["status"], "failed");
-    assert_eq!(output["actions"][0]["occurrence_state_persisted"], false);
-    assert_eq!(output["actions"][0]["occurrence"]["status"], "running");
-    assert_eq!(
-        output["actions"][0]["state_error"],
-        output["actions"][0]["error"]
-    );
-    assert!(
-        output["actions"][0]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("Failed to finish scheduled occurrence")),
-        "{output:#}"
-    );
+    assert_eq!(output["actions"][0]["status"], "succeeded");
+    assert_eq!(output["actions"][0]["occurrence"]["status"], "succeeded");
     assert_eq!(output["actions"][1]["workflow_id"], "healthy-noop");
-    assert_eq!(output["actions"][1]["status"], "failed");
+    assert_eq!(output["actions"][1]["status"], "succeeded");
     assert!(
-        output["actions"][1]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("Initialized loop schedule state is missing")),
-        "{output:#}"
-    );
-    assert!(
-        !completion_marker.exists(),
-        "worker should be terminated as soon as occurrence renewal fails"
+        completion_marker.exists(),
+        "checkout-local schedule forgery must not interrupt the worker"
     );
     assert_eq!(fs::read_to_string(&start_log).unwrap(), "started\n");
 
-    let error = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        error.contains("Initialized loop schedule state is missing"),
-        "{error}"
-    );
+    let second = dispatch_loop(&ctx);
+    assert_eq!(second["ok"], true, "{second:#}");
     assert_eq!(
         fs::read_to_string(&start_log).unwrap(),
         "started\n",
-        "the protected Git-metadata witness must prevent a duplicate worker start"
+        "the protected Git-metadata ledger must prevent a duplicate worker start"
     );
 }
 

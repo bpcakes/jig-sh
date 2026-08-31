@@ -415,17 +415,7 @@ fn abandon_unexecuted_start_failure(
             error,
         ),
         Err(abandon_error) => {
-            step.failed_count = 1;
-            step.action = Some(dispatch_state_failure(
-                workflow,
-                claim,
-                next_at_ms,
-                None,
-                format!(
-                    "{error}; abandoning the unexecuted occurrence also failed: {abandon_error:#}"
-                ),
-            ));
-            return step;
+            record_abandonment_failure(&mut step, workflow, claim, next_at_ms, error, abandon_error)
         }
     }
     step
@@ -467,19 +457,30 @@ fn abandon_unexecuted_tick_failure(
             );
         }
         Err(abandon_error) => {
-            step.failed_count = 1;
-            step.action = Some(dispatch_state_failure(
-                workflow,
-                claim,
-                next_at_ms,
-                None,
-                format!(
-                    "{error}; abandoning the unexecuted occurrence also failed: {abandon_error:#}"
-                ),
-            ));
+            record_abandonment_failure(&mut step, workflow, claim, next_at_ms, error, abandon_error)
         }
     }
     step
+}
+
+fn record_abandonment_failure(
+    step: &mut DispatchStep,
+    workflow: &ResolvedWorkflow,
+    claim: &ScheduleOccurrence,
+    next_at_ms: u64,
+    error: String,
+    abandon_error: anyhow::Error,
+) {
+    step.executed_count = 0;
+    step.skipped_count = 1;
+    step.failed_count = 1;
+    step.action = Some(dispatch_state_failure(
+        workflow,
+        claim,
+        next_at_ms,
+        None,
+        format!("{error}; abandoning the unexecuted occurrence also failed: {abandon_error:#}"),
+    ));
 }
 
 fn record_unexecuted_failure(

@@ -383,22 +383,35 @@ fn run_pr_repair<L: serde::Serialize>(
 ) -> PrRepairOutcome {
     let worktree = match prepare_worktree(repair.repo, repair.workflow, repair.item, observer) {
         Ok(worktree) => worktree,
-        Err(PrRepairStepError::Cancelled(detail)) => {
-            return PrRepairOutcome::Cancelled {
-                detail,
-                worktree: None,
-            };
-        }
-        Err(PrRepairStepError::Failed(error)) => {
-            let worktree = pr_worktree_root(repair.repo, &repair.workflow.id).join(format!(
-                "pr-{}-{}",
-                repair.item.pr_number,
-                sanitize_path_component(&repair.item.head_ref)
-            ));
-            return PrRepairOutcome::PreExecutionFailed {
-                error,
-                worktree: worktree.join(".git").exists().then_some(worktree),
-                worker_receipt_id: None,
+        Err(error) => {
+            if let (Some(worktree), Some(cleanup_error)) =
+                (error.retained_worktree, error.cleanup_error)
+            {
+                let (error, reason) = match error.source {
+                    PrRepairStepError::Cancelled(detail) => {
+                        (anyhow!(detail), UnexecutedReason::CancelledBeforeStart)
+                    }
+                    PrRepairStepError::Failed(error) => {
+                        (error, UnexecutedReason::PreExecutionError)
+                    }
+                };
+                return PrRepairOutcome::PreparationCleanupFailed {
+                    error,
+                    cleanup_error,
+                    worktree,
+                    reason,
+                };
+            }
+            return match error.source {
+                PrRepairStepError::Cancelled(detail) => PrRepairOutcome::Cancelled {
+                    detail,
+                    worktree: None,
+                },
+                PrRepairStepError::Failed(error) => PrRepairOutcome::PreExecutionFailed {
+                    error,
+                    worktree: None,
+                    worker_receipt_id: None,
+                },
             };
         }
     };
@@ -693,5 +706,7 @@ include!("pr_manager/worktree_and_push.rs");
 include!("pr_manager/push_error_tests.rs");
 include!("pr_manager/review_round4_tests.rs");
 include!("pr_manager/cancellation_tests.rs");
+include!("pr_manager/review_thread_boundary_tests.rs");
+include!("pr_manager/preparation_tests.rs");
 include!("pr_manager/git.rs");
 include!("pr_manager/tests.rs");

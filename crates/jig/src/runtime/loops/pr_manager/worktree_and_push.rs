@@ -3,73 +3,155 @@ fn prepare_worktree(
     workflow: &ResolvedWorkflow,
     item: &PrWorkItem,
     observer: &mut dyn ExecutionControl,
-) -> PrRepairStepResult<PathBuf> {
-    if !is_git_object_id(&item.head_sha) {
-        return Err(PrRepairStepError::failed(anyhow!(
-            "GitHub PR snapshot did not include a valid head object ID for PR #{}",
-            item.pr_number
-        )));
-    }
-    let worktree = pr_worktree_root(ctx, &workflow.id)
-        .join(format!(
-            "pr-{}-{}",
-            item.pr_number,
-            sanitize_path_component(&item.head_ref)
-        ));
-    let parent = worktree
-        .parent()
-        .ok_or_else(|| anyhow!("Worktree path has no parent: {}", worktree.display()))?;
-    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
+) -> std::result::Result<PathBuf, PrWorktreePreparationError> {
+    let worktree = pr_worktree_path(ctx, workflow, item);
+    let preflight = (|| -> PrRepairStepResult<()> {
+        if !is_git_object_id(&item.head_sha) {
+            return Err(PrRepairStepError::failed(anyhow!(
+                "GitHub PR snapshot did not include a valid head object ID for PR #{}",
+                item.pr_number
+            )));
+        }
+        let parent = worktree
+            .parent()
+            .ok_or_else(|| anyhow!("Worktree path has no parent: {}", worktree.display()))?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
 
-    let head_ref = remote_branch_ref(&item.head_ref);
-    git_checked(ctx, ctx.root(), ["fetch", "origin", &head_ref], observer)?;
-    let expected_head = format!("{}^{{commit}}", item.head_sha);
-    git_checked(
-        ctx,
-        ctx.root(),
-        ["cat-file", "-e", &expected_head],
-        observer,
-    )?;
-    if worktree.join(".git").exists() {
-        clean_reused_worktree(ctx, &worktree, observer)?;
-        git_checked(
-            ctx,
-            &worktree,
-            ["checkout", "--detach", &item.head_sha],
-            observer,
-        )?;
-    } else {
+        let head_ref = remote_branch_ref(&item.head_ref);
+        git_checked(ctx, ctx.root(), ["fetch", "origin", &head_ref], observer)?;
+        let expected_head = format!("{}^{{commit}}", item.head_sha);
         git_checked(
             ctx,
             ctx.root(),
-            vec![
-                OsString::from("worktree"),
-                OsString::from("add"),
-                OsString::from("--detach"),
-                worktree.as_os_str().to_os_string(),
-                OsString::from(&item.head_sha),
+            ["cat-file", "-e", &expected_head],
+            observer,
+        )
+    })();
+    if let Err(error) = preflight {
+        return Err(cleanup_failed_worktree_preparation(
+            ctx, &worktree, error, false,
+        ));
+    }
+    let result = (|| {
+        if worktree.join(".git").exists() {
+            clean_reused_worktree(ctx, &worktree, observer)?;
+            git_checked(
+                ctx,
+                &worktree,
+                ["checkout", "--detach", &item.head_sha],
+                observer,
+            )?;
+        } else {
+            git_checked(
+                ctx,
+                ctx.root(),
+                vec![
+                    OsString::from("worktree"),
+                    OsString::from("add"),
+                    OsString::from("--detach"),
+                    worktree.as_os_str().to_os_string(),
+                    OsString::from(&item.head_sha),
+                ],
+                observer,
+            )?;
+        }
+
+        git_checked(
+            ctx,
+            &worktree,
+            ["config", "user.name", "Jig PR Manager"],
+            observer,
+        )?;
+        git_checked(
+            ctx,
+            &worktree,
+            [
+                "config",
+                "user.email",
+                "jig-pr-manager@users.noreply.github.com",
             ],
             observer,
         )?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(worktree),
+        Err(error) => Err(cleanup_failed_worktree_preparation(
+            ctx, &worktree, error, true,
+        )),
     }
+}
 
-    git_checked(
+#[derive(Debug)]
+struct PrWorktreePreparationError {
+    source: PrRepairStepError,
+    retained_worktree: Option<PathBuf>,
+    cleanup_error: Option<anyhow::Error>,
+}
+
+impl From<PrRepairStepError> for PrWorktreePreparationError {
+    fn from(source: PrRepairStepError) -> Self {
+        Self {
+            source,
+            retained_worktree: None,
+            cleanup_error: None,
+        }
+    }
+}
+
+fn cleanup_failed_worktree_preparation(
+    ctx: &RepoContext,
+    worktree: &Path,
+    source: PrRepairStepError,
+    may_be_registered_without_a_path: bool,
+) -> PrWorktreePreparationError {
+    let cleanup = (|| -> Result<bool> {
+        let path_exists = worktree.try_exists().with_context(|| {
+            format!("Failed to inspect PR repair worktree {}", worktree.display())
+        })?;
+        if !path_exists && !may_be_registered_without_a_path {
+            return Ok(false);
+        }
+        let registered = pr_worktree_is_registered(ctx, worktree)?;
+        if registered {
+            remove_pr_worktree(ctx, worktree, true)?;
+            return Ok(true);
+        }
+        if path_exists {
+            fs::remove_dir(worktree).with_context(|| {
+                format!(
+                    "Failed to remove partial unregistered PR repair worktree {}",
+                    worktree.display()
+                )
+            })?;
+            return Ok(true);
+        }
+        Ok(false)
+    })();
+    match cleanup {
+        Ok(_) => PrWorktreePreparationError::from(source),
+        Err(cleanup_error) => PrWorktreePreparationError {
+            source,
+            retained_worktree: Some(worktree.to_path_buf()),
+            cleanup_error: Some(cleanup_error),
+        },
+    }
+}
+
+fn pr_worktree_is_registered(ctx: &RepoContext, worktree: &Path) -> Result<bool> {
+    let mut observer = NoopExecutionObserver;
+    let listing = git_stdout(
         ctx,
-        &worktree,
-        ["config", "user.name", "Jig PR Manager"],
-        observer,
-    )?;
-    git_checked(
-        ctx,
-        &worktree,
-        [
-            "config",
-            "user.email",
-            "jig-pr-manager@users.noreply.github.com",
-        ],
-        observer,
-    )?;
-    Ok(worktree)
+        ctx.root(),
+        ["worktree", "list", "--porcelain"],
+        &mut observer,
+    )
+    .map_err(pr_step_error)?;
+    Ok(listing.lines().any(|line| {
+        line.strip_prefix("worktree ")
+            .is_some_and(|candidate| Path::new(candidate) == worktree)
+    }))
 }
 
 fn is_git_object_id(value: &str) -> bool {
@@ -86,6 +168,18 @@ fn pr_worktree_root(ctx: &RepoContext, workflow_id: &str) -> PathBuf {
         .join(LOOP_CACHE_DIR)
         .join("worktrees")
         .join(workflow_key)
+}
+
+fn pr_worktree_path(
+    ctx: &RepoContext,
+    workflow: &ResolvedWorkflow,
+    item: &PrWorkItem,
+) -> PathBuf {
+    pr_worktree_root(ctx, &workflow.id).join(format!(
+        "pr-{}-{}",
+        item.pr_number,
+        sanitize_path_component(&item.head_ref)
+    ))
 }
 fn clean_reused_worktree(
     ctx: &RepoContext,

@@ -189,6 +189,20 @@ fn post_review_thread_reply(
         return Ok(reconciled_reply_response(&comment));
     }
     let body = format!("{body}\n\n{marker}");
+    let mut body_file = tempfile::NamedTempFile::new()
+        .context("Failed to create a temporary GitHub review reply file")
+        .map_err(ExecutionCommandError::failed)?;
+    use std::io::Write as _;
+    body_file
+        .write_all(body.as_bytes())
+        .context("Failed to write the temporary GitHub review reply file")
+        .map_err(ExecutionCommandError::failed)?;
+    body_file
+        .flush()
+        .context("Failed to flush the temporary GitHub review reply file")
+        .map_err(ExecutionCommandError::failed)?;
+    let mut body_field = OsString::from("body=@");
+    body_field.push(body_file.path());
     let result = github::gh_json(
         ctx,
         vec![
@@ -198,8 +212,8 @@ fn post_review_thread_reply(
             OsString::from(format!("query={}", add_review_thread_reply_mutation())),
             OsString::from("-f"),
             OsString::from(format!("threadId={thread_id}")),
-            OsString::from("-f"),
-            OsString::from(format!("body={body}")),
+            OsString::from("-F"),
+            body_field,
         ],
         &[0],
         observer,
