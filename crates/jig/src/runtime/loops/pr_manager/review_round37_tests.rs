@@ -216,6 +216,7 @@ mod review_round37_tests {
             repo.path(),
             "repair/example",
             &observed_head,
+            merge.get("base_head").and_then(Value::as_str),
             &validation_tree,
             &mut NoopExecutionObserver,
         )

@@ -194,6 +194,7 @@ mod push_error_tests {
         std::fs::write(repo.path().join("conflict.txt"), "other\n").unwrap();
         git(&["commit", "-am", "other"]);
         let head_before = git(&["rev-parse", "HEAD"]);
+        let incoming_base_head = git(&["rev-parse", &initial_branch]);
         let merge = std::process::Command::new("git")
             .current_dir(repo.path())
             .args(["merge", &initial_branch])
@@ -208,6 +209,7 @@ mod push_error_tests {
             repo.path(),
             "other",
             &head_before,
+            Some(&incoming_base_head),
             &auto_merge,
             &mut NoopExecutionObserver,
         )
@@ -261,6 +263,7 @@ mod push_error_tests {
             repo.path(),
             "repair/example",
             &base_head,
+            None,
             &bad_head,
             &mut NoopExecutionObserver,
         )
@@ -273,7 +276,7 @@ mod push_error_tests {
     }
 
     #[test]
-    fn commit_and_push_checks_only_changes_after_the_pre_worker_merge() {
+    fn commit_and_push_accepts_conflict_marker_examples_from_the_incoming_base() {
         let _env = crate::test_env::lock_env();
         let repo = tempdir().unwrap();
         let remote_parent = tempdir().unwrap();
@@ -309,7 +312,11 @@ mod push_error_tests {
             &["push", "origin", "HEAD:refs/heads/repair/example"],
         );
 
-        std::fs::write(repo.path().join("base.txt"), "pre-existing whitespace \n").unwrap();
+        std::fs::write(
+            repo.path().join("base.txt"),
+            "<<<<<<< base-branch documentation example\n",
+        )
+        .unwrap();
         git(repo.path(), &["add", "base.txt"]);
         git(repo.path(), &["commit", "-m", "merge base"]);
         let validation_head = git(repo.path(), &["rev-parse", "HEAD"]);
@@ -323,6 +330,7 @@ mod push_error_tests {
             repo.path(),
             "repair/example",
             &observed_head,
+            Some(&validation_head),
             &validation_head,
             &mut NoopExecutionObserver,
         )
@@ -373,6 +381,7 @@ mod push_error_tests {
             repo.path(),
             "repair/example",
             &observed_head,
+            None,
             &observed_head,
             &mut NoopExecutionObserver,
         )
@@ -465,6 +474,7 @@ mod push_error_tests {
             repo.path(),
             "repair/example",
             &observed_head,
+            None,
             &observed_head,
             &mut NoopExecutionObserver,
         )

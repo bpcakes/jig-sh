@@ -1,6 +1,6 @@
 use std::fs;
 #[cfg(unix)]
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt as _, symlink};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -265,6 +265,35 @@ fn writable_checkout_cache_tampering_cannot_change_protected_loop_authority() {
     };
     assert_eq!(current.owner, lease.owner);
     assert_eq!(attempts.snapshot().unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn initialized_protected_attempt_reads_do_not_rewrite_authority() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = example_workflow();
+    let mut attempts = AttemptStore::new(&ctx);
+    attempts
+        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
+        .unwrap();
+    let protected_path = attempts
+        .persistence
+        .protected_path()
+        .unwrap()
+        .unwrap()
+        .to_path_buf();
+    let inode_before = fs::metadata(&protected_path).unwrap().ino();
+
+    assert!(attempts.get(&workflow.id, "pr-17").unwrap().is_some());
+
+    assert_eq!(
+        fs::metadata(&protected_path).unwrap().ino(),
+        inode_before,
+        "a serialized attempt read must not replace initialized authority"
+    );
 }
 
 #[test]

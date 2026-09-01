@@ -598,6 +598,10 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         worktree,
         &repair.item.head_ref,
         &base_head,
+        merge
+            .as_ref()
+            .and_then(|merge| merge.get("base_head"))
+            .and_then(Value::as_str),
         &validation_tree,
         observer,
     ) {

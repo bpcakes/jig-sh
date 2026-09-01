@@ -13,6 +13,7 @@ use cap_std::{
 use fs4::fs_std::FileExt;
 use serde::Serialize;
 
+use crate::bootstrap::path::repository_file_identity;
 use crate::context::RepoContext;
 
 use super::super::records::ReceiptRecord;
@@ -22,6 +23,7 @@ const RECEIPT_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) struct ReceiptJournalWriter<'a> {
     state_dir: &'a Dir,
+    journal: &'a File,
 }
 
 #[derive(Debug)]
@@ -74,33 +76,63 @@ pub(crate) fn with_receipt_journal_writer_until<T>(
     cancelled: &dyn Fn() -> bool,
     operation: impl FnOnce(&ReceiptJournalWriter<'_>) -> Result<T>,
 ) -> Result<T> {
-    let directories = ReceiptJournalDirectories::open(ctx.root())?;
-    // Create the legacy-locked inode before taking either lock. Older runtimes lock the
-    // journal itself, so skipping this lock on the first append would leave no common
-    // serialization point during the cache-lock cutover.
-    let legacy_lock = open_regular_file(
-        &directories.state,
-        "receipts.jsonl",
-        true,
-        true,
-        "receipt journal",
-    )?;
-    lock_exclusive_until(&legacy_lock, "legacy receipt journal", deadline, cancelled)?;
-    let lock = open_regular_file(
-        &directories.locks,
-        "receipts.jsonl.lock",
-        true,
-        true,
-        "receipt journal lock",
-    )?;
-    lock_exclusive_until(&lock, "receipt journal", deadline, cancelled)?;
+    with_receipt_journal_writer_after_open_until(ctx, deadline, cancelled, |_| Ok(()), operation)
+}
 
-    let writer = ReceiptJournalWriter {
-        state_dir: &directories.state,
-    };
-    // The file handles are the lock guards. Dropping them releases advisory locks on every
-    // return path without letting fallible post-operation cleanup reclassify a durable append.
-    operation(&writer)
+fn with_receipt_journal_writer_after_open_until<T>(
+    ctx: &RepoContext,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+    mut after_legacy_open: impl FnMut(&File) -> Result<()>,
+    operation: impl FnOnce(&ReceiptJournalWriter<'_>) -> Result<T>,
+) -> Result<T> {
+    let directories = ReceiptJournalDirectories::open(ctx.root())?;
+    loop {
+        // Create the legacy-locked inode before taking either lock. Older runtimes lock the
+        // journal itself, so skipping this lock on the first append would leave no common
+        // serialization point during the cache-lock cutover.
+        let legacy_lock = open_regular_file(
+            &directories.state,
+            "receipts.jsonl",
+            true,
+            true,
+            "receipt journal",
+        )?;
+        after_legacy_open(&legacy_lock)?;
+        lock_exclusive_until(&legacy_lock, "legacy receipt journal", deadline, cancelled)?;
+        let lock = open_regular_file(
+            &directories.locks,
+            "receipts.jsonl.lock",
+            true,
+            true,
+            "receipt journal lock",
+        )?;
+        lock_exclusive_until(&lock, "receipt journal", deadline, cancelled)?;
+        if !journal_file_is_current(&directories.state, &legacy_lock)? {
+            if cancelled() {
+                bail!("Execution was cancelled while retrying receipt journal lock identity");
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "Timed out retrying receipt journal lock identity before its operation deadline"
+                );
+            }
+            continue;
+        }
+
+        let writer = ReceiptJournalWriter {
+            state_dir: &directories.state,
+            journal: &legacy_lock,
+        };
+        // The file handles are the lock guards. Dropping them releases advisory locks on every
+        // return path without letting fallible post-operation cleanup reclassify a durable append.
+        return operation(&writer);
+    }
+}
+
+fn journal_file_is_current(state_dir: &Dir, opened: &File) -> Result<bool> {
+    let current = open_regular_file(state_dir, "receipts.jsonl", false, false, "receipt journal")?;
+    Ok(repository_file_identity(opened)? == repository_file_identity(&current)?)
 }
 
 fn lock_exclusive_until(
@@ -133,16 +165,12 @@ impl ReceiptJournalWriter<'_> {
     pub(crate) fn append<T: Serialize>(&self, value: &T) -> Result<()> {
         let mut record = serde_json::to_vec(value)?;
         record.push(b'\n');
-        let mut file = open_regular_file(
-            self.state_dir,
-            "receipts.jsonl",
-            true,
-            true,
-            "receipt journal",
-        )?;
-        file.write_all(&record)
+        let mut journal = self.journal;
+        journal
+            .write_all(&record)
             .map_err(|source| anyhow::Error::new(ReceiptAppendMayHaveLanded { source }))?;
-        file.sync_data()
+        journal
+            .sync_data()
             .map_err(|source| anyhow::Error::new(ReceiptAppendMayHaveLanded { source }))?;
         Ok(())
     }
@@ -151,15 +179,15 @@ impl ReceiptJournalWriter<'_> {
         &self,
         operation: impl FnOnce(&File) -> Result<T>,
     ) -> Result<Option<T>> {
-        match open_optional_regular_file(
-            self.state_dir,
-            "receipts.jsonl",
-            false,
-            "receipt journal",
-        )? {
-            Some(file) => operation(&file).map(Some),
-            None => Ok(None),
+        let Some(journal) =
+            open_optional_regular_file(self.state_dir, "receipts.jsonl", false, "receipt journal")?
+        else {
+            return Ok(None);
+        };
+        if repository_file_identity(self.journal)? != repository_file_identity(&journal)? {
+            bail!("Receipt journal changed while its writer locks were held");
         }
+        operation(&journal).map(Some)
     }
 }
 
@@ -259,7 +287,9 @@ mod tests {
     use std::cell::Cell;
     use std::fs;
     use std::fs::OpenOptions as StdOpenOptions;
+    use std::io::Write as _;
     use std::os::unix::fs::symlink;
+    use std::sync::mpsc;
 
     use serde_json::json;
 
@@ -363,6 +393,87 @@ mod tests {
         assert!(journal.try_lock_exclusive().unwrap());
         assert!(lock.try_lock_exclusive().unwrap());
         assert_eq!(fs::read(&journal_path).unwrap(), b"{\"id\":1}\n");
+    }
+
+    #[test]
+    fn receipt_writer_reopens_a_journal_replaced_before_lock_acquisition() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let journal_path = temp.path().join(".agent/state/receipts.jsonl");
+        fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        fs::write(&journal_path, b"{\"id\":\"old\"}\n").unwrap();
+        let legacy_owner = StdOpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&journal_path)
+            .unwrap();
+        assert!(legacy_owner.try_lock_exclusive().unwrap());
+        let lock_path = temp
+            .path()
+            .join(".agent/.cache/state-locks/receipts.jsonl.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let cutover_owner = StdOpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        assert!(cutover_owner.try_lock_exclusive().unwrap());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let (opened_tx, opened_rx) = mpsc::channel();
+        let (replaced_tx, replaced_rx) = mpsc::channel();
+        let writer_journal_path = journal_path.clone();
+
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(move || {
+                let mut open_count = 0;
+                with_receipt_journal_writer_after_open_until(
+                    &ctx,
+                    Instant::now() + Duration::from_secs(2),
+                    &|| false,
+                    |_| {
+                        open_count += 1;
+                        if open_count == 1 {
+                            opened_tx.send(()).unwrap();
+                            replaced_rx.recv().unwrap();
+                        }
+                        Ok(())
+                    },
+                    |writer| {
+                        let competing_legacy = StdOpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(&writer_journal_path)
+                            .unwrap();
+                        assert!(
+                            !competing_legacy.try_lock_exclusive().unwrap(),
+                            "the replacement inode must hold the legacy lock"
+                        );
+                        writer.append(&json!({"id": "current"}))
+                    },
+                )
+                .unwrap();
+                assert!(open_count >= 2, "the detached inode must be reopened");
+            });
+
+            opened_rx.recv().unwrap();
+            let mut replacement =
+                tempfile::NamedTempFile::new_in(journal_path.parent().unwrap()).unwrap();
+            replacement
+                .write_all(b"{\"id\":\"replacement\"}\n")
+                .unwrap();
+            replacement.persist(&journal_path).unwrap();
+            FileExt::unlock(&cutover_owner).unwrap();
+            FileExt::unlock(&legacy_owner).unwrap();
+            replaced_tx.send(()).unwrap();
+            writer.join().unwrap();
+        });
+
+        assert_eq!(
+            fs::read(&journal_path).unwrap(),
+            b"{\"id\":\"replacement\"}\n{\"id\":\"current\"}\n"
+        );
     }
 
     #[test]

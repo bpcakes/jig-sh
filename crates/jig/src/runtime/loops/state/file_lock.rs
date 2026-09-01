@@ -1,26 +1,11 @@
 #[cfg(test)]
-use std::ffi::OsStr;
-#[cfg(test)]
-use std::path::{Component, Path};
-#[cfg(test)]
-use std::thread;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use anyhow::{Context, Result, anyhow, bail};
-#[cfg(test)]
-use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
-#[cfg(test)]
-use cap_std::{
-    ambient_authority,
-    fs::{Dir, OpenOptions},
-};
-#[cfg(test)]
-use fs4::fs_std::FileExt;
+use anyhow::Result;
 
 pub(in crate::runtime::loops) const LOOP_STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const LOOP_STATE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(in crate::runtime::loops) fn loop_state_lock_deadline() -> Instant {
     Instant::now() + LOOP_STATE_LOCK_TIMEOUT
@@ -43,106 +28,9 @@ pub(in crate::runtime::loops) fn with_exclusive_file_lock_until<T>(
     deadline: Instant,
     action: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let directory = open_lock_directory(root, dir)?;
-    let lock_name = direct_child_name(dir, lock_path)?;
-    let lock = open_lock_file(&directory, lock_name, lock_path)?;
-    loop {
-        match lock.try_lock_exclusive() {
-            Ok(true) => break,
-            Ok(false) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    bail!(
-                        "Timed out waiting for loop state lock {} before its operation deadline",
-                        lock_path.display()
-                    );
-                }
-                thread::sleep(LOOP_STATE_LOCK_POLL_INTERVAL.min(remaining));
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to lock {}", lock_path.display()));
-            }
-        }
-    }
-
-    let result = action();
-    drop(lock);
-    result
-}
-
-#[cfg(test)]
-fn open_lock_directory(root: &Path, dir: &Path) -> Result<Dir> {
-    let relative = dir.strip_prefix(root).with_context(|| {
-        format!(
-            "Loop state lock directory {} is outside trusted root {}",
-            dir.display(),
-            root.display()
-        )
-    })?;
-    let mut directory = Dir::open_ambient_dir(root, ambient_authority())
-        .with_context(|| format!("Failed to open loop state lock root {}", root.display()))?;
-    let mut opened = root.to_path_buf();
-    for component in relative.components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(name) => {
-                opened.push(name);
-                directory = directory.open_dir_nofollow(name).with_context(|| {
-                    format!(
-                        "Failed to open loop state lock directory {} without following links",
-                        opened.display()
-                    )
-                })?;
-            }
-            _ => bail!(
-                "Loop state lock directory must be below its trusted root: {}",
-                dir.display()
-            ),
-        }
-    }
-    Ok(directory)
-}
-
-#[cfg(test)]
-fn direct_child_name<'a>(dir: &Path, path: &'a Path) -> Result<&'a OsStr> {
-    if path.parent() != Some(dir) {
-        bail!(
-            "Loop state lock {} is not directly inside {}",
-            path.display(),
-            dir.display()
-        );
-    }
-    path.file_name()
-        .ok_or_else(|| anyhow!("Loop state lock path has no file name: {}", path.display()))
-}
-
-#[cfg(test)]
-fn open_lock_file(directory: &Dir, name: &OsStr, path: &Path) -> Result<std::fs::File> {
-    let mut options = OpenOptions::new();
-    options
-        .create(true)
-        .read(true)
-        .write(true)
-        .follow(FollowSymlinks::No);
-    #[cfg(unix)]
-    {
-        use cap_std::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = directory
-        .open_with(name, &options)
-        .map(cap_std::fs::File::into_std)
-        .with_context(|| {
-            format!(
-                "Failed to open loop state lock {} without following links",
-                path.display()
-            )
-        })?;
-    if !file.metadata()?.is_file() {
-        bail!("Loop state lock is not a regular file: {}", path.display());
-    }
-    Ok(file)
+    let directory = super::json_cache::StateDirectory::open(root, dir)?;
+    let lock_name = super::json_cache::cache_file_name(dir, lock_path)?;
+    directory.with_lock_until(&lock_name, lock_path, deadline, &|| false, action)
 }
 
 #[cfg(test)]

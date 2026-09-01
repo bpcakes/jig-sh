@@ -60,13 +60,13 @@ where
     Ok(())
 }
 
-fn require_no_added_conflict_markers(
+fn conflict_marker_diagnostics(
     ctx: &RepoContext,
     cwd: &Path,
-    observed_head: &str,
+    baseline: &str,
     candidate_head: Option<&str>,
     observer: &mut dyn ExecutionControl,
-) -> PrRepairStepResult<()> {
+) -> PrRepairStepResult<BTreeSet<Vec<u8>>> {
     let mut args = vec![
         OsString::from("-c"),
         OsString::from(
@@ -74,13 +74,68 @@ fn require_no_added_conflict_markers(
         ),
         OsString::from("diff"),
         OsString::from("--check"),
-        OsString::from(observed_head.trim()),
+        OsString::from(baseline.trim()),
     ];
     if let Some(candidate_head) = candidate_head {
         args.push(OsString::from(candidate_head.trim()));
     }
     args.push(OsString::from("--"));
-    git_checked(ctx, cwd, args, observer)
+    let output = git_output(ctx, cwd, args, observer)?;
+    if output.status.success() {
+        return Ok(BTreeSet::new());
+    }
+    if output.stdout.is_empty() || !output.stderr.is_empty() {
+        return Err(PrRepairStepError::failed(git_error(
+            "git conflict-marker check failed",
+            output,
+        )));
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect())
+}
+
+fn require_no_merge_introduced_conflict_markers(
+    ctx: &RepoContext,
+    cwd: &Path,
+    observed_head: &str,
+    incoming_base_head: Option<&str>,
+    candidate_head: Option<&str>,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<()> {
+    let observed = conflict_marker_diagnostics(
+        ctx,
+        cwd,
+        observed_head,
+        candidate_head,
+        observer,
+    )?;
+    let introduced = if let Some(incoming_base_head) = incoming_base_head {
+        let incoming = conflict_marker_diagnostics(
+            ctx,
+            cwd,
+            incoming_base_head,
+            candidate_head,
+            observer,
+        )?;
+        observed.intersection(&incoming).cloned().collect::<Vec<_>>()
+    } else {
+        observed.into_iter().collect()
+    };
+    if introduced.is_empty() {
+        return Ok(());
+    }
+    Err(PrRepairStepError::failed(anyhow!(
+        "PR repair contains conflict markers absent from its pre-worker parent tree(s):\n{}",
+        introduced
+            .iter()
+            .map(|line| String::from_utf8_lossy(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )))
 }
 
 fn git_stdout<I, S>(

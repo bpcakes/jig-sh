@@ -281,6 +281,17 @@ impl JsonStatePersistence {
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
+        let primary: ProtectedState<S> = read_json_cache_locked_until(
+            &protected.root,
+            &protected.dir,
+            &protected.lock_path,
+            &protected.path,
+            deadline,
+            cancelled,
+        )?;
+        if primary.is_initialized()? {
+            return Ok(());
+        }
         with_json_cache_lock_until(
             protected,
             deadline,

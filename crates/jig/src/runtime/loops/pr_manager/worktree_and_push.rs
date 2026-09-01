@@ -315,6 +315,12 @@ fn start_base_merge(
             fetch,
         )));
     }
+    let base_head = git_stdout(
+        ctx,
+        worktree,
+        ["rev-parse", "--verify", "FETCH_HEAD^{commit}"],
+        observer,
+    )?;
     let merge = git_output(
         ctx,
         worktree,
@@ -326,6 +332,7 @@ fn start_base_merge(
         "stdout": String::from_utf8_lossy(&merge.stdout),
         "stderr": String::from_utf8_lossy(&merge.stderr),
         "conflicts": !merge.status.success(),
+        "base_head": base_head,
     }))
 }
 
@@ -386,6 +393,7 @@ fn commit_and_push(
     worktree: &Path,
     head_ref: &str,
     base_head: &str,
+    incoming_base_head: Option<&str>,
     validation_tree: &str,
     observer: &mut dyn ExecutionControl,
 ) -> PrPushResult<Value> {
@@ -408,10 +416,17 @@ fn commit_and_push(
             observer,
         )?;
         // AUTO_MERGE deliberately includes the original conflict markers, so its
-        // worker-only diff cannot prove that the resolution removed them. Compare
-        // with the observed PR head independently while disabling whitespace rules;
-        // incoming base-branch whitespace remains outside the worker's authority.
-        require_no_added_conflict_markers(ctx, worktree, base_head, None, observer)?;
+        // worker-only diff cannot prove that the resolution removed them. Intersect
+        // marker diagnostics from both merge parents: incoming examples remain valid,
+        // while markers introduced by Git are absent from both parents.
+        require_no_merge_introduced_conflict_markers(
+            ctx,
+            worktree,
+            base_head,
+            incoming_base_head,
+            None,
+            observer,
+        )?;
         git_checked(
             ctx,
             worktree,
@@ -445,10 +460,11 @@ fn commit_and_push(
         ],
         observer,
     )?;
-    require_no_added_conflict_markers(
+    require_no_merge_introduced_conflict_markers(
         ctx,
         worktree,
         base_head,
+        incoming_base_head,
         Some(&final_head),
         observer,
     )?;

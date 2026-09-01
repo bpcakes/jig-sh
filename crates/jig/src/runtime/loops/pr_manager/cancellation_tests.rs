@@ -754,6 +754,7 @@ esac
             &worktree,
             "repair/example",
             &base_head,
+            None,
             &base_head,
             &mut observer,
         )
