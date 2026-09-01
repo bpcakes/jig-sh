@@ -31,6 +31,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Rust/React init validates that its default package manager is available, but
+# this check never executes JavaScript tooling. Keep the generated Bun default
+# under test without coupling the Rust-only gate to a runner image's tool list.
+package_manager_probe_dir="$fixture_root/package-manager-probe"
+mkdir -p "$package_manager_probe_dir"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$package_manager_probe_dir/bun"
+chmod +x "$package_manager_probe_dir/bun"
+
 # Share dependency artifacts across the generated repositories while keeping
 # them outside every repository fingerprint and cleaning them with the fixture.
 export CARGO_TARGET_DIR="$fixture_root/cargo-target"
@@ -43,7 +51,8 @@ init_repo() {
   local init_output
   shift
   if ! init_output="$(
-    JIG_DEV_BIN="$jig_bin" "$jig_bin" init "$destination" \
+    PATH="$package_manager_probe_dir:$PATH" JIG_DEV_BIN="$jig_bin" \
+      "$jig_bin" init "$destination" \
       "$@" \
       --no-input \
       --no-vault \
