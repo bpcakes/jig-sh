@@ -68,7 +68,7 @@ mod tests {
             .unwrap();
         assert!(attempt.exhausted);
 
-        let action = attempt_blocking_action(&workflow, &mut attempts, &item)
+        let action = attempt_blocking_action(&workflow, &mut attempts, &item, &|| false)
             .unwrap()
             .unwrap();
         let completion = WorkflowTick::from_actions(Value::Null, vec![action.clone()]).completion;

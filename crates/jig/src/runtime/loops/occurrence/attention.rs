@@ -20,9 +20,11 @@ impl OccurrenceStore {
     pub(in crate::runtime::loops) fn acknowledge_and_then<T>(
         &mut self,
         occurrence_id: &str,
+        cancelled: &dyn Fn() -> bool,
         after_commit: impl FnOnce(&ScheduleOccurrence, bool, Instant) -> Result<T>,
     ) -> Result<(OccurrenceAcknowledgement, T)> {
         self.persistence.with_locked_compensating(
+            cancelled,
             |store| acknowledge_record(store, occurrence_id, now_ms()),
             |acknowledgement, deadline| match acknowledgement {
                 OccurrenceAcknowledgement::Acknowledged(occurrence) => {

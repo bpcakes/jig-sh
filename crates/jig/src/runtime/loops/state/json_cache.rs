@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::Component;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,6 +13,7 @@ use cap_std::{
 };
 use fs4::fs_std::FileExt;
 
+use super::bounded_json::read_bounded_json;
 use super::*;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -35,12 +36,13 @@ where
         lock_path: lock_path.to_path_buf(),
         write_mode: JsonWriteMode::Cache,
     };
-    with_json_cache_lock_until(&location, loop_state_lock_deadline(), action)
+    with_json_cache_lock_until(&location, loop_state_lock_deadline(), &|| false, action)
 }
 
 pub(super) fn with_json_cache_lock_until<T, S>(
     location: &JsonLocation,
     deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
     action: impl FnOnce(&mut S) -> Result<T>,
 ) -> Result<T>
 where
@@ -49,7 +51,7 @@ where
     let cache = StateDirectory::open(&location.root, &location.dir)?;
     let lock_name = cache_file_name(&location.dir, &location.lock_path)?;
     let data_name = cache_file_name(&location.dir, &location.path)?;
-    cache.with_lock_until(&lock_name, &location.lock_path, deadline, || {
+    cache.with_lock_until(&lock_name, &location.lock_path, deadline, cancelled, || {
         cache.reclaim_orphaned_temps(&data_name, &location.path)?;
         let mut store: S = cache.read_json_or_default(&data_name, &location.path, &|| false)?;
         let result = action(&mut store)?;
@@ -61,6 +63,7 @@ where
 pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
     location: &JsonLocation,
     deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
     action: impl FnOnce(&mut S) -> Result<T>,
     after_commit: impl FnOnce(&T) -> Result<U>,
 ) -> Result<(T, U)>
@@ -70,7 +73,7 @@ where
     let cache = StateDirectory::open(&location.root, &location.dir)?;
     let lock_name = cache_file_name(&location.dir, &location.lock_path)?;
     let data_name = cache_file_name(&location.dir, &location.path)?;
-    cache.with_lock_until(&lock_name, &location.lock_path, deadline, || {
+    cache.with_lock_until(&lock_name, &location.lock_path, deadline, cancelled, || {
         cache.reclaim_orphaned_temps(&data_name, &location.path)?;
         let mut store: S = cache.read_json_or_default(&data_name, &location.path, &|| false)?;
         let rollback = store.clone();
@@ -121,6 +124,7 @@ pub(super) fn read_json_cache_locked_until<T>(
     lock_path: &Path,
     data_path: &Path,
     deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<T>
 where
     T: Default + DeserializeOwned,
@@ -128,21 +132,25 @@ where
     let cache = StateDirectory::open(root, dir)?;
     let lock_name = cache_file_name(dir, lock_path)?;
     let data_name = cache_file_name(dir, data_path)?;
-    cache.with_lock_until(&lock_name, lock_path, deadline, || {
-        cache.read_json_or_default(&data_name, data_path, &|| false)
+    cache.with_lock_until(&lock_name, lock_path, deadline, cancelled, || {
+        cache.read_json_or_default(&data_name, data_path, cancelled)
     })
 }
 
-pub(super) fn recover_unparsable_json_cache<T>(location: &JsonLocation) -> Result<bool>
+pub(super) fn recover_unparsable_json_cache<T>(
+    location: &JsonLocation,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
 {
-    replace_unparsable_json_cache(location, T::default())
+    replace_unparsable_json_cache(location, T::default(), cancelled)
 }
 
 pub(super) fn replace_unparsable_json_cache<T>(
     location: &JsonLocation,
     replacement: T,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
@@ -154,9 +162,10 @@ where
         &lock_name,
         &location.lock_path,
         loop_state_lock_deadline(),
+        cancelled,
         || {
             cache.reclaim_orphaned_temps(&data_name, &location.path)?;
-            match cache.read_json_or_default::<T>(&data_name, &location.path, &|| false) {
+            match cache.read_json_or_default::<T>(&data_name, &location.path, cancelled) {
                 Ok(_) => Ok(false),
                 Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
                     cache.write_json_with_mode(
@@ -229,10 +238,17 @@ impl StateDirectory {
         lock_name: &OsStr,
         lock_path: &Path,
         deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
         action: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
         let lock = open_regular_file(&self.directory, lock_name, true, true, false, lock_path)?;
         loop {
+            if cancelled() {
+                bail!(
+                    "Execution was cancelled while waiting for loop state lock {}",
+                    lock_path.display()
+                );
+            }
             match lock.try_lock_exclusive() {
                 Ok(true) => break,
                 Ok(false) => {
@@ -270,21 +286,7 @@ impl StateDirectory {
         else {
             return Ok(T::default());
         };
-        let mut bytes = Vec::new();
-        let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
-        loop {
-            ensure_status_active(cancelled)?;
-            let read = file
-                .read(&mut chunk)
-                .with_context(|| format!("Failed to read {}", data_path.display()))?;
-            if read == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&chunk[..read]);
-        }
-        ensure_status_active(cancelled)?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("Failed to parse {}", data_path.display()))
+        read_bounded_json(&mut file, data_path, cancelled)
     }
 
     pub(in crate::runtime::loops) fn reclaim_orphaned_temps(
@@ -421,22 +423,7 @@ impl StateDirectory {
         else {
             return Ok(None);
         };
-        let mut bytes = Vec::new();
-        let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
-        loop {
-            ensure_status_active(cancelled)?;
-            let read = file
-                .read(&mut chunk)
-                .with_context(|| format!("Failed to read {}", data_path.display()))?;
-            if read == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&chunk[..read]);
-        }
-        ensure_status_active(cancelled)?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("Failed to parse {}", data_path.display()))
-            .map(Some)
+        read_bounded_json(&mut file, data_path, cancelled).map(Some)
     }
 
     pub(in crate::runtime::loops) fn write_json_durable<T: Serialize>(
@@ -757,6 +744,7 @@ mod tests {
         let error = with_json_cache_lock_compensating_until(
             &location,
             loop_state_lock_deadline(),
+            &|| false,
             |state: &mut BTreeMap<String, String>| {
                 state.insert("ExampleProject".into(), "cleared".into());
                 Ok(())

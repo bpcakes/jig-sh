@@ -16,7 +16,9 @@ use super::occurrence::{
     OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish,
     OccurrenceGuard, OccurrenceStatus, OccurrenceStore, ScheduleOccurrence,
 };
-use super::state::{prepare_coordination_state_for_dispatch, validate_repository_branch_authority};
+use super::state::{
+    prepare_coordination_state_for_dispatch, validate_repository_branch_authority_with_cancellation,
+};
 use super::workflow::{
     CodexTaskCheckout, ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows,
     loop_status_is_success, resolve_workflow,
@@ -51,9 +53,10 @@ fn dispatch_due_at_with_observer(
     let started = now_ms();
     let workflows = list_workflows(ctx)?;
     super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
-    let coordination_recovery = prepare_coordination_state_for_dispatch(ctx)?;
+    let coordination_recovery =
+        prepare_coordination_state_for_dispatch(ctx, &|| observer.cancelled())?;
     let mut occurrences = OccurrenceStore::new(ctx);
-    let reconciled = occurrences.reconcile_stale()?;
+    let reconciled = occurrences.reconcile_stale_with_cancellation(&|| observer.cancelled())?;
     let mut actions = Vec::new();
     let mut summary = DispatchSummary::default();
     if coordination_recovery.attempt_cache_reset {
@@ -192,7 +195,8 @@ fn dispatch_workflow(
         ..DispatchStep::default()
     };
     if workflow.requires_repository_branch_authority()
-        && let Err(error) = validate_repository_branch_authority(ctx)
+        && let Err(error) =
+            validate_repository_branch_authority_with_cancellation(ctx, &|| observer.cancelled())
     {
         step.failed_count = 1;
         step.action = DispatchStep::failure(
@@ -212,12 +216,13 @@ fn dispatch_workflow(
     } else {
         OccurrenceAttentionScope::Workflow
     };
-    let claim = match occurrences.claim_scheduled(
+    let claim = match occurrences.claim_scheduled_with_cancellation(
         &workflow.id,
         due_at_ms,
         workflow.lease_ttl_seconds,
         attention_scope,
         blocks_on_retained_worktree,
+        &|| observer.cancelled(),
     ) {
         Ok(claim) => claim,
         Err(error) => {

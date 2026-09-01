@@ -6,11 +6,31 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
+use fs4::fs_std::FileExt;
 use serde_json::Value;
 use tempfile::tempdir;
 
 use super::*;
 use crate::runtime::loops::workflow::NOOP_STATUS_KIND;
+
+#[test]
+fn read_only_loop_cache_scan_observes_cancellation_between_chunks() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("large.json");
+    fs::write(
+        &path,
+        format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024)),
+    )
+    .unwrap();
+    let checks = AtomicUsize::new(0);
+
+    let error = read_json_or_default_with_cancellation::<Value>(&path, &|| {
+        checks.fetch_add(1, Ordering::SeqCst) >= 2
+    })
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "status collection was cancelled");
+}
 
 #[cfg(unix)]
 #[test]
@@ -46,14 +66,14 @@ fn dispatch_preflight_fails_closed_for_lease_corruption_and_recovers_attempts() 
     fs::write(cache_dir.join("attempts.json"), b"{").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let error = prepare_coordination_state_for_dispatch(&ctx)
+    let error = prepare_coordination_state_for_dispatch(&ctx, &|| false)
         .unwrap_err()
         .to_string();
 
     assert!(error.contains("leases.json"), "{error}");
     assert_eq!(fs::read(cache_dir.join("leases.json")).unwrap(), b"{");
     fs::write(cache_dir.join("leases.json"), br#"{"leases":{}}"#).unwrap();
-    let recovery = prepare_coordination_state_for_dispatch(&ctx).unwrap();
+    let recovery = prepare_coordination_state_for_dispatch(&ctx, &|| false).unwrap();
     assert!(recovery.attempt_cache_reset);
     let mut leases = LeaseStore::new(&ctx);
     assert!(matches!(
@@ -124,6 +144,46 @@ fn branch_leases_are_shared_across_linked_worktrees() {
 }
 
 #[test]
+fn lease_acquisition_observes_cancellation_while_waiting_for_its_state_lock() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut leases = LeaseStore::new(&ctx);
+    assert!(matches!(
+        leases.acquire("workflow:existing", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    let lock_path = temp.path().join(LOOP_CACHE_DIR).join("leases.lock");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    assert!(lock.try_lock_exclusive().unwrap());
+    let polls = AtomicUsize::new(0);
+
+    let error = match leases.acquire_with_cancellation("workflow:cancelled", 60, &|| {
+        polls.fetch_add(1, Ordering::SeqCst) > 0
+    }) {
+        Ok(_) => panic!("cancelled lease acquisition must not mutate state"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        error.contains("Execution was cancelled while waiting for loop state lock"),
+        "{error}"
+    );
+    drop(lock);
+    assert!(
+        leases
+            .active_leases()
+            .unwrap()
+            .iter()
+            .all(|lease| !lease.matches_key("workflow:cancelled"))
+    );
+}
+
+#[test]
 fn git_state_migrates_legacy_leases_and_attempts_to_protected_authority() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());
@@ -141,7 +201,7 @@ fn git_state_migrates_legacy_leases_and_attempts_to_protected_authority() {
         .unwrap();
     git_init(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    prepare_coordination_state_for_dispatch(&ctx).unwrap();
+    prepare_coordination_state_for_dispatch(&ctx, &|| false).unwrap();
 
     let mut leases = LeaseStore::new(&ctx);
     let LeaseAcquire::Held(migrated) = leases.acquire("workflow:ExampleProject", 60).unwrap()
@@ -230,7 +290,7 @@ fn git_dispatch_preflight_fails_closed_for_protected_leases_and_resets_attempts(
     let valid_leases = fs::read(lease_path).unwrap();
     fs::write(lease_path, b"{").unwrap();
 
-    let error = prepare_coordination_state_for_dispatch(&ctx)
+    let error = prepare_coordination_state_for_dispatch(&ctx, &|| false)
         .unwrap_err()
         .to_string();
 
@@ -239,7 +299,7 @@ fn git_dispatch_preflight_fails_closed_for_protected_leases_and_resets_attempts(
     fs::write(lease_path, valid_leases).unwrap();
     fs::write(attempt_path, b"{").unwrap();
 
-    let recovery = prepare_coordination_state_for_dispatch(&ctx).unwrap();
+    let recovery = prepare_coordination_state_for_dispatch(&ctx, &|| false).unwrap();
 
     assert!(recovery.attempt_cache_reset);
     assert!(AttemptStore::new(&ctx).snapshot().unwrap().is_empty());
@@ -294,7 +354,7 @@ fn attempt_decision_read_waits_for_compensating_rollback() {
     });
 
     let error = attempts
-        .clear_attempt_and_then("ExampleProject", "pr-17", |cleared, _| {
+        .clear_attempt_and_then("ExampleProject", "pr-17", &|| false, |cleared, _| {
             assert!(cleared);
             start_read.send(()).unwrap();
             assert!(matches!(

@@ -3,8 +3,6 @@ use std::collections::BTreeMap;
 use std::fs;
 #[cfg(test)]
 use std::fs::File;
-#[cfg(test)]
-use std::io::Read;
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -25,6 +23,7 @@ use crate::state::now_ms;
 use super::renewal::{renewal_interval, run_with_wait};
 use super::workflow::ResolvedWorkflow;
 
+mod bounded_json;
 mod file_lock;
 mod json_cache;
 mod json_location;
@@ -88,30 +87,42 @@ impl LeaseStore {
     pub(super) fn for_workflow_claim(
         ctx: &RepoContext,
         workflow: &ResolvedWorkflow,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<Self> {
         if workflow.requires_repository_branch_authority() {
-            validate_repository_branch_authority(ctx)?;
+            validate_repository_branch_authority_with_cancellation(ctx, cancelled)?;
         }
         Ok(Self::new(ctx))
     }
 
+    #[cfg(test)]
     pub(super) fn acquire(&mut self, key: &str, ttl_seconds: u64) -> Result<LeaseAcquire> {
-        self.with_locked(|store| {
-            let now = now_ms();
-            store.prune_expired(now);
-            if let Some(existing) = store.leases.get(key) {
-                return Ok(LeaseAcquire::Held(existing.clone()));
-            }
+        self.acquire_with_cancellation(key, ttl_seconds, &|| false)
+    }
 
-            let record = LeaseRecord {
-                key: key.to_string(),
-                owner: format!("{}-{}", std::process::id(), Ulid::new()),
-                acquired_at_ms: now,
-                expires_at_ms: now.saturating_add(ttl_seconds.saturating_mul(1000)),
-            };
-            store.leases.insert(key.to_string(), record.clone());
-            Ok(LeaseAcquire::Acquired(record))
-        })
+    pub(super) fn acquire_with_cancellation(
+        &mut self,
+        key: &str,
+        ttl_seconds: u64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<LeaseAcquire> {
+        self.persistence
+            .with_locked_with_cancellation(cancelled, |store: &mut LeaseFile| {
+                let now = now_ms();
+                store.prune_expired(now);
+                if let Some(existing) = store.leases.get(key) {
+                    return Ok(LeaseAcquire::Held(existing.clone()));
+                }
+
+                let record = LeaseRecord {
+                    key: key.to_string(),
+                    owner: format!("{}-{}", std::process::id(), Ulid::new()),
+                    acquired_at_ms: now,
+                    expires_at_ms: now.saturating_add(ttl_seconds.saturating_mul(1000)),
+                };
+                store.leases.insert(key.to_string(), record.clone());
+                Ok(LeaseAcquire::Acquired(record))
+            })
     }
 
     pub(super) fn release(&mut self, key: &str, owner: &str) -> Result<()> {
@@ -180,8 +191,10 @@ impl LeaseStore {
         self.persistence.with_locked(action)
     }
 
-    fn validate_parseable(&self) -> Result<()> {
-        self.persistence.validate::<LeaseFile>()
+    fn validate_parseable_with_cancellation(&self, cancelled: &dyn Fn() -> bool) -> Result<()> {
+        self.persistence
+            .read_only_with_cancellation::<LeaseFile>(cancelled)
+            .map(|_| ())
     }
 }
 
@@ -465,11 +478,21 @@ impl AttemptStore {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn get(&self, workflow_id: &str, item_key: &str) -> Result<Option<AttemptRecord>> {
+        self.get_with_cancellation(workflow_id, item_key, &|| false)
+    }
+
+    pub(super) fn get_with_cancellation(
+        &self,
+        workflow_id: &str,
+        item_key: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<AttemptRecord>> {
         let key = format!("{workflow_id}:{item_key}");
         Ok(self
             .persistence
-            .read_locked::<AttemptFile>()?
+            .read_locked_with_cancellation::<AttemptFile>(cancelled)?
             .attempts
             .get(&key)
             .cloned())
@@ -491,34 +514,41 @@ impl AttemptStore {
             .collect())
     }
 
-    pub(super) fn clear_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<bool> {
-        Ok(self.take_attempt(workflow_id, item_key)?.is_some())
+    pub(super) fn clear_attempt_with_cancellation(
+        &mut self,
+        workflow_id: &str,
+        item_key: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<bool> {
+        let key = format!("{workflow_id}:{item_key}");
+        self.persistence
+            .with_locked_with_cancellation(cancelled, |store: &mut AttemptFile| {
+                Ok(store.attempts.remove(&key).is_some())
+            })
     }
 
     pub(super) fn clear_attempt_and_then<T>(
         &mut self,
         workflow_id: &str,
         item_key: &str,
+        cancelled: &dyn Fn() -> bool,
         after_commit: impl FnOnce(bool, Instant) -> Result<T>,
     ) -> Result<(bool, T)> {
         let key = format!("{workflow_id}:{item_key}");
         self.persistence.with_locked_compensating(
+            cancelled,
             |store: &mut AttemptFile| Ok(store.attempts.remove(&key).is_some()),
             |cleared, deadline| after_commit(*cleared, deadline),
         )
-    }
-
-    fn take_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<Option<AttemptRecord>> {
-        let key = format!("{workflow_id}:{item_key}");
-        self.with_locked(|store| Ok(store.attempts.remove(&key)))
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut AttemptFile) -> Result<T>) -> Result<T> {
         self.persistence.with_locked(action)
     }
 
-    fn recover_unparsable(&self) -> Result<bool> {
-        self.persistence.recover_unparsable::<AttemptFile>()
+    fn recover_unparsable_with_cancellation(&self, cancelled: &dyn Fn() -> bool) -> Result<bool> {
+        self.persistence
+            .recover_unparsable_with_cancellation::<AttemptFile>(cancelled)
     }
 }
 
@@ -529,15 +559,20 @@ pub(super) struct CoordinationStateRecovery {
 
 pub(super) fn prepare_coordination_state_for_dispatch(
     ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<CoordinationStateRecovery> {
-    LeaseStore::new(ctx).validate_parseable()?;
+    LeaseStore::new(ctx).validate_parseable_with_cancellation(cancelled)?;
     Ok(CoordinationStateRecovery {
-        attempt_cache_reset: AttemptStore::new(ctx).recover_unparsable()?,
+        attempt_cache_reset: AttemptStore::new(ctx)
+            .recover_unparsable_with_cancellation(cancelled)?,
     })
 }
 
-pub(super) fn validate_repository_branch_authority(ctx: &RepoContext) -> Result<()> {
-    LeaseStore::new_repository(ctx).validate_parseable()
+pub(super) fn validate_repository_branch_authority_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    LeaseStore::new_repository(ctx).validate_parseable_with_cancellation(cancelled)
 }
 
 #[cfg(test)]
@@ -569,24 +604,7 @@ where
 {
     ensure_status_active(cancelled)?;
     match File::open(path) {
-        Ok(mut file) => {
-            let mut bytes = Vec::new();
-            let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
-            loop {
-                ensure_status_active(cancelled)?;
-                let read = file
-                    .read(&mut chunk)
-                    .with_context(|| format!("Failed to read {}", path.display()))?;
-                if read == 0 {
-                    break;
-                }
-                bytes.extend_from_slice(&chunk[..read]);
-            }
-            ensure_status_active(cancelled)?;
-            serde_json::from_slice(&bytes)
-                .with_context(|| format!("Failed to parse {}", path.display()))
-                .map(Some)
-        }
+        Ok(mut file) => bounded_json::read_bounded_json(&mut file, path, cancelled).map(Some),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("Failed to read {}", path.display())),
     }
@@ -599,32 +617,12 @@ fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use serde_json::Value;
     use tempfile::tempdir;
 
     use super::*;
     use crate::runtime::loops::workflow::NOOP_STATUS_KIND;
 
-    #[test]
-    fn read_only_loop_cache_scan_observes_cancellation_between_chunks() {
-        let temp = tempdir().unwrap();
-        let path = temp.path().join("large.json");
-        fs::write(
-            &path,
-            format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024)),
-        )
-        .unwrap();
-        let checks = AtomicUsize::new(0);
-
-        let error = read_json_or_default_with_cancellation::<Value>(&path, &|| {
-            checks.fetch_add(1, Ordering::SeqCst) >= 2
-        })
-        .unwrap_err();
-
-        assert_eq!(error.to_string(), "status collection was cancelled");
-    }
     #[test]
     fn attempt_store_exhausts_after_budget_and_clears_on_success() {
         let temp = tempdir().unwrap();

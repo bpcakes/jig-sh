@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{
@@ -22,6 +22,7 @@ use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval
 mod attention;
 mod claim;
 mod guard_renewal;
+mod history;
 mod manual;
 mod persistence;
 mod worktree;
@@ -30,6 +31,7 @@ pub(super) use claim::OccurrenceAttentionScope;
 use guard_renewal::run_occurrence_renewal;
 #[cfg(test)]
 use guard_renewal::run_occurrence_renewal_with_wait;
+use history::prune_history;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
 pub(super) use worktree::{OccurrenceWorktreeReservation, encode_worktree_path};
@@ -328,6 +330,7 @@ impl OccurrenceStore {
         self.claim_at(workflow_id, scheduled_at_ms, ttl_seconds, now_ms())
     }
 
+    #[cfg(test)]
     pub(super) fn claim_scheduled(
         &mut self,
         workflow_id: &str,
@@ -336,13 +339,35 @@ impl OccurrenceStore {
         attention_scope: claim::OccurrenceAttentionScope,
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
-        self.claim_with_constraints_at(
+        self.claim_scheduled_with_cancellation(
+            workflow_id,
+            scheduled_at_ms,
+            ttl_seconds,
+            attention_scope,
+            block_retained_worktree,
+            &|| false,
+        )
+    }
+
+    pub(super) fn claim_scheduled_with_cancellation(
+        &mut self,
+        workflow_id: &str,
+        scheduled_at_ms: u64,
+        ttl_seconds: u64,
+        attention_scope: claim::OccurrenceAttentionScope,
+        block_retained_worktree: bool,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<OccurrenceClaim> {
+        self.claim_with_execution_at(
             workflow_id,
             scheduled_at_ms,
             ttl_seconds,
             now_ms(),
-            attention_scope,
-            block_retained_worktree,
+            claim::OccurrenceClaimExecution::scheduled(
+                attention_scope,
+                block_retained_worktree,
+                cancelled,
+            ),
         )
     }
 
@@ -475,8 +500,11 @@ impl OccurrenceStore {
         })
     }
 
-    pub(super) fn reconcile_stale(&mut self) -> Result<Vec<ScheduleOccurrence>> {
-        self.reconcile_stale_at(now_ms())
+    pub(super) fn reconcile_stale_with_cancellation(
+        &mut self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<ScheduleOccurrence>> {
+        self.reconcile_stale_at_with_cancellation(now_ms(), cancelled)
     }
 
     #[cfg(test)]
@@ -587,8 +615,17 @@ impl OccurrenceStore {
         })
     }
 
+    #[cfg(test)]
     fn reconcile_stale_at(&mut self, now: u64) -> Result<Vec<ScheduleOccurrence>> {
-        self.with_locked(|store| {
+        self.reconcile_stale_at_with_cancellation(now, &|| false)
+    }
+
+    fn reconcile_stale_at_with_cancellation(
+        &mut self,
+        now: u64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<ScheduleOccurrence>> {
+        self.with_locked_with_cancellation(cancelled, |store| {
             validate_schema(store)?;
             let reconciled = reconcile_stale_file(store, now);
             prune_history(store);
@@ -598,6 +635,15 @@ impl OccurrenceStore {
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut ScheduleFile) -> Result<T>) -> Result<T> {
         self.persistence.with_locked(action)
+    }
+
+    fn with_locked_with_cancellation<T>(
+        &mut self,
+        cancelled: &dyn Fn() -> bool,
+        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
+    ) -> Result<T> {
+        self.persistence
+            .with_locked_with_cancellation(cancelled, action)
     }
 }
 
@@ -724,62 +770,6 @@ fn migrate_schedule_schema(store: &mut ScheduleFile) -> Result<()> {
             Ok(())
         }
         _ => validate_schema(store),
-    }
-}
-
-fn prune_history(store: &mut ScheduleFile) {
-    let workflow_ids = store
-        .occurrences
-        .values()
-        .map(|record| record.workflow_id.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    for workflow_id in workflow_ids {
-        let latest_scheduled_id = store
-            .occurrences
-            .values()
-            .filter(|record| {
-                record.workflow_id == workflow_id
-                    && record.scheduled_at_ms != MANUAL_OCCURRENCE_SCHEDULED_AT_MS
-            })
-            .max_by_key(|record| record.scheduled_at_ms)
-            .map(|record| record.occurrence_id.clone());
-        let mut terminal = store
-            .occurrences
-            .values()
-            .filter(|record| {
-                record.workflow_id == workflow_id
-                    && record.is_prunable_history()
-                    && !record.has_retained_worktree()
-            })
-            .map(|record| {
-                (
-                    record.finished_at_ms.unwrap_or(record.started_at_ms),
-                    record.started_at_ms,
-                    record.scheduled_at_ms,
-                    record.occurrence_id.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        terminal.sort_by(|left, right| right.cmp(left));
-        let mut retained = BTreeSet::new();
-        if let Some(latest_scheduled_id) = latest_scheduled_id
-            && terminal
-                .iter()
-                .any(|(_, _, _, occurrence_id)| occurrence_id == &latest_scheduled_id)
-        {
-            retained.insert(latest_scheduled_id);
-        }
-        for (_, _, _, occurrence_id) in &terminal {
-            if retained.len() == OCCURRENCE_HISTORY_PER_WORKFLOW {
-                break;
-            }
-            retained.insert(occurrence_id.clone());
-        }
-        for (_, _, _, occurrence_id) in terminal {
-            if !retained.contains(&occurrence_id) {
-                store.occurrences.remove(&occurrence_id);
-            }
-        }
     }
 }
 

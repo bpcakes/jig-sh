@@ -341,6 +341,49 @@ mod push_error_tests {
         );
     }
 
+    #[test]
+    fn commit_and_push_rejects_whitespace_introduced_by_the_worker() {
+        let _env = crate::test_env::lock_env();
+        let repo = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(repo.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        git(&["init"]);
+        git(&["config", "user.email", "fixture@example.com"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["add", "."]);
+        git(&["commit", "-m", "observed head"]);
+        let observed_head = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.path().join("repair.txt"), "worker whitespace \n").unwrap();
+        let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+        let error = commit_and_push(
+            &ctx,
+            repo.path(),
+            "repair/example",
+            &observed_head,
+            &observed_head,
+            &mut NoopExecutionObserver,
+        )
+        .unwrap_err();
+
+        let PrPushError::Step(PrRepairStepError::Failed(error)) = error else {
+            panic!("worker whitespace must be an ordinary pre-push failure");
+        };
+        let error = format!("{error:#}");
+        assert!(error.contains("trailing whitespace"), "{error}");
+        assert_eq!(git(&["rev-parse", "HEAD"]), observed_head);
+    }
+
     #[derive(Clone, Copy)]
     enum RemoteMutation {
         Rewind,

@@ -1,7 +1,6 @@
 pub(super) fn pr_manager_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
-    _lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
     worktree_reservation: Option<&OccurrenceWorktreeReservation>,
     observer: &mut dyn ExecutionControl,
@@ -103,7 +102,12 @@ fn pr_manager_tick_from_snapshot(
         match candidate {
             PrCandidate::Skip(action) => actions.push(action),
             PrCandidate::Idle(item) => {
-                match clear_observed_healthy_attempt(workflow, attempt_store, &item) {
+                match clear_observed_healthy_attempt(
+                    workflow,
+                    attempt_store,
+                    &item,
+                    &|| execution.observer.cancelled(),
+                ) {
                     Ok(Some(action)) => actions.push(action),
                     Ok(None) => {}
                     Err(error) => {

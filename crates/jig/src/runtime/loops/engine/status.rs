@@ -1,6 +1,7 @@
 use super::*;
 use crate::cancellation::ensure_status_collection_active;
 use crate::command::LoopStatusRequest;
+use crate::runtime::loops::occurrence::OccurrenceStore;
 
 #[cfg(test)]
 pub(in crate::runtime::loops) fn status(

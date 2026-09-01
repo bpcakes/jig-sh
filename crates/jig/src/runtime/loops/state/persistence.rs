@@ -65,6 +65,17 @@ impl JsonStatePersistence {
         self.with_locked_until(loop_state_lock_deadline(), action)
     }
 
+    pub(super) fn with_locked_with_cancellation<T, S>(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+        action: impl FnOnce(&mut S) -> Result<T>,
+    ) -> Result<T>
+    where
+        S: Clone + Default + DeserializeOwned + Serialize,
+    {
+        self.with_locked_until_with_cancellation(loop_state_lock_deadline(), cancelled, action)
+    }
+
     pub(super) fn with_locked_until<T, S>(
         &self,
         deadline: Instant,
@@ -73,18 +84,36 @@ impl JsonStatePersistence {
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
+        self.with_locked_until_with_cancellation(deadline, &|| false, action)
+    }
+
+    fn with_locked_until_with_cancellation<T, S>(
+        &self,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+        action: impl FnOnce(&mut S) -> Result<T>,
+    ) -> Result<T>
+    where
+        S: Clone + Default + DeserializeOwned + Serialize,
+    {
         let Some(protected) = self.protected()? else {
-            return with_json_cache_lock_until(&self.legacy, deadline, action);
+            return with_json_cache_lock_until(&self.legacy, deadline, cancelled, action);
         };
-        self.ensure_initialized::<S>(protected, deadline)?;
-        with_json_cache_lock_until(protected, deadline, |primary: &mut ProtectedState<S>| {
-            primary.require_initialized()?;
-            action(&mut primary.state)
-        })
+        self.ensure_initialized::<S>(protected, deadline, cancelled)?;
+        with_json_cache_lock_until(
+            protected,
+            deadline,
+            cancelled,
+            |primary: &mut ProtectedState<S>| {
+                primary.require_initialized()?;
+                action(&mut primary.state)
+            },
+        )
     }
 
     pub(super) fn with_locked_compensating<T, U, S>(
         &self,
+        cancelled: &dyn Fn() -> bool,
         action: impl FnOnce(&mut S) -> Result<T>,
         after_commit: impl FnOnce(&T, Instant) -> Result<U>,
     ) -> Result<(T, U)>
@@ -96,14 +125,16 @@ impl JsonStatePersistence {
             return with_json_cache_lock_compensating_until(
                 &self.legacy,
                 deadline,
+                cancelled,
                 action,
                 |result| after_commit(result, deadline),
             );
         };
-        self.ensure_initialized::<S>(protected, deadline)?;
+        self.ensure_initialized::<S>(protected, deadline, cancelled)?;
         with_json_cache_lock_compensating_until(
             protected,
             deadline,
+            cancelled,
             |primary: &mut ProtectedState<S>| {
                 primary.require_initialized()?;
                 action(&mut primary.state)
@@ -126,7 +157,7 @@ impl JsonStatePersistence {
             .state(&self.protected_state_path)
     }
 
-    pub(super) fn read_locked<S>(&self) -> Result<S>
+    pub(super) fn read_locked_with_cancellation<S>(&self, cancelled: &dyn Fn() -> bool) -> Result<S>
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
@@ -138,51 +169,55 @@ impl JsonStatePersistence {
                 &self.legacy.lock_path,
                 &self.legacy.path,
                 deadline,
+                cancelled,
             );
         };
-        self.ensure_initialized::<S>(protected, deadline)?;
+        self.ensure_initialized::<S>(protected, deadline, cancelled)?;
         let primary: ProtectedState<S> = read_json_cache_locked_until(
             &protected.root,
             &protected.dir,
             &protected.lock_path,
             &protected.path,
             deadline,
+            cancelled,
         )?;
         primary.require_initialized()?;
         Ok(primary.state)
     }
 
-    pub(super) fn validate<S>(&self) -> Result<()>
-    where
-        S: Clone + Default + DeserializeOwned,
-    {
-        self.read_only_with_cancellation::<S>(&|| false).map(|_| ())
-    }
-
-    pub(super) fn recover_unparsable<S>(&self) -> Result<bool>
+    pub(super) fn recover_unparsable_with_cancellation<S>(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<bool>
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
         let Some(protected) = self.protected()? else {
-            return recover_unparsable_json_cache::<S>(&self.legacy);
+            return recover_unparsable_json_cache::<S>(&self.legacy, cancelled);
         };
-        match self.read_protected::<S>(protected, &|| false) {
+        match self.read_protected::<S>(protected, cancelled) {
             Ok(primary) if primary.is_initialized()? => Ok(false),
-            Ok(_) => match self.read_legacy::<S>(&|| false) {
+            Ok(_) => match self.read_legacy::<S>(cancelled) {
                 Ok(_) => {
-                    self.with_locked::<_, S>(|_| Ok(()))?;
+                    self.with_locked_with_cancellation::<_, S>(cancelled, |_| Ok(()))?;
                     Ok(false)
                 }
                 Err(error) if is_json_error(&error) => {
-                    replace_unparsable_json_cache(&self.legacy, LegacyState::State(S::default()))?;
-                    self.with_locked::<_, S>(|_| Ok(()))?;
+                    replace_unparsable_json_cache(
+                        &self.legacy,
+                        LegacyState::State(S::default()),
+                        cancelled,
+                    )?;
+                    self.with_locked_with_cancellation::<_, S>(cancelled, |_| Ok(()))?;
                     Ok(true)
                 }
                 Err(error) => Err(error),
             },
-            Err(error) if is_json_error(&error) => {
-                replace_unparsable_json_cache(protected, ProtectedState::new(S::default()))
-            }
+            Err(error) if is_json_error(&error) => replace_unparsable_json_cache(
+                protected,
+                ProtectedState::new(S::default()),
+                cancelled,
+            ),
             Err(error) => Err(error),
         }
     }
@@ -237,30 +272,41 @@ impl JsonStatePersistence {
         )
     }
 
-    fn ensure_initialized<S>(&self, protected: &JsonLocation, deadline: Instant) -> Result<()>
+    fn ensure_initialized<S>(
+        &self,
+        protected: &JsonLocation,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<()>
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
-        with_json_cache_lock_until(protected, deadline, |primary: &mut ProtectedState<S>| {
-            if primary.is_initialized()? {
-                return Ok(());
-            }
-            let state = with_json_cache_lock_until(
-                &self.legacy,
-                deadline,
-                |legacy: &mut LegacyState<S>| {
-                    let state = legacy.clone().state(&self.protected_state_path)?;
-                    *legacy = LegacyState::Migration(MigrationState {
-                        schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
-                        protected_state_path: self.protected_state_path.clone(),
-                        state: state.clone(),
-                    });
-                    Ok(state)
-                },
-            )?;
-            *primary = ProtectedState::new(state);
-            Ok(())
-        })
+        with_json_cache_lock_until(
+            protected,
+            deadline,
+            cancelled,
+            |primary: &mut ProtectedState<S>| {
+                if primary.is_initialized()? {
+                    return Ok(());
+                }
+                let state = with_json_cache_lock_until(
+                    &self.legacy,
+                    deadline,
+                    cancelled,
+                    |legacy: &mut LegacyState<S>| {
+                        let state = legacy.clone().state(&self.protected_state_path)?;
+                        *legacy = LegacyState::Migration(MigrationState {
+                            schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
+                            protected_state_path: self.protected_state_path.clone(),
+                            state: state.clone(),
+                        });
+                        Ok(state)
+                    },
+                )?;
+                *primary = ProtectedState::new(state);
+                Ok(())
+            },
+        )
     }
 }
 

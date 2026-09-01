@@ -100,44 +100,20 @@ fn post_review_thread_updates(
             .unwrap_or(false);
 
         if !handled_thread_ids.insert(thread_id) {
-            posts.push(json!({
-                "thread_id": thread_id,
-                "status": "skipped",
-                "reason": "duplicate_review_thread",
-                "detail": "worker returned more than one update intent for the same review thread",
-                "replied": false,
-                "reply_comment_id": Value::Null,
-                "reply_url": Value::Null,
-                "reply_reconciled": false,
-                "reply_error": Value::Null,
-                "resolved": false,
-                "is_resolved": Value::Null,
-                "resolve_reconciled": false,
-                "resolve_error": Value::Null,
-                "resolve_skipped": false,
-                "resolve_skip_reason": Value::Null,
-            }));
+            posts.push(skipped_review_thread_post(
+                thread_id,
+                "duplicate_review_thread",
+                "worker returned more than one update intent for the same review thread",
+            ));
             continue;
         };
 
         let Some(thread_witness) = thread_witnesses.get(thread_id) else {
-            posts.push(json!({
-                "thread_id": thread_id,
-                "status": "skipped",
-                "reason": "unknown_review_thread",
-                "detail": "worker requested a review thread that was not present in the observed PR snapshot",
-                "replied": false,
-                "reply_comment_id": Value::Null,
-                "reply_url": Value::Null,
-                "reply_reconciled": false,
-                "reply_error": Value::Null,
-                "resolved": false,
-                "is_resolved": Value::Null,
-                "resolve_reconciled": false,
-                "resolve_error": Value::Null,
-                "resolve_skipped": false,
-                "resolve_skip_reason": Value::Null,
-            }));
+            posts.push(skipped_review_thread_post(
+                thread_id,
+                "unknown_review_thread",
+                "worker requested a review thread that was not present in the observed PR snapshot",
+            ));
             continue;
         };
 
@@ -282,6 +258,28 @@ fn post_review_thread_updates(
         failed,
         cancelled,
     }
+}
+
+fn skipped_review_thread_post(thread_id: &str, reason: &str, detail: &str) -> Value {
+    json!({
+        "thread_id": thread_id,
+        "status": "skipped",
+        "reason": reason,
+        "detail": detail,
+        "replied": false,
+        "reply_comment_id": Value::Null,
+        "reply_url": Value::Null,
+        "reply_reconciled": false,
+        "reply_error": Value::Null,
+        "reply_skipped": false,
+        "reply_skip_reason": Value::Null,
+        "resolved": false,
+        "is_resolved": Value::Null,
+        "resolve_reconciled": false,
+        "resolve_error": Value::Null,
+        "resolve_skipped": false,
+        "resolve_skip_reason": Value::Null,
+    })
 }
 
 fn resolve_review_thread(

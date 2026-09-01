@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use fs4::fs_std::FileExt;
+
 use super::*;
 use crate::context::RepoContext;
 use crate::runtime::loops::state::read_json_or_default;
@@ -49,6 +51,40 @@ fn unchanged_legacy_marker_is_not_rewritten() {
         fs::metadata(&persistence.legacy_path).unwrap().ino(),
         original_inode
     );
+}
+
+#[test]
+fn schedule_mutation_observes_cancellation_while_waiting_for_its_state_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    persistence.with_locked(|_| Ok(())).unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&persistence.lock_path)
+        .unwrap();
+    assert!(lock.try_lock_exclusive().unwrap());
+    let polls = std::sync::atomic::AtomicUsize::new(0);
+    let action_ran = std::cell::Cell::new(false);
+
+    let error = persistence
+        .with_locked_with_cancellation(
+            &|| polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0,
+            |_| {
+                action_ran.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("Execution was cancelled while waiting for loop state lock"),
+        "{error}"
+    );
+    assert!(!action_ran.get());
 }
 
 #[test]

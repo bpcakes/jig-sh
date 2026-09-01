@@ -13,7 +13,45 @@ pub(super) struct OccurrenceClaimConstraints {
     pub(super) block_retained_worktree: bool,
 }
 
+pub(super) struct OccurrenceClaimExecution<'a> {
+    constraints: OccurrenceClaimConstraints,
+    cancelled: &'a dyn Fn() -> bool,
+}
+
+impl<'a> OccurrenceClaimExecution<'a> {
+    pub(super) fn scheduled(
+        attention_scope: OccurrenceAttentionScope,
+        block_retained_worktree: bool,
+        cancelled: &'a dyn Fn() -> bool,
+    ) -> Self {
+        Self {
+            constraints: OccurrenceClaimConstraints {
+                attention_scope,
+                block_newer_occurrences: attention_scope != OccurrenceAttentionScope::None,
+                block_retained_worktree,
+            },
+            cancelled,
+        }
+    }
+
+    pub(super) fn manual(
+        attention_scope: OccurrenceAttentionScope,
+        block_retained_worktree: bool,
+        cancelled: &'a dyn Fn() -> bool,
+    ) -> Self {
+        Self {
+            constraints: OccurrenceClaimConstraints {
+                attention_scope,
+                block_newer_occurrences: false,
+                block_retained_worktree,
+            },
+            cancelled,
+        }
+    }
+}
+
 impl OccurrenceStore {
+    #[cfg(test)]
     pub(super) fn claim_with_constraints_at(
         &mut self,
         workflow_id: &str,
@@ -23,21 +61,37 @@ impl OccurrenceStore {
         attention_scope: OccurrenceAttentionScope,
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
+        self.claim_with_execution_at(
+            workflow_id,
+            scheduled_at_ms,
+            ttl_seconds,
+            now,
+            OccurrenceClaimExecution::scheduled(attention_scope, block_retained_worktree, &|| {
+                false
+            }),
+        )
+    }
+
+    pub(super) fn claim_with_execution_at(
+        &mut self,
+        workflow_id: &str,
+        scheduled_at_ms: u64,
+        ttl_seconds: u64,
+        now: u64,
+        execution: OccurrenceClaimExecution<'_>,
+    ) -> Result<OccurrenceClaim> {
         let occurrence_id = occurrence_id(workflow_id, scheduled_at_ms);
-        self.claim_id_with_constraints_at(
+        self.claim_id_with_execution_at(
             occurrence_id,
             workflow_id,
             scheduled_at_ms,
             ttl_seconds,
             now,
-            OccurrenceClaimConstraints {
-                attention_scope,
-                block_newer_occurrences: attention_scope != OccurrenceAttentionScope::None,
-                block_retained_worktree,
-            },
+            execution,
         )
     }
 
+    #[cfg(test)]
     pub(super) fn claim_id_with_constraints_at(
         &mut self,
         occurrence_id: String,
@@ -47,7 +101,29 @@ impl OccurrenceStore {
         now: u64,
         constraints: OccurrenceClaimConstraints,
     ) -> Result<OccurrenceClaim> {
-        self.with_locked(|store| {
+        self.claim_id_with_execution_at(
+            occurrence_id,
+            workflow_id,
+            scheduled_at_ms,
+            ttl_seconds,
+            now,
+            OccurrenceClaimExecution {
+                constraints,
+                cancelled: &|| false,
+            },
+        )
+    }
+
+    pub(super) fn claim_id_with_execution_at(
+        &mut self,
+        occurrence_id: String,
+        workflow_id: &str,
+        scheduled_at_ms: u64,
+        ttl_seconds: u64,
+        now: u64,
+        execution: OccurrenceClaimExecution<'_>,
+    ) -> Result<OccurrenceClaim> {
+        self.with_locked_with_cancellation(execution.cancelled, |store| {
             validate_schema(store)?;
             reconcile_stale_file(store, now);
             if let Some(existing) = store.occurrences.get(&occurrence_id) {
@@ -56,7 +132,7 @@ impl OccurrenceStore {
             if let Some(attention) = latest_status_for_scope(
                 store,
                 workflow_id,
-                constraints.attention_scope,
+                execution.constraints.attention_scope,
                 OccurrenceStatus::NeedsAttention,
             ) {
                 return Ok(OccurrenceClaim::BlockedByAttention(attention));
@@ -64,7 +140,7 @@ impl OccurrenceStore {
             if let Some(running) = latest_status_for_scope(
                 store,
                 workflow_id,
-                constraints.attention_scope,
+                execution.constraints.attention_scope,
                 OccurrenceStatus::Running,
             ) {
                 return Ok(OccurrenceClaim::BlockedByRunning(running));
@@ -72,12 +148,12 @@ impl OccurrenceStore {
             if let Some(retained) = latest_retained_worktree_for_claim(
                 store,
                 workflow_id,
-                constraints.attention_scope,
-                constraints.block_retained_worktree,
+                execution.constraints.attention_scope,
+                execution.constraints.block_retained_worktree,
             ) {
                 return Ok(OccurrenceClaim::BlockedByRetainedWorktree(retained));
             }
-            if constraints.block_newer_occurrences
+            if execution.constraints.block_newer_occurrences
                 && let Some(latest) = latest_workflow_occurrence(store, workflow_id, |_| true)
                 && latest.scheduled_at_ms > scheduled_at_ms
             {
@@ -91,7 +167,8 @@ impl OccurrenceStore {
                 claim_expires_at_ms: expiry(now, ttl_seconds),
                 started_at_ms: now,
                 uses_shared_checkout: Some(
-                    constraints.attention_scope == OccurrenceAttentionScope::SharedRepository,
+                    execution.constraints.attention_scope
+                        == OccurrenceAttentionScope::SharedRepository,
                 ),
                 finished_at_ms: None,
                 acknowledged_at_ms: None,

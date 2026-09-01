@@ -146,12 +146,29 @@ impl SchedulePersistence {
         self.with_locked_until(loop_state_lock_deadline(), action)
     }
 
+    pub(super) fn with_locked_with_cancellation<T>(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
+    ) -> Result<T> {
+        self.with_locked_until_with_cancellation(loop_state_lock_deadline(), cancelled, action)
+    }
+
     pub(super) fn with_locked_until<T>(
         &self,
         deadline: Instant,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
     ) -> Result<T> {
-        self.with_schedule_locks_until(deadline, |directories| {
+        self.with_locked_until_with_cancellation(deadline, &|| false, action)
+    }
+
+    fn with_locked_until_with_cancellation<T>(
+        &self,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+        action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
+    ) -> Result<T> {
+        self.with_schedule_locks_until(deadline, cancelled, |directories| {
             let durable_required = self.durable_state_expected(directories)?;
             let durable = self.read_durable(directories, durable_required, &|| false)?;
             let mut store = durable.unwrap_or_default();
@@ -170,11 +187,12 @@ impl SchedulePersistence {
 
     pub(super) fn with_locked_compensating<T, U>(
         &self,
+        cancelled: &dyn Fn() -> bool,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
         after_commit: impl FnOnce(&T, Instant) -> Result<U>,
     ) -> Result<(T, U)> {
         let deadline = loop_state_lock_deadline();
-        self.with_locked_compensating_until(deadline, action, |result| {
+        self.with_locked_compensating_until(deadline, cancelled, action, |result| {
             after_commit(result, deadline)
         })
     }
@@ -182,10 +200,11 @@ impl SchedulePersistence {
     fn with_locked_compensating_until<T, U>(
         &self,
         deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
         after_commit: impl FnOnce(&T) -> Result<U>,
     ) -> Result<(T, U)> {
-        self.with_schedule_locks_until(deadline, |directories| {
+        self.with_schedule_locks_until(deadline, cancelled, |directories| {
             let durable_required = self.durable_state_expected(directories)?;
             let durable = self.read_durable(directories, durable_required, &|| false)?;
             let mut store = durable.unwrap_or_default();
@@ -209,7 +228,7 @@ impl SchedulePersistence {
         &self,
         action: impl FnOnce(&ScheduleFile) -> Result<T>,
     ) -> Result<T> {
-        self.with_schedule_locks_until(loop_state_lock_deadline(), |directories| {
+        self.with_schedule_locks_until(loop_state_lock_deadline(), &|| false, |directories| {
             let durable_required = self.durable_state_expected(directories)?;
             let store = self.read_durable(directories, durable_required, &|| false)?;
             let durable_exists = store.is_some();
@@ -231,6 +250,7 @@ impl SchedulePersistence {
     fn with_schedule_locks_until<T>(
         &self,
         deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
         action: impl FnOnce(&ScheduleDirectories) -> Result<T>,
     ) -> Result<T> {
         let directories = ScheduleDirectories::open(self, true)?;
@@ -242,12 +262,14 @@ impl SchedulePersistence {
             OsStr::new(SCHEDULE_LOCK_FILE_NAME),
             &self.legacy_lock_path,
             deadline,
+            cancelled,
             || {
                 legacy.reclaim_orphaned_temps(OsStr::new(SCHEDULE_FILE_NAME), &self.legacy_path)?;
                 authority.with_lock_until(
                     OsStr::new(SCHEDULE_LOCK_FILE_NAME),
                     self.authority_lock_path()?,
                     deadline,
+                    cancelled,
                     || {
                         authority.reclaim_orphaned_temps(
                             OsStr::new(SCHEDULE_FILE_NAME),

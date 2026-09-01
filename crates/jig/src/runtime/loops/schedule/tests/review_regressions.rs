@@ -1,9 +1,8 @@
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Command;
-#[cfg(unix)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tempfile::tempdir;
 
@@ -19,26 +18,26 @@ use crate::test_env::TestRepoBuilder;
 #[cfg(unix)]
 use crate::test_env::{EnvVarGuard, lock_env};
 
-struct AlwaysCancelled;
+struct CancelAfterScheduleClaim(PathBuf);
 
-impl crate::execution::ExecutionObserver for AlwaysCancelled {}
+impl crate::execution::ExecutionObserver for CancelAfterScheduleClaim {}
 
-impl crate::execution::ExecutionCancellation for AlwaysCancelled {
+impl crate::execution::ExecutionCancellation for CancelAfterScheduleClaim {
     fn cancelled(&self) -> bool {
-        true
+        fs::read_to_string(&self.0).is_ok_and(|state| state.contains("\"status\": \"running\""))
     }
 }
 
 #[cfg(unix)]
-struct CancelAfterFirstCheck(AtomicUsize);
+struct CancelAfterWorkflowLease(PathBuf);
 
 #[cfg(unix)]
-impl crate::execution::ExecutionObserver for CancelAfterFirstCheck {}
+impl crate::execution::ExecutionObserver for CancelAfterWorkflowLease {}
 
 #[cfg(unix)]
-impl crate::execution::ExecutionCancellation for CancelAfterFirstCheck {
+impl crate::execution::ExecutionCancellation for CancelAfterWorkflowLease {
     fn cancelled(&self) -> bool {
-        self.0.fetch_add(1, Ordering::SeqCst) > 0
+        fs::read_to_string(&self.0).is_ok_and(|state| state.contains("checkout:repo"))
     }
 }
 
@@ -411,7 +410,7 @@ schedule = "* * * * *"
         &mut occurrences,
         &workflow,
         dispatch_at,
-        &mut AlwaysCancelled,
+        &mut CancelAfterScheduleClaim(temp.path().join(LOOP_RUNTIME_DIR).join("schedule.json")),
     );
 
     assert_eq!(cancelled.executed_count, 0);
@@ -471,7 +470,7 @@ checkout = "repo"
         &mut occurrences,
         &workflow,
         super::timestamp("2026-08-21T08:42:30Z"),
-        &mut CancelAfterFirstCheck(AtomicUsize::new(0)),
+        &mut CancelAfterWorkflowLease(temp.path().join(".agent/.cache/loop/leases.json")),
     );
 
     assert_eq!(cancelled.executed_count, 0, "{:#?}", cancelled.action);

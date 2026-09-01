@@ -1,4 +1,4 @@
-use super::claim::{OccurrenceAttentionScope, OccurrenceClaimConstraints};
+use super::claim::{OccurrenceAttentionScope, OccurrenceClaimExecution};
 use super::*;
 
 pub(super) const MANUAL_OCCURRENCE_SCHEDULED_AT_MS: u64 = 0;
@@ -24,6 +24,7 @@ impl OccurrenceGuard {
 }
 
 impl OccurrenceStore {
+    #[cfg(test)]
     pub(in crate::runtime::loops) fn claim_manual(
         &mut self,
         workflow_id: &str,
@@ -32,17 +33,32 @@ impl OccurrenceStore {
         attention_scope: OccurrenceAttentionScope,
         block_retained_worktree: bool,
     ) -> Result<OccurrenceClaim> {
-        self.claim_id_with_constraints_at(
+        self.claim_manual_with_cancellation(
+            workflow_id,
+            item_key,
+            ttl_seconds,
+            attention_scope,
+            block_retained_worktree,
+            &|| false,
+        )
+    }
+
+    pub(in crate::runtime::loops) fn claim_manual_with_cancellation(
+        &mut self,
+        workflow_id: &str,
+        item_key: &str,
+        ttl_seconds: u64,
+        attention_scope: OccurrenceAttentionScope,
+        block_retained_worktree: bool,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<OccurrenceClaim> {
+        self.claim_id_with_execution_at(
             format!("{workflow_id}@manual:{item_key}"),
             workflow_id,
             MANUAL_OCCURRENCE_SCHEDULED_AT_MS,
             ttl_seconds,
             now_ms(),
-            OccurrenceClaimConstraints {
-                attention_scope,
-                block_newer_occurrences: false,
-                block_retained_worktree,
-            },
+            OccurrenceClaimExecution::manual(attention_scope, block_retained_worktree, cancelled),
         )
     }
 

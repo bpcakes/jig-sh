@@ -81,6 +81,7 @@ impl ManualOccurrenceGuard {
         workflow: &ResolvedWorkflow,
         item_key: &str,
         ctx: &crate::context::RepoContext,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<ManualOccurrenceStart> {
         let block_retained_worktree = workflow.blocks_on_retained_worktree();
         let attention_scope = if workflow
@@ -93,12 +94,13 @@ impl ManualOccurrenceGuard {
             OccurrenceAttentionScope::Workflow
         };
         let mut store = OccurrenceStore::new(ctx);
-        let claim = store.claim_manual(
+        let claim = store.claim_manual_with_cancellation(
             &workflow.id,
             item_key,
             workflow.lease_ttl_seconds,
             attention_scope,
             block_retained_worktree,
+            cancelled,
         )?;
         let occurrence = match claim {
             OccurrenceClaim::Acquired(occurrence) => occurrence,

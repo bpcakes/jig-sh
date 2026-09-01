@@ -271,8 +271,9 @@ fn clear_observed_healthy_attempt(
     workflow: &ResolvedWorkflow,
     attempt_store: &mut AttemptStore,
     item: &PrIdleItem,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<Value>> {
-    if !attempt_store.clear_attempt(&workflow.id, &item.item_key)? {
+    if !attempt_store.clear_attempt_with_cancellation(&workflow.id, &item.item_key, cancelled)? {
         return Ok(None);
     }
 
@@ -321,12 +322,18 @@ fn handle_actionable_pr(
     pull_request: &Value,
     execution: PrManagerExecution<'_>,
 ) -> Result<Value> {
-    if let Some(action) = attempt_blocking_action(workflow, attempt_store, item)? {
+    if let Some(action) = attempt_blocking_action(workflow, attempt_store, item, &|| {
+        execution.observer.cancelled()
+    })? {
         return Ok(action);
     }
 
     let branch_lease_key = format!("branch:{}", item.head_ref);
-    let lease = match lease_store.acquire(&branch_lease_key, workflow.lease_ttl_seconds)? {
+    let lease = match lease_store.acquire_with_cancellation(
+        &branch_lease_key,
+        workflow.lease_ttl_seconds,
+        &|| execution.observer.cancelled(),
+    )? {
         LeaseAcquire::Acquired(lease) => lease,
         LeaseAcquire::Held(lease) => {
             return Ok(json!({
@@ -392,12 +399,15 @@ fn attempt_blocking_action(
     workflow: &ResolvedWorkflow,
     attempt_store: &mut AttemptStore,
     item: &PrWorkItem,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<Value>> {
-    let Some(attempt) = attempt_store.get(&workflow.id, &item.item_key)? else {
+    let Some(attempt) =
+        attempt_store.get_with_cancellation(&workflow.id, &item.item_key, cancelled)?
+    else {
         return Ok(None);
     };
     if attempt_version_is_stale(&attempt, item) {
-        attempt_store.clear_attempt(&workflow.id, &item.item_key)?;
+        attempt_store.clear_attempt_with_cancellation(&workflow.id, &item.item_key, cancelled)?;
         return Ok(None);
     }
     if attempt.exhausted {

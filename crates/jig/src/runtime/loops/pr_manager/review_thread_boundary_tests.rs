@@ -43,6 +43,8 @@ mod review_thread_boundary_tests {
         assert_eq!(result.posts[1]["reason"], "duplicate_review_thread");
         assert_eq!(result.posts[1]["reply_comment_id"], Value::Null);
         assert_eq!(result.posts[1]["reply_reconciled"], false);
+        assert_eq!(result.posts[1]["reply_skipped"], false);
+        assert_eq!(result.posts[1]["reply_skip_reason"], Value::Null);
         assert_eq!(result.posts[1]["is_resolved"], Value::Null);
         assert_eq!(result.posts[1]["resolve_reconciled"], false);
         assert_eq!(result.posts[1]["resolve_skipped"], false);
