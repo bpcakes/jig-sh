@@ -1,5 +1,9 @@
-fn sanitize_path_component(value: &str) -> String {
-    value
+const PR_MANAGER_GIT_NAME: &str = "Jig PR Manager";
+const PR_MANAGER_GIT_EMAIL: &str = "jig-pr-manager@users.noreply.github.com";
+const PR_WORKTREE_REF_PREFIX_LEN: usize = 48;
+
+fn bounded_path_component(value: &str) -> String {
+    let readable = value
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
@@ -8,7 +12,33 @@ fn sanitize_path_component(value: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .take(PR_WORKTREE_REF_PREFIX_LEN)
+        .collect::<String>();
+    let readable = if readable.is_empty() {
+        "branch"
+    } else {
+        &readable
+    };
+    let digest = format!("{:x}", Sha256::digest(value.as_bytes()));
+    format!("{readable}-{digest}")
+}
+
+fn git_with_pr_manager_identity<I, S>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = vec![
+        OsString::from("-c"),
+        OsString::from(format!("user.name={PR_MANAGER_GIT_NAME}")),
+        OsString::from("-c"),
+        OsString::from(format!("user.email={PR_MANAGER_GIT_EMAIL}")),
+    ];
+    command.extend(
+        args.into_iter()
+            .map(|argument| argument.as_ref().to_os_string()),
+    );
+    command
 }
 fn git_checked<I, S>(
     ctx: &RepoContext,
@@ -138,8 +168,17 @@ where
 }
 
 fn pr_git_label(args: &[OsString]) -> String {
-    let operation = args
-        .first()
+    let mut arguments = args.iter();
+    let operation = loop {
+        let Some(argument) = arguments.next() else {
+            break None;
+        };
+        if argument == "-c" {
+            let _ = arguments.next();
+            continue;
+        }
+        break Some(argument);
+    }
         .map(|arg| arg.to_string_lossy())
         .unwrap_or_else(|| "command".into());
     format!("PR manager git {operation}")

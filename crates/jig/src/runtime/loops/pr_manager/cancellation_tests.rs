@@ -307,6 +307,9 @@ mod cancellation_tests {
             r#"#!/bin/sh
 set -eu
 case "$*" in
+  *ReviewThreadWitnessState*)
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":0,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
+    ;;
   *ReviewThreadState*)
     if [ -f remote-reply ]; then
       marker=$(tail -n 1 remote-marker)
@@ -356,6 +359,9 @@ esac
             &mut budget,
         )
         .unwrap();
+        let ReviewThreadReply::Posted(response) = response else {
+            panic!("unchanged review thread should receive the reconciled reply");
+        };
 
         assert_eq!(response["_jig"]["reconciled"], true);
         assert_eq!(

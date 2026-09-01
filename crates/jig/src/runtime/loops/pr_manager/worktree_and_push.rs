@@ -63,6 +63,7 @@ fn prepare_worktree(
                 .then_some(PreparedPrWorktree::Retained(worktree)),
         });
     }
+    let mut created_by_current_attempt = !existed_before_preflight;
     let result = (|| {
         if existed_before_preflight {
             if !pr_worktree_is_registered(ctx, &worktree, observer)? {
@@ -71,58 +72,48 @@ fn prepare_worktree(
                     worktree.display()
                 )));
             }
-            clean_reused_worktree(ctx, &worktree, observer)?;
-            git_checked(
-                ctx,
-                &worktree,
-                ["checkout", "--detach", &item.head_sha],
-                observer,
-            )?;
-        } else {
+            // A registered checkout authenticates the path, but it is not a safe cache
+            // boundary: ordinary `git clean` intentionally retains ignored files and
+            // nested repositories. Recreate it so every worker starts from one tree.
             git_checked(
                 ctx,
                 ctx.root(),
                 vec![
                     OsString::from("worktree"),
-                    OsString::from("add"),
-                    OsString::from("--detach"),
+                    OsString::from("remove"),
+                    OsString::from("--force"),
                     worktree.as_os_str().to_os_string(),
-                    OsString::from(&item.head_sha),
                 ],
                 observer,
             )?;
+            created_by_current_attempt = true;
         }
-
         git_checked(
             ctx,
-            &worktree,
-            ["config", "user.name", "Jig PR Manager"],
-            observer,
-        )?;
-        git_checked(
-            ctx,
-            &worktree,
-            [
-                "config",
-                "user.email",
-                "jig-pr-manager@users.noreply.github.com",
+            ctx.root(),
+            vec![
+                OsString::from("worktree"),
+                OsString::from("add"),
+                OsString::from("--detach"),
+                worktree.as_os_str().to_os_string(),
+                OsString::from(&item.head_sha),
             ],
             observer,
         )?;
         Ok(())
     })();
     match result {
-        Ok(()) => Ok(if existed_before_preflight {
-            PreparedPrWorktree::Retained(worktree)
-        } else {
+        Ok(()) => Ok(if created_by_current_attempt {
             PreparedPrWorktree::Created(worktree)
+        } else {
+            PreparedPrWorktree::Retained(worktree)
         }),
         Err(error) => Err(PrWorktreePreparationError {
             source: error,
-            worktree: Some(if existed_before_preflight {
-                PreparedPrWorktree::Retained(worktree)
-            } else {
+            worktree: Some(if created_by_current_attempt {
                 PreparedPrWorktree::Created(worktree)
+            } else {
+                PreparedPrWorktree::Retained(worktree)
             }),
         }),
     }
@@ -287,21 +278,8 @@ fn pr_worktree_path(
     pr_worktree_root(ctx, &workflow.id).join(format!(
         "pr-{}-{}",
         item.pr_number,
-        sanitize_path_component(&item.head_ref)
+        bounded_path_component(&item.head_ref)
     ))
-}
-fn clean_reused_worktree(
-    ctx: &RepoContext,
-    worktree: &Path,
-    observer: &mut dyn ExecutionControl,
-) -> PrRepairStepResult<()> {
-    match git_output(ctx, worktree, ["merge", "--abort"], observer) {
-        Ok(_) | Err(PrRepairStepError::Failed(_)) => {}
-        Err(cancelled @ PrRepairStepError::Cancelled(_)) => return Err(cancelled),
-    }
-    git_checked(ctx, worktree, ["reset", "--hard"], observer)?;
-    git_checked(ctx, worktree, ["clean", "-fd"], observer)?;
-    Ok(())
 }
 
 fn remove_pr_worktree(
@@ -340,7 +318,7 @@ fn start_base_merge(
     let merge = git_output(
         ctx,
         worktree,
-        ["merge", "--no-edit", "FETCH_HEAD"],
+        git_with_pr_manager_identity(["merge", "--no-edit", "FETCH_HEAD"]),
         observer,
     )?;
     Ok(json!({
@@ -349,6 +327,31 @@ fn start_base_merge(
         "stderr": String::from_utf8_lossy(&merge.stderr),
         "conflicts": !merge.status.success(),
     }))
+}
+
+fn validation_tree_after_base_merge(
+    ctx: &RepoContext,
+    worktree: &Path,
+    merge: Option<&Value>,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<String> {
+    if merge
+        .and_then(|value| value.get("conflicts"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        // The ort strategy records its conflicted working-tree snapshot here.
+        // Comparing the worker result with this tree validates only the repair,
+        // rather than revalidating every incoming base-branch line.
+        git_stdout(
+            ctx,
+            worktree,
+            ["rev-parse", "--verify", "AUTO_MERGE^{tree}"],
+            observer,
+        )
+    } else {
+        git_stdout(ctx, worktree, ["rev-parse", "HEAD"], observer)
+    }
 }
 
 fn remote_branch_ref(branch: &str) -> String {
@@ -383,7 +386,7 @@ fn commit_and_push(
     worktree: &Path,
     head_ref: &str,
     base_head: &str,
-    validation_head: &str,
+    validation_tree: &str,
     observer: &mut dyn ExecutionControl,
 ) -> PrPushResult<Value> {
     let dirty_before_commit = git_stdout(ctx, worktree, ["status", "--porcelain"], observer)?;
@@ -398,15 +401,20 @@ fn commit_and_push(
             ))
             .into());
         }
-        git_checked(ctx, worktree, ["diff", "--cached", "--check"], observer)?;
         git_checked(
             ctx,
             worktree,
-            [
+            ["diff", "--check", validation_tree.trim(), "--"],
+            observer,
+        )?;
+        git_checked(
+            ctx,
+            worktree,
+            git_with_pr_manager_identity([
                 "commit",
                 "-m",
                 &format!("chore: update PR via Jig PR manager ({head_ref})"),
-            ],
+            ]),
             observer,
         )?;
     }
@@ -426,7 +434,7 @@ fn commit_and_push(
         [
             "diff",
             "--check",
-            validation_head.trim(),
+            validation_tree.trim(),
             &final_head,
             "--",
         ],

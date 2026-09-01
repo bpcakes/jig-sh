@@ -126,6 +126,11 @@ fn cancellation_window_ms(interval: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::sync::atomic::AtomicUsize;
+
+    use anyhow::anyhow;
+
     use super::*;
 
     #[test]
@@ -145,6 +150,49 @@ mod tests {
         assert_eq!(
             renewal_lock_wait(0, 120_000, Duration::from_secs(10)),
             LOOP_STATE_LOCK_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn retryable_failure_becomes_terminal_at_the_cancellation_window() {
+        let failed = AtomicBool::new(false);
+        let calls = AtomicUsize::new(0);
+        let now_ms = Cell::new(0_u64);
+        let waits = RefCell::new(Vec::new());
+
+        let error = run_with_wait(
+            Duration::from_millis(300),
+            900,
+            &failed,
+            |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(RenewalAttemptError::Retryable(anyhow!("first failure")))
+            },
+            || now_ms.get(),
+            |wait| {
+                waits.borrow_mut().push(wait);
+                now_ms.set(
+                    now_ms
+                        .get()
+                        .saturating_add(u64::try_from(wait.as_millis()).unwrap()),
+                );
+                Err(RecvTimeoutError::Timeout)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "first failure");
+        assert!(failed.load(Ordering::Acquire));
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            waits.into_inner(),
+            [
+                Duration::from_millis(300),
+                Duration::from_millis(75),
+                Duration::from_millis(75),
+                Duration::from_millis(75),
+                Duration::from_millis(75),
+            ]
         );
     }
 }

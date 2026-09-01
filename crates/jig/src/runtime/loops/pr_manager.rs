@@ -500,7 +500,8 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
     } else {
         None
     };
-    let validation_head = git_stdout(repair.repo, worktree, ["rev-parse", "HEAD"], observer)?;
+    let validation_tree =
+        validation_tree_after_base_merge(repair.repo, worktree, merge.as_ref(), observer)?;
     let prompt = pr_worker_prompt(repair.repo, repair.item, pull_request, merge.as_ref());
     let output_schema = pr_worker_output_schema(observed_review_thread_ids(pull_request).len());
     let worker = match run_codex_exec(
@@ -587,7 +588,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         worktree,
         &repair.item.head_ref,
         &base_head,
-        &validation_head,
+        &validation_tree,
         observer,
     ) {
         Ok(push) => push,
@@ -763,11 +764,13 @@ fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
 
 include!("pr_manager/review_thread_queries.rs");
 include!("pr_manager/review_thread_witness.rs");
+include!("pr_manager/review_thread_reply.rs");
 include!("pr_manager/review_threads.rs");
 include!("pr_manager/worktree_identity.rs");
 include!("pr_manager/worktree_and_push.rs");
 include!("pr_manager/push_error_tests.rs");
 include!("pr_manager/review_round4_tests.rs");
+include!("pr_manager/review_round37_tests.rs");
 include!("pr_manager/cancellation_tests.rs");
 include!("pr_manager/review_thread_budget_tests.rs");
 include!("pr_manager/review_thread_boundary_tests.rs");

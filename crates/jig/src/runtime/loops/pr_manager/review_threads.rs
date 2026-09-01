@@ -143,6 +143,8 @@ fn post_review_thread_updates(
 
         let mut thread_failed = false;
         let mut reply_error = Value::Null;
+        let mut reply_skipped = false;
+        let mut reply_skip_reason = Value::Null;
         let reply_response = if body.is_empty() {
             None
         } else {
@@ -155,7 +157,12 @@ fn post_review_thread_updates(
                 observer,
                 &mut budget,
             ) {
-                Ok(response) => Some(response),
+                Ok(ReviewThreadReply::Posted(response)) => Some(response),
+                Ok(ReviewThreadReply::Changed) => {
+                    reply_skipped = true;
+                    reply_skip_reason = Value::String("review_thread_changed".into());
+                    None
+                }
                 Err(
                     ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
                 ) => {
@@ -182,6 +189,10 @@ fn post_review_thread_updates(
             } else {
                 Value::Null
             };
+            None
+        } else if resolve && reply_skipped {
+            resolve_skipped = true;
+            resolve_skip_reason = Value::String("review_thread_changed".into());
             None
         } else if resolve && thread_failed && !body.is_empty() {
             resolve_skipped = true;
@@ -226,7 +237,8 @@ fn post_review_thread_updates(
         };
         posts.push(json!({
             "thread_id": thread_id,
-            "status": if cancelled { "cancelled" } else if thread_failed { "failed" } else { "posted" },
+            "status": if cancelled { "cancelled" } else if thread_failed { "failed" } else if reply_skipped { "skipped" } else { "posted" },
+            "reason": if reply_skipped { Value::String("review_thread_changed".into()) } else { Value::Null },
             "replied": reply_response.is_some(),
             "reply_comment_id": reply_response
                 .as_ref()
@@ -244,6 +256,8 @@ fn post_review_thread_updates(
                 .cloned()
                 .unwrap_or(Value::Bool(false)),
             "reply_error": reply_error,
+            "reply_skipped": reply_skipped,
+            "reply_skip_reason": reply_skip_reason,
             "resolved": resolve_response.is_some(),
             "is_resolved": resolve_response
                 .as_ref()
@@ -268,57 +282,6 @@ fn post_review_thread_updates(
         failed,
         cancelled,
     }
-}
-
-fn post_review_thread_reply(
-    ctx: &RepoContext,
-    thread_id: &str,
-    body: &str,
-    repair_version: &str,
-    witness: &ReviewThreadWitness,
-    observer: &mut dyn ExecutionControl,
-    budget: &mut ReviewThreadUpdateBudget,
-) -> std::result::Result<Value, ExecutionCommandError> {
-    let marker = review_thread_reply_marker(thread_id, repair_version, witness, body);
-    if let Some(comment) =
-        review_thread_reply_comment(ctx, thread_id, &marker, observer, budget)?
-    {
-        return Ok(reconciled_reply_response(&comment));
-    }
-    let body = format!("{body}\n\n{marker}");
-    let mut body_file = tempfile::NamedTempFile::new()
-        .context("Failed to create a temporary GitHub review reply file")
-        .map_err(ExecutionCommandError::failed)?;
-    use std::io::Write as _;
-    body_file
-        .write_all(body.as_bytes())
-        .context("Failed to write the temporary GitHub review reply file")
-        .map_err(ExecutionCommandError::failed)?;
-    body_file
-        .flush()
-        .context("Failed to flush the temporary GitHub review reply file")
-        .map_err(ExecutionCommandError::failed)?;
-    let mut body_field = OsString::from("body=@");
-    body_field.push(body_file.path());
-    let timeout = budget.reserve_request(ctx.command_timeout())?;
-    let result = github::gh_json_with_timeout(
-        ctx,
-        vec![
-            OsString::from("api"),
-            OsString::from("graphql"),
-            OsString::from("-f"),
-            OsString::from(format!("query={}", add_review_thread_reply_mutation())),
-            OsString::from("-f"),
-            OsString::from(format!("threadId={thread_id}")),
-            OsString::from("-F"),
-            body_field,
-        ],
-        &[0],
-        timeout,
-        observer,
-    )
-    .and_then(validate_reply_mutation_response);
-    reconcile_reply_mutation(ctx, thread_id, &marker, result, budget)
 }
 
 fn resolve_review_thread(
