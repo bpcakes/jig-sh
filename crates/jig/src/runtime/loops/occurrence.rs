@@ -32,7 +32,7 @@ use guard_renewal::run_occurrence_renewal;
 use guard_renewal::run_occurrence_renewal_with_wait;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
-pub(super) use worktree::OccurrenceWorktreeReservation;
+pub(super) use worktree::{OccurrenceWorktreeReservation, encode_worktree_path};
 
 const SCHEDULE_SCHEMA_VERSION: u32 = 4;
 const PREVIOUS_SCHEDULE_SCHEMA_VERSION: u32 = 3;

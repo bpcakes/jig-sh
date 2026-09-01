@@ -70,7 +70,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 "branch": repair.item.head_ref,
                 "head_sha": repair.item.head_sha,
                 "reasons": repair.item.reasons,
-                "worktree": worktree.path(),
+                "worktree": encode_worktree_path(worktree.path()),
                 "lease": repair.lease,
                 "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                 "worker_receipt_id": worker_receipt_id,

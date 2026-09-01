@@ -332,6 +332,71 @@ fn pre_creation_worktree_reservation_survives_a_crashed_occurrence() {
     assert_eq!(blocker.occurrence_id, isolated.occurrence_id);
 }
 
+#[cfg(unix)]
+#[test]
+fn retained_worktree_backpressure_preserves_non_utf8_repository_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let temp = tempdir().unwrap();
+    let root = temp
+        .path()
+        .join(OsString::from_vec(b"example-repo-\xff".to_vec()));
+    std::fs::create_dir(&root).unwrap();
+    super::write_loop_fixture_repo(&root);
+    let retained = root.join(".agent/runtime/loop/tasks/example");
+    std::fs::create_dir_all(&retained).unwrap();
+    let ctx = RepoContext::load_from(&root).unwrap();
+    let mut store = OccurrenceStore::new(&ctx);
+    let OccurrenceClaim::Acquired(claim) = store.claim("isolated-task", 100, 60).unwrap() else {
+        panic!("expected occurrence claim");
+    };
+    let encoded = encode_worktree_path(&retained);
+    assert!(encoded.starts_with("jig-path-v1:unix-hex:"), "{encoded}");
+    store
+        .finish(
+            &claim.occurrence_id,
+            &claim.owner,
+            OccurrenceFinish {
+                outcome: OccurrenceOutcome::NeedsAttention,
+                worker_receipt_id: None,
+                worktree: Some(&encoded),
+                error: Some("retained evidence"),
+            },
+        )
+        .unwrap();
+    store.acknowledge(&claim.occurrence_id).unwrap();
+
+    let OccurrenceClaim::BlockedByRetainedWorktree(blocker) = store
+        .claim_with_constraints_at(
+            "isolated-task",
+            200,
+            60,
+            1_000,
+            OccurrenceAttentionScope::Workflow,
+            true,
+        )
+        .unwrap()
+    else {
+        panic!("the exact retained path must continue blocking admission");
+    };
+    assert_eq!(blocker.worktree.as_deref(), Some(encoded.as_str()));
+    std::fs::remove_dir_all(&retained).unwrap();
+    assert!(matches!(
+        store
+            .claim_with_constraints_at(
+                "isolated-task",
+                200,
+                60,
+                1_001,
+                OccurrenceAttentionScope::Workflow,
+                true,
+            )
+            .unwrap(),
+        OccurrenceClaim::Acquired(_)
+    ));
+}
+
 #[test]
 fn live_workflow_occurrence_blocks_a_newer_claim_for_the_same_workflow() {
     let temp = tempdir().unwrap();

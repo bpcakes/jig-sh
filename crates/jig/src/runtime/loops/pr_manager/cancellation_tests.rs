@@ -579,6 +579,9 @@ esac
             r#"#!/bin/sh
 set -eu
 case "$*" in
+  *ReviewThreadWitnessState*)
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":0,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
+    ;;
   *ReviewThreadState*)
     if [ -f remote-resolved ]; then resolved=true; else resolved=false; fi
     printf '{"data":{"viewer":{"login":"jig-bot"},"node":{"id":"PRRT_1","isResolved":%s,"comments":{"totalCount":0,"nodes":[]}}}}\n' "$resolved"

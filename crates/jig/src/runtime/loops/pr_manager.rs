@@ -30,7 +30,7 @@ use crate::state::now_ms;
 
 use super::github;
 use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
-use super::occurrence::OccurrenceWorktreeReservation;
+use super::occurrence::{OccurrenceWorktreeReservation, encode_worktree_path};
 #[cfg(test)]
 use super::state::LOOP_CACHE_DIR;
 use super::state::{
@@ -597,7 +597,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                 "branch": repair.item.head_ref,
                 "head_sha": repair.item.head_sha,
                 "reasons": repair.item.reasons,
-                "worktree": worktree,
+                "worktree": encode_worktree_path(worktree),
                 "lease": repair.lease,
                 "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                 "merge": merge,
@@ -608,7 +608,9 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                     "pushed": Value::Null,
                     "base_head": base_head,
                     "final_head": final_head,
-                    "force": false,
+                    "force": true,
+                    "force_with_lease": true,
+                    "expected_remote_head": base_head,
                 },
                 "review_thread_posts": [],
                 "error": format!("{error:#}"),
@@ -748,6 +750,7 @@ fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
     Ok(value)
 }
 
+include!("pr_manager/review_thread_queries.rs");
 include!("pr_manager/review_thread_witness.rs");
 include!("pr_manager/review_threads.rs");
 include!("pr_manager/worktree_identity.rs");

@@ -258,35 +258,50 @@ esac
     }
 
     #[test]
-    fn resolution_witness_rejects_feedback_added_after_worker_snapshot() {
-        let witness = ReviewThreadWitness {
-            comment_count: 1,
-            latest_comment_id: Some("PRRC_ORIGINAL".into()),
-            ..ReviewThreadWitness::default()
+    fn resolution_witness_rejects_added_or_edited_feedback() {
+        let observed = json!({"review_threads": {"nodes": [{
+            "id": "PRRT_1",
+            "is_resolved": false,
+            "has_trusted_comment": true,
+            "comments": {"total_count": 1, "nodes": [{
+                "id": "PRRC_ORIGINAL",
+                "updatedAt": "2026-09-01T10:00:00Z",
+                "body": "Please add a regression test",
+                "author": {"trusted": true},
+            }]},
+        }]}});
+        let witness = observed_review_thread_witnesses(&observed)
+            .remove("PRRT_1")
+            .unwrap();
+        let changed = LiveReviewThreadState {
+            is_resolved: false,
+            total_count: 2,
+            comments: vec![
+                observed.pointer("/review_threads/nodes/0/comments/nodes/0").unwrap().clone(),
+                json!({"id": "PRRC_NEW_FEEDBACK", "updatedAt": "2026-09-01T11:00:00Z", "body": "Also cover cancellation"}),
+            ],
         };
-        let changed = json!({
-            "data": {"node": {
-                "id": "PRRT_1",
-                "isResolved": false,
-                "comments": {
-                    "totalCount": 2,
-                    "nodes": [{"id": "PRRC_NEW_FEEDBACK"}],
-                },
-            }},
-        });
 
         assert!(!review_thread_matches_witness(&changed, &witness, None));
+        let edited = LiveReviewThreadState {
+            is_resolved: false,
+            total_count: 1,
+            comments: vec![json!({
+                "id": "PRRC_ORIGINAL",
+                "updatedAt": "2026-09-01T11:00:00Z",
+                "body": "Please cover cancellation instead",
+            })],
+        };
+        assert!(!review_thread_matches_witness(&edited, &witness, None));
         assert!(review_thread_matches_witness(
-            &json!({
-                "data": {"node": {
-                    "id": "PRRT_1",
-                    "isResolved": false,
-                    "comments": {
-                        "totalCount": 2,
-                        "nodes": [{"id": "PRRC_JIG_REPLY"}],
-                    },
-                }},
-            }),
+            &LiveReviewThreadState {
+                is_resolved: false,
+                total_count: 2,
+                comments: vec![
+                    observed.pointer("/review_threads/nodes/0/comments/nodes/0").unwrap().clone(),
+                    json!({"id": "PRRC_JIG_REPLY", "updatedAt": "2026-09-01T11:00:00Z", "body": "Addressed"}),
+                ],
+            },
             &witness,
             Some("PRRC_JIG_REPLY"),
         ));
@@ -308,8 +323,8 @@ set -eu
 printf '%s\n' "$*" >> "$JIG_TEST_GH_CALLS"
 case "$*" in
   *"query=mutation"*) exit 9 ;;
-  *"ReviewThreadState"*)
-    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":2,"nodes":[{"id":"PRRC_NEW"}]}}}}'
+  *"ReviewThreadWitnessState"*)
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"PRRC_ORIGINAL","updatedAt":"2026-09-01T11:00:00Z","body":"edited feedback"}]}}}}'
     ;;
   *) exit 2 ;;
 esac
@@ -327,7 +342,11 @@ esac
                 "has_trusted_comment": true,
                 "comments": {
                     "total_count": 1,
-                    "nodes": [{"id": "PRRC_ORIGINAL"}],
+                    "nodes": [{
+                        "id": "PRRC_ORIGINAL",
+                        "updatedAt": "2026-09-01T10:00:00Z",
+                        "body": "original feedback",
+                    }],
                 },
             }]},
         });
@@ -355,7 +374,7 @@ esac
             "review_thread_changed"
         );
         let calls = fs::read_to_string(calls).unwrap();
-        assert!(calls.contains("ReviewThreadState"), "{calls}");
+        assert!(calls.contains("ReviewThreadWitnessState"), "{calls}");
         assert!(!calls.contains("resolveReviewThread(input"), "{calls}");
     }
 }

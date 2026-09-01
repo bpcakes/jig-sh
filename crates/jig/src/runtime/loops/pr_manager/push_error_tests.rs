@@ -5,6 +5,15 @@ mod push_error_tests {
     use super::*;
 
     #[test]
+    fn push_evidence_reports_the_expected_head_force_lease() {
+        let push = push_result_value(" observed-head\n", "repair-head\n", None);
+
+        assert_eq!(push["force"], true);
+        assert_eq!(push["force_with_lease"], true);
+        assert_eq!(push["expected_remote_head"], "observed-head");
+    }
+
+    #[test]
     fn push_execution_error_distinguishes_started_and_unstarted_failures() {
         let started = pr_push_execution_error(
             ExecutionCommandError::Failed {

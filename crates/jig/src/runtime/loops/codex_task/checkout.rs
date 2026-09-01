@@ -98,7 +98,7 @@ impl CheckoutReport {
                 path,
                 retained: true,
                 ..
-            } => Some(path.display().to_string()),
+            } => Some(super::super::occurrence::encode_worktree_path(path)),
             Self::Repository { .. } | Self::Worktree { .. } => None,
         }
     }
@@ -112,7 +112,7 @@ impl CheckoutReport {
                 receipt_append_valid,
             } => json!({
                 "mode": "repo",
-                "path": path,
+                "path": super::super::occurrence::encode_worktree_path(path),
                 "retained": true,
                 "dirty": dirty,
                 "head_changed": head_changed,
@@ -125,7 +125,7 @@ impl CheckoutReport {
                 head_changed,
             } => json!({
                 "mode": "worktree",
-                "path": path,
+                "path": super::super::occurrence::encode_worktree_path(path),
                 "retained": retained,
                 "dirty": dirty,
                 "head_changed": head_changed,

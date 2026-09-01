@@ -534,7 +534,9 @@ fn push_result_value(base_head: &str, final_head: &str, reconciliation: Option<S
         "pushed": true,
         "base_head": base_head.trim(),
         "final_head": final_head.trim(),
-        "force": false,
+        "force": true,
+        "force_with_lease": true,
+        "expected_remote_head": base_head.trim(),
     });
     if let Some(reconciliation) = reconciliation {
         value["reconciliation"] = Value::String(reconciliation);

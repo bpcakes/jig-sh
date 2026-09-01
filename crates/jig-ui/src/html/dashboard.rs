@@ -187,8 +187,8 @@ pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) ->
             let _ = writeln!(
                 body,
                 "<div class=\"hint\">needs attention: <span class=\"mono\">{} / {}</span> exhausted its attempt budget.</div>",
-                escape(&a.workflow),
-                escape(&a.item)
+                escape(&a.workflow_id),
+                escape(&a.item_key)
             );
         }
         for occurrence in &loops.needs_attention.scheduled_occurrences {

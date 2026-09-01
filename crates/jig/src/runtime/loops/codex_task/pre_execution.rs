@@ -163,7 +163,7 @@ impl CheckoutPreparationFailure {
 
     pub(super) fn retained(path: &Path, error: impl Into<anyhow::Error>) -> Self {
         Self {
-            retained_worktree: Some(path.display().to_string()),
+            retained_worktree: Some(super::super::occurrence::encode_worktree_path(path)),
             reason: UnexecutedReason::PreExecutionError,
             error: error.into(),
         }

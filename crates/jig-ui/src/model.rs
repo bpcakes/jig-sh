@@ -203,8 +203,10 @@ pub struct LoopAttentionView {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExhaustedAttemptView {
-    pub workflow: String,
-    pub item: String,
+    pub workflow_id: String,
+    pub item_key: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScheduledOccurrenceView {
@@ -328,7 +330,7 @@ pub struct ReceiptView {
 
 #[cfg(test)]
 mod tests {
-    use super::HarnessView;
+    use super::{HarnessView, LoopsView};
 
     #[test]
     fn legacy_snapshot_uses_product_version_as_runtime_display_fallback() {
@@ -346,5 +348,21 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(current.display_runtime_version(), "0.2.0");
+    }
+
+    #[test]
+    fn loops_view_accepts_runtime_exhausted_attempt_fields() {
+        let loops: LoopsView = serde_json::from_value(serde_json::json!({
+            "needs_attention": {"exhausted_attempts": [{
+                "workflow_id": "pr-manager",
+                "item_key": "pr-17",
+                "attempts": 3,
+            }]},
+        }))
+        .unwrap();
+        let attempt = &loops.needs_attention.exhausted_attempts[0];
+        assert_eq!(attempt.workflow_id, "pr-manager");
+        assert_eq!(attempt.item_key, "pr-17");
+        assert_eq!(attempt.extra["attempts"], 3);
     }
 }
