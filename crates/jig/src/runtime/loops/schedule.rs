@@ -86,6 +86,10 @@ fn dispatch_due_at_with_observer(
     let status = summary.status();
     let ok = loop_status_is_success(status);
     let ended = now_ms();
+    let receipt_actions = actions
+        .iter()
+        .map(dispatch_receipt_action)
+        .collect::<Vec<_>>();
     let evidence = json!({
         "kind": "loop_dispatch",
         "schema_version": 1,
@@ -102,7 +106,7 @@ fn dispatch_due_at_with_observer(
         "state_errors": summary.state_errors,
         "repository_revision_changed": summary.repository_revision_changed,
         "reconciled_occurrences": reconciled,
-        "actions": actions,
+        "actions": receipt_actions,
     });
     let receipt_id = record_receipt_with_cancellation(
         ctx,
@@ -141,8 +145,33 @@ fn dispatch_due_at_with_observer(
         "state_errors": evidence["state_errors"],
         "repository_revision_changed": evidence["repository_revision_changed"],
         "reconciled_occurrences": evidence["reconciled_occurrences"],
-        "actions": evidence["actions"],
+        "actions": actions,
     }))
+}
+
+fn dispatch_receipt_action(action: &Value) -> Value {
+    let mut action = action.clone();
+    let Some(tick) = action.get_mut("tick") else {
+        return action;
+    };
+    let Some(receipt_id) = tick
+        .get("receipt_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return action;
+    };
+    let status = tick.get("status").cloned().unwrap_or(Value::Null);
+    let workflow_id = tick.pointer("/workflow/id").cloned().unwrap_or(Value::Null);
+    let item_key = tick.get("item_key").cloned().unwrap_or(Value::Null);
+    *tick = json!({
+        "kind": "loop_tick_receipt_reference",
+        "receipt_id": receipt_id,
+        "status": status,
+        "workflow_id": workflow_id,
+        "item_key": item_key,
+    });
+    action
 }
 
 fn dispatch_workflow(

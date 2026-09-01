@@ -115,6 +115,35 @@ fn dispatch_summary_distinguishes_deferred_work_from_idle() {
 }
 
 #[test]
+fn dispatch_receipt_references_the_tick_receipt_without_copying_observation() {
+    let action = json!({
+        "workflow_id": "ExampleProject",
+        "status": "succeeded",
+        "tick": {
+            "receipt_id": "receipt-tick",
+            "status": "acted",
+            "workflow": {"id": "ExampleProject"},
+            "item_key": "pr-17",
+            "observed": {"body": "large observation"},
+            "actions": [{"worker_receipt_id": "receipt-worker"}],
+        },
+    });
+
+    let receipt_action = super::dispatch_receipt_action(&action);
+
+    assert_eq!(
+        receipt_action["tick"]["kind"],
+        "loop_tick_receipt_reference"
+    );
+    assert_eq!(receipt_action["tick"]["receipt_id"], "receipt-tick");
+    assert_eq!(receipt_action["tick"]["status"], "acted");
+    assert_eq!(receipt_action["tick"]["workflow_id"], "ExampleProject");
+    assert_eq!(receipt_action["tick"]["item_key"], "pr-17");
+    assert!(receipt_action["tick"].get("observed").is_none());
+    assert_eq!(action["tick"]["observed"]["body"], "large observation");
+}
+
+#[test]
 fn failed_workflow_keeps_a_separate_tick_receipt_error() {
     let tick = ScheduledTick::Errored {
         value: None,
@@ -324,6 +353,26 @@ timezone = "UTC"
     assert_eq!(first["status"], "acted", "{first:#}");
     assert_eq!(first["due_count"], 1);
     assert_eq!(first["executed_count"], 1);
+    assert_eq!(first["actions"][0]["tick"]["command"], "loop tick");
+    let dispatch_receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|receipt| receipt["id"] == first["receipt_id"])
+        .unwrap();
+    assert_eq!(
+        dispatch_receipt["evidence"]["actions"][0]["tick"]["kind"],
+        "loop_tick_receipt_reference"
+    );
+    assert_eq!(
+        dispatch_receipt["evidence"]["actions"][0]["tick"]["receipt_id"],
+        first["actions"][0]["tick"]["receipt_id"]
+    );
+    assert!(
+        dispatch_receipt["evidence"]["actions"][0]["tick"]
+            .get("observed")
+            .is_none()
+    );
     assert_eq!(
         first["actions"][0]["occurrence"]["scheduled_at_ms"],
         timestamp("2026-08-21T08:42:00Z")

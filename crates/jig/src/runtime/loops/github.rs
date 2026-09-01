@@ -27,6 +27,7 @@ const PR_LIST_FETCH_LIMIT: usize = PR_LIST_LIMIT + 1;
 const REVIEW_THREAD_PAGE_LIMIT: usize = 10;
 const GITHUB_SNAPSHOT_REQUEST_LIMIT: usize = 256;
 const GITHUB_SNAPSHOT_RESPONSE_BYTE_LIMIT: usize = 16 * 1024 * 1024;
+const GITHUB_SNAPSHOT_EVIDENCE_BYTE_LIMIT: usize = 16 * 1024 * 1024;
 const GITHUB_SNAPSHOT_REVIEW_ITEM_LIMIT: usize = 10_000;
 const GITHUB_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -85,7 +86,7 @@ pub(super) fn github_pr_status_snapshot(
 
     let summary = summary_for_pull_requests(&pull_requests, PR_LIST_LIMIT, pr_list_truncated);
     let budget = client.budget_snapshot();
-    Ok(json!({
+    let snapshot = json!({
             "kind": "github_pr_status_snapshot",
             "schema_version": 1,
             "observed_at_ms": observed_at_ms,
@@ -93,7 +94,17 @@ pub(super) fn github_pr_status_snapshot(
             "summary": summary,
             "budget": budget,
             "pull_requests": pull_requests,
-    }))
+    });
+    require_serialized_snapshot_budget(&snapshot, GITHUB_SNAPSHOT_EVIDENCE_BYTE_LIMIT)?;
+    Ok(snapshot)
+}
+
+fn require_serialized_snapshot_budget(snapshot: &Value, limit: usize) -> Result<()> {
+    let byte_len = serde_json::to_vec(snapshot)?.len();
+    if byte_len > limit {
+        bail!("GitHub PR snapshot exceeded its {limit}-byte serialized evidence budget");
+    }
+    Ok(())
 }
 
 struct GithubSnapshotClient<'a> {
@@ -328,10 +339,6 @@ fn pull_request_snapshot(
         "created_at": raw_pr.get("createdAt").cloned().unwrap_or(Value::Null),
         "checks": checks,
         "review_threads": review_threads,
-        "raw": {
-            "pr_list": raw_pr,
-            "status_check_rollup": raw_pr.get("statusCheckRollup").cloned().unwrap_or(Value::Null),
-        },
     }))
 }
 

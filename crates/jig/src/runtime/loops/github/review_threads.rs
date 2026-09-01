@@ -395,6 +395,5 @@ fn normalize_review_thread(
             "nodes": comments,
         },
         "has_trusted_comment": has_trusted_comment,
-        "raw": thread,
     }))
 }

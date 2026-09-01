@@ -195,6 +195,7 @@ esac
         assert_eq!(comments["nodes"][0]["id"], "comment-1");
         assert_eq!(snapshot["nodes"][0]["has_trusted_comment"], true);
         assert_eq!(snapshot["summary"]["trusted_unresolved"], 1);
+        assert!(snapshot["nodes"][0].get("raw").is_none());
     }
 
     #[cfg(unix)]
@@ -313,6 +314,15 @@ esac
                 .to_string()
                 .contains("deadline")
         );
+
+        let snapshot = json!({"body": "x".repeat(32)});
+        require_serialized_snapshot_budget(&snapshot, 43).unwrap();
+        assert!(
+            require_serialized_snapshot_budget(&snapshot, 42)
+                .unwrap_err()
+                .to_string()
+                .contains("serialized evidence budget")
+        );
     }
 
     #[cfg(unix)]
@@ -381,6 +391,7 @@ esac
         assert_eq!(snapshot["summary"]["pr_list_truncated"], false);
         assert_eq!(snapshot["budget"]["request_count"], 2 + 2 * PR_LIST_LIMIT);
         assert_eq!(snapshot["budget"]["review_item_count"], 0);
+        assert!(snapshot["pull_requests"][0].get("raw").is_none());
         assert_eq!(
             fs::read_to_string(log).unwrap().lines().count(),
             2 + 2 * PR_LIST_LIMIT
