@@ -1,0 +1,1 @@
+Generate workspace Clippy configuration for every Rust preset, opt member crates into workspace lints, cover rendered output with tests, refresh embedded templates, and verify generated apps with the configured Clippy gate.

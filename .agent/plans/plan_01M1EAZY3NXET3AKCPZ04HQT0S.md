@@ -1,0 +1,1 @@
+Harden workflow triggers, end-to-end generated Clippy validation, declared-minimum coverage, release integration, target-directory handling, fixture documentation, and adoption preservation while retaining the uniform project-owned scaffold model.

@@ -1,11 +1,8 @@
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::Child;
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::dev_outcome;
 use crate::dev_sessions::{DevCleanupLease, DevSessionRuntime, DevSessionStartOutcome};
@@ -31,6 +28,9 @@ use super::{
     validate_dev_specs_for_session, validate_explicit_ports, validate_process_routes,
     wait_for_app_ready_interruptible,
 };
+
+mod phases;
+use phases::*;
 
 pub(crate) fn run_apps_with_preflight(
     repo_name: &str,
@@ -257,60 +257,21 @@ fn run_apps_with_session_and_interrupt_probe(
         bail!("No development apps were configured or discovered.");
     }
     validate_explicit_ports(&specs)?;
-    let uses_proxy = specs.iter().any(|spec| spec.proxy);
     let cancelled = || interrupt_requested().is_some();
-    if uses_proxy {
-        ensure_process_routes_supported()?;
-        validate_process_routes(settings, &specs)?;
-        preflight_process_routes(&store, &specs, &interrupt_requested)?;
-        let hostnames: Vec<String> = specs
-            .iter()
-            .filter(|spec| spec.proxy)
-            .map(|spec| spec.hostname.clone())
-            .collect();
-        prepare_certs_for_hosts_interruptible(settings, &hostnames, &interrupt_requested)?;
-        lock_outcome_or_interruption(
-            ensure_proxy_running_interruptible(&store, settings, current_exe, &cancelled)?,
-            &interrupt_requested,
-        )?;
-    }
+    let uses_proxy = prepare_proxy_for_apps(
+        &specs,
+        settings,
+        current_exe,
+        &store,
+        &interrupt_requested,
+        &cancelled,
+    )?;
     ensure_not_interrupted_with(&interrupt_requested)?;
     let mut children = Vec::new();
     let route_cleanup_deadline = new_route_cleanup_deadline();
     let mut routes = Vec::new();
-    let mut assigned_ports = HashSet::new();
     let mut display_rows = Vec::new();
-    let mut prepared_apps = Vec::new();
-
-    for spec in specs {
-        let route_parts = if spec.proxy {
-            Some(process_route_parts(settings, &spec)?)
-        } else {
-            None
-        };
-        let port = match choose_app_port(spec.explicit_port, &spec.target_host, &mut assigned_ports)
-        {
-            Ok(port) => port,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-        let argv = match command_argv(&spec.command, &spec.kind, port) {
-            Ok(argv) if !argv.is_empty() => argv,
-            Ok(_) => {
-                bail!("No command configured for app '{}'", spec.name);
-            }
-            Err(error) => {
-                return Err(error);
-            }
-        };
-        prepared_apps.push(PreparedApp {
-            spec,
-            route_parts,
-            port,
-            argv,
-        });
-    }
+    let prepared_apps = prepare_apps(specs, settings)?;
     let dev_env = lock_outcome_or_interruption(
         dev_app_environment_interruptible(
             prepared_apps
@@ -324,51 +285,23 @@ fn run_apps_with_session_and_interrupt_probe(
     )?;
 
     arm_owned_resources()?;
-    let mark_running_result = session
-        .mark_running_interruptible(&cancelled)
-        .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
-    if let Err(error) = mark_running_result {
-        if is_interruption(&error) {
-            select_interruption();
-        } else {
-            select_primary_outcome();
-        }
-        return Err(error).context("Failed to mark the Jig dev session as running");
-    }
+    mark_dev_session_running(session, &cancelled, &interrupt_requested)?;
     for prepared in prepared_apps {
-        if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
-            select_interruption();
-            cleanup_dev_session_children(session, &mut children);
-            for running in &mut children {
-                running.output.discard();
-            }
-            return Err(error);
-        }
+        ensure_app_start_not_interrupted(session, &mut children, &interrupt_requested)?;
         let PreparedApp {
             spec,
             route_parts,
             port,
             argv,
         } = prepared;
-        let cleanup_scope_result = session
-            .prepare_app_spawn_interruptible(&spec.name, port, &cancelled)
-            .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
-        if let Err(error) = cleanup_scope_result {
-            let interrupted = is_interruption(&error);
-            if interrupted {
-                select_interruption();
-            } else {
-                select_primary_outcome();
-            }
-            cleanup_dev_session_children(session, &mut children);
-            if interrupted {
-                for running in &mut children {
-                    running.output.discard();
-                }
-            }
-            return Err(error)
-                .context("Failed to persist cleanup intent before starting a development app");
-        }
+        prepare_app_spawn(
+            session,
+            &spec,
+            port,
+            &cancelled,
+            &interrupt_requested,
+            &mut children,
+        )?;
         let mut session_cleanup = session.arm_cleanup();
         let SpawnedChild {
             mut child,
@@ -678,127 +611,29 @@ fn run_apps_with_session_and_interrupt_probe(
 
     print_dev_table(&display_rows);
 
-    let mut first_exit = None;
-    let mut proxy_stopped = false;
-    let mut interrupted = None;
-    let mut failed_child = None;
-    let mut proxy_health_misses = 0u8;
-    let mut next_proxy_health_check = Instant::now() + PROXY_HEALTH_CHECK_INTERVAL;
-    while first_exit.is_none() {
-        for (index, running) in children.iter_mut().enumerate() {
-            match try_wait_preserving_process_group(&mut running.child) {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        failed_child = Some(index);
-                    }
-                    first_exit = Some((running.name.clone(), child_exit_status(&status)));
-                    break;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    select_primary_outcome();
-                    cleanup_dev_session_children(session, &mut children);
-                    return Err(error.into());
-                }
-            }
-        }
-        if first_exit.is_some() {
-            select_primary_outcome();
-            break;
-        }
-        if let Some(reason) = interrupt_requested() {
-            // Close the small observation race by checking every child once
-            // more before accepting interruption as the terminal outcome.
-            for (index, running) in children.iter_mut().enumerate() {
-                match try_wait_preserving_process_group(&mut running.child) {
-                    Ok(Some(status)) => {
-                        if !status.success() {
-                            failed_child = Some(index);
-                        }
-                        first_exit = Some((running.name.clone(), child_exit_status(&status)));
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        select_primary_outcome();
-                        cleanup_dev_session_children(session, &mut children);
-                        return Err(error.into());
-                    }
-                }
-            }
-            if first_exit.is_some() {
-                select_primary_outcome();
-                break;
-            }
-            select_interruption();
-            interrupted = Some(reason);
-            break;
-        }
-        if first_exit.is_none() && uses_proxy && Instant::now() >= next_proxy_health_check {
-            next_proxy_health_check = Instant::now() + PROXY_HEALTH_CHECK_INTERVAL;
-            let proxy_is_ready = match proxy_ready_interruptible(&store, settings, &cancelled) {
-                Ok(LockOutcome::Acquired(ready)) => ready,
-                Ok(LockOutcome::Cancelled) => {
-                    let Some(reason) = interrupt_requested() else {
-                        select_primary_outcome();
-                        cleanup_dev_session_children(session, &mut children);
-                        bail!(
-                            "foreground runtime-state wait was cancelled without a termination request"
-                        );
-                    };
-                    select_interruption();
-                    interrupted = Some(reason);
-                    break;
-                }
-                Err(error) => {
-                    select_primary_outcome();
-                    cleanup_dev_session_children(session, &mut children);
-                    return Err(error);
-                }
-            };
-            if proxy_health_failed(&mut proxy_health_misses, proxy_is_ready) {
-                first_exit = Some(("jig proxy".to_string(), 1));
-                proxy_stopped = true;
-                select_primary_outcome();
-                break;
-            }
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    let cleanup_complete = cleanup_dev_session_children(session, &mut children);
-    if interrupted.is_some() {
-        for running in &mut children {
-            running.output.discard();
-        }
-    } else if let Some(index) = failed_child {
-        let failed = &mut children[index];
-        failed.output.print_failure();
-    }
-
-    if proxy_stopped {
-        eprintln!("Jig proxy stopped responding; shutting down development session");
-    } else if interrupted.is_none()
-        && let Some((name, code)) = &first_exit
-    {
-        eprintln!("{name} exited with status {code}; stopping development session");
-    }
-
-    if let Some(reason) = interrupted {
-        return Err(interruption_error(reason));
-    }
-
-    let primary_failed = proxy_stopped
-        || first_exit
-            .as_ref()
-            .is_some_and(|(_, exit_status)| *exit_status != 0);
-    require_cleanup_for_success(cleanup_complete, primary_failed)?;
-
-    Ok(json!({
-        "ok": first_exit.as_ref().map(|(_, code)| *code == 0).unwrap_or(false),
-        "first_exit": first_exit.map(|(name, code)| json!({ "app": name, "exit_status": code })),
-        "proxy_failed": proxy_stopped,
-        "routes": routes,
-    }))
+    let DevSessionOutcome {
+        first_exit,
+        proxy_stopped,
+        interrupted,
+        failed_child,
+    } = monitor_dev_session(
+        &mut children,
+        uses_proxy,
+        &store,
+        settings,
+        session,
+        &interrupt_requested,
+        &cancelled,
+    )?;
+    finish_dev_session(
+        children,
+        routes,
+        first_exit,
+        proxy_stopped,
+        interrupted,
+        failed_child,
+        session,
+    )
 }
 
 fn cleanup_dev_session_children(

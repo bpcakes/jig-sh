@@ -516,45 +516,49 @@ fn sqlx_driver_discovery_stops_at_the_nearest_existing_dotenv() {
     );
 }
 
+fn assert_driver_indeterminate(root: &Path, command: &str, ambient: Option<&OsStr>) {
+    assert!(
+        matches!(
+            configured_sqlx_driver(root, command, ambient),
+            SqlxDriverResolution::Indeterminate(_)
+        ),
+        "{command:?}"
+    );
+}
+
+fn assert_sqlite_driver(
+    root: &Path,
+    command: &str,
+    ambient: Option<&OsStr>,
+    source: SqlxDriverSource,
+) {
+    assert_eq!(
+        configured_sqlx_driver(root, command, ambient),
+        SqlxDriverResolution::Known(SqlxDriverRequirement {
+            driver: SqlxDriver::Sqlite,
+            source,
+        }),
+        "{command:?}"
+    );
+}
+
 #[test]
 fn sqlx_driver_discovery_fails_open_for_dynamic_and_ambiguous_commands() {
     let temp = tempdir().unwrap();
     let ambient = Some(OsStr::new("sqlite:environment.db"));
 
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "cargo sqlx prepare --database-url '$OTHER_DATABASE_URL'",
-            ambient,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "cargo sqlx prepare --database-url '$DATABASE_URL'",
-            ambient,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            r"cargo sqlx prepare --database-url \$DATABASE_URL",
-            ambient,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert_eq!(
-        configured_sqlx_driver(
-            temp.path(),
-            "cargo sqlx prepare --database-url \"$DATABASE_URL\"",
-            ambient,
-        ),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandFlag,
-        })
+    for command in [
+        "cargo sqlx prepare --database-url '$OTHER_DATABASE_URL'",
+        "cargo sqlx prepare --database-url '$DATABASE_URL'",
+        r"cargo sqlx prepare --database-url \$DATABASE_URL",
+    ] {
+        assert_driver_indeterminate(temp.path(), command, ambient);
+    }
+    assert_sqlite_driver(
+        temp.path(),
+        "cargo sqlx prepare --database-url \"$DATABASE_URL\"",
+        ambient,
+        SqlxDriverSource::CommandFlag,
     );
     for command in [
         "cargo sqlx prepare --database-url $DATABASE_URL",
@@ -570,96 +574,43 @@ fn sqlx_driver_discovery_fails_open_for_dynamic_and_ambiguous_commands() {
             "{command:?}",
         );
     }
-    assert_eq!(
-        configured_sqlx_driver(
-            temp.path(),
-            "DATABASE_URL=$DATABASE_URL cargo sqlx prepare",
-            ambient,
-        ),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandAssignment,
-        })
+    assert_sqlite_driver(
+        temp.path(),
+        "DATABASE_URL=$DATABASE_URL cargo sqlx prepare",
+        ambient,
+        SqlxDriverSource::CommandAssignment,
     );
     fs::write(
         temp.path().join(".env"),
         "DATABASE_URL=postgres://dotenv-must-not-be-used/doctor\n",
     )
     .unwrap();
-    assert!(matches!(
-        configured_sqlx_driver(
+    for command in [
+        "cargo sqlx prepare --database-url '$DATABASE_URL'",
+        "DATABASE_URL=sqlite:first.db cargo sqlx prepare && cargo sqlx migrate info --database-url=postgres://localhost/second",
+        "export DATABASE_URL=postgres://localhost/demo && cargo sqlx prepare",
+        "DATABASE_URL=postgres://localhost/demo && cargo sqlx prepare",
+        "cargo sqlx prepare --database-url='postgres://localhost/demo",
+    ] {
+        assert_driver_indeterminate(temp.path(), command, None);
+    }
+    for command in [
+        "env -u DATABASE_URL cargo sqlx prepare",
+        "env - cargo sqlx prepare",
+    ] {
+        assert_driver_indeterminate(temp.path(), command, ambient);
+    }
+    for command in [
+        "DATABASE_URL=sqlite:first.db cargo sqlx prepare && printf ignored && cargo sqlx migrate info --database-url=sqlite:second.db",
+        "printf DATABASE_URL=postgres://ignored && DATABASE_URL=sqlite:actual.db cargo sqlx prepare",
+    ] {
+        assert_sqlite_driver(
             temp.path(),
-            "cargo sqlx prepare --database-url '$DATABASE_URL'",
+            command,
             None,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert_eq!(
-        configured_sqlx_driver(
-            temp.path(),
-            "DATABASE_URL=sqlite:first.db cargo sqlx prepare && printf ignored && cargo sqlx migrate info --database-url=sqlite:second.db",
-            None,
-        ),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandAssignment,
-        })
-    );
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "DATABASE_URL=sqlite:first.db cargo sqlx prepare && cargo sqlx migrate info --database-url=postgres://localhost/second",
-            None,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "export DATABASE_URL=postgres://localhost/demo && cargo sqlx prepare",
-            None,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "DATABASE_URL=postgres://localhost/demo && cargo sqlx prepare",
-            None,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "env -u DATABASE_URL cargo sqlx prepare",
-            ambient,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(temp.path(), "env - cargo sqlx prepare", ambient,),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert!(matches!(
-        configured_sqlx_driver(
-            temp.path(),
-            "cargo sqlx prepare --database-url='postgres://localhost/demo",
-            None,
-        ),
-        SqlxDriverResolution::Indeterminate(_)
-    ));
-    assert_eq!(
-        configured_sqlx_driver(
-            temp.path(),
-            "printf DATABASE_URL=postgres://ignored && DATABASE_URL=sqlite:actual.db cargo sqlx prepare",
-            None,
-        ),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandAssignment,
-        })
-    );
+            SqlxDriverSource::CommandAssignment,
+        );
+    }
 }
 
 #[test]

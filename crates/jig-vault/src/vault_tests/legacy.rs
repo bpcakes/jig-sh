@@ -415,6 +415,17 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
 
     let after_text = store.read_vault_text().unwrap().unwrap();
     let after: VaultFile = serde_json::from_str(&after_text).unwrap();
+    assert_migration_resealed_header(&before, &after);
+    assert_migrated_secret(&store, &after);
+    assert_v1_ciphertext_rejected_under_v2_aad(before);
+    assert_migration_audit_is_value_free(&store);
+
+    let migration_again = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
+    assert!(!migration_again.changed);
+    assert_eq!(store.read_vault_text().unwrap().unwrap(), after_text);
+}
+
+fn assert_migration_resealed_header(before: &VaultFile, after: &VaultFile) {
     assert_eq!(after.header.version, FORMAT_VERSION);
     assert_eq!(after.header.vault_id, before.header.vault_id);
     assert_eq!(after.header.created_at_ms, before.header.created_at_ms);
@@ -426,8 +437,10 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
     assert_eq!(after.header.kdf.output_len, before.header.kdf.output_len);
     assert_ne!(after.wrapped_dek_nonce_b64, before.wrapped_dek_nonce_b64);
     assert_ne!(after.state_nonce_b64, before.state_nonce_b64);
+}
 
-    let state = decrypt_state_for_test(&after, &passphrase());
+fn assert_migrated_secret(store: &VaultStore, after: &VaultFile) {
+    let state = decrypt_state_for_test(after, &passphrase());
     assert!(
         state
             .windows(b"\"kind\":\"concealed\"".len())
@@ -441,7 +454,9 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
             .as_slice(),
         b"legacy-secret-value"
     );
+}
 
+fn assert_v1_ciphertext_rejected_under_v2_aad(before: VaultFile) {
     let old_state_nonce =
         decode_b64_array::<NONCE_LEN>("vault state nonce", &before.state_nonce_b64).unwrap();
     let old_state = B64.decode(&before.state_b64).unwrap();
@@ -472,14 +487,12 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
         )
         .is_err()
     );
+}
 
+fn assert_migration_audit_is_value_free(store: &VaultStore) {
     let audit = store.read_audit_text().unwrap().unwrap();
     assert!(audit.contains("\"action\":\"vault_format_migrate\""));
     assert!(audit.contains("\"from_version\":1"));
     assert!(audit.contains("\"to_version\":2"));
     assert!(!audit.contains("legacy-secret-value"));
-
-    let migration_again = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
-    assert!(!migration_again.changed);
-    assert_eq!(store.read_vault_text().unwrap().unwrap(), after_text);
 }

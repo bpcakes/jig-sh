@@ -18,14 +18,20 @@ mod scan;
 mod topology;
 
 use self::commands::{CommandCandidate, CommandInference, infer_commands};
-use self::frontend::{FrontendAppProfile, infer_frontend_apps_with_metadata};
-use self::github::{GithubCiShapeInference, infer_ci_github_runner_with_metadata};
+use self::frontend::{
+    FrontendAppProfile, FrontendAppsInference, infer_frontend_apps_with_metadata,
+};
+use self::github::{
+    GithubCiInference, GithubCiShapeInference, infer_ci_github_runner_with_metadata,
+};
 use self::metadata::{Confidence, InferenceMetadata};
-use self::package_manager::infer_package_manager_with_metadata;
-use self::repo::{infer_default_branch_with_metadata, infer_repo_name_with_metadata};
+use self::package_manager::{PackageManagerInference, infer_package_manager_with_metadata};
+use self::repo::{
+    RepoValueInference, infer_default_branch_with_metadata, infer_repo_name_with_metadata,
+};
 use self::rust_sqlx::{
-    RustCrateRootSourceKind, infer_rust_crate_roots_from_scan,
-    infer_rust_crate_roots_with_metadata, infer_sqlx,
+    RustCrateRootSourceKind, RustCrateRootsInference, SqlxInference,
+    infer_rust_crate_roots_from_scan, infer_rust_crate_roots_with_metadata, infer_sqlx,
 };
 use self::scan::{RepoScan, read_limited_text};
 use self::topology::{RepoTopology, infer_repo_topology};
@@ -147,6 +153,29 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         warnings,
         ..AdoptInference::default()
     };
+    record_repository_metadata(
+        &mut inference,
+        &repo_name,
+        &default_branch,
+        &rust_crate_roots,
+        &commands,
+    );
+    record_frontend_and_ci_metadata(&mut inference, &package_manager, &frontend_apps, &github_ci);
+
+    let sqlx = infer_sqlx(root, &scan, &mut inference.warnings);
+    apply_sqlx_inference(&mut inference, &sqlx);
+    record_inference_signals(&mut inference, &github_ci);
+
+    inference
+}
+
+fn record_repository_metadata(
+    inference: &mut AdoptInference,
+    repo_name: &RepoValueInference,
+    default_branch: &RepoValueInference,
+    rust_crate_roots: &RustCrateRootsInference,
+    commands: &CommandInference,
+) {
     if let Some(value) = inference.repo_name.clone() {
         let confidence = if repo_name
             .source
@@ -160,7 +189,7 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "repo_name",
             json!(value),
-            option_source(repo_name.source),
+            option_source(repo_name.source.clone()),
             confidence,
             Vec::new(),
         );
@@ -178,7 +207,7 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "default_branch",
             json!(value),
-            option_source(default_branch.source),
+            option_source(default_branch.source.clone()),
             confidence,
             Vec::new(),
         );
@@ -191,7 +220,7 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "rust_crate_roots",
             json!(inference.rust_crate_roots.clone()),
-            rust_crate_roots.sources,
+            rust_crate_roots.sources.clone(),
             confidence,
             Vec::new(),
         );
@@ -212,12 +241,20 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             inference.record_command_metadata(key, candidate);
         }
     }
+}
+
+fn record_frontend_and_ci_metadata(
+    inference: &mut AdoptInference,
+    package_manager: &PackageManagerInference,
+    frontend_apps: &FrontendAppsInference,
+    github_ci: &GithubCiInference,
+) {
     if !inference.frontend_apps.is_empty() {
         if let Some(value) = inference.web_package_manager.clone() {
             inference.record_metadata(
                 "web_package_manager",
                 json!(value),
-                package_manager.sources,
+                package_manager.sources.clone(),
                 Confidence::High,
                 Vec::new(),
             );
@@ -225,7 +262,7 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "frontend_apps",
             json!(inference.frontend_apps.clone()),
-            frontend_apps.sources,
+            frontend_apps.sources.clone(),
             Confidence::High,
             Vec::new(),
         );
@@ -240,7 +277,7 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         );
     }
     if !inference.frontend_profiles.is_empty() {
-        let frontend_profile_sources = inference
+        let sources = inference
             .frontend_profiles
             .iter()
             .flat_map(|profile| profile.sources.iter().cloned())
@@ -248,9 +285,9 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "frontend_profiles",
             json!(inference.frontend_profiles.clone()),
-            frontend_profile_sources,
+            sources,
             Confidence::Medium,
-            frontend_apps.warnings,
+            frontend_apps.warnings.clone(),
         );
     }
     if let Some(value) = inference.ci_github_runner.clone() {
@@ -262,9 +299,9 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "ci_github_runner",
             json!(value),
-            github_ci.sources,
+            github_ci.sources.clone(),
             confidence,
-            github_ci.runner_warnings,
+            github_ci.runner_warnings.clone(),
         );
     }
     if inference.ci_shape.has_workflows() {
@@ -279,15 +316,16 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             ],
         );
     }
+}
 
-    let sqlx = infer_sqlx(root, &scan, &mut inference.warnings);
+fn apply_sqlx_inference(inference: &mut AdoptInference, sqlx: &SqlxInference) {
     inference.sqlx_enabled = Some(sqlx.enabled.value);
     inference.rust_migration_dirs = sqlx.migration_dirs.value.clone();
-    inference.signals.extend(sqlx.signals);
+    inference.signals.extend(sqlx.signals.clone());
     inference.record_metadata(
         "sqlx_enabled",
         json!(sqlx.enabled.value),
-        sqlx.enabled.sources,
+        sqlx.enabled.sources.clone(),
         if sqlx.enabled.value {
             Confidence::High
         } else {
@@ -295,6 +333,10 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         },
         Vec::new(),
     );
+    record_sqlx_paths(inference, sqlx);
+}
+
+fn record_sqlx_paths(inference: &mut AdoptInference, sqlx: &SqlxInference) {
     if let Some(migration_dir) = &sqlx.migration_dir {
         inference.rust_migration_dir = Some(migration_dir.value.clone());
         inference.record_metadata(
@@ -313,9 +355,9 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         inference.record_metadata(
             "rust_migration_dirs",
             json!(inference.rust_migration_dirs.clone()),
-            sqlx.migration_dirs.sources,
+            sqlx.migration_dirs.sources.clone(),
             Confidence::High,
-            sqlx.migration_dirs.warnings,
+            sqlx.migration_dirs.warnings.clone(),
         );
     }
     if let Some(metadata_dir) = &sqlx.metadata_dir {
@@ -346,6 +388,9 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             vec!["assumes online `cargo sqlx prepare --check` in a POSIX-like shell".into()],
         );
     }
+}
+
+fn record_inference_signals(inference: &mut AdoptInference, github_ci: &GithubCiInference) {
     if !inference.rust_crate_roots.is_empty() {
         inference.signals.push(format!(
             "Rust crate roots: {}",
@@ -387,8 +432,6 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             inference.ci_shape.generated_jig_checks_role()
         ));
     }
-
-    inference
 }
 
 pub(super) fn adoption_candidate_files(root: &Path) -> (Vec<std::path::PathBuf>, Vec<String>) {

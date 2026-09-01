@@ -1,5 +1,10 @@
 #![cfg(target_os = "linux")]
 
+#[path = "vault_consumer_workflow_parts/support.rs"]
+mod vault_consumer_workflow_support;
+
+use vault_consumer_workflow_support::*;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -290,17 +295,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         .args(["--json", "vault", "init"])
         .output()
         .unwrap();
-    let initialized_json = structured_output("vault initialization", &initialized);
-    assert_eq!(initialized_json["vault_scope"], "repo");
-    assert_eq!(
-        initialized_json["vault_scope_id"],
-        "scope_vault_consumer_acceptance"
-    );
-    let source_home = PathBuf::from(
-        initialized_json["vault_home"]
-            .as_str()
-            .expect("init omitted vault home"),
-    );
+    let source_home = assert_initialized(&initialized);
 
     let migrated = jig_command(&repo, &vault_base, INITIAL_PASSPHRASE, None)
         .args(["--json", "vault", "migrate", "--to", "2"])
@@ -322,19 +317,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         .env("OP_TEST_LOG", &op_log)
         .output()
         .unwrap();
-    let imported_json = structured_output("vault import", &imported);
-    assert_eq!(imported_json["dry_run"], false);
-    assert_eq!(imported_json["fields"][0]["kind"], "concealed");
-    assert_eq!(imported_json["fields"][1]["kind"], "text");
-    assert_eq!(imported_json["fields"][2]["kind"], "text");
-    assert_eq!(
-        std::fs::read(&generated_env).unwrap(),
-        b"RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD\nRESTIC_REPOSITORY=jig://Production/RESTIC_REPOSITORY\nRESTIC_COMPRESSION=jig://Production/RESTIC_COMPRESSION\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&op_log).unwrap(),
-        format!("arg=<read>\narg=<--no-newline>\narg=<{OP_REFERENCE}>\n")
-    );
+    assert_imported(&imported, &generated_env, &op_log);
 
     let source_exec = run_exec(
         &repo,
@@ -344,21 +327,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         None,
         "printf 'password=%s repository=%s compression=%s\\n' \"$RESTIC_PASSWORD\" \"$RESTIC_REPOSITORY\" \"$RESTIC_COMPRESSION\"; printf 'error-password=%s\\n' \"$RESTIC_PASSWORD\" >&2",
     );
-    assert_success("source vault exec", &source_exec);
-    assert_no_sensitive_bytes(&source_exec.stdout, "source exec stdout");
-    assert_no_sensitive_bytes(&source_exec.stderr, "source exec stderr");
-    assert!(
-        source_exec.stdout
-            == format!(
-                "password=[REDACTED] repository={REPOSITORY_VALUE} compression={COMPRESSION_VALUE}\n"
-            )
-            .as_bytes(),
-        "source exec output did not preserve text and redact concealed data"
-    );
-    assert!(
-        source_exec.stderr == b"error-password=[REDACTED]\n",
-        "source exec stderr was not independently redacted"
-    );
+    assert_source_exec(&source_exec);
 
     let injected = jig_command(&repo, &vault_base, INITIAL_PASSPHRASE, None)
         .args(["vault", "inject", "--in"])
@@ -367,25 +336,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         .arg(&rendered_config)
         .output()
         .unwrap();
-    assert_success("vault injection", &injected);
-    assert!(injected.stdout.is_empty());
-    assert!(injected.stderr.is_empty());
-    assert!(
-        std::fs::read(&rendered_config).unwrap()
-            == format!(
-                "repository={REPOSITORY_VALUE}\ncompression={COMPRESSION_VALUE}\npassword={CONCEALED_VALUE}\n"
-            )
-            .as_bytes(),
-        "injected fixture did not contain the exact field values"
-    );
-    assert_eq!(
-        std::fs::metadata(&rendered_config)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
+    assert_injected(&injected, &rendered_config);
 
     let mut read_command = jig_command(&repo, &vault_base, INITIAL_PASSPHRASE, None);
     let mut read = read_command
@@ -405,11 +356,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         .output()
         .unwrap();
     let read_output = read.wait_with_output().unwrap();
-    assert_success("vault read", &read_output);
-    assert!(read_output.stderr.is_empty());
-    assert_success("vault read pipe", &pipe_output);
-    assert_eq!(pipe_output.stdout, b"read-pipe-ok");
-    assert!(pipe_output.stderr.is_empty());
+    assert_read_pipe(&read_output, &pipe_output);
 
     let changed = jig_command(
         &repo,
@@ -420,19 +367,17 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     .args(["--json", "vault", "passphrase", "change"])
     .output()
     .unwrap();
-    let changed_json = structured_output("passphrase change", &changed);
-    assert_eq!(changed_json["changed"], true);
+    assert_eq!(
+        structured_output("passphrase change", &changed)["changed"],
+        true
+    );
 
     let created_backup = jig_command(&repo, &vault_base, ROTATED_PASSPHRASE, None)
         .args(["--json", "vault", "backup", "create", "--out"])
         .arg(&backup)
         .output()
         .unwrap();
-    let backup_json = structured_output("vault backup creation", &created_backup);
-    assert_eq!(backup_json["backup_version"], 1);
-    assert!(backup_json["bytes_written"].as_u64().unwrap() > 0);
-    assert_no_encrypted_payload_plaintext(&std::fs::read(&backup).unwrap(), "encrypted backup");
-    assert!(!destination_vault_base.exists());
+    assert_backup_created(&created_backup, &backup, &destination_vault_base);
 
     let restored = jig_command(
         &destination_repo,
@@ -444,18 +389,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     .arg(&backup)
     .output()
     .unwrap();
-    let restored_json = structured_output("vault restore", &restored);
-    assert_eq!(restored_json["restored"], true);
-    assert_eq!(restored_json["format_version"], 2);
-    assert_eq!(restored_json["vault_scope"], "repo");
-    let restored_home = PathBuf::from(
-        restored_json["vault_home"]
-            .as_str()
-            .expect("restore omitted destination vault home"),
-    );
-    assert!(restored_home.starts_with(destination_vault_base.join("scopes")));
-    assert_ne!(restored_home, source_home);
-    assert!(restored_home.join("vault.json").is_file());
+    let restored_home = assert_restored(&restored, &destination_vault_base, &source_home);
 
     let restored_exec = run_exec(
         &destination_repo,
@@ -465,33 +399,8 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         None,
         "printf 'restored-password=%s repository=%s compression=%s\\n' \"$RESTIC_PASSWORD\" \"$RESTIC_REPOSITORY\" \"$RESTIC_COMPRESSION\"; printf 'restored-error=%s\\n' \"$RESTIC_PASSWORD\" >&2; exit 23",
     );
-    assert_eq!(restored_exec.status.code(), Some(23));
-    assert_no_sensitive_bytes(&restored_exec.stdout, "restored exec stdout");
-    assert_no_sensitive_bytes(&restored_exec.stderr, "restored exec stderr");
-    assert!(
-        restored_exec.stdout
-            == format!(
-                "restored-password=[REDACTED] repository={REPOSITORY_VALUE} compression={COMPRESSION_VALUE}\n"
-            )
-            .as_bytes(),
-        "restored exec output did not preserve text and redact concealed data"
-    );
-    assert!(
-        restored_exec.stderr == b"restored-error=[REDACTED]\n",
-        "restored exec emitted a second Jig error or unredacted bytes"
-    );
-
-    assert_audit_has_no_values(&source_home.join("audit.jsonl"));
-    assert_audit_has_no_values(&restored_home.join("audit.jsonl"));
-    assert_no_encrypted_payload_plaintext(
-        &std::fs::read(source_home.join("vault.json")).unwrap(),
-        "source encrypted vault",
-    );
-    assert_no_encrypted_payload_plaintext(
-        &std::fs::read(restored_home.join("vault.json")).unwrap(),
-        "restored encrypted vault",
-    );
-    assert!(!repo.join(".agent/state/receipts.jsonl").exists());
+    assert_restored_exec(&restored_exec);
+    assert_persisted_state_hides_values(&repo, &source_home, &restored_home);
 
     git(&repo, ["add", ".env.jig"]);
     let cached_diff = Command::new("git")
@@ -499,10 +408,5 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
         .args(["diff", "--cached", "--binary", "--no-ext-diff"])
         .output()
         .unwrap();
-    assert_success("synthetic Git diff", &cached_diff);
-    assert_no_sensitive_bytes(&cached_diff.stdout, "synthetic Git diff");
-    for value in [REPOSITORY_VALUE, COMPRESSION_VALUE] {
-        assert!(!contains_bytes(&cached_diff.stdout, value.as_bytes()));
-    }
-    assert_repo_has_no_imported_values(&repo);
+    assert_git_hides_values(&repo, &cached_diff);
 }

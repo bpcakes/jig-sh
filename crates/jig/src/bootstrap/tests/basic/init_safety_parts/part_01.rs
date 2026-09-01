@@ -57,101 +57,109 @@ fn scaffold_rejects_conflicting_file_unless_forced_and_reports_rerun() {
 }
 
 #[cfg(unix)]
+fn symlink_test_plan(destination: &Path) -> scaffold::InitScaffoldPlan {
+    scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        destination,
+    )
+    .unwrap()
+    .unwrap()
+}
+
+#[cfg(unix)]
+fn assert_existing_symlink_rejected(force: bool) {
+    let outside = tempdir().unwrap();
+    let outside_file = outside.path().join(format!("outside-{force}.toml"));
+    fs::write(&outside_file, "outside sentinel\n").unwrap();
+    let destination = tempdir().unwrap();
+    std::os::unix::fs::symlink(&outside_file, destination.path().join("Cargo.toml")).unwrap();
+    let error = symlink_test_plan(destination.path())
+        .write(destination.path(), force)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is a symlink"), "{error}");
+    assert_eq!(fs::read_to_string(&outside_file).unwrap(), "outside sentinel\n");
+    assert!(!destination.path().join("apps").exists());
+    assert!(!destination.path().join("web").exists());
+}
+
+#[cfg(unix)]
+fn assert_broken_symlink_rejected(force: bool) {
+    let outside = tempdir().unwrap();
+    let outside_file = outside.path().join(format!("missing-{force}.toml"));
+    let destination = tempdir().unwrap();
+    std::os::unix::fs::symlink(&outside_file, destination.path().join("Cargo.toml")).unwrap();
+    let error = symlink_test_plan(destination.path())
+        .write(destination.path(), force)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is a symlink"), "{error}");
+    assert!(!outside_file.exists(), "broken link target was created");
+    assert!(!destination.path().join("apps").exists());
+    assert!(!destination.path().join("web").exists());
+}
+
+#[cfg(unix)]
+fn assert_symlinked_ancestor_rejected(force: bool) {
+    let outside = tempdir().unwrap();
+    let destination = tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), destination.path().join("web")).unwrap();
+    let error = symlink_test_plan(destination.path())
+        .write(destination.path(), force)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ancestor"), "{error}");
+    assert!(error.contains("is a symlink"), "{error}");
+    assert!(
+        !destination.path().join("Cargo.toml").exists(),
+        "a late unsafe output must fail before earlier scaffold files are published"
+    );
+    assert!(
+        fs::read_dir(outside.path()).unwrap().next().is_none(),
+        "scaffold wrote through a symlinked output ancestor"
+    );
+}
+
+#[cfg(unix)]
+fn assert_directory_leaf_rejected(force: bool) {
+    let destination = tempdir().unwrap();
+    fs::create_dir(destination.path().join("Cargo.toml")).unwrap();
+    let error = symlink_test_plan(destination.path())
+        .write(destination.path(), force)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("destination leaf"), "{error}");
+    assert!(error.contains("is a directory"), "{error}");
+    assert!(!destination.path().join("apps").exists());
+    assert!(!destination.path().join("web").exists());
+}
+
+#[cfg(unix)]
 #[test]
 fn scaffold_preflight_rejects_symlink_boundaries_without_partial_or_outside_writes() {
-    use std::os::unix::fs::symlink;
-
-    fn plan_for(destination: &Path) -> scaffold::InitScaffoldPlan {
-        scaffold::InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustReact),
-                db: None,
-                frontends: Vec::new(),
-                frontend_list: Vec::new(),
-            },
-            &AnswerOpts {
-                repo_name: Some("demo".into()),
-                ..AnswerOpts::default()
-            },
-            destination,
-        )
-        .unwrap()
-        .unwrap()
+    for force in [false, true] {
+        assert_existing_symlink_rejected(force);
     }
 
     for force in [false, true] {
-        let outside = tempdir().unwrap();
-        let outside_file = outside.path().join(format!("outside-{force}.toml"));
-        fs::write(&outside_file, "outside sentinel\n").unwrap();
-        let destination = tempdir().unwrap();
-        symlink(&outside_file, destination.path().join("Cargo.toml")).unwrap();
-
-        let error = plan_for(destination.path())
-            .write(destination.path(), force)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("is a symlink"), "{error}");
-        assert_eq!(
-            fs::read_to_string(&outside_file).unwrap(),
-            "outside sentinel\n"
-        );
-        assert!(!destination.path().join("apps").exists());
-        assert!(!destination.path().join("web").exists());
+        assert_broken_symlink_rejected(force);
     }
 
     for force in [false, true] {
-        let outside = tempdir().unwrap();
-        let outside_file = outside.path().join(format!("missing-{force}.toml"));
-        let destination = tempdir().unwrap();
-        symlink(&outside_file, destination.path().join("Cargo.toml")).unwrap();
-
-        let error = plan_for(destination.path())
-            .write(destination.path(), force)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("is a symlink"), "{error}");
-        assert!(!outside_file.exists(), "broken link target was created");
-        assert!(!destination.path().join("apps").exists());
-        assert!(!destination.path().join("web").exists());
+        assert_symlinked_ancestor_rejected(force);
     }
 
     for force in [false, true] {
-        let outside = tempdir().unwrap();
-        let destination = tempdir().unwrap();
-        symlink(outside.path(), destination.path().join("web")).unwrap();
-
-        let error = plan_for(destination.path())
-            .write(destination.path(), force)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("ancestor"), "{error}");
-        assert!(error.contains("is a symlink"), "{error}");
-        assert!(
-            !destination.path().join("Cargo.toml").exists(),
-            "a late unsafe output must fail before earlier scaffold files are published"
-        );
-        assert!(
-            fs::read_dir(outside.path()).unwrap().next().is_none(),
-            "scaffold wrote through a symlinked output ancestor"
-        );
-    }
-
-    for force in [false, true] {
-        let destination = tempdir().unwrap();
-        fs::create_dir(destination.path().join("Cargo.toml")).unwrap();
-
-        let error = plan_for(destination.path())
-            .write(destination.path(), force)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("destination leaf"), "{error}");
-        assert!(error.contains("is a directory"), "{error}");
-        assert!(!destination.path().join("apps").exists());
-        assert!(!destination.path().join("web").exists());
+        assert_directory_leaf_rejected(force);
     }
 }
 

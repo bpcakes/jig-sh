@@ -157,6 +157,75 @@ fn process_disappears(pid: libc::pid_t) -> bool {
     }
 }
 
+fn assert_import_dry_run(output: &Output, log: &Path, destination: &Path) {
+    assert!(output.status.success(), "{}", combined_output(output));
+    let payload = json(output);
+    assert_eq!(payload["dry_run"], true);
+    assert_eq!(payload["fields"][0]["kind"], "concealed");
+    assert_eq!(payload["fields"][1]["kind"], "text");
+    assert_eq!(payload["fields"][0]["action"], "create");
+    assert!(!log.exists(), "dry-run unexpectedly invoked op");
+    assert!(!destination.exists());
+}
+
+fn assert_imported_destination(destination: &Path, injection_marker: &Path) {
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        b"TOKEN=jig://Production/TOKEN\nMODE=jig://Production/MODE\nINJECT=jig://Production/INJECT\n"
+    );
+    assert_eq!(
+        std::fs::metadata(destination).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!injection_marker.exists());
+}
+
+fn assert_op_import_log(log: &Path) {
+    let op_log = std::fs::read_to_string(log).unwrap();
+    assert_eq!(op_log.matches("argc=<3>").count(), 2);
+    assert_eq!(op_log.matches("arg=<read>").count(), 2);
+    assert_eq!(op_log.matches("arg=<--no-newline>").count(), 2);
+    assert!(op_log.contains("arg=<op://Test/Login/TOKEN>"));
+    assert!(op_log.contains("arg=<op://Test/Login/value;touch shell-injection-ran>"));
+    assert!(!op_log.contains("stdin-was-not-null"));
+    assert!(!op_log.contains("reserved-passphrase-env-was-inherited"));
+}
+
+fn assert_imported_fields(vault: &Vault) {
+    let passphrase = SecretString::from(PASSPHRASE.to_owned());
+    let fields = vault.list_fields(&passphrase).unwrap();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(fields[0].kind, FieldKind::Concealed);
+    assert_eq!(fields[1].kind, FieldKind::Text);
+    assert_eq!(fields[2].kind, FieldKind::Concealed);
+    let mut token = Vec::new();
+    vault
+        .read_field_to(&passphrase, reference("jig://Production/TOKEN"), &mut token)
+        .unwrap();
+    assert_eq!(token, b"secret-no-newline");
+}
+
+fn assert_existing_import_dry_run(output: &Output, log: &Path, log_len: u64) {
+    assert!(output.status.success());
+    let payload = json(output);
+    assert_eq!(payload["requires_replace"], true);
+    assert_eq!(payload["requires_overwrite"], true);
+    assert_eq!(payload["fields"][0]["action"], "replace");
+    assert_eq!(std::fs::metadata(log).unwrap().len(), log_len);
+}
+
+fn assert_import_audit_has_no_source_values(vault: &Vault) {
+    let audit = std::fs::read(vault.root().join("audit.jsonl")).unwrap();
+    for forbidden in [
+        b"secret-no-newline".as_slice(),
+        b"injection-secret".as_slice(),
+        b"production".as_slice(),
+        b"op://Test".as_slice(),
+    ] {
+        assert!(!audit.windows(forbidden.len()).any(|part| part == forbidden));
+    }
+}
+
 #[test]
 fn imports_literals_and_exact_op_references_and_reruns_convergently() {
     let temp = private_tempdir();
@@ -181,14 +250,7 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
         &destination,
         &["--dry-run"],
     );
-    assert!(dry_run.status.success(), "{}", combined_output(&dry_run));
-    let dry_run_json = json(&dry_run);
-    assert_eq!(dry_run_json["dry_run"], true);
-    assert_eq!(dry_run_json["fields"][0]["kind"], "concealed");
-    assert_eq!(dry_run_json["fields"][1]["kind"], "text");
-    assert_eq!(dry_run_json["fields"][0]["action"], "create");
-    assert!(!log.exists(), "dry-run unexpectedly invoked op");
-    assert!(!destination.exists());
+    assert_import_dry_run(&dry_run, &log, &destination);
 
     let imported = import_output(
         temp.path(),
@@ -204,40 +266,9 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
         "{}",
         String::from_utf8_lossy(&imported.stderr)
     );
-    assert_eq!(
-        std::fs::read(&destination).unwrap(),
-        b"TOKEN=jig://Production/TOKEN\nMODE=jig://Production/MODE\nINJECT=jig://Production/INJECT\n"
-    );
-    assert_eq!(
-        std::fs::metadata(&destination)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
-    assert!(!injection_marker.exists());
-
-    let op_log = std::fs::read_to_string(&log).unwrap();
-    assert_eq!(op_log.matches("argc=<3>").count(), 2);
-    assert_eq!(op_log.matches("arg=<read>").count(), 2);
-    assert_eq!(op_log.matches("arg=<--no-newline>").count(), 2);
-    assert!(op_log.contains("arg=<op://Test/Login/TOKEN>"));
-    assert!(op_log.contains("arg=<op://Test/Login/value;touch shell-injection-ran>"));
-    assert!(!op_log.contains("stdin-was-not-null"));
-    assert!(!op_log.contains("reserved-passphrase-env-was-inherited"));
-
-    let passphrase = SecretString::from(PASSPHRASE.to_owned());
-    let fields = vault.list_fields(&passphrase).unwrap();
-    assert_eq!(fields.len(), 3);
-    assert_eq!(fields[0].kind, FieldKind::Concealed);
-    assert_eq!(fields[1].kind, FieldKind::Text);
-    assert_eq!(fields[2].kind, FieldKind::Concealed);
-    let mut token = Vec::new();
-    vault
-        .read_field_to(&passphrase, reference("jig://Production/TOKEN"), &mut token)
-        .unwrap();
-    assert_eq!(token, b"secret-no-newline");
+    assert_imported_destination(&destination, &injection_marker);
+    assert_op_import_log(&log);
+    assert_imported_fields(&vault);
 
     let log_len = std::fs::metadata(&log).unwrap().len();
     let refused = import_output(
@@ -261,12 +292,7 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
         &destination,
         &["--dry-run"],
     );
-    assert!(existing_dry_run.status.success());
-    let existing_json = json(&existing_dry_run);
-    assert_eq!(existing_json["requires_replace"], true);
-    assert_eq!(existing_json["requires_overwrite"], true);
-    assert_eq!(existing_json["fields"][0]["action"], "replace");
-    assert_eq!(std::fs::metadata(&log).unwrap().len(), log_len);
+    assert_existing_import_dry_run(&existing_dry_run, &log, log_len);
 
     let rerun = import_output(
         temp.path(),
@@ -287,15 +313,7 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
         b"TOKEN=jig://Production/TOKEN\nMODE=jig://Production/MODE\nINJECT=jig://Production/INJECT\n"
     );
 
-    let audit = std::fs::read(vault.root().join("audit.jsonl")).unwrap();
-    for forbidden in [
-        b"secret-no-newline".as_slice(),
-        b"injection-secret".as_slice(),
-        b"production".as_slice(),
-        b"op://Test".as_slice(),
-    ] {
-        assert!(!audit.windows(forbidden.len()).any(|part| part == forbidden));
-    }
+    assert_import_audit_has_no_source_values(&vault);
 }
 
 #[test]

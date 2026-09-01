@@ -254,7 +254,7 @@ fn rust_only_scaffold_generations_fit_exactly_at_the_transaction_budget_boundary
         .unwrap()
         .unwrap();
         let planned = plan.output_paths().into_iter().collect::<BTreeSet<_>>();
-        assert_eq!(planned.len(), 5);
+        assert_eq!(planned.len(), 6);
         let admitted_repeats = MAX_EXISTING_INIT_RETAINED_GENERATIONS - planned.len();
 
         validate_retained_generation_budget(&planned, admitted_repeats, None, 0).unwrap();

@@ -50,6 +50,7 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
         json!([
             "Cargo.toml",
             "README.md",
+            "clippy.toml",
             "crates/exampleclijson/Cargo.toml",
             "crates/exampleclijson/AGENTS.md",
             "crates/exampleclijson/src/main.rs"
@@ -98,7 +99,7 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
     );
     let human = String::from_utf8(human_output.stdout).unwrap();
     assert!(human.contains("scaffold: rust-cli for exampleclihuman (db: none)"));
-    assert!(human.contains("scaffold files: 5 created, 0 modified, 0 unchanged"));
+    assert!(human.contains("scaffold files: 6 created, 0 modified, 0 unchanged"));
     assert!(human.contains("Scaffolded project code is project-owned"));
     assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));

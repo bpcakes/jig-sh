@@ -37,6 +37,14 @@ threads-required = "num-test-threads"
 filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
 test-group = 'frontend-node-local'
 
+[[profile.local.overrides]]
+# These checks intentionally enforce short transport and process-cleanup
+# deadlines. Run them without CPU/process-tree contention from the 64-way
+# local profile so the deadlines measure Jig rather than host saturation.
+filter = 'package(jig-sh) & (test(mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions) | test(mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport))'
+test-group = 'process-signals'
+threads-required = "num-test-threads"
+
 [[profile.default.overrides]]
 # Keep this group at a uniform weight. cargo-nextest 0.9.130 can strand
 # heavier queued group members when unrelated tests saturate global slots.

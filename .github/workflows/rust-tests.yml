@@ -13,11 +13,7 @@ on:
       - ".config/nextest.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
-      - "scripts/jig"
-      - "scripts/install-jig.sh"
-      - "scripts/check-launcher-template.sh"
-      - "scripts/validate-fixtures.sh"
-      - "scripts/fixtures/**"
+      - "scripts/**"
       - "templates/project/**"
       - "templates/scaffolds/**"
       - "examples/**"
@@ -38,11 +34,7 @@ on:
       - ".config/nextest.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
-      - "scripts/jig"
-      - "scripts/install-jig.sh"
-      - "scripts/check-launcher-template.sh"
-      - "scripts/validate-fixtures.sh"
-      - "scripts/fixtures/**"
+      - "scripts/**"
       - "templates/project/**"
       - "templates/scaffolds/**"
       - "examples/**"
@@ -158,6 +150,36 @@ jobs:
         env:
           JIG_DEV_BIN: target/debug/jig
         run: scripts/jig check clippy
+
+  generated-rust-clippy:
+    name: Check generated Rust scaffold Clippy policy at declared minima
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+          components: clippy
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ github.job }}
+      - name: Build current Jig binary
+        run: cargo build -p jig-sh --bin jig --locked
+      - name: Install generated-project Rust toolchains
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component clippy
+          rustup toolchain install 1.94.0 --profile minimal --component clippy
+      - name: Validate generated Rust Clippy policy
+        env:
+          JIG_DEV_BIN: target/debug/jig
+          JIG_GENERATED_RUST_ONLY_TOOLCHAIN: 1.88.0
+          JIG_GENERATED_RUST_REACT_TOOLCHAIN: 1.94.0
+        run: bash scripts/check-generated-rust-clippy.sh
 
   test:
     name: scripts/jig check test-locked

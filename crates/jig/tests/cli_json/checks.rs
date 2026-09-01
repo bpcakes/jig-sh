@@ -1,4 +1,50 @@
 use super::*;
+use std::process::Output;
+
+fn assert_file_budget_check(output: &Output) {
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["schema"], "jig.file_budget/report-v1");
+    assert_eq!(payload["conclusion"], "failure");
+    assert_eq!(payload["exit_status"], 1);
+    assert_eq!(payload["report"]["view"], "worktree");
+}
+
+fn assert_file_budget_audit(output: &Output, expected_status: i32) {
+    assert_eq!(output.status.code(), Some(expected_status));
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["conclusion"], "failure");
+    assert_eq!(payload["exit_status"], expected_status);
+}
+
+fn assert_authored_file_budget(output: &Output) {
+    assert_eq!(output.status.code(), Some(1));
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let target = &payload["run"]["targets"][0];
+    assert_eq!(target["conclusion"], "failure");
+    assert!(
+        target["native_evidence"]["file_budget"]["evaluation_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
+    assert!(
+        !output
+            .stdout
+            .windows(b"engine_pending".len())
+            .any(|window| window == b"engine_pending")
+    );
+}
+
+fn assert_push_file_budget(output: &Output, before: &str) {
+    assert_eq!(output.status.code(), Some(1));
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let evidence = &payload["run"]["targets"][0]["native_evidence"]["file_budget"];
+    assert_eq!(evidence["request"]["kind"], "exact_tree");
+    assert_eq!(evidence["request"]["requested_oid"], before);
+    assert_eq!(evidence["request"]["provenance"], "push_before");
+    assert_eq!(evidence["comparison"]["kind"], "exact_tree");
+}
 
 #[test]
 fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
@@ -20,30 +66,21 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
         .args(["file-budget", "check", "--base", "main", "--json"])
         .output()
         .unwrap();
-    assert_eq!(check.status.code(), Some(1));
-    assert!(check.stderr.is_empty());
-    let payload: Value = serde_json::from_slice(&check.stdout).unwrap();
-    assert_eq!(payload["schema"], "jig.file_budget/report-v1");
-    assert_eq!(payload["conclusion"], "failure");
-    assert_eq!(payload["exit_status"], 1);
-    assert_eq!(payload["report"]["view"], "worktree");
+    assert_file_budget_check(&check);
 
     let audit = jig()
         .current_dir(repo.path())
         .args(["file-budget", "audit", "--json"])
         .output()
         .unwrap();
-    assert_eq!(audit.status.code(), Some(0));
-    let payload: Value = serde_json::from_slice(&audit.stdout).unwrap();
-    assert_eq!(payload["conclusion"], "failure");
-    assert_eq!(payload["exit_status"], 0);
+    assert_file_budget_audit(&audit, 0);
 
     let strict = jig()
         .current_dir(repo.path())
         .args(["file-budget", "audit", "--strict", "--json"])
         .output()
         .unwrap();
-    assert_eq!(strict.status.code(), Some(1));
+    assert_file_budget_audit(&strict, 1);
     assert!(
         !state.exists(),
         "direct diagnostics must not create run or receipt state"
@@ -54,21 +91,7 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
         .args(["check", "repo:file-budget", "--no-receipt", "--json"])
         .output()
         .unwrap();
-    assert_eq!(authored.status.code(), Some(1));
-    let payload: Value = serde_json::from_slice(&authored.stdout).unwrap();
-    let target = &payload["run"]["targets"][0];
-    assert_eq!(target["conclusion"], "failure");
-    assert!(
-        target["native_evidence"]["file_budget"]["evaluation_digest"]
-            .as_str()
-            .is_some_and(|digest| digest.starts_with("sha256:"))
-    );
-    assert!(
-        !authored
-            .stdout
-            .windows(b"engine_pending".len())
-            .any(|window| window == b"engine_pending")
-    );
+    assert_authored_file_budget(&authored);
 
     let push = jig()
         .current_dir(repo.path())
@@ -84,13 +107,7 @@ fn direct_file_budget_json_uses_stable_exits_and_creates_no_durable_state() {
         ])
         .output()
         .unwrap();
-    assert_eq!(push.status.code(), Some(1));
-    let payload: Value = serde_json::from_slice(&push.stdout).unwrap();
-    let evidence = &payload["run"]["targets"][0]["native_evidence"]["file_budget"];
-    assert_eq!(evidence["request"]["kind"], "exact_tree");
-    assert_eq!(evidence["request"]["requested_oid"], before);
-    assert_eq!(evidence["request"]["provenance"], "push_before");
-    assert_eq!(evidence["comparison"]["kind"], "exact_tree");
+    assert_push_file_budget(&push, &before);
 }
 
 #[test]

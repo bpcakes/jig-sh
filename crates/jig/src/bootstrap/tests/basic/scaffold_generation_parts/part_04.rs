@@ -1,4 +1,3 @@
-
 #[test]
 fn rust_react_dev_answer_authority_reaches_config_and_vite_fallback() {
     let _guard = lock_env();
@@ -46,7 +45,6 @@ tld = "Example.TEST"
     assert!(vite.contains("http://api.exampleproject.example.test:2455"));
     assert!(!vite.contains("localhost:1355"));
 }
-
 
 #[cfg(unix)]
 #[test]
@@ -197,133 +195,103 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
     .unwrap();
 
     let rendered = plan.render_files().unwrap();
-    let paths = rendered
-        .iter()
-        .map(|file| file.relative.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    assert!(paths.contains("go.mod"));
-    assert!(paths.contains("cmd/api/main.go"));
-    assert!(paths.contains("cmd/api/main_test.go"));
-    assert!(paths.contains("cmd/api/database_command.go"));
-    assert!(paths.contains("cmd/openapi/main.go"));
-    assert!(paths.contains("sqlc.yaml"));
-    assert!(paths.contains("internal/config/config_test.go"));
-    assert!(paths.contains("internal/database/migrations/00001_app_metadata.sql"));
-    assert!(paths.contains("internal/database/database_test.go"));
-    assert!(paths.contains("scripts/test-postgres.sh"));
-    assert!(paths.contains("internal/database/sqlc/db.go"));
-    assert!(!paths.contains("Cargo.toml"));
+    assert_rendered_paths(
+        &rendered,
+        &[
+            "go.mod",
+            "cmd/api/main.go",
+            "cmd/api/main_test.go",
+            "cmd/api/database_command.go",
+            "cmd/openapi/main.go",
+            "sqlc.yaml",
+            "internal/config/config_test.go",
+            "internal/database/migrations/00001_app_metadata.sql",
+            "internal/database/database_test.go",
+            "scripts/test-postgres.sh",
+            "internal/database/sqlc/db.go",
+        ],
+    );
+    assert_rendered_paths_absent(&rendered, &["Cargo.toml"]);
 
-    let go_mod = rendered
-        .iter()
-        .find(|file| file.relative == "go.mod")
-        .unwrap();
-    assert!(go_mod.contents.contains("module github.com/acme/demo"));
-    assert!(go_mod.contents.contains("go 1.26.0"));
-    assert!(go_mod.contents.contains("github.com/joho/godotenv"));
-    assert!(go_mod.contents.contains("tool ("));
-    let api_main = rendered
-        .iter()
-        .find(|file| file.relative == "cmd/api/main.go")
-        .unwrap();
-    let config = rendered
-        .iter()
-        .find(|file| file.relative == "internal/config/config.go")
-        .unwrap();
-    assert!(api_main.contents.contains("godotenv.Load()"));
-    assert!(
-        api_main
-            .contents
-            .find("parseCommand(os.Args[1:])")
-            .unwrap()
-            < api_main.contents.find("config.Load()").unwrap()
+    let go_mod = rendered_contents(&rendered, "go.mod");
+    assert_contains_all(
+        go_mod,
+        &[
+            "module github.com/acme/demo",
+            "go 1.26.0",
+            "github.com/joho/godotenv",
+            "tool (",
+        ],
     );
-    assert!(config.contents.contains("DatabaseURL"));
-    assert!(config.contents.contains("DATABASE_URL"));
-    assert!(api_main.contents.contains("net.Listen(\"tcp\", cfg.Address)"));
-    assert!(
-        api_main
-            .contents
-            .contains("func serve(ctx context.Context, server *http.Server, listener net.Listener) error")
+    let api_main = rendered_contents(&rendered, "cmd/api/main.go");
+    assert_contains_all(
+        api_main,
+        &[
+            "godotenv.Load()",
+            "net.Listen(\"tcp\", cfg.Address)",
+            "func serve(ctx context.Context, server *http.Server, listener net.Listener) error",
+            "server.Shutdown(shutdownCtx)",
+            "serveErr := <-serverDone",
+        ],
     );
-    assert!(api_main.contents.contains("server.Shutdown(shutdownCtx)"));
-    assert!(api_main.contents.contains("serveErr := <-serverDone"));
-    let api_main_test = rendered
-        .iter()
-        .find(|file| file.relative == "cmd/api/main_test.go")
-        .unwrap();
-    assert!(
-        api_main_test
-            .contents
-            .contains("func TestServeWaitsForInflightRequestsDuringShutdown")
+    assert_text_before(api_main, "parseCommand(os.Args[1:])", "config.Load()");
+    assert_contains_all(
+        rendered_contents(&rendered, "internal/config/config.go"),
+        &["DatabaseURL", "DATABASE_URL"],
     );
-    assert!(
-        api_main_test
-            .contents
-            .contains("func TestRunRejectsInvalidCommandBeforeLoadingConfig")
+    assert_contains_all(
+        rendered_contents(&rendered, "cmd/api/main_test.go"),
+        &[
+            "func TestServeWaitsForInflightRequestsDuringShutdown",
+            "func TestRunRejectsInvalidCommandBeforeLoadingConfig",
+        ],
     );
-    let database_command = rendered
-        .iter()
-        .find(|file| file.relative == "cmd/api/database_command.go")
-        .unwrap();
-    assert!(
-        database_command
-            .contents
-            .contains("--bootstrap-database")
+    assert_contains_all(
+        rendered_contents(&rendered, "cmd/api/database_command.go"),
+        &["--bootstrap-database"],
     );
-    let database = rendered
-        .iter()
-        .find(|file| file.relative == "internal/database/database.go")
-        .unwrap();
-    assert!(database.contents.contains("func Bootstrap("));
-    assert!(database.contents.contains("CREATE DATABASE"));
-    let bootstrap_start = database.contents.find("func Bootstrap(").unwrap();
-    let open_start = database.contents.find("func Open(").unwrap();
-    let migrate_start = database.contents.find("func migrate(").unwrap();
-    assert!(
-        database.contents[bootstrap_start..open_start]
-            .contains("if err := migrate(ctx, databaseURL); err != nil")
+
+    let database = rendered_contents(&rendered, "internal/database/database.go");
+    assert_contains_all(database, &["func Bootstrap(", "CREATE DATABASE"]);
+    let bootstrap_start = database.find("func Bootstrap(").unwrap();
+    let open_start = database.find("func Open(").unwrap();
+    let migrate_start = database.find("func migrate(").unwrap();
+    assert_contains_all(
+        &database[bootstrap_start..open_start],
+        &["if err := migrate(ctx, databaseURL); err != nil"],
     );
-    assert!(
-        !database.contents[open_start..migrate_start]
-            .contains("migrate(ctx, databaseURL)")
+    assert_contains_none(
+        &database[open_start..migrate_start],
+        &["migrate(ctx, databaseURL)"],
     );
-    let database_test = rendered
-        .iter()
-        .find(|file| file.relative == "internal/database/database_test.go")
-        .unwrap();
-    assert!(database_test.contents.contains("database.Bootstrap(ctx, databaseURL)"));
-    let playwright = rendered
-        .iter()
-        .find(|file| file.relative == "web/playwright.config.ts")
-        .unwrap();
-    assert!(
-        playwright
-            .contents
-            .contains("go run ./cmd/api --bootstrap-database")
+    assert_contains_all(
+        rendered_contents(&rendered, "internal/database/database_test.go"),
+        &["database.Bootstrap(ctx, databaseURL)"],
     );
-    let contracts = rendered
-        .iter()
-        .find(|file| file.relative == "scripts/contracts.mjs")
-        .unwrap();
-    assert!(contracts.contents.contains(r#"run("go", ["run", "./cmd/openapi""#));
-    assert!(!contracts.contents.contains(r#"run("cargo""#));
-    assert!(!contracts.contents.contains("execFile"));
-    assert!(!contracts.contents.contains("promisify"));
-    assert!(contracts.contents.contains(r#"join(backendRoot, "go.mod")"#));
-    assert!(contracts.contents.contains("async function withStagedClients()"));
-    let httpapi_test = rendered
-        .iter()
-        .find(|file| file.relative == "internal/httpapi/httpapi_test.go")
-        .unwrap();
-    assert!(httpapi_test.contents.contains("func TestOpenAPIIsCurrent"));
-    assert!(httpapi_test.contents.contains("public OpenAPI document is stale"));
-    assert!(
-        httpapi_test
-            .contents
-            .contains(r#"filepath.FromSlash("../../openapi/public.json")"#)
+    assert_contains_all(
+        rendered_contents(&rendered, "web/playwright.config.ts"),
+        &["go run ./cmd/api --bootstrap-database"],
     );
-    assert!(!httpapi_test.contents.contains("runtime.Caller"));
+    let contracts = rendered_contents(&rendered, "scripts/contracts.mjs");
+    assert_contains_all(
+        contracts,
+        &[
+            r#"run("go", ["run", "./cmd/openapi""#,
+            r#"join(backendRoot, "go.mod")"#,
+            "async function withStagedClients()",
+        ],
+    );
+    assert_contains_none(contracts, &[r#"run("cargo""#, "execFile", "promisify"]);
+    let httpapi_test = rendered_contents(&rendered, "internal/httpapi/httpapi_test.go");
+    assert_contains_all(
+        httpapi_test,
+        &[
+            "func TestOpenAPIIsCurrent",
+            "public OpenAPI document is stale",
+            r#"filepath.FromSlash("../../openapi/public.json")"#,
+        ],
+    );
+    assert_contains_none(httpapi_test, &["runtime.Caller"]);
 }
 
 #[test]
@@ -377,6 +345,258 @@ fn go_react_without_database_keeps_runtime_dependencies_and_omits_database_bound
     assert!(!paths.contains("sqlc.yaml"));
 }
 
+fn assert_quoted_workflow_path_counts(workflow: &str, paths: &[&str], expected: usize) {
+    for path in paths {
+        assert_eq!(
+            workflow.matches(&format!(r#"- "{path}""#)).count(),
+            expected,
+            "workflow has the wrong filter count for {path}"
+        );
+    }
+}
+
+fn assert_go_adapter_workflow(destination: &Path, workflow_name: &str) {
+    let workflow =
+        fs::read_to_string(destination.join(".github/workflows").join(workflow_name)).unwrap();
+    assert_contains_all(
+        &workflow,
+        &[
+            "actions-rust-lang/setup-rust-toolchain@v1",
+            "go-version: ${{ steps.go-version.outputs.version }}",
+            "version=\"$(scripts/jig info go-version)\"",
+            "cache-dependency-path: |\n            go.mod\n            go.sum\n            go.work\n            go.work.sum\n            **/go.mod",
+        ],
+    );
+    assert_contains_none(
+        &workflow,
+        &[
+            "go-version-file: .go-version",
+            "go-version-file: \".go-version\"",
+        ],
+    );
+    let expected_root_filters = usize::from(workflow_name == "go-tests.yml") * 2;
+    assert_contains_count(&workflow, &[(r#"- "**""#, expected_root_filters)]);
+    if workflow_name == "repo-policy.yml" {
+        assert_contains_all(&workflow, &["JIG_PUSH_BEFORE: ${{ github.event.before }}"]);
+    }
+    assert_quoted_workflow_path_counts(
+        &workflow,
+        &[
+            "go.mod",
+            "go.sum",
+            "go.work",
+            "go.work.sum",
+            "**/go.mod",
+            "**/go.sum",
+            "**/go.work",
+            "**/go.work.sum",
+            "vendor/modules.txt",
+            "**/vendor/modules.txt",
+            "sqlc.yaml",
+            "**/sqlc.yaml",
+            "internal/database/migrations/**",
+            "**/*.sql",
+        ],
+        expected_root_filters,
+    );
+}
+
+fn assert_go_test_workflow(destination: &Path) {
+    let go_tests = fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+    let parsed: serde_json::Value = serde_yaml_ng::from_str(&go_tests).unwrap();
+    assert_eq!(parsed["jobs"]["checks"]["defaults"]["run"]["shell"], "bash");
+    assert_contains_count(
+        &go_tests,
+        &[
+            (r#"- "openapi/**""#, 2),
+            (r#"- "scripts/test-postgres.sh""#, 2),
+            ("runs-on: \"macos-14\"", 1),
+            ("runs-on: \"ubuntu-latest\"", 1),
+            ("actions-rust-lang/setup-rust-toolchain@v1", 2),
+        ],
+    );
+    for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
+        assert_contains_all(&go_tests, &[&format!("scripts/jig check {target}")]);
+    }
+    assert_quoted_workflow_path_counts(
+        &go_tests,
+        &[
+            "go.mod",
+            "go.sum",
+            "go.work",
+            "go.work.sum",
+            "**/go.mod",
+            "**/go.sum",
+            "**/go.work",
+            "**/go.work.sum",
+            "vendor/modules.txt",
+            "**/vendor/modules.txt",
+            "scripts/jig",
+            "scripts/install-jig.sh",
+        ],
+        2,
+    );
+    let postgres_job = &go_tests[go_tests.find("postgres-integration:").unwrap()..];
+    assert_text_before(
+        postgres_job,
+        "actions-rust-lang/setup-rust-toolchain@v1",
+        "name: Resolve Go toolchain version",
+    );
+    assert_contains_all(&go_tests, &["run: bash scripts/test-postgres.sh"]);
+    assert_paths_absent(destination, &[".go-version"]);
+}
+
+fn assert_go_repository_contract(destination: &Path) {
+    let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert_contains_all(
+        &config,
+        &[
+            r#"migration_dir = "internal/database/migrations""#,
+            "[repository]",
+            r#"affected_ignore = [".env", ".env.*", "**/.env", "**/.env.*", "README.md", "**/README.md", "AGENTS.md", "**/AGENTS.md", "agent-map.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/**", "LICENSE", "LICENSE.*", ".github/**"]"#,
+            "api_test_command = \"go test ./...\"",
+            "web_test_command = \"scripts/check-webapps.sh check-one",
+            "action = \"frontend-contract-drift\"",
+            "action = \"frontend-public-boundary\"",
+            "contracts-drift-check",
+            "contracts-boundary-check",
+        ],
+    );
+    assert_contains_none(
+        &config,
+        &[
+            "rust_migration_dir =",
+            "backend_language =",
+            "go_database =",
+        ],
+    );
+    let config_value = toml::from_str::<toml::Value>(&config).unwrap();
+    assert_eq!(
+        config_value["work"]["gates"][0]["profile"].as_str(),
+        Some("verify")
+    );
+
+    let contract = fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap();
+    assert_contains_all(&contract, &[r#""name": "jig.migration_add""#]);
+    let contract_value = serde_json::from_str::<serde_json::Value>(&contract).unwrap();
+    assert_eq!(contract_value["default_check_profile"], "verify");
+    assert_eq!(
+        contract_value["affected_ignore"],
+        serde_json::json!([
+            ".env",
+            ".env.*",
+            "**/.env",
+            "**/.env.*",
+            "README.md",
+            "**/README.md",
+            "AGENTS.md",
+            "**/AGENTS.md",
+            "agent-map.md",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
+            "CODE_OF_CONDUCT.md",
+            "SECURITY.md",
+            "docs/**",
+            "LICENSE",
+            "LICENSE.*",
+            ".github/**"
+        ])
+    );
+    for component in ["api", "web"] {
+        assert!(
+            contract_value["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["id"] == component)
+        );
+        assert!(
+            contract_value["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|action| action["target"]["component"] == component
+                    && action["target"]["action"] == "test")
+        );
+    }
+    for action in ["frontend-contract-drift", "frontend-public-boundary"] {
+        assert!(
+            contract_value["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["target"]["component"] == "repo"
+                    && candidate["target"]["action"] == action)
+        );
+    }
+}
+
+fn assert_go_generated_runtime_files(destination: &Path) {
+    let root_guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
+    assert_contains_all(
+        &root_guide,
+        &[
+            "business logic in the owning package",
+            "## Backend Guide Conventions",
+            "scripts/jig migration add NAME",
+        ],
+    );
+    assert_contains_none(&root_guide, &["business logic in the owning crate"]);
+    assert_contains_none(
+        &fs::read_to_string(destination.join("go.mod")).unwrap(),
+        &["github.com/pressly/goose/v3/cmd/goose"],
+    );
+    let context = crate::context::RepoContext::load_from(destination).unwrap();
+    assert_eq!(
+        crate::doctor::go_version_selector(&context).unwrap(),
+        "1.26.0"
+    );
+    assert_contains_all(
+        &fs::read_to_string(destination.join("internal/httpapi/httpapi.go")).unwrap(),
+        &["config.CreateHooks = nil"],
+    );
+    assert_contains_all(
+        &fs::read_to_string(destination.join("internal/httpapi/httpapi_test.go")).unwrap(),
+        &["want field omitted when schema routes are disabled"],
+    );
+    assert_contains_none(
+        &fs::read_to_string(destination.join("openapi/public.json")).unwrap(),
+        &["\"$schema\""],
+    );
+    assert_contains_none(
+        &fs::read_to_string(
+            destination.join("packages/public-api-client/src/generated/types.gen.ts"),
+        )
+        .unwrap(),
+        &["$schema"],
+    );
+    let postgres_script = fs::read_to_string(destination.join("scripts/test-postgres.sh")).unwrap();
+    assert_contains_all(
+        &postgres_script,
+        &[
+            "attempt=$((attempt + 1))",
+            "PostgreSQL container did not become queryable",
+        ],
+    );
+    assert_contains_none(&postgres_script, &["seq 1 60"]);
+    let policy: serde_json::Value = serde_yaml_ng::from_str(
+        &fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap(),
+    )
+    .unwrap();
+    assert!(policy["jobs"]["migration-immutability"].is_object());
+    assert!(policy["jobs"]["sqlx-unchecked-queries"].is_null());
+}
+
+#[cfg(unix)]
+fn assert_rust_only_command_output_success(label: &str, output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "{label} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn go_react_web_workflow_observes_the_complete_application_contract() {
     let _guard = lock_env();
@@ -414,258 +634,44 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
 
     let workflow =
         fs::read_to_string(destination.join(".github/workflows/webapp-checks.yml")).unwrap();
-    for path in [
-        r#"- "**""#,
-        r#"- "openapi/**""#,
-        r#"- "packages/public-api-client/**""#,
-    ] {
-        assert_eq!(
-            workflow.matches(path).count(),
-            2,
-            "missing {path} in:\n{workflow}"
-        );
-    }
-    assert!(workflow.contains("node scripts/contracts.mjs client-check"));
-    assert!(!workflow.contains("if [ -f scripts/contracts.mjs ]"));
-    let build_step = workflow.find("Run build").unwrap();
-    let client_check_step = workflow
-        .find("Check generated API clients and public boundary")
-        .unwrap();
-    assert!(build_step < client_check_step);
+    assert_contains_count(
+        &workflow,
+        &[
+            (r#"- "**""#, 2),
+            (r#"- "openapi/**""#, 2),
+            (r#"- "packages/public-api-client/**""#, 2),
+        ],
+    );
+    assert_contains_all(&workflow, &["node scripts/contracts.mjs client-check"]);
+    assert_contains_none(&workflow, &["if [ -f scripts/contracts.mjs ]"]);
+    assert_text_before(
+        &workflow,
+        "Run build",
+        "Check generated API clients and public boundary",
+    );
 
     for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
-        let workflow = fs::read_to_string(
-            destination
-                .join(".github/workflows")
-                .join(workflow_name),
-        )
-        .unwrap();
-        assert!(
-            workflow.contains("actions-rust-lang/setup-rust-toolchain@v1"),
-            "{workflow_name} must install Rust before invoking scripts/jig"
-        );
-        assert!(
-            workflow.contains("go-version: ${{ steps.go-version.outputs.version }}"),
-            "{workflow_name} must pass the resolved component authority to setup-go"
-        );
-        assert!(workflow.contains("version=\"$(scripts/jig info go-version)\""));
-        assert!(
-            !workflow.contains("go-version-file: .go-version")
-                && !workflow.contains("go-version-file: \".go-version\""),
-            "{workflow_name} must not refer to the retired Go version file"
-        );
-        let expected_root_filters = usize::from(workflow_name == "go-tests.yml") * 2;
-        assert_eq!(
-            workflow.matches(r#"- "**""#).count(),
-            expected_root_filters,
-            "{workflow_name} has the wrong root-path filtering contract"
-        );
-        if workflow_name == "repo-policy.yml" {
-            assert!(
-                workflow.contains("JIG_PUSH_BEFORE: ${{ github.event.before }}"),
-                "repository policy must run universally and bind push comparison authority"
-            );
-        }
-        assert!(workflow.contains(
-            "cache-dependency-path: |\n            go.mod\n            go.sum\n            go.work\n            go.work.sum\n            **/go.mod"
-        ));
-        for path in [
-            "go.mod",
-            "go.sum",
-            "go.work",
-            "go.work.sum",
-            "**/go.mod",
-            "**/go.sum",
-            "**/go.work",
-            "**/go.work.sum",
-            "vendor/modules.txt",
-            "**/vendor/modules.txt",
-            "sqlc.yaml",
-            "**/sqlc.yaml",
-        ] {
-            assert_eq!(
-                workflow.matches(&format!(r#"- "{path}""#)).count(),
-                expected_root_filters,
-                "{workflow_name} must track adapter input {path} on pull requests and pushes"
-            );
-        }
-        assert_eq!(
-            workflow
-                .matches(r#"- "internal/database/migrations/**""#)
-                .count(),
-            expected_root_filters
-        );
-        assert_eq!(
-            workflow.matches(r#"- "**/*.sql""#).count(),
-            expected_root_filters
-        );
+        assert_go_adapter_workflow(&destination, workflow_name);
     }
-
-    let go_tests =
-        fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
-    let go_tests_workflow: serde_json::Value = serde_yaml_ng::from_str(&go_tests).unwrap();
-    assert_eq!(
-        go_tests_workflow["jobs"]["checks"]["defaults"]["run"]["shell"],
-        "bash"
-    );
-    assert_eq!(go_tests.matches(r#"- "openapi/**""#).count(), 2);
-    for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
-        assert!(
-            go_tests.contains(&format!("scripts/jig check {target}")),
-            "Go CI must invoke the exact managed target {target}"
-        );
-    }
-    for path in [
-        "go.mod",
-        "go.sum",
-        "go.work",
-        "go.work.sum",
-        "**/go.mod",
-        "**/go.sum",
-        "**/go.work",
-        "**/go.work.sum",
-        "vendor/modules.txt",
-        "**/vendor/modules.txt",
-        "scripts/jig",
-        "scripts/install-jig.sh",
-    ] {
-        assert_eq!(
-            go_tests.matches(&format!(r#"- "{path}""#)).count(),
-            2,
-            "Go CI must track adapter input {path} on pull requests and pushes"
-        );
-    }
-    assert_eq!(
-        go_tests
-            .matches(r#"- "scripts/test-postgres.sh""#)
-            .count(),
-        2
-    );
-    assert_eq!(go_tests.matches("runs-on: \"macos-14\"").count(), 1);
-    assert_eq!(
-        go_tests.matches("runs-on: \"ubuntu-latest\"").count(),
-        1
-    );
-    assert_eq!(
-        go_tests
-            .matches("actions-rust-lang/setup-rust-toolchain@v1")
-            .count(),
-        2,
-        "each job that invokes scripts/jig must provision Rust"
-    );
-    let postgres_job = &go_tests[go_tests.find("postgres-integration:").unwrap()..];
-    assert!(
-        postgres_job
-            .find("actions-rust-lang/setup-rust-toolchain@v1")
-            .unwrap()
-            < postgres_job
-                .find("name: Resolve Go toolchain version")
-                .unwrap(),
-        "the PostgreSQL job must provision Rust before invoking scripts/jig"
-    );
-    assert!(go_tests.contains("run: bash scripts/test-postgres.sh"));
-    assert!(!destination.join(".go-version").exists());
+    assert_go_test_workflow(&destination);
 
     let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
-    assert!(gitignore.contains(".contract-stage-*/"));
-    assert!(gitignore.contains(".contract-client-stage-*/"));
+    assert_contains_all(
+        &gitignore,
+        &[".contract-stage-*/", ".contract-client-stage-*/"],
+    );
 
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
-    assert!(browser_e2e.contains("version=\"$(scripts/jig info go-version)\""));
-    assert!(browser_e2e.contains("go-version: ${{ steps.go-version.outputs.version }}"));
-    assert!(browser_e2e.contains("cache-dependency-path: |"));
-
-    let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
-    assert!(config.contains(r#"migration_dir = "internal/database/migrations""#));
-    assert!(!config.contains("rust_migration_dir ="));
-    assert!(!config.contains("backend_language ="));
-    assert!(!config.contains("go_database ="));
-    assert!(config.contains("[repository]"));
-    assert!(config.contains(
-        r#"affected_ignore = [".env", ".env.*", "**/.env", "**/.env.*", "README.md", "**/README.md", "AGENTS.md", "**/AGENTS.md", "agent-map.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/**", "LICENSE", "LICENSE.*", ".github/**"]"#
-    ));
-    assert!(config.contains("api_test_command = \"go test ./...\""));
-    assert!(config.contains("web_test_command = \"scripts/check-webapps.sh check-one"));
-    assert!(config.contains("action = \"frontend-contract-drift\""));
-    assert!(config.contains("action = \"frontend-public-boundary\""));
-    assert!(config.contains("contracts-drift-check"));
-    assert!(config.contains("contracts-boundary-check"));
-    let config_value = toml::from_str::<toml::Value>(&config).unwrap();
-    assert_eq!(
-        config_value["work"]["gates"][0]["profile"].as_str(),
-        Some("verify")
+    assert_contains_all(
+        &browser_e2e,
+        &[
+            "version=\"$(scripts/jig info go-version)\"",
+            "go-version: ${{ steps.go-version.outputs.version }}",
+            "cache-dependency-path: |",
+        ],
     );
-    let contract = fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(r#""name": "jig.migration_add""#));
-    let contract_value = serde_json::from_str::<serde_json::Value>(&contract).unwrap();
-    assert_eq!(contract_value["default_check_profile"], "verify");
-    assert_eq!(
-        contract_value["affected_ignore"],
-        serde_json::json!([
-            ".env",
-            ".env.*",
-            "**/.env",
-            "**/.env.*",
-            "README.md",
-            "**/README.md",
-            "AGENTS.md",
-            "**/AGENTS.md",
-            "agent-map.md",
-            "CHANGELOG.md",
-            "CONTRIBUTING.md",
-            "CODE_OF_CONDUCT.md",
-            "SECURITY.md",
-            "docs/**",
-            "LICENSE",
-            "LICENSE.*",
-            ".github/**"
-        ])
-    );
-    for component in ["api", "web"] {
-        assert!(contract_value["components"].as_array().unwrap().iter().any(
-            |candidate| candidate["id"] == component
-        ));
-        assert!(contract_value["actions"].as_array().unwrap().iter().any(
-            |action| action["target"]["component"] == component
-                && action["target"]["action"] == "test"
-        ));
-    }
-    for action in ["frontend-contract-drift", "frontend-public-boundary"] {
-        assert!(contract_value["actions"].as_array().unwrap().iter().any(
-            |candidate| candidate["target"]["component"] == "repo"
-                && candidate["target"]["action"] == action
-        ));
-    }
-    let root_guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
-    assert!(root_guide.contains("business logic in the owning package"));
-    assert!(!root_guide.contains("business logic in the owning crate"));
-    assert!(root_guide.contains("## Backend Guide Conventions"));
-    assert!(root_guide.contains("scripts/jig migration add NAME"));
-    let go_mod = fs::read_to_string(destination.join("go.mod")).unwrap();
-    assert!(!go_mod.contains("github.com/pressly/goose/v3/cmd/goose"));
-    let context = crate::context::RepoContext::load_from(&destination).unwrap();
-    assert_eq!(crate::doctor::go_version_selector(&context).unwrap(), "1.26.0");
-    let http_api = fs::read_to_string(destination.join("internal/httpapi/httpapi.go")).unwrap();
-    assert!(http_api.contains("config.CreateHooks = nil"));
-    let http_api_test =
-        fs::read_to_string(destination.join("internal/httpapi/httpapi_test.go")).unwrap();
-    assert!(http_api_test.contains("want field omitted when schema routes are disabled"));
-    let openapi = fs::read_to_string(destination.join("openapi/public.json")).unwrap();
-    assert!(!openapi.contains("\"$schema\""));
-    let client_types = fs::read_to_string(
-        destination.join("packages/public-api-client/src/generated/types.gen.ts"),
-    )
-    .unwrap();
-    assert!(!client_types.contains("$schema"));
-    let postgres_script = fs::read_to_string(destination.join("scripts/test-postgres.sh")).unwrap();
-    assert!(!postgres_script.contains("seq 1 60"));
-    assert!(postgres_script.contains("attempt=$((attempt + 1))"));
-    assert!(postgres_script.contains("PostgreSQL container did not become queryable"));
-    let policy =
-        fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap();
-    let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();
-    assert!(policy["jobs"]["migration-immutability"].is_object());
-    assert!(policy["jobs"]["sqlx-unchecked-queries"].is_null());
+    assert_go_repository_contract(&destination);
+    assert_go_generated_runtime_files(&destination);
 
     let config_path = destination.join(".jig.toml");
     let config = fs::read_to_string(&config_path).unwrap().replace(
@@ -676,17 +682,16 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     run_update(update_opts(&destination, template.path(), true)).unwrap();
 
     for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
-        let workflow = fs::read_to_string(
-            destination
-                .join(".github/workflows")
-                .join(workflow_name),
-        )
-        .unwrap();
-        assert_eq!(
-            workflow.matches(r#"- "database/migrations/**""#).count(),
-            usize::from(workflow_name == "go-tests.yml") * 2
+        let workflow =
+            fs::read_to_string(destination.join(".github/workflows").join(workflow_name)).unwrap();
+        assert_contains_count(
+            &workflow,
+            &[(
+                r#"- "database/migrations/**""#,
+                usize::from(workflow_name == "go-tests.yml") * 2,
+            )],
         );
-        assert!(!workflow.contains(r#"- "internal/database/migrations/**""#));
+        assert_contains_none(&workflow, &[r#"- "internal/database/migrations/**""#]);
     }
 
     #[cfg(unix)]
@@ -720,11 +725,9 @@ export async function createClient({ output }) {
             "#!/bin/sh\n: > \"$JIG_TEST_GO_MARKER\"\nexit 91\n",
         );
         let backend_marker = destination.join(".backend-exporter-ran");
-        let path = std::env::join_paths(
-            std::iter::once(fake_bin).chain(std::env::split_paths(
-                &std::env::var_os("PATH").unwrap_or_default(),
-            )),
-        )
+        let path = std::env::join_paths(std::iter::once(fake_bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
         .unwrap();
         let before = regular_file_tree_snapshot(&destination);
 
@@ -736,13 +739,8 @@ export async function createClient({ output }) {
             .output()
             .unwrap();
 
-        assert!(
-            output.status.success(),
-            "client-check failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(!backend_marker.exists(), "client-check invoked Go");
+        assert_rust_only_command_output_success("client-check", &output);
+        assert_paths_absent(&destination, &[".backend-exporter-ran"]);
         assert_eq!(regular_file_tree_snapshot(&destination), before);
     }
 
@@ -775,37 +773,34 @@ export async function createClient({ output }) {
     run_update(update_opts(&destination, template.path(), true)).unwrap();
 
     for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
-        let workflow = fs::read_to_string(
-            destination
-                .join(".github/workflows")
-                .join(workflow_name),
-        )
-        .unwrap();
-        assert!(workflow.contains("version=\"$(scripts/jig info go-version)\""));
-        assert!(!workflow.contains("go-version-file: go.mod"));
+        let workflow =
+            fs::read_to_string(destination.join(".github/workflows").join(workflow_name)).unwrap();
+        assert_contains_all(&workflow, &["version=\"$(scripts/jig info go-version)\""]);
+        assert_contains_none(&workflow, &["go-version-file: go.mod", r#"- "**""#]);
         let expected_path_filters = usize::from(workflow_name == "go-tests.yml") * 2;
-        assert_eq!(
-            workflow.matches(r#"- "services/api/**""#).count(),
-            expected_path_filters,
-            "{workflow_name} must follow the authored Go component root"
+        assert_contains_count(
+            &workflow,
+            &[
+                (r#"- "services/api/**""#, expected_path_filters),
+                (r#"- "shared/proto/**""#, expected_path_filters),
+            ],
         );
-        assert_eq!(
-            workflow.matches(r#"- "shared/proto/**""#).count(),
-            expected_path_filters,
-            "{workflow_name} must track declared inputs outside the Go component root"
-        );
-        assert!(!workflow.contains(r#"- "**""#));
     }
     let context = crate::context::RepoContext::load_from(&destination).unwrap();
-    assert_eq!(crate::doctor::go_version_selector(&context).unwrap(), "1.26.0");
+    assert_eq!(
+        crate::doctor::go_version_selector(&context).unwrap(),
+        "1.26.0"
+    );
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
-    assert!(browser_e2e.contains("version=\"$(scripts/jig info go-version)\""));
-    assert!(!browser_e2e.contains("go-version-file: go.mod"));
+    assert_contains_all(
+        &browser_e2e,
+        &["version=\"$(scripts/jig info go-version)\""],
+    );
+    assert_contains_none(&browser_e2e, &["go-version-file: go.mod"]);
 
     fs::remove_file(destination.join("scripts/test-postgres.sh")).unwrap();
     run_update(update_opts(&destination, template.path(), true)).unwrap();
-    let go_tests =
-        fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
-    assert!(go_tests.contains("scripts/jig check api:sqlc"));
-    assert!(!go_tests.contains("postgres-integration:"));
+    let go_tests = fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+    assert_contains_all(&go_tests, &["scripts/jig check api:sqlc"]);
+    assert_contains_none(&go_tests, &["postgres-integration:"]);
 }

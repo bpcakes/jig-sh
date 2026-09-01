@@ -21,6 +21,10 @@ const RUST_ONLY_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "README.md",
     },
     ScaffoldTemplateFile {
+        template: "rust-common/workspace/clippy.toml.jinja",
+        output: "clippy.toml",
+    },
+    ScaffoldTemplateFile {
         template: "rust-only/workspace/crate/Cargo.toml.jinja",
         output: "crates/{package}/Cargo.toml",
     },
@@ -155,6 +159,79 @@ mod tests {
             .collect()
     }
 
+    fn assert_workspace_manifest(
+        root: &toml::Value,
+        package: &toml::Value,
+        rendered: &BTreeMap<String, String>,
+    ) {
+        assert_eq!(root["workspace"]["resolver"].as_str(), Some("3"));
+        assert_eq!(
+            root["workspace"]["members"][0].as_str(),
+            Some("crates/exampleproject")
+        );
+        assert_eq!(
+            root["workspace"]["package"]["rust-version"].as_str(),
+            Some(env!("CARGO_PKG_RUST_VERSION"))
+        );
+        assert_eq!(
+            root["workspace"]["lints"]["clippy"]["cognitive_complexity"].as_str(),
+            Some("warn")
+        );
+        assert_eq!(package["lints"]["workspace"].as_bool(), Some(true));
+        assert_eq!(
+            rendered.get("clippy.toml").map(String::as_str),
+            Some("cognitive-complexity-threshold = 20\n")
+        );
+        assert_eq!(package["package"]["publish"].as_bool(), Some(false));
+    }
+
+    fn assert_license_neutral(
+        root: &toml::Value,
+        package: &toml::Value,
+        rendered: &BTreeMap<String, String>,
+    ) {
+        assert!(root.get("license").is_none());
+        assert!(root["workspace"]["package"].get("license").is_none());
+        assert!(package["package"].get("license").is_none());
+        assert!(package["package"].get("license-file").is_none());
+        assert!(rendered.keys().all(|path| !path.starts_with("LICENSE")));
+    }
+
+    fn assert_artifact_manifest(
+        artifact: RustOnlyArtifact,
+        package: &toml::Value,
+        rendered: &BTreeMap<String, String>,
+    ) {
+        match artifact {
+            RustOnlyArtifact::Library => {
+                assert!(package.get("bin").is_none());
+                let source = rendered.get("crates/exampleproject/src/lib.rs").unwrap();
+                assert!(source.starts_with("//! Library entry point"));
+                assert!(!source.contains("pub "));
+            }
+            RustOnlyArtifact::Cli => {
+                let bins = package["bin"].as_array().unwrap();
+                assert_eq!(bins.len(), 1);
+                assert_eq!(bins[0]["name"].as_str(), Some("exampleproject"));
+                assert_eq!(bins[0]["path"].as_str(), Some("src/main.rs"));
+                let source = rendered.get("crates/exampleproject/src/main.rs").unwrap();
+                assert!(source.contains("env!(\"CARGO_PKG_NAME\")"));
+                assert!(source.contains("env!(\"CARGO_PKG_VERSION\")"));
+            }
+        }
+    }
+
+    fn assert_member_manifest_resolves(root: &toml::Value, rendered: &BTreeMap<String, String>) {
+        let destination = tempdir().unwrap();
+        for (relative, contents) in rendered {
+            let output = destination.path().join(relative);
+            fs::create_dir_all(output.parent().unwrap()).unwrap();
+            fs::write(output, contents).unwrap();
+        }
+        let member = root["workspace"]["members"][0].as_str().unwrap();
+        assert!(destination.path().join(member).join("Cargo.toml").is_file());
+    }
+
     #[test]
     fn rust_only_rendered_paths_and_bytes_match_the_checked_in_snapshot() {
         for artifact in [RustOnlyArtifact::Library, RustOnlyArtifact::Cli] {
@@ -189,6 +266,7 @@ mod tests {
                 [
                     "Cargo.toml",
                     "README.md",
+                    "clippy.toml",
                     "crates/exampleproject/AGENTS.md",
                     "crates/exampleproject/Cargo.toml",
                     &format!("crates/exampleproject/{source}"),
@@ -229,48 +307,10 @@ mod tests {
             let package = rendered.get("crates/exampleproject/Cargo.toml").unwrap();
             let root_toml = toml::from_str::<toml::Value>(root).unwrap();
             let package_toml = toml::from_str::<toml::Value>(package).unwrap();
-            assert_eq!(root_toml["workspace"]["resolver"].as_str(), Some("3"));
-            assert_eq!(
-                root_toml["workspace"]["members"][0].as_str(),
-                Some("crates/exampleproject")
-            );
-            assert_eq!(
-                root_toml["workspace"]["package"]["rust-version"].as_str(),
-                Some(env!("CARGO_PKG_RUST_VERSION"))
-            );
-            assert_eq!(package_toml["package"]["publish"].as_bool(), Some(false));
-            assert!(root_toml.get("license").is_none());
-            assert!(root_toml["workspace"]["package"].get("license").is_none());
-            assert!(package_toml["package"].get("license").is_none());
-            assert!(package_toml["package"].get("license-file").is_none());
-            assert!(rendered.keys().all(|path| !path.starts_with("LICENSE")));
-
-            match artifact {
-                RustOnlyArtifact::Library => {
-                    assert!(package_toml.get("bin").is_none());
-                    let source = rendered.get("crates/exampleproject/src/lib.rs").unwrap();
-                    assert!(source.starts_with("//! Library entry point"));
-                    assert!(!source.contains("pub "));
-                }
-                RustOnlyArtifact::Cli => {
-                    let bins = package_toml["bin"].as_array().unwrap();
-                    assert_eq!(bins.len(), 1);
-                    assert_eq!(bins[0]["name"].as_str(), Some("exampleproject"));
-                    assert_eq!(bins[0]["path"].as_str(), Some("src/main.rs"));
-                    let source = rendered.get("crates/exampleproject/src/main.rs").unwrap();
-                    assert!(source.contains("env!(\"CARGO_PKG_NAME\")"));
-                    assert!(source.contains("env!(\"CARGO_PKG_VERSION\")"));
-                }
-            }
-
-            let destination = tempdir().unwrap();
-            for (relative, contents) in &rendered {
-                let output = destination.path().join(relative);
-                fs::create_dir_all(output.parent().unwrap()).unwrap();
-                fs::write(output, contents).unwrap();
-            }
-            let member = root_toml["workspace"]["members"][0].as_str().unwrap();
-            assert!(destination.path().join(member).join("Cargo.toml").is_file());
+            assert_workspace_manifest(&root_toml, &package_toml, &rendered);
+            assert_license_neutral(&root_toml, &package_toml, &rendered);
+            assert_artifact_manifest(artifact, &package_toml, &rendered);
+            assert_member_manifest_resolves(&root_toml, &rendered);
         }
     }
 

@@ -1,3 +1,40 @@
+fn assert_rendered_paths(rendered: &[scaffold::ScaffoldFile], expected: &[&str]) {
+    for path in expected {
+        assert!(
+            rendered.iter().any(|file| file.relative == *path),
+            "missing nested Go component output {path}"
+        );
+    }
+}
+
+fn assert_rendered_paths_absent(rendered: &[scaffold::ScaffoldFile], forbidden: &[&str]) {
+    for path in forbidden {
+        assert!(
+            rendered.iter().all(|file| file.relative != *path),
+            "Go component output escaped to the repository root: {path}"
+        );
+    }
+}
+
+fn assert_nested_go_defaults(plan: &scaffold::InitScaffoldPlan) {
+    let mut defaults = AnswerOpts::default();
+    plan.apply_answer_defaults(&mut defaults);
+    assert_eq!(
+        defaults.migration_dir.as_deref(),
+        Some("services/api/internal/database/migrations")
+    );
+    assert_eq!(defaults.dev_apps[0].dir.as_deref(), Some("services/api"));
+    let bootstrap = defaults.bootstrap_command.unwrap();
+    assert_contains_all(
+        &bootstrap,
+        &[
+            "(cd services/api && go mod tidy)",
+            "(cd services/api && if [ -z",
+            "(cd services/api && go tool sqlc generate && go run ./cmd/api --bootstrap-database)",
+        ],
+    );
+}
+
 #[test]
 fn go_browser_scaffold_honors_the_authored_backend_root() {
     let planning_root = tempdir().unwrap();
@@ -33,25 +70,15 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
             .contents
             .as_str()
     };
-    for path in [
+    assert_rendered_paths(&rendered, &[
         "services/api/.env.example",
         "services/api/go.mod",
         "services/api/cmd/api/main.go",
         "services/api/cmd/openapi/main.go",
         "services/api/sqlc.yaml",
         "services/api/internal/database/database.go",
-    ] {
-        assert!(
-            rendered.iter().any(|file| file.relative == path),
-            "missing nested Go component output {path}"
-        );
-    }
-    for path in [".env.example", "go.mod", "cmd/api/main.go", "sqlc.yaml"] {
-        assert!(
-            rendered.iter().all(|file| file.relative != path),
-            "Go component output escaped to the repository root: {path}"
-        );
-    }
+    ]);
+    assert_rendered_paths_absent(&rendered, &[".env.example", "go.mod", "cmd/api/main.go", "sqlc.yaml"]);
     let output_paths = plan.output_paths();
     assert!(
         output_paths
@@ -65,7 +92,7 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
     );
     assert!(rendered.iter().any(|file| file.relative == "openapi/public.json"));
     let postgres_script = contents("scripts/test-postgres.sh");
-    assert!(postgres_script.contains(r#"go -C "services/api" test -count=1"#));
+    assert_contains_all(postgres_script, &[r#"go -C "services/api" test -count=1"#]);
     let httpapi_test = contents("services/api/internal/httpapi/httpapi_test.go");
     assert!(httpapi_test.contains(
         r#"filepath.FromSlash("../../../../openapi/public.json")"#
@@ -78,33 +105,17 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
             .count(),
         2
     );
-    assert!(!workflow.contains(r#"- "cmd/**""#));
-    assert!(!workflow.contains(r#"- "internal/**""#));
-    assert!(!workflow.contains(r#"- "**""#));
+    assert_contains_none(workflow, &[r#"- "cmd/**""#, r#"- "internal/**""#, r#"- "**""#]);
 
     let playwright = contents("web/playwright.config.ts");
-    assert!(playwright.contains(r#"path.resolve(repoRoot, "services/api")"#));
-    assert!(playwright.contains("cwd: backendRoot"));
+    assert_contains_all(playwright, &[r#"path.resolve(repoRoot, "services/api")"#, "cwd: backendRoot"]);
     let contracts = contents("scripts/contracts.mjs");
-    assert!(contracts.contains(r#"resolve(repoRoot, "services/api")"#));
-    assert!(contracts.contains(r#"join(backendRoot, "go.mod")"#));
-    assert!(contracts.contains(
-        r#"run("go", ["run", "./cmd/openapi", "--output", document], backendRoot)"#
-    ));
-
-    let mut defaults = AnswerOpts::default();
-    plan.apply_answer_defaults(&mut defaults);
-    assert_eq!(
-        defaults.migration_dir.as_deref(),
-        Some("services/api/internal/database/migrations")
-    );
-    assert_eq!(defaults.dev_apps[0].dir.as_deref(), Some("services/api"));
-    let bootstrap = defaults.bootstrap_command.unwrap();
-    assert!(bootstrap.contains("(cd services/api && go mod tidy)"));
-    assert!(bootstrap.contains("(cd services/api && if [ -z"));
-    assert!(bootstrap.contains(
-        "(cd services/api && go tool sqlc generate && go run ./cmd/api --bootstrap-database)"
-    ));
+    assert_contains_all(contracts, &[
+        r#"resolve(repoRoot, "services/api")"#,
+        r#"join(backendRoot, "go.mod")"#,
+        r#"run("go", ["run", "./cmd/openapi", "--output", document], backendRoot)"#,
+    ]);
+    assert_nested_go_defaults(&plan);
 }
 
 #[test]

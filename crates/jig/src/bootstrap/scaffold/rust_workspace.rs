@@ -20,6 +20,10 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "Cargo.toml",
     },
     ScaffoldTemplateFile {
+        template: "rust-common/workspace/clippy.toml.jinja",
+        output: "clippy.toml",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/core/Cargo.toml.jinja",
         output: "crates/{package}-core/Cargo.toml",
     },

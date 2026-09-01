@@ -5,6 +5,7 @@ fn rust_only_library_descriptor() -> Value {
         "defaults": [
             "The virtual workspace uses crates/<repo> as its only initial member.",
             "Rust 2024 uses the top-level Jig workspace Rust baseline.",
+            "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
             "SQLx, schema dumps, application contracts, frontends, and dev apps are disabled."
         ],
         "layout": [
@@ -15,7 +16,7 @@ fn rust_only_library_descriptor() -> Value {
         "examples": [
             "jig init ./example-library --preset rust-library --no-input --no-vault"
         ],
-        "ownership": "The generated Cargo manifests, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
+        "ownership": "The generated Cargo and Clippy configuration, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
         "non_goals": [
             "The rust-library preset does not create a database, frontend, API, dev app, release workflow, or additional crate layers.",
             "The scaffold does not select a license or enable package publication."
@@ -30,6 +31,7 @@ fn rust_only_cli_descriptor() -> Value {
         "defaults": [
             "The virtual workspace uses crates/<repo> as its only initial member.",
             "Rust 2024 uses the top-level Jig workspace Rust baseline.",
+            "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
             "The starter binary uses only std and prints its package name and version.",
             "SQLx, schema dumps, application contracts, frontends, and dev apps are disabled."
         ],
@@ -42,7 +44,7 @@ fn rust_only_cli_descriptor() -> Value {
             "jig init ./example-cli --preset rust-cli --no-input --no-vault",
             "cargo run -p example-cli"
         ],
-        "ownership": "The generated Cargo manifests, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
+        "ownership": "The generated Cargo and Clippy configuration, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
         "non_goals": [
             "The rust-cli preset does not create a database, frontend, API, dev app, release workflow, library target, or additional crate layers.",
             "The scaffold does not select a license, enable package publication, or choose an argument parser or logging framework."
@@ -201,6 +203,7 @@ fn rust_only_init_process_reports_are_exact_and_generated_jig_checks_pass() {
                 "files_created": [
                     "Cargo.toml",
                     "README.md",
+                    "clippy.toml",
                     format!("crates/{package}/Cargo.toml"),
                     format!("crates/{package}/AGENTS.md"),
                     format!("crates/{package}/{source}"),

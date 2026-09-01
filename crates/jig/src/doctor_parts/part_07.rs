@@ -2,6 +2,14 @@ fn command_database_url_scope(
     words: &[ShellWord],
     program_index: usize,
 ) -> CommandDatabaseUrlScope {
+    let (scope, index) = database_url_prefix_scope(words, program_index);
+    command_database_url_scope_after_prefix(words, program_index, scope, index)
+}
+
+fn database_url_prefix_scope(
+    words: &[ShellWord],
+    program_index: usize,
+) -> (CommandDatabaseUrlScope, usize) {
     let mut scope = CommandDatabaseUrlScope::Inherited;
     let mut index = 0;
     let mut allow_prefix_keyword = true;
@@ -18,7 +26,15 @@ fn command_database_url_scope(
         }
         index += 1;
     }
+    (scope, index)
+}
 
+fn command_database_url_scope_after_prefix(
+    words: &[ShellWord],
+    program_index: usize,
+    mut scope: CommandDatabaseUrlScope,
+    mut index: usize,
+) -> CommandDatabaseUrlScope {
     while index < program_index {
         let word = shell_word_value(&words[index]);
         match word.as_str() {

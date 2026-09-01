@@ -108,6 +108,10 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-cli/crate/src/main.rs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-common/workspace/clippy.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-common/workspace/clippy.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-library/crate/src/lib.rs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-library/crate/src/lib.rs.jinja")),
     },

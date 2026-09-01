@@ -128,23 +128,40 @@ pub(crate) fn validate_contract(
     ctx: &RepoContext,
 ) -> std::result::Result<(), ContractValidationError> {
     let mut errors = Vec::new();
-    let root = ctx.root();
-    let mcp_path = root.join(".mcp.json");
-    let jig_script = root.join("scripts/jig");
-    let install_script = root.join("scripts/install-jig.sh");
+    validate_contract_basics(ctx, &mut errors);
+    validate_required_commands(ctx, &mut errors);
+    let catalog = validate_repository_model(ctx, &mut errors);
+    validate_actions_and_evidence_gates(ctx, &mut errors);
 
+    validate_tool_definitions(ctx, catalog.as_ref(), &mut errors);
+    validate_work_tools(ctx, catalog.as_ref(), &mut errors);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ContractValidationError { errors })
+    }
+}
+
+fn validate_contract_basics(ctx: &RepoContext, errors: &mut Vec<String>) {
     if ctx.tool_specs().iter().any(|tool| tool.kind == "memory") {
         errors.push("Runtime state tools must not be declared in .agent/jig-contract.json.".into());
     }
     if !ctx.is_minimal_footprint() {
-        if !mcp_path.exists() {
-            errors.push("Missing .mcp.json.".into());
-        }
-        if !jig_script.exists() {
-            errors.push("Missing scripts/jig launcher.".into());
-        }
-        if !install_script.exists() {
-            errors.push("Missing scripts/install-jig.sh installer.".into());
+        for (path, message) in [
+            (ctx.root().join(".mcp.json"), "Missing .mcp.json."),
+            (
+                ctx.root().join("scripts/jig"),
+                "Missing scripts/jig launcher.",
+            ),
+            (
+                ctx.root().join("scripts/install-jig.sh"),
+                "Missing scripts/install-jig.sh installer.",
+            ),
+        ] {
+            if !path.exists() {
+                errors.push(message.into());
+            }
         }
     }
     if ctx.migration_policy_enabled() && ctx.migration_dir().trim().is_empty() {
@@ -153,73 +170,48 @@ pub(crate) fn validate_contract(
                 .into(),
         );
     }
+}
+
+fn validate_required_commands(ctx: &RepoContext, errors: &mut Vec<String>) {
     // RepoContext construction has already rejected unsupported contract epochs.
     for command_key in ctx.required_commands() {
         if !ctx.supports_command_key(command_key) {
             errors.push(format!(
                 "Unsupported required command in jig contract: {command_key}."
             ));
-            continue;
-        }
-        if let Err(error) = ctx.command_for_key(command_key) {
+        } else if let Err(error) = ctx.command_for_key(command_key) {
             errors.push(error.to_string());
         }
     }
-    let catalog = if ctx.contract_version() >= 6 {
-        match crate::repository::RepositoryCatalog::from_context(ctx) {
-            Ok(catalog) => {
-                for gate in ctx.work_gates() {
-                    let WorkGate::Evidence(gate) = gate else {
-                        continue;
-                    };
-                    if let Err(error) =
-                        crate::repository::resolve_evidence_targets(&catalog, &gate.selector)
-                    {
-                        errors.push(format!("Work gate '{}': {error}.", gate.id));
-                    }
-                }
-                Some(catalog)
-            }
-            Err(error) => {
-                errors.push(format!("Invalid repository model: {error}."));
-                None
-            }
+}
+
+fn validate_repository_model(
+    ctx: &RepoContext,
+    errors: &mut Vec<String>,
+) -> Option<crate::repository::RepositoryCatalog> {
+    if ctx.contract_version() < 6 {
+        return None;
+    }
+    let catalog = match crate::repository::RepositoryCatalog::from_context(ctx) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            errors.push(format!("Invalid repository model: {error}."));
+            return None;
         }
-    } else {
-        None
     };
-    if ctx.contract_version() >= 6 {
-        for action in ctx.action_specs() {
-            match &action.runner {
-                jig_contract::ActionRunner::Command { command, .. } => {
-                    if !ctx
-                        .required_commands()
-                        .iter()
-                        .any(|required| required == command)
-                    {
-                        errors.push(format!(
-                            "Target {} references command {command}, but it is not declared in required_commands.",
-                            action.target
-                        ));
-                    } else if let Err(error) = ctx.command_for_key(command) {
-                        errors.push(format!("Target {}: {error}.", action.target));
-                    }
-                }
-                jig_contract::ActionRunner::Native { operation, .. } => {
-                    if !jig_features::is_supported_native_tool(operation) {
-                        errors.push(format!(
-                            "Target {} references unsupported native operation {operation}.",
-                            action.target
-                        ));
-                    } else if operation == jig_contract::tool::SCHEMA_CHECK
-                        && let Err(error) = schema::validate_runner(ctx, &action.target)
-                    {
-                        errors.push(format!("Target {}: {error}.", action.target));
-                    }
-                }
-            }
+    for gate in ctx.work_gates() {
+        let WorkGate::Evidence(gate) = gate else {
+            continue;
+        };
+        if let Err(error) = crate::repository::resolve_evidence_targets(&catalog, &gate.selector) {
+            errors.push(format!("Work gate '{}': {error}.", gate.id));
         }
-    } else {
+    }
+    Some(catalog)
+}
+
+fn validate_actions_and_evidence_gates(ctx: &RepoContext, errors: &mut Vec<String>) {
+    if ctx.contract_version() < 6 {
         for gate in ctx.work_gates() {
             if let WorkGate::Evidence(gate) = gate {
                 errors.push(format!(
@@ -228,8 +220,45 @@ pub(crate) fn validate_contract(
                 ));
             }
         }
+        return;
     }
+    for action in ctx.action_specs() {
+        match &action.runner {
+            jig_contract::ActionRunner::Command { command, .. } => {
+                if !ctx
+                    .required_commands()
+                    .iter()
+                    .any(|required| required == command)
+                {
+                    errors.push(format!(
+                        "Target {} references command {command}, but it is not declared in required_commands.",
+                        action.target
+                    ));
+                } else if let Err(error) = ctx.command_for_key(command) {
+                    errors.push(format!("Target {}: {error}.", action.target));
+                }
+            }
+            jig_contract::ActionRunner::Native { operation, .. } => {
+                if !jig_features::is_supported_native_tool(operation) {
+                    errors.push(format!(
+                        "Target {} references unsupported native operation {operation}.",
+                        action.target
+                    ));
+                } else if operation == jig_contract::tool::SCHEMA_CHECK
+                    && let Err(error) = schema::validate_runner(ctx, &action.target)
+                {
+                    errors.push(format!("Target {}: {error}.", action.target));
+                }
+            }
+        }
+    }
+}
 
+fn validate_tool_definitions(
+    ctx: &RepoContext,
+    catalog: Option<&crate::repository::RepositoryCatalog>,
+    errors: &mut Vec<String>,
+) {
     let tool_names = ctx
         .tool_specs()
         .iter()
@@ -241,89 +270,116 @@ pub(crate) fn validate_contract(
         }
     }
     for tool in ctx.tool_specs() {
-        let alias_action = catalog
-            .as_ref()
-            .and_then(|catalog| catalog.action_for_alias(&tool.name));
-        if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
-            errors.push(format!(
-                "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
-                tool.name
-            ));
-        }
-        let native_operation = alias_action.and_then(|action| match &action.runner {
-            jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
-            jig_contract::ActionRunner::Command { .. } => None,
-        });
-        let admission_name = native_operation.unwrap_or(&tool.name);
-        if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
-            errors.push(error);
-        }
-        match tool.kind.as_str() {
-            kind::NATIVE => {
-                if matches!(
-                    alias_action.map(|action| &action.runner),
-                    Some(jig_contract::ActionRunner::Command { .. })
-                ) {
-                    errors.push(format!(
-                        "Native tool {} aliases a command-backed action.",
-                        tool.name
-                    ));
-                    continue;
-                }
-                let operation = native_operation.unwrap_or(&tool.name);
-                if !jig_features::is_supported_native_tool(operation) {
-                    if operation == tool.name {
-                        errors.push(format!("Unsupported native tool: {}.", tool.name));
-                    } else {
-                        errors.push(format!(
-                            "Unsupported native operation {operation} for tool {}.",
-                            tool.name
-                        ));
-                    }
-                }
-            }
-            kind::COMMAND => {
-                if let Some(jig_contract::ActionRunner::Native { operation, .. }) =
-                    alias_action.map(|action| &action.runner)
-                {
-                    errors.push(format!(
-                        "Command-backed tool {} aliases native operation {operation}.",
-                        tool.name
-                    ));
-                    continue;
-                }
-                let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty())
-                else {
-                    errors.push(format!(
-                        "Command-backed tool {} is missing command.",
-                        tool.name
-                    ));
-                    continue;
-                };
-                if let Some(jig_contract::ActionRunner::Command { command, .. }) =
-                    alias_action.map(|action| &action.runner)
-                    && command != command_key
-                {
-                    errors.push(format!(
-                        "Command-backed tool {} projects command {command_key}, but its owning action uses {command}.",
-                        tool.name
-                    ));
-                }
-                if !ctx
-                    .required_commands()
-                    .iter()
-                    .any(|required| required == command_key)
-                {
-                    errors.push(format!(
-                        "Command-backed tool {} references undeclared command {command_key}.",
-                        tool.name
-                    ));
-                }
-            }
-            other => errors.push(format!("Unsupported tool kind for {}: {other}.", tool.name)),
-        }
+        validate_tool_definition(ctx, catalog, tool, errors);
     }
+}
 
+fn validate_tool_definition(
+    ctx: &RepoContext,
+    catalog: Option<&crate::repository::RepositoryCatalog>,
+    tool: &jig_contract::ManifestTool,
+    errors: &mut Vec<String>,
+) {
+    let alias_action = catalog.and_then(|catalog| catalog.action_for_alias(&tool.name));
+    if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
+        errors.push(format!(
+            "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
+            tool.name
+        ));
+    }
+    let native_operation = alias_action.and_then(|action| match &action.runner {
+        jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
+        jig_contract::ActionRunner::Command { .. } => None,
+    });
+    let admission_name = native_operation.unwrap_or(&tool.name);
+    if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
+        errors.push(error);
+    }
+    match tool.kind.as_str() {
+        kind::NATIVE => validate_native_tool(tool, alias_action, native_operation, errors),
+        kind::COMMAND => validate_command_tool(ctx, tool, alias_action, errors),
+        other => errors.push(format!("Unsupported tool kind for {}: {other}.", tool.name)),
+    }
+}
+
+fn validate_native_tool(
+    tool: &jig_contract::ManifestTool,
+    alias_action: Option<&jig_contract::ActionSpec>,
+    native_operation: Option<&str>,
+    errors: &mut Vec<String>,
+) {
+    if matches!(
+        alias_action.map(|action| &action.runner),
+        Some(jig_contract::ActionRunner::Command { .. })
+    ) {
+        errors.push(format!(
+            "Native tool {} aliases a command-backed action.",
+            tool.name
+        ));
+        return;
+    }
+    let operation = native_operation.unwrap_or(&tool.name);
+    if jig_features::is_supported_native_tool(operation) {
+        return;
+    }
+    if operation == tool.name {
+        errors.push(format!("Unsupported native tool: {}.", tool.name));
+    } else {
+        errors.push(format!(
+            "Unsupported native operation {operation} for tool {}.",
+            tool.name
+        ));
+    }
+}
+
+fn validate_command_tool(
+    ctx: &RepoContext,
+    tool: &jig_contract::ManifestTool,
+    alias_action: Option<&jig_contract::ActionSpec>,
+    errors: &mut Vec<String>,
+) {
+    if let Some(jig_contract::ActionRunner::Native { operation, .. }) =
+        alias_action.map(|action| &action.runner)
+    {
+        errors.push(format!(
+            "Command-backed tool {} aliases native operation {operation}.",
+            tool.name
+        ));
+        return;
+    }
+    let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty()) else {
+        errors.push(format!(
+            "Command-backed tool {} is missing command.",
+            tool.name
+        ));
+        return;
+    };
+    if let Some(jig_contract::ActionRunner::Command { command, .. }) =
+        alias_action.map(|action| &action.runner)
+        && command != command_key
+    {
+        errors.push(format!(
+            "Command-backed tool {} projects command {command_key}, but its owning action uses {command}.",
+            tool.name
+        ));
+    }
+    if !ctx
+        .required_commands()
+        .iter()
+        .any(|required| required == command_key)
+    {
+        errors.push(format!(
+            "Command-backed tool {} references undeclared command {command_key}.",
+            tool.name
+        ));
+    }
+}
+
+fn validate_work_tools(
+    ctx: &RepoContext,
+    catalog: Option<&crate::repository::RepositoryCatalog>,
+    errors: &mut Vec<String>,
+) {
     let mut work_tools = HashSet::new();
     for name in ctx.work_check_tools() {
         if !work_tools.insert(name.clone()) {
@@ -342,7 +398,6 @@ pub(crate) fn validate_contract(
             continue;
         }
         let native_operation = catalog
-            .as_ref()
             .and_then(|catalog| catalog.action_for_alias(&name))
             .and_then(|action| match &action.runner {
                 jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
@@ -353,12 +408,6 @@ pub(crate) fn validate_contract(
                 "Configured work check or gate tool requires an argument: {name}."
             ));
         }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(ContractValidationError { errors })
     }
 }
 

@@ -456,6 +456,140 @@ fn second_signal_while_route_publication_is_locked_is_prompt_and_sticky() {
     assert!(stop.success(), "proxy stop exited with {stop}");
 }
 
+fn configure_signal_command(
+    command: &mut Command,
+    mode: ForegroundMode,
+    state_dir: &Path,
+    json_output: bool,
+) {
+    if json_output {
+        command.arg("--json");
+    }
+    command.process_group(0);
+    match mode {
+        ForegroundMode::Dev => {
+            command
+                .args(["dev", "--no-proxy", "--state-dir"])
+                .arg(state_dir);
+        }
+        ForegroundMode::ProxyRun => {
+            command
+                .args(["proxy", "run", "signal-helper", "--no-proxy", "--state-dir"])
+                .arg(state_dir)
+                .arg("--")
+                .arg(std::env::current_exe().expect("resolve test binary"))
+                .args(["--exact", "env_port_helper", "--nocapture"]);
+        }
+    }
+}
+
+fn send_test_signal(
+    child: &mut ForegroundChildGuard,
+    helper_pid: &VerifiedProcessIdentity,
+    descendant_pid: &VerifiedProcessIdentity,
+    case: SignalCase,
+    mode: ForegroundMode,
+) {
+    let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, case.signal) };
+    if signal_result == 0 {
+        return;
+    }
+    let error = std::io::Error::last_os_error();
+    let _ = child.kill();
+    let _ = child.wait();
+    terminate_verified_process(helper_pid);
+    terminate_verified_process(descendant_pid);
+    panic!("send {} to {}: {error}", case.label, mode.command_name());
+}
+
+fn wait_for_signal_exit(
+    child: &mut ForegroundChildGuard,
+    helper_pid: &VerifiedProcessIdentity,
+    descendant_pid: &VerifiedProcessIdentity,
+    case: SignalCase,
+    mode: ForegroundMode,
+) -> std::process::ExitStatus {
+    child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("wait for jig dev")
+        .unwrap_or_else(|| {
+            let _ = child.kill();
+            let _ = child.wait();
+            terminate_verified_process(helper_pid);
+            terminate_verified_process(descendant_pid);
+            panic!("{} did not stop after {}", mode.command_name(), case.label);
+        })
+}
+
+fn assert_signal_stopped_process_tree(
+    helper_pid: &VerifiedProcessIdentity,
+    descendant_pid: &VerifiedProcessIdentity,
+    mode: ForegroundMode,
+) {
+    let helper_stopped = wait_for_verified_exit(helper_pid, Duration::from_secs(5));
+    let descendant_stopped = wait_for_verified_exit(descendant_pid, Duration::from_secs(5));
+    if !helper_stopped {
+        terminate_verified_process(helper_pid);
+    }
+    if !descendant_stopped {
+        terminate_verified_process(descendant_pid);
+    }
+    assert!(
+        helper_stopped,
+        "{} left helper process {helper_pid} running",
+        mode.command_name()
+    );
+    assert!(
+        descendant_stopped,
+        "{} left helper descendant {descendant_pid} running",
+        mode.command_name()
+    );
+}
+
+fn assert_no_duplicate_signal_summary(stdout: &str, stderr: &str) {
+    assert!(!stdout.contains("Development session interrupted"));
+    assert!(!stderr.contains("Development session interrupted"));
+    assert!(!stdout.contains("Foreground process interrupted"));
+    assert!(!stderr.contains("Foreground process interrupted"));
+}
+
+fn assert_json_signal_summary(stdout: &str, case: SignalCase, mode: ForegroundMode) {
+    let output: Value = serde_json::from_str(stdout).expect("stdout is one JSON result");
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["interrupted"], true);
+    assert_eq!(output["exit_status"], case.exit_status);
+    assert_eq!(output["exit_signal"], case.signal);
+    assert_eq!(output["termination_signal"], case.label);
+    match mode {
+        ForegroundMode::Dev => {
+            assert!(output["first_exit"].is_null());
+            assert_eq!(output["routes"], json!([]));
+        }
+        ForegroundMode::ProxyRun => {
+            assert_eq!(output["app"], "signal-helper");
+            assert_eq!(output["hostname"], "signal-helper.signal-test.localhost");
+            assert!(output["port"].is_null());
+        }
+    }
+}
+
+fn assert_human_signal_summary(stdout: &str, case: SignalCase, mode: ForegroundMode) {
+    let heading = match mode {
+        ForegroundMode::Dev => "Dev",
+        ForegroundMode::ProxyRun => "Proxy",
+    };
+    assert_eq!(
+        stdout
+            .matches(&format!("{heading}: stopped ({})", case.label))
+            .count(),
+        1
+    );
+    match mode {
+        ForegroundMode::Dev => assert!(!stdout.contains("  Routes:")),
+        ForegroundMode::ProxyRun => assert!(stdout.contains("  App: signal-helper")),
+    }
+}
+
 fn run_signal_case(case: SignalCase, mode: ForegroundMode, json_output: bool) {
     let repo = tempdir().expect("create test repo");
     let state_dir = repo.path().join("state");
@@ -469,25 +603,7 @@ fn run_signal_case(case: SignalCase, mode: ForegroundMode, json_output: bool) {
     let stderr = stderr_file.reopen().expect("reopen stderr capture");
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
-    if json_output {
-        command.arg("--json");
-    }
-    command.process_group(0);
-    match mode {
-        ForegroundMode::Dev => {
-            command
-                .args(["dev", "--no-proxy", "--state-dir"])
-                .arg(&state_dir);
-        }
-        ForegroundMode::ProxyRun => {
-            command
-                .args(["proxy", "run", "signal-helper", "--no-proxy", "--state-dir"])
-                .arg(&state_dir)
-                .arg("--")
-                .arg(std::env::current_exe().expect("resolve test binary"))
-                .args(["--exact", "env_port_helper", "--nocapture"]);
-        }
-    }
+    configure_signal_command(&mut command, mode, &state_dir, json_output);
     let child = command
         .current_dir(repo.path())
         .env_remove("JIG_REPO_ROOT")
@@ -511,88 +627,20 @@ fn run_signal_case(case: SignalCase, mode: ForegroundMode, json_output: bool) {
     );
     let (helper_pid, _helper_port, descendant_pid) = read_helper_marker(&ready_path);
 
-    let signal_result = unsafe { libc::kill(child.id() as libc::pid_t, case.signal) };
-    if signal_result != 0 {
-        let error = std::io::Error::last_os_error();
-        let _ = child.kill();
-        let _ = child.wait();
-        terminate_verified_process(&helper_pid);
-        terminate_verified_process(&descendant_pid);
-        panic!("send {} to {}: {error}", case.label, mode.command_name());
-    }
-
-    let Some(status) = child
-        .wait_timeout(Duration::from_secs(10))
-        .expect("wait for jig dev")
-    else {
-        let _ = child.kill();
-        let _ = child.wait();
-        terminate_verified_process(&helper_pid);
-        terminate_verified_process(&descendant_pid);
-        panic!("{} did not stop after {}", mode.command_name(), case.label);
-    };
-
-    let helper_stopped = wait_for_verified_exit(&helper_pid, Duration::from_secs(5));
-    let descendant_stopped = wait_for_verified_exit(&descendant_pid, Duration::from_secs(5));
-    if !helper_stopped {
-        terminate_verified_process(&helper_pid);
-    }
-    if !descendant_stopped {
-        terminate_verified_process(&descendant_pid);
-    }
-    assert!(
-        helper_stopped,
-        "{} left helper process {helper_pid} running",
-        mode.command_name()
-    );
-    assert!(
-        descendant_stopped,
-        "{} left helper descendant {descendant_pid} running",
-        mode.command_name()
-    );
+    send_test_signal(&mut child, &helper_pid, &descendant_pid, case, mode);
+    let status = wait_for_signal_exit(&mut child, &helper_pid, &descendant_pid, case, mode);
+    assert_signal_stopped_process_tree(&helper_pid, &descendant_pid, mode);
     child.disarm();
 
     let stdout = fs::read_to_string(stdout_file.path()).expect("read stdout capture");
     let stderr = fs::read_to_string(stderr_file.path()).expect("read stderr capture");
     assert_eq!(status.code(), Some(case.exit_status));
-    assert!(!stdout.contains("Development session interrupted"));
-    assert!(!stderr.contains("Development session interrupted"));
-    assert!(!stdout.contains("Foreground process interrupted"));
-    assert!(!stderr.contains("Foreground process interrupted"));
+    assert_no_duplicate_signal_summary(&stdout, &stderr);
 
     if json_output {
-        let output: Value = serde_json::from_str(&stdout).expect("stdout is one JSON result");
-        assert_eq!(output["ok"], false);
-        assert_eq!(output["interrupted"], true);
-        assert_eq!(output["exit_status"], case.exit_status);
-        assert_eq!(output["exit_signal"], case.signal);
-        assert_eq!(output["termination_signal"], case.label);
-        match mode {
-            ForegroundMode::Dev => {
-                assert!(output["first_exit"].is_null());
-                assert_eq!(output["routes"], json!([]));
-            }
-            ForegroundMode::ProxyRun => {
-                assert_eq!(output["app"], "signal-helper");
-                assert_eq!(output["hostname"], "signal-helper.signal-test.localhost");
-                assert!(output["port"].is_null());
-            }
-        }
+        assert_json_signal_summary(&stdout, case, mode);
     } else {
-        let heading = match mode {
-            ForegroundMode::Dev => "Dev",
-            ForegroundMode::ProxyRun => "Proxy",
-        };
-        assert_eq!(
-            stdout
-                .matches(&format!("{heading}: stopped ({})", case.label))
-                .count(),
-            1
-        );
-        match mode {
-            ForegroundMode::Dev => assert!(!stdout.contains("  Routes:")),
-            ForegroundMode::ProxyRun => assert!(stdout.contains("  App: signal-helper")),
-        }
+        assert_human_signal_summary(&stdout, case, mode);
     }
 }
 

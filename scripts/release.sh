@@ -670,6 +670,7 @@ release_check() {
 
   run_ci_checks
   run bash scripts/validate-fixtures.sh
+  run env JIG_DEV_BIN=target/debug/jig bash scripts/check-generated-rust-clippy.sh
   for package_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
     dependency_status="$(crate_version_status "$package_name" "$version")"
     case "$dependency_status" in

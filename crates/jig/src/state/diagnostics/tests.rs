@@ -29,6 +29,92 @@ fn diagnose_missing_state_is_strictly_read_only() {
     assert!(!temp.path().join(".git").exists());
 }
 
+fn assert_stream_diagnostics(output: &serde_json::Value, sessions: &str, recursive: &str) {
+    assert_eq!(
+        output["streams"]["sessions"]["bytes"],
+        sessions.len() as u64
+    );
+    assert_eq!(output["streams"]["sessions"]["records"], 2);
+    assert_eq!(
+        output["streams"]["sessions"]["max_line_bytes"],
+        recursive.len() as u64 + 1
+    );
+    assert_eq!(
+        output["streams"]["sessions"]["max_record_bytes"],
+        recursive.len() as u64
+    );
+    assert_eq!(output["streams"]["sessions"]["max_record_line"], 1);
+    assert_eq!(output["streams"]["plans"]["records"], 2);
+    assert_eq!(output["streams"]["plans"]["malformed_records"], 1);
+    assert_eq!(
+        output["streams"]["plans"]["malformed_record_samples"][0]["line"],
+        2
+    );
+    assert_eq!(output["streams"]["plans"]["torn_tail"], true);
+}
+
+fn assert_session_projection(
+    output: &serde_json::Value,
+    sessions: &str,
+    recursive: &str,
+    ordinary: &str,
+    nested_summary: &str,
+) {
+    let compacted = recursive.replace(
+        &format!(r#""summary":{nested_summary}"#),
+        r#""summary":null"#,
+    );
+    let projected = compacted.len() + 1 + ordinary.len() + 1;
+    assert_eq!(output["sessions"]["recursive_session_records"], 1);
+    assert_eq!(output["sessions"]["recursive_summary_values"], 1);
+    assert_eq!(
+        output["sessions"]["projected_shallow_bytes"],
+        projected as u64
+    );
+    assert_eq!(
+        output["sessions"]["estimated_reclaimable_bytes"],
+        (sessions.len() - projected) as u64
+    );
+}
+
+fn assert_receipt_and_archive_diagnostics(
+    output: &serde_json::Value,
+    args: &str,
+    stdout: &str,
+    stderr: &str,
+    evidence: &str,
+    paths: &str,
+    diff: &str,
+) {
+    assert_eq!(output["receipts"]["analyzed_records"], 1);
+    assert_eq!(output["receipts"]["args_bytes"], args.len() as u64);
+    assert_eq!(
+        output["receipts"]["stdout_preview_bytes"],
+        stdout.len() as u64
+    );
+    assert_eq!(
+        output["receipts"]["stderr_preview_bytes"],
+        stderr.len() as u64
+    );
+    assert_eq!(
+        output["receipts"]["output_preview_bytes"],
+        (stdout.len() + stderr.len()) as u64
+    );
+    assert_eq!(output["receipts"]["evidence_bytes"], evidence.len() as u64);
+    assert_eq!(
+        output["receipts"]["changed_paths_bytes"],
+        paths.len() as u64
+    );
+    assert_eq!(output["receipts"]["diff_stat_bytes"], diff.len() as u64);
+    assert_eq!(output["legacy_archive"]["files"], 2);
+    assert_eq!(output["legacy_archive"]["bytes"], 8);
+    assert_eq!(output["totals"]["legacy_archive_bytes"], 8);
+    assert_eq!(
+        output["recommendations"][0]["command"],
+        "jig state compact sessions --dry-run"
+    );
+}
+
 #[test]
 fn diagnose_reports_exact_stream_and_deep_storage_facts() {
     let temp = tempdir().unwrap();
@@ -81,71 +167,9 @@ fn diagnose_reports_exact_stream_and_deep_storage_facts() {
 
     let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
 
-    assert_eq!(
-        output["streams"]["sessions"]["bytes"],
-        sessions.len() as u64
-    );
-    assert_eq!(output["streams"]["sessions"]["records"], 2);
-    assert_eq!(
-        output["streams"]["sessions"]["max_line_bytes"],
-        recursive.len() as u64 + 1
-    );
-    assert_eq!(
-        output["streams"]["sessions"]["max_record_bytes"],
-        recursive.len() as u64
-    );
-    assert_eq!(output["streams"]["sessions"]["max_record_line"], 1);
-    assert_eq!(output["streams"]["plans"]["records"], 2);
-    assert_eq!(output["streams"]["plans"]["malformed_records"], 1);
-    assert_eq!(
-        output["streams"]["plans"]["malformed_record_samples"][0]["line"],
-        2
-    );
-    assert_eq!(output["streams"]["plans"]["torn_tail"], true);
-
-    let compacted_recursive = recursive.replace(
-        &format!(r#""summary":{nested_summary}"#),
-        r#""summary":null"#,
-    );
-    let expected_projection = compacted_recursive.len() + 1 + ordinary.len() + 1;
-    assert_eq!(output["sessions"]["recursive_session_records"], 1);
-    assert_eq!(output["sessions"]["recursive_summary_values"], 1);
-    assert_eq!(
-        output["sessions"]["projected_shallow_bytes"],
-        expected_projection as u64
-    );
-    assert_eq!(
-        output["sessions"]["estimated_reclaimable_bytes"],
-        (sessions.len() - expected_projection) as u64
-    );
-
-    assert_eq!(output["receipts"]["analyzed_records"], 1);
-    assert_eq!(output["receipts"]["args_bytes"], args.len() as u64);
-    assert_eq!(
-        output["receipts"]["stdout_preview_bytes"],
-        stdout.len() as u64
-    );
-    assert_eq!(
-        output["receipts"]["stderr_preview_bytes"],
-        stderr.len() as u64
-    );
-    assert_eq!(
-        output["receipts"]["output_preview_bytes"],
-        (stdout.len() + stderr.len()) as u64
-    );
-    assert_eq!(output["receipts"]["evidence_bytes"], evidence.len() as u64);
-    assert_eq!(
-        output["receipts"]["changed_paths_bytes"],
-        paths.len() as u64
-    );
-    assert_eq!(output["receipts"]["diff_stat_bytes"], diff.len() as u64);
-    assert_eq!(output["legacy_archive"]["files"], 2);
-    assert_eq!(output["legacy_archive"]["bytes"], 8);
-    assert_eq!(output["totals"]["legacy_archive_bytes"], 8);
-    assert_eq!(
-        output["recommendations"][0]["command"],
-        "jig state compact sessions --dry-run"
-    );
+    assert_stream_diagnostics(&output, &sessions, &recursive);
+    assert_session_projection(&output, &sessions, &recursive, ordinary, nested_summary);
+    assert_receipt_and_archive_diagnostics(&output, args, stdout, stderr, evidence, paths, diff);
 }
 
 #[test]

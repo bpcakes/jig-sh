@@ -172,69 +172,10 @@ fn heredoc_specs_on_line(line: &str) -> (Vec<HeredocSpec>, bool) {
                     index += 3;
                     continue;
                 }
-                index += 2;
-                let strip_tabs = chars.get(index) == Some(&'-');
-                if strip_tabs {
-                    index += 1;
-                }
-                while chars.get(index).is_some_and(|ch| matches!(ch, ' ' | '\t')) {
-                    index += 1;
-                }
-                let mut delimiter = String::new();
-                let mut delimiter_quote = None;
-                let mut delimiter_was_quoted = false;
-                while let Some(&delimiter_ch) = chars.get(index) {
-                    if let Some(quote_ch) = delimiter_quote {
-                        if delimiter_ch == quote_ch {
-                            delimiter_quote = None;
-                        } else if delimiter_ch == '\\' && quote_ch == '"' {
-                            index += 1;
-                            if let Some(escaped) = chars.get(index) {
-                                delimiter.push(*escaped);
-                            } else {
-                                ambiguous = true;
-                            }
-                        } else {
-                            delimiter.push(delimiter_ch);
-                        }
-                        index += 1;
-                        continue;
-                    }
-                    if matches!(delimiter_ch, '\'' | '"') {
-                        delimiter_was_quoted = true;
-                        delimiter_quote = Some(delimiter_ch);
-                        index += 1;
-                        continue;
-                    }
-                    if delimiter_ch == '\\' {
-                        delimiter_was_quoted = true;
-                        index += 1;
-                        if let Some(escaped) = chars.get(index) {
-                            delimiter.push(*escaped);
-                            index += 1;
-                        } else {
-                            ambiguous = true;
-                        }
-                        continue;
-                    }
-                    if delimiter_ch.is_whitespace()
-                        || is_shell_separator_char(delimiter_ch)
-                        || matches!(delimiter_ch, '<' | '>')
-                    {
-                        break;
-                    }
-                    delimiter.push(delimiter_ch);
-                    index += 1;
-                }
-                if delimiter.is_empty() || delimiter_quote.is_some() {
-                    ambiguous = true;
-                } else {
-                    specs.push(HeredocSpec {
-                        delimiter,
-                        strip_tabs,
-                        expands_body: !delimiter_was_quoted,
-                    });
-                }
+                let parsed = parse_heredoc_spec(&chars, index + 2);
+                index = parsed.next_index;
+                ambiguous |= parsed.ambiguous;
+                specs.extend(parsed.spec);
                 at_word_start = true;
             }
             ch if ch.is_whitespace() || is_shell_separator_char(ch) => {
@@ -249,6 +190,76 @@ fn heredoc_specs_on_line(line: &str) -> (Vec<HeredocSpec>, bool) {
     }
     ambiguous |= quote.is_some();
     (specs, ambiguous)
+}
+
+struct ParsedHeredocSpec {
+    next_index: usize,
+    spec: Option<HeredocSpec>,
+    ambiguous: bool,
+}
+
+fn parse_heredoc_spec(chars: &[char], mut index: usize) -> ParsedHeredocSpec {
+    let strip_tabs = chars.get(index) == Some(&'-');
+    index += usize::from(strip_tabs);
+    while chars.get(index).is_some_and(|ch| matches!(ch, ' ' | '\t')) {
+        index += 1;
+    }
+    let mut delimiter = String::new();
+    let mut quote = None;
+    let mut was_quoted = false;
+    let mut ambiguous = false;
+    while let Some(&ch) = chars.get(index) {
+        if let Some(quote_ch) = quote {
+            if ch == quote_ch {
+                quote = None;
+            } else if ch == '\\' && quote_ch == '"' {
+                index += 1;
+                match chars.get(index) {
+                    Some(escaped) => delimiter.push(*escaped),
+                    None => ambiguous = true,
+                }
+            } else {
+                delimiter.push(ch);
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            was_quoted = true;
+            quote = Some(ch);
+            index += 1;
+            continue;
+        }
+        if ch == '\\' {
+            was_quoted = true;
+            index += 1;
+            match chars.get(index) {
+                Some(escaped) => {
+                    delimiter.push(*escaped);
+                    index += 1;
+                }
+                None => ambiguous = true,
+            }
+            continue;
+        }
+        if ch.is_whitespace() || is_shell_separator_char(ch) || matches!(ch, '<' | '>') {
+            break;
+        }
+        delimiter.push(ch);
+        index += 1;
+    }
+    let invalid = delimiter.is_empty() || quote.is_some();
+    ambiguous |= invalid;
+    let spec = (!invalid).then_some(HeredocSpec {
+        delimiter,
+        strip_tabs,
+        expands_body: !was_quoted,
+    });
+    ParsedHeredocSpec {
+        next_index: index,
+        spec,
+        ambiguous,
+    }
 }
 
 fn heredoc_body_has_active_command_substitution(line: &str) -> bool {
@@ -267,251 +278,18 @@ fn heredoc_body_has_active_command_substitution(line: &str) -> bool {
 }
 
 fn shell_tokens(command: &str) -> ShellLex {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut word_started = false;
-    let mut origin = ShellWordOrigin::default();
-    let mut active_dollar = false;
-    let mut literal_dollar = false;
-    let mut dynamic = false;
-    let mut quote = None;
-    let mut ambiguous = false;
+    let mut state = ShellTokenState::new();
     let mut chars = command.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if let Some(quote_ch) = quote {
-            if ch == quote_ch {
-                quote = None;
-            } else if ch == '\\' && quote_ch == '"' {
-                if let Some(escaped) = chars.next() {
-                    if escaped == '\n' {
-                        continue;
-                    }
-                    if escaped == '\r' && chars.peek() == Some(&'\n') {
-                        chars.next();
-                        continue;
-                    }
-                    if escaped == '$' {
-                        literal_dollar = true;
-                    }
-                    current.push(escaped);
-                } else {
-                    ambiguous = true;
-                }
-            } else {
-                if ch == '$' {
-                    if quote_ch == '\'' {
-                        literal_dollar = true;
-                    } else {
-                        active_dollar = true;
-                        if chars.peek() == Some(&'(') {
-                            ambiguous = true;
-                            dynamic = true;
-                            current.push(ch);
-                            push_command_substitution_tail(&mut current, &mut chars);
-                            continue;
-                        }
-                    }
-                } else if ch == '`' && quote_ch != '\'' {
-                    dynamic = true;
-                    ambiguous = true;
-                    current.push(ch);
-                    push_backtick_substitution_tail(&mut current, &mut chars);
-                    continue;
-                }
-                current.push(ch);
-            }
+        if let Some(quote_ch) = state.quote {
+            consume_quoted_shell_char(ch, quote_ch, &mut state, &mut chars);
             continue;
         }
-
-        match ch {
-            '\'' | '"' => {
-                word_started = true;
-                origin.syntactically_plain = false;
-                if !current.contains('=') {
-                    origin.assignment_name_plain = false;
-                }
-                quote = Some(ch);
-            }
-            '\\' => {
-                if let Some(escaped) = chars.next() {
-                    if escaped == '\n' {
-                        continue;
-                    }
-                    if escaped == '\r' && chars.peek() == Some(&'\n') {
-                        chars.next();
-                        continue;
-                    }
-                    origin.syntactically_plain = false;
-                    if !current.contains('=') {
-                        origin.assignment_name_plain = false;
-                    }
-                    if escaped == '$' {
-                        literal_dollar = true;
-                    }
-                    word_started = true;
-                    current.push(escaped);
-                } else {
-                    ambiguous = true;
-                }
-            }
-            '\n' | '\r' => {
-                push_shell_word(
-                    &mut tokens,
-                    &mut current,
-                    &mut word_started,
-                    &mut origin,
-                    &mut active_dollar,
-                    &mut literal_dollar,
-                    &mut dynamic,
-                );
-                if ch == '\r' && chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
-                tokens.push(ShellToken::Separator(ShellSeparator::Sequence));
-            }
-            ch if ch.is_whitespace() => push_shell_word(
-                &mut tokens,
-                &mut current,
-                &mut word_started,
-                &mut origin,
-                &mut active_dollar,
-                &mut literal_dollar,
-                &mut dynamic,
-            ),
-            ';' | '(' | ')' => {
-                push_shell_word(
-                    &mut tokens,
-                    &mut current,
-                    &mut word_started,
-                    &mut origin,
-                    &mut active_dollar,
-                    &mut literal_dollar,
-                    &mut dynamic,
-                );
-                tokens.push(ShellToken::Separator(if ch == ';' {
-                    ShellSeparator::Sequence
-                } else {
-                    ShellSeparator::Group
-                }));
-                ambiguous |= matches!(ch, '(' | ')');
-            }
-            '&' if chars.peek() == Some(&'>') => {
-                push_shell_word(
-                    &mut tokens,
-                    &mut current,
-                    &mut word_started,
-                    &mut origin,
-                    &mut active_dollar,
-                    &mut literal_dollar,
-                    &mut dynamic,
-                );
-                chars.next();
-                let mut redirection = String::from("&>");
-                if chars.peek() == Some(&'>') {
-                    redirection.push(chars.next().expect("peeked append redirection"));
-                }
-                push_inline_redirection_target(&mut redirection, &mut chars);
-                ambiguous |= shell_fragment_has_active_command_substitution(&redirection);
-                tokens.push(ShellToken::Redirection(redirection));
-            }
-            '&' | '|' => {
-                push_shell_word(
-                    &mut tokens,
-                    &mut current,
-                    &mut word_started,
-                    &mut origin,
-                    &mut active_dollar,
-                    &mut literal_dollar,
-                    &mut dynamic,
-                );
-                let doubled = chars.peek() == Some(&ch);
-                if doubled {
-                    chars.next();
-                }
-                let separator = match (ch, doubled) {
-                    ('&', true) => ShellSeparator::And,
-                    ('|', true) => ShellSeparator::Or,
-                    ('&', false) => ShellSeparator::Background,
-                    ('|', false) => ShellSeparator::Pipe,
-                    _ => unreachable!(),
-                };
-                tokens.push(ShellToken::Separator(separator));
-            }
-            '<' | '>' => {
-                push_shell_word_or_drop_fd_prefix(
-                    &mut tokens,
-                    &mut current,
-                    &mut word_started,
-                    &mut origin,
-                    &mut active_dollar,
-                    &mut literal_dollar,
-                    &mut dynamic,
-                );
-                let mut redirection = String::from(ch);
-                if chars.peek() == Some(&ch) {
-                    redirection.push(chars.next().expect("peeked redirection operator"));
-                    if ch == '<' && chars.peek().is_some_and(|next| matches!(*next, '-' | '<')) {
-                        redirection.push(chars.next().expect("peeked heredoc modifier"));
-                    }
-                } else if (ch == '>' && chars.peek() == Some(&'|'))
-                    || (ch == '<' && chars.peek() == Some(&'>'))
-                {
-                    redirection.push(chars.next().expect("peeked compound redirection"));
-                }
-                if chars.peek() == Some(&'&') {
-                    redirection.push(chars.next().expect("peeked redirection target marker"));
-                }
-                push_inline_redirection_target(&mut redirection, &mut chars);
-                ambiguous |= shell_fragment_has_active_command_substitution(&redirection);
-                tokens.push(ShellToken::Redirection(redirection));
-            }
-            '#' if !word_started => {
-                while let Some(comment_ch) = chars.next() {
-                    if matches!(comment_ch, '\n' | '\r') {
-                        if comment_ch == '\r' && chars.peek() == Some(&'\n') {
-                            chars.next();
-                        }
-                        tokens.push(ShellToken::Separator(ShellSeparator::Sequence));
-                        break;
-                    }
-                }
-            }
-            '$' => {
-                word_started = true;
-                active_dollar = true;
-                current.push(ch);
-                if chars.peek() == Some(&'(') {
-                    ambiguous = true;
-                    dynamic = true;
-                    push_command_substitution_tail(&mut current, &mut chars);
-                }
-            }
-            '`' => {
-                word_started = true;
-                dynamic = true;
-                ambiguous = true;
-                current.push(ch);
-                push_backtick_substitution_tail(&mut current, &mut chars);
-            }
-            _ => {
-                word_started = true;
-                current.push(ch);
-            }
-        }
+        consume_unquoted_shell_char(ch, &mut state, &mut chars);
     }
 
-    ambiguous |= quote.is_some();
-    push_shell_word(
-        &mut tokens,
-        &mut current,
-        &mut word_started,
-        &mut origin,
-        &mut active_dollar,
-        &mut literal_dollar,
-        &mut dynamic,
-    );
-    ShellLex { tokens, ambiguous }
+    state.finish()
 }
 
 fn push_command_substitution_tail(
