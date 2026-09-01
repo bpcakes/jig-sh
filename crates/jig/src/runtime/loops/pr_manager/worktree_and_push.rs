@@ -407,6 +407,11 @@ fn commit_and_push(
             ["diff", "--check", validation_tree.trim(), "--"],
             observer,
         )?;
+        // AUTO_MERGE deliberately includes the original conflict markers, so its
+        // worker-only diff cannot prove that the resolution removed them. Compare
+        // with the observed PR head independently while disabling whitespace rules;
+        // incoming base-branch whitespace remains outside the worker's authority.
+        require_no_added_conflict_markers(ctx, worktree, base_head, None, observer)?;
         git_checked(
             ctx,
             worktree,
@@ -438,6 +443,13 @@ fn commit_and_push(
             &final_head,
             "--",
         ],
+        observer,
+    )?;
+    require_no_added_conflict_markers(
+        ctx,
+        worktree,
+        base_head,
+        Some(&final_head),
         observer,
     )?;
 

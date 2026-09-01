@@ -204,6 +204,8 @@ This section is part of the renderer answers round trip: `jig update --recopy` p
 
 ## `loop` Shape
 
+PR conflict validation uses independent baselines. `AUTO_MERGE` limits the ordinary conflict/whitespace check to worker-authored changes, while a separate comparison with the observed PR head disables whitespace rules and rejects conflict markers that the merge introduced but the worker left behind.
+
 Git repositories keep the authoritative schedule ledger, initialization marker, and lock below the checkout's worktree-specific Git metadata directory. Codex `workspace-write` protects Git metadata. The protected ledger is the mutation commit point. The checkout-local `.agent/runtime/loop/schedule.json` is a compatibility and diagnostic replica: current runtimes ignore worker changes to that replica, retry its publication on later authoritative writes, and never let a replica publication failure discard or ambiguously fail an already committed protected transition.
 
 PR-manager branch-lease loss is phase-sensitive but always fail-closed around a prepared checkout. Loss after a worker failure retains even an otherwise clean checkout; loss before worker start retains the checkout as `needs_attention` instead of racing a new lease owner by force-removing that shared path.

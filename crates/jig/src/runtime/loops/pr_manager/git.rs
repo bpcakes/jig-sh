@@ -60,6 +60,29 @@ where
     Ok(())
 }
 
+fn require_no_added_conflict_markers(
+    ctx: &RepoContext,
+    cwd: &Path,
+    observed_head: &str,
+    candidate_head: Option<&str>,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<()> {
+    let mut args = vec![
+        OsString::from("-c"),
+        OsString::from(
+            "core.whitespace=-trailing-space,-space-before-tab,-indent-with-non-tab,-tab-in-indent",
+        ),
+        OsString::from("diff"),
+        OsString::from("--check"),
+        OsString::from(observed_head.trim()),
+    ];
+    if let Some(candidate_head) = candidate_head {
+        args.push(OsString::from(candidate_head.trim()));
+    }
+    args.push(OsString::from("--"));
+    git_checked(ctx, cwd, args, observer)
+}
+
 fn git_stdout<I, S>(
     ctx: &RepoContext,
     cwd: &Path,

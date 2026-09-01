@@ -165,7 +165,7 @@ mod push_error_tests {
     }
 
     #[test]
-    fn commit_and_push_refuses_unresolved_conflict_markers_after_parent_staging() {
+    fn commit_and_push_refuses_unresolved_conflict_markers_with_auto_merge_baseline() {
         let _env = crate::test_env::lock_env();
         let repo = tempdir().unwrap();
         crate::test_env::TestRepoBuilder::new(repo.path())
@@ -200,6 +200,7 @@ mod push_error_tests {
             .output()
             .unwrap();
         assert!(!merge.status.success(), "{merge:?}");
+        let auto_merge = git(&["rev-parse", "--verify", "AUTO_MERGE^{tree}"]);
         let ctx = RepoContext::load_from(repo.path()).unwrap();
 
         let error = commit_and_push(
@@ -207,7 +208,7 @@ mod push_error_tests {
             repo.path(),
             "other",
             &head_before,
-            &head_before,
+            &auto_merge,
             &mut NoopExecutionObserver,
         )
         .unwrap_err();
@@ -224,7 +225,7 @@ mod push_error_tests {
     }
 
     #[test]
-    fn commit_and_push_refuses_conflict_markers_already_committed_by_the_worker() {
+    fn commit_and_push_refuses_committed_markers_present_in_the_validation_tree() {
         let _env = crate::test_env::lock_env();
         let repo = tempdir().unwrap();
         crate::test_env::TestRepoBuilder::new(repo.path())
@@ -252,6 +253,7 @@ mod push_error_tests {
         )
         .unwrap();
         git(&["commit", "-am", "bad resolution"]);
+        let bad_head = git(&["rev-parse", "HEAD"]);
         let ctx = RepoContext::load_from(repo.path()).unwrap();
 
         let error = commit_and_push(
@@ -259,15 +261,15 @@ mod push_error_tests {
             repo.path(),
             "repair/example",
             &base_head,
-            &base_head,
+            &bad_head,
             &mut NoopExecutionObserver,
         )
         .unwrap_err();
 
-        assert!(matches!(
-            error,
-            PrPushError::Step(PrRepairStepError::Failed(_))
-        ));
+        let PrPushError::Step(PrRepairStepError::Failed(error)) = error else {
+            panic!("committed conflict markers must be an ordinary pre-push failure");
+        };
+        assert!(format!("{error:#}").contains("conflict marker"), "{error:#}");
     }
 
     #[test]
