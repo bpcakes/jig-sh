@@ -5,76 +5,146 @@
 
 > **Keep coding agents on contract.**
 
-Jig turns any repository into an operating environment for coding agents. Without it, agents lose context across machines, have no stable execution contract, and leave no inspectable record of their work. Jig generates that scaffolding once — a typed command contract, MCP runtime, receipts, gates, a dev proxy, and a sealed local vault — and keeps it in sync as the harness evolves.
+Jig is a repo-local operating harness for coding agents. It gives supported Rust, Go, and TypeScript repositories a versioned command catalog, gated work plans, and append-only receipts. You can adopt an existing repository or scaffold one of Jig's supported project shapes.
+
+Agents should not have to infer how to operate a repository from scattered scripts and prose. Jig makes the repository's commands, ownership boundaries, checks, and definition of done explicit to humans, CI, CLI clients, and MCP clients.
+
+## Contents
+
+- [What you get](#what-you-get)
+- [Supported project shapes](#supported-project-shapes)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Command contract](#command-contract)
+- [Creating and adopting repositories](#creating-and-adopting-repositories)
+- [Feature guide](#feature-guide)
+- [Documentation](#documentation)
 
 ## What you get
 
-- **Agent context files** (`AGENTS.md`, `agent-map.md`) so agents learn the repo layout and conventions without reading source.
-- **A typed `jig` command contract** so every machine, CI run, and agent executes the same commands and leaves append-only receipts under `.agent/state/`.
-- **An open status-provider protocol and aggregate** so public or private project inspectors can publish versioned software-rewrite observations and `jig status` can join them with repo and harness state.
-- **Work gates backed by receipts** so a task cannot be marked done without a verifiable output artifact.
-- **A local dev proxy** so app hostnames stay stable across port changes and machine restarts.
-- **A local encrypted vault** so selected secrets resolve into brokered child processes without ever living in the repo.
-- **A prompt library** so reusable prompts live outside the agent context window.
-- **Repo policy scripts and CI workflows** so lint, tests, and coverage enforcement run consistently from day one.
-- **Template sync via `jig update`** so the harness stays current without overwriting files you have customized.
+- **Agent guidance** through `AGENTS.md` and `agent-map.md`.
+- **A typed command catalog** in `.agent/jig-contract.json`, executed through the repo-local `scripts/jig` launcher.
+- **Structured work and gates** that let `work finish` close a plan only when every required gate has current evidence.
+- **Append-only receipts** under `.agent/state/` for checks, plans, decisions, and runs.
+- **Affected checks and file budgets** so agents can select work from checked-in component policy and enforce repository-owned source limits.
+- **A bounded MCP runtime** for repository inspection, immutable planning, execution, and cancellation.
+- **Local runtime tools** for orchestration loops, status dashboards, reusable prompts, development hostnames, and encrypted local secrets.
+- **Conservative template updates** that preserve project-owned application code and refuse to overwrite customized managed files without `--force`.
+
+## Supported project shapes
+
+Jig is opinionated about the stacks it generates. It is not a universal application framework.
+
+| Path | Generated project shape | Toolchain requirements |
+| --- | --- | --- |
+| `harness-only` | Jig harness files without application code | Rust 1.88+, Bash, Python 3.8+ |
+| `rust-library` | Rust 2024 workspace with one library crate | Rust 1.88+, Bash, Python 3.8+ |
+| `rust-cli` | Rust 2024 workspace with one binary crate | Rust 1.88+, Bash, Python 3.8+ |
+| `rust-react` | Rust API plus optional Vite React, Astro, and admin frontends | Rust 1.94+; Node.js 24.19.0+ and a supported package manager for frontends; selected database tools when enabled |
+| `go-react` | Go API plus Vite React or Astro frontends | Go 1.26; Node.js 24.19.0+ and a supported package manager; PostgreSQL tools when enabled |
+| `jig adopt` | Harness added to an existing repository after a read-only preview | Depends on the repository; Rust/SQLx and JavaScript/TypeScript inference are the most established adoption paths |
+
+Linux and macOS are supported hosts. See [Platform Support](docs/platform-support.md) for CI guarantees and feature-specific limits. Run `jig presets` for the current generated layouts and rejected combinations.
+
+## Project status
+
+Jig is pre-1.0. The current source renders contract v7; contracts v2 through v6 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
 
 ## Install
 
-**Supported hosts:** Linux and macOS. See [Platform Support](docs/platform-support.md) for feature-specific limits.
-
-**Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), Go 1.26 for generated Go backends, and the selected database engine when database support is enabled.
-
-The checked-in `rust-toolchain.toml` pins contributor and default CI tooling to Rust 1.98.0; `Cargo.toml` keeps Rust 1.88 as the workspace MSRV.
+Install the bootstrap CLI from crates.io:
 
 ```sh
 cargo install jig-sh
 ```
 
-You only need a global install to run `jig init` or `jig adopt` on a repo for the first time. Generated repos install their own runtime through `scripts/install-jig.sh`, then reuse it only while its recorded template source revision still matches and it supports the repository's contract epoch and requested build profile. A same-contract `jig update` therefore refreshes the cached runtime when `_commit` advances without pinning the repository to a product release.
+The Jig workspace MSRV is Rust 1.88. Generated application requirements vary by preset; use the table above instead of treating every supported toolchain as a universal prerequisite. The checked-in `rust-toolchain.toml` pins contributor and default CI tooling to Rust 1.98.0.
 
-Set `JIG_INSTALL_REFRESH=1` for one normal `scripts/jig` invocation, or call `scripts/install-jig.sh --refresh --profile runtime`, to deliberately replace a compatible cached runtime whose source follows an explicitly approved unpinned or embedded-source fallback.
+You only need a global installation for the first `jig init` or `jig adopt`. Generated repositories install and select a contract-compatible runtime through `scripts/install-jig.sh`, then expose it through `scripts/jig`.
 
 ## Quick start
 
-Render the harness, check readiness, and run the work loop:
+Create a harness-only repository without prompts, prepare it, and complete one structured work plan:
 
 ```sh
-# 1. Run the guided init (or `jig adopt .` inside an existing repo)
-jig init ./my-app
-
-# 2. Prepare the generated repo and verify its minimum contract
-cd ./my-app
+jig init ./ExampleProject --preset harness-only --no-input --no-vault
+cd ./ExampleProject
 scripts/jig setup
 
-# 3. Do work behind gates
-plan_id="$(scripts/jig work start --title "First change" --body "Validate the harness loop." --print-plan-id)"
+plan_id="$(scripts/jig work start \
+  --title "First change" \
+  --body "Validate the harness loop." \
+  --print-plan-id)"
 scripts/jig work check --plan-id "$plan_id"
-scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified" --outcome success
+scripts/jig work finish \
+  --plan-id "$plan_id" \
+  --resolution "Harness loop verified" \
+  --outcome success
 ```
 
-`setup` runs doctor first, bootstraps project dependencies, registers configured agent tooling when needed, verifies the generated contract, and runs doctor again. It records the bootstrap and contract receipts. `doctor` remains the read-only diagnostic command and exits nonzero until required setup is complete. Human-readable output is the default; pass `--json` for structured automation output.
+For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an existing repository, use `jig adopt .` to preview changes and `jig adopt . --write` to apply them.
+
+`setup` runs the read-only doctor, bootstraps project dependencies, registers configured agent tooling when needed, verifies the generated contract, and runs doctor again. Pass `--json` to Jig commands when automation needs structured output.
+
+## What changes in the repository
+
+A full harness contains this core structure:
+
+```text
+.
+├── .jig.toml                   # public configuration and renderer answers
+├── .mcp.json                   # MCP client wiring
+├── AGENTS.md                   # repo-wide agent guidance
+├── agent-map.md                # index of nested agent guides
+├── .agent/
+│   ├── PLANS.md                # ExecPlan guidance
+│   ├── jig-contract.json       # versioned command catalog
+│   └── state/                  # append-only plans, receipts, and decisions
+├── scripts/
+│   ├── jig                     # repo-local launcher
+│   └── install-jig.sh          # compatible runtime installer
+└── .github/workflows/          # generated policy and test workflows
+```
+
+Checks append receipt records. A simplified record looks like this:
+
+```json
+{
+  "tool_name": "jig.test",
+  "plan_id": "plan_...",
+  "exit_status": 0,
+  "changed_paths": ["README.md"],
+  "diff_stat": { "files": 1, "insertions": 8, "deletions": 2 }
+}
+```
+
+Inspect the current evidence with `scripts/jig work status`, `scripts/jig work evidence`, or `scripts/jig work receipts`.
 
 ## How it works
 
-1. **Render the harness.** `jig init` (greenfield) or `jig adopt` (existing repo) renders the template into your project: `scripts/jig`, agent context files, CI workflows, and MCP config — pinned to a template version. `scripts/jig` is the generated command surface for everything below.
-2. **Work behind gates.** Agents run the same typed commands on every machine. Each `check` and `work` step appends a receipt under `.agent/state/`, so a task can't be closed without verifiable evidence.
-3. **Stay in sync.** `jig update` pulls template improvements without clobbering files you've changed — they are never overwritten without `--force`.
+1. **Render or adopt the harness.** `jig init` creates a supported project shape; `jig adopt` previews and then adds the harness to an existing repository.
+2. **Discover the repository contract.** Humans, CI, and agents use the same checked-in components, actions, profiles, and command runners through `scripts/jig`.
+3. **Plan and check work.** A work plan captures an exact Git baseline. Required gates execute only when their checked-in path policy applies and record explicit not-applicable evidence otherwise.
+4. **Review the receipts.** Checks and structured work append evidence under `.agent/state/`; `jig ui` and status commands present that state without changing it.
+5. **Update conservatively.** `jig update` advances managed harness files while preserving project-owned code and customized managed files unless replacement is explicitly forced.
 
-## The command contract
+## Command contract
 
-`.agent/jig-contract.json` records the stable repository targets and compatibility command tools that CLI and CI clients can execute across machines. Contract v6 MCP clients discover the same repository model through four bounded inspect, plan, execute, and cancel operations; older contracts continue to expose their declared command tools directly. Runtime-owned commands manage local workflow state, processes, or secrets and are intentionally outside the generated contract.
+`.agent/jig-contract.json` is the stable repository authority. Current contract v7 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, and target-local affected selection.
 
-| Surface         | Stable contract? | Records receipts? | Machine-local? |
-| --------------- | ---------------- | ----------------- | -------------- |
-| `check`         | yes              | yes               | no             |
-| `work`          | runtime-owned    | yes               | no             |
-| `state`         | runtime-owned    | no                | partly         |
-| `prompt`        | runtime-owned    | no                | partly         |
-| `dev` / `proxy` | runtime-owned    | no                | yes            |
-| `vault`         | runtime-owned    | no                | yes            |
+Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, status providers, or secrets outside the generated command catalog.
 
-For local validation, call the contract commands directly:
+| Surface | Stable contract? | Records receipts? | Machine-local? |
+| --- | --- | --- | --- |
+| `check` | yes | yes | no |
+| `work` / `loop` | runtime-owned | yes | no |
+| `state` / `prompt` | runtime-owned | no | partly |
+| `status` / `ui` | runtime-owned | no | partly |
+| `dev` / `proxy` | runtime-owned | no | yes |
+| `vault` | runtime-owned | no | yes |
+
+Run configured checks directly:
 
 ```sh
 scripts/jig check fmt
@@ -83,213 +153,132 @@ scripts/jig check test
 scripts/jig check test --affected origin/main --explain
 ```
 
-These append receipts under `.agent/state/`. Pass `--no-receipt` to a one-off command when you don't want evidence recorded. Read existing state with `scripts/jig work status`, `scripts/jig work evidence`, and `scripts/jig work receipts --failed-only`.
+In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
 
-In contract-v6 repositories, `--affected BASE` filters the normal target or
-profile selection using Git changes and checked-in component/input policy. The
-plan retains direct-path and dependency reasons, so agents can inspect why each
-target was selected before executing it.
+## Creating and adopting repositories
 
-See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
-
-## Creating and adopting repos
-
-Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choose `rust-react`, `go-react`, `harness-only`, `rust-library`, or `rust-cli`. The two application presets then ask for their supported database and frontends; the harness-only and Rust-only choices need no application-shape follow-up. `--defaults` skips the project-shape questions and fills omitted choices with `--preset rust-react --db none --frontend web`; initial vault setup can still prompt unless `JIG_VAULT_PASSPHRASE` is set or `--no-vault` is passed. `--no-input` is strict automation: pass a complete application shape (including `--go-module` for Go) or an explicit complete `harness-only`, `rust-library`, or `rust-cli` preset. Redirected/non-terminal init is equally strict unless `--defaults` is present. Explicit CLI and answers-file values always win over defaults. Run `jig presets` for the complete generated layouts and boundaries.
-
-**Greenfield, harness only:**
+Run `jig presets` before automation to inspect the supported shapes and their boundaries.
 
 ```sh
-jig init /path/to/target-repo --preset harness-only --no-input --no-vault
+# Harness without application code
+jig init ./ExampleProject --preset harness-only --no-input --no-vault
+
+# One Rust library or CLI crate
+jig init ./ExampleProject --preset rust-library --no-input --no-vault
+jig init ./ExampleProject --preset rust-cli --no-input --no-vault
+
+# Rust API with product, marketing, and admin frontends
+jig init ./ExampleProject \
+  --preset rust-react \
+  --db postgres \
+  --frontends web,landing,admin
+
+# Go API with PostgreSQL and a product frontend
+jig init ./ExampleProject \
+  --preset go-react \
+  --go-module example.com/example/project \
+  --db postgres \
+  --frontends web
 ```
 
-**Greenfield Rust library:**
+The Rust-only presets create a virtual Rust 2024 workspace with one non-publishable, license-neutral crate. They add no database, frontend, API, dev app, or release workflow. Commit the generated `Cargo.lock` after `scripts/jig setup`.
+
+The Rust/React preset generates a Cargo workspace plus source-owned shadcn Vite React, Astro, or admin applications. The Go/React preset generates a chi/Huma API, optional pgxpool/sqlc/Goose PostgreSQL support, and a Huma OpenAPI to Hey API TypeScript client. Generated application code becomes project-owned immediately; `jig update` does not migrate or overwrite it.
+
+For an existing repository, preview before writing:
 
 ```sh
-jig init /path/to/example-library --preset rust-library --no-input --no-vault
+cd /path/to/repository
+jig adopt .
+jig adopt . --write
 ```
 
-This creates a virtual Rust 2024 workspace whose only member is `crates/example-library`, with its starter source in `src/lib.rs`.
+Adoption preserves existing root files such as `AGENTS.md` and `Makefile`; it changes only Jig's marked or explicitly managed sections. Override inferred settings with flags or an answers file. See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md).
 
-**Greenfield Rust CLI:**
+Update an adopted or generated repository with:
 
 ```sh
-jig init /path/to/example-cli --preset rust-cli --no-input --no-vault
+jig update             # advance the template, preserving local changes
+jig update --recopy    # re-render from the stored .jig.toml answers
 ```
 
-This creates the same expandable virtual workspace shape with one binary crate, `src/main.rs`, and an explicit `[[bin]]` target. The replaceable std-only starter prints its package name and version; it does not choose an argument parser or logging framework.
+`jig update` refuses to overwrite changed managed files unless `--force` is passed.
 
-Both Rust-only presets use Jig's top-level Rust 1.88 baseline, start non-publishable and license-neutral, and add no database, SQLx, application contract, frontend, API, dev app, release workflow, or extra crate layer. The generated Cargo manifests, Rust source, crate guide, and scaffold README become project-owned immediately; `jig update` keeps only the Jig harness current. Neither preset configures `scripts/jig dev`. From the generated repository, prepare the lock file and run the documented verification:
+## Feature guide
 
-```sh
-scripts/jig setup
-scripts/jig check test
-```
+### Structured work, affected checks, and file budgets
 
-Setup creates `Cargo.lock`; commit it for both the library and CLI so locked checks and CI use the same dependency resolution. Use `jig adopt .` instead of `jig init` when the Rust repository already exists. The similar-sounding `rust-workspace` name is not a public preset.
+`work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence. `work finish` refuses to close a plan until every required gate has current evidence.
 
-**Greenfield Rust backend + React frontends.** Run `jig presets` to see available presets and their generated layout, then:
+Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
-```sh
-jig init /path/to/target-repo --preset rust-react --db postgres --frontends web,landing,admin
-```
+### Orchestration, status, and flight recorder
 
-This scaffolds a Cargo workspace (`apps/<repo>-api`, `crates/<repo>-core`, `crates/<repo>`, `crates/<repo>-http`, `crates/<repo>-test-support`, optional `crates/<repo>-db`) plus a shadcn Vite React product app, an Astro site, and a responsive shadcn admin application. Both React apps start with TanStack Router, TanStack Query, Tailwind 4, source-owned shadcn components, and a tested API version/readiness slice; the admin adds theme switching, navigation, and operational routes. Authentication and authorization remain project-owned. Jig records the tested shadcn CLI, preset, primitive library, and style for both React apps instead of running a mutable `shadcn@latest` during init.
-
-**Greenfield Go backend + React frontend.** The first Go increment supports no database or PostgreSQL plus `web` and `landing` frontends:
+`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig status` joins local Git and work state with any configured `jig.status-provider/v1` inspectors. `jig ui` serves a read-only loopback dashboard over plans, gates, receipts, decisions, and loops.
 
 ```sh
-jig init /path/to/target-repo --preset go-react --go-module github.com/acme/my-app --db postgres --frontends web
-```
-
-This scaffolds Go 1.26 with chi, Huma, optional pgxpool/sqlc/Goose database support, and a Huma OpenAPI → Hey API TypeScript client. `cmd/api` and the offline `cmd/openapi` exporter share the same side-effect-free API constructor. SQLite and the privileged `admin` API/client boundary are rejected explicitly in this increment.
-
-Bare frontend names other than `web`, `landing`, `admin` and the compatible `marketing`, `astro`, and `admin-panel` aliases are custom names. Interactive init shows the resolved app kind and directory, then asks for confirmation so a typo such as `amdin` does not silently become a directory; non-interactive init calls the custom name out in the summary. Use an explicit kind such as `dashboard:spa`, `ops:admin`, or `campaign:astro` when a custom name is intentional. The Rust + React preset reserves `api` (case-insensitively) for its backend dev app, so use a name such as `api-client` for an API-facing frontend.
-
-The frontends share a private root JavaScript workspace, pinned Node/package-manager metadata, and one root lockfile; fresh Yarn workspaces use the `node-modules` linker for compatibility with the generated Vite and Astro apps. For a database-backed scaffold, export `DATABASE_URL` or copy `.env.example` to `.env` and configure it before running `scripts/jig setup` (or the narrower `scripts/jig bootstrap`). Bootstrap applies the selected migration/query workflow, installs frontend dependencies once, and records both the selected dependency inputs and installed artifact. `scripts/jig dev` verifies that exact state without installing packages, and frontend `dev` scripts only start their servers. Commit the generated root lockfile. Local `.env` files remain ignored. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
-
-**Adopt an existing repo.** `jig adopt` scans first and previews managed-file changes; re-run with `--write` after reviewing:
-
-```sh
-cd /path/to/target-repo
-jig adopt .            # preview
-jig adopt . --write    # apply
-```
-
-Adopt infers the repo name, default branch, Rust crate roots, SQLx/migrations, frontend apps, and CI `runs-on` values. Override anything with explicit flags (e.g. `--sqlx-enabled false`), or add `--json` for the full detection report. Existing root files like `AGENTS.md` and `Makefile` stay repo-owned — adopt only inserts or updates its marked block.
-
-**Update an adopted repo:**
-
-```sh
-cd /path/to/target-repo
-jig update             # advance to the current template, preserving your changes
-jig update --recopy    # re-render from stored .jig.toml answers without advancing
-```
-
-`jig update` refuses to overwrite changed template-managed files unless `--force` is passed. `.jig.toml` is both the public repo config and the renderer answers file.
-
-See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md) for the complete flag reference and update/versioning rules.
-
-## Feature reference
-
-### Structured work & receipts
-
-`work start` opens a plan with an exact Git baseline (the repository's hash-format-specific empty tree before its first commit), `work check` runs only required gates whose path policy applies, and `work finish` closes a plan only after every required gate has fresh executed, reused, or explicit not-applicable evidence. `jig-contract` proves harness wiring; scaffolds with OpenAPI clients use separate application-contract and public-artifact gates. Contract and gate commands append receipts under `.agent/state/`, giving every change a reviewable trail. See [Developer UX](docs/developer-ux.md#work-receipts-and-gate-evidence).
-
-### Local state maintenance
-
-State repair and retention work locally; no hosted service is required. Start with `scripts/jig state diagnose`, adding `--deep` to analyze recursive session summaries and receipt payload growth. Preview a legacy-session repair with `scripts/jig state compact sessions --dry-run`, then run it without `--dry-run` to write an exact compressed backup under ignored `.agent/.cache/` before replacing the working-tree state. Restore that backup with `scripts/jig state restore --backup <backup-directory>`.
-
-`scripts/jig state archive --before <date>` compresses eligible old receipts into ignored local storage; add `--include-runs` to also archive completed run histories and shrink both active journals while retaining open-plan evidence. Run archival refuses to rewrite the journal while any known run is nonterminal, preserving live readers' durable byte cursors. Applying mode creates exact per-stream recovery backups. Restore a selected stream backup with the same `state restore` command. `scripts/jig state export receipts --before <date> --output <file.jsonl.gz>` creates a non-mutating receipt export at a caller-selected path. Artifacts under `.agent/.cache/` are local recovery aids, so copy them elsewhere for durable retention. Working-tree compaction and archiving do not remove state blobs already reachable from Git history. See [Runtime State](docs/public-contract.md#runtime-state).
-
-Before applying a compaction, archive rewrite, or restore, stop Jig processes launched with older runtimes; current runtimes share the repository state lock, but a legacy writer waiting on a pre-opened inode cannot follow an atomic replacement. After verifying a rewrite, keep or copy the recovery artifact you need and remove obsolete ignored cache artifacts. `state diagnose` reports that cache usage separately.
-
-### Rewrite status
-
-Configure a public or private `jig.status-provider/v1` inspector in `.jig.toml`, then join its blockers and implementation/verification progress with local Git freshness, plans, gates, loop leases, and attempts:
-
-```sh
+scripts/jig loop status
 scripts/jig status
-scripts/jig status --json
 scripts/jig status --tui
+scripts/jig ui --port 0
 ```
 
-The terminal dashboard has Overview, Packages, and Blockers views, background refresh, provider switching, and stable package/blocker selection. Press Enter on a package for a scrollable detail view covering facets, dependencies, acceptance checks, blockers, evidence, and provider-specific details. The command is read-only and keeps provider failures visible as partial status. It is separate from `jig ui`, the browser-based work/receipt flight recorder. See [Status-provider protocol](docs/status-provider.md#terminal-dashboard).
+Provider failures remain visible as partial status instead of hiding available local state. The UI binds to `127.0.0.1`, validates loopback host and origin, and uses a one-time sign-in URL. See [Status-provider protocol](docs/status-provider.md) and [Flight Recorder UI](docs/developer-ux.md#flight-recorder-ui).
 
-### Flight recorder UI
+### State maintenance
 
-`jig ui` serves a read-only loopback dashboard over `.agent/state/`: open plans with gate status and the next command to unblock them, recent failures with stderr, finished work with resolutions, per-tool check health, loop workflows and attempt budgets, and a filterable timeline of sessions, plans, receipts, and decisions. Plan ids link to detail pages with the plan body, gate evidence, decisions, and per-receipt output.
-
-```sh
-scripts/jig ui               # prints a one-time loopback sign-in URL
-scripts/jig ui --port 0      # pick any free port
-```
-
-The dashboard validates the exact loopback `Host` and `Origin` and requires a
-session cookie established by the printed one-time URL. Proxy aliases are not
-supported because accepting arbitrary hostnames would reopen DNS-rebinding
-access to receipt and plan contents.
-
-The printed unguessable namespace contains JSON snapshot and plan endpoints returning the same joined data. The server binds `127.0.0.1` only and records no receipts. See [Developer UX](docs/developer-ux.md#flight-recorder-ui).
+Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
 ### Vault
 
-Jig Vault stores an encrypted environment bundle outside the repo. `jig init` and `jig adopt . --write` initialize a repo-scoped local vault by default; pass `--no-vault` to defer that setup. References are relative to the selected vault, so `jig://Production/RESTIC_PASSWORD` means item `Production`, field `RESTIC_PASSWORD`, in the current project scope. The project name is intentionally not repeated in the reference.
+Jig Vault stores an encrypted environment bundle outside the repository and resolves selected values only for brokered child processes.
 
 ```sh
-# Run this only when init/adopt used --no-vault.
 scripts/jig vault init
 scripts/jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
-printf '%s' 'local' | scripts/jig vault field set jig://Production/MODE --text --value-stdin
 scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-To copy a repo-scoped vault to another machine, create an encrypted backup outside the source checkout, copy the backup securely, then restore it from the destination checkout. A checkout configured with `[vault].scope = "repo"` selects its repo-scoped vault home automatically:
+Vault metadata, child output, and plaintext do not enter command receipts or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
 
-```sh
-# Source machine
-scripts/jig vault backup create --out ../ExampleProject-vault.backup
+### Prompt library
 
-# Destination machine, from the cloned repo (Linux only)
-scripts/jig vault backup restore --in ../ExampleProject-vault.backup
-scripts/jig vault audit verify
-```
-
-Do not commit vault backups. On a destination without repo-scoped vault configuration, pass `--global` to make selection of the legacy user-level vault deliberate, or `--home` to choose a specific recovery or test location. Omitting both retains the legacy user-level selection for contract-v4 compatibility. Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, encrypted backup, and Linux-only absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
-
-### Prompts
-
-Jig Prompt stores reusable prompts outside the agent context window. Prompts can be user-level, repo-level, or distributed through read-only prompt packs.
+Prompts can be user-level, repo-level, or distributed through read-only prompt packs:
 
 ```sh
 scripts/jig prompt add comprehensive-review-loop --file prompt.md --tag review
 scripts/jig prompt get comprehensive-review-loop
 scripts/jig prompt get repo:release-checklist --var base=main
-scripts/jig prompt list
 scripts/jig prompt search review
 ```
 
-Without `--json`, `prompt get` is the exact-output primitive: it prints only the rendered prompt body, with no envelope or added newline. Pass global `--json` for the standard command envelope instead. Bodies render as MiniJinja templates (`--var KEY=VALUE`, or `--raw` to skip rendering). Names may be namespaced with `user:`, `repo:`, or `pack:<pack>/`; unqualified writes default to `user:` and `pack:` prompts are read-only. Common subcommands have shell-style aliases (`cat`, `cp`, `new`, `rm`, `ls`, `find`).
+`prompt get` prints only the rendered MiniJinja body unless global `--json` is passed. See [Developer UX](docs/developer-ux.md).
 
-### Local dev proxy
+### Local development proxy
 
-Generated repos run supervised dev commands behind stable local hostnames, so app URLs survive port changes and restarts.
+Configured development apps run behind stable, repo-scoped local hostnames:
 
 ```sh
 scripts/jig dev
 scripts/jig dev status
-scripts/jig dev --replace
 scripts/jig dev stop
-scripts/jig proxy alias api --port 8080
 scripts/jig proxy list
 ```
 
-Bare `scripts/jig dev` still launches the configured apps in the foreground. Each successful launch is registered as a repo-scoped dev session, so a terminal or agent that loses the foreground process can inspect it with `dev status` and request a safe, idempotent shutdown with `dev stop`. Use `dev --replace` to stop only conflicting registered sessions from the same canonical repository before launching; Jig refuses to replace another repo's session or an unregistered/ad-hoc process. If a supervisor crashed, spawn state is known, and every exact registered process identity is gone, either explicit command reports the session as recoverable and retires it with its exact-owned stale routes without signaling stored PIDs. A record left by an interrupted spawn or an older Jig can instead be removed with `scripts/jig dev stop --forget-ambiguous-orphans` after checking that no unrecorded process is still running. That explicit repair still refuses live or uncertain registered identities and emits a structured recovery notice recording that ambiguous spawn history cannot prove process absence.
+The proxy owns route and process state outside `.agent/state/`. HTTPS certificate generation and trust require an explicit local trust-store acknowledgement. See [Developer UX](docs/developer-ux.md) and [Platform Support](docs/platform-support.md).
 
-For HTTPS, generate and explicitly trust a local, name-constrained CA:
+## Stack-specific repository contracts
 
-```sh
-scripts/jig proxy cert generate
-scripts/jig proxy cert trust --accept-trust-scope
-```
+Jig does not require every generated repository to be a Cargo workspace. Rust presets use Cargo, `cargo fmt`, and `cargo clippy`; Go presets use their generated Go adapter commands; `harness-only` generates no application toolchain files.
 
-`--accept-trust-scope` acknowledges platform trust-store mutation. Automatic certificate management and process-owned routes are supported on Linux and macOS. Other hosts are outside Jig's [platform support policy](docs/platform-support.md). See [Developer UX](docs/developer-ux.md).
-
-## Required repo conventions
-
-All generated repos are expected to use Cargo workspaces, `cargo fmt`, and `cargo clippy`. When `sqlx_enabled` is `true`, repos also use SQLx workspace metadata (e.g. `.sqlx/`) and repo-owned migrations.
-
-Optional web apps must expose `lint`, `typecheck`, `build:bundle`, and `test:coverage` package scripts in each app directory. `test:coverage` must write `coverage/coverage-summary.json` so generated checks can enforce the threshold. The default workflow assumes Bun for package install and script execution.
+Configured web apps must expose `lint`, `typecheck`, `build:bundle`, and `test:coverage` package scripts. `test:coverage` writes `coverage/coverage-summary.json` for the generated threshold check. Bun is the default package manager, with supported npm, pnpm, and Yarn configurations documented in [Configuration](docs/configuration.md).
 
 ## Templates and versioning
 
-A *template* is the source repo whose files are rendered into your project. Release builds of `jig init`/`jig adopt` use the official `jig-sh` template, pinned to the release tag for the installed Jig version. Pass `--template` only to dogfood a local checkout, fork, or private template:
+Release builds of `jig init` and `jig adopt` use the official `jig-sh` template pinned to the installed release tag. Unreleased or dirty local builds use templates embedded in the binary. Pass `--template` only for a local checkout, fork, or private template.
 
-```sh
-jig init ./my-app --template /path/to/jig-sh --template-mode committed
-```
-
-Unreleased or dirty local builds use the templates embedded in the binary. When editing files under `templates/project`, refresh the packaged snapshot before committing:
+When editing this repository's files under `templates/project`, refresh the packaged snapshot before committing:
 
 ```sh
 JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
@@ -297,42 +286,40 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 
 ## Documentation
 
-- [Platform Support](docs/platform-support.md) — supported hosts, CI guarantees, and feature-specific limits
-- [Developer UX](docs/developer-ux.md) — the `jig` command surface and daily workflow
-- [Configuration](docs/configuration.md) — full `.jig.toml` reference and options
-- [Adoption](docs/adoption.md) — bring Jig into an existing repository
-- [Public Contract](docs/public-contract.md) — stable command contract for MCP clients and CI
-- [Status-provider protocol](docs/status-provider.md) — open JSON contract for software-rewrite observations
-- [`examples/`](examples/) — visible `.jig.toml` answer-file examples
+- [Developer UX](docs/developer-ux.md): command surface and daily workflow
+- [Configuration](docs/configuration.md): `.jig.toml`, presets, package managers, and runtime options
+- [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
+- [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, receipts, runs, and state
+- [Status-provider protocol](docs/status-provider.md): open JSON observation contract
+- [Platform Support](docs/platform-support.md): supported hosts and feature limits
+- [`examples/`](examples/): visible `.jig.toml` answer files
 
 ## Repository layout
 
-- `crates/jig/` — publishable `jig` runtime and MCP server
-- `crates/jig-codex-tui/` — searchable Codex-home picker with live account and usage details
-- `crates/jig-dev-proxy/` — local HTTP/HTTPS proxy with TLS certificate management
-- `crates/jig-status-tui/` — read-only terminal dashboard over versioned status aggregates
-- `crates/jig-tui/` — shared terminal lifecycle and cooperative-worker foundations
-- `crates/jig-ui/` — read-only loopback dashboard server and presentation
-- `crates/jig-vault/` — local encrypted vault, redaction, audit, and brokered-run primitives
-- `crates/jig-contract/contracts/status-provider/` — public status-provider JSON Schema and conformance example
-- `templates/project/` — files rendered into downstream repos
-- `examples/` — sample `.jig.toml` answer files
-- `scripts/validate-fixtures.sh` — renders sample repos and validates the generated harness
+- `crates/jig/`: publishable CLI, bootstrapper, and MCP runtime
+- `crates/jig-contract/`: shared DTOs and public status-provider contract
+- `crates/jig-{rust,go,typescript,sqlx}/`: repository model adapters
+- `crates/jig-file-budget/`: native file-budget policy and evaluation
+- `crates/jig-dev-proxy/`: local HTTP/HTTPS proxy and process supervision
+- `crates/jig-{status-tui,ui,codex-tui,vault,vault-tui}/`: status, dashboard, Codex, and vault surfaces
+- `templates/project/`: files rendered into downstream repositories
+- `examples/`: sample answer files
+- `scripts/validate-fixtures.sh`: rendered-repository validation
 
-Validate this repo with:
+Validate this source tree with:
 
 ```sh
 ./scripts/validate-fixtures.sh
 ```
 
-## Release
+## Security
 
-Use the GitHub Actions `Release` workflow — leave `version` blank for the next patch, or set it explicitly. See [CONTRIBUTING.md](CONTRIBUTING.md) for local release steps, CHANGELOG conventions, and crates.io trusted-publishing setup.
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Do not include secrets, private repository contents, or exploit details in a public issue.
 
 ## Contributing
 
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks, release steps, and changelog conventions.
 
 ## License
 
-MIT
+[MIT](LICENSE)
