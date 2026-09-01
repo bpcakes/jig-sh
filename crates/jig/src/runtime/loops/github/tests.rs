@@ -315,6 +315,20 @@ esac
                 .contains("deadline")
         );
 
+        let mut subsecond_budget = GithubSnapshotBudget::new(timeout);
+        subsecond_budget.timeout = Duration::from_millis(500);
+        assert!(
+            subsecond_budget
+                .reserve_request()
+                .unwrap_err()
+                .to_string()
+                .contains("deadline")
+        );
+        assert_eq!(
+            subsecond_budget.request_count, 0,
+            "a request rejected before launch must not consume or report budget"
+        );
+
         let snapshot = json!({"body": "x".repeat(32)});
         require_serialized_snapshot_budget(&snapshot, 43).unwrap();
         assert!(

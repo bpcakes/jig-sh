@@ -185,7 +185,6 @@ impl GithubSnapshotBudget {
                     self.timeout.as_secs()
                 )
             })?;
-        self.request_count += 1;
         let seconds = remaining.as_secs();
         if seconds == 0 {
             bail!(
@@ -193,8 +192,10 @@ impl GithubSnapshotBudget {
                 self.timeout.as_secs()
             );
         }
-        CommandTimeout::from_seconds(seconds)
-            .ok_or_else(|| anyhow!("GitHub PR snapshot produced an invalid request timeout"))
+        let timeout = CommandTimeout::from_seconds(seconds)
+            .ok_or_else(|| anyhow!("GitHub PR snapshot produced an invalid request timeout"))?;
+        self.request_count += 1;
+        Ok(timeout)
     }
 
     fn record_response(&mut self, output: &GhOutput) -> Result<()> {

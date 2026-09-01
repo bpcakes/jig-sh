@@ -147,14 +147,15 @@ impl JsonStatePersistence {
     where
         S: Clone + Default + DeserializeOwned,
     {
-        if let Some(protected) = self.protected()? {
+        let protected = self.protected()?;
+        if let Some(protected) = protected {
             let primary = self.read_protected::<S>(protected, cancelled)?;
             if primary.is_initialized()? {
                 return Ok(primary.state);
             }
         }
-        self.read_legacy::<S>(cancelled)?
-            .state(&self.protected_state_path)
+        let legacy = self.read_legacy::<S>(cancelled)?;
+        self.resolve_after_protected_miss(protected, legacy, cancelled)
     }
 
     pub(super) fn read_locked_with_cancellation<S>(&self, cancelled: &dyn Fn() -> bool) -> Result<S>
@@ -270,6 +271,36 @@ impl JsonStatePersistence {
             &self.legacy.path,
             cancelled,
         )
+    }
+
+    fn resolve_after_protected_miss<S>(
+        &self,
+        protected: Option<&JsonLocation>,
+        legacy: LegacyState<S>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<S>
+    where
+        S: Default + DeserializeOwned,
+    {
+        match legacy {
+            LegacyState::State(state) => Ok(state),
+            LegacyState::Migration(marker) => {
+                marker.validate(&self.protected_state_path)?;
+                if let Some(state) = marker.state {
+                    return Ok(state);
+                }
+                if let Some(protected) = protected {
+                    let primary = self.read_protected::<S>(protected, cancelled)?;
+                    if primary.is_initialized()? {
+                        return Ok(primary.state);
+                    }
+                }
+                bail!(
+                    "Loop state migration marker exists without protected state at {}",
+                    self.protected_state_path
+                )
+            }
+        }
     }
 
     fn ensure_initialized<S>(
@@ -459,5 +490,56 @@ impl<S> MigrationState<S> {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn read_only_rechecks_protected_state_when_compaction_follows_initial_miss() {
+        let temp = tempdir().unwrap();
+        let legacy = JsonLocation::new(
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+            "leases-legacy",
+            JsonWriteMode::Cache,
+        );
+        let protected = JsonLocation::new(
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+            "leases",
+            JsonWriteMode::Durable,
+        );
+        let persistence = JsonStatePersistence {
+            legacy,
+            protected: Ok(Some(protected)),
+            protected_state_path: "jig/loop/leases.json".into(),
+        };
+        let protected = persistence.protected().unwrap().unwrap();
+        let expected = BTreeMap::from([("ExampleProject".to_string(), "owner".to_string())]);
+        fs::write(
+            &protected.path,
+            serde_json::to_vec(&ProtectedState::new(expected.clone())).unwrap(),
+        )
+        .unwrap();
+        let compacted: LegacyState<BTreeMap<String, String>> =
+            LegacyState::Migration(MigrationState {
+                schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
+                protected_state_path: persistence.protected_state_path.clone(),
+                state: None,
+            });
+
+        let resolved = persistence
+            .resolve_after_protected_miss(Some(protected), compacted, &|| false)
+            .unwrap();
+
+        assert_eq!(resolved, expected);
     }
 }

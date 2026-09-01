@@ -79,16 +79,13 @@ fn post_review_thread_updates(
     let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
     let mut failed = false;
     let mut cancelled = false;
-    for reply in replies {
+    for (index, reply) in replies.iter().enumerate() {
         if observer.cancelled() {
             cancelled = true;
+            posts.extend(replies[index..].iter().map(cancelled_review_thread_post));
             break;
         }
-        let thread_id = reply
-            .get("thread_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
+        let thread_id = review_thread_id(reply);
         let body = reply
             .get("body")
             .and_then(Value::as_str)
@@ -266,6 +263,11 @@ fn post_review_thread_updates(
             "resolve_skip_reason": resolve_skip_reason,
         }));
         if cancelled {
+            posts.extend(
+                replies[index + 1..]
+                    .iter()
+                    .map(cancelled_review_thread_post),
+            );
             break;
         }
     }
@@ -317,6 +319,22 @@ fn skipped_review_thread_post(thread_id: &str, reason: &str, detail: &str) -> Va
         "resolve_skipped": false,
         "resolve_skip_reason": Value::Null,
     })
+}
+
+fn cancelled_review_thread_post(reply: &Value) -> Value {
+    skipped_review_thread_post(
+        review_thread_id(reply),
+        "cancelled",
+        "review thread update was not attempted because execution was cancelled",
+    )
+}
+
+fn review_thread_id(reply: &Value) -> &str {
+    reply
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
 }
 
 fn resolve_review_thread(

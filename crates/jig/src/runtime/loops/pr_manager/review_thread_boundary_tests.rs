@@ -8,6 +8,47 @@ mod review_thread_boundary_tests {
     use super::*;
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
+    struct CancelledControl;
+
+    impl crate::execution::ExecutionObserver for CancelledControl {}
+
+    impl crate::execution::ExecutionCancellation for CancelledControl {
+        fn cancelled(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn cancellation_records_every_unattempted_review_thread_intent() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let worker_output = json!({
+            "review_thread_replies": [
+                {"thread_id": "PRRT_1", "body": "first"},
+                {"thread_id": "PRRT_2", "body": "second", "resolve": true},
+            ],
+        });
+
+        let result = post_review_thread_updates(
+            &ctx,
+            &json!({}),
+            &worker_output,
+            "example-head",
+            &mut CancelledControl,
+        );
+
+        assert!(result.cancelled);
+        assert_eq!(result.posts.as_array().unwrap().len(), 2);
+        assert!(result.posts.as_array().unwrap().iter().all(|post| {
+            post["status"] == "skipped" && post["reason"] == "cancelled"
+        }));
+        assert_eq!(result.posts[0]["thread_id"], "PRRT_1");
+        assert_eq!(result.posts[1]["thread_id"], "PRRT_2");
+    }
+
     #[test]
     fn missing_thread_ids_are_rejected_before_deduplication() {
         let temp = tempdir().unwrap();
