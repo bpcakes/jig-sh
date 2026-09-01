@@ -168,6 +168,7 @@ impl LeaseStore {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn active_leases(&mut self) -> Result<Vec<LeaseRecord>> {
         self.with_locked(|store| {
             store.prune_expired(now_ms());
@@ -498,6 +499,7 @@ impl AttemptStore {
             .cloned())
     }
 
+    #[cfg(test)]
     pub(super) fn snapshot(&self) -> Result<Vec<AttemptRecord>> {
         self.snapshot_read_only_with_cancellation(&|| false)
     }

@@ -224,6 +224,7 @@ impl SchedulePersistence {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn read_locked<T>(
         &self,
         action: impl FnOnce(&ScheduleFile) -> Result<T>,

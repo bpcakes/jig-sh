@@ -512,6 +512,7 @@ impl OccurrenceStore {
         self.reconcile_stale_at(now)
     }
 
+    #[cfg(test)]
     pub(super) fn snapshot(&self) -> Result<Vec<ScheduleOccurrence>> {
         self.persistence.read_locked(|store| {
             validate_schema(store)?;

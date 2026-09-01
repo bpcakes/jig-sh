@@ -99,6 +99,14 @@ fn post_review_thread_updates(
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
+        if thread_id.is_empty() {
+            posts.push(skipped_review_thread_post(
+                thread_id,
+                "missing_review_thread",
+                "worker returned a review thread update without a thread ID",
+            ));
+            continue;
+        }
         if !handled_thread_ids.insert(thread_id) {
             posts.push(skipped_review_thread_post(
                 thread_id,
@@ -211,10 +219,18 @@ fn post_review_thread_updates(
         } else {
             None
         };
+        let (status, reason) = review_thread_post_status(
+            cancelled,
+            thread_failed,
+            reply_skipped,
+            &reply_skip_reason,
+            resolve_skipped,
+            &resolve_skip_reason,
+        );
         posts.push(json!({
             "thread_id": thread_id,
-            "status": if cancelled { "cancelled" } else if thread_failed { "failed" } else if reply_skipped { "skipped" } else { "posted" },
-            "reason": if reply_skipped { Value::String("review_thread_changed".into()) } else { Value::Null },
+            "status": status,
+            "reason": reason,
             "replied": reply_response.is_some(),
             "reply_comment_id": reply_response
                 .as_ref()
@@ -257,6 +273,27 @@ fn post_review_thread_updates(
         posts: json!(posts),
         failed,
         cancelled,
+    }
+}
+
+fn review_thread_post_status(
+    cancelled: bool,
+    failed: bool,
+    reply_skipped: bool,
+    reply_skip_reason: &Value,
+    resolve_skipped: bool,
+    resolve_skip_reason: &Value,
+) -> (&'static str, Value) {
+    if cancelled {
+        ("cancelled", Value::Null)
+    } else if failed {
+        ("failed", Value::Null)
+    } else if reply_skipped {
+        ("skipped", reply_skip_reason.clone())
+    } else if resolve_skipped {
+        ("skipped", resolve_skip_reason.clone())
+    } else {
+        ("posted", Value::Null)
     }
 }
 

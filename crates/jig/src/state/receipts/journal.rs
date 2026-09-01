@@ -109,14 +109,18 @@ fn with_receipt_journal_writer_after_open_until<T>(
         )?;
         lock_exclusive_until(&lock, "receipt journal", deadline, cancelled)?;
         if !journal_file_is_current(&directories.state, &legacy_lock)? {
+            drop(lock);
+            drop(legacy_lock);
             if cancelled() {
                 bail!("Execution was cancelled while retrying receipt journal lock identity");
             }
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 bail!(
                     "Timed out retrying receipt journal lock identity before its operation deadline"
                 );
             }
+            thread::sleep(RECEIPT_LOCK_POLL_INTERVAL.min(remaining));
             continue;
         }
 
@@ -473,6 +477,47 @@ mod tests {
         assert_eq!(
             fs::read(&journal_path).unwrap(),
             b"{\"id\":\"replacement\"}\n{\"id\":\"current\"}\n"
+        );
+    }
+
+    #[test]
+    fn receipt_writer_backs_off_across_repeated_inode_replacements() {
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let journal_path = temp.path().join(".agent/state/receipts.jsonl");
+        fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
+        fs::write(&journal_path, b"{\"id\":\"initial\"}\n").unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut open_count = 0_u32;
+        let replacement_count = 3_u32;
+        let started = Instant::now();
+
+        with_receipt_journal_writer_after_open_until(
+            &ctx,
+            Instant::now() + Duration::from_secs(2),
+            &|| false,
+            |_| {
+                open_count += 1;
+                if open_count <= replacement_count {
+                    let mut replacement =
+                        tempfile::NamedTempFile::new_in(journal_path.parent().unwrap()).unwrap();
+                    writeln!(replacement, "{{\"id\":\"replacement-{open_count}\"}}").unwrap();
+                    replacement.persist(&journal_path).unwrap();
+                }
+                Ok(())
+            },
+            |writer| writer.append(&json!({"id": "current"})),
+        )
+        .unwrap();
+
+        assert_eq!(open_count, replacement_count + 1);
+        assert!(
+            started.elapsed() >= RECEIPT_LOCK_POLL_INTERVAL * replacement_count,
+            "identity retries must use the bounded poll interval"
+        );
+        assert_eq!(
+            fs::read(&journal_path).unwrap(),
+            b"{\"id\":\"replacement-3\"}\n{\"id\":\"current\"}\n"
         );
     }
 

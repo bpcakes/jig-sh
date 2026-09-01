@@ -9,6 +9,39 @@ mod review_thread_boundary_tests {
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     #[test]
+    fn missing_thread_ids_are_rejected_before_deduplication() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let worker_output = json!({
+            "review_thread_replies": [
+                {"thread_id": "", "body": "reply"},
+                {"thread_id": "  ", "body": "reply"},
+            ],
+        });
+
+        let result = post_review_thread_updates(
+            &ctx,
+            &json!({}),
+            &worker_output,
+            "example-head",
+            &mut NoopExecutionObserver,
+        );
+
+        assert!(!result.failed);
+        assert_eq!(result.posts.as_array().unwrap().len(), 2);
+        assert!(
+            result.posts.as_array().unwrap().iter().all(|post| {
+                post["status"] == "skipped" && post["reason"] == "missing_review_thread"
+            }),
+            "{}",
+            result.posts
+        );
+    }
+
+    #[test]
     fn duplicate_intents_are_skipped_with_one_observed_thread() {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path())
@@ -378,6 +411,8 @@ esac
         );
 
         assert!(!result.failed, "{}", result.posts);
+        assert_eq!(result.posts[0]["status"], "skipped");
+        assert_eq!(result.posts[0]["reason"], "review_thread_changed");
         assert_eq!(result.posts[0]["resolved"], false);
         assert_eq!(result.posts[0]["resolve_skipped"], true);
         assert_eq!(

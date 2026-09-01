@@ -383,9 +383,10 @@ fn tick_with_execution(
     let active_scheduled_occurrence = (!execution.manual).then_some(execution.item_key.as_str());
     let runtime_state = TickRuntimeState::collect(
         ctx,
-        &mut lease_store,
-        &mut attempt_store,
+        &lease_store,
+        &attempt_store,
         active_scheduled_occurrence,
+        &|| observer.cancelled(),
     );
     if let Some(error) = runtime_state.error_text() {
         append_tick_error(&mut tick_error, error);
