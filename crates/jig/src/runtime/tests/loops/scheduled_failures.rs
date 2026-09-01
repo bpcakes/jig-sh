@@ -128,7 +128,9 @@ printf 'task complete\n'
     assert!(
         output["actions"][0]["tick"]["release_warning"]
             .as_str()
-            .is_some_and(|error| error.contains("Loop lease is no longer held")),
+            .is_some_and(|error| error.contains(
+                "Loop state migration marker exists without protected state"
+            )),
         "{output:#}"
     );
 }
