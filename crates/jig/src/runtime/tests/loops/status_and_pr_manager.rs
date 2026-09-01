@@ -273,6 +273,11 @@ JSON
     ;;
   "api graphql")
     case "$*" in
+      *ReviewThreadWitnessState*)
+        cat <<'JSON'
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":2,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}},{{"id":"PRRC_REPLY","updatedAt":"2026-07-08T10:04:00Z","body":"Addressed by the pushed fix."}}]}}}}}}}}
+JSON
+        ;;
       *ReviewThreadState*)
         if [ -f .agent/.cache/gh-replied ]; then
           cat <<'JSON'
@@ -378,7 +383,12 @@ exit 2
         codex_home.canonicalize().unwrap().display().to_string()
     );
     assert_eq!(output["actions"][0]["push"]["pushed"], true);
-    assert_eq!(output["actions"][0]["push"]["force"], false);
+    assert_eq!(output["actions"][0]["push"]["force"], true);
+    assert_eq!(output["actions"][0]["push"]["force_with_lease"], true);
+    assert_eq!(
+        output["actions"][0]["push"]["expected_remote_head"],
+        head_sha
+    );
     assert!(
         output["actions"][0]["reasons"]
             .as_array()
@@ -685,7 +695,7 @@ exit 2
 
 #[cfg(unix)]
 #[test]
-fn loop_tick_pr_manager_resolves_merge_conflict_without_force_push() {
+fn loop_tick_pr_manager_resolves_merge_conflict_with_expected_head_lease() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -777,7 +787,12 @@ exit 2
     assert_eq!(output["actions"][0]["status"], "attempted", "{output:#}");
     assert_eq!(output["actions"][0]["merge"]["conflicts"], true);
     assert_eq!(output["actions"][0]["push"]["pushed"], true);
-    assert_eq!(output["actions"][0]["push"]["force"], false);
+    assert_eq!(output["actions"][0]["push"]["force"], true);
+    assert_eq!(output["actions"][0]["push"]["force_with_lease"], true);
+    assert_eq!(
+        output["actions"][0]["push"]["expected_remote_head"],
+        head_sha
+    );
     assert!(
         output["actions"][0]["reasons"]
             .as_array()
