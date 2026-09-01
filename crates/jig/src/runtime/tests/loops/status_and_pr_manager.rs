@@ -274,9 +274,15 @@ JSON
   "api graphql")
     case "$*" in
       *ReviewThreadWitnessState*)
-        cat <<'JSON'
+        if [ -f .agent/.cache/gh-replied ]; then
+          cat <<'JSON'
 {{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":2,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}},{{"id":"PRRC_REPLY","updatedAt":"2026-07-08T10:04:00Z","body":"Addressed by the pushed fix."}}]}}}}}}}}
 JSON
+        else
+          cat <<'JSON'
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":1,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}}]}}}}}}}}
+JSON
+        fi
         ;;
       *ReviewThreadState*)
         if [ -f .agent/.cache/gh-replied ]; then
