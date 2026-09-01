@@ -430,6 +430,14 @@ exit 2
         output["actions"][0]["review_thread_posts"][1]["reason"],
         "unknown_review_thread"
     );
+    assert_eq!(
+        output["actions"][0]["review_thread_posts"][1]["reply_skipped"],
+        false
+    );
+    assert_eq!(
+        output["actions"][0]["review_thread_posts"][1]["reply_skip_reason"],
+        Value::Null
+    );
     assert_eq!(output["attempts"].as_array().unwrap().len(), 1);
     assert_eq!(output["attempts"][0]["item_key"], "pr-7");
     assert_eq!(
