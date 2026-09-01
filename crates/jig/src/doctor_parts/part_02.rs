@@ -71,6 +71,27 @@ fn required_tools_check_with_environment(
     )
 }
 
+fn resolve_required_program(
+    root: &Path,
+    program: &RequiredProgram,
+    captured_search_path: Option<&std::ffi::OsStr>,
+) -> ProgramPresence {
+    let search_path = match &program.path_lookup {
+        ProgramPathLookup::Explicit | ProgramPathLookup::Captured => captured_search_path,
+        ProgramPathLookup::CommandLocal(search_path) => Some(search_path.as_os_str()),
+        ProgramPathLookup::CapturedAfterCwdChange
+            if search_path_is_cwd_independent(captured_search_path) =>
+        {
+            captured_search_path
+        }
+        ProgramPathLookup::CapturedAfterCwdChange | ProgramPathLookup::Unverifiable => {
+            return ProgramPresence::Unverified;
+        }
+    };
+    resolve_program(root, &program.program, search_path)
+        .map_or(ProgramPresence::Missing, ProgramPresence::Present)
+}
+
 fn required_tools_check_with_environment_and_process_control(
     ctx: &RepoContext,
     environment: &DoctorEnvironment,
@@ -124,44 +145,11 @@ fn required_tools_check_with_environment_and_process_control(
                 .iter()
                 .map(|program_spec| {
                     let program = &program_spec.program;
-                    let presence = match &program_spec.path_lookup {
-                        ProgramPathLookup::Explicit | ProgramPathLookup::Captured => {
-                            match resolve_program(
-                                ctx.root(),
-                                program,
-                                environment.search_path.as_deref(),
-                            ) {
-                                Some(resolution) => ProgramPresence::Present(resolution),
-                                None => ProgramPresence::Missing,
-                            }
-                        }
-                        ProgramPathLookup::CommandLocal(search_path) => {
-                            match resolve_program(
-                                ctx.root(),
-                                program,
-                                Some(search_path.as_os_str()),
-                            ) {
-                                Some(resolution) => ProgramPresence::Present(resolution),
-                                None => ProgramPresence::Missing,
-                            }
-                        }
-                        ProgramPathLookup::CapturedAfterCwdChange
-                            if search_path_is_cwd_independent(
-                                environment.search_path.as_deref(),
-                            ) =>
-                        {
-                            match resolve_program(
-                                ctx.root(),
-                                program,
-                                environment.search_path.as_deref(),
-                            ) {
-                                Some(resolution) => ProgramPresence::Present(resolution),
-                                None => ProgramPresence::Missing,
-                            }
-                        }
-                        ProgramPathLookup::CapturedAfterCwdChange
-                        | ProgramPathLookup::Unverifiable => ProgramPresence::Unverified,
-                    };
+                    let presence = resolve_required_program(
+                        ctx.root(),
+                        program_spec,
+                        environment.search_path.as_deref(),
+                    );
                     let resolved = match &presence {
                         ProgramPresence::Present(resolution) => Some(resolution),
                         ProgramPresence::Missing | ProgramPresence::Unverified => None,

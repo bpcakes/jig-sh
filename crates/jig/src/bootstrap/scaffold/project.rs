@@ -192,65 +192,54 @@ mod tests {
     use super::super::InitScaffoldPlan;
     use super::*;
 
-    #[test]
-    fn existing_presets_dispatch_through_typed_project_variants() {
+    fn plan_for(preset: ScaffoldPreset, db: Option<ScaffoldDb>) -> Option<InitScaffoldPlan> {
         let destination = tempdir().unwrap();
-        let rust = InitScaffoldPlan::from_opts(
+        let answers = if preset == ScaffoldPreset::GoReact {
+            AnswerOpts {
+                go_module: Some("example.com/ExampleProject".into()),
+                ..AnswerOpts::default()
+            }
+        } else {
+            AnswerOpts::default()
+        };
+        InitScaffoldPlan::from_opts(
             &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustReact),
-                db: Some(ScaffoldDb::None),
+                preset: Some(preset),
+                db,
                 ..ScaffoldOpts::default()
             },
-            &AnswerOpts::default(),
+            &answers,
             destination.path(),
         )
         .unwrap()
-        .unwrap();
+    }
+
+    #[test]
+    fn rust_react_dispatches_to_typed_project() {
+        let rust = plan_for(ScaffoldPreset::RustReact, Some(ScaffoldDb::None)).unwrap();
         assert!(matches!(&rust.project, ScaffoldProjectPlan::RustReact(_)));
         assert_eq!(rust.identity(), ScaffoldIdentity::RustReact);
         assert_eq!(rust.database(), ScaffoldDb::None);
         assert_eq!(rust.frontends().len(), 1);
+    }
 
-        let go = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::GoReact),
-                db: Some(ScaffoldDb::Postgres),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts {
-                go_module: Some("example.com/ExampleProject".into()),
-                ..AnswerOpts::default()
-            },
-            destination.path(),
-        )
-        .unwrap()
-        .unwrap();
+    #[test]
+    fn go_react_dispatches_to_typed_project() {
+        let go = plan_for(ScaffoldPreset::GoReact, Some(ScaffoldDb::Postgres)).unwrap();
         assert!(matches!(&go.project, ScaffoldProjectPlan::GoReact(_)));
         assert_eq!(go.identity(), ScaffoldIdentity::GoReact);
         assert_eq!(go.database(), ScaffoldDb::Postgres);
         assert_eq!(go.frontends().len(), 1);
+    }
 
-        let harness = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::HarnessOnly),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts::default(),
-            destination.path(),
-        )
-        .unwrap();
-        assert!(harness.is_none());
+    #[test]
+    fn harness_only_has_no_project_plan() {
+        assert!(plan_for(ScaffoldPreset::HarnessOnly, None).is_none());
+    }
 
-        let library = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustLibrary),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts::default(),
-            destination.path(),
-        )
-        .unwrap()
-        .unwrap();
+    #[test]
+    fn rust_library_dispatches_to_typed_project() {
+        let library = plan_for(ScaffoldPreset::RustLibrary, None).unwrap();
         assert!(matches!(
             &library.project,
             ScaffoldProjectPlan::RustOnly(RustOnlyScaffoldPlan {
@@ -260,17 +249,11 @@ mod tests {
         assert_eq!(library.identity(), ScaffoldIdentity::RustLibrary);
         assert_eq!(library.database(), ScaffoldDb::None);
         assert!(library.frontends().is_empty());
+    }
 
-        let cli = InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustCli),
-                ..ScaffoldOpts::default()
-            },
-            &AnswerOpts::default(),
-            destination.path(),
-        )
-        .unwrap()
-        .unwrap();
+    #[test]
+    fn rust_cli_dispatches_to_typed_project() {
+        let cli = plan_for(ScaffoldPreset::RustCli, None).unwrap();
         assert!(matches!(
             &cli.project,
             ScaffoldProjectPlan::RustOnly(RustOnlyScaffoldPlan {

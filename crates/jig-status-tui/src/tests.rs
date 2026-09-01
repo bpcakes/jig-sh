@@ -438,7 +438,7 @@ fn package_detail_opens_scrolls_and_survives_a_stable_refresh() {
 }
 
 #[test]
-fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() {
+fn renderer_surfaces_progress_and_freshness() {
     let mut app = App::default();
     app.accept_snapshot(fixture());
 
@@ -449,6 +449,12 @@ fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() 
     assert!(overview.contains("Catalog is one"));
     assert!(overview.contains("revision behind"));
     assert!(overview.contains("no remote fetch"));
+}
+
+#[test]
+fn renderer_surfaces_packages_and_full_details() {
+    let mut app = App::default();
+    app.accept_snapshot(fixture());
 
     app.select_tab(Tab::Packages);
     let packages = render_text(&app, 120, 36);
@@ -470,7 +476,12 @@ fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() 
     assert!(detail.contains("Provider-specific details"));
     assert!(detail.contains("First acceptance criterion"));
     assert!(detail.contains("Esc/Enter back"));
-    app.close_package_detail();
+}
+
+#[test]
+fn renderer_surfaces_blockers() {
+    let mut app = App::default();
+    app.accept_snapshot(fixture());
 
     app.select_tab(Tab::Blockers);
     let blockers = render_text(&app, 120, 36);
@@ -478,13 +489,22 @@ fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() 
     assert!(blockers.contains("Blocker queue (1)"));
     assert!(blocker_text.contains("WP-000 must be verified first"));
     assert!(blockers.contains("docs/packages.md:12:3"));
+}
+
+#[test]
+fn renderer_surfaces_failed_providers() {
+    let mut app = App::default();
+    app.accept_snapshot(fixture());
 
     app.switch_provider(false);
     app.select_tab(Tab::Overview);
     let failed = render_text(&app, 120, 36);
     assert!(failed.contains("Provider timed_out"));
     assert!(failed.contains("last diagnostic [truncated]"));
+}
 
+#[test]
+fn renderer_surfaces_an_empty_provider_list() {
     let mut empty = fixture();
     empty["providers"] = json!([]);
     empty["errors"] = json!([]);
@@ -492,6 +512,12 @@ fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() 
     empty_app.accept_snapshot(empty);
     let empty = render_text(&empty_app, 120, 36);
     assert!(empty.contains("No status providers are configured."));
+}
+
+#[test]
+fn renderer_surfaces_small_terminal_requirements() {
+    let mut app = App::default();
+    app.accept_snapshot(fixture());
 
     let small = render_text(&app, 60, 15);
     assert!(small.contains("Terminal too small: 60x15"));

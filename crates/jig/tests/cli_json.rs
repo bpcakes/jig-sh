@@ -19,6 +19,10 @@ use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use support::tempdir;
 
+#[path = "cli_json_parts/cognitive_helpers.rs"]
+mod cognitive_helpers;
+use cognitive_helpers::*;
+
 fn jig() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
     command
@@ -462,63 +466,9 @@ fn info_commands_sqlx_remediation_preserves_minimal_custom_template_identity() {
         .join("../..")
         .canonicalize()
         .unwrap();
-    let clone = Command::new("git")
-        .args(["clone", "--quiet", "--local", "--no-hardlinks"])
-        .arg(&workspace)
-        .arg(&template)
-        .status()
-        .unwrap();
-    assert!(clone.success());
-    let template_patch = Command::new("git")
-        .current_dir(&workspace)
-        .args(["diff", "--binary", "HEAD", "--", "templates"])
-        .output()
-        .unwrap();
-    assert!(template_patch.status.success());
-    if !template_patch.stdout.is_empty() {
-        let mut apply = Command::new("git")
-            .current_dir(&template)
-            .args(["apply", "--binary", "-"])
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap();
-        apply
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(&template_patch.stdout)
-            .unwrap();
-        assert!(apply.wait().unwrap().success());
-        for args in [
-            &["config", "user.email", "reviewer@example.invalid"][..],
-            &["config", "user.name", "ExampleReviewer"],
-            &["add", "templates"],
-            &[
-                "commit",
-                "--quiet",
-                "-m",
-                "Synthetic current template snapshot",
-            ],
-        ] {
-            assert!(
-                Command::new("git")
-                    .current_dir(&template)
-                    .args(args)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        }
-    }
+    prepare_current_template(&template, &workspace);
     let canonical_template = template.canonicalize().unwrap();
-    let commit = Command::new("git")
-        .current_dir(&template)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    assert!(commit.status.success());
-    let commit = String::from_utf8(commit.stdout).unwrap();
-    let commit = commit.trim();
+    let commit = template_commit(&template);
     let portable_source = "https://example.invalid/team/custom-jig.git";
 
     let repo = tempdir().unwrap();
@@ -559,20 +509,7 @@ marketplaces = []
         .args(["info", "--commands", "--json"])
         .output()
         .unwrap();
-    assert!(inventory.status.success());
-    let inventory: Value = serde_json::from_slice(&inventory.stdout).unwrap();
-    let next_step = command_by_name(&inventory, "sqlx")["next_step"]
-        .as_str()
-        .unwrap();
-    let mut commands = next_step.split('`');
-    let preview = commands.nth(1).unwrap();
-    let apply = commands.nth(1).unwrap();
-    assert!(preview.contains("--minimal"));
-    assert!(preview.contains("--template"));
-    assert!(preview.contains("--template-mode committed"));
-    assert!(preview.contains(&format!("--vcs-ref {commit}")));
-    assert!(preview.contains(&format!("--template-source-url {portable_source}")));
-    assert!(apply.contains("--force --write"));
+    let (preview, apply) = remediation_commands(&inventory, &commit, portable_source);
 
     let jig_bin = Path::new(env!("CARGO_BIN_EXE_jig"));
     let binary_dir = jig_bin.parent().unwrap();
@@ -590,20 +527,7 @@ marketplaces = []
         .output()
         .unwrap();
 
-    assert!(
-        preview.status.success(),
-        "status: {}\nstdout:\n{}\nstderr:\n{}",
-        preview.status,
-        String::from_utf8_lossy(&preview.stdout),
-        String::from_utf8_lossy(&preview.stderr)
-    );
-    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
-    assert_eq!(preview["render_mode"], "preview");
-    assert_eq!(preview["harness_footprint"], "minimal");
-    assert_eq!(
-        preview["template"],
-        canonical_template.display().to_string()
-    );
+    assert_bootstrap_report(&preview, "preview", &canonical_template);
 
     let apply = Command::new("/bin/sh")
         .current_dir(repo.path())
@@ -613,24 +537,9 @@ marketplaces = []
         .arg(format!("{apply} --no-input --no-vault --json"))
         .output()
         .unwrap();
-    assert!(
-        apply.status.success(),
-        "status: {}\nstdout:\n{}\nstderr:\n{}",
-        apply.status,
-        String::from_utf8_lossy(&apply.stdout),
-        String::from_utf8_lossy(&apply.stderr)
-    );
-    let apply: Value = serde_json::from_slice(&apply.stdout).unwrap();
-    assert_eq!(apply["render_mode"], "copy");
-    assert_eq!(apply["harness_footprint"], "minimal");
-    assert_eq!(apply["template"], canonical_template.display().to_string());
+    assert_bootstrap_report(&apply, "copy", &canonical_template);
     let config = fs::read_to_string(repo.path().join(".jig.toml")).unwrap();
-    assert!(config.contains("harness_footprint = \"minimal\""));
-    assert!(config.contains(&format!("_src_path = {portable_source:?}")));
-    assert!(config.contains(&format!(
-        "_template_local_path = {:?}",
-        canonical_template.display().to_string()
-    )));
+    assert_minimal_template_identity(&config, portable_source, &canonical_template);
 }
 
 #[test]
@@ -667,66 +576,9 @@ fn rust_library_init_has_exact_json_and_human_process_summaries() {
         ])
         .output()
         .unwrap();
-    assert!(
-        json_output.status.success(),
-        "status: {}\nstdout:\n{}\nstderr:\n{}",
-        json_output.status,
-        String::from_utf8_lossy(&json_output.stdout),
-        String::from_utf8_lossy(&json_output.stderr)
-    );
-    let json_report: Value = serde_json::from_slice(&json_output.stdout).unwrap();
-    assert_eq!(json_report["ok"], true);
-    assert_eq!(json_report["scaffold"]["preset"], "rust-library");
-    assert_eq!(json_report["scaffold"]["db"], "none");
-    assert_eq!(json_report["scaffold"]["frontends"], json!([]));
-    assert_eq!(
-        json_report["scaffold"]["files_created"]
-            .as_array()
-            .unwrap()
-            .len(),
-        5
-    );
-    assert!(
-        json_report["next_steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|step| step.as_str() != Some("scripts/jig dev"))
-    );
-    let notes = json_report["notes"].as_array().unwrap();
-    assert!(notes.iter().any(|note| {
-        note.as_str()
-            .is_some_and(|note| note.contains("Scaffolded project code is project-owned"))
-    }));
-    assert!(notes.iter().all(|note| {
-        !note
-            .as_str()
-            .is_some_and(|note| note.contains("Scaffolded application code"))
-    }));
-    let config = fs::read_to_string(json_destination.join(".jig.toml")).unwrap();
-    let config = toml::from_str::<toml::Value>(&config).unwrap();
-    assert_eq!(config["dev"]["proxy_port"].as_integer(), Some(1355));
-    assert_eq!(config["dev"]["https_port"].as_integer(), Some(1443));
-    assert_eq!(config["dev"]["https"].as_bool(), Some(false));
-    assert_eq!(config["dev"]["http2"].as_bool(), Some(true));
-    assert_eq!(config["dev"]["lan"].as_bool(), Some(false));
-    assert_eq!(config["dev"]["tld"].as_str(), Some("localhost"));
-    assert_eq!(config["dev"]["workspace_discovery"].as_bool(), Some(false));
-
-    for check in ["contract", "agent-map", "agent-guides"] {
-        let output = jig()
-            .current_dir(&json_destination)
-            .args(["check", check])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "jig check {check} failed with {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    assert_rust_library_json(&json_output);
+    assert_rust_library_dev_defaults(&json_destination);
+    assert_rust_library_checks(&json_destination);
 
     let human_destination = destinations.path().join("ExampleLibraryHuman");
     let human_output = jig()
@@ -744,20 +596,7 @@ fn rust_library_init_has_exact_json_and_human_process_summaries() {
         ])
         .output()
         .unwrap();
-    assert!(
-        human_output.status.success(),
-        "status: {}\nstdout:\n{}\nstderr:\n{}",
-        human_output.status,
-        String::from_utf8_lossy(&human_output.stdout),
-        String::from_utf8_lossy(&human_output.stderr)
-    );
-    let human = String::from_utf8(human_output.stdout).unwrap();
-    assert!(human.contains("scaffold: rust-library for examplelibraryhuman (db: none)"));
-    assert!(human.contains("scaffold files: 5 created, 0 modified, 0 unchanged"));
-    assert!(human.contains("Scaffolded project code is project-owned"));
-    assert!(!human.contains("Scaffolded application code"));
-    assert!(!human.contains("frontends:"));
-    assert!(!human.contains("scripts/jig dev"));
+    assert_rust_library_human(&human_output);
 }
 
 #[test]

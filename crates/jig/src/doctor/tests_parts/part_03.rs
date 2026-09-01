@@ -31,6 +31,28 @@ fn shell_parser_preserves_assignment_name_and_io_number_provenance() {
     }
 }
 
+fn assert_inert_heredoc(command: &str) {
+    let discovery = required_command_programs_for_shell(command);
+    assert!(discovery.ambiguity.is_none(), "{command:?}");
+    assert_eq!(discovery.programs[0].program, "cat", "{command:?}");
+    assert_eq!(
+        discovery.programs[0].path_lookup,
+        ProgramPathLookup::Captured,
+        "{command:?}",
+    );
+}
+
+fn assert_heredoc_selects_sqlite(root: &Path, command: &str, programs: &[&str]) {
+    assert_eq!(command_programs_for_shell(command), programs);
+    assert_eq!(
+        configured_sqlx_driver(root, command, None),
+        SqlxDriverResolution::Known(SqlxDriverRequirement {
+            driver: SqlxDriver::Sqlite,
+            source: SqlxDriverSource::CommandFlag,
+        })
+    );
+}
+
 #[test]
 fn shell_parser_ignores_heredoc_bodies() {
     let temp = tempdir().unwrap();
@@ -55,69 +77,25 @@ fn shell_parser_ignores_heredoc_bodies() {
         "cat <<\\EOF\n$(missing-helper)\nEOF",
         "cat <<EOF\n\\$(missing-helper)\nEOF",
     ] {
-        let discovery = required_command_programs_for_shell(inert);
-        assert!(discovery.ambiguity.is_none(), "{inert:?}");
-        assert_eq!(discovery.programs[0].program, "cat", "{inert:?}");
-        assert_eq!(
-            discovery.programs[0].path_lookup,
-            ProgramPathLookup::Captured,
-            "{inert:?}",
-        );
+        assert_inert_heredoc(inert);
     }
 
     let command = "cat <<'PAYLOAD'\nDATABASE_URL=postgres://body-secret cargo sqlx prepare -D postgres://body-secret\nPAYLOAD\ncargo sqlx prepare -D sqlite:actual.db";
 
-    assert_eq!(command_programs_for_shell(command), vec!["cat", "cargo"]);
-    assert_eq!(
-        configured_sqlx_driver(temp.path(), command, None),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandFlag,
-        })
-    );
+    assert_heredoc_selects_sqlite(temp.path(), command, &["cat", "cargo"]);
 
     let tab_stripped = "cat <<-EOF\n\tcargo sqlx prepare -D postgres://ignored\n\tEOF\nsqlx prepare -D sqlite:actual.db";
-    assert_eq!(
-        command_programs_for_shell(tab_stripped),
-        vec!["cat", "sqlx"]
-    );
-    assert_eq!(
-        configured_sqlx_driver(temp.path(), tab_stripped, None),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandFlag,
-        })
-    );
+    assert_heredoc_selects_sqlite(temp.path(), tab_stripped, &["cat", "sqlx"]);
 
     for tab_stripped in [
         "cat <<- EOF\n\tcargo sqlx prepare -D postgres://ignored\n\tEOF\nsqlx prepare -D sqlite:actual.db",
         "cat <<-EOF\n\tcargo sqlx prepare -D postgres://ignored\n\tEOF\nsqlx prepare -D sqlite:actual.db",
     ] {
-        assert_eq!(
-            command_programs_for_shell(tab_stripped),
-            vec!["cat", "sqlx"]
-        );
-        assert_eq!(
-            configured_sqlx_driver(temp.path(), tab_stripped, None),
-            SqlxDriverResolution::Known(SqlxDriverRequirement {
-                driver: SqlxDriver::Sqlite,
-                source: SqlxDriverSource::CommandFlag,
-            })
-        );
+        assert_heredoc_selects_sqlite(temp.path(), tab_stripped, &["cat", "sqlx"]);
     }
 
     let multiple_crlf = "cat <<ONE <<-'TWO'\r\ncargo sqlx prepare -D postgres://first\r\nONE\r\n\tcargo sqlx prepare -D postgres://second\r\n\tTWO\r\nsqlx prepare -D sqlite:actual.db";
-    assert_eq!(
-        command_programs_for_shell(multiple_crlf),
-        vec!["cat", "sqlx"]
-    );
-    assert_eq!(
-        configured_sqlx_driver(temp.path(), multiple_crlf, None),
-        SqlxDriverResolution::Known(SqlxDriverRequirement {
-            driver: SqlxDriver::Sqlite,
-            source: SqlxDriverSource::CommandFlag,
-        })
-    );
+    assert_heredoc_selects_sqlite(temp.path(), multiple_crlf, &["cat", "sqlx"]);
 
     let unterminated = "cat <<EOF\ncargo sqlx prepare -D postgres://body-secret";
     assert_eq!(command_programs_for_shell(unterminated), vec!["cat"]);

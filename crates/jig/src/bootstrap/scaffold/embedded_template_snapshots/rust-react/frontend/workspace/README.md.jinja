@@ -89,6 +89,11 @@ scripts/jig check clippy
 scripts/jig check contract
 ```
 
+[% if backend_language == "rust" %]
+The workspace enables Clippy's `cognitive_complexity` restriction lint with a threshold of 20. Clippy describes this score as a heuristic rather than an objective complexity measurement. The strict `scripts/jig check clippy` command treats all warnings as failures. The root Cargo and Clippy configuration is project-owned after init, so adjust or remove this policy when it does not fit the codebase.
+
+[% endif %]
+
 Enabled frontend workspaces:[% for frontend in frontends %]
 
 - `<<[ frontend.dir ]>>` (`<<[ frontend.name ]>>`)[% endfor %]

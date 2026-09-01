@@ -620,6 +620,20 @@ fn queued_runs_keep_a_stable_lease_inode_after_reconciliation() {
 }
 
 #[test]
+fn dropping_a_run_lease_unlocks_before_inherited_descriptors_close() {
+    let (_temp, ctx) = context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let inherited_descriptor = lease._file.try_clone().unwrap();
+
+    drop(lease);
+    let recovered = reconcile_run_for_inspection(&ctx, &started.result.run_id).unwrap();
+
+    assert_eq!(recovered.result.status, RunStatus::Completed);
+    assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
+    drop(inherited_descriptor);
+}
+
+#[test]
 fn concurrent_reconciliation_appends_one_terminal_event() {
     use std::sync::{Arc, Barrier};
 

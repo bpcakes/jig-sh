@@ -74,6 +74,7 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
         scaffold,
         &[
             "Cargo.toml",
+            "clippy.toml",
             "apps/exampleproject-api/src/main.rs",
             "crates/exampleproject/src/lib.rs",
             "crates/exampleproject-core/src/lib.rs",
@@ -103,6 +104,14 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
             "crates/exampleproject-test-support",
         ]
         .map(|member| toml::Value::String(member.into()))
+    );
+    assert_eq!(
+        cargo["workspace"]["lints"]["clippy"]["cognitive_complexity"].as_str(),
+        Some("warn")
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("clippy.toml")).unwrap(),
+        "cognitive-complexity-threshold = 20\n"
     );
 }
 

@@ -212,7 +212,7 @@ fn parses_hidden_sqlx_todo_generator_for_compatibility() {
 }
 
 #[test]
-fn parses_prompt_registry_commands() {
+fn parses_prompt_get_copy_and_aliases() {
     let get = Cli::try_parse_from([
         "jig",
         "prompt",
@@ -229,23 +229,20 @@ fn parses_prompt_registry_commands() {
         }
         other => panic!("expected prompt get command, got {other:?}"),
     }
-
     let cat = Cli::try_parse_from(["jig", "prompt", "cat", "review-loop"]).unwrap();
     match cat.command {
-        CommandKind::Prompt(PromptCommand::Get(opts)) => {
-            assert_eq!(opts.name, "review-loop");
-        }
+        CommandKind::Prompt(PromptCommand::Get(opts)) => assert_eq!(opts.name, "review-loop"),
         other => panic!("expected prompt get command from cat alias, got {other:?}"),
     }
-
     let cp = Cli::try_parse_from(["jig", "prompt", "cp", "review-loop"]).unwrap();
     match cp.command {
-        CommandKind::Prompt(PromptCommand::Copy(opts)) => {
-            assert_eq!(opts.name, "review-loop");
-        }
+        CommandKind::Prompt(PromptCommand::Copy(opts)) => assert_eq!(opts.name, "review-loop"),
         other => panic!("expected prompt copy command from cp alias, got {other:?}"),
     }
+}
 
+#[test]
+fn parses_prompt_add_and_new_forms() {
     let add = Cli::try_parse_from([
         "jig",
         "prompt",
@@ -268,7 +265,6 @@ fn parses_prompt_registry_commands() {
         }
         other => panic!("expected prompt add command, got {other:?}"),
     }
-
     let new = Cli::try_parse_from(["jig", "prompt", "new", "review-loop", "body"]).unwrap();
     match new.command {
         CommandKind::Prompt(PromptCommand::Add(opts)) => {
@@ -278,69 +274,58 @@ fn parses_prompt_registry_commands() {
         }
         other => panic!("expected prompt add command from new alias, got {other:?}"),
     }
-
-    let new_no_editor =
+    let no_editor =
         Cli::try_parse_from(["jig", "prompt", "new", "review-loop", "--no-editor"]).unwrap();
-    match new_no_editor.command {
+    match no_editor.command {
         CommandKind::Prompt(PromptCommand::Add(opts)) => {
             assert_eq!(opts.name.as_deref(), Some("review-loop"));
             assert_eq!(opts.body, None);
             assert!(opts.no_editor);
         }
-        other => {
-            panic!("expected prompt add command from new alias with --no-editor, got {other:?}")
-        }
+        other => panic!("expected prompt new --no-editor, got {other:?}"),
     }
+}
 
-    let edit_no_editor =
+#[test]
+fn parses_prompt_interactive_add_and_edit() {
+    let edit =
         Cli::try_parse_from(["jig", "prompt", "edit", "review-loop", "--no-editor"]).unwrap();
-    match edit_no_editor.command {
+    match edit.command {
         CommandKind::Prompt(PromptCommand::Edit(opts)) => {
             assert_eq!(opts.name, "review-loop");
             assert!(opts.no_editor);
         }
-        other => panic!("expected prompt edit command with --no-editor, got {other:?}"),
+        other => panic!("expected prompt edit command, got {other:?}"),
     }
-
-    let interactive_add = Cli::try_parse_from(["jig", "prompt", "add"]).unwrap();
-    match interactive_add.command {
-        CommandKind::Prompt(PromptCommand::Add(opts)) => {
-            assert_eq!(opts.name, None);
-            assert_eq!(opts.body, None);
-            assert_eq!(opts.file, None);
-            assert!(!opts.no_editor);
+    for (args, expected_name) in [
+        (&["jig", "prompt", "add"][..], None),
+        (
+            &["jig", "prompt", "add", "review-loop"][..],
+            Some("review-loop"),
+        ),
+    ] {
+        let cli = Cli::try_parse_from(args).unwrap();
+        match cli.command {
+            CommandKind::Prompt(PromptCommand::Add(opts)) => {
+                assert_eq!(opts.name.as_deref(), expected_name);
+                assert_eq!(opts.body, None);
+                assert_eq!(opts.file, None);
+                assert!(!opts.no_editor);
+            }
+            other => panic!("expected interactive prompt add, got {other:?}"),
         }
-        other => panic!("expected prompt add command, got {other:?}"),
     }
+}
 
-    let named_interactive_add =
-        Cli::try_parse_from(["jig", "prompt", "add", "review-loop"]).unwrap();
-    match named_interactive_add.command {
-        CommandKind::Prompt(PromptCommand::Add(opts)) => {
-            assert_eq!(opts.name.as_deref(), Some("review-loop"));
-            assert_eq!(opts.body, None);
-            assert_eq!(opts.file, None);
-            assert!(!opts.no_editor);
+#[test]
+fn parses_prompt_list_search_and_remove_aliases() {
+    for command in ["list", "ls"] {
+        let cli = Cli::try_parse_from(["jig", "prompt", command, "--no-packs"]).unwrap();
+        match cli.command {
+            CommandKind::Prompt(PromptCommand::List(opts)) => assert!(opts.no_packs),
+            other => panic!("expected prompt list command, got {other:?}"),
         }
-        other => panic!("expected prompt add command, got {other:?}"),
     }
-
-    let list_without_packs = Cli::try_parse_from(["jig", "prompt", "list", "--no-packs"]).unwrap();
-    match list_without_packs.command {
-        CommandKind::Prompt(PromptCommand::List(opts)) => {
-            assert!(opts.no_packs);
-        }
-        other => panic!("expected prompt list command, got {other:?}"),
-    }
-
-    let ls = Cli::try_parse_from(["jig", "prompt", "ls", "--no-packs"]).unwrap();
-    match ls.command {
-        CommandKind::Prompt(PromptCommand::List(opts)) => {
-            assert!(opts.no_packs);
-        }
-        other => panic!("expected prompt list command from ls alias, got {other:?}"),
-    }
-
     let find = Cli::try_parse_from(["jig", "prompt", "find", "review", "--body"]).unwrap();
     match find.command {
         CommandKind::Prompt(PromptCommand::Search(opts)) => {
@@ -349,12 +334,9 @@ fn parses_prompt_registry_commands() {
         }
         other => panic!("expected prompt search command from find alias, got {other:?}"),
     }
-
     let rm = Cli::try_parse_from(["jig", "prompt", "rm", "review-loop"]).unwrap();
     match rm.command {
-        CommandKind::Prompt(PromptCommand::Remove(opts)) => {
-            assert_eq!(opts.name, "review-loop");
-        }
+        CommandKind::Prompt(PromptCommand::Remove(opts)) => assert_eq!(opts.name, "review-loop"),
         other => panic!("expected prompt remove command from rm alias, got {other:?}"),
     }
 }

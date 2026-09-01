@@ -2,6 +2,8 @@
 use std::fs::{self, File};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -266,7 +268,19 @@ fn authenticated_tampered_audit_fails_and_cleans_owned_staging() {
 fn creates_and_restores_private_complete_vault() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let source_home = temp.path().join("source-vault");
+    let (source_home, source) = initialized_backup_source(temp.path());
+
+    assert_create_race_is_non_destructive(temp.path(), &source_home, &source);
+    let (output, created, source_audit) = create_private_backup(temp.path(), source_home, &source);
+    assert_backup_create_preflight_rejections(temp.path(), &source, &output, &source_audit);
+    assert_backup_ciphertext_is_random(temp.path(), &source, &output);
+    assert_restore_rejections(temp.path(), &output, created.created_at_ms);
+    assert_restore_round_trip(temp.path(), &output);
+}
+
+#[cfg(target_os = "linux")]
+fn initialized_backup_source(temp: &Path) -> (PathBuf, Vault) {
+    let source_home = temp.join("source-vault");
     let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
     source.init(&test_passphrase()).unwrap();
     source
@@ -279,10 +293,14 @@ fn creates_and_restores_private_complete_vault() {
             )],
         )
         .unwrap();
+    (source_home, source)
+}
 
-    let raced_output = temp.path().join("raced-output.backup");
+#[cfg(target_os = "linux")]
+fn assert_create_race_is_non_destructive(temp: &Path, source_home: &Path, source: &Vault) {
+    let raced_output = temp.join("raced-output.backup");
     let raced_request =
-        Vault::preflight_backup_create(source_home.clone(), &raced_output, false).unwrap();
+        Vault::preflight_backup_create(source_home.to_path_buf(), &raced_output, false).unwrap();
     let audit_path = source.root().join("audit.jsonl");
     let racer_output = raced_output.clone();
     let racer = std::thread::spawn(move || {
@@ -318,8 +336,15 @@ fn creates_and_restores_private_complete_vault() {
         raced_events[0].details["operation_id"],
         raced_events[1].details["operation_id"]
     );
+}
 
-    let output = temp.path().join("vault.backup");
+#[cfg(target_os = "linux")]
+fn create_private_backup(
+    temp: &Path,
+    source_home: PathBuf,
+    source: &Vault,
+) -> (PathBuf, BackupCreateResult, Vec<u8>) {
+    let output = temp.join("vault.backup");
     let request = Vault::preflight_backup_create(source_home, &output, false).unwrap();
     let created = Vault::create_backup(&test_passphrase(), request).unwrap();
     assert_eq!(created.backup_version, BACKUP_FORMAT_VERSION);
@@ -361,10 +386,18 @@ fn creates_and_restores_private_complete_vault() {
     let audit_text = String::from_utf8(source_audit_after_create.clone()).unwrap();
     assert!(!audit_text.contains("backup-secret-sentinel"));
     assert!(!audit_text.contains(output.to_string_lossy().as_ref()));
+    (output, created, source_audit_after_create)
+}
 
-    let before_refusal = source_audit_after_create;
+#[cfg(target_os = "linux")]
+fn assert_backup_create_preflight_rejections(
+    temp: &Path,
+    source: &Vault,
+    output: &Path,
+    before_refusal: &[u8],
+) {
     let collision =
-        Vault::preflight_backup_create(source.root().to_path_buf(), &output, false).unwrap_err();
+        Vault::preflight_backup_create(source.root().to_path_buf(), output, false).unwrap_err();
     assert_eq!(collision.kind(), VaultErrorKind::AlreadyExists);
     assert_eq!(
         fs::read(source.root().join("audit.jsonl")).unwrap(),
@@ -381,7 +414,7 @@ fn creates_and_restores_private_complete_vault() {
         "backup output must be outside the source vault home"
     );
 
-    let hardlink = temp.path().join("source-hardlink.backup");
+    let hardlink = temp.join("source-hardlink.backup");
     fs::hard_link(source.root().join("vault.json"), &hardlink).unwrap();
     let alias_error =
         Vault::preflight_backup_create(source.root().to_path_buf(), &hardlink, true).unwrap_err();
@@ -391,20 +424,26 @@ fn creates_and_restores_private_complete_vault() {
         "backup output must not alias a source vault file"
     );
     fs::remove_file(&hardlink).unwrap();
+}
 
-    let output_two = temp.path().join("vault-two.backup");
+#[cfg(target_os = "linux")]
+fn assert_backup_ciphertext_is_random(temp: &Path, source: &Vault, output: &Path) {
+    let output_two = temp.join("vault-two.backup");
     let request =
         Vault::preflight_backup_create(source.root().to_path_buf(), &output_two, false).unwrap();
     Vault::create_backup(&test_passphrase(), request).unwrap();
-    assert_ne!(fs::read(&output).unwrap(), fs::read(&output_two).unwrap());
+    assert_ne!(fs::read(output).unwrap(), fs::read(&output_two).unwrap());
+}
 
-    let wrong_target = temp.path().join("wrong-pass-target");
-    let request = Vault::preflight_backup_restore(&output, wrong_target.clone()).unwrap();
+#[cfg(target_os = "linux")]
+fn assert_restore_rejections(temp: &Path, output: &Path, created_at_ms: i128) {
+    let wrong_target = temp.join("wrong-pass-target");
+    let request = Vault::preflight_backup_restore(output, wrong_target.clone()).unwrap();
     let wrong = SecretString::from("different backup passphrase".to_owned());
     let error = Vault::restore_backup(&wrong, request).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::Authentication);
     assert!(!wrong_target.exists());
-    assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+    assert!(!fs::read_dir(temp).unwrap().any(|entry| {
         entry
             .unwrap()
             .file_name()
@@ -413,30 +452,33 @@ fn creates_and_restores_private_complete_vault() {
     }));
 
     let mut tampered: serde_json::Value =
-        serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-    tampered["header"]["created_at_ms"] = serde_json::json!(created.created_at_ms + 1);
-    let tampered_path = temp.path().join("tampered.backup");
+        serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+    tampered["header"]["created_at_ms"] = serde_json::json!(created_at_ms + 1);
+    let tampered_path = temp.join("tampered.backup");
     fs::write(
         &tampered_path,
         serde_json::to_vec_pretty(&tampered).unwrap(),
     )
     .unwrap();
-    let tampered_target = temp.path().join("tampered-target");
+    let tampered_target = temp.join("tampered-target");
     let request = Vault::preflight_backup_restore(&tampered_path, tampered_target.clone()).unwrap();
     let error = Vault::restore_backup(&test_passphrase(), request).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::Authentication);
     assert!(!tampered_target.exists());
 
-    let raced_target = temp.path().join("raced-target");
-    let request = Vault::preflight_backup_restore(&output, raced_target.clone()).unwrap();
+    let raced_target = temp.join("raced-target");
+    let request = Vault::preflight_backup_restore(output, raced_target.clone()).unwrap();
     fs::create_dir(&raced_target).unwrap();
     fs::write(raced_target.join("marker"), b"unchanged").unwrap();
     let error = Vault::restore_backup(&test_passphrase(), request).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
     assert_eq!(fs::read(raced_target.join("marker")).unwrap(), b"unchanged");
+}
 
-    let target = temp.path().join("restored-vault");
-    let request = Vault::preflight_backup_restore(&output, target.clone()).unwrap();
+#[cfg(target_os = "linux")]
+fn assert_restore_round_trip(temp: &Path, output: &Path) {
+    let target = temp.join("restored-vault");
+    let request = Vault::preflight_backup_restore(output, target.clone()).unwrap();
     let restored = Vault::restore_backup(&test_passphrase(), request).unwrap();
     assert_eq!(restored.root, target);
     assert_eq!(restored.format_version, FORMAT_VERSION);

@@ -69,35 +69,13 @@ fn shell_command_name(words: &[ShellWord]) -> ShellCommandName {
         let shell_builtin_dispatch = !force_external && bash_builtin(&word);
         let shell_keyword_dispatch =
             !force_external && allow_keyword && shell_word_is_keyword(&words[index]);
-        let wrapper = if shell_builtin_dispatch {
-            match word.as_str() {
-                "builtin" => Some((
-                    ShellWrapperKind::Builtin,
-                    builtin_wrapper_target(words, index + 1),
-                )),
-                "command" => Some((
-                    ShellWrapperKind::Command,
-                    command_wrapper_target(words, index + 1),
-                )),
-                "exec" => Some((
-                    ShellWrapperKind::Exec,
-                    exec_wrapper_target(words, index + 1),
-                )),
-                _ => None,
-            }
-        } else if executable_is_named(&word, "nohup") {
-            Some((
-                ShellWrapperKind::Nohup,
-                nohup_wrapper_target(words, index + 1),
-            ))
-        } else if !shell_keyword_dispatch && executable_is_named(&word, "time") {
-            Some((
-                ShellWrapperKind::Time,
-                time_wrapper_target(words, index + 1),
-            ))
-        } else {
-            None
-        };
+        let wrapper = shell_wrapper(
+            words,
+            index,
+            &word,
+            shell_builtin_dispatch,
+            shell_keyword_dispatch,
+        );
         if let Some((wrapper_kind, wrapper_target)) = wrapper {
             if wrapper_kind.is_external() {
                 external_wrappers.push(ExternalWrapperReference {
@@ -224,6 +202,44 @@ fn shell_command_name(words: &[ShellWord]) -> ShellCommandName {
         external_wrappers,
         changes_cwd,
     }
+}
+
+fn shell_wrapper(
+    words: &[ShellWord],
+    index: usize,
+    word: &str,
+    shell_builtin_dispatch: bool,
+    shell_keyword_dispatch: bool,
+) -> Option<(ShellWrapperKind, WrapperTarget)> {
+    if shell_builtin_dispatch {
+        return match word {
+            "builtin" => Some((
+                ShellWrapperKind::Builtin,
+                builtin_wrapper_target(words, index + 1),
+            )),
+            "command" => Some((
+                ShellWrapperKind::Command,
+                command_wrapper_target(words, index + 1),
+            )),
+            "exec" => Some((
+                ShellWrapperKind::Exec,
+                exec_wrapper_target(words, index + 1),
+            )),
+            _ => None,
+        };
+    }
+    if executable_is_named(word, "nohup") {
+        return Some((
+            ShellWrapperKind::Nohup,
+            nohup_wrapper_target(words, index + 1),
+        ));
+    }
+    (!shell_keyword_dispatch && executable_is_named(word, "time")).then(|| {
+        (
+            ShellWrapperKind::Time,
+            time_wrapper_target(words, index + 1),
+        )
+    })
 }
 
 fn shell_command_has_ambiguous_wrapper(words: &[ShellWord]) -> bool {

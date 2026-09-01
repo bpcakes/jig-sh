@@ -39,6 +39,7 @@ fn run_init_rust_react_scaffold_omits_admin_contract_without_admin_frontend() {
 
     let workspace_cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
     assert!(workspace_cargo.contains("rust-version = \"1.94\""));
+    assert_generated_rust_clippy_defaults(&destination);
     assert!(!workspace_cargo.contains("sqlx ="));
     let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
     assert!(root_readme.contains("Prerequisites: Rust 1.94 or newer"));

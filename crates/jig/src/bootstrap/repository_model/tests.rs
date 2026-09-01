@@ -47,6 +47,114 @@ fn rust_workspace_answers() -> RenderAnswers {
         .0
 }
 
+fn assert_go_backend_targets(model: &RepositoryRenderModel) {
+    assert!(model.go_ci_input_paths().contains(&"**".into()));
+    assert!(model.go_ci_input_paths().contains(&"**/*.go".into()));
+    assert!(
+        model
+            .components
+            .iter()
+            .any(|component| component.id.as_str() == "api"
+                && component.adapters == ["go", "go-postgres"])
+    );
+    for target in ["api:test", "web:test", "admin:test"] {
+        assert!(
+            model
+                .actions
+                .iter()
+                .any(|action| action.target.to_string() == target),
+            "missing {target}"
+        );
+    }
+}
+
+fn assert_go_database_inputs(model: &RepositoryRenderModel) {
+    let migration = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "api:migration-add")
+        .unwrap();
+    assert_eq!(migration.inputs, ["internal/database/migrations/**"]);
+    let sqlc = model
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "api:sqlc")
+        .unwrap();
+    assert_eq!(sqlc.inputs, ["sqlc.yaml", "**/sqlc.yaml", "**/*.sql"]);
+}
+
+fn assert_frontend_targets(model: &RepositoryRenderModel) {
+    assert!(model.required_commands.contains(&"web_test_command".into()));
+    assert!(
+        model
+            .required_commands
+            .contains(&"admin_test_command".into())
+    );
+    assert!(
+        model
+            .profiles
+            .first()
+            .unwrap()
+            .targets
+            .iter()
+            .any(|target| target.to_string() == "web:test")
+    );
+}
+
+fn assert_frontend_contract_dependencies(model: &RepositoryRenderModel) {
+    let drift_target = target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION).unwrap();
+    let boundary_target = target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION).unwrap();
+    assert_eq!(
+        model
+            .actions
+            .iter()
+            .filter(|action| action.target == drift_target)
+            .count(),
+        1
+    );
+    assert_eq!(
+        model
+            .actions
+            .iter()
+            .filter(|action| action.target == boundary_target)
+            .count(),
+        1
+    );
+    let drift = model
+        .actions
+        .iter()
+        .find(|action| action.target == drift_target)
+        .unwrap();
+    let boundary = model
+        .actions
+        .iter()
+        .find(|action| action.target == boundary_target)
+        .unwrap();
+    assert_eq!(
+        boundary.description.as_deref(),
+        Some("Check public frontend manifests and artifacts for privileged markers.")
+    );
+    for artifact in ["docs/public/**", "public-docs/**"] {
+        assert!(boundary.inputs.iter().any(|input| input == artifact));
+        assert!(!drift.inputs.iter().any(|input| input == artifact));
+    }
+    for component in ["web", "admin"] {
+        let typecheck = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == format!("{component}:typecheck"))
+            .unwrap();
+        assert!(typecheck.depends_on.contains(&drift_target));
+        assert!(typecheck.depends_on.contains(&boundary_target));
+        let build = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == format!("{component}:build"))
+            .unwrap();
+        assert_eq!(build.depends_on, std::slice::from_ref(&boundary_target));
+    }
+}
+
 #[test]
 fn generated_affected_defaults_ignore_guidance_but_keep_execution_authority_fail_closed() {
     let model = RepositoryRenderModel::from_answers(&answers("")).unwrap();
@@ -100,115 +208,10 @@ role = "admin"
     );
     let model = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-    assert!(model.go_ci_input_paths().contains(&"**".into()));
-    assert!(model.go_ci_input_paths().contains(&"**/*.go".into()));
-
-    assert!(
-        model
-            .components
-            .iter()
-            .any(|component| component.id.as_str() == "api"
-                && component.adapters == ["go", "go-postgres"])
-    );
-    for target in ["api:test", "web:test", "admin:test"] {
-        assert!(
-            model
-                .actions
-                .iter()
-                .any(|action| action.target.to_string() == target),
-            "missing {target}"
-        );
-    }
-    let migration = model
-        .actions
-        .iter()
-        .find(|action| action.target.to_string() == "api:migration-add")
-        .unwrap();
-    assert_eq!(
-        migration.inputs,
-        ["internal/database/migrations/**".to_owned()]
-    );
-    let sqlc = model
-        .actions
-        .iter()
-        .find(|action| action.target.to_string() == "api:sqlc")
-        .unwrap();
-    assert_eq!(
-        sqlc.inputs,
-        [
-            "sqlc.yaml".to_owned(),
-            "**/sqlc.yaml".to_owned(),
-            "**/*.sql".to_owned(),
-        ]
-    );
-    assert!(model.required_commands.contains(&"web_test_command".into()));
-    assert!(
-        model
-            .required_commands
-            .contains(&"admin_test_command".into())
-    );
-    assert!(
-        model
-            .profiles
-            .first()
-            .unwrap()
-            .targets
-            .iter()
-            .any(|target| target.to_string() == "web:test")
-    );
-
-    let drift_target = target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION).unwrap();
-    let boundary_target = target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION).unwrap();
-    assert_eq!(
-        model
-            .actions
-            .iter()
-            .filter(|action| action.target == drift_target)
-            .count(),
-        1
-    );
-    assert_eq!(
-        model
-            .actions
-            .iter()
-            .filter(|action| action.target == boundary_target)
-            .count(),
-        1
-    );
-    let drift = model
-        .actions
-        .iter()
-        .find(|action| action.target == drift_target)
-        .unwrap();
-    let boundary = model
-        .actions
-        .iter()
-        .find(|action| action.target == boundary_target)
-        .unwrap();
-    assert_eq!(
-        boundary.description.as_deref(),
-        Some("Check public frontend manifests and artifacts for privileged markers.")
-    );
-    for artifact in ["docs/public/**", "public-docs/**"] {
-        assert!(boundary.inputs.iter().any(|input| input == artifact));
-        assert!(!drift.inputs.iter().any(|input| input == artifact));
-    }
-    for component in ["web", "admin"] {
-        let typecheck = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == format!("{component}:typecheck"))
-            .unwrap();
-        assert!(typecheck.depends_on.contains(&drift_target));
-        assert!(typecheck.depends_on.contains(&boundary_target));
-
-        let build = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == format!("{component}:build"))
-            .unwrap();
-        assert_eq!(build.depends_on, std::slice::from_ref(&boundary_target));
-    }
+    assert_go_backend_targets(&model);
+    assert_go_database_inputs(&model);
+    assert_frontend_targets(&model);
+    assert_frontend_contract_dependencies(&model);
 }
 
 #[test]

@@ -277,6 +277,15 @@ allow_global = false
     assert!(error.contains("rerun `jig vault init`"));
 }
 
+fn assert_summary_contains(summary: &str, expected: &[&str]) {
+    for text in expected {
+        assert!(
+            summary.contains(text),
+            "missing preset summary text: {text}"
+        );
+    }
+}
+
 #[test]
 fn presets_summary_explains_defaults_and_ownership() {
     let output = bootstrap::scaffold_presets_report();
@@ -307,6 +316,7 @@ fn presets_summary_explains_defaults_and_ownership() {
             "defaults": [
                 "The virtual workspace uses crates/<repo> as its only initial member.",
                 "Rust 2024 uses the top-level Jig workspace Rust baseline.",
+                "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
                 "The starter binary uses only std and prints its package name and version.",
                 "SQLx, schema dumps, application contracts, frontends, and dev apps are disabled."
             ],
@@ -319,7 +329,7 @@ fn presets_summary_explains_defaults_and_ownership() {
                 "jig init ./example-cli --preset rust-cli --no-input --no-vault",
                 "cargo run -p example-cli"
             ],
-            "ownership": "The generated Cargo manifests, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
+            "ownership": "The generated Cargo and Clippy configuration, Rust source, crate guide, and README are project-owned after creation; jig update keeps only the Jig harness current.",
             "non_goals": [
                 "The rust-cli preset does not create a database, frontend, API, dev app, release workflow, library target, or additional crate layers.",
                 "The scaffold does not select a license, enable package publication, or choose an argument parser or logging framework."
@@ -329,37 +339,50 @@ fn presets_summary_explains_defaults_and_ownership() {
 
     let summary = format_presets_human_summary(&output);
 
-    assert!(summary.contains("available presets"));
-    assert!(summary.contains("rust-react"));
-    assert!(summary.contains("Rust crate roots default to apps and crates."));
-    assert!(summary.contains("apps/<repo>-api"));
-    assert!(summary.contains("web: shadcn Vite React product app in web/"));
-    assert!(summary.contains("admin: shadcn Vite React admin app in admin-panel/"));
-    assert!(summary.contains("React frontends ship tested shadcn 4 sources and provenance"));
-    assert!(summary.contains("jig init ./my-app --preset rust-react"));
-    assert!(summary.contains("harness-only"));
-    assert!(summary.contains("jig init ./my-repo --preset harness-only --no-input --no-vault"));
-    assert!(summary.contains("without starter application code"));
-    assert!(summary.contains("does not create Rust crates, databases, or frontend applications"));
-    assert!(summary.contains("project-owned after creation"));
-    assert!(summary.contains("Presets are starter shapes, not long-term application frameworks."));
-    assert!(summary.contains("rust-library"));
-    assert!(summary.contains("Expandable Rust workspace with one library crate."));
-    assert!(summary.contains("Cargo.toml virtual workspace"));
-    assert!(summary.contains("crates/<repo> library crate"));
-    assert!(
-        summary.contains("jig init ./example-library --preset rust-library --no-input --no-vault")
+    assert_summary_contains(
+        &summary,
+        &[
+            "available presets",
+            "rust-react",
+            "Rust crate roots default to apps and crates.",
+            "apps/<repo>-api",
+            "web: shadcn Vite React product app in web/",
+            "admin: shadcn Vite React admin app in admin-panel/",
+            "React frontends ship tested shadcn 4 sources and provenance",
+            "jig init ./my-app --preset rust-react",
+            "harness-only",
+            "jig init ./my-repo --preset harness-only --no-input --no-vault",
+            "without starter application code",
+            "does not create Rust crates, databases, or frontend applications",
+            "project-owned after creation",
+            "Presets are starter shapes, not long-term application frameworks.",
+            "rust-library",
+            "Expandable Rust workspace with one library crate.",
+            "Cargo.toml virtual workspace",
+            "crates/<repo> library crate",
+            "jig init ./example-library --preset rust-library --no-input --no-vault",
+            "does not create a database, frontend, API, dev app",
+            "does not select a license or enable package publication",
+            "rust-cli",
+            "Expandable Rust workspace with one command-line binary crate.",
+            "crates/<repo> command-line binary crate",
+            "jig init ./example-cli --preset rust-cli --no-input --no-vault",
+            "cargo run -p example-cli",
+            "does not select a license, enable package publication",
+            "argument parser or logging framework",
+        ],
     );
-    assert!(summary.contains("does not create a database, frontend, API, dev app"));
-    assert!(summary.contains("does not select a license or enable package publication"));
-    assert!(summary.contains("rust-cli"));
-    assert!(summary.contains("Expandable Rust workspace with one command-line binary crate."));
-    assert!(summary.contains("crates/<repo> command-line binary crate"));
-    assert!(summary.contains("jig init ./example-cli --preset rust-cli --no-input --no-vault"));
-    assert!(summary.contains("cargo run -p example-cli"));
-    assert!(summary.contains("does not create a database, frontend, API, dev app"));
-    assert!(summary.contains("does not select a license, enable package publication"));
-    assert!(summary.contains("argument parser or logging framework"));
+    let clippy_default = "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.";
+    for preset_index in [0, 3, 4] {
+        assert!(
+            output["presets"][preset_index]["defaults"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|default| default.as_str() == Some(clippy_default)),
+            "preset at index {preset_index} omitted the Clippy default"
+        );
+    }
 }
 
 #[test]

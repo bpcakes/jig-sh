@@ -42,6 +42,15 @@ fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
     .unwrap();
 
     let prepared = vault.store.prepare_exec(&passphrase(), request).unwrap();
+    assert_prepared_bindings(&prepared);
+    assert_prepared_redaction(&prepared);
+    let operation_id = assert_exec_start_audit(&vault, &prepared);
+
+    prepared.record_finish(0, None).unwrap();
+    assert_exec_finish_audit(&vault, &operation_id);
+}
+
+fn assert_prepared_bindings(prepared: &PreparedExec) {
     assert_eq!(prepared.command.len(), 2);
     assert_eq!(prepared.env.len(), 3);
     assert_eq!(prepared.env[0].field_kind, None);
@@ -50,7 +59,9 @@ fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
     assert_eq!(prepared.env[1].value.as_str(), "secret-value");
     assert_eq!(prepared.env[2].field_kind, Some(FieldKind::Text));
     assert_eq!(prepared.env[2].value.as_str(), "false");
+}
 
+fn assert_prepared_redaction(prepared: &PreparedExec) {
     let mut redactor = prepared.redactor.independent_stream();
     let mut output = Vec::new();
     redactor
@@ -64,7 +75,9 @@ fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
         output,
         b"raw=[REDACTED] b64=[REDACTED] text=false literal=literal-value-sentinel"
     );
+}
 
+fn assert_exec_start_audit(vault: &Vault, prepared: &PreparedExec) -> String {
     let events = audit_events(&vault.store);
     let start = events.last().unwrap();
     assert_eq!(start.action, "exec_start");
@@ -78,6 +91,11 @@ fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
         start.details["field_bindings"][0]["reference"],
         "jig://Production/TOKEN"
     );
+    assert_exec_audit_has_no_values(vault);
+    prepared.operation_id.clone()
+}
+
+fn assert_exec_audit_has_no_values(vault: &Vault) {
     let audit = vault.store.read_audit_text().unwrap().unwrap();
     for forbidden in [
         "argv-secret-sentinel",
@@ -88,15 +106,13 @@ fn exec_preparation_resolves_fields_and_builds_concealed_only_redaction() {
     ] {
         assert!(!audit.contains(forbidden), "audit leaked {forbidden}");
     }
+}
 
-    prepared.record_finish(0, None).unwrap();
+fn assert_exec_finish_audit(vault: &Vault, operation_id: &str) {
     let events = audit_events(&vault.store);
     let finish = events.last().unwrap();
     assert_eq!(finish.action, "exec_finish");
-    assert_eq!(
-        finish.details["operation_id"],
-        start.details["operation_id"]
-    );
+    assert_eq!(finish.details["operation_id"], operation_id);
     assert_eq!(finish.details["exit_status"], 0);
     assert!(finish.details["exit_signal"].is_null());
 }

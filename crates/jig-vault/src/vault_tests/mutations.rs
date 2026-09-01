@@ -47,17 +47,33 @@ fn field_batch_is_atomic_and_preserves_encrypted_text_metadata() {
             ],
         )
         .unwrap();
+    assert_batch_metadata(&batch, &concealed, &text);
+    assert_stored_fields(&vault, &concealed, &text);
+    assert_encrypted_storage_and_safe_audit(&vault, &text);
+    assert_removal_is_idempotent(&vault, concealed);
+    assert_duplicate_batch_is_atomic(&vault);
+}
+
+fn assert_batch_metadata(
+    batch: &FieldBatchResult,
+    concealed: &VaultReference,
+    text: &VaultReference,
+) {
     assert_eq!(batch.changed, vec![concealed.clone(), text.clone()]);
     assert!(batch.removed.is_empty());
+}
 
+fn assert_stored_fields(vault: &Vault, concealed: &VaultReference, text: &VaultReference) {
     let fields = vault.list_fields(&passphrase()).unwrap();
     assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].reference, text);
+    assert_eq!(&fields[0].reference, text);
     assert_eq!(fields[0].kind, FieldKind::Text);
     assert_eq!(fields[0].value_len, 0);
-    assert_eq!(fields[1].reference, concealed);
+    assert_eq!(&fields[1].reference, concealed);
     assert_eq!(fields[1].kind, FieldKind::Concealed);
+}
 
+fn assert_encrypted_storage_and_safe_audit(vault: &Vault, text: &VaultReference) {
     let opened = vault.store.open_unlocked(&passphrase()).unwrap();
     assert_eq!(
         opened
@@ -75,7 +91,9 @@ fn field_batch_is_atomic_and_preserves_encrypted_text_metadata() {
     assert!(audit.contains("\"kind\":\"concealed\""));
     assert!(audit.contains("\"kind\":\"text\""));
     assert!(!audit.contains("field-secret-value"));
+}
 
+fn assert_removal_is_idempotent(vault: &Vault, concealed: VaultReference) {
     let removal = vault
         .remove_field(&passphrase(), concealed.clone())
         .unwrap();
@@ -86,7 +104,9 @@ fn field_batch_is_atomic_and_preserves_encrypted_text_metadata() {
     let audit_after_removals = std::fs::read_to_string(vault.root().join("audit.jsonl")).unwrap();
     assert!(audit_after_removals.contains("\"removed\":true"));
     assert!(audit_after_removals.contains("\"removed\":false"));
+}
 
+fn assert_duplicate_batch_is_atomic(vault: &Vault) {
     let before_vault = std::fs::read_to_string(vault.root().join("vault.json")).unwrap();
     let before_audit = std::fs::read_to_string(vault.root().join("audit.jsonl")).unwrap();
     let duplicate = VaultReference::parse("jig://Production/DUPLICATE").unwrap();

@@ -1,5 +1,3 @@
-
-
 #[test]
 fn scaffold_uses_explicit_frontend_role_without_name_inference() {
     let temp = tempdir().unwrap();
@@ -580,6 +578,150 @@ fn run_init_sqlite_scaffold_keeps_sanitized_database_names_and_ignores_aligned()
     );
 }
 
+fn assert_sqlite_scaffold_manifests(root: &Path) {
+    let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert_text_contains_all(
+        &cargo_toml,
+        &[
+            "\"sqlite\"",
+            "\"signal\", \"sync\", \"time\"",
+            "fs4 = \"0.13.1\"",
+            "url = \"2\"",
+        ],
+    );
+    assert!(cargo_toml.ends_with('\n'));
+    assert_eq!(
+        fs::read_to_string(root.join(".env.example")).unwrap(),
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=demo=info,demo_api=info,tower_http=info\nDATABASE_URL=sqlite:demo.db\n"
+    );
+    let db_cargo = fs::read_to_string(root.join("crates/demo-db/Cargo.toml")).unwrap();
+    assert_text_contains_all(
+        &db_cargo,
+        &[
+            "anyhow.workspace = true",
+            "fs4.workspace = true",
+            "url.workspace = true",
+            "tokio.workspace = true",
+        ],
+    );
+}
+
+fn assert_sqlite_database_helper(root: &Path) {
+    let db_lib = fs::read_to_string(root.join("crates/demo-db/src/lib.rs")).unwrap();
+    assert_text_contains_all(
+        &db_lib,
+        &[
+            "SqlitePool",
+            "sqlx::Sqlite::database_exists",
+            "OpenOptions::new()",
+            ".create_new(true)",
+            "options.get_filename()",
+            "fs::create_dir_all(parent)",
+            "create_if_missing",
+            "concurrent_create_if_missing_calls_are_idempotent",
+            "sqlx::migrate!(\n",
+            "\"../../db/migrations\"\n        )",
+            "DEFAULT_DB_TIMEOUT",
+            "connect_with_timeout",
+            "fs::canonicalize(&database_filename)",
+            "sqlite_database_url_is_in_memory",
+            "sqlite_database_url_semantics",
+            "requires_single_connection_pool",
+            "SqlitePoolOptions::new()",
+            ".max_connections(1)",
+            ".min_connections(1)",
+            ".idle_timeout(None)",
+            ".max_lifetime(None)",
+            ".test_before_acquire(false)",
+            "mirrors_sqlx_ordered_in_memory_cache_semantics",
+            "in_memory_mode_ignores_an_existing_filename_for_locking",
+            "create_if_missing_does_not_materialize_an_in_memory_filename",
+            "symlink_aliases_share_the_canonical_migration_lock",
+            "migrate_with_timeout",
+            "static SQLITE_MIGRATION_LOCK",
+            "fs4::fs_std::FileExt::try_lock_exclusive(&file)",
+            "Ok(true) => return Ok(Some(file))",
+            "Ok(false) =>",
+            "in_memory_database_connects_and_migrates_without_a_file_lock",
+            "private_cache_in_memory_pool_waits_for_the_active_checkout",
+            "shared_in_memory_urls_keep_multiple_schema_aware_connections",
+            "ordinary_file_pool_keeps_multiple_schema_aware_connections",
+            "migration_mutex_is_shared_by_separate_in_memory_connections",
+        ],
+    );
+    assert_text_contains_none(
+        &db_lib,
+        &[
+            "sqlx::Sqlite::create_database",
+            "num_idle()",
+            "fs4::lock_contended_error",
+        ],
+    );
+    assert!(root.join("db/migrations/.gitkeep").exists());
+}
+
+fn assert_sqlite_playwright(root: &Path) {
+    let playwright = fs::read_to_string(root.join("web/playwright.config.ts")).unwrap();
+    assert_text_contains_all(
+        &playwright,
+        &[
+            "E2E_DATABASE_URL",
+            "sqlite:${defaultDatabasePath}",
+            "demo_web_e2e.sqlite",
+            "-- --bootstrap-database",
+            "['','-shm','-wal','-journal']",
+        ],
+    );
+    #[cfg(unix)]
+    {
+        let reset_line = playwright
+            .lines()
+            .find(|line| line.contains("node -e") && line.contains("fs.rmSync"))
+            .unwrap()
+            .trim();
+        let reset_command = reset_line
+            .strip_prefix('`')
+            .and_then(|line| line.strip_suffix("`,"))
+            .unwrap()
+            .replace("${defaultDatabasePath}", ".agent/tmp/demo_web_e2e.sqlite");
+        let database = root.join(".agent/tmp/demo_web_e2e.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            fs::write(format!("{}{}", database.display(), suffix), "stale\n").unwrap();
+        }
+        assert!(
+            std::process::Command::new("bash")
+                .args(["-c", &reset_command])
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            assert!(!Path::new(&format!("{}{}", database.display(), suffix)).exists());
+        }
+    }
+}
+
+fn assert_sqlite_e2e_workflow(root: &Path) {
+    let workflow = fs::read_to_string(root.join(".github/workflows/e2e.yml")).unwrap();
+    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["env"]["SQLX_OFFLINE_DIR"],
+        "${{ github.workspace }}/.sqlx"
+    );
+    assert_text_contains_all(
+        &workflow,
+        &[
+            r#"- "db/migrations/**""#,
+            r#"- ".sqlx/**""#,
+            r#"SQLX_OFFLINE: "true""#,
+        ],
+    );
+    assert_text_contains_none(&workflow, &["image: postgres", "E2E_DATABASE_URL"]);
+}
+
 #[test]
 fn scaffold_sqlite_branch_generates_sqlite_db_helper() {
     let temp = tempdir().unwrap();
@@ -604,109 +746,10 @@ fn scaffold_sqlite_branch_generates_sqlite_db_helper() {
     let report = plan.write(temp.path(), false).unwrap();
 
     assert_eq!(report["db"], "sqlite");
-    let cargo_toml = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
-    assert!(cargo_toml.contains("\"sqlite\""));
-    assert!(cargo_toml.contains("\"signal\", \"sync\", \"time\""));
-    assert!(cargo_toml.contains("fs4 = \"0.13.1\""));
-    assert!(cargo_toml.contains("url = \"2\""));
-    assert!(cargo_toml.ends_with('\n'));
-    assert_eq!(
-        fs::read_to_string(temp.path().join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=demo=info,demo_api=info,tower_http=info\nDATABASE_URL=sqlite:demo.db\n"
-    );
-    let db_cargo = fs::read_to_string(temp.path().join("crates/demo-db/Cargo.toml")).unwrap();
-    assert!(db_cargo.contains("anyhow.workspace = true"));
-    assert!(db_cargo.contains("fs4.workspace = true"));
-    assert!(db_cargo.contains("url.workspace = true"));
-    assert!(db_cargo.contains("tokio.workspace = true"));
-    let db_lib = fs::read_to_string(temp.path().join("crates/demo-db/src/lib.rs")).unwrap();
-    assert!(db_lib.contains("SqlitePool"));
-    assert!(db_lib.contains("sqlx::Sqlite::database_exists"));
-    assert!(db_lib.contains("OpenOptions::new()"));
-    assert!(db_lib.contains(".create_new(true)"));
-    assert!(db_lib.contains("options.get_filename()"));
-    assert!(db_lib.contains("fs::create_dir_all(parent)"));
-    assert!(!db_lib.contains("sqlx::Sqlite::create_database"));
-    assert!(db_lib.contains("create_if_missing"));
-    assert!(db_lib.contains("concurrent_create_if_missing_calls_are_idempotent"));
-    assert!(db_lib.contains("sqlx::migrate!(\n"));
-    assert!(db_lib.contains("\"../../db/migrations\"\n        )"));
-    assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
-    assert!(db_lib.contains("connect_with_timeout"));
-    assert!(db_lib.contains("fs::canonicalize(&database_filename)"));
-    assert!(db_lib.contains("sqlite_database_url_is_in_memory"));
-    assert!(db_lib.contains("sqlite_database_url_semantics"));
-    assert!(db_lib.contains("requires_single_connection_pool"));
-    assert!(db_lib.contains("SqlitePoolOptions::new()"));
-    assert!(db_lib.contains(".max_connections(1)"));
-    assert!(db_lib.contains(".min_connections(1)"));
-    assert!(db_lib.contains(".idle_timeout(None)"));
-    assert!(db_lib.contains(".max_lifetime(None)"));
-    assert!(db_lib.contains(".test_before_acquire(false)"));
-    assert!(!db_lib.contains("num_idle()"));
-    assert!(db_lib.contains("mirrors_sqlx_ordered_in_memory_cache_semantics"));
-    assert!(db_lib.contains("in_memory_mode_ignores_an_existing_filename_for_locking"));
-    assert!(db_lib.contains("create_if_missing_does_not_materialize_an_in_memory_filename"));
-    assert!(db_lib.contains("symlink_aliases_share_the_canonical_migration_lock"));
-    assert!(db_lib.contains("migrate_with_timeout"));
-    assert!(db_lib.contains("static SQLITE_MIGRATION_LOCK"));
-    assert!(db_lib.contains("fs4::fs_std::FileExt::try_lock_exclusive(&file)"));
-    assert!(db_lib.contains("Ok(true) => return Ok(Some(file))"));
-    assert!(db_lib.contains("Ok(false) =>"));
-    assert!(!db_lib.contains("fs4::lock_contended_error"));
-    assert!(db_lib.contains("in_memory_database_connects_and_migrates_without_a_file_lock"));
-    assert!(db_lib.contains("private_cache_in_memory_pool_waits_for_the_active_checkout"));
-    assert!(db_lib.contains("shared_in_memory_urls_keep_multiple_schema_aware_connections"));
-    assert!(db_lib.contains("ordinary_file_pool_keeps_multiple_schema_aware_connections"));
-    assert!(db_lib.contains("migration_mutex_is_shared_by_separate_in_memory_connections"));
-    assert!(temp.path().join("db/migrations/.gitkeep").exists());
-    let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
-    assert!(playwright.contains("E2E_DATABASE_URL"));
-    assert!(playwright.contains("sqlite:${defaultDatabasePath}"));
-    assert!(playwright.contains("demo_web_e2e.sqlite"));
-    assert!(playwright.contains("-- --bootstrap-database"));
-    assert!(playwright.contains("['','-shm','-wal','-journal']"));
-    #[cfg(unix)]
-    {
-        let reset_line = playwright
-            .lines()
-            .find(|line| line.contains("node -e") && line.contains("fs.rmSync"))
-            .unwrap()
-            .trim();
-        let reset_command = reset_line
-            .strip_prefix('`')
-            .and_then(|line| line.strip_suffix("`,"))
-            .unwrap()
-            .replace("${defaultDatabasePath}", ".agent/tmp/demo_web_e2e.sqlite");
-        let database = temp.path().join(".agent/tmp/demo_web_e2e.sqlite");
-        fs::create_dir_all(database.parent().unwrap()).unwrap();
-        for suffix in ["", "-shm", "-wal", "-journal"] {
-            fs::write(format!("{}{}", database.display(), suffix), "stale\n").unwrap();
-        }
-        assert!(
-            std::process::Command::new("bash")
-                .args(["-c", &reset_command])
-                .current_dir(temp.path())
-                .status()
-                .unwrap()
-                .success()
-        );
-        for suffix in ["", "-shm", "-wal", "-journal"] {
-            assert!(!Path::new(&format!("{}{}", database.display(), suffix)).exists());
-        }
-    }
-    let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
-    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
-    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
-    assert_eq!(
-        workflow_yaml["jobs"]["e2e"]["env"]["SQLX_OFFLINE_DIR"],
-        "${{ github.workspace }}/.sqlx"
-    );
-    assert!(!workflow.contains("image: postgres"));
-    assert!(!workflow.contains("E2E_DATABASE_URL"));
-    assert!(workflow.contains(r#"- "db/migrations/**""#));
-    assert!(workflow.contains(r#"- ".sqlx/**""#));
-    assert!(workflow.contains(r#"SQLX_OFFLINE: "true""#));
+    assert_sqlite_scaffold_manifests(temp.path());
+    assert_sqlite_database_helper(temp.path());
+    assert_sqlite_playwright(temp.path());
+    assert_sqlite_e2e_workflow(temp.path());
 }
 
 mod output_paths;

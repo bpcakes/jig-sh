@@ -233,90 +233,32 @@ impl UiCommand {
     fn state_availability(self, app: &App) -> CommandAvailability {
         let format_version = app.snapshot().map(|snapshot| snapshot.format_version);
         let writable = format_version == Some(2);
+        if self.requires_v2_management() && !writable {
+            return CommandAvailability::Disabled("Vault management requires version 2.");
+        }
+        if self.requires_unlocked_v2() && !writable {
+            return CommandAvailability::Disabled("An unlocked version 2 vault is required.");
+        }
         match self {
-            Self::CreateItem | Self::AddLegacy => {
-                if writable {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                }
-            }
-            Self::AddField => {
-                if !writable {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                } else if matches!(app.selected_item, Some(ItemIdentity::Canonical(_))) {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled(
-                        "Select a canonical item or create a new item first.",
-                    )
-                }
-            }
-            Self::ReplaceValue => {
-                if !writable {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                } else if app.selected_entry.is_some() {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled("Select a field or legacy entry first.")
-                }
-            }
-            Self::ChangeKind => {
-                if !writable {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                } else if matches!(app.selected_entry, Some(EntryIdentity::Field(_))) {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled("Select a canonical field first.")
-                }
-            }
-            Self::RenameSelection => {
-                if !writable {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                } else if app.focus == Focus::Items {
-                    match app.selected_item {
-                        Some(ItemIdentity::Canonical(_)) => CommandAvailability::Enabled,
-                        Some(ItemIdentity::Legacy) => CommandAvailability::Disabled(
-                            "Convert legacy entries instead of renaming the group.",
-                        ),
-                        None => CommandAvailability::Disabled("Select an item first."),
-                    }
-                } else {
-                    match app.selected_entry {
-                        Some(EntryIdentity::Field(_)) => CommandAvailability::Enabled,
-                        Some(EntryIdentity::Legacy(_)) => CommandAvailability::Disabled(
-                            "Convert the legacy entry instead of renaming it.",
-                        ),
-                        None => CommandAvailability::Disabled("Select a field first."),
-                    }
-                }
-            }
-            Self::ConvertLegacy => {
-                if !writable {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                } else if matches!(app.selected_entry, Some(EntryIdentity::Legacy(_))) {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled("Select a legacy entry first.")
-                }
-            }
-            Self::DeleteSelection => {
-                if !writable {
-                    CommandAvailability::Disabled("Vault management requires version 2.")
-                } else if app.focus == Focus::Items {
-                    match app.selected_item {
-                        Some(ItemIdentity::Canonical(_)) => CommandAvailability::Enabled,
-                        Some(ItemIdentity::Legacy) => CommandAvailability::Disabled(
-                            "Select one legacy entry; bulk legacy deletion is disabled.",
-                        ),
-                        None => CommandAvailability::Disabled("Select an item first."),
-                    }
-                } else if app.selected_entry.is_some() {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled("Select a field or legacy entry first.")
-                }
-            }
+            Self::CreateItem | Self::AddLegacy => CommandAvailability::Enabled,
+            Self::AddField => enabled_if(
+                matches!(app.selected_item, Some(ItemIdentity::Canonical(_))),
+                "Select a canonical item or create a new item first.",
+            ),
+            Self::ReplaceValue => enabled_if(
+                app.selected_entry.is_some(),
+                "Select a field or legacy entry first.",
+            ),
+            Self::ChangeKind => enabled_if(
+                matches!(app.selected_entry, Some(EntryIdentity::Field(_))),
+                "Select a canonical field first.",
+            ),
+            Self::RenameSelection => rename_availability(app),
+            Self::ConvertLegacy => enabled_if(
+                matches!(app.selected_entry, Some(EntryIdentity::Legacy(_))),
+                "Select a legacy entry first.",
+            ),
+            Self::DeleteSelection => delete_availability(app),
             Self::ExportField | Self::PeekField => match app.selected_entry {
                 Some(EntryIdentity::Field(_)) => CommandAvailability::Enabled,
                 Some(EntryIdentity::Legacy(_)) => CommandAvailability::Disabled(
@@ -337,11 +279,7 @@ impl UiCommand {
                 None => CommandAvailability::Disabled("Unlock the vault first."),
             },
             Self::ImportOnePassword | Self::CreateBackup | Self::ChangePassphrase => {
-                if writable {
-                    CommandAvailability::Enabled
-                } else {
-                    CommandAvailability::Disabled("An unlocked version 2 vault is required.")
-                }
+                CommandAvailability::Enabled
             }
             Self::RestoreBackup => {
                 if app.snapshot().is_some() || !app.descriptor.home_state.is_absent() {
@@ -351,6 +289,27 @@ impl UiCommand {
                 }
             }
         }
+    }
+
+    const fn requires_v2_management(self) -> bool {
+        matches!(
+            self,
+            Self::CreateItem
+                | Self::AddField
+                | Self::AddLegacy
+                | Self::ReplaceValue
+                | Self::ChangeKind
+                | Self::RenameSelection
+                | Self::ConvertLegacy
+                | Self::DeleteSelection
+        )
+    }
+
+    const fn requires_unlocked_v2(self) -> bool {
+        matches!(
+            self,
+            Self::ImportOnePassword | Self::CreateBackup | Self::ChangePassphrase
+        )
     }
 
     const fn platform_requirement(self) -> PlatformRequirement {
@@ -451,6 +410,51 @@ impl UiCommand {
         self.binding().map_or_else(
             || self.short_label().to_owned(),
             |binding| format!("{} {}", binding.label, self.short_label()),
+        )
+    }
+}
+
+const fn enabled_if(condition: bool, disabled_reason: &'static str) -> CommandAvailability {
+    if condition {
+        CommandAvailability::Enabled
+    } else {
+        CommandAvailability::Disabled(disabled_reason)
+    }
+}
+
+fn rename_availability(app: &App) -> CommandAvailability {
+    if app.focus == Focus::Items {
+        match app.selected_item {
+            Some(ItemIdentity::Canonical(_)) => CommandAvailability::Enabled,
+            Some(ItemIdentity::Legacy) => CommandAvailability::Disabled(
+                "Convert legacy entries instead of renaming the group.",
+            ),
+            None => CommandAvailability::Disabled("Select an item first."),
+        }
+    } else {
+        match app.selected_entry {
+            Some(EntryIdentity::Field(_)) => CommandAvailability::Enabled,
+            Some(EntryIdentity::Legacy(_)) => {
+                CommandAvailability::Disabled("Convert the legacy entry instead of renaming it.")
+            }
+            None => CommandAvailability::Disabled("Select a field first."),
+        }
+    }
+}
+
+fn delete_availability(app: &App) -> CommandAvailability {
+    if app.focus == Focus::Items {
+        match app.selected_item {
+            Some(ItemIdentity::Canonical(_)) => CommandAvailability::Enabled,
+            Some(ItemIdentity::Legacy) => CommandAvailability::Disabled(
+                "Select one legacy entry; bulk legacy deletion is disabled.",
+            ),
+            None => CommandAvailability::Disabled("Select an item first."),
+        }
+    } else {
+        enabled_if(
+            app.selected_entry.is_some(),
+            "Select a field or legacy entry first.",
         )
     }
 }

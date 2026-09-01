@@ -47,6 +47,54 @@ fn lifecycle_env_port_helper() {
     }
 }
 
+fn assert_running_status(status: &Value) {
+    assert_eq!(status["ok"], true);
+    assert_eq!(status["command"], "dev status");
+    assert_eq!(status["running"], true);
+    assert_eq!(status["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(status["sessions"][0]["status"], "running");
+    assert_eq!(status["sessions"][0]["apps"][0]["name"], "lifecycle-helper");
+    assert_eq!(status["sessions"][0]["apps"][0]["alive"], true);
+}
+
+fn assert_same_repo_conflict(conflict: &CommandOutput, first: &mut ForegroundDev) {
+    assert!(!conflict.status.success());
+    assert!(conflict.stderr.contains("jig dev stop"));
+    assert!(conflict.stderr.contains("jig dev --replace"));
+    assert!(
+        first.is_running(),
+        "a rejected same-repo launch must leave the registered session alive"
+    );
+}
+
+fn assert_replaced_status(status: &Value, replacement: &ForegroundDev) {
+    assert_eq!(status["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        status["sessions"][0]["supervisor_pid"],
+        u64::from(replacement.id())
+    );
+}
+
+fn assert_stopped_status(stopped: &Value) {
+    assert_eq!(stopped["ok"], true);
+    assert_eq!(stopped["matched_sessions"], 1);
+    assert_eq!(stopped["stopped_sessions"], 1);
+    assert_eq!(stopped["stopped_apps"], 1);
+    assert_eq!(stopped["sessions"], json!([]));
+    assert_eq!(stopped["warnings"], json!([]));
+}
+
+fn assert_inactive_status(status: &Value) {
+    assert_eq!(status["running"], false);
+    assert_eq!(status["sessions"], json!([]));
+}
+
+fn assert_empty_stop(stopped: &Value) {
+    assert_eq!(stopped["ok"], true);
+    assert_eq!(stopped["matched_sessions"], 0);
+    assert_eq!(stopped["stopped_sessions"], 0);
+}
+
 #[test]
 fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     let _guard = LIFECYCLE_TEST_LOCK
@@ -66,22 +114,10 @@ fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     first.wait_until_ready(&first_ready);
 
     let status = wait_for_running_status(&repo_a, &state_dir);
-    assert_eq!(status["ok"], true);
-    assert_eq!(status["command"], "dev status");
-    assert_eq!(status["running"], true);
-    assert_eq!(status["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(status["sessions"][0]["status"], "running");
-    assert_eq!(status["sessions"][0]["apps"][0]["name"], "lifecycle-helper");
-    assert_eq!(status["sessions"][0]["apps"][0]["alive"], true);
+    assert_running_status(&status);
 
     let conflict = run_dev_to_completion(&repo_a, &state_dir, false);
-    assert!(!conflict.status.success());
-    assert!(conflict.stderr.contains("jig dev stop"));
-    assert!(conflict.stderr.contains("jig dev --replace"));
-    assert!(
-        first.is_running(),
-        "a rejected same-repo launch must leave the registered session alive"
-    );
+    assert_same_repo_conflict(&conflict, &mut first);
 
     let other_ready = temp.path().join("other-ready");
     let mut other = ForegroundDev::spawn(&repo_b, &state_dir, &other_ready, true);
@@ -102,19 +138,10 @@ fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     );
 
     let replaced_status = run_json(&repo_a, ["dev", "status", "--state-dir"], Some(&state_dir));
-    assert_eq!(replaced_status["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        replaced_status["sessions"][0]["supervisor_pid"],
-        u64::from(replacement.id())
-    );
+    assert_replaced_status(&replaced_status, &replacement);
 
     let stopped = run_json(&repo_a, ["dev", "stop", "--state-dir"], Some(&state_dir));
-    assert_eq!(stopped["ok"], true);
-    assert_eq!(stopped["matched_sessions"], 1);
-    assert_eq!(stopped["stopped_sessions"], 1);
-    assert_eq!(stopped["stopped_apps"], 1);
-    assert_eq!(stopped["sessions"], json!([]));
-    assert_eq!(stopped["warnings"], json!([]));
+    assert_stopped_status(&stopped);
     replacement.wait_for_success("stopped foreground dev");
     assert!(
         other.is_running(),
@@ -122,13 +149,10 @@ fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     );
 
     let final_status = run_json(&repo_a, ["dev", "status", "--state-dir"], Some(&state_dir));
-    assert_eq!(final_status["running"], false);
-    assert_eq!(final_status["sessions"], json!([]));
+    assert_inactive_status(&final_status);
 
     let repeated = run_json(&repo_a, ["dev", "stop", "--state-dir"], Some(&state_dir));
-    assert_eq!(repeated["ok"], true);
-    assert_eq!(repeated["matched_sessions"], 0);
-    assert_eq!(repeated["stopped_sessions"], 0);
+    assert_empty_stop(&repeated);
 
     let other_stopped = run_json(&repo_b, ["dev", "stop", "--state-dir"], Some(&state_dir));
     assert_eq!(other_stopped["ok"], true);

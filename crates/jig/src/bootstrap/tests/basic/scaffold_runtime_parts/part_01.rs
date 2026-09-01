@@ -32,8 +32,8 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
         });
     assert!(!has_db_crate);
     let cargo_toml = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
-    assert!(!cargo_toml.contains("sqlx ="));
-    assert!(cargo_toml.contains("\"signal\", \"time\""));
+    assert_text_contains_none(&cargo_toml, &["sqlx ="]);
+    assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
     assert!(cargo_toml.ends_with('\n'));
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");
@@ -45,40 +45,48 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
         )
     );
     let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
-    assert!(playwright.contains("const backendCommand = \"cargo run --locked"));
-    assert!(!playwright.contains("-- --bootstrap-database"));
-    assert!(!playwright.contains("E2E_DATABASE_URL"));
+    assert_text_contains_all(
+        &playwright,
+        &["const backendCommand = \"cargo run --locked"],
+    );
+    assert_text_contains_none(
+        &playwright,
+        &["-- --bootstrap-database", "E2E_DATABASE_URL"],
+    );
     let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
-    assert!(!workflow.contains("image: postgres"));
-    assert!(!workflow.contains("E2E_DATABASE_URL"));
-    assert!(!workflow.contains("SQLX_OFFLINE"));
+    assert_text_contains_none(
+        &workflow,
+        &["image: postgres", "E2E_DATABASE_URL", "SQLX_OFFLINE"],
+    );
     let api_main = fs::read_to_string(
         temp.path()
             .join("apps")
             .join(format!("{repo_name}-api/src/main.rs")),
     )
     .unwrap();
-    assert!(
-        api_main
-            .contains("    parse_command()?;\n    let config = app_crate::AppConfig::from_env()")
+    assert_text_contains_all(
+        &api_main,
+        &[
+            "    parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
+            "match (arguments.next(), arguments.next())",
+            "unexpected API argument",
+        ],
     );
-    assert!(!api_main.contains("let command = parse_command()?;"));
-    assert!(!api_main.contains("--bootstrap-database"));
-    assert!(api_main.contains("match (arguments.next(), arguments.next())"));
-    assert!(api_main.contains("unexpected API argument"));
-    assert!(!api_main.contains("args_os().any"));
+    assert_text_contains_none(
+        &api_main,
+        &[
+            "let command = parse_command()?;",
+            "--bootstrap-database",
+            "args_os().any",
+        ],
+    );
 
     let output = std::process::Command::new("cargo")
         .args(["fmt", "--all", "--", "--check"])
         .current_dir(temp.path())
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-        "cargo fmt failed for the no-database scaffold\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_command_succeeded("cargo fmt for the no-database scaffold", &output);
 }
 
 #[test]
@@ -123,6 +131,99 @@ fn scaffold_playwright_api_environment_overrides_hostile_inherited_bindings() {
     assert!(!api_server_config.contains("process.env.PORT"));
 }
 
+fn assert_e2e_workflow_for_package_manager(
+    root: &Path,
+    package_manager: &str,
+    setup: &str,
+    run: &str,
+    root_cache_locks: &str,
+    app_cache_locks: &str,
+) {
+    let destination = root.join(package_manager);
+    fs::create_dir(&destination).unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ci_github_runner: Some("macos-14".into()),
+            web_package_manager: Some(package_manager.into()),
+            ..AnswerOpts::default()
+        },
+        &destination,
+    )
+    .unwrap()
+    .unwrap();
+    plan.write(&destination, false).unwrap();
+
+    let workflow = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow)
+        .expect("generated E2E workflow must be valid YAML");
+    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["defaults"]["run"]["shell"],
+        "bash"
+    );
+    assert_text_contains_all(
+        &workflow,
+        &[
+            setup,
+            "Classic required status checks can remain pending",
+            "Bootstrap Node for dependency metadata",
+            "scripts/check-webapps.sh node-version-file",
+            "status=$?",
+            "if [ \"$status\" -eq 1 ]",
+            "exit \"$status\"",
+            "${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}",
+            "mktemp -d \"$RUNNER_TEMP/jig-node-version.XXXXXX\"",
+            "set -o noclobber",
+            "APP_DIR: ${{ matrix.app.dir }}",
+            r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#,
+            "PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.agent/tmp/ms-playwright",
+            "- name: Cache Playwright Chromium",
+            "path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}",
+            "playwright-chromium-${{ hashFiles(",
+            "hashFiles('package.json', format('{0}/package.json', matrix.app.dir),",
+            root_cache_locks,
+            app_cache_locks,
+            r#"- "**/.yarnrc.yml""#,
+            r#"- "**/.yarn/**""#,
+            r#"- "**/.node-version""#,
+            r#"- "**/.npmrc""#,
+            "${{ matrix.app.dir }}/",
+            r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e:install:ci"#,
+            r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e"#,
+        ],
+    );
+    assert_text_contains_none(
+        &workflow,
+        &[
+            "if ! node_version_file=",
+            "> .node-version",
+            &format!("{run} test:e2e"),
+            r#"cd "$APP_DIR" &&"#,
+            "test:e2e:install --",
+        ],
+    );
+    assert_eq!(workflow.matches(r#"- "rust-toolchain""#).count(), 2);
+    if package_manager == "npm" {
+        assert_text_contains_all(
+            &workflow,
+            &[
+                "            npm-shrinkwrap.json",
+                "            package-lock.json",
+                "            ${{ matrix.app.dir }}/npm-shrinkwrap.json",
+                "            ${{ matrix.app.dir }}/package-lock.json",
+            ],
+        );
+        assert_eq!(workflow.matches(r#"- "npm-shrinkwrap.json""#).count(), 2);
+    }
+}
+
 #[test]
 fn scaffold_e2e_workflow_uses_each_package_manager_portably() {
     let temp = tempdir().unwrap();
@@ -156,99 +257,14 @@ fn scaffold_e2e_workflow_uses_each_package_manager_portably() {
             "format('{0}/yarn.lock', matrix.app.dir)",
         ),
     ] {
-        let destination = temp.path().join(package_manager);
-        fs::create_dir(&destination).unwrap();
-        let plan = scaffold::InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustReact),
-                db: None,
-                frontends: Vec::new(),
-                frontend_list: Vec::new(),
-            },
-            &AnswerOpts {
-                repo_name: Some("demo".into()),
-                ci_github_runner: Some("macos-14".into()),
-                web_package_manager: Some(package_manager.into()),
-                ..AnswerOpts::default()
-            },
-            &destination,
-        )
-        .unwrap()
-        .unwrap();
-
-        plan.write(&destination, false).unwrap();
-
-        let workflow = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
-        let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow)
-            .expect("generated E2E workflow must be valid YAML");
-        assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
-        assert_eq!(
-            workflow_yaml["jobs"]["e2e"]["defaults"]["run"]["shell"],
-            "bash"
+        assert_e2e_workflow_for_package_manager(
+            temp.path(),
+            package_manager,
+            setup,
+            run,
+            root_cache_locks,
+            app_cache_locks,
         );
-        assert!(workflow.contains(setup), "missing {package_manager} setup");
-        assert!(workflow.contains("Classic required status checks can remain pending"));
-        assert!(workflow.contains("Bootstrap Node for dependency metadata"));
-        assert!(workflow.contains("scripts/check-webapps.sh node-version-file"));
-        assert!(workflow.contains("status=$?"));
-        assert!(workflow.contains("if [ \"$status\" -eq 1 ]"));
-        assert!(workflow.contains("exit \"$status\""));
-        assert!(!workflow.contains("if ! node_version_file="));
-        assert!(workflow.contains("${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}"));
-        assert!(workflow.contains("mktemp -d \"$RUNNER_TEMP/jig-node-version.XXXXXX\""));
-        assert!(workflow.contains("set -o noclobber"));
-        assert!(!workflow.contains("> .node-version"));
-        assert!(workflow.contains("APP_DIR: ${{ matrix.app.dir }}"));
-        assert_eq!(workflow.matches(r#"- "rust-toolchain""#).count(), 2);
-        assert!(workflow.contains(r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#));
-        assert!(workflow.contains(
-            "PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.agent/tmp/ms-playwright"
-        ));
-        assert!(workflow.contains("- name: Cache Playwright Chromium"));
-        assert!(workflow.contains("path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}"));
-        assert!(workflow.contains("playwright-chromium-${{ hashFiles("));
-        assert!(
-            workflow
-                .contains("hashFiles('package.json', format('{0}/package.json', matrix.app.dir),")
-        );
-        assert!(
-            workflow.contains(root_cache_locks),
-            "Playwright cache key is missing root {package_manager} lockfiles"
-        );
-        assert!(
-            workflow.contains(app_cache_locks),
-            "Playwright cache key is missing app {package_manager} lockfiles"
-        );
-        if package_manager == "npm" {
-            for cache_path in [
-                "            npm-shrinkwrap.json",
-                "            package-lock.json",
-                "            ${{ matrix.app.dir }}/npm-shrinkwrap.json",
-                "            ${{ matrix.app.dir }}/package-lock.json",
-            ] {
-                assert!(
-                    workflow.contains(cache_path),
-                    "npm dependency cache is missing {cache_path}"
-                );
-            }
-            assert_eq!(workflow.matches(r#"- "npm-shrinkwrap.json""#).count(), 2);
-        }
-        assert!(workflow.contains(r#"- "**/.yarnrc.yml""#));
-        assert!(workflow.contains(r#"- "**/.yarn/**""#));
-        assert!(workflow.contains(r#"- "**/.node-version""#));
-        assert!(workflow.contains(r#"- "**/.npmrc""#));
-        assert!(workflow.contains("${{ matrix.app.dir }}/"));
-        assert!(
-            workflow
-                .contains(r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e:install:ci"#)
-        );
-        assert!(workflow.contains(r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e"#));
-        assert!(
-            !workflow.contains(&format!("{run} test:e2e")),
-            "{package_manager} E2E must use the managed checker launcher"
-        );
-        assert!(!workflow.contains(r#"cd "$APP_DIR" &&"#));
-        assert!(!workflow.contains("test:e2e:install --"));
     }
 }
 
@@ -583,86 +599,99 @@ fn go_scaffold_without_postgres_does_not_emit_migration_configuration() {
     assert_eq!(answers.migration_dir, None);
 }
 
+fn assert_frontend_dev_scripts_for_package_manager(package_manager: &str) {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![
+                parse_scaffold_frontend("web").unwrap(),
+                parse_scaffold_frontend("landing").unwrap(),
+            ],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            web_package_manager: Some(package_manager.into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        plan.output_paths()
+            .iter()
+            .any(|path| path == Path::new(".yarnrc.yml")),
+        package_manager == "yarn"
+    );
+    plan.write(temp.path(), false).unwrap();
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("web/package.json")).unwrap(),
+        &[r#""dev": "vite""#],
+    );
+    assert_text_contains_none(
+        &fs::read_to_string(temp.path().join("web/package.json")).unwrap(),
+        &[" install && "],
+    );
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("landing/package.json")).unwrap(),
+        &[r#""dev": "astro dev""#],
+    );
+    assert_text_contains_none(
+        &fs::read_to_string(temp.path().join("landing/package.json")).unwrap(),
+        &[" install && "],
+    );
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("landing/astro.config.mjs")).unwrap(),
+        &[
+            "process.env.HOST?.trim()",
+            "process.env.PORT",
+            "strictPort: true",
+        ],
+    );
+    assert_text_contains_all(
+        &fs::read_to_string(temp.path().join("package.json")).unwrap(),
+        &[&format!(r#""packageManager": "{package_manager}@"#)],
+    );
+    assert_eq!(
+        temp.path().join("pnpm-workspace.yaml").exists(),
+        package_manager == "pnpm"
+    );
+    assert_eq!(
+        temp.path().join(".yarnrc.yml").exists(),
+        package_manager == "yarn"
+    );
+    if package_manager == "pnpm" {
+        let pnpm_workspace = fs::read_to_string(temp.path().join("pnpm-workspace.yaml")).unwrap();
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pnpm_workspace).unwrap();
+        assert_eq!(parsed["enableGlobalVirtualStore"].as_bool(), Some(false));
+        assert_eq!(parsed["linkWorkspacePackages"].as_bool(), Some(true));
+        assert_eq!(parsed["overrides"]["js-yaml"], "4.3.1");
+        assert_text_contains_all(
+            &pnpm_workspace,
+            &[
+                "pre-run validation rewrite installed executable shims",
+                "Keep\n# this allowlist narrow",
+                "authorizes dependency code execution",
+                "\nallowBuilds:\n  esbuild: true\n",
+            ],
+        );
+    }
+    if package_manager == "yarn" {
+        assert_eq!(
+            fs::read_to_string(temp.path().join(".yarnrc.yml")).unwrap(),
+            "nodeLinker: node-modules\n"
+        );
+    }
+}
+
 #[test]
 fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
     for package_manager in ["bun", "npm", "pnpm", "yarn"] {
-        let temp = tempdir().unwrap();
-        let plan = scaffold::InitScaffoldPlan::from_opts(
-            &ScaffoldOpts {
-                preset: Some(ScaffoldPreset::RustReact),
-                db: None,
-                frontends: vec![
-                    parse_scaffold_frontend("web").unwrap(),
-                    parse_scaffold_frontend("landing").unwrap(),
-                ],
-                frontend_list: Vec::new(),
-            },
-            &AnswerOpts {
-                repo_name: Some("demo".into()),
-                web_package_manager: Some(package_manager.into()),
-                ..AnswerOpts::default()
-            },
-            temp.path(),
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(
-            plan.output_paths()
-                .iter()
-                .any(|path| path == Path::new(".yarnrc.yml")),
-            package_manager == "yarn"
-        );
-        plan.write(temp.path(), false).unwrap();
-
-        let web_package = fs::read_to_string(temp.path().join("web/package.json")).unwrap();
-        assert!(web_package.contains(r#""dev": "vite""#));
-        assert!(!web_package.contains(" install && "));
-        let landing_package = fs::read_to_string(temp.path().join("landing/package.json")).unwrap();
-        assert!(landing_package.contains(r#""dev": "astro dev""#));
-        assert!(!landing_package.contains(" install && "));
-        let landing_config =
-            fs::read_to_string(temp.path().join("landing/astro.config.mjs")).unwrap();
-        assert!(landing_config.contains("process.env.HOST?.trim()"));
-        assert!(landing_config.contains("process.env.PORT"));
-        assert!(landing_config.contains("strictPort: true"));
-        let workspace_package = fs::read_to_string(temp.path().join("package.json")).unwrap();
-        assert!(workspace_package.contains(&format!(r#""packageManager": "{package_manager}@"#)));
-        assert_eq!(
-            temp.path().join("pnpm-workspace.yaml").exists(),
-            package_manager == "pnpm"
-        );
-        assert_eq!(
-            temp.path().join(".yarnrc.yml").exists(),
-            package_manager == "yarn"
-        );
-        if package_manager == "pnpm" {
-            let pnpm_workspace =
-                fs::read_to_string(temp.path().join("pnpm-workspace.yaml")).unwrap();
-            let pnpm_workspace_yaml: serde_yaml_ng::Value =
-                serde_yaml_ng::from_str(&pnpm_workspace).unwrap();
-            assert_eq!(
-                pnpm_workspace_yaml["enableGlobalVirtualStore"].as_bool(),
-                Some(false)
-            );
-            assert_eq!(
-                pnpm_workspace_yaml["linkWorkspacePackages"].as_bool(),
-                Some(true)
-            );
-            assert_eq!(pnpm_workspace_yaml["overrides"]["js-yaml"], "4.3.1");
-            assert!(
-                pnpm_workspace.contains("pre-run validation rewrite installed executable shims")
-            );
-            assert!(pnpm_workspace.contains("Keep\n# this allowlist narrow"));
-            assert!(pnpm_workspace.contains("authorizes dependency code execution"));
-            assert!(pnpm_workspace.contains("\nallowBuilds:\n  esbuild: true\n"));
-        }
-        if package_manager == "yarn" {
-            assert_eq!(
-                fs::read_to_string(temp.path().join(".yarnrc.yml")).unwrap(),
-                "nodeLinker: node-modules\n"
-            );
-        }
+        assert_frontend_dev_scripts_for_package_manager(package_manager);
     }
 }
 

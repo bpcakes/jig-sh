@@ -150,29 +150,40 @@ fn seed_answers_only_serializes_provided_values() {
     assert!(!mapping.contains_key("default_branch"));
 }
 
-#[test]
-fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
-    assert_eq!(template_progress_label(None), "default jig-sh template");
-    assert_eq!(template_progress_label(Some("/tmp/jig-sh")), "/tmp/jig-sh");
-
-    let destination = PathBuf::from("/tmp/demo");
-    let result = initial_copy::BootstrapCopyResult {
+fn copy_result(bootstrap: bool, dry_run: bool, minimal: bool) -> initial_copy::BootstrapCopyResult {
+    initial_copy::BootstrapCopyResult {
         default_branch: Some("main".into()),
-        bootstrap_command_configured: true,
-        frontend_apps_configured: true,
-        dev_apps_configured: true,
-        sqlx_enabled: true,
-        schema_dump_enabled: true,
-        minimal_footprint: false,
+        bootstrap_command_configured: bootstrap,
+        frontend_apps_configured: bootstrap,
+        dev_apps_configured: bootstrap,
+        sqlx_enabled: bootstrap,
+        schema_dump_enabled: bootstrap,
+        minimal_footprint: minimal,
         full_to_minimal_transition: false,
         render_preview: initial_copy::AdoptionRenderPreview::default(),
-        apply_report: sync::ApplyRenderReport::default(),
+        apply_report: sync::ApplyRenderReport {
+            dry_run,
+            ..sync::ApplyRenderReport::default()
+        },
         notes: Vec::new(),
-    };
+    }
+}
 
-    let steps = initial_next_steps(InitialCommand::Adopt, &destination, &result, false);
-    let command_report = initial_command_report(&result);
+#[test]
+fn template_progress_labels_name_the_selected_source() {
+    assert_eq!(template_progress_label(None), "default jig-sh template");
+    assert_eq!(template_progress_label(Some("/tmp/jig-sh")), "/tmp/jig-sh");
+}
 
+#[test]
+fn adopted_full_harness_next_steps_cover_configured_capabilities() {
+    let result = copy_result(true, false, false);
+    let steps = initial_next_steps(
+        InitialCommand::Adopt,
+        Path::new("/tmp/demo"),
+        &result,
+        false,
+    );
     assert_eq!(steps[0], "cd /tmp/demo");
     for expected in [
         "scripts/jig setup",
@@ -181,33 +192,30 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
     ] {
         assert!(steps.iter().any(|step| step == expected));
     }
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.contains("scripts/jig check sqlx"))
-    );
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.contains("scripts/dump-schema.sh"))
-    );
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.contains("Commit the adoption diff"))
-    );
+    for expected in [
+        "scripts/jig check sqlx",
+        "scripts/dump-schema.sh",
+        "Commit the adoption diff",
+    ] {
+        assert!(steps.iter().any(|step| step.contains(expected)));
+    }
     assert!(!steps.iter().any(|step| step.starts_with("Review ")));
+
+    let commands = initial_command_report(&result);
     assert!(
-        command_report
+        commands
             .iter()
             .all(|command| !command.contains("run jig ") && !command.contains("through jig "))
     );
     assert!(
-        command_report
+        commands
             .iter()
             .all(|command| command.contains("scripts/jig"))
     );
+}
 
+#[test]
+fn initial_notes_cover_review_and_required_checks() {
     let notes = initial_notes(Vec::new(), true, None, false);
     for expected in [
         "Review generated .jig.toml",
@@ -216,111 +224,58 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
     ] {
         assert!(notes.iter().any(|note| note.contains(expected)));
     }
+}
 
-    let preview_steps = initial_next_steps(
+#[test]
+fn preview_next_steps_do_not_run_generated_commands() {
+    let steps = initial_next_steps(
         InitialCommand::Adopt,
         Path::new("/tmp/preview"),
-        &initial_copy::BootstrapCopyResult {
-            default_branch: Some("main".into()),
-            bootstrap_command_configured: true,
-            frontend_apps_configured: true,
-            dev_apps_configured: true,
-            sqlx_enabled: true,
-            schema_dump_enabled: true,
-            minimal_footprint: false,
-            full_to_minimal_transition: false,
-            render_preview: initial_copy::AdoptionRenderPreview::default(),
-            apply_report: sync::ApplyRenderReport {
-                dry_run: true,
-                ..sync::ApplyRenderReport::default()
-            },
-            notes: Vec::new(),
-        },
+        &copy_result(true, true, false),
         false,
     );
     assert!(
-        preview_steps
+        steps
             .iter()
             .any(|step| step.contains("jig adopt . --write"))
     );
     assert!(
-        preview_steps
+        steps
             .iter()
             .any(|step| step == "No files were changed by this preview.")
     );
-    assert!(
-        !preview_steps
-            .iter()
-            .any(|step| step.starts_with("scripts/jig"))
-    );
+    assert!(!steps.iter().any(|step| step.starts_with("scripts/jig")));
+}
 
-    let quoted_steps = initial_next_steps(
+#[test]
+fn init_next_steps_quote_destinations_with_spaces() {
+    let steps = initial_next_steps(
         InitialCommand::Init,
         Path::new("/tmp/demo repo"),
-        &initial_copy::BootstrapCopyResult {
-            default_branch: Some("main".into()),
-            bootstrap_command_configured: true,
-            frontend_apps_configured: false,
-            dev_apps_configured: false,
-            sqlx_enabled: false,
-            schema_dump_enabled: false,
-            minimal_footprint: false,
-            full_to_minimal_transition: false,
-            render_preview: initial_copy::AdoptionRenderPreview::default(),
-            apply_report: sync::ApplyRenderReport::default(),
-            notes: Vec::new(),
-        },
+        &copy_result(false, false, false),
         false,
     );
-    assert_eq!(quoted_steps[0], "cd '/tmp/demo repo'");
+    assert_eq!(steps[0], "cd '/tmp/demo repo'");
+}
 
-    let no_bootstrap_steps = initial_next_steps(
+#[test]
+fn init_without_bootstrap_uses_setup_and_reports_the_skip() {
+    let result = copy_result(false, false, false);
+    let steps = initial_next_steps(
         InitialCommand::Init,
         Path::new("/tmp/no-bootstrap"),
-        &initial_copy::BootstrapCopyResult {
-            default_branch: Some("main".into()),
-            bootstrap_command_configured: false,
-            frontend_apps_configured: false,
-            dev_apps_configured: false,
-            sqlx_enabled: false,
-            schema_dump_enabled: false,
-            minimal_footprint: false,
-            full_to_minimal_transition: false,
-            render_preview: initial_copy::AdoptionRenderPreview::default(),
-            apply_report: sync::ApplyRenderReport::default(),
-            notes: Vec::new(),
-        },
+        &result,
         false,
     );
-    assert!(
-        !no_bootstrap_steps
-            .iter()
-            .any(|step| step == "scripts/jig bootstrap")
-    );
-    assert!(
-        no_bootstrap_steps
-            .iter()
-            .any(|step| step == "scripts/jig setup")
-    );
-    let no_bootstrap_report = initial_command_report(&initial_copy::BootstrapCopyResult {
-        default_branch: Some("main".into()),
-        bootstrap_command_configured: false,
-        frontend_apps_configured: false,
-        dev_apps_configured: false,
-        sqlx_enabled: false,
-        schema_dump_enabled: false,
-        minimal_footprint: true,
-        full_to_minimal_transition: false,
-        render_preview: initial_copy::AdoptionRenderPreview::default(),
-        apply_report: sync::ApplyRenderReport::default(),
-        notes: Vec::new(),
-    });
+    assert!(!steps.iter().any(|step| step == "scripts/jig bootstrap"));
+    assert!(steps.iter().any(|step| step == "scripts/jig setup"));
+    let commands = initial_command_report(&copy_result(false, false, true));
     assert_eq!(
-        no_bootstrap_report[0],
+        commands[0],
         "bootstrap_command not configured; skip jig bootstrap"
     );
     assert!(
-        no_bootstrap_report
+        commands
             .iter()
             .all(|command| !command.contains("scripts/jig"))
     );

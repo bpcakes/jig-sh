@@ -65,7 +65,7 @@ jig init /path/to/example-library --preset rust-library --no-input --no-vault
 jig init /path/to/example-cli --preset rust-cli --no-input --no-vault
 ```
 
-Both presets use Rust 2024 and the top-level Jig Rust 1.88 baseline. Their one seed package starts non-publishable and without license metadata. They add no database, SQLx, application contract, frontend, API, dev app, release workflow, or extra crate layer. The CLI starter uses only std and prints its package name and version; its argument parsing and logging choices remain project decisions. There is no public `rust-workspace` preset—choose the artifact the initial crate actually provides. If the Rust repository already exists, run `jig adopt .` instead so Jig previews and preserves its project-owned structure.
+Both presets use Rust 2024 and the top-level Jig Rust 1.88 baseline. Like `rust-react`, they enable Clippy's `cognitive_complexity` restriction lint at warning level with a threshold of 20, and every generated workspace member inherits that policy. The strict Clippy command denies warnings, so a heuristic score above 20 fails the gate. Clippy cautions that this score is not an objective complexity measurement; the generated Cargo and Clippy configuration is project-owned and can be adjusted when the policy does not fit the codebase. Their one seed package starts non-publishable and without license metadata. They add no database, SQLx, application contract, frontend, API, dev app, release workflow, or extra crate layer. The CLI starter uses only std and prints its package name and version; its argument parsing and logging choices remain project decisions. There is no public `rust-workspace` preset—choose the artifact the initial crate actually provides. If the Rust repository already exists, run `jig adopt .` instead so Jig previews and preserves its project-owned structure.
 
 The generated Rust-only README gives the complete command list. The minimum post-init workflow is:
 
@@ -74,7 +74,7 @@ scripts/jig setup
 scripts/jig check test
 ```
 
-Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI share the resolution. The root/member Cargo manifests, seed source, crate guide, and scaffold README are generated once and become project-owned. `jig update` maintains the harness without rewriting them. Root guidance talks about the Rust workspace and crate ownership, and neither preset configures or recommends `scripts/jig dev`.
+Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI share the resolution. The root/member Cargo manifests, root `clippy.toml`, seed source, crate guide, and scaffold README are generated once and become project-owned. `jig update` maintains the harness without rewriting them. Root guidance talks about the Rust workspace and crate ownership, and neither preset configures or recommends `scripts/jig dev`.
 
 When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
 

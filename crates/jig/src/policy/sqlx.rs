@@ -216,25 +216,7 @@ fn scan_sqlx_calls(path: &str, text: &str) -> Vec<SqlxCall> {
             pending_cfg_test = false;
         }
 
-        for name in names {
-            let mut start = 0usize;
-            while let Some(pos) = code[start..].find(name) {
-                let absolute = start + pos;
-                let after = &code[absolute + name.len()..];
-                if is_keyword_boundary(code[..absolute].chars().next_back())
-                    && let Some(checked) = sqlx_call_checked(after)
-                {
-                    calls.push(SqlxCall {
-                        path: path.into(),
-                        line: index + 1,
-                        function: name.into(),
-                        checked,
-                        is_test: line_is_test,
-                    });
-                }
-                start = absolute + name.len();
-            }
-        }
+        scan_sqlx_calls_in_line(path, index + 1, &code, line_is_test, &names, &mut calls);
 
         let mut clear_test_module = false;
         if let Some(depth) = &mut test_module_brace_depth {
@@ -250,6 +232,35 @@ fn scan_sqlx_calls(path: &str, text: &str) -> Vec<SqlxCall> {
         }
     }
     calls
+}
+
+fn scan_sqlx_calls_in_line(
+    path: &str,
+    line: usize,
+    code: &str,
+    is_test: bool,
+    names: &[&str],
+    calls: &mut Vec<SqlxCall>,
+) {
+    for name in names {
+        let mut start = 0usize;
+        while let Some(pos) = code[start..].find(name) {
+            let absolute = start + pos;
+            let after = &code[absolute + name.len()..];
+            if is_keyword_boundary(code[..absolute].chars().next_back())
+                && let Some(checked) = sqlx_call_checked(after)
+            {
+                calls.push(SqlxCall {
+                    path: path.into(),
+                    line,
+                    function: (*name).into(),
+                    checked,
+                    is_test,
+                });
+            }
+            start = absolute + name.len();
+        }
+    }
 }
 
 enum TestModuleDecl {

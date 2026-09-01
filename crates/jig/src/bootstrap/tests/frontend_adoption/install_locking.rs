@@ -187,7 +187,7 @@ esac
         .current_dir(&repo)
         .output()
         .unwrap();
-    assert!(resolved_spec.status.success());
+    assert_output_succeeded("resolve standalone pnpm spec", &resolved_spec);
     assert_eq!(
         String::from_utf8(resolved_spec.stdout).unwrap().trim(),
         "pnpm@10.11.0"
@@ -245,69 +245,53 @@ esac
             r#"{"lastValidatedTimestamp":1,"settings":{"dedupeInjectedDeps":true}}"#,
         )
         .unwrap();
-        assert!(
-            dependencies_ready(),
-            "pnpm's root validation cache {workspace_state_name} invalidated an otherwise ready install"
-        );
+        assert_dependency_readiness(workspace_state_name, dependencies_ready(), true);
         fs::write(
             &workspace_state,
             r#"{"lastValidatedTimestamp":1784300000000,"settings":{"dedupeInjectedDeps":true}}"#,
         )
         .unwrap();
-        assert!(
-            dependencies_ready(),
-            "a {workspace_state_name} timestamp/size rewrite invalidated readiness"
-        );
+        assert_dependency_readiness("rewritten pnpm workspace state", dependencies_ready(), true);
 
         let nested_workspace_state = node_modules.join("test-package").join(workspace_state_name);
         fs::write(&nested_workspace_state, "nested package-owned state\n").unwrap();
-        assert!(
-            !dependencies_ready(),
-            "nested {workspace_state_name} escaped the structural proof"
-        );
+        assert_dependency_readiness("nested pnpm workspace state", dependencies_ready(), false);
         fs::remove_file(&nested_workspace_state).unwrap();
-        assert!(dependencies_ready());
+        assert_dependency_readiness("removed nested workspace state", dependencies_ready(), true);
 
         fs::remove_file(&workspace_state).unwrap();
-        assert!(
-            dependencies_ready(),
-            "deleting pnpm's volatile root cache {workspace_state_name} invalidated readiness"
-        );
+        assert_dependency_readiness("deleted volatile root cache", dependencies_ready(), true);
         fs::create_dir(&workspace_state).unwrap();
-        assert!(
-            !dependencies_ready(),
-            "a directory replacing {workspace_state_name} escaped the structural proof"
+        assert_dependency_readiness(
+            "directory replacing workspace state",
+            dependencies_ready(),
+            false,
         );
         fs::remove_dir(&workspace_state).unwrap();
-        assert!(dependencies_ready());
+        assert_dependency_readiness("removed replacement directory", dependencies_ready(), true);
 
         symlink("test-package/package.json", &workspace_state).unwrap();
-        assert!(
-            !dependencies_ready(),
-            "a symlink replacing {workspace_state_name} escaped the structural proof"
+        assert_dependency_readiness(
+            "symlink replacing workspace state",
+            dependencies_ready(),
+            false,
         );
         fs::remove_file(&workspace_state).unwrap();
-        assert!(dependencies_ready());
+        assert_dependency_readiness("removed replacement symlink", dependencies_ready(), true);
     }
 
     let bin_dir = node_modules.join(".bin");
     fs::create_dir(&bin_dir).unwrap();
     fs::write(bin_dir.join("test-package"), "shim\n").unwrap();
-    assert!(
-        !dependencies_ready(),
-        "pnpm's .bin layout escaped the structural proof"
-    );
+    assert_dependency_readiness("pnpm .bin layout", dependencies_ready(), false);
     fs::remove_dir_all(&bin_dir).unwrap();
-    assert!(dependencies_ready());
+    assert_dependency_readiness("removed pnpm .bin", dependencies_ready(), true);
 
     let modules_metadata = node_modules.join(".modules.yaml");
     fs::write(&modules_metadata, "layout-v2\n").unwrap();
-    assert!(
-        !dependencies_ready(),
-        "same-sized semantic pnpm metadata mutation escaped the structural proof"
-    );
+    assert_dependency_readiness("pnpm metadata mutation", dependencies_ready(), false);
     fs::write(&modules_metadata, "layout-v1\n").unwrap();
-    assert!(dependencies_ready());
+    assert_dependency_readiness("restored pnpm metadata", dependencies_ready(), true);
 
     fs::write(repo.join("apps/web/local.patch"), "patch contents\n").unwrap();
     fs::write(
@@ -326,13 +310,12 @@ esac
             .env("PNPM_VERSION", version)
             .output()
             .unwrap();
-        assert!(
-            !rejected.status.success(),
-            "pnpm {version} accepted scope-local YAML patches that --ignore-workspace would ignore"
-        );
+        assert_output_failed("scope-local pnpm YAML patch", &rejected);
         let stderr = String::from_utf8_lossy(&rejected.stderr);
-        assert!(stderr.contains("apps/web/pnpm-workspace.yaml"), "{stderr}");
-        assert!(stderr.contains("--ignore-workspace"), "{stderr}");
+        assert_text_contains_all(
+            &stderr,
+            &["apps/web/pnpm-workspace.yaml", "--ignore-workspace"],
+        );
         assert_eq!(
             fs::read_to_string(&install_count).unwrap().trim(),
             "1",
@@ -734,12 +717,7 @@ mv() {
         "candidate hardlink was not retained at the simulated kill point"
     );
     let recovered = command(None).output().unwrap();
-    assert!(
-        recovered.status.success(),
-        "bootstrap did not reclaim an interrupted lock creation:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&recovered.stdout),
-        String::from_utf8_lossy(&recovered.stderr)
-    );
+    assert_output_succeeded("reclaim interrupted lock creation", &recovered);
     assert_eq!(fs::read_to_string(&install_log).unwrap().lines().count(), 1);
     assert!(!install_lock.exists());
     assert_no_lock_sidecars();
@@ -749,12 +727,7 @@ mv() {
     interrupt_after_link("claim");
     assert!(install_lock.exists());
     let recovered = command(None).output().unwrap();
-    assert!(
-        recovered.status.success(),
-        "bootstrap did not reclaim an interrupted recovery claim:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&recovered.stdout),
-        String::from_utf8_lossy(&recovered.stderr)
-    );
+    assert_output_succeeded("reclaim interrupted recovery claim", &recovered);
     assert_eq!(fs::read_to_string(&install_log).unwrap().lines().count(), 1);
     assert!(!install_lock.exists());
     assert_no_lock_sidecars();
@@ -766,12 +739,7 @@ mv() {
     )
     .unwrap();
     let recovered = command(Some(&pid_reuse_bash_env)).output().unwrap();
-    assert!(
-        recovered.status.success(),
-        "bootstrap did not detect a reused lock-owner PID:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&recovered.stdout),
-        String::from_utf8_lossy(&recovered.stderr)
-    );
+    assert_output_succeeded("detect reused lock-owner PID", &recovered);
     assert_eq!(fs::read_to_string(&install_log).unwrap().lines().count(), 1);
     assert!(!install_lock.exists());
     assert_no_lock_sidecars();
@@ -784,12 +752,7 @@ mv() {
     let first = first.wait_with_output().unwrap();
     let second = second.wait_with_output().unwrap();
     for (name, output) in [("first", first), ("second", second)] {
-        assert!(
-            output.status.success(),
-            "{name} bootstrap failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_output_succeeded(name, &output);
     }
 
     assert_eq!(
@@ -809,6 +772,80 @@ mv() {
     assert!(!install_lock.exists());
     assert!(repo.join("node_modules").is_dir());
     assert_no_lock_sidecars();
+}
+
+#[cfg(unix)]
+fn assert_unverified_live_lock_owners_are_preserved(
+    repo: &Path,
+    install_lock: &Path,
+    command: &impl Fn() -> std::process::Command,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let kill_failure_env = repo.join("kill-failure-env");
+    fs::write(
+        &kill_failure_env,
+        "kill() { if [ \"${1:-}\" = \"-0\" ]; then return 1; fi; builtin kill \"$@\"; }\n",
+    )
+    .unwrap();
+    let probe_node = repo.join("probe-node");
+    fs::write(
+        &probe_node,
+        r#"#!/bin/sh
+if [ "${1:-}" = "-" ] && [ "${2:-}" = "--jig-process-probe" ]; then
+  case "${PROBE_BEHAVIOR:-}" in
+    eperm) printf '%s\n' unverified; exit 0 ;;
+    tool-failure) exit 19 ;;
+  esac
+fi
+exec node "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&probe_node, fs::Permissions::from_mode(0o755)).unwrap();
+    let simulated_owner = format!(
+        "{} simulated-permission-owner RecordedStart\n",
+        std::process::id()
+    );
+    for behavior in ["eperm", "tool-failure"] {
+        fs::write(install_lock, &simulated_owner).unwrap();
+        let mut simulated = command();
+        simulated
+            .env("BASH_ENV", &kill_failure_env)
+            .env("NODE", &probe_node)
+            .env("PROBE_BEHAVIOR", behavior);
+        let simulated = simulated.output().unwrap();
+        assert!(
+            !simulated.status.success(),
+            "{behavior} process probe was treated as a stale owner"
+        );
+        assert_eq!(fs::read_to_string(install_lock).unwrap(), simulated_owner);
+    }
+
+    let unknown_live = format!("{} legacy-token unknown\n", std::process::id());
+    fs::write(install_lock, &unknown_live).unwrap();
+    let unverified = command().output().unwrap();
+    assert_output_failed("unknown live lock owner", &unverified);
+    assert_eq!(fs::read_to_string(install_lock).unwrap(), unknown_live);
+    assert!(
+        String::from_utf8_lossy(&unverified.stderr).contains("could not be validated or recovered")
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        let ps_failure_env = repo.join("ps-failure-env");
+        fs::write(&ps_failure_env, "ps() { return 1; }\n").unwrap();
+        fs::write(
+            install_lock,
+            format!("{} known-token RecordedStart\n", std::process::id()),
+        )
+        .unwrap();
+        let mut unreadable_identity = command();
+        unreadable_identity.env("BASH_ENV", &ps_failure_env);
+        let unreadable_identity = unreadable_identity.output().unwrap();
+        assert_output_failed("unreadable live lock identity", &unreadable_identity);
+        assert!(install_lock.exists(), "unverified live lock was removed");
+    }
 }
 
 #[cfg(unix)]
@@ -959,69 +996,97 @@ esac
     fs::remove_dir_all(repo.join("node_modules")).unwrap();
     fs::remove_dir_all(repo.join(".agent/tmp/web-dependencies")).unwrap();
 
-    let kill_failure_env = repo.join("kill-failure-env");
-    fs::write(
-        &kill_failure_env,
-        "kill() { if [ \"${1:-}\" = \"-0\" ]; then return 1; fi; builtin kill \"$@\"; }\n",
-    )
-    .unwrap();
-    let probe_node = repo.join("probe-node");
-    fs::write(
-        &probe_node,
-        r#"#!/bin/sh
-if [ "${1:-}" = "-" ] && [ "${2:-}" = "--jig-process-probe" ]; then
-  case "${PROBE_BEHAVIOR:-}" in
-    eperm) printf '%s\n' unverified; exit 0 ;;
-    tool-failure) exit 19 ;;
-  esac
-fi
-exec node "$@"
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&probe_node, fs::Permissions::from_mode(0o755)).unwrap();
-    let simulated_owner = format!(
-        "{} simulated-permission-owner RecordedStart\n",
-        std::process::id()
-    );
-    for behavior in ["eperm", "tool-failure"] {
-        fs::write(&install_lock, &simulated_owner).unwrap();
-        let mut simulated = command();
-        simulated
-            .env("BASH_ENV", &kill_failure_env)
-            .env("NODE", &probe_node)
-            .env("PROBE_BEHAVIOR", behavior);
-        let simulated = simulated.output().unwrap();
-        assert!(
-            !simulated.status.success(),
-            "{behavior} process probe was treated as a stale owner"
-        );
-        assert_eq!(fs::read_to_string(&install_lock).unwrap(), simulated_owner);
+    assert_unverified_live_lock_owners_are_preserved(&repo, &install_lock, &command);
+}
+
+#[cfg(unix)]
+fn wait_for_path(path: &Path) -> bool {
+    for _ in 0..500 {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    false
+}
 
-    let unknown_live = format!("{} legacy-token unknown\n", std::process::id());
-    fs::write(&install_lock, &unknown_live).unwrap();
-    let unverified = command().output().unwrap();
-    assert!(!unverified.status.success());
-    assert_eq!(fs::read_to_string(&install_lock).unwrap(), unknown_live);
+#[cfg(unix)]
+fn wait_for_child(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
+    for _ in 0..500 {
+        let status = child.try_wait().unwrap();
+        if status.is_some() {
+            return status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
+}
+
+#[cfg(unix)]
+fn assert_install_worker_script_contract(checker: &str) {
+    let start_worker = checker
+        .split_once("start_install_worker() {")
+        .unwrap()
+        .1
+        .split_once("run_dependency_install() {")
+        .unwrap()
+        .0;
     assert!(
-        String::from_utf8_lossy(&unverified.stderr).contains("could not be validated or recovered")
+        start_worker
+            .find("trap 'forward_install_worker_signal HUP' HUP")
+            .unwrap()
+            < start_worker.find("\"$bash_bin\" \"$0\"").unwrap()
     );
+    assert_text_contains_all(
+        checker,
+        &["trap 'preserve_install_lock_for_group_recovery' EXIT"],
+    );
+    assert_text_contains_none(
+        checker,
+        &["trap 'release_install_lock' EXIT\n          break"],
+    );
+    let handoff = checker
+        .split_once("dependency_install_worker() {")
+        .unwrap()
+        .1
+        .split_once("scope=\"$(dependency_scope")
+        .unwrap()
+        .0;
+    assert_text_contains_all(
+        handoff,
+        &[
+            "while :; do",
+            "unresolved_handoff_attempts=0",
+            "max_unresolved_handoff_attempts=600",
+        ],
+    );
+    assert_text_contains_none(handoff, &["attempt -lt 500"]);
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        let ps_failure_env = repo.join("ps-failure-env");
-        fs::write(&ps_failure_env, "ps() { return 1; }\n").unwrap();
-        fs::write(
-            &install_lock,
-            format!("{} known-token RecordedStart\n", std::process::id()),
-        )
-        .unwrap();
-        let mut unreadable_identity = command();
-        unreadable_identity.env("BASH_ENV", &ps_failure_env);
-        let unreadable_identity = unreadable_identity.output().unwrap();
-        assert!(!unreadable_identity.status.success());
-        assert!(install_lock.exists(), "unverified live lock was removed");
+#[cfg(unix)]
+fn kill_parent_after_worker_starts(child: &std::process::Child, install_started: &Path) -> bool {
+    let started = wait_for_path(install_started);
+    if started {
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGKILL);
+        }
+    }
+    started
+}
+
+#[cfg(unix)]
+fn reset_install_worker_fixture(repo: &Path, install_active: &Path, fixture_files: &[&Path]) {
+    fs::remove_dir_all(repo.join("node_modules")).unwrap();
+    fs::remove_dir_all(repo.join(".agent/tmp/web-dependencies")).unwrap();
+    for file in fixture_files {
+        if file.exists() {
+            fs::remove_file(file).unwrap();
+        }
+    }
+    if install_active.exists() {
+        fs::remove_dir_all(install_active).unwrap();
     }
 }
 
@@ -1062,33 +1127,7 @@ fn generated_web_install_worker_survives_parent_sigkill_without_overlapping_inst
     })
     .unwrap();
     let checker = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
-    let start_worker = checker
-        .split_once("start_install_worker() {")
-        .unwrap()
-        .1
-        .split_once("run_dependency_install() {")
-        .unwrap()
-        .0;
-    assert!(
-        start_worker
-            .find("trap 'forward_install_worker_signal HUP' HUP")
-            .unwrap()
-            < start_worker.find("\"$bash_bin\" \"$0\"").unwrap(),
-        "worker signal forwarding must be armed before the worker is spawned"
-    );
-    assert!(checker.contains("trap 'preserve_install_lock_for_group_recovery' EXIT"));
-    assert!(!checker.contains("trap 'release_install_lock' EXIT\n          break"));
-    let handoff_wait = checker
-        .split_once("dependency_install_worker() {")
-        .unwrap()
-        .1
-        .split_once("scope=\"$(dependency_scope")
-        .unwrap()
-        .0;
-    assert!(handoff_wait.contains("while :; do"));
-    assert!(handoff_wait.contains("unresolved_handoff_attempts=0"));
-    assert!(handoff_wait.contains("max_unresolved_handoff_attempts=600"));
-    assert!(!handoff_wait.contains("attempt -lt 500"));
+    assert_install_worker_script_contract(&checker);
     fs::create_dir_all(repo.join("apps/web")).unwrap();
     fs::write(
         repo.join("package.json"),
@@ -1162,36 +1201,14 @@ esac
     };
 
     let mut first = command().spawn().unwrap();
-    for _ in 0..500 {
-        if install_started.exists() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let started = install_started.exists();
-    if started {
-        unsafe {
-            libc::kill(first.id() as i32, libc::SIGKILL);
-        }
-    }
+    let started = kill_parent_after_worker_starts(&first, &install_started);
     let _ = first.wait();
     let mut second = command().spawn().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(200));
     let overlap_before_release = install_overlap.exists();
     fs::write(&install_release, "release\n").unwrap();
 
-    let mut second_status = None;
-    for _ in 0..500 {
-        second_status = second.try_wait().unwrap();
-        if second_status.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if second_status.is_none() {
-        let _ = second.kill();
-        let _ = second.wait();
-    }
+    let second_status = wait_for_child(&mut second);
 
     assert!(started, "installer worker never started");
     assert!(
@@ -1213,31 +1230,21 @@ esac
             .success()
     );
 
-    fs::remove_dir_all(repo.join("node_modules")).unwrap();
-    fs::remove_dir_all(repo.join(".agent/tmp/web-dependencies")).unwrap();
-    for file in [
-        &install_overlap,
-        &install_count,
-        &install_started,
-        &install_release,
-    ] {
-        if file.exists() {
-            fs::remove_file(file).unwrap();
-        }
-    }
-    if install_active.exists() {
-        fs::remove_dir_all(&install_active).unwrap();
-    }
+    reset_install_worker_fixture(
+        &repo,
+        &install_active,
+        &[
+            &install_overlap,
+            &install_count,
+            &install_started,
+            &install_release,
+        ],
+    );
 
     let mut interrupted = command().spawn().unwrap();
-    for _ in 0..500 {
-        if install_started.exists() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let interrupted_started = wait_for_path(&install_started);
     assert!(
-        install_started.exists(),
+        interrupted_started,
         "signal-interrupted installer worker never started"
     );
     assert_eq!(
@@ -1245,14 +1252,7 @@ esac
         0,
         "could not signal dependency-install coordinator"
     );
-    let mut interrupted_status = None;
-    for _ in 0..500 {
-        interrupted_status = interrupted.try_wait().unwrap();
-        if interrupted_status.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let interrupted_status = wait_for_child(&mut interrupted);
     assert!(
         interrupted_status.is_some_and(|status| !status.success()),
         "signal-interrupted coordinator did not exit through its forwarding path"
@@ -1271,18 +1271,7 @@ esac
     assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "1");
     fs::write(&install_release, "release\n").unwrap();
 
-    let mut waiting_status = None;
-    for _ in 0..500 {
-        waiting_status = waiting.try_wait().unwrap();
-        if waiting_status.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if waiting_status.is_none() {
-        let _ = waiting.kill();
-        let _ = waiting.wait();
-    }
+    let waiting_status = wait_for_child(&mut waiting);
     assert!(
         waiting_status.unwrap().success(),
         "waiter failed after the interrupted install group exited"

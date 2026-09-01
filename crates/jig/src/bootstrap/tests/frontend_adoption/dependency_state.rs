@@ -1,6 +1,389 @@
 use super::*;
 
 #[cfg(unix)]
+struct DependencyStateHarness {
+    repo: PathBuf,
+    fake_node: PathBuf,
+    path: std::ffi::OsString,
+    install_count: PathBuf,
+    install_argv: PathBuf,
+    install_env: PathBuf,
+    lockfile: String,
+    package_manager: String,
+    artifact: String,
+}
+
+#[cfg(unix)]
+impl DependencyStateHarness {
+    fn run_mode(&self, mode: &str, fail_install: bool) {
+        let output = std::process::Command::new("bash")
+            .args(["scripts/check-webapps.sh", mode])
+            .current_dir(&self.repo)
+            .env("NODE", &self.fake_node)
+            .env("PATH", &self.path)
+            .env("INSTALL_COUNT", &self.install_count)
+            .env("INSTALL_ARGV", &self.install_argv)
+            .env("INSTALL_ENV", &self.install_env)
+            .env("TEST_LOCKFILE", &self.lockfile)
+            .env("TEST_PACKAGE_MANAGER", &self.package_manager)
+            .env("TEST_ARTIFACT", &self.artifact)
+            .env("FAIL_INSTALL", if fail_install { "1" } else { "0" })
+            .env("NODE_ENV", "production")
+            .env("NPM_CONFIG_OMIT", "dev optional peer")
+            .env("NPM_CONFIG_INCLUDE", "prod")
+            .env("NPM_CONFIG_PRODUCTION", "true")
+            .env("NPM_CONFIG_OPTIONAL", "false")
+            .env("NPM_CONFIG_ONLY", "production")
+            .env("NPM_CONFIG_DEV", "false")
+            .env("NPM_CONFIG_ALSO", "production")
+            .env("Npm_Config_Bin_Links", "false")
+            .env("npm_CONFIG_dry_run", "true")
+            .env("NPM_CONFIG_PACKAGE_LOCK_ONLY", "true")
+            .env("NPM_CONFIG_PACKAGE_LOCK", "false")
+            .env("NPM_CONFIG_GLOBAL", "true")
+            .env("NPM_CONFIG_WORKSPACE", "other")
+            .env("NPM_CONFIG_WORKSPACES", "false")
+            .env("NPM_CONFIG_INCLUDE_WORKSPACE_ROOT", "false")
+            .env("NPM_CONFIG_PREFIX", "/hostile-prefix")
+            .env("NPM_CONFIG_LOCATION", "global")
+            .env("NPM_CONFIG_IF_PRESENT", "true")
+            .env("NPM_CONFIG_CPU", "hostile-cpu")
+            .env("NPM_CONFIG_OS", "hostile-os")
+            .env("NPM_CONFIG_LIBC", "hostile-libc")
+            .env("NPM_CONFIG_REGISTRY", "https://registry.example.invalid/")
+            .env("npm_config_install_strategy", "nested")
+            .env("NPM_CONFIG_LEGACY_PEER_DEPS", "true")
+            .env("NPM_CONFIG_IGNORE_SCRIPTS", "true")
+            .output()
+            .unwrap();
+        if fail_install {
+            assert_output_failed(mode, &output);
+        } else {
+            assert_output_succeeded(mode, &output);
+        }
+    }
+
+    fn ready(&self) -> bool {
+        std::process::Command::new("bash")
+            .args(["scripts/check-webapps.sh", "dependencies-ready", "apps/web"])
+            .current_dir(&self.repo)
+            .env("NODE", &self.fake_node)
+            .env("PATH", &self.path)
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    fn assert_ready(&self, expected: bool, label: &str) {
+        assert_eq!(self.ready(), expected, "unexpected readiness for {label}");
+    }
+
+    fn assert_install_count(&self, expected: usize) {
+        assert_eq!(
+            fs::read_to_string(&self.install_count).unwrap().trim(),
+            expected.to_string()
+        );
+    }
+
+    fn repair_after_failed_install(&self, expected_install_count: &mut usize) {
+        self.run_mode("lint", true);
+        *expected_install_count += 1;
+        self.assert_install_count(*expected_install_count);
+        self.run_mode("lint", false);
+        *expected_install_count += 1;
+        self.assert_install_count(*expected_install_count);
+    }
+
+    fn refresh_install(&self, expected_install_count: &mut usize) {
+        self.run_mode("lint", false);
+        *expected_install_count += 1;
+        self.assert_install_count(*expected_install_count);
+    }
+}
+
+#[cfg(unix)]
+fn assert_initial_dependency_receipt(
+    harness: &DependencyStateHarness,
+    initial_lock: &str,
+) -> usize {
+    let install_lock = harness.repo.join(".agent/tmp/web-dependencies.lock");
+    fs::create_dir_all(install_lock.parent().unwrap()).unwrap();
+    fs::write(&install_lock, "999999999\n").unwrap();
+    harness.run_mode("bootstrap", false);
+    assert!(
+        !install_lock.exists(),
+        "stale dependency lock was not recovered"
+    );
+    assert_eq!(
+        fs::read_to_string(harness.repo.join(&harness.lockfile)).unwrap(),
+        initial_lock
+    );
+    harness.assert_ready(true, "initial receipt publication");
+
+    let dependency_stamp = harness.repo.join(".agent/tmp/web-dependencies/root.sha256");
+    let current_stamp = fs::read_to_string(&dependency_stamp).unwrap();
+    assert!(
+        current_stamp.starts_with("v5 "),
+        "{} did not publish a v5 dependency receipt",
+        harness.package_manager
+    );
+    fs::write(&dependency_stamp, current_stamp.replacen("v5 ", "v4 ", 1)).unwrap();
+    harness.assert_ready(false, "stale v4 receipt");
+    fs::write(&dependency_stamp, current_stamp).unwrap();
+    harness.assert_ready(true, "expected ready state");
+    harness.run_mode("lint", false);
+    harness.assert_install_count(1);
+    harness.assert_ready(true, "expected ready state");
+    1
+}
+
+#[cfg(unix)]
+fn assert_npm_install_contract(
+    harness: &DependencyStateHarness,
+    expected_install_count: &mut usize,
+) {
+    let npm_install_argv = format!(
+        "{{operation}}\n--include=dev\n--include=optional\n--include=peer\n--bin-links=true\n--dry-run=false\n--package-lock-only=false\n--package-lock=true\n--global=false\n--location=project\n--prefix={}\n--cpu=test-cpu\n--os=test-platform\n--workspaces=true\n--include-workspace-root=true\n",
+        harness.repo.canonicalize().unwrap().display()
+    );
+    assert_eq!(
+        fs::read_to_string(&harness.install_argv).unwrap(),
+        npm_install_argv.replace("{operation}", "install"),
+        "npm bootstrap did not freeze install-shaping inputs"
+    );
+    let environment = fs::read_to_string(&harness.install_env).unwrap();
+    assert_environment_contains_none(
+        &environment,
+        &[
+            "NODE_ENV=",
+            "NPM_CONFIG_OMIT=",
+            "NPM_CONFIG_INCLUDE=",
+            "NPM_CONFIG_PRODUCTION=",
+            "NPM_CONFIG_OPTIONAL=",
+            "NPM_CONFIG_ONLY=",
+            "NPM_CONFIG_DEV=",
+            "NPM_CONFIG_ALSO=",
+            "Npm_Config_Bin_Links=",
+            "npm_CONFIG_dry_run=",
+            "NPM_CONFIG_PACKAGE_LOCK_ONLY=",
+            "NPM_CONFIG_PACKAGE_LOCK=",
+            "NPM_CONFIG_GLOBAL=",
+            "NPM_CONFIG_WORKSPACE=",
+            "NPM_CONFIG_WORKSPACES=",
+            "NPM_CONFIG_INCLUDE_WORKSPACE_ROOT=",
+            "NPM_CONFIG_PREFIX=",
+            "NPM_CONFIG_LOCATION=",
+            "NPM_CONFIG_IF_PRESENT=",
+            "NPM_CONFIG_CPU=",
+            "NPM_CONFIG_OS=",
+            "NPM_CONFIG_LIBC=",
+        ],
+    );
+    assert_environment_contains_all(
+        &environment,
+        &[
+            "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
+            "npm_config_install_strategy=nested",
+            "NPM_CONFIG_LEGACY_PEER_DEPS=true",
+            "NPM_CONFIG_IGNORE_SCRIPTS=true",
+        ],
+    );
+    fs::write(
+        harness.repo.join("package.json"),
+        r#"{"private":true,"version":"2","workspaces":["apps/web"]}"#,
+    )
+    .unwrap();
+    harness.run_mode("lint", false);
+    *expected_install_count += 1;
+    assert_eq!(
+        fs::read_to_string(&harness.install_argv).unwrap(),
+        npm_install_argv.replace("{operation}", "ci"),
+        "npm frozen install did not freeze install-shaping inputs"
+    );
+    harness.assert_ready(true, "expected ready state");
+}
+
+#[cfg(unix)]
+fn assert_yarn_linker_and_pnp_state(
+    harness: &DependencyStateHarness,
+    classic_pnp: bool,
+    expected_install_count: &mut usize,
+) {
+    let opposite = if harness.artifact == "node_modules" {
+        harness.repo.join(".pnp.cjs")
+    } else {
+        harness.repo.join("node_modules")
+    };
+    if harness.artifact == "node_modules" {
+        fs::write(&opposite, "unexpected pnp loader\n").unwrap();
+    } else {
+        fs::create_dir_all(&opposite).unwrap();
+    }
+    harness.assert_ready(false, "two effective Yarn linkers");
+    if opposite.is_dir() {
+        fs::remove_dir_all(&opposite).unwrap();
+    } else {
+        fs::remove_file(&opposite).unwrap();
+    }
+    harness.assert_ready(true, "expected ready state");
+
+    if harness.artifact == ".pnp.cjs" {
+        fs::write(
+            harness.repo.join(".yarn/cache/unrelated.zip"),
+            "unrelated archive\n",
+        )
+        .unwrap();
+        harness.assert_ready(true, "unrelated shared-cache addition");
+        for companion in [
+            ".pnp.data.json",
+            ".yarn/cache/dependency.zip",
+            ".yarn/install-state.gz",
+        ] {
+            fs::write(harness.repo.join(companion), "changed companion\n").unwrap();
+            harness.assert_ready(false, companion);
+            harness.refresh_install(expected_install_count);
+        }
+    }
+
+    if classic_pnp {
+        for flag in ["--install.pnp true", "--enable-pnp true"] {
+            fs::write(
+                harness.repo.join(".yarnrc"),
+                format!("--install.pure-lockfile false\n{flag}\n"),
+            )
+            .unwrap();
+            harness.assert_ready(false, "expected stale state");
+            harness.refresh_install(expected_install_count);
+            harness.assert_ready(true, flag);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn assert_shrinkwrap_authority(
+    harness: &DependencyStateHarness,
+    expected_install_count: &mut usize,
+) {
+    fs::write(harness.repo.join("package-lock.json"), "inactive-lock-v1\n").unwrap();
+    harness.assert_ready(true, "added inactive package-lock");
+    fs::write(harness.repo.join("package-lock.json"), "inactive-lock-v2\n").unwrap();
+    harness.assert_ready(true, "changed inactive package-lock");
+    fs::remove_file(harness.repo.join("npm-shrinkwrap.json")).unwrap();
+    harness.assert_ready(false, "removed authoritative shrinkwrap");
+    harness.refresh_install(expected_install_count);
+    harness.assert_ready(true, "expected ready state");
+}
+
+#[cfg(unix)]
+fn assert_yarn_input_changes(
+    harness: &DependencyStateHarness,
+    classic_pnp: bool,
+    expected_install_count: &mut usize,
+) {
+    for runtime_file in [
+        ".yarn/patches/dependency.patch",
+        ".yarn/plugins/plugin.cjs",
+        ".yarn/releases/yarn.cjs",
+    ] {
+        fs::write(harness.repo.join(runtime_file), "runtime-v2\n").unwrap();
+        harness.repair_after_failed_install(expected_install_count);
+    }
+    for config_file in [".yarnrc", ".yarnrc.yml"] {
+        let config = match (classic_pnp, harness.artifact.as_str(), config_file) {
+            (true, _, ".yarnrc") => "--pnp true\n--install.pure-lockfile false\n",
+            (_, "node_modules", ".yarnrc.yml") => {
+                "nodeLinker: node-modules\nchecksumBehavior: reset\n"
+            }
+            _ => "config-v2\n",
+        };
+        fs::write(harness.repo.join(config_file), config).unwrap();
+        harness.repair_after_failed_install(expected_install_count);
+    }
+}
+
+#[cfg(unix)]
+fn assert_common_dependency_state_changes(
+    harness: &DependencyStateHarness,
+    case_name: &str,
+    expected_install_count: &mut usize,
+) {
+    use std::os::unix::fs::symlink;
+
+    fs::write(harness.repo.join(".node-version"), "24.19.1\n").unwrap();
+    harness.repair_after_failed_install(expected_install_count);
+    fs::write(harness.repo.join(&harness.lockfile), "lock-v2\n").unwrap();
+    harness.repair_after_failed_install(expected_install_count);
+
+    let artifact_path = harness.repo.join(&harness.artifact);
+    if artifact_path.is_dir() {
+        fs::remove_dir_all(&artifact_path).unwrap();
+        fs::create_dir_all(&artifact_path).unwrap();
+    } else {
+        fs::write(&artifact_path, "").unwrap();
+    }
+    harness.assert_ready(false, "replaced or truncated artifact");
+    harness.refresh_install(expected_install_count);
+
+    if harness.artifact != "node_modules" {
+        fs::write(&artifact_path, "different nonempty loader\n").unwrap();
+        harness.assert_ready(false, "changed nonempty PnP loader");
+        harness.refresh_install(expected_install_count);
+    }
+
+    let symlink_target = harness
+        .repo
+        .join(format!("{case_name}-replacement-artifact"));
+    if harness.artifact == "node_modules" {
+        fs::remove_dir_all(&artifact_path).unwrap();
+        fs::create_dir_all(&symlink_target).unwrap();
+    } else {
+        fs::remove_file(&artifact_path).unwrap();
+        fs::write(&symlink_target, "linked loader\n").unwrap();
+    }
+    symlink(&symlink_target, &artifact_path).unwrap();
+    harness.assert_ready(false, "symlinked dependency artifact");
+    fs::remove_file(&artifact_path).unwrap();
+    if symlink_target.is_dir() {
+        fs::remove_dir_all(&symlink_target).unwrap();
+    } else {
+        fs::remove_file(&symlink_target).unwrap();
+    }
+    harness.refresh_install(expected_install_count);
+
+    if harness.artifact == "node_modules" {
+        assert_node_modules_receipt_cannot_mask_corruption(
+            harness,
+            &artifact_path,
+            expected_install_count,
+        );
+    }
+}
+
+#[cfg(unix)]
+fn assert_node_modules_receipt_cannot_mask_corruption(
+    harness: &DependencyStateHarness,
+    artifact_path: &Path,
+    expected_install_count: &mut usize,
+) {
+    let installed_manifest = artifact_path.join("test-package/package.json");
+    fs::write(&installed_manifest, "").unwrap();
+    harness.assert_ready(false, "corrupt installed entries");
+    harness.refresh_install(expected_install_count);
+
+    let receipt_path = artifact_path.join(".jig-web-dependencies-v3");
+    let copied_receipt = fs::read_to_string(&receipt_path).unwrap();
+    fs::remove_dir_all(artifact_path).unwrap();
+    fs::create_dir_all(artifact_path).unwrap();
+    fs::write(
+        artifact_path.join(".jig-web-dependencies-v3"),
+        copied_receipt,
+    )
+    .unwrap();
+    harness.assert_ready(false, "empty node_modules with copied receipt");
+    harness.refresh_install(expected_install_count);
+}
+
+#[cfg(unix)]
 #[test]
 fn generated_web_checks_track_npm_package_lock_install_state() {
     generated_web_checks_track_lockfile_install_state(
@@ -81,7 +464,7 @@ fn generated_web_checks_track_lockfile_install_state(
     yarn_config: Option<&str>,
 ) {
     use std::ffi::OsString;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::PermissionsExt;
 
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -367,408 +750,30 @@ esac
     let mut path = OsString::from(fake_bin.as_os_str());
     path.push(":");
     path.push(std::env::var_os("PATH").unwrap_or_default());
-    let run_mode = |mode: &str, fail_install: bool| {
-        let output = std::process::Command::new("bash")
-            .args(["scripts/check-webapps.sh", mode])
-            .current_dir(&repo)
-            .env("NODE", &fake_node)
-            .env("PATH", &path)
-            .env("INSTALL_COUNT", &install_count)
-            .env("INSTALL_ARGV", &install_argv)
-            .env("INSTALL_ENV", &install_env)
-            .env("TEST_LOCKFILE", lockfile)
-            .env("TEST_PACKAGE_MANAGER", package_manager)
-            .env("TEST_ARTIFACT", artifact)
-            .env("FAIL_INSTALL", if fail_install { "1" } else { "0" })
-            .env("NODE_ENV", "production")
-            .env("NPM_CONFIG_OMIT", "dev optional peer")
-            .env("NPM_CONFIG_INCLUDE", "prod")
-            .env("NPM_CONFIG_PRODUCTION", "true")
-            .env("NPM_CONFIG_OPTIONAL", "false")
-            .env("NPM_CONFIG_ONLY", "production")
-            .env("NPM_CONFIG_DEV", "false")
-            .env("NPM_CONFIG_ALSO", "production")
-            .env("Npm_Config_Bin_Links", "false")
-            .env("npm_CONFIG_dry_run", "true")
-            .env("NPM_CONFIG_PACKAGE_LOCK_ONLY", "true")
-            .env("NPM_CONFIG_PACKAGE_LOCK", "false")
-            .env("NPM_CONFIG_GLOBAL", "true")
-            .env("NPM_CONFIG_WORKSPACE", "other")
-            .env("NPM_CONFIG_WORKSPACES", "false")
-            .env("NPM_CONFIG_INCLUDE_WORKSPACE_ROOT", "false")
-            .env("NPM_CONFIG_PREFIX", "/hostile-prefix")
-            .env("NPM_CONFIG_LOCATION", "global")
-            .env("NPM_CONFIG_IF_PRESENT", "true")
-            .env("NPM_CONFIG_CPU", "hostile-cpu")
-            .env("NPM_CONFIG_OS", "hostile-os")
-            .env("NPM_CONFIG_LIBC", "hostile-libc")
-            .env("NPM_CONFIG_REGISTRY", "https://registry.example.invalid/")
-            .env("npm_config_install_strategy", "nested")
-            .env("NPM_CONFIG_LEGACY_PEER_DEPS", "true")
-            .env("NPM_CONFIG_IGNORE_SCRIPTS", "true")
-            .output()
-            .unwrap();
-        assert_eq!(
-            output.status.success(),
-            !fail_install,
-            "{package_manager} web {mode} failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    let dependencies_ready = || {
-        std::process::Command::new("bash")
-            .args(["scripts/check-webapps.sh", "dependencies-ready", "apps/web"])
-            .current_dir(&repo)
-            .env("NODE", &fake_node)
-            .env("PATH", &path)
-            .status()
-            .unwrap()
-            .success()
+    let harness = DependencyStateHarness {
+        repo,
+        fake_node,
+        path,
+        install_count,
+        install_argv,
+        install_env,
+        lockfile: lockfile.to_owned(),
+        package_manager: package_manager.to_owned(),
+        artifact: artifact.to_owned(),
     };
 
-    let install_lock = repo.join(".agent/tmp/web-dependencies.lock");
-    fs::create_dir_all(install_lock.parent().unwrap()).unwrap();
-    fs::write(&install_lock, "999999999\n").unwrap();
-    run_mode("bootstrap", false);
-    assert!(
-        !install_lock.exists(),
-        "stale dependency lock was not recovered"
-    );
-    assert_eq!(
-        fs::read_to_string(repo.join(lockfile)).unwrap(),
-        initial_lock
-    );
-    assert!(
-        dependencies_ready(),
-        "{package_manager} dependency receipt was not reusable immediately after publication"
-    );
-    let dependency_stamp = repo.join(".agent/tmp/web-dependencies/root.sha256");
-    let current_stamp = fs::read_to_string(&dependency_stamp).unwrap();
-    assert!(
-        current_stamp.starts_with("v5 "),
-        "{package_manager} did not publish a v5 dependency receipt"
-    );
-    fs::write(&dependency_stamp, current_stamp.replacen("v5 ", "v4 ", 1)).unwrap();
-    assert!(
-        !dependencies_ready(),
-        "{package_manager} accepted a stale v4 dependency receipt"
-    );
-    fs::write(&dependency_stamp, current_stamp).unwrap();
-    assert!(dependencies_ready());
-    run_mode("lint", false);
-    assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "1");
-    assert!(dependencies_ready());
-
-    let mut expected_install_count = 1;
+    let mut expected_install_count = assert_initial_dependency_receipt(&harness, initial_lock);
     if package_manager == "npm" {
-        let npm_install_argv = format!(
-            "{{operation}}\n--include=dev\n--include=optional\n--include=peer\n--bin-links=true\n--dry-run=false\n--package-lock-only=false\n--package-lock=true\n--global=false\n--location=project\n--prefix={}\n--cpu=test-cpu\n--os=test-platform\n--workspaces=true\n--include-workspace-root=true\n",
-            repo.canonicalize().unwrap().display()
-        );
-        assert_eq!(
-            fs::read_to_string(&install_argv).unwrap(),
-            npm_install_argv.replace("{operation}", "install"),
-            "npm bootstrap did not freeze install-shaping inputs"
-        );
-        let environment = fs::read_to_string(&install_env).unwrap();
-        for removed in [
-            "NODE_ENV=",
-            "NPM_CONFIG_OMIT=",
-            "NPM_CONFIG_INCLUDE=",
-            "NPM_CONFIG_PRODUCTION=",
-            "NPM_CONFIG_OPTIONAL=",
-            "NPM_CONFIG_ONLY=",
-            "NPM_CONFIG_DEV=",
-            "NPM_CONFIG_ALSO=",
-            "Npm_Config_Bin_Links=",
-            "npm_CONFIG_dry_run=",
-            "NPM_CONFIG_PACKAGE_LOCK_ONLY=",
-            "NPM_CONFIG_PACKAGE_LOCK=",
-            "NPM_CONFIG_GLOBAL=",
-            "NPM_CONFIG_WORKSPACE=",
-            "NPM_CONFIG_WORKSPACES=",
-            "NPM_CONFIG_INCLUDE_WORKSPACE_ROOT=",
-            "NPM_CONFIG_PREFIX=",
-            "NPM_CONFIG_LOCATION=",
-            "NPM_CONFIG_IF_PRESENT=",
-            "NPM_CONFIG_CPU=",
-            "NPM_CONFIG_OS=",
-            "NPM_CONFIG_LIBC=",
-        ] {
-            assert!(
-                !environment.lines().any(|line| line.starts_with(removed)),
-                "npm install inherited shaping input {removed}:\n{environment}"
-            );
-        }
-        for preserved in [
-            "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
-            "npm_config_install_strategy=nested",
-            "NPM_CONFIG_LEGACY_PEER_DEPS=true",
-            "NPM_CONFIG_IGNORE_SCRIPTS=true",
-        ] {
-            assert!(
-                environment.lines().any(|line| line == preserved),
-                "npm install removed supported input {preserved}:\n{environment}"
-            );
-        }
-        fs::write(
-            repo.join("package.json"),
-            r#"{"private":true,"version":"2","workspaces":["apps/web"]}"#,
-        )
-        .unwrap();
-        run_mode("lint", false);
-        expected_install_count += 1;
-        assert_eq!(
-            fs::read_to_string(&install_argv).unwrap(),
-            npm_install_argv.replace("{operation}", "ci"),
-            "npm frozen install did not freeze install-shaping inputs"
-        );
-        assert!(dependencies_ready());
+        assert_npm_install_contract(&harness, &mut expected_install_count);
     }
     if package_manager == "yarn" {
-        let opposite = if artifact == "node_modules" {
-            repo.join(".pnp.cjs")
-        } else {
-            repo.join("node_modules")
-        };
-        if artifact == "node_modules" {
-            fs::write(&opposite, "unexpected pnp loader\n").unwrap();
-        } else {
-            fs::create_dir_all(&opposite).unwrap();
-        }
-        assert!(
-            !dependencies_ready(),
-            "Yarn accepted artifacts for two effective linkers in {case_name}"
-        );
-        if opposite.is_dir() {
-            fs::remove_dir_all(&opposite).unwrap();
-        } else {
-            fs::remove_file(&opposite).unwrap();
-        }
-        assert!(dependencies_ready());
-        if artifact == ".pnp.cjs" {
-            fs::write(
-                repo.join(".yarn/cache/unrelated.zip"),
-                "unrelated archive\n",
-            )
-            .unwrap();
-            assert!(
-                dependencies_ready(),
-                "an unrelated shared-cache addition invalidated Yarn Berry readiness"
-            );
-            for companion in [
-                ".pnp.data.json",
-                ".yarn/cache/dependency.zip",
-                ".yarn/install-state.gz",
-            ] {
-                fs::write(repo.join(companion), "changed companion\n").unwrap();
-                assert!(
-                    !dependencies_ready(),
-                    "Yarn Berry ignored changed PnP companion {companion}"
-                );
-                run_mode("lint", false);
-                expected_install_count += 1;
-                assert_eq!(
-                    fs::read_to_string(&install_count).unwrap().trim(),
-                    expected_install_count.to_string()
-                );
-            }
-        }
-        if classic_pnp {
-            for flag in ["--install.pnp true", "--enable-pnp true"] {
-                fs::write(
-                    repo.join(".yarnrc"),
-                    format!("--install.pure-lockfile false\n{flag}\n"),
-                )
-                .unwrap();
-                assert!(!dependencies_ready());
-                run_mode("lint", false);
-                expected_install_count += 1;
-                assert!(dependencies_ready(), "Yarn Classic ignored {flag}");
-            }
-        }
+        assert_yarn_linker_and_pnp_state(&harness, classic_pnp, &mut expected_install_count);
     }
-
     if lockfile == "npm-shrinkwrap.json" {
-        fs::write(repo.join("package-lock.json"), "inactive-lock-v1\n").unwrap();
-        assert!(
-            dependencies_ready(),
-            "adding an inactive package-lock invalidated the shrinkwrap receipt"
-        );
-        fs::write(repo.join("package-lock.json"), "inactive-lock-v2\n").unwrap();
-        assert!(
-            dependencies_ready(),
-            "changing an inactive package-lock invalidated the shrinkwrap receipt"
-        );
-        fs::remove_file(repo.join("npm-shrinkwrap.json")).unwrap();
-        assert!(
-            !dependencies_ready(),
-            "removing the authoritative shrinkwrap reused its receipt for package-lock"
-        );
-        run_mode("lint", false);
-        expected_install_count += 1;
-        assert!(dependencies_ready());
+        assert_shrinkwrap_authority(&harness, &mut expected_install_count);
     }
-
     if package_manager == "yarn" {
-        for runtime_file in [
-            ".yarn/patches/dependency.patch",
-            ".yarn/plugins/plugin.cjs",
-            ".yarn/releases/yarn.cjs",
-        ] {
-            fs::write(repo.join(runtime_file), "runtime-v2\n").unwrap();
-            run_mode("lint", true);
-            expected_install_count += 1;
-            assert_eq!(
-                fs::read_to_string(&install_count).unwrap().trim(),
-                expected_install_count.to_string()
-            );
-            run_mode("lint", false);
-            expected_install_count += 1;
-            assert_eq!(
-                fs::read_to_string(&install_count).unwrap().trim(),
-                expected_install_count.to_string()
-            );
-        }
-        for config_file in [".yarnrc", ".yarnrc.yml"] {
-            let config = match (classic_pnp, artifact, config_file) {
-                (true, _, ".yarnrc") => "--pnp true\n--install.pure-lockfile false\n",
-                (_, "node_modules", ".yarnrc.yml") => {
-                    "nodeLinker: node-modules\nchecksumBehavior: reset\n"
-                }
-                _ => "config-v2\n",
-            };
-            fs::write(repo.join(config_file), config).unwrap();
-            run_mode("lint", true);
-            expected_install_count += 1;
-            assert_eq!(
-                fs::read_to_string(&install_count).unwrap().trim(),
-                expected_install_count.to_string()
-            );
-            run_mode("lint", false);
-            expected_install_count += 1;
-            assert_eq!(
-                fs::read_to_string(&install_count).unwrap().trim(),
-                expected_install_count.to_string()
-            );
-        }
+        assert_yarn_input_changes(&harness, classic_pnp, &mut expected_install_count);
     }
-
-    fs::write(repo.join(".node-version"), "24.19.1\n").unwrap();
-    run_mode("lint", true);
-    expected_install_count += 1;
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap().trim(),
-        expected_install_count.to_string()
-    );
-    run_mode("lint", false);
-    expected_install_count += 1;
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap().trim(),
-        expected_install_count.to_string()
-    );
-
-    fs::write(repo.join(lockfile), "lock-v2\n").unwrap();
-    run_mode("lint", true);
-    expected_install_count += 1;
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap().trim(),
-        expected_install_count.to_string()
-    );
-    run_mode("lint", false);
-    expected_install_count += 1;
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap().trim(),
-        expected_install_count.to_string()
-    );
-
-    let artifact_path = repo.join(artifact);
-    if artifact_path.is_dir() {
-        fs::remove_dir_all(&artifact_path).unwrap();
-        fs::create_dir_all(&artifact_path).unwrap();
-    } else {
-        fs::write(&artifact_path, "").unwrap();
-    }
-    assert!(
-        !dependencies_ready(),
-        "replacement or truncation of {artifact} was accepted"
-    );
-    run_mode("lint", false);
-    expected_install_count += 1;
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap().trim(),
-        expected_install_count.to_string()
-    );
-
-    if artifact != "node_modules" {
-        fs::write(&artifact_path, "different nonempty loader\n").unwrap();
-        assert!(
-            !dependencies_ready(),
-            "a changed nonempty PnP loader was not detected"
-        );
-        run_mode("lint", false);
-        expected_install_count += 1;
-        assert_eq!(
-            fs::read_to_string(&install_count).unwrap().trim(),
-            expected_install_count.to_string()
-        );
-    }
-
-    let symlink_target = repo.join(format!("{case_name}-replacement-artifact"));
-    if artifact == "node_modules" {
-        fs::remove_dir_all(&artifact_path).unwrap();
-        fs::create_dir_all(&symlink_target).unwrap();
-    } else {
-        fs::remove_file(&artifact_path).unwrap();
-        fs::write(&symlink_target, "linked loader\n").unwrap();
-    }
-    symlink(&symlink_target, &artifact_path).unwrap();
-    assert!(
-        !dependencies_ready(),
-        "a symlinked dependency artifact was accepted"
-    );
-    fs::remove_file(&artifact_path).unwrap();
-    if symlink_target.is_dir() {
-        fs::remove_dir_all(&symlink_target).unwrap();
-    } else {
-        fs::remove_file(&symlink_target).unwrap();
-    }
-    run_mode("lint", false);
-    expected_install_count += 1;
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap().trim(),
-        expected_install_count.to_string()
-    );
-
-    if artifact == "node_modules" {
-        let installed_manifest = artifact_path.join("test-package/package.json");
-        fs::write(&installed_manifest, "").unwrap();
-        assert!(
-            !dependencies_ready(),
-            "corrupt installed entries were accepted with an unchanged receipt"
-        );
-        run_mode("lint", false);
-        expected_install_count += 1;
-
-        let receipt_path = artifact_path.join(".jig-web-dependencies-v3");
-        let copied_receipt = fs::read_to_string(&receipt_path).unwrap();
-        fs::remove_dir_all(&artifact_path).unwrap();
-        fs::create_dir_all(&artifact_path).unwrap();
-        fs::write(
-            artifact_path.join(".jig-web-dependencies-v3"),
-            copied_receipt,
-        )
-        .unwrap();
-        assert!(
-            !dependencies_ready(),
-            "an empty node_modules tree with a copied receipt was accepted"
-        );
-        run_mode("lint", false);
-        expected_install_count += 1;
-        assert_eq!(
-            fs::read_to_string(&install_count).unwrap().trim(),
-            expected_install_count.to_string()
-        );
-    }
+    assert_common_dependency_state_changes(&harness, case_name, &mut expected_install_count);
 }

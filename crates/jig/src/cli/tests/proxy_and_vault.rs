@@ -79,8 +79,7 @@ fn parses_proxy_run_no_proxy() {
     }
 }
 
-#[test]
-fn parses_vault_commands() {
+fn assert_vault_root_commands() {
     let tui = Cli::try_parse_from(["jig", "vault", "tui", "--home", "/tmp/jig-vault"]).unwrap();
     match tui.command {
         CommandKind::Vault(VaultCommand::Tui(opts)) => {
@@ -122,7 +121,9 @@ fn parses_vault_commands() {
         }
         other => panic!("expected vault migrate command, got {other:?}"),
     }
+}
 
+fn assert_vault_field_commands() {
     let field_list =
         Cli::try_parse_from(["jig", "vault", "field", "list", "jig://Production"]).unwrap();
     match field_list.command {
@@ -175,7 +176,9 @@ fn parses_vault_commands() {
         }
         other => panic!("expected vault field remove command, got {other:?}"),
     }
+}
 
+fn assert_vault_read_inject_and_exec_commands() {
     let read = Cli::try_parse_from([
         "jig",
         "vault",
@@ -240,7 +243,9 @@ fn parses_vault_commands() {
         }
         other => panic!("expected vault exec command, got {other:?}"),
     }
+}
 
+fn assert_vault_import_command() {
     let import = Cli::try_parse_from([
         "jig",
         "vault",
@@ -283,7 +288,9 @@ fn parses_vault_commands() {
         ])
         .is_err()
     );
+}
 
+fn assert_vault_secret_commands() {
     let set = Cli::try_parse_from([
         "jig",
         "vault",
@@ -354,7 +361,9 @@ fn parses_vault_commands() {
     ])
     .unwrap_err();
     assert!(duplicate_field_value_source.to_string().contains("cannot"));
+}
 
+fn assert_vault_audit_and_run_commands() {
     let audit = Cli::try_parse_from(["jig", "vault", "audit", "verify"]).unwrap();
     match audit.command {
         CommandKind::Vault(VaultCommand::Audit(VaultAuditCommand::Verify(_))) => {}
@@ -385,6 +394,16 @@ fn parses_vault_commands() {
         }
         other => panic!("expected vault run command, got {other:?}"),
     }
+}
+
+#[test]
+fn parses_vault_commands() {
+    assert_vault_root_commands();
+    assert_vault_field_commands();
+    assert_vault_read_inject_and_exec_commands();
+    assert_vault_import_command();
+    assert_vault_secret_commands();
+    assert_vault_audit_and_run_commands();
 }
 
 #[test]

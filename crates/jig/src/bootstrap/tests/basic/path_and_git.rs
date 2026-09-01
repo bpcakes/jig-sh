@@ -454,50 +454,6 @@ fn adopt_with_real_template_runs_destination_tasks() {
 }
 
 #[test]
-fn adopt_keeps_project_owned_makefile() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    write_test_crate_guide(&repo);
-    fs::write(repo.join("Makefile"), "project-owned:\n\t@true\n").unwrap();
-
-    run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    assert_eq!(
-        fs::read_to_string(repo.join("Makefile")).unwrap(),
-        "project-owned:\n\t@true\n"
-    );
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(!answers.contains("makefile_enabled"));
-    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(&format!(
-        r#""contract_version": {}"#,
-        crate::context::CURRENT_CONTRACT_VERSION
-    )));
-    assert!(!contract.contains("jig_version"));
-    assert!(contract.contains(r#""kind": "command""#));
-    assert!(!contract.contains("jig.run_target"));
-}
-
-#[test]
 fn adopt_appends_jig_block_to_existing_root_agents() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -817,3 +773,4 @@ fn adopt_with_sqlx_and_schema_dumps_disabled_hides_schema_dump_target() {
 }
 
 include!("path_and_git_parts/part_01.rs");
+include!("path_and_git_parts/project_owned.rs");

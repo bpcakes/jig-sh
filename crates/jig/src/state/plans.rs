@@ -18,7 +18,7 @@ use crate::tool_defs::{args, tool};
 use super::jsonl::{append_jsonl, append_text, read_jsonl, read_jsonl_with_cancellation};
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
 use super::records::{PlanBaseline, PlanEvent};
-use super::support::{ensure_state_layout, new_id, now_ms, rel_path};
+use super::support::{AdvisoryLeaseFile, ensure_state_layout, new_id, now_ms, rel_path};
 
 const PLAN_EXECUTION_LEASE_DIR: &str = ".agent/.cache/plan-execution-leases";
 
@@ -28,11 +28,11 @@ thread_local! {
 }
 
 pub(super) struct ActivePlanRunLease {
-    _file: File,
+    _file: AdvisoryLeaseFile,
 }
 
 struct PlanFinishLease {
-    _file: File,
+    _file: AdvisoryLeaseFile,
 }
 
 #[derive(Debug, Deserialize)]
@@ -245,13 +245,17 @@ pub(super) fn acquire_active_plan_run_lease(
     // and close append. Acquiring shared first and checking second prevents a
     // run from starting after the plan closes.
     ensure_plan_is_open(ctx, plan_id)?;
-    Ok(ActivePlanRunLease { _file: file })
+    Ok(ActivePlanRunLease {
+        _file: AdvisoryLeaseFile::new(file),
+    })
 }
 
 fn acquire_plan_finish_lease(ctx: &RepoContext, plan_id: &str) -> Result<PlanFinishLease> {
     let file = open_plan_execution_lease(ctx, plan_id)?;
     match FileExt::try_lock_exclusive(&file) {
-        Ok(true) => Ok(PlanFinishLease { _file: file }),
+        Ok(true) => Ok(PlanFinishLease {
+            _file: AdvisoryLeaseFile::new(file),
+        }),
         Ok(false) => bail!(
             "Plan has active linked repository runs: {plan_id}; wait for them to finish or cancel them before retrying"
         ),

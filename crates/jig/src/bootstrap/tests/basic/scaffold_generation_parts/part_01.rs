@@ -1,3 +1,40 @@
+fn assert_native_init_config(destination: &Path) {
+    assert!(destination.exists());
+    assert!(destination.join(".jig.toml").exists());
+    let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert!(answers.contains("[vault]"));
+    assert!(answers.contains("scope = \"repo\""));
+    assert!(answers.contains("allow_global = false"));
+    assert!(answers.contains(
+        "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR=.sqlx sqlx prepare --check --workspace -- --workspace --all-targets"
+    ));
+    assert!(!answers.contains("cargo sqlx prepare --check"));
+}
+
+fn assert_native_init_ignore_files(destination: &Path) {
+    let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
+    for expected in [
+        "node_modules/",
+        ".pnp.*",
+        "!.yarn/patches",
+        "target/",
+        ".agent/.cache/*",
+        ".agent/tmp/",
+        "# BEGIN JIG MANAGED BLOCK",
+    ] {
+        assert!(gitignore.contains(expected), "missing gitignore entry {expected}");
+    }
+    let attributes = fs::read_to_string(destination.join(".gitattributes")).unwrap();
+    assert!(attributes.contains(".agent/state/*.jsonl merge=union"));
+}
+
+fn assert_native_init_manifest(destination: &Path) {
+    assert!(destination.join("scripts/jig").exists());
+    let paths = managed_manifest_paths(destination);
+    assert!(paths.iter().any(|path| path == managed_paths::MANIFEST_PATH));
+    assert!(paths.iter().all(|path| destination.join(path).is_file()));
+}
+
 #[test]
 fn run_init_uses_native_renderer_and_git() {
     let _guard = lock_env();
@@ -46,38 +83,9 @@ fn run_init_uses_native_renderer_and_git() {
     assert_eq!(output["git_initialized"], true);
     let log = fs::read_to_string(&log_path).unwrap();
     assert!(log.contains(" init -b main"));
-    assert!(destination.exists());
-    assert!(destination.join(".jig.toml").exists());
-    let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
-    assert!(answers.contains("[vault]"));
-    assert!(answers.contains("scope = \"repo\""));
-    assert!(answers.contains("allow_global = false"));
-    assert!(answers.contains(
-        "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR=.sqlx sqlx prepare --check --workspace -- --workspace --all-targets"
-    ));
-    assert!(!answers.contains("cargo sqlx prepare --check"));
-    let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
-    assert!(gitignore.contains("node_modules/"));
-    assert!(gitignore.contains(".pnp.*"));
-    assert!(gitignore.contains("!.yarn/patches"));
-    assert!(gitignore.contains("target/"));
-    assert!(gitignore.contains(".agent/.cache/*"));
-    assert!(gitignore.contains(".agent/tmp/"));
-    assert!(gitignore.contains("# BEGIN JIG MANAGED BLOCK"));
-    let attributes = fs::read_to_string(destination.join(".gitattributes")).unwrap();
-    assert!(attributes.contains(".agent/state/*.jsonl merge=union"));
-    assert!(destination.join("scripts/jig").exists());
-    let manifest_paths = managed_manifest_paths(&destination);
-    assert!(
-        manifest_paths
-            .iter()
-            .any(|path| path == managed_paths::MANIFEST_PATH)
-    );
-    assert!(
-        manifest_paths
-            .iter()
-            .all(|path| destination.join(path).is_file())
-    );
+    assert_native_init_config(&destination);
+    assert_native_init_ignore_files(&destination);
+    assert_native_init_manifest(&destination);
 }
 
 #[test]
