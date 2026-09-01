@@ -562,6 +562,15 @@ JSON
     ;;
   "api graphql")
     case "$*" in
+      *ReviewThreadWitnessState*)
+        case "$*" in
+          *threadId=PRRT_1*) comment_id="PRRC_1"; updated_at="2026-07-08T10:03:00Z"; body="First thread" ;;
+          *threadId=PRRT_2*) comment_id="PRRC_2"; updated_at="2026-07-08T10:04:00Z"; body="Second thread" ;;
+          *threadId=PRRT_3*) comment_id="PRRC_3"; updated_at="2026-07-08T10:05:00Z"; body="Third thread" ;;
+          *) echo "unexpected witness query: $*" >&2; exit 2 ;;
+        esac
+        printf '{"data":{"node":{"id":"%s","isResolved":false,"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"%s","updatedAt":"%s","body":"%s"}]}}}}\n' "PRRT_${comment_id#PRRC_}" "$comment_id" "$updated_at" "$body"
+        ;;
       *ReviewThreadState*)
         thread_id=""
         case "$*" in
