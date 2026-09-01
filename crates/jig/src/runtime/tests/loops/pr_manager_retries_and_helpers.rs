@@ -18,7 +18,7 @@ JSON
     ;;
   "pr list")
     cat <<JSON
-[{"number":7,"title":"Still failing","url":"https://github.com/acme/demo/pull/7","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
+[{"number":7,"title":"Still failing","url":"https://github.com/acme/demo/pull/7","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"name":"demo","nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
 JSON
     ;;
   "pr checks")
@@ -171,7 +171,7 @@ JSON
     ;;
   "pr list")
     cat <<JSON
-[{"number":7,"title":"Still failing","url":"https://github.com/acme/demo/pull/7","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
+[{"number":7,"title":"Still failing","url":"https://github.com/acme/demo/pull/7","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$head_sha","headRepository":{"name":"demo","nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
 JSON
     ;;
   "pr checks")
@@ -311,7 +311,7 @@ JSON
     ;;
   "pr list")
     cat <<JSON
-[{"number":1,"title":"Blocked PR","url":"https://github.com/acme/demo/pull/1","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/blocked","headRefOid":"blockedsha","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"},{"number":2,"title":"Runnable PR","url":"https://github.com/acme/demo/pull/2","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$widgets_sha","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
+[{"number":1,"title":"Blocked PR","url":"https://github.com/acme/demo/pull/1","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/blocked","headRefOid":"blockedsha","headRepository":{"name":"demo","nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"},{"number":2,"title":"Runnable PR","url":"https://github.com/acme/demo/pull/2","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/widgets","headRefOid":"$widgets_sha","headRepository":{"name":"demo","nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
 JSON
     ;;
   "pr checks")
@@ -405,7 +405,7 @@ JSON
     ;;
   "pr list")
     cat <<JSON
-[{"number":9,"title":"Resolve conflict","url":"https://github.com/acme/demo/pull/9","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/conflict","headRefOid":"$head_sha","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
+[{"number":9,"title":"Resolve conflict","url":"https://github.com/acme/demo/pull/9","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"main","headRefName":"codex/conflict","headRefOid":"$head_sha","headRepository":{"name":"demo","nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
 JSON
     ;;
   "pr checks")
@@ -523,7 +523,7 @@ JSON
     ;;
   "pr list")
     cat <<'JSON'
-[{"number":8,"title":"Stacked work","url":"https://github.com/acme/demo/pull/8","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"feature-base","headRefName":"codex/stacked","headRefOid":"abc123","headRepository":{"nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
+[{"number":8,"title":"Stacked work","url":"https://github.com/acme/demo/pull/8","state":"OPEN","isDraft":false,"author":{"login":"octo"},"baseRefName":"feature-base","headRefName":"codex/stacked","headRefOid":"abc123","headRepository":{"name":"demo","nameWithOwner":"acme/demo"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[],"updatedAt":"2026-07-08T10:00:00Z","createdAt":"2026-07-08T09:00:00Z"}]
 JSON
     ;;
   "pr checks")

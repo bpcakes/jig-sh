@@ -31,6 +31,63 @@ printf 'task complete\n'
 
 #[cfg(unix)]
 #[test]
+fn scheduled_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    append_scheduled_pr_manager_workflow(temp.path());
+    git_ok(temp.path(), ["init"]);
+    let authority = temp.path().join(".git/jig/loop");
+    fs::create_dir_all(&authority).unwrap();
+    fs::write(authority.join("branch_leases.json"), b"{").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::loops::dispatch_due_at(&ctx, fixed_dispatch_time()).unwrap();
+
+    assert_eq!(output["status"], "failed", "{output:#}");
+    assert_eq!(output["due_count"], 1, "{output:#}");
+    assert_eq!(output["executed_count"], 0, "{output:#}");
+    assert!(
+        output["actions"][0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("branch_leases.json")),
+        "{output:#}"
+    );
+    let schedule: serde_json::Value =
+        serde_json::from_slice(&fs::read(authority.join("schedule.json")).unwrap()).unwrap();
+    assert_eq!(schedule["occurrences"], json!({}), "{schedule:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn manual_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    append_pr_manager_workflow(temp.path());
+    git_ok(temp.path(), ["init"]);
+    let authority = temp.path().join(".git/jig/loop");
+    fs::create_dir_all(&authority).unwrap();
+    fs::write(authority.join("branch_leases.json"), b"{").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("pr-manager".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap_err();
+
+    assert!(format!("{error:#}").contains("branch_leases.json"));
+    assert!(!authority.join("schedule.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn scheduled_lease_failure_preserves_worker_receipt_and_retained_worktree() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

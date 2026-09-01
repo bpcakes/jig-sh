@@ -52,6 +52,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn head_repository_identity_rejects_a_composite_only_fallback() {
+        let raw = json!({
+            "headRepository": {
+                "nameWithOwner": "ExampleProject/ExampleVault",
+            },
+        });
+
+        assert_eq!(head_repository_name_with_owner(&raw), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn gh_commands_scrub_repository_redirects_but_keep_authentication() {

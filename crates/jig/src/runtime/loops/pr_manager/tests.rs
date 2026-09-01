@@ -141,6 +141,7 @@ mod tests {
                 "worker_receipt_id": "receipt-worker",
                 "error": null,
             }),
+            &worktree,
             false,
         );
 

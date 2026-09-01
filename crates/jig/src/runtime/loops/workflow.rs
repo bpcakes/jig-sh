@@ -222,6 +222,10 @@ pub(super) struct CodexTaskSettings {
 }
 
 impl ResolvedWorkflow {
+    pub(super) fn requires_repository_branch_authority(&self) -> bool {
+        self.kind == PR_MANAGER_KIND
+    }
+
     pub(super) fn lease_key(&self) -> String {
         match self.codex_task.as_ref().map(|task| task.checkout) {
             Some(CodexTaskCheckout::Repo) => REPO_CHECKOUT_LEASE_KEY.into(),

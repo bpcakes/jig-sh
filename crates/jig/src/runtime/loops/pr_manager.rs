@@ -592,34 +592,37 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
     ) {
         Ok(push) => push,
         Err(PrPushError::Ambiguous { error, final_head }) => {
-            return Ok(PrRepairOutcome::Completed(json!({
-                "kind": "pr_manager_worker",
-                "status": "needs_attention",
-                "attention_kind": "ambiguous_push",
-                "pr_number": repair.item.pr_number,
-                "item_key": repair.item.item_key,
-                "title": repair.item.title,
-                "branch": repair.item.head_ref,
-                "head_sha": repair.item.head_sha,
-                "reasons": repair.item.reasons,
-                "worktree": pr_worktree_value(worktree),
-                "lease": repair.lease,
-                "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
-                "merge": merge,
-                "worker_output": worker_output,
-                "worker_receipt_id": worker.worker_receipt_id(),
-                "push": {
-                    "status": "unconfirmed",
-                    "pushed": Value::Null,
-                    "base_head": base_head,
-                    "final_head": final_head,
-                    "force": true,
-                    "force_with_lease": true,
-                    "expected_remote_head": base_head,
-                },
-                "review_thread_posts": [],
-                "error": format!("{error:#}"),
-            })));
+            return Ok(PrRepairOutcome::Completed {
+                action: json!({
+                    "kind": "pr_manager_worker",
+                    "status": "needs_attention",
+                    "attention_kind": "ambiguous_push",
+                    "pr_number": repair.item.pr_number,
+                    "item_key": repair.item.item_key,
+                    "title": repair.item.title,
+                    "branch": repair.item.head_ref,
+                    "head_sha": repair.item.head_sha,
+                    "reasons": repair.item.reasons,
+                    "worktree": pr_worktree_value(worktree),
+                    "lease": repair.lease,
+                    "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
+                    "merge": merge,
+                    "worker_output": worker_output,
+                    "worker_receipt_id": worker.worker_receipt_id(),
+                    "push": {
+                        "status": "unconfirmed",
+                        "pushed": Value::Null,
+                        "base_head": base_head,
+                        "final_head": final_head,
+                        "force": true,
+                        "force_with_lease": true,
+                        "expected_remote_head": base_head,
+                    },
+                    "review_thread_posts": [],
+                    "error": format!("{error:#}"),
+                }),
+                worktree: worktree.to_path_buf(),
+            });
         }
         Err(PrPushError::Step(error)) => {
             let error = match error {
@@ -655,25 +658,28 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
     } else {
         Value::Null
     };
-    Ok(PrRepairOutcome::Completed(json!({
-        "kind": "pr_manager_worker",
-        "status": status,
-        "pr_number": repair.item.pr_number,
-        "item_key": repair.item.item_key,
-        "title": repair.item.title,
-        "branch": repair.item.head_ref,
-        "head_sha": repair.item.head_sha,
-        "reasons": repair.item.reasons,
-        "worktree": pr_worktree_value(worktree),
-        "lease": repair.lease,
-        "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
-        "merge": merge,
-        "worker_output": worker_output,
-        "worker_receipt_id": worker.worker_receipt_id(),
-        "push": push,
-        "review_thread_posts": review_thread_posts.posts,
-        "error": error,
-    })))
+    Ok(PrRepairOutcome::Completed {
+        action: json!({
+            "kind": "pr_manager_worker",
+            "status": status,
+            "pr_number": repair.item.pr_number,
+            "item_key": repair.item.item_key,
+            "title": repair.item.title,
+            "branch": repair.item.head_ref,
+            "head_sha": repair.item.head_sha,
+            "reasons": repair.item.reasons,
+            "worktree": pr_worktree_value(worktree),
+            "lease": repair.lease,
+            "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
+            "merge": merge,
+            "worker_output": worker_output,
+            "worker_receipt_id": worker.worker_receipt_id(),
+            "push": push,
+            "review_thread_posts": review_thread_posts.posts,
+            "error": error,
+        }),
+        worktree: worktree.to_path_buf(),
+    })
 }
 
 fn post_commit_cancellation_error(repair_version: &str) -> String {

@@ -524,6 +524,10 @@ pub(super) fn prepare_coordination_state_for_dispatch(
     })
 }
 
+pub(super) fn validate_repository_branch_authority(ctx: &RepoContext) -> Result<()> {
+    LeaseStore::new_repository(ctx).validate_parseable()
+}
+
 #[cfg(test)]
 pub(super) fn read_json_or_default<T>(path: &Path) -> Result<T>
 where

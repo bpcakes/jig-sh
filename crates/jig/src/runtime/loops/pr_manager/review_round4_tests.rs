@@ -692,13 +692,16 @@ exec "$JIG_TEST_REAL_GIT" "$@"
         let action = record_pr_repair_outcome_under_branch_lease(
             &repair,
             &mut attempts,
-            PrRepairOutcome::Completed(json!({
-                "kind": "pr_manager_worker",
-                "status": "attempted",
-                "worktree": worktree,
-                "worker_receipt_id": "receipt-worker",
-                "push": {"final_head": "pushed-head"},
-            })),
+            PrRepairOutcome::Completed {
+                action: json!({
+                    "kind": "pr_manager_worker",
+                    "status": "attempted",
+                    "worktree": worktree,
+                    "worker_receipt_id": "receipt-worker",
+                    "push": {"final_head": "pushed-head"},
+                }),
+                worktree: worktree.clone(),
+            },
         )
         .unwrap();
 

@@ -6,7 +6,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
     cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Result<Value> {
     match outcome {
-        PrRepairOutcome::Completed(action) => {
+        PrRepairOutcome::Completed { action, worktree } => {
             let item_version = action
                 .pointer("/push/final_head")
                 .and_then(Value::as_str)
@@ -29,7 +29,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 Err(error) => attempt_state_attention(action, error),
             };
             let action = with_branch_lease_result(action, cleanup_authority_error);
-            Ok(finalize_pr_worktree(cleanup, action, false))
+            Ok(finalize_pr_worktree(cleanup, action, &worktree, false))
         }
         PrRepairOutcome::Cancelled { detail, worktree } => Ok(cancelled_before_start_action(
             repair,
@@ -76,7 +76,12 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 "worker_receipt_id": worker_receipt_id,
                 "error": error,
             }), cleanup_authority_error);
-            Ok(finalize_pr_worktree(cleanup, action, false))
+            Ok(finalize_pr_worktree(
+                cleanup,
+                action,
+                worktree.path(),
+                false,
+            ))
         }
         PrRepairOutcome::PreExecutionFailed {
             error,
@@ -104,7 +109,9 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 worker_receipt_id.as_deref(),
             );
             let action = with_branch_lease_result(action, cleanup_authority_error);
-            Ok(finalize_failed_pr_worktree(repair, action, cleanup))
+            Ok(finalize_failed_pr_worktree(
+                repair, &worktree, action, cleanup,
+            ))
         }
     }
 }
@@ -215,22 +222,16 @@ fn failed_pr_repair_action<L: serde::Serialize>(
 
 fn finalize_failed_pr_worktree<L: serde::Serialize>(
     repair: &PrRepairContext<'_, L>,
+    worktree: &Path,
     action: Value,
     cleanup: &mut PrWorktreeCleanup<'_>,
 ) -> Value {
     if action.get("status").and_then(Value::as_str) == Some("needs_attention") {
-        return finalize_pr_worktree(cleanup, action, false);
+        return finalize_pr_worktree(cleanup, action, worktree, false);
     }
-    let Some(worktree) = action
-        .get("worktree")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-    else {
-        return action;
-    };
-    match cleanup.failed_worktree_has_evidence(&worktree, &repair.item.head_sha) {
+    match cleanup.failed_worktree_has_evidence(worktree, &repair.item.head_sha) {
         Ok(true) => failed_worktree_attention(action),
-        Ok(false) => finalize_pr_worktree(cleanup, action, false),
+        Ok(false) => finalize_pr_worktree(cleanup, action, worktree, false),
         Err(error) => worktree_inspection_attention(action, error),
     }
 }
@@ -329,6 +330,7 @@ fn pr_worker_action(
 fn finalize_pr_worktree(
     cleanup: &mut PrWorktreeCleanup<'_>,
     mut action: Value,
+    worktree: &Path,
     force: bool,
 ) -> Value {
     let retained = matches!(
@@ -339,14 +341,7 @@ fn finalize_pr_worktree(
         action["worktree_retained"] = json!(true);
         return action;
     }
-    let Some(worktree) = action
-        .get("worktree")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-    else {
-        return action;
-    };
-    match cleanup.remove(&worktree, force) {
+    match cleanup.remove(worktree, force) {
         Ok(()) => {
             action["worktree_retained"] = json!(false);
             action
@@ -398,7 +393,10 @@ fn branch_lease_cleanup_attention(mut action: Value, authority_error: &anyhow::E
 }
 
 enum PrRepairOutcome {
-    Completed(Value),
+    Completed {
+        action: Value,
+        worktree: PathBuf,
+    },
     Cancelled {
         detail: String,
         worktree: Option<PreparedPrWorktree>,

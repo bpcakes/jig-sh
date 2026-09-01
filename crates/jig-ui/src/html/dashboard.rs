@@ -169,7 +169,7 @@ pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) ->
         }
         if !loops.scheduled_occurrences.is_empty() {
             body.push_str("<h3>Loop runs</h3><table><tr><th>workflow</th><th>when</th><th>status</th><th>worker receipt</th><th>retained worktree</th></tr>");
-            for occurrence in loops.scheduled_occurrences.iter().rev() {
+            for occurrence in occurrences_by_recency(&loops.scheduled_occurrences) {
                 let _ = writeln!(
                     body,
                     "<tr><td class=\"mono\">{}</td><td>{}</td><td><span class=\"badge {}\">{}</span></td><td class=\"mono muted\">{}</td><td class=\"mono muted\">{}</td></tr>",
@@ -241,6 +241,26 @@ fn occurrence_time(occurrence: &ScheduledOccurrenceView) -> String {
         return "Manual".into();
     }
     format!("Manual ({})", format_ms(Some(occurrence.started_at_ms)))
+}
+
+fn occurrences_by_recency(
+    occurrences: &[ScheduledOccurrenceView],
+) -> Vec<&ScheduledOccurrenceView> {
+    let mut occurrences = occurrences.iter().collect::<Vec<_>>();
+    occurrences.sort_by(|left, right| {
+        occurrence_recency(right)
+            .cmp(&occurrence_recency(left))
+            .then_with(|| left.occurrence_id.cmp(&right.occurrence_id))
+    });
+    occurrences
+}
+
+fn occurrence_recency(occurrence: &ScheduledOccurrenceView) -> u64 {
+    if occurrence.scheduled_at_ms == 0 {
+        occurrence.started_at_ms
+    } else {
+        occurrence.scheduled_at_ms
+    }
 }
 
 fn render_timeline(out: &mut String, item: &TimelineItem, namespace: &str) {
@@ -339,5 +359,39 @@ mod tests {
         .unwrap();
 
         assert_eq!(occurrence_time(&occurrence), "Manual");
+    }
+
+    #[test]
+    fn loop_runs_are_ordered_by_recency_across_workflows_and_manual_runs() {
+        let occurrences = [
+            ("alpha-old", "alpha", 100, 101),
+            ("zeta-new", "zeta", 300, 301),
+            ("manual-middle", "alpha", 0, 250),
+        ]
+        .into_iter()
+        .map(
+            |(occurrence_id, workflow_id, scheduled_at_ms, started_at_ms)| {
+                serde_json::from_value::<ScheduledOccurrenceView>(serde_json::json!({
+                    "occurrence_id": occurrence_id,
+                    "workflow_id": workflow_id,
+                    "scheduled_at_ms": scheduled_at_ms,
+                    "started_at_ms": started_at_ms,
+                    "status": "succeeded",
+                    "finished_at_ms": null,
+                    "worker_receipt_id": null,
+                    "worktree": null,
+                    "error": null
+                }))
+                .unwrap()
+            },
+        )
+        .collect::<Vec<_>>();
+
+        let ordered = occurrences_by_recency(&occurrences)
+            .into_iter()
+            .map(|occurrence| occurrence.occurrence_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordered, ["zeta-new", "manual-middle", "alpha-old"]);
     }
 }

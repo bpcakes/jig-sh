@@ -395,6 +395,8 @@ fn capture_prefix(path: &Path, source: &File, byte_len: u64) -> Result<[u8; 32]>
     let mut file = source
         .try_clone()
         .with_context(|| format!("Failed to inspect {}", path.display()))?;
+    file.seek(SeekFrom::Start(0))
+        .with_context(|| format!("Failed to inspect {}", path.display()))?;
     let mut hasher = Sha256::new();
     let copied = std::io::copy(&mut (&mut file).take(byte_len), &mut hasher)
         .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -440,6 +442,8 @@ fn verify_append(
             "receipt journal append exceeds the {MAX_VERIFIED_RECEIPT_APPEND_BYTES} byte verification limit"
         );
     }
+    file.seek(SeekFrom::Start(0))
+        .with_context(|| format!("Failed to inspect {}", baseline.path.display()))?;
     let mut prefix = (&mut file).take(baseline.byte_len);
     let mut hasher = Sha256::new();
     std::io::copy(&mut prefix, &mut hasher)

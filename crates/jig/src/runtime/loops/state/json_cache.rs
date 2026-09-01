@@ -626,6 +626,59 @@ mod tests {
         assert!(data_path.is_file());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn locked_cache_refuses_a_symlinked_lock_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let target = outside.path().join("outside.lock");
+        fs::write(&target, b"outside").unwrap();
+        let lock_path = temp.path().join("attempts.lock");
+        let data_path = temp.path().join("attempts.json");
+        symlink(&target, &lock_path).unwrap();
+
+        let error = with_json_cache_lock::<_, BTreeMap<String, String>>(
+            temp.path(),
+            temp.path(),
+            &lock_path,
+            &data_path,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("without following links"));
+        assert_eq!(fs::read(&target).unwrap(), b"outside");
+        assert!(!data_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locked_cache_refuses_a_symlinked_directory_component() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        symlink(outside.path(), temp.path().join("loop")).unwrap();
+        let directory = temp.path().join("loop");
+        let lock_path = directory.join("attempts.lock");
+        let data_path = directory.join("attempts.json");
+
+        let error = with_json_cache_lock::<_, BTreeMap<String, String>>(
+            temp.path(),
+            &directory,
+            &lock_path,
+            &data_path,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("without following links"));
+        assert!(!outside.path().join("attempts.lock").exists());
+        assert!(!outside.path().join("attempts.json").exists());
+    }
+
     #[test]
     fn read_only_cache_access_does_not_rewrite_the_cache() {
         let temp = tempdir().unwrap();

@@ -349,14 +349,6 @@ fn head_repository_name_with_owner(raw_pr: &Value) -> Option<String> {
     owner
         .zip(name)
         .map(|(owner, name)| format!("{owner}/{name}"))
-        .or_else(|| {
-            raw_pr
-                .pointer("/headRepository/nameWithOwner")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string)
-        })
 }
 
 fn checks_snapshot(client: &mut GithubSnapshotClient<'_>, pr_number: u64) -> Result<Value> {

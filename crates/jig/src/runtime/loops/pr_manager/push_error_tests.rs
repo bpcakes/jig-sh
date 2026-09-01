@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod push_error_tests {
     #[cfg(unix)]
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     #[cfg(unix)]
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
     #[cfg(unix)]
@@ -49,6 +49,62 @@ mod push_error_tests {
 
         assert_eq!(action["worktree"], encoded);
         assert!(encoded.as_str().unwrap().starts_with("jig-path-v1:unix-hex:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pr_cleanup_uses_the_native_non_utf8_worktree_path() {
+        let _guard = lock_env();
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        for args in [
+            &["init"][..],
+            &["config", "user.email", "fixture@example.com"],
+            &["config", "user.name", "Fixture"],
+            &["add", "."],
+            &["commit", "-m", "fixture"],
+        ] {
+            let output = Command::new("git")
+                .current_dir(temp.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+        }
+        let worktree = temp
+            .path()
+            .join(OsString::from_vec(b"repair-worktree-\xff".to_vec()));
+        let output = Command::new("git")
+            .current_dir(temp.path())
+            .args([
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--detach"),
+                worktree.as_os_str(),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut cleanup = PrWorktreeCleanup::assuming_lease(&ctx);
+
+        let action = finalize_pr_worktree(
+            &mut cleanup,
+            json!({
+                "kind": "pr_manager_worker",
+                "status": "attempted",
+                "worktree": pr_worktree_value(&worktree),
+                "error": null,
+            }),
+            &worktree,
+            false,
+        );
+
+        assert_eq!(action["status"], "attempted");
+        assert_eq!(action["worktree_retained"], false);
+        assert!(!worktree.exists());
     }
 
     #[cfg(unix)]

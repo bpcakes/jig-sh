@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;
-    use std::io::Write as _;
+    use std::io::{Seek as _, SeekFrom, Write as _};
     use std::thread;
 
     use tempfile::tempdir;
@@ -124,11 +124,12 @@ mod tests {
     }
 
     #[test]
-    fn prefix_termination_check_ignores_a_concurrent_partial_append() {
+    fn prefix_capture_starts_at_zero_and_ignores_a_concurrent_partial_append() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("receipts.jsonl");
         fs::write(&path, b"{}\npartial-append").unwrap();
-        let file = File::open(&path).unwrap();
+        let mut file = File::open(&path).unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
 
         capture_prefix(&path, &file, 3).unwrap();
     }

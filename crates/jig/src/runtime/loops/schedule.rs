@@ -16,7 +16,7 @@ use super::occurrence::{
     OccurrenceAttentionScope, OccurrenceClaim, OccurrenceFinalization, OccurrenceFinish,
     OccurrenceGuard, OccurrenceStatus, OccurrenceStore, ScheduleOccurrence,
 };
-use super::state::prepare_coordination_state_for_dispatch;
+use super::state::{prepare_coordination_state_for_dispatch, validate_repository_branch_authority};
 use super::workflow::{
     CodexTaskCheckout, ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows,
     loop_status_is_success, resolve_workflow,
@@ -191,6 +191,17 @@ fn dispatch_workflow(
         due_count: 1,
         ..DispatchStep::default()
     };
+    if workflow.requires_repository_branch_authority()
+        && let Err(error) = validate_repository_branch_authority(ctx)
+    {
+        step.failed_count = 1;
+        step.action = DispatchStep::failure(
+            &workflow.id,
+            format!("Failed to validate PR branch lease authority: {error:#}"),
+        )
+        .action;
+        return step;
+    }
     let blocks_on_retained_worktree = workflow.blocks_on_retained_worktree();
     let attention_scope = if workflow
         .codex_task
