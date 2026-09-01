@@ -40,12 +40,19 @@ rust_react_toolchain="${JIG_GENERATED_RUST_REACT_TOOLCHAIN:-}"
 
 init_repo() {
   local destination="$1"
+  local init_output
   shift
-  JIG_DEV_BIN="$jig_bin" "$jig_bin" init "$destination" \
-    "$@" \
-    --no-input \
-    --no-vault \
-    --json >/dev/null
+  if ! init_output="$(
+    JIG_DEV_BIN="$jig_bin" "$jig_bin" init "$destination" \
+      "$@" \
+      --no-input \
+      --no-vault \
+      --json 2>&1
+  )"; then
+    echo "Failed to initialize generated Rust fixture at $destination" >&2
+    printf '%s\n' "$init_output" >&2
+    return 1
+  fi
 }
 
 with_toolchain() {

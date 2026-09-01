@@ -775,6 +775,80 @@ mv() {
 }
 
 #[cfg(unix)]
+fn assert_unverified_live_lock_owners_are_preserved(
+    repo: &Path,
+    install_lock: &Path,
+    command: &impl Fn() -> std::process::Command,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let kill_failure_env = repo.join("kill-failure-env");
+    fs::write(
+        &kill_failure_env,
+        "kill() { if [ \"${1:-}\" = \"-0\" ]; then return 1; fi; builtin kill \"$@\"; }\n",
+    )
+    .unwrap();
+    let probe_node = repo.join("probe-node");
+    fs::write(
+        &probe_node,
+        r#"#!/bin/sh
+if [ "${1:-}" = "-" ] && [ "${2:-}" = "--jig-process-probe" ]; then
+  case "${PROBE_BEHAVIOR:-}" in
+    eperm) printf '%s\n' unverified; exit 0 ;;
+    tool-failure) exit 19 ;;
+  esac
+fi
+exec node "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&probe_node, fs::Permissions::from_mode(0o755)).unwrap();
+    let simulated_owner = format!(
+        "{} simulated-permission-owner RecordedStart\n",
+        std::process::id()
+    );
+    for behavior in ["eperm", "tool-failure"] {
+        fs::write(install_lock, &simulated_owner).unwrap();
+        let mut simulated = command();
+        simulated
+            .env("BASH_ENV", &kill_failure_env)
+            .env("NODE", &probe_node)
+            .env("PROBE_BEHAVIOR", behavior);
+        let simulated = simulated.output().unwrap();
+        assert!(
+            !simulated.status.success(),
+            "{behavior} process probe was treated as a stale owner"
+        );
+        assert_eq!(fs::read_to_string(install_lock).unwrap(), simulated_owner);
+    }
+
+    let unknown_live = format!("{} legacy-token unknown\n", std::process::id());
+    fs::write(install_lock, &unknown_live).unwrap();
+    let unverified = command().output().unwrap();
+    assert_output_failed("unknown live lock owner", &unverified);
+    assert_eq!(fs::read_to_string(install_lock).unwrap(), unknown_live);
+    assert!(
+        String::from_utf8_lossy(&unverified.stderr).contains("could not be validated or recovered")
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        let ps_failure_env = repo.join("ps-failure-env");
+        fs::write(&ps_failure_env, "ps() { return 1; }\n").unwrap();
+        fs::write(
+            install_lock,
+            format!("{} known-token RecordedStart\n", std::process::id()),
+        )
+        .unwrap();
+        let mut unreadable_identity = command();
+        unreadable_identity.env("BASH_ENV", &ps_failure_env);
+        let unreadable_identity = unreadable_identity.output().unwrap();
+        assert_output_failed("unreadable live lock identity", &unreadable_identity);
+        assert!(install_lock.exists(), "unverified live lock was removed");
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn generated_web_checks_wait_for_live_installs_and_never_suggest_removing_their_lock() {
     use std::ffi::OsString;
@@ -922,70 +996,7 @@ esac
     fs::remove_dir_all(repo.join("node_modules")).unwrap();
     fs::remove_dir_all(repo.join(".agent/tmp/web-dependencies")).unwrap();
 
-    let kill_failure_env = repo.join("kill-failure-env");
-    fs::write(
-        &kill_failure_env,
-        "kill() { if [ \"${1:-}\" = \"-0\" ]; then return 1; fi; builtin kill \"$@\"; }\n",
-    )
-    .unwrap();
-    let probe_node = repo.join("probe-node");
-    fs::write(
-        &probe_node,
-        r#"#!/bin/sh
-if [ "${1:-}" = "-" ] && [ "${2:-}" = "--jig-process-probe" ]; then
-  case "${PROBE_BEHAVIOR:-}" in
-    eperm) printf '%s\n' unverified; exit 0 ;;
-    tool-failure) exit 19 ;;
-  esac
-fi
-exec node "$@"
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&probe_node, fs::Permissions::from_mode(0o755)).unwrap();
-    let simulated_owner = format!(
-        "{} simulated-permission-owner RecordedStart\n",
-        std::process::id()
-    );
-    for behavior in ["eperm", "tool-failure"] {
-        fs::write(&install_lock, &simulated_owner).unwrap();
-        let mut simulated = command();
-        simulated
-            .env("BASH_ENV", &kill_failure_env)
-            .env("NODE", &probe_node)
-            .env("PROBE_BEHAVIOR", behavior);
-        let simulated = simulated.output().unwrap();
-        assert!(
-            !simulated.status.success(),
-            "{behavior} process probe was treated as a stale owner"
-        );
-        assert_eq!(fs::read_to_string(&install_lock).unwrap(), simulated_owner);
-    }
-
-    let unknown_live = format!("{} legacy-token unknown\n", std::process::id());
-    fs::write(&install_lock, &unknown_live).unwrap();
-    let unverified = command().output().unwrap();
-    assert!(!unverified.status.success());
-    assert_eq!(fs::read_to_string(&install_lock).unwrap(), unknown_live);
-    assert!(
-        String::from_utf8_lossy(&unverified.stderr).contains("could not be validated or recovered")
-    );
-
-    #[cfg(target_os = "macos")]
-    {
-        let ps_failure_env = repo.join("ps-failure-env");
-        fs::write(&ps_failure_env, "ps() { return 1; }\n").unwrap();
-        fs::write(
-            &install_lock,
-            format!("{} known-token RecordedStart\n", std::process::id()),
-        )
-        .unwrap();
-        let mut unreadable_identity = command();
-        unreadable_identity.env("BASH_ENV", &ps_failure_env);
-        let unreadable_identity = unreadable_identity.output().unwrap();
-        assert!(!unreadable_identity.status.success());
-        assert!(install_lock.exists(), "unverified live lock was removed");
-    }
+    assert_unverified_live_lock_owners_are_preserved(&repo, &install_lock, &command);
 }
 
 #[cfg(unix)]
