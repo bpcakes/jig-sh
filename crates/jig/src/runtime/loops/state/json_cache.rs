@@ -17,6 +17,12 @@ use super::*;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum JsonWriteMode {
+    Cache,
+    Durable,
+}
+
 #[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
     root: &Path,
@@ -34,6 +40,7 @@ where
         lock_path,
         data_path,
         loop_state_lock_deadline(),
+        JsonWriteMode::Cache,
         action,
     )
 }
@@ -44,6 +51,7 @@ pub(super) fn with_json_cache_lock_until<T, S>(
     lock_path: &Path,
     data_path: &Path,
     deadline: Instant,
+    write_mode: JsonWriteMode,
     action: impl FnOnce(&mut S) -> Result<T>,
 ) -> Result<T>
 where
@@ -56,7 +64,7 @@ where
         cache.reclaim_orphaned_temps(&data_name, data_path)?;
         let mut store: S = cache.read_json_or_default(&data_name, data_path, &|| false)?;
         let result = action(&mut store)?;
-        cache.write_json(&data_name, data_path, &store)?;
+        cache.write_json_with_mode(&data_name, data_path, &store, write_mode)?;
         Ok(result)
     })
 }
@@ -67,6 +75,7 @@ pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
     lock_path: &Path,
     data_path: &Path,
     deadline: Instant,
+    write_mode: JsonWriteMode,
     action: impl FnOnce(&mut S) -> Result<T>,
     after_commit: impl FnOnce(&T) -> Result<U>,
 ) -> Result<(T, U)>
@@ -81,19 +90,21 @@ where
         let mut store: S = cache.read_json_or_default(&data_name, data_path, &|| false)?;
         let rollback = store.clone();
         let result = action(&mut store)?;
-        cache.write_json(&data_name, data_path, &store)?;
+        cache.write_json_with_mode(&data_name, data_path, &store, write_mode)?;
         match after_commit(&result) {
             Ok(effect) => Ok((result, effect)),
             Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error
                 .context(
                     "Committed loop state was retained because its receipt append may have landed",
                 )),
-            Err(error) => match cache.write_json(&data_name, data_path, &rollback) {
-                Ok(()) => Err(error),
-                Err(rollback_error) => Err(error.context(format!(
-                    "Failed to roll back committed loop state: {rollback_error:#}"
-                ))),
-            },
+            Err(error) => {
+                match cache.write_json_with_mode(&data_name, data_path, &rollback, write_mode) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(error.context(format!(
+                        "Failed to roll back committed loop state: {rollback_error:#}"
+                    ))),
+                }
+            }
         }
     })
 }
@@ -137,11 +148,12 @@ pub(super) fn recover_unparsable_json_cache<T>(
     dir: &Path,
     lock_path: &Path,
     data_path: &Path,
+    write_mode: JsonWriteMode,
 ) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
 {
-    replace_unparsable_json_cache(root, dir, lock_path, data_path, T::default())
+    replace_unparsable_json_cache(root, dir, lock_path, data_path, write_mode, T::default())
 }
 
 pub(super) fn replace_unparsable_json_cache<T>(
@@ -149,6 +161,7 @@ pub(super) fn replace_unparsable_json_cache<T>(
     dir: &Path,
     lock_path: &Path,
     data_path: &Path,
+    write_mode: JsonWriteMode,
     replacement: T,
 ) -> Result<bool>
 where
@@ -162,7 +175,7 @@ where
         match cache.read_json_or_default::<T>(&data_name, data_path, &|| false) {
             Ok(_) => Ok(false),
             Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
-                cache.write_json(&data_name, data_path, &replacement)?;
+                cache.write_json_with_mode(&data_name, data_path, &replacement, write_mode)?;
                 Ok(true)
             }
             Err(error) => Err(error),
@@ -380,6 +393,19 @@ impl StateDirectory {
                     tmp_path.display()
                 ))),
             },
+        }
+    }
+
+    fn write_json_with_mode<T: Serialize>(
+        &self,
+        data_name: &OsStr,
+        data_path: &Path,
+        value: &T,
+        write_mode: JsonWriteMode,
+    ) -> Result<()> {
+        match write_mode {
+            JsonWriteMode::Cache => self.write_json(data_name, data_path, value),
+            JsonWriteMode::Durable => self.write_json_durable(data_name, data_path, value),
         }
     }
 
@@ -739,6 +765,7 @@ mod tests {
             &lock_path,
             &data_path,
             loop_state_lock_deadline(),
+            JsonWriteMode::Cache,
             |state: &mut BTreeMap<String, String>| {
                 state.insert("ExampleProject".into(), "cleared".into());
                 Ok(())

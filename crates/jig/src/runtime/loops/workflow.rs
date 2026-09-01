@@ -166,7 +166,8 @@ fn retained_worktree(action: &Value) -> Option<&str> {
     .flatten();
     codex_worktree.or_else(|| {
         let pr_attention = action["kind"].as_str() == Some("pr_manager_worker")
-            && action_requires_attention(action);
+            && action_requires_attention(action)
+            && action["worktree_retained"].as_bool() == Some(true);
         pr_attention.then(|| action["worktree"].as_str()).flatten()
     })
 }
@@ -692,6 +693,18 @@ mod tests {
         })]);
 
         assert_eq!(completion.worktree, None);
+    }
+
+    #[test]
+    fn removed_pr_worktree_is_not_retained() {
+        let action = json!({
+            "kind": "pr_manager_worker",
+            "status": "needs_attention",
+            "worktree": "/tmp/removed-pr-worktree",
+            "worktree_retained": false,
+        });
+
+        assert_eq!(retained_worktree(&action), None);
     }
 
     #[test]

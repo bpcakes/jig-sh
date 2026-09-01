@@ -11,7 +11,7 @@ use crate::runtime::loops::authority::{
 };
 
 use super::json_cache::{
-    read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
+    JsonWriteMode, read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
     recover_unparsable_json_cache, replace_unparsable_json_cache,
     with_json_cache_lock_compensating_until, with_json_cache_lock_until,
 };
@@ -26,15 +26,17 @@ struct JsonLocation {
     dir: PathBuf,
     path: PathBuf,
     lock_path: PathBuf,
+    write_mode: JsonWriteMode,
 }
 
 impl JsonLocation {
-    fn new(root: PathBuf, dir: PathBuf, name: &str) -> Self {
+    fn new(root: PathBuf, dir: PathBuf, name: &str, write_mode: JsonWriteMode) -> Self {
         Self {
             path: dir.join(format!("{name}.json")),
             lock_path: dir.join(format!("{name}.lock")),
             root,
             dir,
+            write_mode,
         }
     }
 }
@@ -61,7 +63,12 @@ impl JsonStatePersistence {
         resolve: fn(&std::path::Path) -> Result<Option<ProtectedLoopAuthority>>,
     ) -> Self {
         let legacy_dir = ctx.root().join(LOOP_CACHE_DIR);
-        let legacy = JsonLocation::new(ctx.root().to_path_buf(), legacy_dir, name);
+        let legacy = JsonLocation::new(
+            ctx.root().to_path_buf(),
+            legacy_dir,
+            name,
+            JsonWriteMode::Cache,
+        );
         let protected_state_path = format!("jig/loop/{name}.json");
         let protected = resolve(ctx.root())
             .map(|authority| authority.map(|authority| protected_location(authority, name)))
@@ -95,6 +102,7 @@ impl JsonStatePersistence {
                 &self.legacy.lock_path,
                 &self.legacy.path,
                 deadline,
+                self.legacy.write_mode,
                 action,
             );
         };
@@ -105,6 +113,7 @@ impl JsonStatePersistence {
             &protected.lock_path,
             &protected.path,
             deadline,
+            protected.write_mode,
             |primary: &mut ProtectedState<S>| {
                 primary.require_initialized()?;
                 action(&mut primary.state)
@@ -128,6 +137,7 @@ impl JsonStatePersistence {
                 &self.legacy.lock_path,
                 &self.legacy.path,
                 deadline,
+                self.legacy.write_mode,
                 action,
                 |result| after_commit(result, deadline),
             );
@@ -139,6 +149,7 @@ impl JsonStatePersistence {
             &protected.lock_path,
             &protected.path,
             deadline,
+            protected.write_mode,
             |primary: &mut ProtectedState<S>| {
                 primary.require_initialized()?;
                 action(&mut primary.state)
@@ -204,6 +215,7 @@ impl JsonStatePersistence {
                 &self.legacy.dir,
                 &self.legacy.lock_path,
                 &self.legacy.path,
+                self.legacy.write_mode,
             );
         };
         match self.read_protected::<S>(protected, &|| false) {
@@ -219,6 +231,7 @@ impl JsonStatePersistence {
                         &self.legacy.dir,
                         &self.legacy.lock_path,
                         &self.legacy.path,
+                        self.legacy.write_mode,
                         LegacyState::State(S::default()),
                     )?;
                     self.with_locked::<_, S>(|_| Ok(()))?;
@@ -231,6 +244,7 @@ impl JsonStatePersistence {
                 &protected.dir,
                 &protected.lock_path,
                 &protected.path,
+                protected.write_mode,
                 ProtectedState::new(S::default()),
             ),
             Err(error) => Err(error),
@@ -245,6 +259,11 @@ impl JsonStatePersistence {
     #[cfg(test)]
     pub(super) fn protected_path(&self) -> Result<Option<&std::path::Path>> {
         Ok(self.protected()?.map(|location| location.path.as_path()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn protected_write_mode(&self) -> Result<Option<JsonWriteMode>> {
+        Ok(self.protected()?.map(|location| location.write_mode))
     }
 
     fn protected(&self) -> Result<Option<&JsonLocation>> {
@@ -292,6 +311,7 @@ impl JsonStatePersistence {
             &protected.lock_path,
             &protected.path,
             deadline,
+            protected.write_mode,
             |primary: &mut ProtectedState<S>| {
                 if primary.is_initialized()? {
                     return Ok(());
@@ -302,6 +322,7 @@ impl JsonStatePersistence {
                     &self.legacy.lock_path,
                     &self.legacy.path,
                     deadline,
+                    self.legacy.write_mode,
                     |legacy: &mut LegacyState<S>| {
                         let state = legacy.clone().state(&self.protected_state_path)?;
                         *legacy = LegacyState::Migration(MigrationState {
@@ -320,7 +341,7 @@ impl JsonStatePersistence {
 }
 
 fn protected_location(authority: ProtectedLoopAuthority, name: &str) -> JsonLocation {
-    JsonLocation::new(authority.root, authority.dir, name)
+    JsonLocation::new(authority.root, authority.dir, name, JsonWriteMode::Durable)
 }
 
 fn is_json_error(error: &anyhow::Error) -> bool {

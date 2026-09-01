@@ -138,8 +138,9 @@ impl RuntimeCommand {
                 LoopCommand::Tick(_)
                 | LoopCommand::Dispatch(_)
                 | LoopCommand::Status(_)
-                | LoopCommand::Run(_) => Cooperative,
-                LoopCommand::ClearAttempt(_) | LoopCommand::AcknowledgeOccurrence(_) => Native,
+                | LoopCommand::Run(_)
+                | LoopCommand::ClearAttempt(_)
+                | LoopCommand::AcknowledgeOccurrence(_) => Cooperative,
             },
             Self::State(command) => match command {
                 StateCommand::Summary => Cooperative,
@@ -231,6 +232,15 @@ mod tests {
             RuntimeCommand::Check(CheckCommand::Test(ToolRequest::default())),
             RuntimeCommand::Work(WorkCommand::Status),
             RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
+            RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
+                workflow: "ExampleProject".into(),
+                item: "pr-17".into(),
+            })),
+            RuntimeCommand::Loop(LoopCommand::AcknowledgeOccurrence(
+                LoopAcknowledgeOccurrenceRequest {
+                    occurrence: "ExampleProject@100".into(),
+                },
+            )),
             RuntimeCommand::State(StateCommand::Summary),
         ];
 
