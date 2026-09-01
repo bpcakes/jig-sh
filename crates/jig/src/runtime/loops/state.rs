@@ -27,6 +27,7 @@ use super::workflow::ResolvedWorkflow;
 
 mod file_lock;
 mod json_cache;
+mod json_location;
 mod lease_renewal;
 mod persistence;
 
@@ -36,6 +37,7 @@ pub(super) use file_lock::{LOOP_STATE_LOCK_TIMEOUT, loop_state_lock_deadline};
 pub(in crate::runtime::loops) use json_cache::StateDirectory;
 #[cfg(test)]
 pub(in crate::runtime::loops) use json_cache::cache_file_name;
+use json_location::{JsonLocation, JsonWriteMode};
 use persistence::JsonStatePersistence;
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";

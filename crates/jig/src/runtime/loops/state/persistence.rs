@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Result, bail};
@@ -11,35 +10,14 @@ use crate::runtime::loops::authority::{
 };
 
 use super::json_cache::{
-    JsonWriteMode, read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
+    read_json_cache_locked_until, read_json_cache_or_default_with_cancellation,
     recover_unparsable_json_cache, replace_unparsable_json_cache,
     with_json_cache_lock_compensating_until, with_json_cache_lock_until,
 };
-use super::{LOOP_CACHE_DIR, loop_state_lock_deadline};
+use super::{JsonLocation, JsonWriteMode, LOOP_CACHE_DIR, loop_state_lock_deadline};
 
 const PROTECTED_STATE_SCHEMA_VERSION: u32 = 1;
 const LEGACY_MIGRATION_SCHEMA_VERSION: u32 = 1;
-
-#[derive(Clone)]
-struct JsonLocation {
-    root: PathBuf,
-    dir: PathBuf,
-    path: PathBuf,
-    lock_path: PathBuf,
-    write_mode: JsonWriteMode,
-}
-
-impl JsonLocation {
-    fn new(root: PathBuf, dir: PathBuf, name: &str, write_mode: JsonWriteMode) -> Self {
-        Self {
-            path: dir.join(format!("{name}.json")),
-            lock_path: dir.join(format!("{name}.lock")),
-            root,
-            dir,
-            write_mode,
-        }
-    }
-}
 
 #[derive(Clone)]
 pub(super) struct JsonStatePersistence {
@@ -96,29 +74,13 @@ impl JsonStatePersistence {
         S: Clone + Default + DeserializeOwned + Serialize,
     {
         let Some(protected) = self.protected()? else {
-            return with_json_cache_lock_until(
-                &self.legacy.root,
-                &self.legacy.dir,
-                &self.legacy.lock_path,
-                &self.legacy.path,
-                deadline,
-                self.legacy.write_mode,
-                action,
-            );
+            return with_json_cache_lock_until(&self.legacy, deadline, action);
         };
         self.ensure_initialized::<S>(protected, deadline)?;
-        with_json_cache_lock_until(
-            &protected.root,
-            &protected.dir,
-            &protected.lock_path,
-            &protected.path,
-            deadline,
-            protected.write_mode,
-            |primary: &mut ProtectedState<S>| {
-                primary.require_initialized()?;
-                action(&mut primary.state)
-            },
-        )
+        with_json_cache_lock_until(protected, deadline, |primary: &mut ProtectedState<S>| {
+            primary.require_initialized()?;
+            action(&mut primary.state)
+        })
     }
 
     pub(super) fn with_locked_compensating<T, U, S>(
@@ -132,24 +94,16 @@ impl JsonStatePersistence {
         let deadline = loop_state_lock_deadline();
         let Some(protected) = self.protected()? else {
             return with_json_cache_lock_compensating_until(
-                &self.legacy.root,
-                &self.legacy.dir,
-                &self.legacy.lock_path,
-                &self.legacy.path,
+                &self.legacy,
                 deadline,
-                self.legacy.write_mode,
                 action,
                 |result| after_commit(result, deadline),
             );
         };
         self.ensure_initialized::<S>(protected, deadline)?;
         with_json_cache_lock_compensating_until(
-            &protected.root,
-            &protected.dir,
-            &protected.lock_path,
-            &protected.path,
+            protected,
             deadline,
-            protected.write_mode,
             |primary: &mut ProtectedState<S>| {
                 primary.require_initialized()?;
                 action(&mut primary.state)
@@ -210,13 +164,7 @@ impl JsonStatePersistence {
         S: Clone + Default + DeserializeOwned + Serialize,
     {
         let Some(protected) = self.protected()? else {
-            return recover_unparsable_json_cache::<S>(
-                &self.legacy.root,
-                &self.legacy.dir,
-                &self.legacy.lock_path,
-                &self.legacy.path,
-                self.legacy.write_mode,
-            );
+            return recover_unparsable_json_cache::<S>(&self.legacy);
         };
         match self.read_protected::<S>(protected, &|| false) {
             Ok(primary) if primary.is_initialized()? => Ok(false),
@@ -226,27 +174,15 @@ impl JsonStatePersistence {
                     Ok(false)
                 }
                 Err(error) if is_json_error(&error) => {
-                    replace_unparsable_json_cache(
-                        &self.legacy.root,
-                        &self.legacy.dir,
-                        &self.legacy.lock_path,
-                        &self.legacy.path,
-                        self.legacy.write_mode,
-                        LegacyState::State(S::default()),
-                    )?;
+                    replace_unparsable_json_cache(&self.legacy, LegacyState::State(S::default()))?;
                     self.with_locked::<_, S>(|_| Ok(()))?;
                     Ok(true)
                 }
                 Err(error) => Err(error),
             },
-            Err(error) if is_json_error(&error) => replace_unparsable_json_cache(
-                &protected.root,
-                &protected.dir,
-                &protected.lock_path,
-                &protected.path,
-                protected.write_mode,
-                ProtectedState::new(S::default()),
-            ),
+            Err(error) if is_json_error(&error) => {
+                replace_unparsable_json_cache(protected, ProtectedState::new(S::default()))
+            }
             Err(error) => Err(error),
         }
     }
@@ -305,38 +241,26 @@ impl JsonStatePersistence {
     where
         S: Clone + Default + DeserializeOwned + Serialize,
     {
-        with_json_cache_lock_until(
-            &protected.root,
-            &protected.dir,
-            &protected.lock_path,
-            &protected.path,
-            deadline,
-            protected.write_mode,
-            |primary: &mut ProtectedState<S>| {
-                if primary.is_initialized()? {
-                    return Ok(());
-                }
-                let state = with_json_cache_lock_until(
-                    &self.legacy.root,
-                    &self.legacy.dir,
-                    &self.legacy.lock_path,
-                    &self.legacy.path,
-                    deadline,
-                    self.legacy.write_mode,
-                    |legacy: &mut LegacyState<S>| {
-                        let state = legacy.clone().state(&self.protected_state_path)?;
-                        *legacy = LegacyState::Migration(MigrationState {
-                            schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
-                            protected_state_path: self.protected_state_path.clone(),
-                            state: state.clone(),
-                        });
-                        Ok(state)
-                    },
-                )?;
-                *primary = ProtectedState::new(state);
-                Ok(())
-            },
-        )
+        with_json_cache_lock_until(protected, deadline, |primary: &mut ProtectedState<S>| {
+            if primary.is_initialized()? {
+                return Ok(());
+            }
+            let state = with_json_cache_lock_until(
+                &self.legacy,
+                deadline,
+                |legacy: &mut LegacyState<S>| {
+                    let state = legacy.clone().state(&self.protected_state_path)?;
+                    *legacy = LegacyState::Migration(MigrationState {
+                        schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
+                        protected_state_path: self.protected_state_path.clone(),
+                        state: state.clone(),
+                    });
+                    Ok(state)
+                },
+            )?;
+            *primary = ProtectedState::new(state);
+            Ok(())
+        })
     }
 }
 

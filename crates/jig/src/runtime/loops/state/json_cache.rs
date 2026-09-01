@@ -17,12 +17,6 @@ use super::*;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum JsonWriteMode {
-    Cache,
-    Durable,
-}
-
 #[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
     root: &Path,
@@ -34,63 +28,54 @@ pub(super) fn with_json_cache_lock<T, S>(
 where
     S: Default + DeserializeOwned + Serialize,
 {
-    with_json_cache_lock_until(
-        root,
-        dir,
-        lock_path,
-        data_path,
-        loop_state_lock_deadline(),
-        JsonWriteMode::Cache,
-        action,
-    )
+    let location = JsonLocation {
+        root: root.to_path_buf(),
+        dir: dir.to_path_buf(),
+        path: data_path.to_path_buf(),
+        lock_path: lock_path.to_path_buf(),
+        write_mode: JsonWriteMode::Cache,
+    };
+    with_json_cache_lock_until(&location, loop_state_lock_deadline(), action)
 }
 
 pub(super) fn with_json_cache_lock_until<T, S>(
-    root: &Path,
-    dir: &Path,
-    lock_path: &Path,
-    data_path: &Path,
+    location: &JsonLocation,
     deadline: Instant,
-    write_mode: JsonWriteMode,
     action: impl FnOnce(&mut S) -> Result<T>,
 ) -> Result<T>
 where
     S: Default + DeserializeOwned + Serialize,
 {
-    let cache = StateDirectory::open(root, dir)?;
-    let lock_name = cache_file_name(dir, lock_path)?;
-    let data_name = cache_file_name(dir, data_path)?;
-    cache.with_lock_until(&lock_name, lock_path, deadline, || {
-        cache.reclaim_orphaned_temps(&data_name, data_path)?;
-        let mut store: S = cache.read_json_or_default(&data_name, data_path, &|| false)?;
+    let cache = StateDirectory::open(&location.root, &location.dir)?;
+    let lock_name = cache_file_name(&location.dir, &location.lock_path)?;
+    let data_name = cache_file_name(&location.dir, &location.path)?;
+    cache.with_lock_until(&lock_name, &location.lock_path, deadline, || {
+        cache.reclaim_orphaned_temps(&data_name, &location.path)?;
+        let mut store: S = cache.read_json_or_default(&data_name, &location.path, &|| false)?;
         let result = action(&mut store)?;
-        cache.write_json_with_mode(&data_name, data_path, &store, write_mode)?;
+        cache.write_json_with_mode(&data_name, &location.path, &store, location.write_mode)?;
         Ok(result)
     })
 }
 
 pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
-    root: &Path,
-    dir: &Path,
-    lock_path: &Path,
-    data_path: &Path,
+    location: &JsonLocation,
     deadline: Instant,
-    write_mode: JsonWriteMode,
     action: impl FnOnce(&mut S) -> Result<T>,
     after_commit: impl FnOnce(&T) -> Result<U>,
 ) -> Result<(T, U)>
 where
     S: Clone + Default + DeserializeOwned + Serialize,
 {
-    let cache = StateDirectory::open(root, dir)?;
-    let lock_name = cache_file_name(dir, lock_path)?;
-    let data_name = cache_file_name(dir, data_path)?;
-    cache.with_lock_until(&lock_name, lock_path, deadline, || {
-        cache.reclaim_orphaned_temps(&data_name, data_path)?;
-        let mut store: S = cache.read_json_or_default(&data_name, data_path, &|| false)?;
+    let cache = StateDirectory::open(&location.root, &location.dir)?;
+    let lock_name = cache_file_name(&location.dir, &location.lock_path)?;
+    let data_name = cache_file_name(&location.dir, &location.path)?;
+    cache.with_lock_until(&lock_name, &location.lock_path, deadline, || {
+        cache.reclaim_orphaned_temps(&data_name, &location.path)?;
+        let mut store: S = cache.read_json_or_default(&data_name, &location.path, &|| false)?;
         let rollback = store.clone();
         let result = action(&mut store)?;
-        cache.write_json_with_mode(&data_name, data_path, &store, write_mode)?;
+        cache.write_json_with_mode(&data_name, &location.path, &store, location.write_mode)?;
         match after_commit(&result) {
             Ok(effect) => Ok((result, effect)),
             Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error
@@ -98,7 +83,12 @@ where
                     "Committed loop state was retained because its receipt append may have landed",
                 )),
             Err(error) => {
-                match cache.write_json_with_mode(&data_name, data_path, &rollback, write_mode) {
+                match cache.write_json_with_mode(
+                    &data_name,
+                    &location.path,
+                    &rollback,
+                    location.write_mode,
+                ) {
                     Ok(()) => Err(error),
                     Err(rollback_error) => Err(error.context(format!(
                         "Failed to roll back committed loop state: {rollback_error:#}"
@@ -143,44 +133,44 @@ where
     })
 }
 
-pub(super) fn recover_unparsable_json_cache<T>(
-    root: &Path,
-    dir: &Path,
-    lock_path: &Path,
-    data_path: &Path,
-    write_mode: JsonWriteMode,
-) -> Result<bool>
+pub(super) fn recover_unparsable_json_cache<T>(location: &JsonLocation) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
 {
-    replace_unparsable_json_cache(root, dir, lock_path, data_path, write_mode, T::default())
+    replace_unparsable_json_cache(location, T::default())
 }
 
 pub(super) fn replace_unparsable_json_cache<T>(
-    root: &Path,
-    dir: &Path,
-    lock_path: &Path,
-    data_path: &Path,
-    write_mode: JsonWriteMode,
+    location: &JsonLocation,
     replacement: T,
 ) -> Result<bool>
 where
     T: Default + DeserializeOwned + Serialize,
 {
-    let cache = StateDirectory::open(root, dir)?;
-    let lock_name = cache_file_name(dir, lock_path)?;
-    let data_name = cache_file_name(dir, data_path)?;
-    cache.with_lock_until(&lock_name, lock_path, loop_state_lock_deadline(), || {
-        cache.reclaim_orphaned_temps(&data_name, data_path)?;
-        match cache.read_json_or_default::<T>(&data_name, data_path, &|| false) {
-            Ok(_) => Ok(false),
-            Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
-                cache.write_json_with_mode(&data_name, data_path, &replacement, write_mode)?;
-                Ok(true)
+    let cache = StateDirectory::open(&location.root, &location.dir)?;
+    let lock_name = cache_file_name(&location.dir, &location.lock_path)?;
+    let data_name = cache_file_name(&location.dir, &location.path)?;
+    cache.with_lock_until(
+        &lock_name,
+        &location.lock_path,
+        loop_state_lock_deadline(),
+        || {
+            cache.reclaim_orphaned_temps(&data_name, &location.path)?;
+            match cache.read_json_or_default::<T>(&data_name, &location.path, &|| false) {
+                Ok(_) => Ok(false),
+                Err(error) if error.downcast_ref::<serde_json::Error>().is_some() => {
+                    cache.write_json_with_mode(
+                        &data_name,
+                        &location.path,
+                        &replacement,
+                        location.write_mode,
+                    )?;
+                    Ok(true)
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
-        }
-    })
+        },
+    )
 }
 
 pub(in crate::runtime::loops) struct StateDirectory {
@@ -757,15 +747,16 @@ mod tests {
     fn compensating_cache_retains_commit_when_receipt_may_have_landed() {
         let temp = tempdir().unwrap();
         let data_path = temp.path().join("attempts.json");
-        let lock_path = temp.path().join("attempts.lock");
+        let location = JsonLocation::new(
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+            "attempts",
+            JsonWriteMode::Cache,
+        );
 
         let error = with_json_cache_lock_compensating_until(
-            temp.path(),
-            temp.path(),
-            &lock_path,
-            &data_path,
+            &location,
             loop_state_lock_deadline(),
-            JsonWriteMode::Cache,
             |state: &mut BTreeMap<String, String>| {
                 state.insert("ExampleProject".into(), "cleared".into());
                 Ok(())

@@ -171,12 +171,12 @@ fn git_state_migrates_legacy_leases_and_attempts_to_protected_authority() {
     );
     assert_eq!(
         leases.persistence.protected_write_mode().unwrap(),
-        Some(json_cache::JsonWriteMode::Durable),
+        Some(JsonWriteMode::Durable),
         "protected lease authority must use crash-durable replacement"
     );
     assert_eq!(
         attempts.persistence.protected_write_mode().unwrap(),
-        Some(json_cache::JsonWriteMode::Durable),
+        Some(JsonWriteMode::Durable),
         "protected attempt authority must use crash-durable replacement"
     );
 }
