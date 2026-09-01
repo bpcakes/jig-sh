@@ -12,10 +12,7 @@ use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL
 use super::occurrence::{
     OccurrenceAcknowledgement, OccurrenceStore, OccurrenceWorktreeReservation,
 };
-use super::state::{
-    AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore,
-    validate_repository_branch_authority,
-};
+use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
     CODEX_TASK_KIND, DEFAULT_WORKFLOW_ID, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND,
     ResolvedWorkflow, TuningOverrides, UnexecutedReason, WorkflowCompletion, WorkflowOutcome,
@@ -220,10 +217,7 @@ fn tick_with_execution(
     if execution.manual {
         super::pre_execution::require_ignored_loop_runtime_root(ctx, observer)?;
     }
-    if workflow.requires_repository_branch_authority() {
-        validate_repository_branch_authority(ctx)?;
-    }
-    let mut lease_store = LeaseStore::new(ctx);
+    let mut lease_store = LeaseStore::for_workflow_claim(ctx, &workflow)?;
     let mut attempt_store = AttemptStore::new(ctx);
 
     let mut status = "idle";

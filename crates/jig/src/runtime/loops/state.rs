@@ -83,6 +83,16 @@ impl LeaseStore {
         }
     }
 
+    pub(super) fn for_workflow_claim(
+        ctx: &RepoContext,
+        workflow: &ResolvedWorkflow,
+    ) -> Result<Self> {
+        if workflow.requires_repository_branch_authority() {
+            validate_repository_branch_authority(ctx)?;
+        }
+        Ok(Self::new(ctx))
+    }
+
     pub(super) fn acquire(&mut self, key: &str, ttl_seconds: u64) -> Result<LeaseAcquire> {
         self.with_locked(|store| {
             let now = now_ms();
