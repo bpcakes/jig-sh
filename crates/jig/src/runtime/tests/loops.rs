@@ -51,6 +51,7 @@ include!("loops/checkout_regressions.rs");
 include!("loops/scheduled_failures.rs");
 include!("loops/attempt_lifecycle.rs");
 include!("loops/status_and_pr_manager.rs");
+include!("loops/pr_manager_conflict.rs");
 include!("loops/occurrence_lifecycle.rs");
 include!("loops/pr_manager_retries_and_helpers.rs");
 include!("loops/scheduled_attention_regressions.rs");
