@@ -44,8 +44,8 @@ fn post_review_thread_reply(
         .map_err(ExecutionCommandError::failed)?;
     let mut body_field = OsString::from("body=@");
     body_field.push(body_file.path());
-    let timeout = budget.reserve_request(ctx.command_timeout())?;
-    let result = github::gh_json_with_timeout(
+    let timeout = budget.reserve_request(ctx.command_timeout().duration())?;
+    let result = github::gh_json_with_duration(
         ctx,
         vec![
             OsString::from("api"),

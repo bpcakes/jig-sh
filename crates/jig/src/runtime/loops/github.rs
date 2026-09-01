@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::bootstrap::scrub_known_repository_git_environment;
 use crate::context::{CommandTimeout, RepoContext};
 use crate::execution::{
-    ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
+    ExecutionCommandError, ExecutionControl, run_authoritative_execution_command_for_duration,
 };
 use crate::state::now_ms;
 
@@ -138,7 +138,7 @@ impl<'a> GithubSnapshotClient<'a> {
 
     fn output(&mut self, args: Vec<OsString>) -> Result<GhOutput> {
         let timeout = self.budget.reserve_request()?;
-        let output = run_gh_with_timeout(self.ctx, args, timeout, self.observer)?;
+        let output = run_gh_with_duration(self.ctx, args, timeout, self.observer)?;
         self.budget.record_response(&output)?;
         Ok(output)
     }
@@ -171,7 +171,7 @@ impl GithubSnapshotBudget {
         }
     }
 
-    fn reserve_request(&mut self) -> Result<CommandTimeout> {
+    fn reserve_request(&mut self) -> Result<Duration> {
         if self.request_count >= GITHUB_SNAPSHOT_REQUEST_LIMIT {
             bail!("GitHub PR snapshot exceeded its {GITHUB_SNAPSHOT_REQUEST_LIMIT}-request budget");
         }
@@ -185,17 +185,8 @@ impl GithubSnapshotBudget {
                     self.timeout.as_secs()
                 )
             })?;
-        let seconds = remaining.as_secs();
-        if seconds == 0 {
-            bail!(
-                "GitHub PR snapshot exceeded its {}-second deadline",
-                self.timeout.as_secs()
-            );
-        }
-        let timeout = CommandTimeout::from_seconds(seconds)
-            .ok_or_else(|| anyhow!("GitHub PR snapshot produced an invalid request timeout"))?;
         self.request_count += 1;
-        Ok(timeout)
+        Ok(remaining)
     }
 
     fn record_response(&mut self, output: &GhOutput) -> Result<()> {
@@ -571,15 +562,15 @@ impl GhOutput {
     }
 }
 
-pub(super) fn gh_json_with_timeout(
+pub(super) fn gh_json_with_duration(
     ctx: &RepoContext,
     args: Vec<OsString>,
     allowed_statuses: &[i32],
-    timeout: crate::context::CommandTimeout,
+    timeout: Duration,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let command_label = command_label(&args);
-    let output = run_gh_with_timeout(ctx, args, timeout, observer)?;
+    let output = run_gh_with_duration(ctx, args, timeout, observer)?;
     let status = output.status_code.unwrap_or(-1);
     if !allowed_statuses.contains(&status) {
         return Err(ExecutionCommandError::failed(
@@ -589,14 +580,14 @@ pub(super) fn gh_json_with_timeout(
     parse_gh_json(&output.stdout, &command_label).map_err(ExecutionCommandError::failed)
 }
 
-fn run_gh_with_timeout(
+fn run_gh_with_duration(
     ctx: &RepoContext,
     args: Vec<OsString>,
-    timeout: crate::context::CommandTimeout,
+    timeout: Duration,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let gh = std::env::var_os("JIG_GH_BIN").unwrap_or_else(|| OsString::from("gh"));
-    run_gh_with_program_timeout(ctx, args, &gh, timeout, observer)
+    run_gh_with_program_duration(ctx, args, &gh, timeout, observer)
 }
 
 #[cfg(test)]
@@ -606,14 +597,14 @@ fn run_gh_with_program(
     gh: &OsStr,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<GhOutput, ExecutionCommandError> {
-    run_gh_with_program_timeout(ctx, args, gh, ctx.command_timeout(), observer)
+    run_gh_with_program_duration(ctx, args, gh, ctx.command_timeout().duration(), observer)
 }
 
-fn run_gh_with_program_timeout(
+fn run_gh_with_program_duration(
     ctx: &RepoContext,
     args: Vec<OsString>,
     gh: &OsStr,
-    timeout: crate::context::CommandTimeout,
+    timeout: Duration,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let command_label = command_label(&args);
@@ -626,7 +617,7 @@ fn run_gh_with_program_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     scrub_github_repository_environment(&mut command);
-    let output = run_authoritative_execution_command(
+    let output = run_authoritative_execution_command_for_duration(
         &mut command,
         timeout,
         crate::execution::internal_execution_output_limit(),

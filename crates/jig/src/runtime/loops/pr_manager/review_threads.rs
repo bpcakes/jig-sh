@@ -26,8 +26,8 @@ impl ReviewThreadUpdateBudget {
 
     fn reserve_request(
         &mut self,
-        requested_timeout: CommandTimeout,
-    ) -> std::result::Result<CommandTimeout, ExecutionCommandError> {
+        requested_timeout: Duration,
+    ) -> std::result::Result<Duration, ExecutionCommandError> {
         if self.request_count >= REVIEW_THREAD_UPDATE_REQUEST_LIMIT {
             return Err(ExecutionCommandError::failed(anyhow!(
                 "GitHub review thread updates exceeded their {REVIEW_THREAD_UPDATE_REQUEST_LIMIT}-request budget"
@@ -43,19 +43,13 @@ impl ReviewThreadUpdateBudget {
                     self.timeout.as_secs()
                 ))
             })?;
-        let timeout = remaining.min(requested_timeout.duration());
-        let seconds = timeout.as_secs();
-        if seconds == 0 {
+        let timeout = remaining.min(requested_timeout);
+        if timeout.is_zero() {
             return Err(ExecutionCommandError::failed(anyhow!(
                 "GitHub review thread updates exceeded their {}-second deadline",
                 self.timeout.as_secs()
             )));
         }
-        let timeout = CommandTimeout::from_seconds(seconds).ok_or_else(|| {
-            ExecutionCommandError::failed(anyhow!(
-                "GitHub review thread updates produced an invalid request timeout"
-            ))
-        })?;
         self.request_count += 1;
         Ok(timeout)
     }
@@ -354,8 +348,8 @@ fn resolve_review_thread(
     if !review_thread_matches_witness(&state, witness, reply_comment_id) {
         return Ok(ReviewThreadResolution::Changed);
     }
-    let timeout = budget.reserve_request(ctx.command_timeout())?;
-    let result = github::gh_json_with_timeout(
+    let timeout = budget.reserve_request(ctx.command_timeout().duration())?;
+    let result = github::gh_json_with_duration(
         ctx,
         vec![
             OsString::from("api"),
@@ -389,7 +383,7 @@ fn review_thread_reply_comment(
             "GitHub review thread reply lookup",
         )?;
         let timeout = budget.reserve_request(timeout)?;
-        github::gh_json_with_timeout(
+        github::gh_json_with_duration(
             ctx,
             review_thread_reply_state_args(thread_id, cursor),
             &[0],
@@ -409,7 +403,7 @@ fn review_thread_reply_comment_for_reconciliation(
     fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
         let mut observer = NoopExecutionObserver;
         let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
-        github::gh_json_with_timeout(
+        github::gh_json_with_duration(
             ctx,
             review_thread_reply_state_args(thread_id, cursor),
             &[0],
@@ -450,7 +444,7 @@ fn review_thread_resolution_state(
             "GitHub review thread witness lookup",
         )?;
         let timeout = budget.reserve_request(timeout)?;
-        github::gh_json_with_timeout(
+        github::gh_json_with_duration(
             ctx,
             review_thread_witness_state_args(thread_id, cursor),
             &[0],
@@ -468,7 +462,7 @@ fn review_thread_resolution_state_for_reconciliation(
     let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
     let mut observer = NoopExecutionObserver;
     let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
-    github::gh_json_with_timeout(
+    github::gh_json_with_duration(
         ctx,
         review_thread_resolution_state_args(thread_id),
         &[0],
@@ -480,7 +474,7 @@ fn review_thread_resolution_state_for_reconciliation(
 
 fn remaining_reconciliation_timeout(
     deadline: Instant,
-) -> std::result::Result<CommandTimeout, ExecutionCommandError> {
+) -> std::result::Result<Duration, ExecutionCommandError> {
     remaining_operation_timeout(
         deadline,
         MUTATION_RECONCILIATION_TIMEOUT,
@@ -492,7 +486,7 @@ fn remaining_operation_timeout(
     deadline: Instant,
     total_timeout: Duration,
     operation: &str,
-) -> std::result::Result<CommandTimeout, ExecutionCommandError> {
+) -> std::result::Result<Duration, ExecutionCommandError> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(ExecutionCommandError::failed(anyhow!(
@@ -500,14 +494,7 @@ fn remaining_operation_timeout(
             total_timeout.as_secs()
         )));
     }
-    let seconds = remaining
-        .as_secs()
-        .saturating_add(u64::from(remaining.subsec_nanos() != 0));
-    CommandTimeout::from_seconds(seconds).ok_or_else(|| {
-        ExecutionCommandError::failed(anyhow!(
-            "{operation} has an invalid remaining timeout"
-        ))
-    })
+    Ok(remaining)
 }
 
 fn review_thread_resolution_state_args(thread_id: &str) -> Vec<OsString> {

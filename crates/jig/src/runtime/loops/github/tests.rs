@@ -314,20 +314,14 @@ esac
                 .to_string()
                 .contains("deadline")
         );
+        assert_eq!(expired_budget.request_count, 0);
 
         let mut subsecond_budget = GithubSnapshotBudget::new(timeout);
         subsecond_budget.timeout = Duration::from_millis(500);
-        assert!(
-            subsecond_budget
-                .reserve_request()
-                .unwrap_err()
-                .to_string()
-                .contains("deadline")
-        );
-        assert_eq!(
-            subsecond_budget.request_count, 0,
-            "a request rejected before launch must not consume or report budget"
-        );
+        let remaining = subsecond_budget.reserve_request().unwrap();
+        assert!(!remaining.is_zero());
+        assert!(remaining <= Duration::from_millis(500));
+        assert_eq!(subsecond_budget.request_count, 1);
 
         let snapshot = json!({"body": "x".repeat(32)});
         require_serialized_snapshot_budget(&snapshot, 43).unwrap();
@@ -337,6 +331,50 @@ esac
                 .to_string()
                 .contains("serialized evidence budget")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn minimum_command_timeout_preserves_the_snapshot_deadline_between_requests() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .config("[execution]\ncommand_timeout_seconds = 1\n")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let log = temp.path().join("gh-calls.log");
+        let gh = temp.path().join("fixture-gh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+printf 'CALL\n' >> "$JIG_TEST_GH_LOG"
+case "$*" in
+  *"repo view"*)
+    printf '%s\n' '{"nameWithOwner":"ExampleProject/ExampleVault","name":"ExampleVault","owner":{"login":"ExampleProject"},"url":"https://example.invalid/ExampleProject/ExampleVault","defaultBranchRef":{"name":"main"}}'
+    ;;
+  *"pr list"*) printf '%s\n' '[]' ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh, permissions).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let _log = EnvVarGuard::set("JIG_TEST_GH_LOG", log.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = crate::execution::NoopExecutionObserver;
+
+        let snapshot = github_pr_status_snapshot(&ctx, &mut observer).unwrap();
+
+        assert_eq!(snapshot["budget"]["request_count"], 2);
+        assert_eq!(fs::read_to_string(log).unwrap().lines().count(), 2);
     }
 
     #[cfg(unix)]

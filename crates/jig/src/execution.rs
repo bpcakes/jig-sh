@@ -112,8 +112,24 @@ pub(crate) fn run_authoritative_execution_command(
     label: &str,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ExecutionCommandOutput, ExecutionCommandError> {
-    run_supervised_execution_command(command, timeout.duration(), output_limit, label, observer)
-        .map_err(|error| execution_command_error(error, timeout, output_limit, label))
+    run_authoritative_execution_command_for_duration(
+        command,
+        timeout.duration(),
+        output_limit,
+        label,
+        observer,
+    )
+}
+
+pub(crate) fn run_authoritative_execution_command_for_duration(
+    command: &mut Command,
+    timeout: Duration,
+    output_limit: CommandOutputLimit,
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ExecutionCommandOutput, ExecutionCommandError> {
+    run_supervised_execution_command(command, timeout, output_limit, label, observer)
+        .map_err(|error| execution_command_error_for_duration(error, timeout, output_limit, label))
 }
 
 /// Runs a repository-owned command under the complete non-interactive process
@@ -162,13 +178,22 @@ pub(crate) fn execution_command_error(
     output_limit: CommandOutputLimit,
     label: &str,
 ) -> ExecutionCommandError {
+    execution_command_error_for_duration(error, timeout.duration(), output_limit, label)
+}
+
+fn execution_command_error_for_duration(
+    error: SupervisedExecutionError,
+    timeout: Duration,
+    output_limit: CommandOutputLimit,
+    label: &str,
+) -> ExecutionCommandError {
     let error = match error {
         SupervisedExecutionError::CancelledBeforeStart => {
             return ExecutionCommandError::CancelledBeforeStart;
         }
         SupervisedExecutionError::Cancelled => return ExecutionCommandError::Cancelled,
         SupervisedExecutionError::TimedOut => {
-            anyhow!("{label} timed out after {} seconds", timeout.as_secs())
+            anyhow!("{label} timed out after {}", timeout_description(timeout))
         }
         SupervisedExecutionError::OutputLimitExceeded { stream, .. } => anyhow!(
             "{label} exceeded the {} byte {stream} capture limit",
@@ -185,6 +210,14 @@ pub(crate) fn execution_command_error(
         }
     };
     ExecutionCommandError::failed_after_start(error)
+}
+
+fn timeout_description(timeout: Duration) -> String {
+    if timeout.subsec_nanos() == 0 {
+        format!("{} seconds", timeout.as_secs())
+    } else {
+        format!("{timeout:?}")
+    }
 }
 
 fn supervised_execution_error(
