@@ -1,8 +1,17 @@
 #[cfg(test)]
 mod push_error_tests {
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+
     use tempfile::tempdir;
 
     use super::*;
+    #[cfg(unix)]
+    use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     #[test]
     fn push_evidence_reports_the_expected_head_force_lease() {
@@ -11,6 +20,64 @@ mod push_error_tests {
         assert_eq!(push["force"], true);
         assert_eq!(push["force_with_lease"], true);
         assert_eq!(push["expected_remote_head"], "observed-head");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pr_worker_actions_encode_non_utf8_worktree_paths() {
+        let path = PathBuf::from(OsString::from_vec(b"/tmp/pr-worktree-\xff".to_vec()));
+        let encoded = pr_worktree_value(&path);
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Example repair".into(),
+            base_ref: "main".into(),
+            head_ref: "repair/example".into(),
+            head_sha: "a".repeat(40),
+            reasons: vec!["failing_checks".into()],
+        };
+
+        let action = pr_worker_action(
+            &item,
+            &json!({"owner": "example"}),
+            None,
+            "failed",
+            "worker failed",
+            Some(&path),
+            None,
+        );
+
+        assert_eq!(action["worktree"], encoded);
+        assert!(encoded.as_str().unwrap().starts_with("jig-path-v1:unix-hex:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_path_output_preserves_non_utf8_bytes() {
+        let _guard = lock_env();
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let expected = temp
+            .path()
+            .join(OsString::from_vec(b"common-git-\xff".to_vec()));
+        let git = temp.path().join("git-path-stub.sh");
+        fs::write(&git, "#!/bin/sh\nprintf '%s\\n' \"$JIG_TEST_COMMON_GIT_DIR\"\n").unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+        let _common = EnvVarGuard::set("JIG_TEST_COMMON_GIT_DIR", expected.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let actual = git_stdout_path(
+            &ctx,
+            temp.path(),
+            ["rev-parse", "--git-common-dir"],
+            &mut NoopExecutionObserver,
+        )
+        .unwrap();
+
+        assert_eq!(actual.as_os_str().as_bytes(), expected.as_os_str().as_bytes());
     }
 
     #[test]

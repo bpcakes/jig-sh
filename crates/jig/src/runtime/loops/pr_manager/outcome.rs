@@ -70,7 +70,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
                 "branch": repair.item.head_ref,
                 "head_sha": repair.item.head_sha,
                 "reasons": repair.item.reasons,
-                "worktree": encode_worktree_path(worktree.path()),
+                "worktree": pr_worktree_value(worktree.path()),
                 "lease": repair.lease,
                 "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                 "worker_receipt_id": worker_receipt_id,
@@ -318,7 +318,7 @@ fn pr_worker_action(
         "error": error,
     });
     if let Some(worktree) = worktree {
-        action["worktree"] = json!(worktree);
+        action["worktree"] = pr_worktree_value(worktree);
     }
     if let Some(worker_receipt_id) = worker_receipt_id {
         action["worker_receipt_id"] = json!(worker_receipt_id);

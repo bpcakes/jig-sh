@@ -40,6 +40,40 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let stdout = git_stdout_bytes(ctx, cwd, args, observer)?;
+    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
+fn git_stdout_path<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<PathBuf>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let stdout = git_stdout_bytes(ctx, cwd, args, observer)?;
+    let path = trim_ascii_line(&stdout);
+    if path.is_empty() || path.contains(&b'\r') || path.contains(&b'\n') {
+        return Err(PrRepairStepError::failed(anyhow!(
+            "git command returned an empty or multiline path"
+        )));
+    }
+    Ok(path_from_git_bytes(path))
+}
+
+fn git_stdout_bytes<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<Vec<u8>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let output = git_output(ctx, cwd, args, observer)?;
     if !output.status.success() {
         return Err(PrRepairStepError::failed(git_error(
@@ -47,7 +81,7 @@ where
             output,
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(output.stdout)
 }
 
 fn git_output<I, S>(

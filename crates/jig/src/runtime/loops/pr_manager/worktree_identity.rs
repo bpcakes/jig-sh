@@ -43,18 +43,6 @@ fn worktree_paths_from_porcelain(bytes: &[u8]) -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(unix)]
-fn path_from_git_bytes(bytes: &[u8]) -> PathBuf {
-    use std::os::unix::ffi::OsStringExt as _;
-
-    PathBuf::from(OsString::from_vec(bytes.to_vec()))
-}
-
-#[cfg(not(unix))]
-fn path_from_git_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
-}
-
 fn validate_linked_worktree_gitfile(
     ctx: &RepoContext,
     worktree: &Path,
@@ -73,14 +61,13 @@ fn validate_linked_worktree_gitfile(
         Ok(path) => path,
         Err(_) => return Ok(false),
     };
-    let common = git_stdout(
+    let common = git_stdout_path(
         ctx,
         ctx.root(),
         ["rev-parse", "--git-common-dir"],
         observer,
     )
     .map_err(pr_step_error)?;
-    let common = PathBuf::from(common);
     let common = if common.is_absolute() {
         common
     } else {
@@ -142,14 +129,4 @@ fn parse_gitdir_pointer(bytes: &[u8], worktree: &Path) -> Option<PathBuf> {
     } else {
         worktree.join(path)
     })
-}
-
-fn trim_ascii_line(mut bytes: &[u8]) -> &[u8] {
-    while bytes
-        .last()
-        .is_some_and(|byte| matches!(byte, b'\r' | b'\n'))
-    {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
 }

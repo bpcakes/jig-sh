@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use super::git_path::{path_from_git_bytes, trim_ascii_line};
+
 const PROTECTED_LOOP_DIR: &str = "jig/loop";
 const MAX_GITDIR_FILE_BYTES: u64 = 16 * 1024;
 
@@ -63,20 +65,20 @@ fn resolve_common_git_directory(git_dir: &Path) -> Result<PathBuf> {
             common_pointer.display()
         );
     }
-    let pointer = fs::read_to_string(&common_pointer).with_context(|| {
+    let pointer = fs::read(&common_pointer).with_context(|| {
         format!(
             "Failed to read common Git metadata pointer {}",
             common_pointer.display()
         )
     })?;
-    let pointer = pointer.trim_end_matches(['\r', '\n']);
-    if pointer.is_empty() || pointer.contains(['\r', '\n']) {
+    let pointer = trim_ascii_line(&pointer);
+    if pointer.is_empty() || pointer.contains(&b'\r') || pointer.contains(&b'\n') {
         bail!(
             "Common Git metadata pointer is empty or contains multiple lines at {}",
             common_pointer.display()
         );
     }
-    let pointer = PathBuf::from(pointer);
+    let pointer = path_from_git_bytes(pointer);
     let common_dir = if pointer.is_absolute() {
         pointer
     } else {
@@ -112,23 +114,23 @@ fn resolve_git_metadata_directory(
                 metadata.len()
             );
         }
-        let pointer = fs::read_to_string(&dot_git).with_context(|| {
+        let pointer = fs::read(&dot_git).with_context(|| {
             format!("Failed to read Git metadata pointer {}", dot_git.display())
         })?;
-        let pointer = pointer.trim_end_matches(['\r', '\n']);
-        if pointer.contains(['\r', '\n']) {
+        let pointer = trim_ascii_line(&pointer);
+        if pointer.contains(&b'\r') || pointer.contains(&b'\n') {
             bail!(
                 "Git metadata pointer contains multiple lines at {}",
                 dot_git.display()
             );
         }
         let path = pointer
-            .strip_prefix("gitdir: ")
+            .strip_prefix(b"gitdir: ")
             .filter(|path| !path.is_empty())
             .ok_or_else(|| {
                 anyhow::anyhow!("Invalid Git metadata pointer at {}", dot_git.display())
             })?;
-        let path = PathBuf::from(path);
+        let path = path_from_git_bytes(path);
         if path.is_absolute() {
             path
         } else {
@@ -153,4 +155,42 @@ fn resolve_git_metadata_directory(
         );
     }
     Ok(git_dir)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn linked_worktree_authority_preserves_non_utf8_git_paths() {
+        let temp = tempdir().unwrap();
+        let common = temp
+            .path()
+            .join(OsString::from_vec(b"common-repo-\xff".to_vec()))
+            .join(".git");
+        let git_dir = common.join("worktrees/scheduler");
+        let checkout = temp.path().join("scheduler");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&checkout).unwrap();
+        let mut pointer = b"gitdir: ".to_vec();
+        pointer.extend_from_slice(git_dir.as_os_str().as_bytes());
+        pointer.push(b'\n');
+        fs::write(checkout.join(".git"), pointer).unwrap();
+        fs::write(git_dir.join("commondir"), b"../..\n").unwrap();
+
+        let worktree = resolve_protected_loop_authority(&checkout)
+            .unwrap()
+            .unwrap();
+        let repository = resolve_protected_repository_authority(&checkout)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(worktree.root, git_dir.canonicalize().unwrap());
+        assert_eq!(repository.root, common.canonicalize().unwrap());
+    }
 }

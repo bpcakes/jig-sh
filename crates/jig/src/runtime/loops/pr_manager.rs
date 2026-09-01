@@ -28,6 +28,7 @@ use crate::runtime::worker_runner::{
 };
 use crate::state::now_ms;
 
+use super::git_path::{path_from_git_bytes, trim_ascii_line};
 use super::github;
 use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
 use super::occurrence::{OccurrenceWorktreeReservation, encode_worktree_path};
@@ -87,6 +88,10 @@ struct PrPendingItem {
     head_ref: String,
     head_sha: String,
     pending_checks: u64,
+}
+
+fn pr_worktree_value(path: &Path) -> Value {
+    Value::String(encode_worktree_path(path))
 }
 
 fn classify_pull_request(
@@ -597,7 +602,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
                 "branch": repair.item.head_ref,
                 "head_sha": repair.item.head_sha,
                 "reasons": repair.item.reasons,
-                "worktree": encode_worktree_path(worktree),
+                "worktree": pr_worktree_value(worktree),
                 "lease": repair.lease,
                 "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
                 "merge": merge,
@@ -659,7 +664,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         "branch": repair.item.head_ref,
         "head_sha": repair.item.head_sha,
         "reasons": repair.item.reasons,
-        "worktree": worktree,
+        "worktree": pr_worktree_value(worktree),
         "lease": repair.lease,
         "codex_home_resolved": repair.codex_home.map(|home| home.display().to_string()),
         "merge": merge,

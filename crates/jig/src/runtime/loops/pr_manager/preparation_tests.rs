@@ -1,7 +1,8 @@
 #[cfg(all(test, unix))]
 mod preparation_tests {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
+    use std::os::unix::ffi::OsStringExt as _;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::time::{Duration, Instant};
@@ -131,6 +132,88 @@ mod preparation_tests {
             !pr_worktree_is_registered(&ctx, &worktree, &mut NoopExecutionObserver).unwrap()
         );
         assert!(worktree.join(".git").is_file());
+    }
+
+    #[test]
+    fn registered_pr_worktree_preserves_a_non_utf8_common_git_directory() {
+        let _guard = lock_env();
+        let temp = tempdir().unwrap();
+        let repo = temp
+            .path()
+            .join(OsString::from_vec(b"common-repo-\xff".to_vec()));
+        let scheduler = temp.path().join("scheduler");
+        TestRepoBuilder::new(&repo)
+            .required_commands(Vec::<String>::new())
+            .write();
+        let git = |cwd: &Path, args: &[&OsStr]| {
+            let output = Command::new("git")
+                .current_dir(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            output.stdout
+        };
+        git(&repo, &[OsStr::new("init")]);
+        git(
+            &repo,
+            &[
+                OsStr::new("config"),
+                OsStr::new("user.email"),
+                OsStr::new("fixture@example.com"),
+            ],
+        );
+        git(
+            &repo,
+            &[
+                OsStr::new("config"),
+                OsStr::new("user.name"),
+                OsStr::new("Fixture"),
+            ],
+        );
+        git(&repo, &[OsStr::new("add"), OsStr::new(".")]);
+        git(
+            &repo,
+            &[
+                OsStr::new("commit"),
+                OsStr::new("-m"),
+                OsStr::new("fixture"),
+            ],
+        );
+        git(
+            &repo,
+            &[
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--detach"),
+                scheduler.as_os_str(),
+                OsStr::new("HEAD"),
+            ],
+        );
+        let ctx = RepoContext::load_from(&scheduler).unwrap();
+        let head = String::from_utf8(git(
+            &scheduler,
+            &[OsStr::new("rev-parse"), OsStr::new("HEAD")],
+        ))
+        .unwrap()
+        .trim()
+        .to_string();
+        let worktree = pr_worktree_path(&ctx, &workflow(60), &item(head));
+        fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+        git(
+            &scheduler,
+            &[
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("--detach"),
+                worktree.as_os_str(),
+                OsStr::new("HEAD"),
+            ],
+        );
+
+        assert!(
+            pr_worktree_is_registered(&ctx, &worktree, &mut NoopExecutionObserver).unwrap()
+        );
     }
 
     #[test]
