@@ -53,7 +53,7 @@ where
     let data_name = cache_file_name(&location.dir, &location.path)?;
     cache.with_lock_until(&lock_name, &location.lock_path, deadline, cancelled, || {
         cache.reclaim_orphaned_temps(&data_name, &location.path)?;
-        let mut store: S = cache.read_json_or_default(&data_name, &location.path, &|| false)?;
+        let mut store: S = cache.read_json_or_default(&data_name, &location.path, cancelled)?;
         let result = action(&mut store)?;
         cache.write_json_with_mode(&data_name, &location.path, &store, location.write_mode)?;
         Ok(result)
@@ -75,7 +75,7 @@ where
     let data_name = cache_file_name(&location.dir, &location.path)?;
     cache.with_lock_until(&lock_name, &location.lock_path, deadline, cancelled, || {
         cache.reclaim_orphaned_temps(&data_name, &location.path)?;
-        let mut store: S = cache.read_json_or_default(&data_name, &location.path, &|| false)?;
+        let mut store: S = cache.read_json_or_default(&data_name, &location.path, cancelled)?;
         let rollback = store.clone();
         let result = action(&mut store)?;
         cache.write_json_with_mode(&data_name, &location.path, &store, location.write_mode)?;

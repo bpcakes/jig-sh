@@ -32,6 +32,55 @@ fn read_only_loop_cache_scan_observes_cancellation_between_chunks() {
     assert_eq!(error.to_string(), "status collection was cancelled");
 }
 
+#[test]
+fn locked_loop_cache_reads_observe_cancellation_between_chunks() {
+    for (name, compensating) in [("leases", false), ("attempts", true)] {
+        let temp = tempdir().unwrap();
+        let data_path = temp.path().join(format!("{name}.json"));
+        let original = format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024));
+        fs::write(&data_path, &original).unwrap();
+        let location = JsonLocation::new(
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+            name,
+            JsonWriteMode::Cache,
+        );
+        let checks = AtomicUsize::new(0);
+        let action_ran = AtomicBool::new(false);
+        let cancelled = || checks.fetch_add(1, Ordering::SeqCst) >= 3;
+
+        let error = if compensating {
+            json_cache::with_json_cache_lock_compensating_until(
+                &location,
+                loop_state_lock_deadline(),
+                &cancelled,
+                |_: &mut Value| {
+                    action_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+                |_| Ok(()),
+            )
+            .map(|_| ())
+            .unwrap_err()
+        } else {
+            json_cache::with_json_cache_lock_until(
+                &location,
+                loop_state_lock_deadline(),
+                &cancelled,
+                |_: &mut Value| {
+                    action_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap_err()
+        };
+
+        assert_eq!(error.to_string(), "status collection was cancelled");
+        assert!(!action_ran.load(Ordering::SeqCst));
+        assert_eq!(fs::read_to_string(data_path).unwrap(), original);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn loop_cache_directory_symlink_cannot_redirect_parent_state_mutations() {
@@ -438,13 +487,12 @@ fn legacy_migration_marker_cannot_redirect_state_to_another_authority() {
 }
 
 #[test]
-fn failed_protected_mutation_publish_recovers_only_preexisting_migrated_state() {
+fn failed_protected_mutation_after_cutover_does_not_recover_stale_state() {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());
     let legacy_ctx = RepoContext::load_from(temp.path()).unwrap();
     let mut legacy = LeaseStore::new(&legacy_ctx);
-    let LeaseAcquire::Acquired(lease) = legacy.acquire("workflow:ExampleProject", 60).unwrap()
-    else {
+    let LeaseAcquire::Acquired(_) = legacy.acquire("workflow:ExampleProject", 60).unwrap() else {
         panic!("expected legacy lease acquisition");
     };
     git_init(temp.path());
@@ -471,14 +519,56 @@ fn failed_protected_mutation_publish_recovers_only_preexisting_migrated_state() 
         "a completed legacy marker must block an older runtime"
     );
     fs::remove_dir(&protected_path).unwrap();
-    let mut recovered = LeaseStore::new(&ctx);
-    let LeaseAcquire::Held(current) = recovered.acquire("workflow:ExampleProject", 60).unwrap()
-    else {
-        panic!("the migration marker must recover the pre-cutover lease");
+    let marker: Value =
+        serde_json::from_slice(&fs::read(persistence.legacy_path()).unwrap()).unwrap();
+    assert!(marker.get("state").is_none());
+    let error = match LeaseStore::new(&ctx).acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("completed migration must not re-adopt stale legacy state"),
+        Err(error) => error.to_string(),
     };
-    assert_eq!(current.owner, lease.owner);
-    assert_eq!(recovered.active_leases().unwrap().len(), 1);
-    assert!(protected_path.is_file());
+    assert!(
+        error.contains("migration marker exists without protected state"),
+        "{error}"
+    );
+    assert!(!protected_path.exists());
+}
+
+#[test]
+fn completed_coordination_migration_does_not_resurrect_stale_state() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let legacy_ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut legacy = LeaseStore::new(&legacy_ctx);
+    assert!(matches!(
+        legacy.acquire("workflow:ExampleProject", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = JsonStatePersistence::new(&ctx, "leases");
+    let protected_path = persistence.protected_path().unwrap().unwrap().to_path_buf();
+    let mut migrated = LeaseStore::new(&ctx);
+    assert!(matches!(
+        migrated.acquire("workflow:ExampleVault", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+
+    let marker: Value =
+        serde_json::from_slice(&fs::read(persistence.legacy_path()).unwrap()).unwrap();
+    assert_eq!(marker["schema_version"], 1);
+    assert_eq!(marker["protected_state_path"], "jig/loop/leases.json");
+    assert!(marker.get("state").is_none());
+    fs::remove_file(&protected_path).unwrap();
+
+    let error = match LeaseStore::new(&ctx).acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("completed migration must not re-adopt stale legacy state"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("migration marker exists without protected state"),
+        "{error}"
+    );
+    assert!(!protected_path.exists());
 }
 
 #[test]

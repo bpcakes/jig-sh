@@ -290,7 +290,7 @@ impl JsonStatePersistence {
             cancelled,
         )?;
         if primary.is_initialized()? {
-            return Ok(());
+            return self.finalize_legacy_migration::<S>(deadline, cancelled);
         }
         with_json_cache_lock_until(
             protected,
@@ -309,12 +309,46 @@ impl JsonStatePersistence {
                         *legacy = LegacyState::Migration(MigrationState {
                             schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
                             protected_state_path: self.protected_state_path.clone(),
-                            state: state.clone(),
+                            state: Some(state.clone()),
                         });
                         Ok(state)
                     },
                 )?;
                 *primary = ProtectedState::new(state);
+                Ok(())
+            },
+        )?;
+        self.finalize_legacy_migration::<S>(deadline, cancelled)
+    }
+
+    fn finalize_legacy_migration<S>(
+        &self,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<()>
+    where
+        S: Default + DeserializeOwned + Serialize,
+    {
+        let legacy = self.read_legacy::<S>(cancelled)?;
+        if let LegacyState::Migration(marker) = &legacy {
+            marker.validate(&self.protected_state_path)?;
+            if marker.state.is_none() {
+                return Ok(());
+            }
+        }
+        with_json_cache_lock_until(
+            &self.legacy,
+            deadline,
+            cancelled,
+            |legacy: &mut LegacyState<S>| {
+                if let LegacyState::Migration(marker) = legacy {
+                    marker.validate(&self.protected_state_path)?;
+                }
+                *legacy = LegacyState::Migration(MigrationState {
+                    schema_version: LEGACY_MIGRATION_SCHEMA_VERSION,
+                    protected_state_path: self.protected_state_path.clone(),
+                    state: None,
+                });
                 Ok(())
             },
         )
@@ -389,27 +423,41 @@ impl<S> LegacyState<S> {
         match self {
             Self::State(state) => Ok(state),
             Self::Migration(marker) => {
-                if marker.schema_version != LEGACY_MIGRATION_SCHEMA_VERSION {
+                marker.validate(expected_protected_state_path)?;
+                let Some(state) = marker.state else {
                     bail!(
-                        "Unsupported loop state migration schema version {}; expected {LEGACY_MIGRATION_SCHEMA_VERSION}",
-                        marker.schema_version
+                        "Loop state migration marker exists without protected state at {expected_protected_state_path}"
                     );
-                }
-                if marker.protected_state_path != expected_protected_state_path {
-                    bail!(
-                        "Loop state migration marker points to {}; expected {expected_protected_state_path}",
-                        marker.protected_state_path
-                    );
-                }
-                Ok(marker.state)
+                };
+                Ok(state)
             }
         }
     }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
 struct MigrationState<S> {
     schema_version: u32,
     protected_state_path: String,
-    state: S,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<S>,
+}
+
+impl<S> MigrationState<S> {
+    fn validate(&self, expected_protected_state_path: &str) -> Result<()> {
+        if self.schema_version != LEGACY_MIGRATION_SCHEMA_VERSION {
+            bail!(
+                "Unsupported loop state migration schema version {}; expected {LEGACY_MIGRATION_SCHEMA_VERSION}",
+                self.schema_version
+            );
+        }
+        if self.protected_state_path != expected_protected_state_path {
+            bail!(
+                "Loop state migration marker points to {}; expected {expected_protected_state_path}",
+                self.protected_state_path
+            );
+        }
+        Ok(())
+    }
 }
