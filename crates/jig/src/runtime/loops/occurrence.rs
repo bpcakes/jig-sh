@@ -25,6 +25,7 @@ mod guard_renewal;
 mod history;
 mod manual;
 mod persistence;
+mod transition;
 mod worktree;
 
 pub(super) use claim::OccurrenceAttentionScope;
@@ -34,6 +35,10 @@ use guard_renewal::run_occurrence_renewal_with_wait;
 use history::prune_history;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
+use transition::{
+    OwnedOccurrenceState, require_owned_occurrence_state, require_running_owner,
+    require_unexecuted_owner,
+};
 pub(super) use worktree::{OccurrenceWorktreeReservation, encode_worktree_path};
 
 const SCHEDULE_SCHEMA_VERSION: u32 = 4;
@@ -42,6 +47,8 @@ const LEGACY_SCHEDULE_SCHEMA_VERSION: u32 = 1;
 const OCCURRENCE_HISTORY_PER_WORKFLOW: usize = 20;
 const MAX_ERROR_CHARS: usize = 4_000;
 const STALE_RECONCILIATION_ERROR: &str = "scheduled task stopped without a terminal result";
+const STALE_RECONCILIATION_STAGED_ERROR_PREFIX: &str =
+    "scheduled task stopped without a terminal result; staged occurrence evidence: ";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct ScheduleOccurrence {
@@ -420,13 +427,15 @@ impl OccurrenceStore {
             let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
-            if record.owner == owner && is_unacknowledged_stale_reconciliation(record) {
-                record_expired_finish_evidence(record, &finish);
-                let finished = record.clone();
-                prune_history(store);
-                return Ok(finished);
+            match require_owned_occurrence_state(record, owner)? {
+                OwnedOccurrenceState::Running => {}
+                OwnedOccurrenceState::StaleReconciled => {
+                    record_expired_finish_evidence(record, &finish);
+                    let finished = record.clone();
+                    prune_history(store);
+                    return Ok(finished);
+                }
             }
-            require_running_owner(record, owner)?;
             if record.claim_expires_at_ms <= now {
                 mark_expired_claim(record, now, Some(&finish));
                 let finished = record.clone();
@@ -652,52 +661,6 @@ fn occurrence_id(workflow_id: &str, scheduled_at_ms: u64) -> String {
     format!("{workflow_id}@{scheduled_at_ms}")
 }
 
-fn require_running_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()> {
-    if record.owner != owner {
-        bail!(
-            "Scheduled occurrence '{}' is owned by another dispatcher",
-            record.occurrence_id
-        );
-    }
-    if record.status != OccurrenceStatus::Running {
-        bail!(
-            "Scheduled occurrence '{}' is already {}",
-            record.occurrence_id,
-            record.status
-        );
-    }
-    Ok(())
-}
-
-fn require_unexecuted_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()> {
-    if record.owner != owner {
-        bail!(
-            "Scheduled occurrence '{}' is owned by another dispatcher",
-            record.occurrence_id
-        );
-    }
-    match record.status {
-        OccurrenceStatus::Running => Ok(()),
-        OccurrenceStatus::NeedsAttention if is_unacknowledged_stale_reconciliation(record) => {
-            Ok(())
-        }
-        _ => bail!(
-            "Scheduled occurrence '{}' is already {}",
-            record.occurrence_id,
-            record.status
-        ),
-    }
-}
-
-fn is_unacknowledged_stale_reconciliation(record: &ScheduleOccurrence) -> bool {
-    record.status == OccurrenceStatus::NeedsAttention
-        && record.finished_at_ms.is_some()
-        && record.acknowledged_at_ms.is_none()
-        && record.worker_receipt_id.is_none()
-        && record.worktree.is_none()
-        && record.error.as_deref() == Some(STALE_RECONCILIATION_ERROR)
-}
-
 fn reconcile_stale_file(store: &mut ScheduleFile, now: u64) -> Vec<ScheduleOccurrence> {
     let mut reconciled = Vec::new();
     for record in store.occurrences.values_mut() {
@@ -721,7 +684,7 @@ fn mark_expired_claim(
     } else {
         record.error = Some(match record.error.take() {
             Some(staged_error) => bounded_error(&format!(
-                "{STALE_RECONCILIATION_ERROR}; staged occurrence evidence: {staged_error}"
+                "{STALE_RECONCILIATION_STAGED_ERROR_PREFIX}{staged_error}"
             )),
             None => STALE_RECONCILIATION_ERROR.into(),
         });

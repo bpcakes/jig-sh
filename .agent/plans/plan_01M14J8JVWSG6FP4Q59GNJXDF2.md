@@ -126,3 +126,5 @@ Tests use generic temporary repositories. The new marker is additive ignored run
 ## Interfaces and dependencies
 
 `cap-std` is added as a private implementation dependency for capability-rooted prompt opening on the repository's supported Linux and macOS hosts. No public API, unsafe code, async runtime, feature, ABI, or MSRV change is planned. Keep Rust 1.88 and edition 2024 compatibility. All new types remain crate-internal. Preserve the schema-version-3 schedule JSON and schema-version-1 command/evidence contracts.
+
+Review round continuation: research resolved the three open questions without new defects. Address reserved-worktree stale recovery, manual late evidence, and observed/resulting PR attempt identity with centralized owner/state transition helpers and focused regression tests; keep unrelated pre-existing timeout failures out of branch scope.

@@ -24,6 +24,71 @@ fn original_owner_can_enrich_an_unacknowledged_stale_reconciliation() {
 }
 
 #[test]
+fn original_owner_can_enrich_stale_reconciliation_after_worktree_reservation() {
+    let (temp, mut store, claim) = claimed_occurrence();
+    let reserved = temp.path().join("reserved-worktree");
+    let reservation = OccurrenceWorktreeReservation {
+        store: store.clone(),
+        occurrence_id: claim.occurrence_id.clone(),
+        owner: claim.owner.clone(),
+    };
+    reservation.reserve(&reserved).unwrap();
+    store.reconcile_stale_at(3_500).unwrap();
+    let reserved = reserved.to_str().unwrap();
+
+    let finished = store
+        .finish_at(
+            &claim.occurrence_id,
+            &claim.owner,
+            OccurrenceFinish {
+                outcome: OccurrenceOutcome::Succeeded,
+                worker_receipt_id: Some("receipt-worker"),
+                worktree: Some(reserved),
+                error: None,
+            },
+            4_000,
+        )
+        .unwrap();
+
+    assert_eq!(finished.status, OccurrenceStatus::NeedsAttention);
+    assert_eq!(
+        finished.worker_receipt_id.as_deref(),
+        Some("receipt-worker")
+    );
+    assert!(
+        finished
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("claim expired")),
+        "{finished:?}"
+    );
+    assert_eq!(finished.finished_at_ms, Some(3_500));
+    assert_eq!(finished.worktree.as_deref(), Some(reserved));
+}
+
+#[test]
+fn original_owner_can_abandon_stale_reconciliation_after_reserved_worktree_cleanup() {
+    let (temp, mut store, claim) = claimed_occurrence();
+    let reserved = temp.path().join("reserved-worktree");
+    std::fs::create_dir(&reserved).unwrap();
+    let reservation = OccurrenceWorktreeReservation {
+        store: store.clone(),
+        occurrence_id: claim.occurrence_id.clone(),
+        owner: claim.owner.clone(),
+    };
+    reservation.reserve(&reserved).unwrap();
+    store.reconcile_stale_at(3_500).unwrap();
+    std::fs::remove_dir(&reserved).unwrap();
+
+    let abandoned = store
+        .abandon_unexecuted(&claim.occurrence_id, &claim.owner)
+        .unwrap();
+
+    assert_eq!(abandoned.status, OccurrenceStatus::NeedsAttention);
+    assert!(store.snapshot().unwrap().is_empty());
+}
+
+#[test]
 fn stale_reconciliation_rejects_evidence_from_another_owner() {
     let (_temp, mut store, claim) = claimed_occurrence();
     store.reconcile_stale_at(3_500).unwrap();

@@ -529,6 +529,23 @@ impl AttemptStore {
             })
     }
 
+    pub(super) fn clear_attempt_for_observed_version_with_cancellation(
+        &mut self,
+        workflow_id: &str,
+        item_key: &str,
+        observed_item_version: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<bool> {
+        let key = format!("{workflow_id}:{item_key}");
+        self.persistence
+            .with_locked_with_cancellation(cancelled, |store: &mut AttemptFile| {
+                let matches_observed_version = store.attempts.get(&key).is_some_and(|attempt| {
+                    attempt.item_version.as_deref() == Some(observed_item_version)
+                });
+                Ok(matches_observed_version && store.attempts.remove(&key).is_some())
+            })
+    }
+
     pub(super) fn clear_attempt_and_then<T>(
         &mut self,
         workflow_id: &str,

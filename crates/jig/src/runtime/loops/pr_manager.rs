@@ -273,7 +273,12 @@ fn clear_observed_healthy_attempt(
     item: &PrIdleItem,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<Value>> {
-    if !attempt_store.clear_attempt_with_cancellation(&workflow.id, &item.item_key, cancelled)? {
+    if !attempt_store.clear_attempt_for_observed_version_with_cancellation(
+        &workflow.id,
+        &item.item_key,
+        &item.head_sha,
+        cancelled,
+    )? {
         return Ok(None);
     }
 
@@ -790,4 +795,5 @@ include!("pr_manager/review_thread_budget_tests.rs");
 include!("pr_manager/review_thread_boundary_tests.rs");
 include!("pr_manager/preparation_tests.rs");
 include!("pr_manager/git.rs");
+include!("pr_manager/attempt_clear_tests.rs");
 include!("pr_manager/tests.rs");

@@ -75,7 +75,13 @@ impl OccurrenceStore {
                 .occurrences
                 .get_mut(occurrence_id)
                 .ok_or_else(|| anyhow::anyhow!("Loop occurrence not found: {occurrence_id}"))?;
-            require_running_owner(record, owner)?;
+            match require_owned_occurrence_state(record, owner)? {
+                OwnedOccurrenceState::Running => {}
+                OwnedOccurrenceState::StaleReconciled => {
+                    record_expired_finish_evidence(record, &finish);
+                    return Ok(record.clone());
+                }
+            }
             if record.claim_expires_at_ms <= now {
                 mark_expired_claim(record, now, Some(&finish));
                 return Ok(record.clone());
@@ -110,7 +116,13 @@ impl OccurrenceStore {
                 .occurrences
                 .get_mut(occurrence_id)
                 .ok_or_else(|| anyhow::anyhow!("Loop occurrence not found: {occurrence_id}"))?;
-            require_running_owner(record, owner)?;
+            match require_owned_occurrence_state(record, owner)? {
+                OwnedOccurrenceState::Running => {}
+                OwnedOccurrenceState::StaleReconciled => {
+                    record_expired_finish_evidence(record, &finish);
+                    return Ok(record.clone());
+                }
+            }
             if record.claim_expires_at_ms <= now {
                 mark_expired_claim(record, now, Some(&finish));
                 return Ok(record.clone());
