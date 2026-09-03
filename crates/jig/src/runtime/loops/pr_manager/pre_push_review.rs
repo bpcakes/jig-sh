@@ -67,7 +67,7 @@ fn revalidate_observed_review_threads(
         });
     }
     for (thread_id, witness) in &observed {
-        if !witness.same_feedback(&current[thread_id]) {
+        if witness != &current[thread_id] {
             return Ok(PrePushReviewAuthority::Changed {
                 thread_id: Some(thread_id.clone()),
                 reason: "review_thread_changed",

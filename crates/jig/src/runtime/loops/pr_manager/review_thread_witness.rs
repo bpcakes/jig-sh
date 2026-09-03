@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 struct ReviewThreadWitness {
     comment_count: u64,
     comment_ids: BTreeSet<String>,
@@ -19,13 +19,6 @@ impl Default for ReviewThreadWitness {
             viewer_can_reply: false,
             viewer_can_resolve: false,
         }
-    }
-}
-
-impl ReviewThreadWitness {
-    fn same_feedback(&self, other: &Self) -> bool {
-        self.comment_count == other.comment_count
-            && self.resolution_generation == other.resolution_generation
     }
 }
 

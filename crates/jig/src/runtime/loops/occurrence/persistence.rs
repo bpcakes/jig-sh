@@ -469,20 +469,14 @@ impl SchedulePersistence {
         } else {
             (SCHEDULE_INITIALIZATION_SCHEMA_VERSION, SCHEDULE_STATE_PATH)
         };
-        let public_marker = self.ensure_initialization_marker_at(
+        self.ensure_initialization_marker_at(
             directories.public()?,
             &self.initialized_path,
             "loop schedule initialization marker",
             public_marker_schema,
             public_marker_state_path,
             protected.is_some(),
-        );
-        if protected.is_some() {
-            // The checkout marker is a repairable replica once protected authority exists.
-            // A later authoritative access retries this publication.
-            return Ok(());
-        }
-        public_marker
+        )
     }
 
     fn ensure_initialization_marker_at(
@@ -599,13 +593,21 @@ impl SchedulePersistence {
         &'a self,
         directories: &'a ScheduleDirectories,
     ) -> Result<(Option<&'a StateDirectory>, &'a Path)> {
-        if let Some(authority) = self.protected_authority()?
-            && (location_exists(
-                directories.protected.as_ref(),
-                &authority.path,
-                SCHEDULE_FILE_NAME,
-            )? || self.protected_marker_requires_authority(directories)?
-                || self.public_marker_requires_protected_authority(directories)?)
+        let Some(authority) = self.protected_authority()? else {
+            if self.public_marker_requires_protected_authority(directories)? {
+                bail!(
+                    "Loop schedule initialization marker requires protected Git authority, but Git metadata is unavailable at {}",
+                    self.initialized_path.display()
+                );
+            }
+            return Ok((directories.public.as_ref(), &self.path));
+        };
+        if location_exists(
+            directories.protected.as_ref(),
+            &authority.path,
+            SCHEDULE_FILE_NAME,
+        )? || self.protected_marker_requires_authority(directories)?
+            || self.public_marker_requires_protected_authority(directories)?
         {
             return Ok((directories.protected.as_ref(), &authority.path));
         }

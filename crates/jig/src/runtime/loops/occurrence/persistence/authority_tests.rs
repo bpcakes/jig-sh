@@ -205,6 +205,31 @@ fn protected_authority_is_commit_point_when_replica_publication_fails() {
 }
 
 #[test]
+fn protected_mutation_waits_for_the_public_cutover_witness() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    let protected = persistence.protected_authority().unwrap().unwrap().clone();
+    write_json_durable(&protected.root, &protected.path, &ScheduleFile::default()).unwrap();
+    fs::create_dir_all(&persistence.initialized_path).unwrap();
+    let action_ran = std::cell::Cell::new(false);
+
+    let error = persistence
+        .with_locked(|_| {
+            action_ran.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert!(!action_ran.get());
+    assert!(protected.path.is_file(), "{error:#}");
+    assert!(protected.initialized_path.is_file(), "{error:#}");
+    assert!(persistence.initialized_path.is_dir(), "{error:#}");
+}
+
+#[test]
 fn protected_initialization_marker_prevents_replica_promotion_when_the_ledger_is_missing() {
     let temp = tempfile::tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
@@ -264,6 +289,32 @@ fn public_cutover_witness_prevents_replica_promotion_when_protected_authority_is
 
     assert!(error.to_string().contains("missing"), "{error:#}");
     assert!(!protected.path.exists());
+}
+
+#[test]
+fn public_cutover_witness_fails_closed_when_git_metadata_is_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    persistence.with_locked(|_| Ok(())).unwrap();
+    let detached_metadata = temp.path().join("detached-git-metadata");
+    fs::rename(temp.path().join(".git"), &detached_metadata).unwrap();
+    let without_git_authority = SchedulePersistence::new(&ctx);
+
+    let error = without_git_authority
+        .read_only(&|| false)
+        .err()
+        .expect("a protected-authority witness must not fall back to its checkout replica");
+
+    assert!(
+        error
+            .to_string()
+            .contains("requires protected Git authority"),
+        "{error:#}"
+    );
+    assert!(without_git_authority.path.is_file());
 }
 
 #[test]
