@@ -159,8 +159,8 @@ esac
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let pull_request = json!({
             "review_threads": { "nodes": [
-                {"id": "PRRT_1", "is_resolved": false, "has_trusted_comment": true, "comments": {"total_count": 0, "nodes": []}},
-                {"id": "PRRT_2", "is_resolved": false, "has_trusted_comment": true, "comments": {"total_count": 0, "nodes": []}},
+                {"id": "PRRT_1", "is_resolved": false, "has_trusted_comment": true, "viewer_can_reply": true, "comments": {"total_count": 0, "nodes": []}},
+                {"id": "PRRT_2", "is_resolved": false, "has_trusted_comment": true, "viewer_can_reply": true, "comments": {"total_count": 0, "nodes": []}},
             ]},
         });
         let worker_output = json!({
@@ -293,7 +293,6 @@ esac
             reply_generation: review_reply_generation(&later),
             ..ReviewThreadWitness::default()
         };
-
         let original = review_thread_reply_marker("PRRT_1", "same-head", &first);
         assert_eq!(
             original,
@@ -324,7 +323,6 @@ esac
             Some("PRRC_LEGACY")
         );
     }
-
     #[test]
     fn trusted_human_marker_quote_advances_the_reply_generation() {
         let original = json!({
@@ -359,7 +357,6 @@ esac
                 },
             ]},
         });
-
         assert_eq!(
             review_reply_generation(&before_quote),
             review_reply_generation(&original_only)
@@ -474,7 +471,6 @@ esac
                 .contains("addPullRequestReviewThreadReply")
         );
     }
-
     #[test]
     fn changed_retry_wording_reconciles_the_reply_from_the_prior_tick() {
         let _guard = lock_env();
@@ -681,6 +677,8 @@ esac
                 "id": "PRRT_1",
                 "is_resolved": false,
                 "has_trusted_comment": true,
+                "viewer_can_reply": true,
+                "viewer_can_resolve": true,
                 "comments": {
                     "total_count": 1,
                     "nodes": [{
@@ -757,6 +755,8 @@ esac
                 "id": "PRRT_1",
                 "is_resolved": false,
                 "has_trusted_comment": true,
+                "viewer_can_reply": true,
+                "viewer_can_resolve": true,
                 "comments": {
                     "total_count": 1,
                     "nodes": [{

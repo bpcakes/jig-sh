@@ -4,6 +4,8 @@ struct ReviewThreadWitness {
     comment_ids: BTreeSet<String>,
     resolution_generation: String,
     reply_generation: String,
+    viewer_can_reply: bool,
+    viewer_can_resolve: bool,
 }
 
 impl Default for ReviewThreadWitness {
@@ -14,6 +16,8 @@ impl Default for ReviewThreadWitness {
             comment_ids: BTreeSet::new(),
             resolution_generation: empty_generation.clone(),
             reply_generation: empty_generation,
+            viewer_can_reply: false,
+            viewer_can_resolve: false,
         }
     }
 }
@@ -79,6 +83,14 @@ fn observed_review_thread_witnesses(
                     comment_ids,
                     resolution_generation,
                     reply_generation,
+                    viewer_can_reply: thread
+                        .get("viewer_can_reply")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    viewer_can_resolve: thread
+                        .get("viewer_can_resolve")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 },
             ))
         })

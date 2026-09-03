@@ -4,64 +4,7 @@ struct ReviewThreadPostResult {
     cancelled: bool,
 }
 
-const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 100;
-const REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT: usize = REVIEW_THREAD_COMMENT_PAGE_LIMIT * 3 + 3;
-const REVIEW_THREAD_UPDATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const MUTATION_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
-
-struct ReviewThreadUpdateBudget {
-    started_at: Instant,
-    timeout: Duration,
-    request_count: usize,
-    request_limit: usize,
-}
-
-impl ReviewThreadUpdateBudget {
-    fn new(command_timeout: CommandTimeout, actionable_intent_count: usize) -> Self {
-        let intent_multiplier = u32::try_from(actionable_intent_count.max(1)).unwrap_or(u32::MAX);
-        Self {
-            started_at: Instant::now(),
-            timeout: command_timeout
-                .duration()
-                .saturating_mul(intent_multiplier)
-                .min(REVIEW_THREAD_UPDATE_TIMEOUT),
-            request_count: 0,
-            request_limit: REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT
-                .saturating_mul(actionable_intent_count.max(1)),
-        }
-    }
-
-    fn reserve_request(
-        &mut self,
-        requested_timeout: Duration,
-    ) -> std::result::Result<Duration, ExecutionCommandError> {
-        if self.request_count >= self.request_limit {
-            return Err(ExecutionCommandError::failed(anyhow!(
-                "GitHub review thread updates exceeded their {}-request budget",
-                self.request_limit
-            )));
-        }
-        let remaining = self
-            .timeout
-            .checked_sub(self.started_at.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| {
-                ExecutionCommandError::failed(anyhow!(
-                    "GitHub review thread updates exceeded their {}-second deadline",
-                    self.timeout.as_secs()
-                ))
-            })?;
-        let timeout = remaining.min(requested_timeout);
-        if timeout.is_zero() {
-            return Err(ExecutionCommandError::failed(anyhow!(
-                "GitHub review thread updates exceeded their {}-second deadline",
-                self.timeout.as_secs()
-            )));
-        }
-        self.request_count += 1;
-        Ok(timeout)
-    }
-}
+include!("review_thread_budget.rs");
 
 fn post_review_thread_updates(
     ctx: &RepoContext,
@@ -130,12 +73,17 @@ fn post_review_thread_updates(
             ));
             continue;
         };
+        budget.begin_intent(ctx.command_timeout());
 
         let mut thread_failed = false;
         let mut reply_error = Value::Null;
         let mut reply_skipped = false;
         let mut reply_skip_reason = Value::Null;
         let reply_response = if body.is_empty() {
+            None
+        } else if !thread_witness.viewer_can_reply {
+            reply_skipped = true;
+            reply_skip_reason = Value::String("viewer_cannot_reply".into());
             None
         } else {
             match post_review_thread_reply(
@@ -187,6 +135,10 @@ fn post_review_thread_updates(
         } else if resolve && thread_failed && !body.is_empty() {
             resolve_skipped = true;
             resolve_skip_reason = Value::String("reply_failed".into());
+            None
+        } else if resolve && !thread_witness.viewer_can_resolve {
+            resolve_skipped = true;
+            resolve_skip_reason = Value::String("viewer_cannot_resolve".into());
             None
         } else if resolve {
             let reply_comment_id = reply_response

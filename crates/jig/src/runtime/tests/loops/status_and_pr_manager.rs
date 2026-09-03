@@ -274,13 +274,14 @@ JSON
   "api graphql")
     case "$*" in
       *ReviewThreadWitnessState*)
+        repair_head="$(git --git-dir .tmp-origin.git rev-parse refs/heads/codex/widgets)"
         if [ -f .agent/.cache/gh-replied ]; then
-          cat <<'JSON'
-{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":2,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}},{{"id":"PRRC_REPLY","updatedAt":"2026-07-08T10:04:00Z","body":"Addressed by the pushed fix."}}]}}}}}}}}
+          cat <<JSON
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"pullRequest":{{"headRefOid":"$repair_head"}},"comments":{{"totalCount":2,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}},{{"id":"PRRC_REPLY","updatedAt":"2026-07-08T10:04:00Z","body":"Addressed by the pushed fix."}}]}}}}}}}}
 JSON
         else
-          cat <<'JSON'
-{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"totalCount":1,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}}]}}}}}}}}
+          cat <<JSON
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"pullRequest":{{"headRefOid":"$repair_head"}},"comments":{{"totalCount":1,"pageInfo":{{"hasPreviousPage":false,"startCursor":null}},"nodes":[{{"id":"PRRC_1","updatedAt":"2026-07-08T10:03:00Z","body":"Please fix this failing path"}}]}}}}}}}}
 JSON
         fi
         ;;
@@ -577,13 +578,14 @@ JSON
   "api graphql")
     case "$*" in
       *ReviewThreadWitnessState*)
+        repair_head="$(git --git-dir .tmp-origin.git rev-parse refs/heads/codex/widgets)"
         case "$*" in
           *threadId=PRRT_1*) comment_id="PRRC_1"; updated_at="2026-07-08T10:03:00Z"; body="First thread" ;;
           *threadId=PRRT_2*) comment_id="PRRC_2"; updated_at="2026-07-08T10:04:00Z"; body="Second thread" ;;
           *threadId=PRRT_3*) comment_id="PRRC_3"; updated_at="2026-07-08T10:05:00Z"; body="Third thread" ;;
           *) echo "unexpected witness query: $*" >&2; exit 2 ;;
         esac
-        printf '{"data":{"node":{"id":"%s","isResolved":false,"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"%s","updatedAt":"%s","body":"%s"}]}}}}\n' "PRRT_${comment_id#PRRC_}" "$comment_id" "$updated_at" "$body"
+        printf '{"data":{"node":{"id":"%s","isResolved":false,"pullRequest":{"headRefOid":"%s"},"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"%s","updatedAt":"%s","body":"%s"}]}}}}\n' "PRRT_${comment_id#PRRC_}" "$repair_head" "$comment_id" "$updated_at" "$body"
         ;;
       *ReviewThreadState*)
         thread_id=""

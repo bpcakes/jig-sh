@@ -793,6 +793,7 @@ include!("pr_manager/review_round37_tests.rs");
 include!("pr_manager/cancellation_tests.rs");
 include!("pr_manager/review_thread_budget_tests.rs");
 include!("pr_manager/review_thread_boundary_tests.rs");
+include!("pr_manager/review_thread_capability_tests.rs");
 include!("pr_manager/preparation_tests.rs");
 include!("pr_manager/git.rs");
 include!("pr_manager/attempt_clear_tests.rs");

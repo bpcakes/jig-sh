@@ -24,12 +24,55 @@ mod review_thread_budget_tests {
         let timeout = command_timeout.duration();
         let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 2);
 
-        for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT * 2 {
-            budget.reserve_request(timeout).unwrap();
+        for _ in 0..2 {
+            budget.begin_intent(command_timeout);
+            for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT {
+                budget.reserve_request(timeout).unwrap();
+            }
         }
+        budget.begin_intent(command_timeout);
         let error = budget.reserve_request(timeout).unwrap_err().to_string();
 
         assert!(error.contains("606-request budget"), "{error}");
+    }
+
+    #[test]
+    fn one_saturated_intent_does_not_consume_the_next_intents_slice() {
+        let command_timeout = CommandTimeout::from_seconds(60).unwrap();
+        let timeout = command_timeout.duration();
+        let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 2);
+
+        for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT {
+            budget.reserve_request(timeout).unwrap();
+        }
+        assert!(
+            budget
+                .reserve_request(timeout)
+                .unwrap_err()
+                .to_string()
+                .contains("intent")
+        );
+        budget.begin_intent(command_timeout);
+
+        assert!(!budget.reserve_request(timeout).unwrap().is_zero());
+    }
+
+    #[test]
+    fn one_expired_intent_does_not_consume_the_next_intents_time_slice() {
+        let command_timeout = CommandTimeout::from_seconds(1).unwrap();
+        let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 2);
+        budget.intent_started_at -= Duration::from_secs(2);
+
+        assert!(
+            budget
+                .reserve_request(command_timeout.duration())
+                .unwrap_err()
+                .to_string()
+                .contains("intent")
+        );
+        budget.begin_intent(command_timeout);
+
+        assert!(budget.reserve_request(command_timeout.duration()).is_ok());
     }
 
     #[test]
