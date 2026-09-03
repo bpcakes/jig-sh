@@ -140,7 +140,7 @@ set -eu
 printf 'call\n' >> "$JIG_TEST_GH_CALLS"
 case "$*" in
   *ReviewThreadWitnessState*)
-    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":0,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"pullRequest":{"headRefOid":"example-head"},"comments":{"totalCount":0,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
     ;;
   *ReviewThreadState*)
     printf '%s\n' '{"data":{"node":{"id":"PRRT_1","comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
@@ -198,7 +198,7 @@ esac
 set -eu
 case "$*" in
   *ReviewThreadWitnessState*)
-    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":0,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"pullRequest":{"headRefOid":"example-head"},"comments":{"totalCount":0,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
     ;;
   *ReviewThreadState*)
     cat <<'JSON'
@@ -360,6 +360,7 @@ esac
             .unwrap();
         let changed = LiveReviewThreadState {
             is_resolved: false,
+            head_sha: "example-head".into(),
             total_count: 2,
             comments: vec![
                 observed.pointer("/review_threads/nodes/0/comments/nodes/0").unwrap().clone(),
@@ -370,6 +371,7 @@ esac
         assert!(!review_thread_matches_witness(&changed, &witness, None));
         let edited = LiveReviewThreadState {
             is_resolved: false,
+            head_sha: "example-head".into(),
             total_count: 1,
             comments: vec![json!({
                 "id": "PRRC_ORIGINAL",
@@ -381,6 +383,7 @@ esac
         assert!(review_thread_matches_witness(
             &LiveReviewThreadState {
                 is_resolved: false,
+                head_sha: "example-head".into(),
                 total_count: 2,
                 comments: vec![
                     observed.pointer("/review_threads/nodes/0/comments/nodes/0").unwrap().clone(),
@@ -390,6 +393,22 @@ esac
             &witness,
             Some("PRRC_JIG_REPLY"),
         ));
+    }
+
+    #[test]
+    fn changed_pr_head_invalidates_an_unchanged_review_thread_witness() {
+        let witness = ReviewThreadWitness::default();
+        let state = LiveReviewThreadState {
+            is_resolved: false,
+            head_sha: "new-head".into(),
+            total_count: 0,
+            comments: Vec::new(),
+        };
+
+        assert_eq!(
+            review_thread_mutation_change_reason(&state, &witness, None, "repaired-head"),
+            Some("pr_head_changed")
+        );
     }
 
     #[test]
@@ -409,7 +428,7 @@ printf '%s\n' "$*" >> "$JIG_TEST_GH_CALLS"
 case "$*" in
   *"query=mutation"*) exit 9 ;;
   *"ReviewThreadWitnessState"*)
-    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"PRRC_ORIGINAL","updatedAt":"2026-09-01T11:00:00Z","body":"edited feedback"}]}}}}'
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"pullRequest":{"headRefOid":"example-head"},"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"PRRC_ORIGINAL","updatedAt":"2026-09-01T11:00:00Z","body":"edited feedback"}]}}}}'
     ;;
   *) exit 2 ;;
 esac
@@ -466,7 +485,7 @@ esac
     }
 
     #[test]
-    fn changed_review_thread_is_skipped_before_reply_mutation() {
+    fn changed_pr_head_is_skipped_before_reply_mutation() {
         let _guard = lock_env();
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path())
@@ -482,7 +501,7 @@ printf '%s\n' "$*" >> "$JIG_TEST_GH_CALLS"
 case "$*" in
   *"query=mutation"*) exit 9 ;;
   *"ReviewThreadWitnessState"*)
-    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"PRRC_ORIGINAL","updatedAt":"2026-09-01T11:00:00Z","body":"edited feedback"}]}}}}'
+    printf '%s\n' '{"data":{"node":{"id":"PRRT_1","isResolved":false,"pullRequest":{"headRefOid":"new-head"},"comments":{"totalCount":1,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"PRRC_ORIGINAL","updatedAt":"2026-09-01T10:00:00Z","body":"original feedback"}]}}}}'
     ;;
   *"ReviewThreadState"*)
     printf '%s\n' '{"data":{"node":{"id":"PRRT_1","comments":{"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[]}}}}'
@@ -532,9 +551,10 @@ esac
         assert_eq!(result.posts[0]["reply_skipped"], true);
         assert_eq!(
             result.posts[0]["reply_skip_reason"],
-            "review_thread_changed"
+            "pr_head_changed"
         );
         assert_eq!(result.posts[0]["resolve_skipped"], true);
+        assert_eq!(result.posts[0]["resolve_skip_reason"], "pr_head_changed");
         let calls = fs::read_to_string(calls).unwrap();
         assert!(calls.contains("ReviewThreadWitnessState"), "{calls}");
         assert!(!calls.contains("addPullRequestReviewThreadReply"), "{calls}");

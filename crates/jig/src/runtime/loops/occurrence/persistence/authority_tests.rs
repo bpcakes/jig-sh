@@ -148,9 +148,9 @@ fn protected_ledger_ignores_a_forged_checkout_replica() {
     .unwrap();
     assert_eq!(
         marker.schema_version,
-        SCHEDULE_INITIALIZATION_SCHEMA_VERSION
+        PROTECTED_SCHEDULE_AUTHORITY_SCHEMA_VERSION
     );
-    assert_eq!(marker.state_path, SCHEDULE_STATE_PATH);
+    assert_eq!(marker.state_path, PROTECTED_SCHEDULE_STATE_PATH);
 }
 
 #[test]
@@ -239,6 +239,28 @@ fn protected_initialization_marker_prevents_replica_promotion_when_the_ledger_is
         .read_locked(|store| Ok(store.clone()))
         .err()
         .expect("a protected initialization marker must make a missing ledger fail closed");
+
+    assert!(error.to_string().contains("missing"), "{error:#}");
+    assert!(!protected.path.exists());
+}
+
+#[test]
+fn public_cutover_witness_prevents_replica_promotion_when_protected_authority_is_lost() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    persistence.with_locked(|_| Ok(())).unwrap();
+    let protected = persistence.protected_authority().unwrap().unwrap().clone();
+
+    fs::remove_file(&protected.path).unwrap();
+    fs::remove_file(&protected.initialized_path).unwrap();
+
+    let error = persistence
+        .read_only(&|| false)
+        .err()
+        .expect("a public cutover witness must not become schedule authority");
 
     assert!(error.to_string().contains("missing"), "{error:#}");
     assert!(!protected.path.exists());

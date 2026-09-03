@@ -103,11 +103,7 @@ fn prepare_worktree(
         Ok(())
     })();
     match result {
-        Ok(()) => Ok(if created_by_current_attempt {
-            PreparedPrWorktree::Created(worktree)
-        } else {
-            PreparedPrWorktree::Retained(worktree)
-        }),
+        Ok(()) => Ok(PreparedPrWorktree::Created(worktree)),
         Err(error) => Err(PrWorktreePreparationError {
             source: error,
             worktree: Some(if created_by_current_attempt {

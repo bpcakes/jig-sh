@@ -3,12 +3,10 @@ use super::*;
 impl ScheduleOccurrence {
     fn is_unacknowledged_stale_reconciliation(&self) -> bool {
         self.status == OccurrenceStatus::NeedsAttention
-            && self.finished_at_ms.is_some()
+            && self
+                .finished_at_ms
+                .is_some_and(|finished_at_ms| finished_at_ms >= self.claim_expires_at_ms)
             && self.acknowledged_at_ms.is_none()
-            && self.error.as_deref().is_some_and(|error| {
-                error == STALE_RECONCILIATION_ERROR
-                    || error.starts_with(STALE_RECONCILIATION_STAGED_ERROR_PREFIX)
-            })
     }
 
     fn is_unexecuted_stale_reconciliation(&self) -> bool {

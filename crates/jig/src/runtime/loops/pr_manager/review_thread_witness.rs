@@ -20,13 +20,14 @@ impl Default for ReviewThreadWitness {
 
 struct LiveReviewThreadState {
     is_resolved: bool,
+    head_sha: String,
     total_count: u64,
     comments: Vec<Value>,
 }
 
 enum ReviewThreadResolution {
     Resolved(Value),
-    Changed,
+    Changed(&'static str),
 }
 
 fn observed_review_thread_witnesses(
@@ -163,6 +164,23 @@ fn review_thread_matches_witness(
         ) == witness.resolution_generation
 }
 
+fn review_thread_mutation_change_reason(
+    state: &LiveReviewThreadState,
+    witness: &ReviewThreadWitness,
+    reply_comment_id: Option<&str>,
+    repair_version: &str,
+) -> Option<&'static str> {
+    if state.head_sha != repair_version {
+        Some("pr_head_changed")
+    } else if state.is_resolved
+        || !review_thread_matches_witness(state, witness, reply_comment_id)
+    {
+        Some("review_thread_changed")
+    } else {
+        None
+    }
+}
+
 fn fetch_review_thread_witness_state(
     thread_id: &str,
     mut fetch: impl FnMut(Option<&str>) -> std::result::Result<Value, ExecutionCommandError>,
@@ -171,6 +189,7 @@ fn fetch_review_thread_witness_state(
     let mut pages = Vec::new();
     let mut total_count = None;
     let mut is_resolved = None;
+    let mut head_sha = None;
     let mut cursors = BTreeSet::new();
     for _ in 0..REVIEW_THREAD_COMMENT_PAGE_LIMIT {
         let page = validate_review_thread_witness_page(fetch(cursor.as_deref())?, thread_id)?;
@@ -182,10 +201,18 @@ fn fetch_review_thread_witness_state(
             .pointer("/data/node/isResolved")
             .and_then(Value::as_bool)
             .unwrap();
+        let page_head_sha = page
+            .pointer("/data/node/pullRequest/headRefOid")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
         if total_count.replace(page_total).is_some_and(|count| count != page_total)
             || is_resolved
                 .replace(page_resolved)
                 .is_some_and(|resolved| resolved != page_resolved)
+            || head_sha
+                .replace(page_head_sha.clone())
+                .is_some_and(|version| version != page_head_sha)
         {
             return Err(ExecutionCommandError::failed(anyhow!(
                 "GitHub review thread changed while its comment witness was collected for {thread_id}"
@@ -212,6 +239,7 @@ fn fetch_review_thread_witness_state(
             }
             return Ok(LiveReviewThreadState {
                 is_resolved: is_resolved.unwrap_or(false),
+                head_sha: head_sha.unwrap_or_default(),
                 total_count,
                 comments,
             });

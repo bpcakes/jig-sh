@@ -1,6 +1,6 @@
 enum ReviewThreadReply {
     Posted(Value),
-    Changed,
+    Changed(&'static str),
 }
 
 fn post_review_thread_reply(
@@ -25,8 +25,10 @@ fn post_review_thread_reply(
     // immediately before mutation so edited, added, or resolved feedback never
     // receives a response derived from stale input.
     let state = review_thread_resolution_state(ctx, thread_id, observer, budget)?;
-    if state.is_resolved || !review_thread_matches_witness(&state, witness, None) {
-        return Ok(ReviewThreadReply::Changed);
+    if let Some(reason) =
+        review_thread_mutation_change_reason(&state, witness, None, repair_version)
+    {
+        return Ok(ReviewThreadReply::Changed(reason));
     }
 
     let body = format!("{body}\n\n{marker}");

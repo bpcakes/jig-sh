@@ -11,7 +11,7 @@ This living plan closes the comprehensive-review findings in the current `feat/j
 - [x] Apply the structural refactorings, then the separate behavior fixes.
 - [x] Run focused suites and the complete `cargo test -p jig-sh` target (2,167 unit tests passed, 2 stress tests ignored, all integration and doc-test targets passed).
 - [x] Build the development Jig binary and run configured contract, LOC, format, Clippy, and partitioned test gates.
-- [x] Run independent Codex and Cursor comprehensive review on exact working-tree fingerprints; fix branch-scope findings and repeat until the completed native Codex pass is clean. The eighth native Codex pass was clean; the ninth found two in-scope races, now fixed; and the post-remediation pass found no actionable findings or open questions. Cursor was attempted each cycle but its CLI did not complete a review on this host.
+- [ ] Run independent comprehensive review on exact working-tree fingerprints; fix branch-scope findings and repeat until both selected reviewers report no actionable findings. The latest completed Claude/Codex round found a live-PR-head mutation race and raised a schedule-authority question that exposed a second fail-closed gap; both are now fixed and await the next review round.
 - [x] Record the unrelated oversized frontend install-locking test module as Bead `feat-codex-resume-generic-monorepo-7kn` and exclude it from the fix loop. The JSONL-only fallback succeeded; normal `br sync --flush-only` remains blocked by the existing incompatible local Beads runtime schema.
 
 ## Surprises & Discoveries
@@ -31,6 +31,8 @@ This living plan closes the comprehensive-review findings in the current `feat/j
 - The ninth review found that canonicalizing a prompt and later reopening its absolute path left an intermediate-directory symlink-swap window. It also found that successful unexecuted abandonment after exact stale reconciliation returned the transient terminal record, causing the dispatcher to contradict the public deferred contract. These are deeper boundary leaks rather than isolated typos: path containment must be enforced by the opened directory capability, and the occurrence transition—not its caller—must normalize the superseded reconciliation state.
 - The post-fix full gate passed every core, process, vault, and vault-TUI test, then exposed unrelated frontend-fixture isolation failures and left `/tmp` returning `EROFS`. The affected files are unchanged by this branch; the problem is recorded as Bead `feat-codex-resume-generic-monorepo-55h` and excluded from this loop.
 - `scripts/jig work check` cannot attest the repository's pre-existing partially staged files without changing the user's index. The same configured gates were therefore run directly against the checked worktree; the real staging state was preserved.
+- A later Claude/Codex review confirmed that worktree-reservation finalization, malformed retained paths, malformed lease state, and short-TTL renewal waits are intentional fail-closed policies. It also exposed two genuine boundary leaks: review-thread mutations did not carry the live PR head in their final witness, and loss of both protected schedule files could let a surviving checkout replica become authoritative.
+- The full repository test gate stopped on a host-contention-sensitive 202-process GitHub snapshot fixture; the unchanged test passed alone. This is tracked outside the repair loop as Bead `jig-sh-iyo`.
 
 ## Decision Log
 
@@ -79,6 +81,15 @@ This living plan closes the comprehensive-review findings in the current `feat/j
 - Decision: make the unexecuted abandonment transition normalize the exact stale-reconciled record back to running semantics before returning it.
   Rationale: stale reconciliation is an internal competing transition that the typed held-lease proof is allowed to supersede. Returning that transient terminal shape leaked occurrence internals into dispatch reporting; normalization keeps the public deferred contract unconditional after a successful abandon.
   Date/Author: 2026-08-30 / Codex
+- Decision: classify stale reconciliation from the persisted expiry transition and owner/acknowledgement state, not from human-readable error text.
+  Rationale: lifecycle authority already exists in `claim_expires_at_ms` and `finished_at_ms`. Reusing those facts removes a free-text type code and prevents worker diagnostics from becoming transition authority.
+  Date/Author: 2026-09-03 / Codex
+- Decision: include `pullRequest.headRefOid` in the same final GraphQL witness used for review-thread replies and resolution.
+  Rationale: comment state and repair-head authority must be sampled together immediately before mutation; a changed head skips the stale intent without adding a second independently timed lookup.
+  Date/Author: 2026-09-03 / Codex
+- Decision: publish the protected-authority cutover identity in the checkout initialization marker and consult it before selecting a durable read location.
+  Rationale: a compatibility replica must retain its non-authoritative identity even when both protected files are lost, otherwise stale state can be promoted across the source-of-truth boundary.
+  Date/Author: 2026-09-03 / Codex
 
 ## Outcomes & Retrospective
 
@@ -127,4 +138,4 @@ Tests use generic temporary repositories. The new marker is additive ignored run
 
 `cap-std` is added as a private implementation dependency for capability-rooted prompt opening on the repository's supported Linux and macOS hosts. No public API, unsafe code, async runtime, feature, ABI, or MSRV change is planned. Keep Rust 1.88 and edition 2024 compatibility. All new types remain crate-internal. Preserve the schema-version-3 schedule JSON and schema-version-1 command/evidence contracts.
 
-Review round continuation: research resolved the three open questions without new defects. Address reserved-worktree stale recovery, manual late evidence, and observed/resulting PR attempt identity with centralized owner/state transition helpers and focused regression tests; keep unrelated pre-existing timeout failures out of branch scope.
+Review round continuation: research resolved the initial three open questions without new defects. Reserved-worktree stale recovery, manual late evidence, and observed/resulting PR attempt identity now use centralized owner/state transition helpers with focused regression tests. The following Claude/Codex round found the review-thread head race and prompted the protected-authority-loss proof above. Keep unrelated timeout and host-contention failures out of branch scope and in Beads.

@@ -119,6 +119,30 @@ fn acknowledged_stale_reconciliation_rejects_late_worker_evidence() {
     assert!(error.contains("already acknowledged"), "{error}");
 }
 
+#[test]
+fn terminal_attention_cannot_impersonate_stale_reconciliation_with_error_text() {
+    let (_temp, mut store, claim) = claimed_occurrence();
+    store
+        .finish_at(
+            &claim.occurrence_id,
+            &claim.owner,
+            OccurrenceFinish {
+                outcome: OccurrenceOutcome::NeedsAttention,
+                worker_receipt_id: None,
+                worktree: None,
+                error: Some(STALE_RECONCILIATION_ERROR),
+            },
+            1_500,
+        )
+        .unwrap();
+
+    let error = finish_with_evidence(&mut store, &claim, 1_600)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("already needs_attention"), "{error}");
+}
+
 fn claimed_occurrence() -> (TempDir, OccurrenceStore, ScheduleOccurrence) {
     let temp = tempdir().unwrap();
     write_loop_fixture_repo(temp.path());

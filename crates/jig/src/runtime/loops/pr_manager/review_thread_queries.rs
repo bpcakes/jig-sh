@@ -55,6 +55,9 @@ query ReviewThreadState($threadId: ID!) {
     ... on PullRequestReviewThread {
       id
       isResolved
+      pullRequest {
+        headRefOid
+      }
       comments(last: 1) {
         totalCount
         nodes {
@@ -74,6 +77,9 @@ query ReviewThreadWitnessState($threadId: ID!, $commentsBefore: String) {
     ... on PullRequestReviewThread {
       id
       isResolved
+      pullRequest {
+        headRefOid
+      }
       comments(last: 100, before: $commentsBefore) {
         totalCount
         pageInfo {

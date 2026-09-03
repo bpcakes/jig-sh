@@ -463,12 +463,20 @@ impl SchedulePersistence {
                 false,
             )?;
         }
+        let (public_marker_schema, public_marker_state_path) = if protected.is_some() {
+            (
+                PROTECTED_SCHEDULE_AUTHORITY_SCHEMA_VERSION,
+                PROTECTED_SCHEDULE_STATE_PATH,
+            )
+        } else {
+            (SCHEDULE_INITIALIZATION_SCHEMA_VERSION, SCHEDULE_STATE_PATH)
+        };
         let public_marker = self.ensure_initialization_marker_at(
             directories.public()?,
             &self.initialized_path,
             "loop schedule initialization marker",
-            SCHEDULE_INITIALIZATION_SCHEMA_VERSION,
-            SCHEDULE_STATE_PATH,
+            public_marker_schema,
+            public_marker_state_path,
             protected.is_some(),
         );
         if protected.is_some() {
@@ -564,6 +572,31 @@ impl SchedulePersistence {
         }
     }
 
+    fn public_marker_requires_protected_authority(
+        &self,
+        directories: &ScheduleDirectories,
+    ) -> Result<bool> {
+        let Some(marker) = read_location::<ScheduleInitializationMarker>(
+            directories.public.as_ref(),
+            &self.initialized_path,
+            SCHEDULE_INITIALIZED_FILE_NAME,
+            &|| false,
+        )?
+        else {
+            return Ok(false);
+        };
+        match (marker.schema_version, marker.state_path.as_str()) {
+            (SCHEDULE_INITIALIZATION_SCHEMA_VERSION, SCHEDULE_STATE_PATH) => Ok(false),
+            (PROTECTED_SCHEDULE_AUTHORITY_SCHEMA_VERSION, PROTECTED_SCHEDULE_STATE_PATH) => {
+                Ok(true)
+            }
+            _ => bail!(
+                "Invalid loop schedule initialization marker at {}",
+                self.initialized_path.display()
+            ),
+        }
+    }
+
     fn durable_read_location<'a>(
         &'a self,
         directories: &'a ScheduleDirectories,
@@ -573,7 +606,8 @@ impl SchedulePersistence {
                 directories.protected.as_ref(),
                 &authority.path,
                 SCHEDULE_FILE_NAME,
-            )? || self.protected_marker_requires_authority(directories)?)
+            )? || self.protected_marker_requires_authority(directories)?
+                || self.public_marker_requires_protected_authority(directories)?)
         {
             return Ok((directories.protected.as_ref(), &authority.path));
         }

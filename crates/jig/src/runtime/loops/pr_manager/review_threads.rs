@@ -133,9 +133,9 @@ fn post_review_thread_updates(
                 &mut budget,
             ) {
                 Ok(ReviewThreadReply::Posted(response)) => Some(response),
-                Ok(ReviewThreadReply::Changed) => {
+                Ok(ReviewThreadReply::Changed(reason)) => {
                     reply_skipped = true;
-                    reply_skip_reason = Value::String("review_thread_changed".into());
+                    reply_skip_reason = Value::String(reason.into());
                     None
                 }
                 Err(
@@ -167,7 +167,7 @@ fn post_review_thread_updates(
             None
         } else if resolve && reply_skipped {
             resolve_skipped = true;
-            resolve_skip_reason = Value::String("review_thread_changed".into());
+            resolve_skip_reason = reply_skip_reason.clone();
             None
         } else if resolve && thread_failed && !body.is_empty() {
             resolve_skipped = true;
@@ -183,13 +183,14 @@ fn post_review_thread_updates(
                 thread_id,
                 thread_witness,
                 reply_comment_id,
+                repair_version,
                 observer,
                 &mut budget,
             ) {
                 Ok(ReviewThreadResolution::Resolved(response)) => Some(response),
-                Ok(ReviewThreadResolution::Changed) => {
+                Ok(ReviewThreadResolution::Changed(reason)) => {
                     resolve_skipped = true;
-                    resolve_skip_reason = Value::String("review_thread_changed".into());
+                    resolve_skip_reason = Value::String(reason.into());
                     None
                 }
                 Err(
@@ -336,6 +337,7 @@ fn resolve_review_thread(
     thread_id: &str,
     witness: &ReviewThreadWitness,
     reply_comment_id: Option<&str>,
+    repair_version: &str,
     observer: &mut dyn ExecutionControl,
     budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<ReviewThreadResolution, ExecutionCommandError> {
@@ -345,8 +347,10 @@ fn resolve_review_thread(
             reconciled_resolve_response(thread_id),
         ));
     }
-    if !review_thread_matches_witness(&state, witness, reply_comment_id) {
-        return Ok(ReviewThreadResolution::Changed);
+    if let Some(reason) =
+        review_thread_mutation_change_reason(&state, witness, reply_comment_id, repair_version)
+    {
+        return Ok(ReviewThreadResolution::Changed(reason));
     }
     let timeout = budget.reserve_request(ctx.command_timeout().duration())?;
     let result = github::gh_json_with_duration(
@@ -599,12 +603,17 @@ fn validate_review_thread_resolution_state(
     let comment_count = value
         .pointer("/data/node/comments/totalCount")
         .and_then(Value::as_u64);
+    let repair_version = value
+        .pointer("/data/node/pullRequest/headRefOid")
+        .and_then(Value::as_str)
+        .filter(|version| !version.is_empty());
     let comments = value
         .pointer("/data/node/comments/nodes")
         .and_then(Value::as_array);
     if observed_id != Some(thread_id)
         || is_resolved.is_none()
         || comment_count.is_none()
+        || repair_version.is_none()
         || comments.is_none()
     {
         return Err(ExecutionCommandError::failed(anyhow!(
@@ -623,6 +632,10 @@ fn validate_review_thread_witness_page(
             .pointer("/data/node/isResolved")
             .and_then(Value::as_bool)
             .is_some()
+        && value
+            .pointer("/data/node/pullRequest/headRefOid")
+            .and_then(Value::as_str)
+            .is_some_and(|version| !version.is_empty())
         && value
             .pointer("/data/node/comments/totalCount")
             .and_then(Value::as_u64)
