@@ -33,6 +33,8 @@ This living plan closes the comprehensive-review findings in the current `feat/j
 - `scripts/jig work check` cannot attest the repository's pre-existing partially staged files without changing the user's index. The same configured gates were therefore run directly against the checked worktree; the real staging state was preserved.
 - A later Claude/Codex review confirmed that worktree-reservation finalization, malformed retained paths, malformed lease state, and short-TTL renewal waits are intentional fail-closed policies. It also exposed two genuine boundary leaks: review-thread mutations did not carry the live PR head in their final witness, and loss of both protected schedule files could let a surviving checkout replica become authoritative.
 - The full repository test gate stopped on a host-contention-sensitive 202-process GitHub snapshot fixture; the unchanged test passed alone. This is tracked outside the repair loop as Bead `jig-sh-iyo`.
+- The next frozen Claude/Codex round had three open questions. History confirmed that `work review` cancellation was already error-shaped before the output-wrapper refactor; workflow execution leases are intentionally worktree-local while branch leases alone are repository-common; and manual stale records remain non-prunable `needs_attention` evidence, making an extra prune call a no-op. Existing tests already cover missing runtime-ignore remediation and the exact scheduled-watermark pruning boundary.
+- That round reported three low in-scope findings. The reply idempotency marker incorrectly included generated response prose, the fixed aggregate request allowance could reject a valid large set of actionable thread intents after push, and the hard `.agent/runtime/` upgrade prerequisite was absent from the migration notes. The marker now follows durable feedback/head identity with legacy-v2 recognition, and the update budget derives a bounded allowance from unique actionable intents while retaining the ten-minute aggregate deadline.
 
 ## Decision Log
 
@@ -89,6 +91,12 @@ This living plan closes the comprehensive-review findings in the current `feat/j
   Date/Author: 2026-09-03 / Codex
 - Decision: publish the protected-authority cutover identity in the checkout initialization marker and consult it before selecting a durable read location.
   Rationale: a compatibility replica must retain its non-authoritative identity even when both protected files are lost, otherwise stale state can be promoted across the source-of-truth boundary.
+  Date/Author: 2026-09-03 / Codex
+- Decision: key review-reply idempotency by thread, repaired head, and trusted-feedback generation rather than worker-authored reply text, while accepting a matching legacy-v2 marker during cutover.
+  Rationale: those three inputs identify the side effect. Generated prose is retry-local data; including it creates duplicate comments after an uncertain mutation whenever a new worker phrases the same response differently.
+  Date/Author: 2026-09-03 / Codex
+- Decision: derive the post-push request allowance from the number of unique actionable worker intents and the bounded per-thread pagination protocol, while preserving one aggregate deadline.
+  Rationale: the previous fixed global allowance made valid independent intents contend for arbitrary shared capacity. Per-intent capacity keeps every protocol path bounded without turning the number of review threads into a correctness cliff.
   Date/Author: 2026-09-03 / Codex
 
 ## Outcomes & Retrospective

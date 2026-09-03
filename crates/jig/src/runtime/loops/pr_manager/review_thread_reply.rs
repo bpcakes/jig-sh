@@ -12,10 +12,15 @@ fn post_review_thread_reply(
     observer: &mut dyn ExecutionControl,
     budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<ReviewThreadReply, ExecutionCommandError> {
-    let marker = review_thread_reply_marker(thread_id, repair_version, witness, body);
-    if let Some(comment) =
-        review_thread_reply_comment(ctx, thread_id, &marker, observer, budget)?
-    {
+    let marker = review_thread_reply_marker(thread_id, repair_version, witness);
+    let legacy_marker = legacy_review_thread_reply_marker(thread_id, repair_version, witness, body);
+    if let Some(comment) = review_thread_reply_comment(
+        ctx,
+        thread_id,
+        &[&marker, &legacy_marker],
+        observer,
+        budget,
+    )? {
         return Ok(ReviewThreadReply::Posted(reconciled_reply_response(
             &comment,
         )));

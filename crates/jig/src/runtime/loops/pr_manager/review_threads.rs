@@ -5,7 +5,7 @@ struct ReviewThreadPostResult {
 }
 
 const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 100;
-const REVIEW_THREAD_UPDATE_REQUEST_LIMIT: usize = 256;
+const REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT: usize = REVIEW_THREAD_COMMENT_PAGE_LIMIT * 3 + 3;
 const REVIEW_THREAD_UPDATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MUTATION_RECONCILIATION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -13,14 +13,17 @@ struct ReviewThreadUpdateBudget {
     started_at: Instant,
     timeout: Duration,
     request_count: usize,
+    request_limit: usize,
 }
 
 impl ReviewThreadUpdateBudget {
-    fn new(command_timeout: CommandTimeout) -> Self {
+    fn new(command_timeout: CommandTimeout, actionable_intent_count: usize) -> Self {
         Self {
             started_at: Instant::now(),
             timeout: command_timeout.duration().min(REVIEW_THREAD_UPDATE_TIMEOUT),
             request_count: 0,
+            request_limit: REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT
+                .saturating_mul(actionable_intent_count.max(1)),
         }
     }
 
@@ -28,9 +31,10 @@ impl ReviewThreadUpdateBudget {
         &mut self,
         requested_timeout: Duration,
     ) -> std::result::Result<Duration, ExecutionCommandError> {
-        if self.request_count >= REVIEW_THREAD_UPDATE_REQUEST_LIMIT {
+        if self.request_count >= self.request_limit {
             return Err(ExecutionCommandError::failed(anyhow!(
-                "GitHub review thread updates exceeded their {REVIEW_THREAD_UPDATE_REQUEST_LIMIT}-request budget"
+                "GitHub review thread updates exceeded their {}-request budget",
+                self.request_limit
             )));
         }
         let remaining = self
@@ -68,9 +72,16 @@ fn post_review_thread_updates(
         .and_then(Value::as_array)
         .unwrap_or(&empty);
     let thread_witnesses = observed_review_thread_witnesses(pull_request);
+    let actionable_intent_count = replies
+        .iter()
+        .map(review_thread_id)
+        .filter(|thread_id| thread_witnesses.contains_key(*thread_id))
+        .collect::<BTreeSet<_>>()
+        .len();
     let mut posts = Vec::new();
     let mut handled_thread_ids = BTreeSet::new();
-    let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
+    let mut budget =
+        ReviewThreadUpdateBudget::new(ctx.command_timeout(), actionable_intent_count);
     let mut failed = false;
     let mut cancelled = false;
     for (index, reply) in replies.iter().enumerate() {
@@ -374,13 +385,13 @@ fn resolve_review_thread(
 fn review_thread_reply_comment(
     ctx: &RepoContext,
     thread_id: &str,
-    marker: &str,
+    markers: &[&str],
     observer: &mut dyn ExecutionControl,
     budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Option<Value>, ExecutionCommandError> {
     let total_timeout = ctx.command_timeout().duration();
     let deadline = Instant::now() + total_timeout;
-    fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
+    fetch_review_thread_reply_comment_with_markers(thread_id, markers, |cursor| {
         let timeout = remaining_operation_timeout(
             deadline,
             total_timeout,
@@ -404,7 +415,7 @@ fn review_thread_reply_comment_for_reconciliation(
     budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<Option<Value>, ExecutionCommandError> {
     let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
-    fetch_review_thread_reply_comment(thread_id, marker, |cursor| {
+    fetch_review_thread_reply_comment_with_markers(thread_id, &[marker], |cursor| {
         let mut observer = NoopExecutionObserver;
         let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
         github::gh_json_with_duration(
@@ -531,15 +542,15 @@ fn review_thread_witness_state_args(thread_id: &str, cursor: Option<&str>) -> Ve
     args
 }
 
-fn fetch_review_thread_reply_comment(
+fn fetch_review_thread_reply_comment_with_markers(
     thread_id: &str,
-    marker: &str,
+    markers: &[&str],
     mut fetch: impl FnMut(Option<&str>) -> std::result::Result<Value, ExecutionCommandError>,
 ) -> std::result::Result<Option<Value>, ExecutionCommandError> {
     let mut cursor = None;
     for _ in 0..REVIEW_THREAD_COMMENT_PAGE_LIMIT {
         let state = validate_review_thread_reply_state(fetch(cursor.as_deref())?, thread_id)?;
-        if let Some(comment) = review_thread_comment_with_marker(&state, marker) {
+        if let Some(comment) = review_thread_comment_with_markers(&state, markers) {
             return Ok(Some(comment.clone()));
         }
         if !review_thread_comments_have_previous_page(&state) {
@@ -737,16 +748,18 @@ fn reconcile_resolve_mutation(
     Err(error)
 }
 
-fn review_thread_comment_with_marker<'a>(state: &'a Value, marker: &str) -> Option<&'a Value> {
+fn review_thread_comment_with_markers<'a>(
+    state: &'a Value,
+    markers: &[&str],
+) -> Option<&'a Value> {
     state
         .pointer("/data/node/comments/nodes")?
         .as_array()?
         .iter()
         .find(|comment| {
-            let has_marker = comment
-                .get("body")
-                .and_then(Value::as_str)
-                .is_some_and(|body| body.contains(marker));
+            let has_marker = comment.get("body").and_then(Value::as_str).is_some_and(|body| {
+                markers.iter().any(|marker| body.contains(marker))
+            });
             let has_id = comment
                 .get("id")
                 .and_then(Value::as_str)

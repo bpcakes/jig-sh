@@ -15,6 +15,7 @@
 - Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
 
 ### Changed
+- Migration: repositories adopted before the loop runtime ignore rule must run `scripts/jig update --recopy` so `.agent/runtime/` is ignored before `jig loop dispatch` or `jig loop tick` can publish state.
 - Breaking: Contract-v6 MCP clients use the stable `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` surface instead of directly invoking per-manifest execution tools; submitted plans are re-derived from current checked-in authority before execution.
 - Keep read-only work-gate, evidence, and status inspection available when a configured tool, repository target, profile, or catalog no longer resolves; report the affected required gate in-band as `unsupported` with a reason while contract validation, execution, and work finish continue to fail closed.
 - Make configured checks non-interactive and uniformly supervised for timeout, cancellation, process-tree cleanup, and bounded stdout/stderr capture.
@@ -31,6 +32,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Keep review-reply retries idempotent when worker wording changes, and scale the bounded post-push GitHub request allowance with unique actionable review-thread intents.
 - Bind review-thread replies and resolution to the live repaired PR head, make stale-reconciliation enrichment depend on the recorded expiry transition instead of error prose, and prevent a surviving checkout replica from replacing lost protected schedule authority.
 - Bound serialized GitHub loop evidence, omit redundant raw payload copies, and make dispatch receipts reference their detailed tick receipts so one large observation is not journaled twice.
 - Normalize PR head identity strictly from the owner/name fields emitted by GitHub CLI, accept valid failed-check JSON from legacy nonzero `gh pr checks` exits, bind review replies and resolution to complete comment generations, preserve native non-UTF-8 worktree paths across retained authority, terminal PR actions, cleanup, and Git metadata reads, decode exhausted attempts and order loop runs chronologically in Jig UI, report force-with-lease pushes accurately, retain pre-existing repair worktrees on unexecuted retries, and validate repository-common PR branch leases before occurrence claims.

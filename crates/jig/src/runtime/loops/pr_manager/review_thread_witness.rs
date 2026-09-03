@@ -107,22 +107,41 @@ fn review_thread_reply_marker(
     thread_id: &str,
     repair_version: &str,
     witness: &ReviewThreadWitness,
+) -> String {
+    format!(
+        "<!-- jig-pr-manager:review-reply:v3:{} -->",
+        review_thread_reply_marker_digest([
+            thread_id.as_bytes(),
+            repair_version.as_bytes(),
+            witness.reply_generation.as_bytes(),
+        ])
+    )
+}
+
+fn legacy_review_thread_reply_marker(
+    thread_id: &str,
+    repair_version: &str,
+    witness: &ReviewThreadWitness,
     body: &str,
 ) -> String {
+    format!(
+        "<!-- jig-pr-manager:review-reply:v2:{} -->",
+        review_thread_reply_marker_digest([
+            thread_id.as_bytes(),
+            repair_version.as_bytes(),
+            witness.reply_generation.as_bytes(),
+            body.trim().as_bytes(),
+        ])
+    )
+}
+
+fn review_thread_reply_marker_digest<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> String {
     let mut digest = Sha256::new();
-    for value in [
-        thread_id.as_bytes(),
-        repair_version.as_bytes(),
-        witness.reply_generation.as_bytes(),
-        body.trim().as_bytes(),
-    ] {
+    for value in values {
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value);
     }
-    format!(
-        "<!-- jig-pr-manager:review-reply:v2:{:x} -->",
-        digest.finalize()
-    )
+    format!("{:x}", digest.finalize())
 }
 
 fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {

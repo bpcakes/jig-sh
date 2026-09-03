@@ -5,12 +5,12 @@ mod review_thread_budget_tests {
     use super::*;
 
     #[test]
-    fn review_thread_updates_share_one_aggregate_request_budget() {
+    fn one_review_thread_intent_has_one_bounded_request_budget() {
         let command_timeout = CommandTimeout::from_seconds(60).unwrap();
         let timeout = command_timeout.duration();
-        let mut budget = ReviewThreadUpdateBudget::new(command_timeout);
+        let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 1);
 
-        for _ in 0..REVIEW_THREAD_UPDATE_REQUEST_LIMIT {
+        for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT {
             budget.reserve_request(timeout).unwrap();
         }
         let error = budget.reserve_request(timeout).unwrap_err().to_string();
@@ -19,9 +19,23 @@ mod review_thread_budget_tests {
     }
 
     #[test]
+    fn aggregate_request_budget_scales_with_unique_actionable_intents() {
+        let command_timeout = CommandTimeout::from_seconds(60).unwrap();
+        let timeout = command_timeout.duration();
+        let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 2);
+
+        for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT * 2 {
+            budget.reserve_request(timeout).unwrap();
+        }
+        let error = budget.reserve_request(timeout).unwrap_err().to_string();
+
+        assert!(error.contains("606-request budget"), "{error}");
+    }
+
+    #[test]
     fn review_thread_budget_preserves_subsecond_remaining_time() {
         let command_timeout = CommandTimeout::from_seconds(1).unwrap();
-        let mut budget = ReviewThreadUpdateBudget::new(command_timeout);
+        let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 1);
 
         let first = budget.reserve_request(command_timeout.duration()).unwrap();
         let second = budget.reserve_request(command_timeout.duration()).unwrap();
@@ -39,8 +53,8 @@ mod review_thread_budget_tests {
             .required_commands(Vec::<String>::new())
             .write();
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let mut reply_budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
-        let mut resolve_budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
+        let mut reply_budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), 1);
+        let mut resolve_budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), 1);
 
         assert!(matches!(
             reconcile_reply_mutation(

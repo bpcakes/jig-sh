@@ -348,7 +348,7 @@ esac
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
         let witness = ReviewThreadWitness::default();
-        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
+        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), 1);
 
         let response = post_review_thread_reply(
             &ctx,
@@ -380,7 +380,7 @@ esac
         let marker = "<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->";
         let mut calls = Vec::new();
 
-        let comment = fetch_review_thread_reply_comment("PRRT_1", marker, |cursor| {
+        let comment = fetch_review_thread_reply_comment_with_markers("PRRT_1", &[marker], |cursor| {
             calls.push(cursor.map(str::to_string));
             Ok(json!({
                 "data": {"node": {
@@ -412,7 +412,7 @@ esac
         let marker = "<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->";
         let mut calls = Vec::new();
 
-        let comment = fetch_review_thread_reply_comment("PRRT_1", marker, |cursor| {
+        let comment = fetch_review_thread_reply_comment_with_markers("PRRT_1", &[marker], |cursor| {
             calls.push(cursor.map(str::to_string));
             Ok(if cursor.is_none() {
                 json!({
@@ -461,7 +461,7 @@ esac
 
     #[test]
     fn review_thread_reply_search_rejects_missing_backward_cursor() {
-        let error = fetch_review_thread_reply_comment("PRRT_1", "marker", |_| {
+        let error = fetch_review_thread_reply_comment_with_markers("PRRT_1", &["marker"], |_| {
             Ok(json!({
                 "data": {"node": {
                     "id": "PRRT_1",
@@ -481,7 +481,7 @@ esac
     #[test]
     fn review_thread_reply_search_enforces_the_page_safety_limit() {
         let mut calls = 0;
-        let error = fetch_review_thread_reply_comment("PRRT_1", "marker", |_| {
+        let error = fetch_review_thread_reply_comment_with_markers("PRRT_1", &["marker"], |_| {
             calls += 1;
             Ok(json!({
                 "data": {"node": {
@@ -509,7 +509,7 @@ esac
         let live_deadline = Instant::now() + total_timeout;
         let mut requests = 0;
 
-        let error = fetch_review_thread_reply_comment("PRRT_1", "marker", |_| {
+        let error = fetch_review_thread_reply_comment_with_markers("PRRT_1", &["marker"], |_| {
             let deadline = if requests == 0 {
                 live_deadline
             } else {
@@ -614,7 +614,7 @@ esac
         let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
-        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout());
+        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), 1);
 
         let response = resolve_review_thread(
             &ctx,
