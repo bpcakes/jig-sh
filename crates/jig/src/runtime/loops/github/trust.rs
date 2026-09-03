@@ -18,10 +18,11 @@ impl RepositoryPermissionCache {
         if let Some(cached) = self.by_login.get(login) {
             return Ok(cached.clone());
         }
+        let encoded_owner = encode_path_segment(&repository.owner);
+        let encoded_name = encode_path_segment(&repository.name);
         let encoded_login = encode_path_segment(login);
         let endpoint = format!(
-            "repos/{}/{}/collaborators/{encoded_login}/permission",
-            repository.owner, repository.name
+            "repos/{encoded_owner}/{encoded_name}/collaborators/{encoded_login}/permission"
         );
         let output = client.output(
             vec![

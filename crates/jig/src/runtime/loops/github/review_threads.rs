@@ -1,5 +1,23 @@
 const REVIEW_THREAD_COMMENT_PAGE_LIMIT: usize = 10;
 
+pub(super) fn github_pr_review_threads_snapshot(
+    ctx: &RepoContext,
+    pr_number: u64,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    let mut client = GithubSnapshotClient::new(ctx, observer);
+    let repository = repository_snapshot(&mut client)?;
+    let mut permissions = RepositoryPermissionCache::default();
+    let review_threads =
+        review_threads_snapshot(&mut client, &repository, pr_number, &mut permissions)?;
+    let snapshot = json!({
+        "review_threads": review_threads,
+        "budget": client.budget_snapshot(),
+    });
+    require_serialized_snapshot_budget(&snapshot, GITHUB_SNAPSHOT_EVIDENCE_BYTE_LIMIT)?;
+    Ok(snapshot)
+}
+
 fn review_threads_snapshot(
     client: &mut GithubSnapshotClient<'_>,
     repository: &RepositorySnapshot,

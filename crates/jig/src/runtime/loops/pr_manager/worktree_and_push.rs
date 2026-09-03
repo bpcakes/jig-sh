@@ -368,6 +368,21 @@ fn require_remote_head(
     expected_head: &str,
     observer: &mut dyn ExecutionControl,
 ) -> PrRepairStepResult<()> {
+    let observed = remote_head_for_ref(ctx, cwd, remote_ref, observer)?;
+    if observed != expected_head {
+        return Err(PrRepairStepError::failed(anyhow!(
+            "Remote ref {remote_ref} changed after the GitHub snapshot: expected {expected_head}, found {observed}"
+        )));
+    }
+    Ok(())
+}
+
+fn remote_head_for_ref(
+    ctx: &RepoContext,
+    cwd: &Path,
+    remote_ref: &str,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<String> {
     let stdout = git_stdout(
         ctx,
         cwd,
@@ -376,12 +391,7 @@ fn require_remote_head(
     )?;
     let observed = remote_head_from_ls_remote(stdout.as_bytes(), remote_ref)
         .ok_or_else(|| PrRepairStepError::failed(anyhow!("Remote ref {remote_ref} was not found")))?;
-    if observed != expected_head {
-        return Err(PrRepairStepError::failed(anyhow!(
-            "Remote ref {remote_ref} changed after the GitHub snapshot: expected {expected_head}, found {observed}"
-        )));
-    }
-    Ok(())
+    Ok(observed.to_string())
 }
 
 fn commit_and_push(

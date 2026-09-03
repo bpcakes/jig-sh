@@ -32,6 +32,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Recollect the complete bounded pull-request review-thread snapshot immediately before committing a repair, retain completed local work when trusted unresolved feedback or the PR head changed, and percent-encode every GitHub API path segment.
 - Keep review-reply retries idempotent when worker wording changes, distinguish trusted human marker quotations from Jig-authored replies, give each actionable review-thread intent a fair slice of the bounded post-push GitHub budget, and skip mutations the observed viewer cannot perform.
 - Bind review-thread replies and resolution to the live repaired PR head, make stale-reconciliation enrichment depend on the recorded expiry transition instead of error prose, and prevent a surviving checkout replica from replacing lost protected schedule authority.
 - Bound serialized GitHub loop evidence, omit redundant raw payload copies, and make dispatch receipts reference their detailed tick receipts so one large observation is not journaled twice.

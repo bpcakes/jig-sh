@@ -1,7 +1,7 @@
 enum PrePushReviewAuthority {
     Current,
     Changed {
-        thread_id: String,
+        thread_id: Option<String>,
         reason: &'static str,
     },
 }
@@ -9,18 +9,69 @@ enum PrePushReviewAuthority {
 fn revalidate_observed_review_threads(
     ctx: &RepoContext,
     pull_request: &Value,
+    worktree: &Path,
+    head_ref: &str,
     expected_head: &str,
     observer: &mut dyn ExecutionControl,
-) -> std::result::Result<PrePushReviewAuthority, ExecutionCommandError> {
-    let witnesses = observed_review_thread_witnesses(pull_request);
-    let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), witnesses.len());
-    for (thread_id, witness) in witnesses {
-        budget.begin_intent(ctx.command_timeout());
-        let state = review_thread_resolution_state(ctx, &thread_id, observer, &mut budget)?;
-        if let Some(reason) =
-            review_thread_mutation_change_reason(&state, &witness, None, expected_head)
-        {
-            return Ok(PrePushReviewAuthority::Changed { thread_id, reason });
+) -> PrRepairStepResult<PrePushReviewAuthority> {
+    let remote_ref = remote_branch_ref(head_ref);
+    let remote_head_before = remote_head_for_ref(ctx, worktree, &remote_ref, observer)?;
+    if remote_head_before != expected_head {
+        return Ok(PrePushReviewAuthority::Changed {
+            thread_id: None,
+            reason: "pr_head_changed",
+        });
+    }
+    let current = github::github_pr_review_threads_snapshot(
+        ctx,
+        pull_request
+            .get("number")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                PrRepairStepError::failed(anyhow!(
+                    "GitHub pull request snapshot did not include its number"
+                ))
+            })?,
+        observer,
+    )
+    .map_err(PrRepairStepError::failed)?;
+    let remote_head_after = remote_head_for_ref(ctx, worktree, &remote_ref, observer)?;
+    if remote_head_after != expected_head || remote_head_after != remote_head_before {
+        return Ok(PrePushReviewAuthority::Changed {
+            thread_id: None,
+            reason: "pr_head_changed",
+        });
+    }
+    if current
+        .pointer("/review_threads/page_info/truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        return Err(PrRepairStepError::failed(anyhow!(
+            "GitHub review feedback revalidation was incomplete"
+        )));
+    }
+
+    let observed = observed_review_thread_witnesses(pull_request);
+    let current = observed_review_thread_witnesses(&current);
+    if observed.keys().ne(current.keys()) {
+        let thread_id = observed
+            .keys()
+            .chain(current.keys())
+            .find(|thread_id| !observed.contains_key(*thread_id) || !current.contains_key(*thread_id))
+            .cloned()
+            .unwrap_or_default();
+        return Ok(PrePushReviewAuthority::Changed {
+            thread_id: Some(thread_id),
+            reason: "review_thread_membership_changed",
+        });
+    }
+    for (thread_id, witness) in &observed {
+        if !witness.same_feedback(&current[thread_id]) {
+            return Ok(PrePushReviewAuthority::Changed {
+                thread_id: Some(thread_id.clone()),
+                reason: "review_thread_changed",
+            });
         }
     }
     Ok(PrePushReviewAuthority::Current)
@@ -39,27 +90,48 @@ fn pre_push_review_authority_outcome<L: serde::Serialize>(
         match revalidate_observed_review_threads(
             repair.repo,
             pull_request,
+            worktree.path(),
+            &repair.item.head_ref,
             &repair.item.head_sha,
             observer,
         ) {
             Ok(PrePushReviewAuthority::Current) => return None,
-            Ok(PrePushReviewAuthority::Changed { thread_id, reason }) => (
-                "review_feedback_changed_before_push",
-                format!(
-                    "Review thread {thread_id} changed after the worker ran; the local repair was retained and was not pushed"
-                ),
-                json!({"status": "changed", "thread_id": thread_id, "reason": reason}),
-            ),
-            Err(
-                ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
-            ) => {
+            Ok(PrePushReviewAuthority::Changed { thread_id, reason }) => {
+                let error = thread_id.as_deref().map_or_else(
+                    || {
+                        "The pull request head changed after the worker ran; the local repair was retained and was not pushed".to_string()
+                    },
+                    |thread_id| {
+                        format!(
+                            "Review thread {thread_id} changed after the worker ran; the local repair was retained and was not pushed"
+                        )
+                    },
+                );
+                (
+                    if reason == "pr_head_changed" {
+                        "pr_head_changed_before_push"
+                    } else {
+                        "review_feedback_changed_before_push"
+                    },
+                    error,
+                    json!({"status": "changed", "thread_id": thread_id, "reason": reason}),
+                )
+            }
+            Err(_) if observer.cancelled() => {
                 return Some(PrRepairOutcome::WorkerCancelled {
                     before_start: false,
                     worker_receipt_id: worker_receipt_id.to_string(),
                     worktree: worktree.clone(),
                 });
             }
-            Err(ExecutionCommandError::Failed { error, .. }) => (
+            Err(PrRepairStepError::Cancelled(_)) => {
+                return Some(PrRepairOutcome::WorkerCancelled {
+                    before_start: false,
+                    worker_receipt_id: worker_receipt_id.to_string(),
+                    worktree: worktree.clone(),
+                });
+            }
+            Err(PrRepairStepError::Failed(error)) => (
                 "review_feedback_revalidation_failed",
                 format!(
                     "Review feedback could not be revalidated after the worker ran, so the local repair was retained and was not pushed: {error:#}"

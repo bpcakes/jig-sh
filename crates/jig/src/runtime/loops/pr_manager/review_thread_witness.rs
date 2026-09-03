@@ -22,6 +22,13 @@ impl Default for ReviewThreadWitness {
     }
 }
 
+impl ReviewThreadWitness {
+    fn same_feedback(&self, other: &Self) -> bool {
+        self.comment_count == other.comment_count
+            && self.resolution_generation == other.resolution_generation
+    }
+}
+
 struct LiveReviewThreadState {
     is_resolved: bool,
     head_sha: String,

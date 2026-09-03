@@ -656,4 +656,11 @@ esac
         assert!(error.contains("cancelled"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
+
+    #[test]
+    fn github_api_path_segments_are_percent_encoded() {
+        assert_eq!(encode_path_segment("Example Owner"), "Example%20Owner");
+        assert_eq!(encode_path_segment("Example/Vault"), "Example%2FVault");
+        assert_eq!(encode_path_segment("reviewer[bot]"), "reviewer%5Bbot%5D");
+    }
 }

@@ -268,10 +268,12 @@ printf '%s\n' '{"summary":"repaired checks","review_thread_replies":[]}' > "$out
         &git_path,
         r#"#!/bin/sh
 case "$*" in
-  *" push --force-with-lease=refs/heads/codex/widgets:"*" origin HEAD:refs/heads/codex/widgets") exit 9 ;;
+  *" push --force-with-lease=refs/heads/codex/widgets:"*" origin HEAD:refs/heads/codex/widgets")
+    : > "$JIG_TEST_GIT_STATE"
+    exit 9
+    ;;
   *" ls-remote --exit-code origin refs/heads/codex/widgets")
     if [ -e "$JIG_TEST_GIT_STATE" ]; then exit 10; fi
-    : > "$JIG_TEST_GIT_STATE"
     exec git "$@"
     ;;
   *) exec git "$@" ;;
