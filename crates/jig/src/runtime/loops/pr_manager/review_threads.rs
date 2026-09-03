@@ -373,7 +373,8 @@ fn review_thread_reply_comment_for_reconciliation(
     let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
     fetch_review_thread_reply_comment_with_markers(thread_id, &[marker], |cursor| {
         let mut observer = NoopExecutionObserver;
-        let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
+        let timeout =
+            budget.reserve_reconciliation_request(remaining_reconciliation_timeout(deadline)?)?;
         github::gh_json_with_duration(
             ctx,
             review_thread_reply_state_args(thread_id, cursor),
@@ -432,7 +433,8 @@ fn review_thread_resolution_state_for_reconciliation(
 ) -> std::result::Result<Value, ExecutionCommandError> {
     let deadline = Instant::now() + MUTATION_RECONCILIATION_TIMEOUT;
     let mut observer = NoopExecutionObserver;
-    let timeout = budget.reserve_request(remaining_reconciliation_timeout(deadline)?)?;
+    let timeout =
+        budget.reserve_reconciliation_request(remaining_reconciliation_timeout(deadline)?)?;
     github::gh_json_with_duration(
         ctx,
         review_thread_resolution_state_args(thread_id),
@@ -636,6 +638,7 @@ fn reconcile_reply_mutation(
         Err(error @ ExecutionCommandError::CancelledBeforeStart) => return Err(error),
         Err(error) => error,
     };
+    budget.begin_reconciliation();
     if let Ok(Some(comment)) = review_thread_reply_comment_for_reconciliation(
         ctx,
         thread_id,
@@ -659,6 +662,7 @@ fn reconcile_resolve_mutation(
         Err(error @ ExecutionCommandError::CancelledBeforeStart) => return Err(error),
         Err(error) => error,
     };
+    budget.begin_reconciliation();
     if let Ok(state) =
         review_thread_resolution_state_for_reconciliation(ctx, thread_id, budget)
         && state

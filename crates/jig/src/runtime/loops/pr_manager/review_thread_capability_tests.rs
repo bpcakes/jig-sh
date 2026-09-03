@@ -78,4 +78,44 @@ mod review_thread_capability_tests {
             "viewer_cannot_resolve"
         );
     }
+
+    #[test]
+    fn paginated_witness_rejects_feedback_that_changes_during_collection() {
+        let page = std::cell::Cell::new(0);
+
+        let result = fetch_review_thread_witness_state("PRRT_1", |cursor| {
+            let current = page.get();
+            page.set(current + 1);
+            Ok(if cursor.is_none() {
+                json!({"data": {"node": {
+                    "id": "PRRT_1",
+                    "isResolved": false,
+                    "pullRequest": {"headRefOid": "example-head"},
+                    "comments": {
+                        "totalCount": 2,
+                        "pageInfo": {"hasPreviousPage": true, "startCursor": "cursor-1"},
+                        "nodes": [{"id": "PRRC_2", "updatedAt": "2026-09-03T11:00:00Z", "body": "newer"}]
+                    }
+                }}})
+            } else {
+                json!({"data": {"node": {
+                    "id": "PRRT_1",
+                    "isResolved": false,
+                    "pullRequest": {"headRefOid": "example-head"},
+                    "comments": {
+                        "totalCount": 3,
+                        "pageInfo": {"hasPreviousPage": false, "startCursor": null},
+                        "nodes": [{"id": "PRRC_1", "updatedAt": "2026-09-03T10:00:00Z", "body": "older"}]
+                    }
+                }}})
+            })
+        });
+        let error = match result {
+            Ok(_) => panic!("changing pages must not produce a witness"),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(page.get(), 2);
+        assert!(error.contains("changed while its comment witness was collected"));
+    }
 }

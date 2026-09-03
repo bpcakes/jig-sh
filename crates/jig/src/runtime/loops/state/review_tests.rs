@@ -58,7 +58,7 @@ fn locked_loop_cache_reads_observe_cancellation_between_chunks() {
                     action_ran.store(true, Ordering::SeqCst);
                     Ok(())
                 },
-                |_| Ok(()),
+                |_, _| Ok(()),
             )
             .map(|_| ())
             .unwrap_err()

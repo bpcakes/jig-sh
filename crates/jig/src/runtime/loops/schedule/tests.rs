@@ -21,6 +21,8 @@ use crate::command::LoopStatusRequest;
 use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 
+#[path = "tests/post_work_evidence.rs"]
+mod post_work_evidence;
 #[path = "tests/receipt_evidence.rs"]
 mod receipt_evidence;
 #[path = "tests/review_regressions.rs"]

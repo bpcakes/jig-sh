@@ -6,6 +6,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+#[cfg(unix)]
+use cap_fs_ext::OpenOptionsMaybeDirExt;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::{
     ambient_authority,
@@ -17,16 +19,9 @@ use super::bounded_json::read_bounded_json;
 use super::*;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
-fn temporary_file_prefix(data_name: &OsStr) -> OsString {
-    let mut prefix = data_name.to_os_string();
-    prefix.push(".tmp-");
-    prefix
-}
-fn temporary_file_name(data_name: &OsStr) -> OsString {
-    let mut name = temporary_file_prefix(data_name);
-    name.push(Ulid::new().to_string());
-    name
-}
+
+include!("json_cache/temp_names.rs");
+include!("json_cache/durable.rs");
 
 #[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
@@ -75,7 +70,7 @@ pub(super) fn with_json_cache_lock_compensating_until<T, U, S>(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
     action: impl FnOnce(&mut S) -> Result<T>,
-    after_commit: impl FnOnce(&T) -> Result<U>,
+    after_commit: impl FnOnce(&T, Instant) -> Result<U>,
 ) -> Result<(T, U)>
 where
     S: Clone + Default + DeserializeOwned + Serialize,
@@ -89,7 +84,7 @@ where
         let rollback = store.clone();
         let result = action(&mut store)?;
         cache.write_json_with_mode(&data_name, &location.path, &store, location.write_mode)?;
-        match after_commit(&result) {
+        match after_commit(&result, loop_state_lock_deadline()) {
             Ok(effect) => Ok((result, effect)),
             Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error
                 .context(
@@ -442,41 +437,40 @@ impl StateDirectory {
         let _ = self.exists(data_name, data_path)?;
         let tmp_name = temporary_file_name(data_name);
         let tmp_path = data_path.parent().unwrap_or(data_path).join(&tmp_name);
-        let result = (|| {
-            let mut tmp = open_regular_file(
-                &self.directory,
-                tmp_name.as_os_str(),
-                true,
-                true,
-                true,
-                &tmp_path,
-            )?;
-            tmp.write_all(
-                &serde_json::to_vec_pretty(value).context("Failed to encode loop state JSON")?,
-            )
-            .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
-            tmp.sync_all()
-                .with_context(|| format!("Failed to sync {}", tmp_path.display()))?;
-            drop(tmp);
-            self.directory
-                .rename(&tmp_name, &self.directory, data_name)
-                .with_context(|| {
-                    format!(
-                        "Failed to replace loop state file {} with {}",
-                        data_path.display(),
-                        tmp_path.display()
-                    )
-                })?;
-            self.directory
-                .open(".")
-                .and_then(|directory| directory.sync_all())
-                .with_context(|| {
-                    format!(
-                        "Failed to sync loop state directory {}",
-                        data_path.parent().unwrap_or(data_path).display()
-                    )
-                })
-        })();
+        let result = publish_durable_json(
+            data_path,
+            || {
+                let mut tmp = open_regular_file(
+                    &self.directory,
+                    tmp_name.as_os_str(),
+                    true,
+                    true,
+                    true,
+                    &tmp_path,
+                )?;
+                tmp.write_all(
+                    &serde_json::to_vec_pretty(value)
+                        .context("Failed to encode loop state JSON")?,
+                )
+                .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+                tmp.sync_all()
+                    .with_context(|| format!("Failed to sync {}", tmp_path.display()))?;
+                drop(tmp);
+                Ok(())
+            },
+            || {
+                self.directory
+                    .rename(&tmp_name, &self.directory, data_name)
+                    .with_context(|| {
+                        format!(
+                            "Failed to replace loop state file {} with {}",
+                            data_path.display(),
+                            tmp_path.display()
+                        )
+                    })
+            },
+            || self.sync_durable_json_publication(data_name, data_path),
+        );
         match result {
             Ok(()) => Ok(()),
             Err(error) => match self.directory.remove_file(&tmp_name) {
@@ -777,7 +771,7 @@ mod tests {
                 state.insert("ExampleProject".into(), "cleared".into());
                 Ok(())
             },
-            |_| -> Result<()> { Err(crate::state::receipt_append_may_have_landed_for_test()) },
+            |_, _| -> Result<()> { Err(crate::state::receipt_append_may_have_landed_for_test()) },
         )
         .unwrap_err();
 
@@ -797,4 +791,6 @@ mod tests {
             "{error:#}"
         );
     }
+
+    include!("json_cache/durable_tests.rs");
 }

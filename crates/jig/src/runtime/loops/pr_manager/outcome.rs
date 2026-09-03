@@ -31,6 +31,10 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
             let action = with_branch_lease_result(action, cleanup_authority_error);
             Ok(finalize_pr_worktree(cleanup, action, &worktree, false))
         }
+        PrRepairOutcome::NeedsAttention { action, worktree } => {
+            let action = with_branch_lease_result(action, cleanup_authority_error);
+            Ok(finalize_pr_worktree(cleanup, action, &worktree, false))
+        }
         PrRepairOutcome::Cancelled { detail, worktree } => Ok(cancelled_before_start_action(
             repair,
             &detail,
@@ -47,7 +51,7 @@ fn record_pr_repair_outcome<L: serde::Serialize>(
             let timing = if before_start {
                 "before the worker started"
             } else {
-                "while the worker was running"
+                "after the worker started"
             };
             let error = format!("PR manager repair was cancelled {timing}");
             if before_start {
@@ -394,6 +398,10 @@ fn branch_lease_cleanup_attention(mut action: Value, authority_error: &anyhow::E
 
 enum PrRepairOutcome {
     Completed {
+        action: Value,
+        worktree: PathBuf,
+    },
+    NeedsAttention {
         action: Value,
         worktree: PathBuf,
     },

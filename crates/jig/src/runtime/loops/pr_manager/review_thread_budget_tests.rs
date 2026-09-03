@@ -10,12 +10,12 @@ mod review_thread_budget_tests {
         let timeout = command_timeout.duration();
         let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 1);
 
-        for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT {
+        for _ in 0..REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT {
             budget.reserve_request(timeout).unwrap();
         }
         let error = budget.reserve_request(timeout).unwrap_err().to_string();
 
-        assert!(error.contains("request budget"), "{error}");
+        assert!(error.contains("primary-operation budget"), "{error}");
     }
 
     #[test]
@@ -26,14 +26,14 @@ mod review_thread_budget_tests {
 
         for _ in 0..2 {
             budget.begin_intent(command_timeout);
-            for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT {
+            for _ in 0..REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT {
                 budget.reserve_request(timeout).unwrap();
             }
         }
         budget.begin_intent(command_timeout);
         let error = budget.reserve_request(timeout).unwrap_err().to_string();
 
-        assert!(error.contains("606-request budget"), "{error}");
+        assert!(error.contains("604-request primary-operation budget"), "{error}");
     }
 
     #[test]
@@ -42,7 +42,7 @@ mod review_thread_budget_tests {
         let timeout = command_timeout.duration();
         let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 2);
 
-        for _ in 0..REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT {
+        for _ in 0..REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT {
             budget.reserve_request(timeout).unwrap();
         }
         assert!(
@@ -101,6 +101,36 @@ mod review_thread_budget_tests {
         assert!(!second.is_zero());
         assert!(second <= first);
         assert_eq!(budget.request_count, 2);
+    }
+
+    #[test]
+    fn reconciliation_keeps_a_dedicated_deadline_and_the_full_worst_case_budget() {
+        let command_timeout = CommandTimeout::from_seconds(1).unwrap();
+        let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 1);
+        for _ in 0..REVIEW_THREAD_PRIMARY_REQUESTS_PER_INTENT {
+            budget
+                .reserve_request(command_timeout.duration())
+                .unwrap();
+        }
+        budget.started_at -= Duration::from_secs(2);
+        budget.intent_started_at -= Duration::from_secs(2);
+        budget.begin_reconciliation();
+
+        for _ in 0..REVIEW_THREAD_RECONCILIATION_REQUESTS_PER_INTENT {
+            budget
+                .reserve_reconciliation_request(MUTATION_RECONCILIATION_TIMEOUT)
+                .unwrap();
+        }
+
+        assert_eq!(budget.request_count, REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT);
+        assert_eq!(REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT, 403);
+        assert!(
+            budget
+                .reserve_reconciliation_request(MUTATION_RECONCILIATION_TIMEOUT)
+                .unwrap_err()
+                .to_string()
+                .contains("403-request total budget")
+        );
     }
 
     #[test]

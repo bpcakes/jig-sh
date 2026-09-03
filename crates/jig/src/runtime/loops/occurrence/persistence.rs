@@ -192,9 +192,7 @@ impl SchedulePersistence {
         after_commit: impl FnOnce(&T, Instant) -> Result<U>,
     ) -> Result<(T, U)> {
         let deadline = loop_state_lock_deadline();
-        self.with_locked_compensating_until(deadline, cancelled, action, |result| {
-            after_commit(result, deadline)
-        })
+        self.with_locked_compensating_until(deadline, cancelled, action, after_commit)
     }
 
     fn with_locked_compensating_until<T, U>(
@@ -202,7 +200,7 @@ impl SchedulePersistence {
         deadline: Instant,
         cancelled: &dyn Fn() -> bool,
         action: impl FnOnce(&mut ScheduleFile) -> Result<T>,
-        after_commit: impl FnOnce(&T) -> Result<U>,
+        after_commit: impl FnOnce(&T, Instant) -> Result<U>,
     ) -> Result<(T, U)> {
         self.with_schedule_locks_until(deadline, cancelled, |directories| {
             let durable_required = self.durable_state_expected(directories)?;
@@ -670,10 +668,10 @@ impl SchedulePersistence {
 
 fn compensate_after_commit<T, U>(
     result: T,
-    after_commit: impl FnOnce(&T) -> Result<U>,
+    after_commit: impl FnOnce(&T, Instant) -> Result<U>,
     rollback: impl FnOnce() -> Result<()>,
 ) -> Result<(T, U)> {
-    match after_commit(&result) {
+    match after_commit(&result, loop_state_lock_deadline()) {
         Ok(effect) => Ok((result, effect)),
         Err(error) if crate::state::receipt_append_may_have_landed(&error) => Err(error.context(
             "Committed loop schedule state was retained because its receipt append may have landed",

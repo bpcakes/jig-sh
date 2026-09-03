@@ -158,16 +158,21 @@ pub(super) struct TerminalDetails {
 impl TerminalDetails {
     pub(super) fn from_tick(tick: &ScheduledTick) -> Self {
         let completion = tick.completion();
-        let outcome = match completion.outcome {
-            WorkflowOutcome::NeedsAttention => OccurrenceOutcome::NeedsAttention,
-            WorkflowOutcome::Succeeded => OccurrenceOutcome::Succeeded,
-            WorkflowOutcome::Failed => OccurrenceOutcome::Failed,
+        let post_work_error = tick.post_work_error();
+        let outcome = match (completion.outcome, post_work_error) {
+            (WorkflowOutcome::Succeeded, Some(_)) => OccurrenceOutcome::NeedsAttention,
+            (WorkflowOutcome::NeedsAttention, _) => OccurrenceOutcome::NeedsAttention,
+            (WorkflowOutcome::Succeeded, None) => OccurrenceOutcome::Succeeded,
+            (WorkflowOutcome::Failed, _) => OccurrenceOutcome::Failed,
         };
         Self {
             outcome,
             worker_receipt_id: completion.worker_receipt_id.clone(),
             worktree: completion.worktree.clone(),
-            error: completion.error.clone(),
+            error: completion
+                .error
+                .clone()
+                .or_else(|| post_work_error.map(str::to_string)),
         }
     }
 }
@@ -275,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn post_work_tick_error_cannot_override_successful_worker_completion() {
+    fn post_work_tick_error_requires_attention_after_successful_worker_completion() {
         let tick = ScheduledTick::Errored {
             value: Some(json!({"status": "failed"})),
             completion: WorkflowCompletion {
@@ -294,9 +299,12 @@ mod tests {
 
         let details = TerminalDetails::from_tick(&tick);
 
-        assert_eq!(details.outcome, OccurrenceOutcome::Succeeded);
+        assert_eq!(details.outcome, OccurrenceOutcome::NeedsAttention);
         assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
         assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
-        assert_eq!(details.error, None);
+        assert_eq!(
+            details.error.as_deref(),
+            Some("attempt state could not be observed")
+        );
     }
 }

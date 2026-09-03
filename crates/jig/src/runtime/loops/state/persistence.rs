@@ -127,7 +127,7 @@ impl JsonStatePersistence {
                 deadline,
                 cancelled,
                 action,
-                |result| after_commit(result, deadline),
+                after_commit,
             );
         };
         self.ensure_initialized::<S>(protected, deadline, cancelled)?;
@@ -139,7 +139,7 @@ impl JsonStatePersistence {
                 primary.require_initialized()?;
                 action(&mut primary.state)
             },
-            |result| after_commit(result, deadline),
+            after_commit,
         )
     }
 
