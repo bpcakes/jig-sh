@@ -25,9 +25,34 @@ struct LiveReviewThreadState {
     comments: Vec<Value>,
 }
 
+struct ReviewThreadWitnessPage {
+    total_count: u64,
+    is_resolved: bool,
+    head_sha: String,
+    comments: Vec<Value>,
+    has_previous_page: bool,
+    start_cursor: Option<String>,
+}
+
 enum ReviewThreadResolution {
     Resolved(Value),
     Changed(&'static str),
+}
+
+fn review_thread_resolution_before_mutation(
+    state: &LiveReviewThreadState,
+    thread_id: &str,
+    repair_version: &str,
+) -> Option<ReviewThreadResolution> {
+    if state.head_sha != repair_version {
+        Some(ReviewThreadResolution::Changed("pr_head_changed"))
+    } else if state.is_resolved {
+        Some(ReviewThreadResolution::Resolved(
+            reconciled_resolve_response(thread_id),
+        ))
+    } else {
+        None
+    }
 }
 
 fn observed_review_thread_witnesses(
@@ -72,10 +97,11 @@ fn review_reply_generation(thread: &Value) -> String {
                 .pointer("/author/trusted")
                 .and_then(Value::as_bool)
                 == Some(true)
-                && !comment
-                    .get("body")
-                    .and_then(Value::as_str)
-                    .is_some_and(|body| body.contains("<!-- jig-pr-manager:review-reply:"))
+                && !(comment.get("viewerDidAuthor").and_then(Value::as_bool) == Some(true)
+                    && comment
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .is_some_and(|body| body.contains("<!-- jig-pr-manager:review-reply:")))
         }),
         None,
     )
@@ -212,19 +238,9 @@ fn fetch_review_thread_witness_state(
     let mut cursors = BTreeSet::new();
     for _ in 0..REVIEW_THREAD_COMMENT_PAGE_LIMIT {
         let page = validate_review_thread_witness_page(fetch(cursor.as_deref())?, thread_id)?;
-        let page_total = page
-            .pointer("/data/node/comments/totalCount")
-            .and_then(Value::as_u64)
-            .unwrap();
-        let page_resolved = page
-            .pointer("/data/node/isResolved")
-            .and_then(Value::as_bool)
-            .unwrap();
-        let page_head_sha = page
-            .pointer("/data/node/pullRequest/headRefOid")
-            .and_then(Value::as_str)
-            .unwrap()
-            .to_string();
+        let page_total = page.total_count;
+        let page_resolved = page.is_resolved;
+        let page_head_sha = page.head_sha.clone();
         if total_count.replace(page_total).is_some_and(|count| count != page_total)
             || is_resolved
                 .replace(page_resolved)
@@ -237,42 +253,34 @@ fn fetch_review_thread_witness_state(
                 "GitHub review thread changed while its comment witness was collected for {thread_id}"
             )));
         }
-        pages.push(
-            page.pointer("/data/node/comments/nodes")
-                .and_then(Value::as_array)
-                .unwrap()
-                .clone(),
-        );
-        if !review_thread_comments_have_previous_page(&page) {
+        pages.push(page.comments);
+        if !page.has_previous_page {
             pages.reverse();
             let comments = pages.into_iter().flatten().collect::<Vec<_>>();
-            let total_count = total_count.unwrap_or_default();
             let ids = comments
                 .iter()
                 .filter_map(|comment| comment.get("id").and_then(Value::as_str))
                 .collect::<BTreeSet<_>>();
-            if comments.len() as u64 != total_count || ids.len() != comments.len() {
+            if comments.len() as u64 != page_total || ids.len() != comments.len() {
                 return Err(ExecutionCommandError::failed(anyhow!(
                     "GitHub review thread comment witness was incomplete for {thread_id}"
                 )));
             }
             return Ok(LiveReviewThreadState {
-                is_resolved: is_resolved.unwrap_or(false),
-                head_sha: head_sha.unwrap_or_default(),
-                total_count,
+                is_resolved: page_resolved,
+                head_sha: page_head_sha,
+                total_count: page_total,
                 comments,
             });
         }
         let next = page
-            .pointer("/data/node/comments/pageInfo/startCursor")
-            .and_then(Value::as_str)
+            .start_cursor
             .filter(|cursor| !cursor.is_empty())
             .ok_or_else(|| {
                 ExecutionCommandError::failed(anyhow!(
                     "GitHub review thread comment page reported earlier results without a start cursor for {thread_id}"
                 ))
-            })?
-            .to_string();
+            })?;
         if !cursors.insert(next.clone()) {
             return Err(ExecutionCommandError::failed(anyhow!(
                 "GitHub review thread comment pagination repeated a cursor for {thread_id}"
@@ -283,4 +291,49 @@ fn fetch_review_thread_witness_state(
     Err(ExecutionCommandError::failed(anyhow!(
         "GitHub review thread comment history exceeded the {REVIEW_THREAD_COMMENT_PAGE_LIMIT}-page safety limit for {thread_id}"
     )))
+}
+
+fn validate_review_thread_witness_page(
+    value: Value,
+    thread_id: &str,
+) -> std::result::Result<ReviewThreadWitnessPage, ExecutionCommandError> {
+    let parsed = || {
+        Some(ReviewThreadWitnessPage {
+            is_resolved: value.pointer("/data/node/isResolved")?.as_bool()?,
+            head_sha: value
+                .pointer("/data/node/pullRequest/headRefOid")?
+                .as_str()?
+                .to_string(),
+            total_count: value
+                .pointer("/data/node/comments/totalCount")?
+                .as_u64()?,
+            has_previous_page: value
+                .pointer("/data/node/comments/pageInfo/hasPreviousPage")?
+                .as_bool()?,
+            start_cursor: value
+                .pointer("/data/node/comments/pageInfo/startCursor")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            comments: value
+                .pointer("/data/node/comments/nodes")?
+                .as_array()?
+                .clone(),
+        })
+    };
+    if value.pointer("/data/node/id").and_then(Value::as_str) != Some(thread_id) {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread witness query returned an invalid payload for {thread_id}"
+        )));
+    }
+    let page = parsed().ok_or_else(|| {
+        ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread witness query returned an invalid payload for {thread_id}"
+        ))
+    })?;
+    if page.head_sha.is_empty() {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread witness query returned an invalid payload for {thread_id}"
+        )));
+    }
+    Ok(page)
 }

@@ -346,8 +346,8 @@ fn locked_snapshot_reclaims_orphaned_schedule_temp_files() {
     let runtime_dir = temp.path().join(LOOP_RUNTIME_DIR);
     std::fs::create_dir_all(&legacy_dir).unwrap();
     std::fs::create_dir_all(&runtime_dir).unwrap();
-    let legacy_temp = legacy_dir.join("schedule.tmp-orphan");
-    let runtime_temp = runtime_dir.join("schedule.tmp-orphan");
+    let legacy_temp = legacy_dir.join("schedule.json.tmp-orphan");
+    let runtime_temp = runtime_dir.join("schedule.json.tmp-orphan");
     std::fs::write(&legacy_temp, b"partial").unwrap();
     std::fs::write(&runtime_temp, b"partial").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();

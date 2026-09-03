@@ -17,6 +17,16 @@ use super::bounded_json::read_bounded_json;
 use super::*;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
+fn temporary_file_prefix(data_name: &OsStr) -> OsString {
+    let mut prefix = data_name.to_os_string();
+    prefix.push(".tmp-");
+    prefix
+}
+fn temporary_file_name(data_name: &OsStr) -> OsString {
+    let mut name = temporary_file_prefix(data_name);
+    name.push(Ulid::new().to_string());
+    name
+}
 
 #[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
@@ -294,10 +304,7 @@ impl StateDirectory {
         data_name: &OsStr,
         data_path: &Path,
     ) -> Result<()> {
-        let prefix_path = Path::new(data_name).with_extension("tmp-");
-        let prefix = prefix_path
-            .file_name()
-            .ok_or_else(|| anyhow!("Loop state path has no file name: {}", data_path.display()))?;
+        let prefix = temporary_file_prefix(data_name);
         for entry in self.directory.entries().with_context(|| {
             format!(
                 "Failed to inspect loop cache directory {}",
@@ -349,7 +356,7 @@ impl StateDirectory {
         data_path: &Path,
         value: &T,
     ) -> Result<()> {
-        let tmp_name = Path::new(data_name).with_extension(format!("tmp-{}", Ulid::new()));
+        let tmp_name = temporary_file_name(data_name);
         let tmp_path = data_path.parent().unwrap_or(data_path).join(&tmp_name);
         let result = (|| {
             let mut tmp = open_regular_file(
@@ -433,7 +440,7 @@ impl StateDirectory {
         value: &T,
     ) -> Result<()> {
         let _ = self.exists(data_name, data_path)?;
-        let tmp_name = Path::new(data_name).with_extension(format!("tmp-{}", Ulid::new()));
+        let tmp_name = temporary_file_name(data_name);
         let tmp_path = data_path.parent().unwrap_or(data_path).join(&tmp_name);
         let result = (|| {
             let mut tmp = open_regular_file(
@@ -592,7 +599,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let data_path = temp.path().join("attempts.json");
         let lock_path = temp.path().join("attempts.lock");
-        let orphan = temp.path().join("attempts.tmp-ExampleOrphan");
+        let orphan = temp.path().join("attempts.json.tmp-ExampleOrphan");
         fs::write(&orphan, b"partial").unwrap();
 
         with_json_cache_lock::<_, BTreeMap<String, String>>(
@@ -613,7 +620,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let data_path = temp.path().join("attempts.json");
         let lock_path = temp.path().join("attempts.lock");
-        let unrelated_directory = temp.path().join("attempts.tmp-ExampleDirectory");
+        let unrelated_directory = temp.path().join("attempts.json.tmp-ExampleDirectory");
         fs::create_dir(&unrelated_directory).unwrap();
 
         with_json_cache_lock::<_, BTreeMap<String, String>>(
@@ -627,6 +634,27 @@ mod tests {
 
         assert!(unrelated_directory.is_dir());
         assert!(data_path.is_file());
+    }
+
+    #[test]
+    fn locked_cache_access_does_not_reclaim_a_sibling_files_temps() {
+        let temp = tempdir().unwrap();
+        let data_path = temp.path().join("schedule.json");
+        let lock_path = temp.path().join("schedule.lock");
+        let own_orphan = temp.path().join("schedule.json.tmp-ExampleOrphan");
+        let sibling_orphan = temp.path().join("schedule.initialized.tmp-ExampleOrphan");
+        fs::write(&own_orphan, b"partial").unwrap();
+        fs::write(&sibling_orphan, b"sibling").unwrap();
+        with_json_cache_lock::<_, BTreeMap<String, String>>(
+            temp.path(),
+            temp.path(),
+            &lock_path,
+            &data_path,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(!own_orphan.exists());
+        assert_eq!(fs::read(sibling_orphan).unwrap(), b"sibling");
     }
 
     #[cfg(unix)]
@@ -726,7 +754,7 @@ mod tests {
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
-                .starts_with("attempts.tmp-")
+                .starts_with("attempts.json.tmp-")
         }));
     }
 

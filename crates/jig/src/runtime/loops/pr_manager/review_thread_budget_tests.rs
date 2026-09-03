@@ -33,6 +33,20 @@ mod review_thread_budget_tests {
     }
 
     #[test]
+    fn aggregate_deadline_scales_with_unique_actionable_intents() {
+        let command_timeout = CommandTimeout::from_seconds(2).unwrap();
+
+        assert_eq!(
+            ReviewThreadUpdateBudget::new(command_timeout, 3).timeout,
+            Duration::from_secs(6)
+        );
+        assert_eq!(
+            ReviewThreadUpdateBudget::new(command_timeout, usize::MAX).timeout,
+            REVIEW_THREAD_UPDATE_TIMEOUT
+        );
+    }
+
+    #[test]
     fn review_thread_budget_preserves_subsecond_remaining_time() {
         let command_timeout = CommandTimeout::from_seconds(1).unwrap();
         let mut budget = ReviewThreadUpdateBudget::new(command_timeout, 1);

@@ -326,6 +326,156 @@ esac
     }
 
     #[test]
+    fn trusted_human_marker_quote_advances_the_reply_generation() {
+        let original = json!({
+            "id": "PRRC_ORIGINAL",
+            "updatedAt": "2026-09-03T10:00:00Z",
+            "body": "Please add a regression test",
+            "viewerDidAuthor": false,
+            "author": {"trusted": true},
+        });
+        let jig_reply = json!({
+            "id": "PRRC_JIG",
+            "updatedAt": "2026-09-03T10:05:00Z",
+            "body": "Addressed. <!-- jig-pr-manager:review-reply:v3:fixture -->",
+            "viewerDidAuthor": true,
+            "author": {"trusted": true},
+        });
+        let before_quote = json!({
+            "comments": {"nodes": [original, jig_reply]},
+        });
+        let original_only = json!({
+            "comments": {"nodes": [original]},
+        });
+        let after_quote = json!({
+            "comments": {"nodes": [
+                original,
+                {
+                    "id": "PRRC_HUMAN_QUOTE",
+                    "updatedAt": "2026-09-03T10:10:00Z",
+                    "body": "This still needs work: <!-- jig-pr-manager:review-reply:v3:fixture -->",
+                    "viewerDidAuthor": false,
+                    "author": {"trusted": true},
+                },
+            ]},
+        });
+
+        assert_eq!(
+            review_reply_generation(&before_quote),
+            review_reply_generation(&original_only)
+        );
+        assert_ne!(
+            review_reply_generation(&before_quote),
+            review_reply_generation(&after_quote)
+        );
+    }
+    #[test]
+    fn trusted_human_marker_quote_requires_a_new_remote_reply() {
+        let _guard = lock_env();
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let original = json!({
+            "id": "PRRC_ORIGINAL",
+            "updatedAt": "2026-09-03T10:00:00Z",
+            "body": "Please add a regression test",
+            "viewerDidAuthor": false,
+            "author": {"trusted": true},
+        });
+        let original_thread = json!({"comments": {"nodes": [original]}});
+        let old_witness = ReviewThreadWitness {
+            reply_generation: review_reply_generation(&original_thread),
+            ..ReviewThreadWitness::default()
+        };
+        let old_marker = review_thread_reply_marker("PRRT_1", "pushed-head", &old_witness);
+        let observed = json!({
+            "review_threads": {"nodes": [{
+                "id": "PRRT_1",
+                "is_resolved": false,
+                "has_trusted_comment": true,
+                "comments": {
+                    "total_count": 3,
+                    "nodes": [
+                        original,
+                        {
+                            "id": "PRRC_PRIOR",
+                            "updatedAt": "2026-09-03T10:05:00Z",
+                            "body": format!("Addressed. {old_marker}"),
+                            "viewerDidAuthor": true,
+                            "author": {"trusted": true},
+                        },
+                        {
+                            "id": "PRRC_HUMAN_QUOTE",
+                            "updatedAt": "2026-09-03T10:10:00Z",
+                            "body": format!("Still open: {old_marker}"),
+                            "viewerDidAuthor": false,
+                            "author": {"trusted": true},
+                        },
+                    ],
+                },
+            }]},
+        });
+        let witness = observed_review_thread_witnesses(&observed)
+            .remove("PRRT_1")
+            .unwrap();
+        assert_ne!(
+            review_thread_reply_marker("PRRT_1", "pushed-head", &witness),
+            old_marker
+        );
+        let calls = temp.path().join("gh-calls");
+        let gh = temp.path().join("gh-human-quote-stub.sh");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$JIG_TEST_GH_CALLS"
+case "$*" in
+  *ReviewThreadState*)
+    printf '%s\n' "{\"data\":{\"node\":{\"id\":\"PRRT_1\",\"comments\":{\"pageInfo\":{\"hasPreviousPage\":false,\"startCursor\":null},\"nodes\":[{\"id\":\"PRRC_PRIOR\",\"url\":\"https://example.invalid/prior\",\"body\":\"Addressed. $JIG_TEST_OLD_MARKER\",\"viewerDidAuthor\":true},{\"id\":\"PRRC_HUMAN_QUOTE\",\"url\":\"https://example.invalid/quote\",\"body\":\"Still open: $JIG_TEST_OLD_MARKER\",\"viewerDidAuthor\":false}]}}}}"
+    ;;
+  *ReviewThreadWitnessState*)
+    printf '%s\n' "{\"data\":{\"node\":{\"id\":\"PRRT_1\",\"isResolved\":false,\"pullRequest\":{\"headRefOid\":\"pushed-head\"},\"comments\":{\"totalCount\":3,\"pageInfo\":{\"hasPreviousPage\":false,\"startCursor\":null},\"nodes\":[{\"id\":\"PRRC_ORIGINAL\",\"updatedAt\":\"2026-09-03T10:00:00Z\",\"body\":\"Please add a regression test\"},{\"id\":\"PRRC_PRIOR\",\"updatedAt\":\"2026-09-03T10:05:00Z\",\"body\":\"Addressed. $JIG_TEST_OLD_MARKER\"},{\"id\":\"PRRC_HUMAN_QUOTE\",\"updatedAt\":\"2026-09-03T10:10:00Z\",\"body\":\"Still open: $JIG_TEST_OLD_MARKER\"}]}}}}"
+    ;;
+  *addPullRequestReviewThreadReply*)
+    printf '%s\n' '{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"PRRC_NEW","url":"https://example.invalid/new"}}}}'
+    ;;
+  *) exit 2 ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let _calls = EnvVarGuard::set("JIG_TEST_GH_CALLS", calls.as_os_str());
+        let _marker = EnvVarGuard::set("JIG_TEST_OLD_MARKER", old_marker.as_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut budget = ReviewThreadUpdateBudget::new(ctx.command_timeout(), 1);
+        let response = post_review_thread_reply(
+            &ctx,
+            "PRRT_1",
+            "Addressed after the follow-up.",
+            "pushed-head",
+            &witness,
+            &mut NoopExecutionObserver,
+            &mut budget,
+        )
+        .unwrap();
+        let ReviewThreadReply::Posted(response) = response else {
+            panic!("trusted human follow-up should receive a new reply");
+        };
+        assert_eq!(
+            response["data"]["addPullRequestReviewThreadReply"]["comment"]["id"],
+            "PRRC_NEW"
+        );
+        assert!(
+            fs::read_to_string(calls)
+                .unwrap()
+                .contains("addPullRequestReviewThreadReply")
+        );
+    }
+
+    #[test]
     fn changed_retry_wording_reconciles_the_reply_from_the_prior_tick() {
         let _guard = lock_env();
         let temp = tempdir().unwrap();
@@ -481,6 +631,21 @@ esac
             review_thread_mutation_change_reason(&state, &witness, None, "repaired-head"),
             Some("pr_head_changed")
         );
+    }
+
+    #[test]
+    fn changed_pr_head_takes_precedence_over_an_already_resolved_thread() {
+        let state = LiveReviewThreadState {
+            is_resolved: true,
+            head_sha: "new-head".into(),
+            total_count: 0,
+            comments: Vec::new(),
+        };
+
+        assert!(matches!(
+            review_thread_resolution_before_mutation(&state, "PRRT_1", "repaired-head"),
+            Some(ReviewThreadResolution::Changed("pr_head_changed"))
+        ));
     }
 
     #[test]

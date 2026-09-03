@@ -48,7 +48,9 @@ impl std::error::Error for ReceiptAppendMayHaveLanded {
 }
 
 pub(crate) fn receipt_append_may_have_landed(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<ReceiptAppendMayHaveLanded>().is_some()
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<ReceiptAppendMayHaveLanded>().is_some())
 }
 
 #[cfg(test)]

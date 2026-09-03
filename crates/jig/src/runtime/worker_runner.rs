@@ -137,9 +137,26 @@ pub(crate) struct CodexExecFailure {
     unexecuted: bool,
     cancelled_before_start: bool,
     message: String,
+    source: Option<anyhow::Error>,
 }
 
 impl CodexExecFailure {
+    fn receipt_recording(
+        message: String,
+        receipt_error: anyhow::Error,
+        unexecuted: bool,
+        cancelled_before_start: bool,
+    ) -> Self {
+        let message = format!("{message}: {receipt_error:#}");
+        Self {
+            worker_receipt_id: None,
+            unexecuted,
+            cancelled_before_start,
+            message,
+            source: Some(receipt_error),
+        }
+    }
+
     pub(crate) fn worker_receipt_id(&self) -> Option<&str> {
         self.worker_receipt_id.as_deref()
     }
@@ -159,7 +176,11 @@ impl fmt::Display for CodexExecFailure {
     }
 }
 
-impl std::error::Error for CodexExecFailure {}
+impl std::error::Error for CodexExecFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|source| source.as_ref())
+    }
+}
 
 pub(crate) enum CodexExecOutcome {
     Completed(CodexExecOutput),
@@ -227,13 +248,13 @@ pub(crate) fn run_codex_exec(
                 },
                 observer,
             )
-            .map_err(|error| CodexExecFailure {
-                worker_receipt_id: None,
-                unexecuted: false,
-                cancelled_before_start: false,
-                message: format!(
-                    "Codex worker completed but its receipt could not be recorded: {error:#}"
-                ),
+            .map_err(|error| {
+                CodexExecFailure::receipt_recording(
+                    "Codex worker completed but its receipt could not be recorded".into(),
+                    error,
+                    false,
+                    false,
+                )
             })?;
             Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
@@ -265,13 +286,13 @@ pub(crate) fn run_codex_exec(
                 },
                 observer,
             )
-            .map_err(|receipt_error| CodexExecFailure {
-                worker_receipt_id: None,
-                unexecuted: before_start,
-                cancelled_before_start: before_start,
-                message: format!(
-                    "{message}; the cancellation receipt could not be recorded: {receipt_error:#}"
-                ),
+            .map_err(|receipt_error| {
+                CodexExecFailure::receipt_recording(
+                    format!("{message}; the cancellation receipt could not be recorded"),
+                    receipt_error,
+                    before_start,
+                    before_start,
+                )
             })?;
             Ok(CodexExecOutcome::Cancelled {
                 before_start,
@@ -300,19 +321,20 @@ pub(crate) fn run_codex_exec(
                 },
                 observer,
             )
-            .map_err(|receipt_error| CodexExecFailure {
-                worker_receipt_id: None,
-                unexecuted: !process_started,
-                cancelled_before_start: false,
-                message: format!(
-                    "{message}; the worker failure receipt could not be recorded: {receipt_error:#}"
-                ),
+            .map_err(|receipt_error| {
+                CodexExecFailure::receipt_recording(
+                    format!("{message}; the worker failure receipt could not be recorded"),
+                    receipt_error,
+                    !process_started,
+                    false,
+                )
             })?;
             Err(CodexExecFailure {
                 worker_receipt_id: Some(receipt_id.clone()),
                 unexecuted: !process_started,
                 cancelled_before_start: false,
                 message: format!("Codex worker invocation failed; receipt {receipt_id}: {message}"),
+                source: None,
             }
             .into())
         }

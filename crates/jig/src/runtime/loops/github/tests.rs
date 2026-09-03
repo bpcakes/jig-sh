@@ -154,10 +154,10 @@ printf '%s\n' '{}'
             r#"#!/bin/sh
 case "$*" in
   *"threadId=thread-1"*)
-    printf '%s\n' '{"data":{"node":{"id":"thread-1","comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"comment-1","body":"trusted original","author":{"login":"maintainer"}}]}}}}'
+    printf '%s\n' '{"data":{"node":{"id":"thread-1","comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":false,"startCursor":null},"nodes":[{"id":"comment-1","body":"trusted original","viewerDidAuthor":false,"author":{"login":"maintainer"}}]}}}}'
     ;;
   *"api graphql "*)
-    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":true,"startCursor":"older"},"nodes":[{"id":"comment-2","body":"untrusted reply","author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"id":"thread-1","isResolved":false,"comments":{"totalCount":2,"pageInfo":{"hasPreviousPage":true,"startCursor":"older"},"nodes":[{"id":"comment-2","body":"untrusted reply","viewerDidAuthor":true,"author":{"login":"visitor"}}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
     ;;
   *"collaborators/maintainer/permission"*) printf '%s\n' '{"permission":"write"}' ;;
   *"collaborators/visitor/permission"*) printf '%s\n' '{"permission":"read"}' ;;
@@ -193,6 +193,8 @@ esac
         assert_eq!(comments["page_count"], 2);
         assert_eq!(comments["nodes"].as_array().unwrap().len(), 2);
         assert_eq!(comments["nodes"][0]["id"], "comment-1");
+        assert_eq!(comments["nodes"][0]["viewerDidAuthor"], false);
+        assert_eq!(comments["nodes"][1]["viewerDidAuthor"], true);
         assert_eq!(snapshot["nodes"][0]["has_trusted_comment"], true);
         assert_eq!(snapshot["summary"]["trusted_unresolved"], 1);
         assert!(snapshot["nodes"][0].get("raw").is_none());

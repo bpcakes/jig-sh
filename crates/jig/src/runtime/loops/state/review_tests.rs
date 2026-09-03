@@ -89,7 +89,7 @@ fn loop_cache_directory_symlink_cannot_redirect_parent_state_mutations() {
     write_loop_fixture_repo(temp.path());
     let cache_parent = temp.path().join(".agent/.cache");
     fs::create_dir_all(&cache_parent).unwrap();
-    let outside_temp = outside.path().join("leases.tmp-ExampleOutside");
+    let outside_temp = outside.path().join("leases.json.tmp-ExampleOutside");
     fs::write(&outside_temp, b"outside").unwrap();
     symlink(outside.path(), cache_parent.join("loop")).unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();

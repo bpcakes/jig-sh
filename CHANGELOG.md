@@ -32,7 +32,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
-- Keep review-reply retries idempotent when worker wording changes, and scale the bounded post-push GitHub request allowance with unique actionable review-thread intents.
+- Keep review-reply retries idempotent when worker wording changes, distinguish trusted human marker quotations from Jig-authored replies, and scale bounded post-push GitHub request and time allowances with unique actionable review-thread intents.
 - Bind review-thread replies and resolution to the live repaired PR head, make stale-reconciliation enrichment depend on the recorded expiry transition instead of error prose, and prevent a surviving checkout replica from replacing lost protected schedule authority.
 - Bound serialized GitHub loop evidence, omit redundant raw payload copies, and make dispatch receipts reference their detailed tick receipts so one large observation is not journaled twice.
 - Normalize PR head identity strictly from the owner/name fields emitted by GitHub CLI, accept valid failed-check JSON from legacy nonzero `gh pr checks` exits, bind review replies and resolution to complete comment generations, preserve native non-UTF-8 worktree paths across retained authority, terminal PR actions, cleanup, and Git metadata reads, decode exhausted attempts and order loop runs chronologically in Jig UI, report force-with-lease pushes accurately, retain pre-existing repair worktrees on unexecuted retries, and validate repository-common PR branch leases before occurrence claims.

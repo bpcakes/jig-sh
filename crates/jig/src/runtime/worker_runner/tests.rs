@@ -42,6 +42,19 @@ mod tests {
     }
 
     #[test]
+    fn receipt_recording_failure_preserves_ambiguous_append_provenance() {
+        let failure = CodexExecFailure::receipt_recording(
+            "worker receipt failed".into(),
+            crate::state::receipt_append_may_have_landed_for_test(),
+            false,
+            false,
+        );
+        let error = anyhow::Error::new(failure);
+
+        assert!(crate::state::receipt_append_may_have_landed(&error));
+    }
+
+    #[test]
     fn codex_refine_approval_policy_is_a_top_level_codex_arg() {
         let mut request = CodexExecRequest {
             root: Path::new("/tmp/repo"),

@@ -176,7 +176,7 @@ fn durable_write_publishes_a_readable_schedule_without_a_temp_leftover() {
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with("schedule.tmp-")
+            .starts_with("schedule.json.tmp-")
     }));
 }
 
@@ -210,7 +210,7 @@ fn durable_write_rejects_a_non_file_destination_without_leaving_a_temp_file() {
     let leftovers = fs::read_dir(temp.path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
-        .filter(|name| name.to_string_lossy().starts_with("schedule.tmp-"))
+        .filter(|name| name.to_string_lossy().starts_with("schedule.json.tmp-"))
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }

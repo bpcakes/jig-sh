@@ -179,6 +179,7 @@ query($owner: String!, $name: String!, $number: Int!, $threadsAfter: String) {
               body
               createdAt
               updatedAt
+              viewerDidAuthor
               author {
                 login
               }
@@ -327,6 +328,7 @@ query($threadId: ID!, $commentsBefore: String) {
           body
           createdAt
           updatedAt
+          viewerDidAuthor
           author {
             login
           }
@@ -360,6 +362,7 @@ fn normalize_review_thread(
             "body": comment.get("body").cloned().unwrap_or(Value::Null),
             "createdAt": comment.get("createdAt").cloned().unwrap_or(Value::Null),
             "updatedAt": comment.get("updatedAt").cloned().unwrap_or(Value::Null),
+            "viewerDidAuthor": comment.get("viewerDidAuthor").cloned().unwrap_or(Value::Null),
             "author": author,
         }));
     }

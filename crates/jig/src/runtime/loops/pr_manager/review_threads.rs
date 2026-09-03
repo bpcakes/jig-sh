@@ -18,9 +18,13 @@ struct ReviewThreadUpdateBudget {
 
 impl ReviewThreadUpdateBudget {
     fn new(command_timeout: CommandTimeout, actionable_intent_count: usize) -> Self {
+        let intent_multiplier = u32::try_from(actionable_intent_count.max(1)).unwrap_or(u32::MAX);
         Self {
             started_at: Instant::now(),
-            timeout: command_timeout.duration().min(REVIEW_THREAD_UPDATE_TIMEOUT),
+            timeout: command_timeout
+                .duration()
+                .saturating_mul(intent_multiplier)
+                .min(REVIEW_THREAD_UPDATE_TIMEOUT),
             request_count: 0,
             request_limit: REVIEW_THREAD_UPDATE_REQUESTS_PER_INTENT
                 .saturating_mul(actionable_intent_count.max(1)),
@@ -353,10 +357,10 @@ fn resolve_review_thread(
     budget: &mut ReviewThreadUpdateBudget,
 ) -> std::result::Result<ReviewThreadResolution, ExecutionCommandError> {
     let state = review_thread_resolution_state(ctx, thread_id, observer, budget)?;
-    if state.is_resolved {
-        return Ok(ReviewThreadResolution::Resolved(
-            reconciled_resolve_response(thread_id),
-        ));
+    if let Some(resolution) =
+        review_thread_resolution_before_mutation(&state, thread_id, repair_version)
+    {
+        return Ok(resolution);
     }
     if let Some(reason) =
         review_thread_mutation_change_reason(&state, witness, reply_comment_id, repair_version)
@@ -629,39 +633,6 @@ fn validate_review_thread_resolution_state(
     {
         return Err(ExecutionCommandError::failed(anyhow!(
             "GitHub review thread resolution query returned an invalid payload for {thread_id}"
-        )));
-    }
-    Ok(value)
-}
-
-fn validate_review_thread_witness_page(
-    value: Value,
-    thread_id: &str,
-) -> std::result::Result<Value, ExecutionCommandError> {
-    let valid = value.pointer("/data/node/id").and_then(Value::as_str) == Some(thread_id)
-        && value
-            .pointer("/data/node/isResolved")
-            .and_then(Value::as_bool)
-            .is_some()
-        && value
-            .pointer("/data/node/pullRequest/headRefOid")
-            .and_then(Value::as_str)
-            .is_some_and(|version| !version.is_empty())
-        && value
-            .pointer("/data/node/comments/totalCount")
-            .and_then(Value::as_u64)
-            .is_some()
-        && value
-            .pointer("/data/node/comments/pageInfo/hasPreviousPage")
-            .and_then(Value::as_bool)
-            .is_some()
-        && value
-            .pointer("/data/node/comments/nodes")
-            .and_then(Value::as_array)
-            .is_some();
-    if !valid {
-        return Err(ExecutionCommandError::failed(anyhow!(
-            "GitHub review thread witness query returned an invalid payload for {thread_id}"
         )));
     }
     Ok(value)
