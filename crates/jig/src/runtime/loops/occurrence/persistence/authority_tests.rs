@@ -205,14 +205,13 @@ fn protected_authority_is_commit_point_when_replica_publication_fails() {
 }
 
 #[test]
-fn protected_mutation_waits_for_the_public_cutover_witness() {
+fn protected_cutover_does_not_start_without_a_public_witness() {
     let temp = tempfile::tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     git(temp.path(), &["init"]);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let persistence = SchedulePersistence::new(&ctx);
     let protected = persistence.protected_authority().unwrap().unwrap().clone();
-    write_json_durable(&protected.root, &protected.path, &ScheduleFile::default()).unwrap();
     fs::create_dir_all(&persistence.initialized_path).unwrap();
     let action_ran = std::cell::Cell::new(false);
 
@@ -224,9 +223,33 @@ fn protected_mutation_waits_for_the_public_cutover_witness() {
         .unwrap_err();
 
     assert!(!action_ran.get());
-    assert!(protected.path.is_file(), "{error:#}");
-    assert!(protected.initialized_path.is_file(), "{error:#}");
+    assert!(!protected.path.exists(), "{error:#}");
+    assert!(!protected.initialized_path.exists(), "{error:#}");
     assert!(persistence.initialized_path.is_dir(), "{error:#}");
+}
+
+#[test]
+fn protected_cutover_does_not_start_without_a_public_recovery_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    let protected = persistence.protected_authority().unwrap().unwrap().clone();
+    fs::create_dir_all(&persistence.path).unwrap();
+    let action_ran = std::cell::Cell::new(false);
+
+    let error = persistence
+        .with_locked(|_| {
+            action_ran.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert!(!action_ran.get());
+    assert!(!protected.path.exists(), "{error:#}");
+    assert!(!protected.initialized_path.exists(), "{error:#}");
+    assert!(!persistence.initialized_path.exists(), "{error:#}");
 }
 
 #[test]
@@ -315,6 +338,85 @@ fn public_cutover_witness_fails_closed_when_git_metadata_is_unavailable() {
         "{error:#}"
     );
     assert!(without_git_authority.path.is_file());
+}
+
+#[test]
+fn pending_protected_cutover_is_resumable_but_never_public_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    git(temp.path(), &["init"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = SchedulePersistence::new(&ctx);
+    write_json_durable(
+        &persistence.root,
+        &persistence.path,
+        &ScheduleFile::default(),
+    )
+    .unwrap();
+    write_json_durable(
+        &persistence.root,
+        &persistence.initialized_path,
+        &ScheduleInitializationMarker {
+            schema_version: PROTECTED_SCHEDULE_AUTHORITY_SCHEMA_VERSION,
+            state_path: SCHEDULE_STATE_PATH.into(),
+        },
+    )
+    .unwrap();
+    let detached_metadata = temp.path().join("detached-git-metadata");
+    fs::rename(temp.path().join(".git"), &detached_metadata).unwrap();
+    let without_git_authority = SchedulePersistence::new(&ctx);
+    let action_ran = std::cell::Cell::new(false);
+
+    let error = without_git_authority
+        .with_locked(|_| {
+            action_ran.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert!(!action_ran.get());
+    assert!(
+        error
+            .to_string()
+            .contains("requires protected Git authority"),
+        "{error:#}"
+    );
+
+    fs::rename(&detached_metadata, temp.path().join(".git")).unwrap();
+    let restored = SchedulePersistence::new(&ctx);
+    restored
+        .with_locked(|store| {
+            store.occurrences.insert(
+                "scheduled:example:100".into(),
+                super::super::ScheduleOccurrence {
+                    occurrence_id: "scheduled:example:100".into(),
+                    workflow_id: "example".into(),
+                    scheduled_at_ms: 100,
+                    owner: "fixture-owner".into(),
+                    claim_expires_at_ms: 200,
+                    started_at_ms: 100,
+                    uses_shared_checkout: Some(false),
+                    finished_at_ms: Some(150),
+                    acknowledged_at_ms: None,
+                    status: super::super::OccurrenceStatus::Succeeded,
+                    worker_receipt_id: Some("receipt_fixture".into()),
+                    worktree: None,
+                    error: None,
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+
+    fs::rename(temp.path().join(".git"), &detached_metadata).unwrap();
+    assert!(SchedulePersistence::new(&ctx).read_only(&|| false).is_err());
+    fs::rename(&detached_metadata, temp.path().join(".git")).unwrap();
+    let authoritative = SchedulePersistence::new(&ctx).read_only(&|| false).unwrap();
+    assert!(
+        authoritative
+            .occurrences
+            .contains_key("scheduled:example:100")
+    );
 }
 
 #[test]
