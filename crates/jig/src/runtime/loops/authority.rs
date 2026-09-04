@@ -157,7 +157,7 @@ fn resolve_git_metadata_directory(
     Ok(git_dir)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::ffi::OsString;
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};

@@ -32,7 +32,6 @@ use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 mod archive;
 mod journal;
 mod target_evidence;
-
 pub(super) use archive::parse_archive_before_ms;
 use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
@@ -797,6 +796,5 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
 }
 
 include!("receipts/tail.rs");
-
 #[cfg(test)]
 mod tests;

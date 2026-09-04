@@ -332,7 +332,7 @@ fn pre_creation_worktree_reservation_survives_a_crashed_occurrence() {
     assert_eq!(blocker.occurrence_id, isolated.occurrence_id);
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn retained_worktree_backpressure_preserves_non_utf8_repository_paths() {
     use std::ffi::OsString;

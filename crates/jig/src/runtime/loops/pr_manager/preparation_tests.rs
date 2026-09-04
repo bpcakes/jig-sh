@@ -1,7 +1,10 @@
 #[cfg(all(test, unix))]
 mod preparation_tests {
-    use std::ffi::{OsStr, OsString};
+    use std::ffi::OsStr;
+    #[cfg(target_os = "linux")]
+    use std::ffi::OsString;
     use std::fs;
+    #[cfg(target_os = "linux")]
     use std::os::unix::ffi::OsStringExt as _;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
@@ -134,6 +137,7 @@ mod preparation_tests {
         assert!(worktree.join(".git").is_file());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn registered_pr_worktree_preserves_a_non_utf8_common_git_directory() {
         let _guard = lock_env();
@@ -330,10 +334,11 @@ exit "$status"
             .output()
             .unwrap();
         assert!(listing.status.success(), "{listing:?}");
+        let registered_worktree = expected_worktree.canonicalize().unwrap();
         assert!(
             String::from_utf8_lossy(&listing.stdout)
                 .lines()
-                .any(|line| line == format!("worktree {}", expected_worktree.display()))
+                .any(|line| line == format!("worktree {}", registered_worktree.display()))
         );
 
         let action = record_pr_repair_outcome_under_branch_lease(

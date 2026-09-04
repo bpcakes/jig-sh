@@ -190,6 +190,7 @@ pub(super) fn tick_scheduled_with_observer(
     )
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn tick_with_execution(
     ctx: &RepoContext,
     request: LoopTickRequest,

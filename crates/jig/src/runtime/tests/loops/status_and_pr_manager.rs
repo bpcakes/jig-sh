@@ -81,6 +81,7 @@ kind = "noop_status"
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::cognitive_complexity)]
 fn loop_tick_github_pr_status_records_normalized_read_only_snapshot() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -239,6 +240,7 @@ exit 4
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::cognitive_complexity)]
 fn loop_tick_pr_manager_runs_worker_pushes_and_records_attempt() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

@@ -51,7 +51,7 @@ mod push_error_tests {
         assert!(encoded.as_str().unwrap().starts_with("jig-path-v1:unix-hex:"));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn pr_cleanup_uses_the_native_non_utf8_worktree_path() {
         let _guard = lock_env();

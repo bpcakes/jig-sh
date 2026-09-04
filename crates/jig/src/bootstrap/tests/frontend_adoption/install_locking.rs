@@ -621,7 +621,6 @@ mv() {
 
     let install_lock = repo.join(".agent/tmp/web-dependencies.lock");
     fs::create_dir_all(install_lock.parent().unwrap()).unwrap();
-
     let install_active = repo.join("install-active");
     let install_overlap = repo.join("install-overlap");
     let install_log = repo.join("install-log");
@@ -649,7 +648,6 @@ mv() {
         }
         command
     };
-
     let interrupt_after_link = |kind: &str| {
         if claim_ready.exists() {
             fs::remove_file(&claim_ready).unwrap();
@@ -660,18 +658,13 @@ mv() {
         let interrupted_pid = interrupted.id();
         let observed_pid =
             wait_for_positive_pid_file(&claim_ready, std::time::Duration::from_secs(5));
-        let kill_result = interrupted.kill();
-        let output_result = interrupted.wait_with_output();
+        let (kill_result, output_result) = (interrupted.kill(), interrupted.wait_with_output());
         let observed_pid = observed_pid.unwrap_or_else(|error| {
             panic!("interrupted {kind} transition never reached its pause point: {error}")
         });
-        assert_eq!(
-            observed_pid, interrupted_pid,
-            "interrupted {kind} transition recorded the wrong PID"
-        );
+        assert_eq!(observed_pid, interrupted_pid, "{kind} transition PID");
         kill_result.unwrap();
-        let output = output_result.unwrap();
-        assert!(!output.status.success());
+        assert!(!output_result.unwrap().status.success());
     };
     let assert_no_lock_sidecars = || {
         assert!(

@@ -13,6 +13,7 @@ This living plan closes the comprehensive-review findings in the current `feat/j
 - [x] Build the development Jig binary and run configured contract, LOC, format, Clippy, and partitioned test gates.
 - [ ] Run independent comprehensive review on exact working-tree fingerprints; fix branch-scope findings and repeat until both selected reviewers report no actionable findings. The latest completed Claude/Codex round found a live-PR-head mutation race and raised a schedule-authority question that exposed a second fail-closed gap; both are now fixed and await the next review round.
 - [x] Record the unrelated oversized frontend install-locking test module as Bead `feat-codex-resume-generic-monorepo-7kn` and exclude it from the fix loop. The JSONL-only fallback succeeded; normal `br sync --flush-only` remains blocked by the existing incompatible local Beads runtime schema.
+- [x] Repair the final branch CI failures: retire two line-budget regressions, satisfy strict Clippy, and make filesystem-path tests portable across Linux and macOS.
 
 ## Surprises & Discoveries
 
@@ -35,6 +36,7 @@ This living plan closes the comprehensive-review findings in the current `feat/j
 - The full repository test gate stopped on a host-contention-sensitive 202-process GitHub snapshot fixture; the unchanged test passed alone. This is tracked outside the repair loop as Bead `jig-sh-iyo`.
 - The next frozen Claude/Codex round had three open questions. History confirmed that `work review` cancellation was already error-shaped before the output-wrapper refactor; workflow execution leases are intentionally worktree-local while branch leases alone are repository-common; and manual stale records remain non-prunable `needs_attention` evidence, making an extra prune call a no-op. Existing tests already cover missing runtime-ignore remediation and the exact scheduled-watermark pruning boundary.
 - That round reported three low in-scope findings. The reply idempotency marker incorrectly included generated response prose, the fixed aggregate request allowance could reject a valid large set of actionable thread intents after push, and the hard `.agent/runtime/` upgrade prerequisite was absent from the migration notes. The marker now follows durable feedback/head identity with legacy-v2 recognition, and the update budget derives a bounded allowance from unique actionable intents while retaining the ten-minute aggregate deadline.
+- The final PR checks exposed five strict-Clippy findings, two line-budget debt regressions, and five macOS test failures. Four tests exercised byte-invalid filesystem paths that macOS rejects and are now Linux-only; the remaining worktree assertion now compares Git's canonical path. Local format, contract, file-budget, and Clippy gates pass. The full local test gate reached compilation but the worktree filesystem exhausted its free space, so cross-platform execution remains delegated to the required PR checks.
 
 ## Decision Log
 

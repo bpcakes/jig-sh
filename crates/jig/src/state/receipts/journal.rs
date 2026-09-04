@@ -293,7 +293,6 @@ mod tests {
     use std::cell::Cell;
     use std::fs;
     use std::fs::OpenOptions as StdOpenOptions;
-    use std::io::Write as _;
     use std::os::unix::fs::symlink;
     use std::sync::mpsc;
 
