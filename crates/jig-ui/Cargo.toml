@@ -14,13 +14,20 @@ categories = ["command-line-utilities", "development-tools", "web-programming"]
 [lib]
 name = "jig_ui"
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 getrandom.workspace = true
+jig-contract.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
 time.workspace = true
+
+[dev-dependencies]
+jig-ui = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

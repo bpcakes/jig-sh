@@ -1,0 +1,340 @@
+{
+  "command": "status",
+  "errors": [],
+  "loops": {
+    "attempts": [
+      {
+        "attempts": 2,
+        "exhausted": false,
+        "item_key": "item-example",
+        "item_version": "v1",
+        "key": "workflow-example:item-example",
+        "last_attempt_ms": 1699999940000,
+        "last_status": "attempted",
+        "max_attempts": 3,
+        "next_eligible_ms": 1700000030000,
+        "observed_item_version": "v1",
+        "workflow_id": "workflow-example"
+      }
+    ],
+    "command": "loop status",
+    "leases": [
+      {
+        "acquired_at_ms": 1699999970000,
+        "expires_at_ms": 1700000030000,
+        "key": "item-example",
+        "owner": "worker-example"
+      }
+    ],
+    "needs_attention": {
+      "exhausted_attempts": [
+        {
+          "attempts": 3,
+          "exhausted": true,
+          "item_key": "item-example",
+          "item_version": "v1",
+          "key": "workflow-example:item-example",
+          "last_attempt_ms": 1699999940000,
+          "last_status": "failed",
+          "max_attempts": 3,
+          "next_eligible_ms": 1700000000000,
+          "observed_item_version": "v1",
+          "workflow_id": "workflow-example"
+        }
+      ],
+      "scheduled_occurrences": []
+    },
+    "ok": true,
+    "scheduled_occurrences": [],
+    "state_error_count": 0,
+    "state_errors": [],
+    "waiting_attempts": [],
+    "workflows": [
+      {
+        "backoff_seconds": 30,
+        "codex_home_configured": null,
+        "codex_task": null,
+        "configured": true,
+        "enabled": true,
+        "id": "workflow-example",
+        "kind": "queue",
+        "lease_ttl_seconds": 120,
+        "max_attempts": 3,
+        "schedule": null
+      }
+    ]
+  },
+  "observed_at_ms": 1700000000000,
+  "ok": true,
+  "outcome": "complete",
+  "providers": [
+    {
+      "duration_ms": 25,
+      "error": null,
+      "id": "example-provider",
+      "input_freshness": [
+        {
+          "dirty": false,
+          "expected_revision": "0123456789abcdef",
+          "kind": "git",
+          "name": "target",
+          "observed_revision": "0123456789abcdef",
+          "path": ".",
+          "reason": null,
+          "status": "current"
+        }
+      ],
+      "report": {
+        "extensions": {
+          "example.root": {
+            "preserved": true
+          }
+        },
+        "future_root_field": {
+          "preserved": true
+        },
+        "observed_at_ms": 1700000000000,
+        "outcome": "complete",
+        "protocol": "jig.status-provider/v1",
+        "provider": {
+          "adapter_version": "1.0.0",
+          "display_name": "Example Provider",
+          "extensions": {
+            "example.identity": {
+              "preserved": true
+            }
+          },
+          "future_identity_field": {
+            "preserved": true
+          },
+          "id": "example-provider"
+        },
+        "work_packages": [
+          {
+            "extensions": {
+              "example.package": {
+                "preserved": true
+              }
+            },
+            "future_package_field": {
+              "preserved": true
+            },
+            "id": "package-example",
+            "implementation": {
+              "category": "active",
+              "state": "active"
+            },
+            "specification": {
+              "category": "ready",
+              "state": "ready"
+            },
+            "title": "Example package",
+            "verification": {
+              "category": "pending",
+              "state": "pending"
+            }
+          }
+        ]
+      },
+      "status": "complete",
+      "summary": {
+        "acceptance": {
+          "active": 0,
+          "blocked": 0,
+          "complete": 0,
+          "failed": 0,
+          "pending": 0,
+          "ready": 0,
+          "unknown": 0
+        },
+        "acceptance_checks": 0,
+        "blockers": 0,
+        "diagnostics": {
+          "error": 0,
+          "info": 0,
+          "total": 0,
+          "warning": 0
+        },
+        "implementation": {
+          "active": 1,
+          "blocked": 0,
+          "complete": 0,
+          "failed": 0,
+          "pending": 0,
+          "ready": 0,
+          "unknown": 0
+        },
+        "specification": {
+          "active": 0,
+          "blocked": 0,
+          "complete": 0,
+          "failed": 0,
+          "pending": 0,
+          "ready": 1,
+          "unknown": 0
+        },
+        "verification": {
+          "active": 0,
+          "blocked": 0,
+          "complete": 0,
+          "failed": 0,
+          "pending": 1,
+          "ready": 0,
+          "unknown": 0
+        },
+        "work_packages": 1,
+        "work_packages_with_blockers": 0
+      }
+    }
+  ],
+  "repository": {
+    "branch": "feature/example",
+    "default_branch": "main",
+    "detached": false,
+    "dirty": false,
+    "head_revision": "0123456789abcdef",
+    "name": "ExampleProject",
+    "upstream": {
+      "ahead": 0,
+      "basis": "local_tracking_ref",
+      "behind": 0,
+      "reference": "origin/main",
+      "state": "in_sync"
+    }
+  },
+  "schema_version": 1,
+  "work": {
+    "gates": [
+      {
+        "error": null,
+        "plan_id": "plan_example",
+        "snapshot": {
+          "current_worktree_fingerprint": "sha256:example",
+          "current_worktree_fingerprint_error": null,
+          "failed_required": [],
+          "gates": [
+            {
+              "applicability": "applicable",
+              "applicability_error": null,
+              "applicability_reason": "changed path matched",
+              "baseline_oid": "0123456789abcdef",
+              "changed_path_count": 1,
+              "changed_paths": [
+                "src/example.rs"
+              ],
+              "changed_paths_digest": "sha256:paths",
+              "changed_paths_truncated": false,
+              "current_worktree_fingerprint_error": null,
+              "diff_summary": "1 file changed",
+              "ended_at_ms": 1699999999900,
+              "evidence_status": "completed",
+              "exit_status": 0,
+              "forced": false,
+              "freshness": "fresh",
+              "freshness_reason": "receipt matches current worktree fingerprint",
+              "freshness_receipt_id": "receipt_example",
+              "gate_signature": "sha256:gate",
+              "id": "test",
+              "kind": "check",
+              "matching_path_count": 1,
+              "matching_paths": [
+                "src/example.rs"
+              ],
+              "matching_paths_digest": "sha256:matching",
+              "matching_paths_truncated": false,
+              "paths": [
+                "src/**"
+              ],
+              "paths_ignore": [],
+              "receipt_applicability": "applicable",
+              "receipt_baseline_oid": "0123456789abcdef",
+              "receipt_gate_signature": "sha256:gate",
+              "receipt_id": "receipt_example",
+              "receipt_scope_fingerprint": "sha256:scope",
+              "receipt_worktree_fingerprint_error": null,
+              "required": true,
+              "requires_time_validity": false,
+              "reuse": true,
+              "scope_fingerprint": "sha256:scope",
+              "source_batch_receipt_id": null,
+              "source_plan_id": null,
+              "source_tool_receipt_id": null,
+              "status": "passed",
+              "tool": "jig.test",
+              "valid_until_ms": null
+            }
+          ],
+          "gates_ok": true,
+          "missing_required": [],
+          "ok": true,
+          "overall": "passed",
+          "plan_baseline": {
+            "commit_oid": "0123456789abcdef",
+            "error": null,
+            "requested_ref": "HEAD"
+          },
+          "plan_id": "plan_example",
+          "plan_state": "open",
+          "stale_required": [],
+          "unknown_required": [],
+          "unsupported_required": []
+        }
+      }
+    ],
+    "state": {
+      "counts": {
+        "decisions": 1,
+        "failed_receipts": 1,
+        "open_plans": 1,
+        "plan_events": 4,
+        "plans": 2,
+        "receipts": 3,
+        "session_events": 3,
+        "sessions": 2
+      },
+      "current_session_id": "session_example",
+      "ok": true,
+      "open_plans": [
+        {
+          "baseline": {
+            "commit_oid": "0123456789abcdef",
+            "error": null,
+            "requested_ref": "HEAD"
+          },
+          "body_path": ".agent/plans/plan_example.md",
+          "plan_id": "plan_example",
+          "title": "Example plan"
+        }
+      ],
+      "recent_decisions": [
+        {
+          "id": "decision_example",
+          "plan_id": "plan_example",
+          "selected_option": "A",
+          "session_id": "session_example",
+          "timestamp_ms": 1699999999500,
+          "title": "Choose an example"
+        }
+      ],
+      "recent_receipts": [
+        {
+          "diff_summary": "1 file changed",
+          "ended_at_ms": 1699999999000,
+          "exit_status": 1,
+          "id": "receipt_failed",
+          "invoked_command_key": "test",
+          "plan_id": "plan_example",
+          "session_id": "session_example",
+          "started_at_ms": 1699999998750,
+          "tool_name": "jig.test"
+        }
+      ],
+      "repo": {
+        "default_branch": "main",
+        "name": "ExampleProject",
+        "source_commit": "0123456789abcdef",
+        "source_path": "/example/source"
+      }
+    }
+  }
+}

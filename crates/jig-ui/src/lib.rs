@@ -5,6 +5,7 @@
 //! keeping repository state and runtime policy in the CLI crate that owns it.
 
 use anyhow::Result;
+pub mod dashboard;
 mod html;
 mod model;
 mod server;
@@ -13,8 +14,8 @@ pub use model::*;
 pub use server::UiServer;
 
 pub const DEFAULT_UI_PORT: u16 = 5440;
-const DEFAULT_TIMELINE_LIMIT: usize = 120;
-const MAX_TIMELINE_LIMIT: usize = 1000;
+const DEFAULT_TIMELINE_LIMIT: usize = dashboard::DEFAULT_TIMELINE_ROWS;
+const MAX_TIMELINE_LIMIT: usize = dashboard::MAX_TIMELINE_ROWS;
 
 /// Read-only data source for the dashboard and plan detail routes.
 pub trait SnapshotProvider: Sync {

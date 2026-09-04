@@ -2068,6 +2068,7 @@ The authoritative recorder/detail limit identifiers and ceilings are:
 | `loop_workflows` | 1,000 rows |
 | `loop_leases` | 1,000 rows |
 | `loop_attempts` | 1,000 rows |
+| `loop_scheduled_occurrences` | 1,000 rows per occurrence collection |
 | `loop_waiting_attempts` | 1,000 rows |
 | `loop_exhausted_attempts` | 1,000 rows |
 | `timeline` | requested 1 through 1,000; default 120 |
