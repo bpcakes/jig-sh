@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use minijinja::{Environment, UndefinedBehavior, syntax::SyntaxConfig};
 use serde_json::Value;
 
-use super::embedded_templates::EMBEDDED_SCAFFOLD_TEMPLATE_FILES;
+use super::embedded_templates::{EMBEDDED_SCAFFOLD_TEMPLATE_FILES, EmbeddedScaffoldTemplateFile};
 
 const TEMPLATE_SUFFIX: &str = ".jinja";
 
@@ -13,7 +13,15 @@ pub(super) struct ScaffoldTemplateFile {
 }
 
 pub(super) fn render_scaffold_template(template: &str, context: &Value) -> Result<String> {
-    let source = EMBEDDED_SCAFFOLD_TEMPLATE_FILES
+    render_scaffold_template_from_files(EMBEDDED_SCAFFOLD_TEMPLATE_FILES, template, context)
+}
+
+pub(super) fn render_scaffold_template_from_files(
+    files: &[EmbeddedScaffoldTemplateFile],
+    template: &str,
+    context: &Value,
+) -> Result<String> {
+    let source = files
         .iter()
         .find(|file| file.relative_path == template)
         .map(|file| file.contents)

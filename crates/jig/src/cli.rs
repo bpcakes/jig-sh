@@ -14,6 +14,7 @@ mod bootstrap_run;
 mod check;
 mod codex;
 mod codex_run;
+mod file_budget;
 mod init_wizard;
 mod loops;
 mod migration;
@@ -28,10 +29,11 @@ mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{
-    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts,
-    CheckRustFileLocOpts, CheckTargetOpts,
+    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckExactTreeProvenance,
+    CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
 };
 pub(crate) use codex::CodexCommand;
+pub(crate) use file_budget::FileBudgetCommand;
 pub(crate) use loops::{
     LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
     LoopRunOpts, LoopStatusOpts, LoopTickOpts,
@@ -94,9 +96,9 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
-const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test";
+const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test";
 
 const ROOT_COMMON_WORKFLOWS: &str = "\
 Common workflows:
@@ -181,12 +183,14 @@ Examples:
   jig status --tui";
 
 const PRESETS_AFTER_HELP: &str = "\
-Use presets with `jig init` when you want Jig to create starter application code
+Use presets with `jig init` when you want Jig to create starter project code
 and the repo harness together.
 
 Examples:
   jig presets
   jig init ./my-repo --preset harness-only --no-input --no-vault
+  jig init ./my-library --preset rust-library --no-input --no-vault
+  jig init ./my-cli --preset rust-cli --no-input --no-vault
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
 
@@ -299,6 +303,13 @@ pub(crate) enum CommandKind {
         after_help = check::CHECK_AFTER_HELP
     )]
     Check(CheckOpts),
+    /// Run built-in file-budget diagnostics without creating a run or receipt.
+    #[command(
+        name = root_commands::FILE_BUDGET.name,
+        display_order = root_commands::FILE_BUDGET.display_order,
+        subcommand
+    )]
+    FileBudget(FileBudgetCommand),
     /// Aggregate local repo, work, loop, and configured status-provider observations.
     #[command(
         name = root_commands::STATUS.name,

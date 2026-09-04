@@ -1,13 +1,13 @@
 # Repository Guidelines
 
 <!-- BEGIN JIG MANAGED BLOCK -->
-This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in crate-level guides; keep generic agent workflow and repo policy here.
+This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in backend-level guides; keep generic agent workflow and repo policy here.
 
 ## Start Here
 
 - Use this file for repo-wide defaults.
 - Open [agent-map.md](./agent-map.md) before backend work.
-- Read the nearest crate-level `AGENTS.md` before changing a crate when one exists.
+- Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
 - Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
@@ -21,37 +21,54 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
 - Preserve compatibility or stage rollouts for persisted database state, queued job types, public API contracts, bookmarked routes, webhook boundaries, or source-of-truth moves that can straddle deploys.
 
+
+
+
 ## Backend Defaults
 
-- Treat `crates` as Rust crate roots.
-- Keep transport logic thin and business logic in the owning crate.
+
+
+- Treat `.` as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+- Keep transport logic thin and business logic in the owning crate.
+
+
+
 
 ## Frontend Defaults
 
 No web apps are configured in `.jig.toml`.
+
 
 ## Preferred Commands
 
 - `scripts/jig bootstrap`
 - `scripts/jig doctor`
 - `scripts/jig dev`
-- `scripts/jig work status`
-- `scripts/jig work evidence`
 - `scripts/jig check test`
 - `scripts/jig check fmt`
+
+
 - `scripts/jig check clippy`
+
+- `scripts/jig work status`
+- `scripts/jig work evidence`
+
+
+
 - `scripts/jig check contract`
 
 ## Done Means
 
 - Run the relevant local verification for the area you changed.
 - For backend changes, finish with `scripts/jig check test`.
+
+
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
-## Crate Guide Conventions
+## Backend Guide Conventions
 
-When a backend crate has a crate-level `AGENTS.md`, use these sections:
+When a backend package or crate has an `AGENTS.md`, use these sections:
 
 - `## Purpose`
 - `## Key entrypoints`

@@ -6,11 +6,16 @@ pub mod status_provider;
 
 pub use repository::{
     ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
-    FieldProvenance, ProfileId, ProfileSpec, ResultParser, TargetId,
+    FieldProvenance, MissingComparisonV1, NativeActionConfigurationV1, NativeFileBudgetConfigV1,
+    ProfileId, ProfileSpec, ResultParser, TargetId,
 };
 pub use run::{
-    ActionArguments, EvidenceReference, Finding, FindingLocation, FindingSeverity, PlannedTarget,
-    RunConclusion, RunPlan, RunResult, RunStatus, SelectionReason, SourceIdentity, TargetRunResult,
+    ActionArguments, ComparisonPreparationFailureV1, ComparisonPreparationV1, ComparisonRequestV1,
+    CurrentViewV1, EvidenceReference, ExactTreeProvenanceV1, Finding, FindingLocation,
+    FindingSeverity, NativeActionResult, PlannedTarget, PolicyPreparationFailureV1,
+    PolicyPreparationV1, PolicySourceV1, PreparedDiagnosticV1, PreparedNativeInputV1,
+    ResolvedComparisonV1, RunConclusion, RunPlan, RunResult, RunStatus, SelectionReason,
+    SourceIdentity, StrictInventoryFallbackV1, StrictInventoryReasonV1, TargetRunResult,
 };
 
 pub mod kind {
@@ -25,6 +30,7 @@ pub mod tool {
     pub const CONTRACT_CHECK: &str = "jig.contract_check";
     pub const DECISIONS_ADD: &str = "jig.decisions_add";
     pub const FMT_CHECK: &str = "jig.fmt_check";
+    pub const FILE_BUDGET: &str = "jig.file_budget";
     pub const LINT: &str = "jig.lint";
     pub const MIGRATION_ADD: &str = "jig.migration_add";
     pub const INSPECT: &str = "jig.inspect";
@@ -94,6 +100,7 @@ impl ManifestTool {
 #[non_exhaustive]
 pub enum NativeToolKind {
     ContractCheck,
+    FileBudget,
     MigrationAdd,
     SchemaCheck,
 }

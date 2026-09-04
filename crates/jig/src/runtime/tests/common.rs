@@ -200,6 +200,110 @@ targets = [
     write_open_plan(root);
 }
 
+pub(super) fn write_non_rust_file_budget_fixture_repo(root: &Path) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::create_dir_all(root.join("web")).unwrap();
+    fs::create_dir_all(root.join("docs")).unwrap();
+    fs::write(
+        root.join("web/example.ts"),
+        "export const example = true;\n",
+    )
+    .unwrap();
+    fs::write(root.join("docs/example.md"), "# Example\n").unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+web_file_loc_command = "test ! -f web/fail.loc && printf 'web LOC passed\n'"
+docs_file_loc_command = "printf 'docs LOC passed\n'"
+
+[repository]
+default_check_profile = "quality"
+
+[[repository.components]]
+id = "web"
+root = "web"
+adapters = ["typescript"]
+
+[[repository.components]]
+id = "docs"
+root = "docs"
+adapters = ["markdown"]
+
+[[repository.actions]]
+target = { component = "web", action = "file-loc" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "web_file_loc_command" }
+inputs = ["web/**"]
+
+[[repository.actions]]
+target = { component = "docs", action = "file-loc" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "docs_file_loc_command" }
+inputs = ["docs/**"]
+
+[[repository.profiles]]
+id = "quality"
+targets = [
+  { component = "web", action = "file-loc" },
+  { component = "docs", action = "file-loc" },
+]
+
+[[work.gates]]
+id = "web-file-loc"
+kind = "evidence"
+target = "web:file-loc"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": ["web_file_loc_command", "docs_file_loc_command"],
+            "tools": [],
+            "components": [
+                {"id": "web", "root": "web", "adapters": ["typescript"]},
+                {"id": "docs", "root": "docs", "adapters": ["markdown"]}
+            ],
+            "actions": [
+                {
+                    "target": {"component": "web", "action": "file-loc"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "web_file_loc_command"},
+                    "inputs": ["web/**"]
+                },
+                {
+                    "target": {"component": "docs", "action": "file-loc"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "docs_file_loc_command"},
+                    "inputs": ["docs/**"]
+                }
+            ],
+            "profiles": [{
+                "id": "quality",
+                "targets": [
+                    {"component": "web", "action": "file-loc"},
+                    {"component": "docs", "action": "file-loc"}
+                ]
+            }],
+            "default_check_profile": "quality"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_open_plan(root);
+}
+
 pub(super) fn write_wide_v6_evidence_fixture_repo(root: &Path, commands: &[String]) {
     fs::create_dir_all(root.join(".agent")).unwrap();
     let mut config = String::from(

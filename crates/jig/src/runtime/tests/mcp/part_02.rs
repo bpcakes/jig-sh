@@ -480,6 +480,8 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
             selectors: vec!["api:test".into()],
             profile: None,
             affected_base: None,
+            comparison: None,
+            work_plan_id: None,
         },
     )
     .unwrap();
@@ -528,6 +530,8 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
             selectors: vec!["api:generate".into()],
             profile: None,
             affected_base: None,
+            comparison: None,
+            work_plan_id: None,
         },
         Default::default(),
     )

@@ -1,13 +1,13 @@
 # Repository Guidelines
 
 <!-- BEGIN JIG MANAGED BLOCK -->
-This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in backend-level guides; keep generic agent workflow and repo policy here.
+This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] guides; keep generic agent workflow and repo policy here.
 
 ## Start Here
 
 - Use this file for repo-wide defaults.
-- Open [agent-map.md](./agent-map.md) before backend work.
-- Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
+- Open [agent-map.md](./agent-map.md) before [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
 - Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
@@ -32,7 +32,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 [% endif %]
 [% endif %]
 
-## Backend Defaults
+## [% if rust_workspace_guidance_enabled %]Rust[% else %]Backend[% endif %] Defaults
 
 [% if go_backend_enabled %]
 - Treat `cmd/` as process entrypoints and `internal/` as private application packages.
@@ -47,7 +47,9 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 [% if rust_backend_enabled %]
 - Treat [% for root in rust_crate_roots %]`<<[ root ]>>`[% if not loop.last %], [% endif %][% endfor %] as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+[% if not rust_workspace_guidance_enabled %]
 - Keep transport logic thin and business logic in the owning crate.
+[% endif %]
 [% endif %]
 [% if sqlx_enabled %]
 [% if rust_migration_layout == "flat_migrations" %]
@@ -92,7 +94,9 @@ No web apps are configured in `.jig.toml`.
 
 - `scripts/jig bootstrap`
 - `scripts/jig doctor`
+[% if not rust_workspace_guidance_enabled %]
 - `scripts/jig dev`
+[% endif %]
 - `scripts/jig check test`
 - `scripts/jig check fmt`
 [% if go_backend_enabled %]
@@ -132,7 +136,7 @@ No web apps are configured in `.jig.toml`.
 ## Done Means
 
 - Run the relevant local verification for the area you changed.
-- For backend changes, finish with `scripts/jig check test`.
+- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, finish with `scripts/jig check test`.
 [% if frontend_apps | length > 0 %]
 - For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
 [% endif %]
@@ -144,9 +148,9 @@ No web apps are configured in `.jig.toml`.
 [% endif %]
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
-## Backend Guide Conventions
+## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions
 
-When a backend package or crate has an `AGENTS.md`, use these sections:
+When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, use these sections:
 
 - `## Purpose`
 - `## Key entrypoints`

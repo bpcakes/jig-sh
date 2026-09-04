@@ -104,6 +104,34 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/sqlc.yaml.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-cli/crate/src/main.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-cli/crate/src/main.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-common/workspace/clippy.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-common/workspace/clippy.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-library/crate/src/lib.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-library/crate/src/lib.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-only/workspace/Cargo.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-only/workspace/Cargo.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-only/workspace/README.md.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-only/workspace/README.md.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-only/workspace/crate/AGENTS.md.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-only/workspace/crate/AGENTS.md.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-only/workspace/crate/Cargo.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-only/workspace/crate/Cargo.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/frontend/admin-shadcn/.prettierignore.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/admin-shadcn/.prettierignore.jinja")),
     },

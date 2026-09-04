@@ -569,54 +569,62 @@ fn required_tools_distinguishes_missing_and_incompatible_sqlx_cli() {
 }
 
 #[cfg(unix)]
+fn required_tools_for(command: &str, executables: &[&str]) -> DoctorCheck {
+    let repo = tempdir().unwrap();
+    write_doctor_fixture_with_bootstrap_command(repo.path(), command);
+    let tools = tempdir().unwrap();
+    for executable in executables {
+        write_test_executable(&tools.path().join(executable), "#!/bin/sh\nexit 0\n");
+    }
+    let ctx = RepoContext::load_from_root(repo.path().to_path_buf()).unwrap();
+    required_tools_check_with_environment(&ctx, &doctor_environment(tools.path(), None))
+}
+
+#[cfg(unix)]
+fn bootstrap_programs(check: &DoctorCheck) -> Vec<Value> {
+    check.data["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["command_key"] == "bootstrap_command")
+        .unwrap()["programs"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[cfg(unix)]
+fn assert_external_wrapper_contract(wrapper: &str) {
+    let command = format!("{wrapper} cargo test");
+    let missing_wrapper = required_tools_for(&command, &["cargo"]);
+    assert_eq!(missing_wrapper.status, "missing", "{wrapper}");
+    assert!(!missing_wrapper.ok, "{wrapper}");
+    let programs = bootstrap_programs(&missing_wrapper);
+    assert_eq!(programs[0]["program"], wrapper, "{wrapper}");
+    assert_eq!(programs[0]["present"], false, "{wrapper}");
+    assert_eq!(programs[1]["program"], "cargo", "{wrapper}");
+    assert_eq!(programs[1]["present"], true, "{wrapper}");
+
+    let missing_target = required_tools_for(&command, &[wrapper]);
+    assert_eq!(missing_target.status, "missing", "{wrapper}");
+    let programs = bootstrap_programs(&missing_target);
+    assert_eq!(programs[0]["present"], true, "{wrapper}");
+    assert_eq!(programs[1]["present"], false, "{wrapper}");
+
+    let all_present = required_tools_for(&command, &[wrapper, "cargo"]);
+    assert_eq!(all_present.status, "present", "{wrapper}");
+    assert!(all_present.ok, "{wrapper}");
+}
+
+#[cfg(unix)]
 #[test]
 fn required_tools_require_external_wrappers_and_their_targets() {
-    let run = |command: &str, executables: &[&str]| {
-        let repo = tempdir().unwrap();
-        write_doctor_fixture_with_bootstrap_command(repo.path(), command);
-        let tools = tempdir().unwrap();
-        for executable in executables {
-            write_test_executable(&tools.path().join(executable), "#!/bin/sh\nexit 0\n");
-        }
-        let ctx = RepoContext::load_from_root(repo.path().to_path_buf()).unwrap();
-        required_tools_check_with_environment(&ctx, &doctor_environment(tools.path(), None))
-    };
-    let bootstrap_programs = |check: &DoctorCheck| {
-        check.data["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["command_key"] == "bootstrap_command")
-            .unwrap()["programs"]
-            .as_array()
-            .unwrap()
-            .clone()
-    };
-
     for wrapper in ["env", "nohup"] {
-        let command = format!("{wrapper} cargo test");
-        let missing_wrapper = run(&command, &["cargo"]);
-        assert_eq!(missing_wrapper.status, "missing", "{wrapper}");
-        assert!(!missing_wrapper.ok, "{wrapper}");
-        let programs = bootstrap_programs(&missing_wrapper);
-        assert_eq!(programs[0]["program"], wrapper, "{wrapper}");
-        assert_eq!(programs[0]["present"], false, "{wrapper}");
-        assert_eq!(programs[1]["program"], "cargo", "{wrapper}");
-        assert_eq!(programs[1]["present"], true, "{wrapper}");
-
-        let missing_target = run(&command, &[wrapper]);
-        assert_eq!(missing_target.status, "missing", "{wrapper}");
-        let programs = bootstrap_programs(&missing_target);
-        assert_eq!(programs[0]["present"], true, "{wrapper}");
-        assert_eq!(programs[1]["present"], false, "{wrapper}");
-
-        let all_present = run(&command, &[wrapper, "cargo"]);
-        assert_eq!(all_present.status, "present", "{wrapper}");
-        assert!(all_present.ok, "{wrapper}");
+        assert_external_wrapper_contract(wrapper);
     }
 
     for command in ["env --help", "env -0"] {
-        let missing_wrapper = run(command, &[]);
+        let missing_wrapper = required_tools_for(command, &[]);
         assert_eq!(missing_wrapper.status, "missing", "{command:?}");
         let programs = bootstrap_programs(&missing_wrapper);
         assert_eq!(programs.len(), 1, "{command:?}");
@@ -624,7 +632,7 @@ fn required_tools_require_external_wrappers_and_their_targets() {
         assert_eq!(programs[0]["present"], false, "{command:?}");
     }
 
-    let dynamic_target = run("env \"$TOOL\" test", &[]);
+    let dynamic_target = required_tools_for("env \"$TOOL\" test", &[]);
     assert_eq!(dynamic_target.status, "missing");
     let programs = bootstrap_programs(&dynamic_target);
     assert_eq!(programs[0]["program"], "env");

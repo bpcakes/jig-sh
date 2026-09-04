@@ -1,0 +1,41 @@
+# <<[ repo_name ]>>
+
+This repository starts as a Rust [% if artifact_kind == "library" %]library[% else %]command-line application[% endif %] in an expandable virtual Cargo workspace.
+
+## Layout
+
+- `Cargo.toml` defines the virtual workspace.
+- `clippy.toml` sets the project-owned cognitive-complexity threshold.
+- `crates/<<[ package_name ]>>` contains the project-owned [% if artifact_kind == "library" %]library[% else %]binary[% endif %] crate.
+
+Prerequisites: Rust <<[ rust_version ]>> or newer.
+
+## Setup and checks
+
+```sh
+scripts/jig setup
+scripts/jig check fmt
+scripts/jig check clippy
+scripts/jig check test
+scripts/jig check test-locked
+scripts/jig check contract
+```
+
+Setup creates `Cargo.lock`; commit it so locked checks and CI use the same dependency resolution.
+
+The workspace enables Clippy's `cognitive_complexity` nursery lint with a threshold of 20 and its `mod_module_files` restriction lint to reject `mod.rs` module layouts. Clippy describes the complexity score as a heuristic rather than an objective measurement. The strict `scripts/jig check clippy` command checks all targets and features, treats all warnings as failures, and explicitly denies `mod_module_files`, so the layout policy still applies to feature-gated modules and if a workspace member forgets to inherit workspace lints. Clippy checks compiled workspace targets rather than every tracked Rust file or code selected only on another target platform; adjust or remove this project-owned policy when it does not fit the codebase.
+[% if artifact_kind == "cli" %]
+Run the replaceable starter binary with:
+
+```sh
+cargo run -p <<[ package_name ]>>
+```
+[% endif %]
+
+Add future crates beneath `crates/` and list each one explicitly in the root workspace members. Give a new direct-child crate its own `AGENTS.md` when it gains meaningful ownership or invariants.
+
+The root manifest, `clippy.toml`, this README, the seed crate manifest, guide, and Rust source are scaffolded once and then owned by this project. `jig update` maintains the Jig harness but does not rewrite them.
+
+The seed package starts with `publish = false` and no `license` or `license-file`. Choose the correct license and publication metadata deliberately before changing that policy.
+
+Before publication, add the package metadata appropriate to the real crate[% if artifact_kind == "library" %], including its description, repository, documentation, categories, and keywords[% endif %].

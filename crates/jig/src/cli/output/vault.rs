@@ -48,46 +48,11 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
             lines.push(format!("  Exists: {}", if exists { "yes" } else { "no" }));
         }
         "vault passphrase change" => {
-            if let Some(changed) = value_bool(value, "changed") {
-                lines.push(format!("  Changed: {}", if changed { "yes" } else { "no" }));
-            }
+            append_optional_bool(&mut lines, value, "changed", "Changed");
         }
-        "vault backup create" => {
-            if let Some(backup) = value_str(value, "backup") {
-                lines.push(format!("  Backup: {backup}"));
-            }
-            if let Some(version) = value_u64(value, "backup_version") {
-                lines.push(format!("  Backup version: {version}"));
-            }
-            if let Some(bytes) = value_u64(value, "bytes_written") {
-                lines.push(format!("  Bytes written: {bytes}"));
-            }
-        }
-        "vault backup restore" => {
-            if let Some(backup) = value_str(value, "backup") {
-                lines.push(format!("  Backup: {backup}"));
-            }
-            if let Some(restored) = value_bool(value, "restored") {
-                lines.push(format!(
-                    "  Restored: {}",
-                    if restored { "yes" } else { "no" }
-                ));
-            }
-            if let Some(version) = value_u64(value, "format_version") {
-                lines.push(format!("  Vault format: {version}"));
-            }
-        }
-        "vault migrate" => {
-            if let Some(from_version) = value_u64(value, "from_version") {
-                lines.push(format!("  From version: {from_version}"));
-            }
-            if let Some(to_version) = value_u64(value, "to_version") {
-                lines.push(format!("  To version: {to_version}"));
-            }
-            if let Some(changed) = value_bool(value, "changed") {
-                lines.push(format!("  Changed: {}", if changed { "yes" } else { "no" }));
-            }
-        }
+        "vault backup create" => append_backup_create(&mut lines, value),
+        "vault backup restore" => append_backup_restore(&mut lines, value),
+        "vault migrate" => append_migration(&mut lines, value),
         "vault field list" => {
             let fields = value["fields"].as_array().map(Vec::len).unwrap_or(0);
             lines.push(format!("  Fields: {fields}"));
@@ -106,52 +71,15 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
             }
         }
         "vault field set" => {
-            if let Some(reference) = value_str(value, "reference") {
-                lines.push(format!("  Field: {reference}"));
-            }
-            if let Some(kind) = value_str(value, "kind") {
-                lines.push(format!("  Kind: {kind}"));
-            }
-            if let Some(changed) = value_bool(value, "changed") {
-                lines.push(format!("  Changed: {}", if changed { "yes" } else { "no" }));
-            }
+            append_optional_str(&mut lines, value, "reference", "Field");
+            append_optional_str(&mut lines, value, "kind", "Kind");
+            append_optional_bool(&mut lines, value, "changed", "Changed");
         }
         "vault field remove" => {
-            if let Some(reference) = value_str(value, "reference") {
-                lines.push(format!("  Field: {reference}"));
-            }
-            if let Some(removed) = value_bool(value, "removed") {
-                lines.push(format!("  Removed: {}", if removed { "yes" } else { "no" }));
-            }
+            append_optional_str(&mut lines, value, "reference", "Field");
+            append_optional_bool(&mut lines, value, "removed", "Removed");
         }
-        "vault import onepassword" => {
-            if let Some(dry_run) = value_bool(value, "dry_run") {
-                lines.push(format!("  Dry run: {}", if dry_run { "yes" } else { "no" }));
-            }
-            if let Some(destination) = value_str(value, "destination") {
-                lines.push(format!("  Destination: {destination}"));
-            }
-            if let Some(fields) = value["fields"].as_array() {
-                lines.push(format!("  Fields: {}", fields.len()));
-                for field in fields.iter().take(20) {
-                    let reference = value_str(field, "reference").unwrap_or("<unknown>");
-                    let kind = value_str(field, "kind").unwrap_or("unknown");
-                    let action = value_str(field, "action")
-                        .map(|action| format!(", {action}"))
-                        .unwrap_or_default();
-                    lines.push(format!("  - {reference} ({kind}{action})"));
-                }
-                if fields.len() > 20 {
-                    lines.push(format!("  (and {} more)", fields.len() - 20));
-                }
-            }
-            if value_bool(value, "requires_replace") == Some(true) {
-                lines.push("  Requires: --replace".into());
-            }
-            if value_bool(value, "requires_overwrite") == Some(true) {
-                lines.push("  Requires: --overwrite".into());
-            }
-        }
+        "vault import onepassword" => append_import(&mut lines, value),
         "vault secret list" => {
             let secrets = value["secrets"].as_array().map(Vec::len).unwrap_or(0);
             lines.push(format!("  Secrets: {secrets}"));
@@ -166,17 +94,11 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
             }
         }
         "vault secret set" => {
-            if let Some(name) = value_str(value, "name") {
-                lines.push(format!("  Name: {name}"));
-            }
+            append_optional_str(&mut lines, value, "name", "Name");
         }
         "vault secret remove" => {
-            if let Some(name) = value_str(value, "name") {
-                lines.push(format!("  Name: {name}"));
-            }
-            if let Some(removed) = value_bool(value, "removed") {
-                lines.push(format!("  Removed: {}", if removed { "yes" } else { "no" }));
-            }
+            append_optional_str(&mut lines, value, "name", "Name");
+            append_optional_bool(&mut lines, value, "removed", "Removed");
         }
         "vault audit verify" => {
             let events = value_u64(value, "event_count").unwrap_or(0);
@@ -191,6 +113,78 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
     }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+fn append_optional_str(lines: &mut Vec<String>, value: &serde_json::Value, key: &str, label: &str) {
+    if let Some(text) = value_str(value, key) {
+        lines.push(format!("  {label}: {text}"));
+    }
+}
+
+fn append_optional_bool(
+    lines: &mut Vec<String>,
+    value: &serde_json::Value,
+    key: &str,
+    label: &str,
+) {
+    if let Some(enabled) = value_bool(value, key) {
+        lines.push(format!("  {label}: {}", if enabled { "yes" } else { "no" }));
+    }
+}
+
+fn append_backup_create(lines: &mut Vec<String>, value: &serde_json::Value) {
+    append_optional_str(lines, value, "backup", "Backup");
+    if let Some(version) = value_u64(value, "backup_version") {
+        lines.push(format!("  Backup version: {version}"));
+    }
+    if let Some(bytes) = value_u64(value, "bytes_written") {
+        lines.push(format!("  Bytes written: {bytes}"));
+    }
+}
+
+fn append_backup_restore(lines: &mut Vec<String>, value: &serde_json::Value) {
+    append_optional_str(lines, value, "backup", "Backup");
+    append_optional_bool(lines, value, "restored", "Restored");
+    if let Some(version) = value_u64(value, "format_version") {
+        lines.push(format!("  Vault format: {version}"));
+    }
+}
+
+fn append_migration(lines: &mut Vec<String>, value: &serde_json::Value) {
+    if let Some(version) = value_u64(value, "from_version") {
+        lines.push(format!("  From version: {version}"));
+    }
+    if let Some(version) = value_u64(value, "to_version") {
+        lines.push(format!("  To version: {version}"));
+    }
+    append_optional_bool(lines, value, "changed", "Changed");
+}
+
+fn append_import(lines: &mut Vec<String>, value: &serde_json::Value) {
+    append_optional_bool(lines, value, "dry_run", "Dry run");
+    append_optional_str(lines, value, "destination", "Destination");
+    if let Some(fields) = value["fields"].as_array() {
+        lines.push(format!("  Fields: {}", fields.len()));
+        for field in fields.iter().take(20) {
+            let reference = value_str(field, "reference").unwrap_or("<unknown>");
+            let kind = value_str(field, "kind").unwrap_or("unknown");
+            let action = value_str(field, "action")
+                .map(|action| format!(", {action}"))
+                .unwrap_or_default();
+            lines.push(format!("  - {reference} ({kind}{action})"));
+        }
+        if fields.len() > 20 {
+            lines.push(format!("  (and {} more)", fields.len() - 20));
+        }
+    }
+    for (key, flag) in [
+        ("requires_replace", "--replace"),
+        ("requires_overwrite", "--overwrite"),
+    ] {
+        if value_bool(value, key) == Some(true) {
+            lines.push(format!("  Requires: {flag}"));
+        }
+    }
 }
 
 #[cfg(test)]

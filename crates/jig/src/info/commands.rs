@@ -157,6 +157,7 @@ pub(super) fn info_with_capabilities(
     commands.push(dev_command(ctx));
     commands.extend([
         ready_command(root_commands::CHECK),
+        ready_command(root_commands::FILE_BUDGET),
         ready_command(root_commands::STATUS),
         ready_command(root_commands::UI),
         ready_command(root_commands::WORK),
@@ -242,6 +243,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         info_without_context_command(repo_context_next_step),
         dev,
         repo_context_command_with_next_step(root_commands::CHECK, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::FILE_BUDGET, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::STATUS, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::WORK, repo_context_next_step),

@@ -20,7 +20,7 @@ mod work;
 pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
     AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest,
-    RepositoryCheckRequest, RustFileLocRequest, SqlxTodoRequest,
+    RepositoryCheckRequest, SqlxTodoRequest,
 };
 pub(crate) use loops::{
     LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest,
@@ -115,8 +115,6 @@ impl RuntimeCommand {
                 | CheckCommand::Contract(_) => Cooperative,
                 CheckCommand::AgentMap(_)
                 | CheckCommand::AgentGuides
-                | CheckCommand::RustFileLoc(_)
-                | CheckCommand::NoModRs
                 | CheckCommand::MigrationImmutability(_)
                 | CheckCommand::SqlxUncheckedNonTest => Native,
             },

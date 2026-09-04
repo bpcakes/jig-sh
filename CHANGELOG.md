@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Add the explicit `rust-library` init preset for a virtual Rust 2024 workspace with one documented, non-publishable library crate and no application, database, frontend, or dev-app state.
 - Add the contract-v6 agent-native repository model with checked-in components, actions, profiles, affected-selection policy, immutable content-addressed run plans, durable target runs, and target/profile evidence gates.
 - Add `jig check` selectors with `--profile`, `--affected`, `--explain`, and `--fail-fast`, plus repository-aware `jig info` subjects and `jig migration add`.
 - Add the `go-react` scaffold preset, `jig-go` repository adapter, Go test workflow, Huma/Chi API skeleton, optional PostgreSQL/sqlc/Goose integration, and generated React client-contract checks.
@@ -16,6 +17,7 @@
 
 ### Changed
 - Migration: repositories adopted before the loop runtime ignore rule must run `scripts/jig update --recopy` so `.agent/runtime/` is ignored before `jig loop dispatch` or `jig loop tick` can publish state.
+- Breaking: replace the generated tracked-file `mod.rs` policy check with Clippy's `mod_module_files` restriction lint. Exact generated Clippy command defaults, including nested-manifest wrappers, migrate automatically; generated and inferred Clippy commands now check all targets and features. Because Cargo features are expected to be additive but can be mutually exclusive in existing repositories, this migration can expose feature-combination failures or new warnings. Fresh adoption explains the feature-coverage opt-out; updates and file-backed re-adoption report generated inputs that gain `--all-features`, resolve effective Clippy runners through the `jig.clippy` capability alias, warn without rewriting unless every direct or nested invocation structurally denies or forbids `mod_module_files`, and leave unrelated command values untouched. Wrapper-inferred Clippy commands carry the same policy-verification warning. To opt out while retaining the module-layout policy, remove only `--all-features` from the generated Clippy command in `.jig.toml`; that explicit feature-coverage customization is preserved by later updates. Other customized commands must add `-D clippy::mod_module_files` explicitly to retain the policy. Clippy covers compiled Cargo targets rather than excluded crates, code for other target platforms, or every tracked Rust file.
 - Breaking: Contract-v6 MCP clients use the stable `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` surface instead of directly invoking per-manifest execution tools; submitted plans are re-derived from current checked-in authority before execution.
 - Keep read-only work-gate, evidence, and status inspection available when a configured tool, repository target, profile, or catalog no longer resolves; report the affected required gate in-band as `unsupported` with a reason while contract validation, execution, and work finish continue to fail closed.
 - Make configured checks non-interactive and uniformly supervised for timeout, cancellation, process-tree cleanup, and bounded stdout/stderr capture.
@@ -49,6 +51,8 @@
 - Defer every PR-manager preparation cleanup to the lease-refreshing outcome finalizer, quarantine only the PR whose review history is truncated, retain the newest manual occurrences during bounded pruning, and preserve non-ownership renewal shutdown failures as state evidence.
 - Keep PR-manager worktree inspection and cleanup behind a freshly renewed branch lease, retain authority-lost paths without touching them, store retained PR evidence outside disposable cache, bound composed GitHub snapshots across nested requests and payloads, and preserve truthful staged occurrence diagnostics through stale reconciliation.
 - Make PR-manager repair publication compare-and-swap the exact GitHub-observed remote head, reject non-descendant worker history, and page nested review comments backward so older trusted feedback cannot disappear behind GitHub's per-connection limit.
+- Omit the generated repository-policy workflow when no conditional jobs remain, and keep generated Clippy policy probes isolated across library, CLI, and Rust/React scaffolds.
+- Preserve validated scalar `[dev]` settings across init/update rendering and keep generated Vite fallback origins aligned with the configured proxy port and private TLD.
 - Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy without imposing scaffold-only CI selectors, reject symlink-redirection in Go component roots, and make generated Go CI resolve nested component module authorities, observe vendored modules and SQL inputs, and reserve Linux for Docker-backed PostgreSQL tests.
 - Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
 - Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
@@ -92,7 +96,7 @@
 - Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
 - Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
 
-## v0.2.0 - 2026-08-05
+## v0.2.0 - 2026-08-31
 
 ### Added
 - Add scheduled `codex_task` loop workflows, durable occurrence claims, and `jig loop dispatch`
@@ -104,10 +108,49 @@
 - Add cancellable status collection
 - Standardize JSON errors and work validation
 - Add interactive Codex home launcher
-- Add home-aware Codex session resume
 - Configure Codex home for loop workers
 - Add command availability inventory
 - Namespace SQLx project commands
+- Add project fields and format v2
+- Add controlled read and inject
+- Add transparent dotenv exec
+- Import onepassword dotenv bundles
+- Add rekey and encrypted recovery
+- Add home-aware Codex resume
+- Evolve repository runtime contract and repair flow
+- Add atomic TUI management APIs
+- Add vault TUI browser
+- Manage vault secrets in the TUI
+- Add vault TUI lifecycle tools
+- Harden controlled vault TUI output
+- Add contextual action palettes
+- Add explicit item creation
+- Add metadata line editing
+- Add metadata quick access
+- Harden the generated rust-react stack
+- Project usage in home picker
+- Add Go backend scaffold
+- Enforce Go migration immutability
+- Report progress for long-running commands
+- Add repository run model
+- Project legacy tools as targets
+- Plan component targets
+- Persist target execution evidence
+- Generate component-native v6 contracts
+- Gate on target evidence
+- Add bounded repository run tools
+- Add explainable affected selection
+- Configure authoritative command output limits
+- Harden contract execution boundaries
+- Harden component-native backend policy
+- Harden work evidence and gate scope
+- Make managed Rust LOC checker self-contained
+- Make LOC enforcement template-owned
+- Add universal file budget foundations
+- Add shared Rust-only scaffold renderer
+- Expose rust-library preset
+- Complete Rust-only presets
+- Ship universal repository file budgets
 
 ### Fixed
 - Renew workflow and branch leases while long-running loop workers are active
@@ -116,22 +159,237 @@
 - Preserve ambiguous scheduled outcomes across later bookkeeping failures, keep their complete diagnostics, and avoid duplicating retry-exhaustion alerts across occurrence and attempt repair surfaces
 - Move the scheduled occurrence ledger out of disposable cache with a fail-closed migration, and add an idempotent acknowledgement transition that resolves attention without reopening an occurrence
 - Keep dev session cleanup signal-responsive
-- Keep runtime installation portable on stock macOS Bash 3.2, source-aware for Git and non-Git checkouts, refreshable for mutable sources, and fail-closed for unpinned remotes or untrusted PATH wrappers.
-- Keep help, `doctor`, contract checks, adoption, and launcher repair reachable when repository configuration is malformed, with traceback-free and directly executable recovery guidance.
-- Keep bare launcher help reachable under a broken repository contract, anchor relative runtime source paths to the repository, and reject non-file launcher paths in Doctor.
-- Make launcher-only repair transactional and self-contained: preflight its recorded source, warn when embedded repair templates replace source-specific launcher customizations, preserve the legacy contract epoch, validate the running repair binary, seed truthfully fingerprinted caches, refresh the cheap identity stamp after a digest fallback, roll back published scripts if real runtime seeding fails, and restore prior caches if the rendered-script transaction cannot commit.
-- Drain noisy owned subprocesses promptly while retaining hard time, memory, capture, cancellation, and cleanup bounds.
-- Keep stale missing Codex-home candidates from blocking a unique session resume
-- Recognize supported Codex app-server missing-thread response variants during resume lookup
-- Preserve session-lookup cancellation even when Codex app-server emits stderr
-
-### Breaking
-- Generated repositories move from contract v3 to v4 and no longer pin `jig_version`/`JIG_VERSION`. Run a current Jig binary with `jig update <repo> --force` to migrate the full harness. If the legacy wrapper cannot start, first run `jig update <repo> --launcher-only --force`, then perform the full update; `doctor` treats the unmigrated launcher as a required migration and exits nonzero while v2/v3 remain runtime-readable. A repaired legacy launcher depends on its seeded compatible cache until full migration, so fresh clones, cacheless CI, or cache cleanup require a current external Jig binary to repeat the narrow repair.
-- Remote runtime installation now requires the repository's immutable hexadecimal `_commit`; legacy unpinned repositories must explicitly acknowledge default-branch installation with `JIG_INSTALL_ALLOW_UNPINNED_REMOTE=1` before migrating their source metadata.
-- A usable remote `_src_path` is now the authoritative runtime source ahead of `template_source_url`; repositories that intentionally relied on the fallback URL must update `_src_path` before their next cache install.
-- The generated launcher passes its contract epoch, build profile, and repository root to the selected binary, which validates the complete repository contract in-process before ordinary command dispatch and reuses that loaded context process-wide. That launcher-provided root is authoritative over an inherited `JIG_REPO_ROOT`. Contract-invalid repositories cannot run `work`, `dev`, `mcp`, `info`, or ordinary gates such as `check fmt` until repaired; `doctor`, `adopt`, `codex`, `init`, `presets`, `update`, and `check contract` retain a capability-only escape hatch.
-- The published `jig-ui` crate changes `HarnessView::jig_version` from `String` to `Option<String>` and adds `runtime_version` so v4 snapshots distinguish a legacy generated pin from the executing runtime. Both fields have Serde defaults so current readers can deserialize older snapshots, and the public `display_runtime_version` helper implements the legacy fallback. Pre-v4 readers cannot deserialize the new v4 snapshot shape.
-- Structured `jig info --json` and `jig doctor --json` output now reports nullable `repo.jig_version`, adds `repo.runtime_version`, and replaces product-version runtime statuses with the contract-oriented `compatible`, `migration needed`, `unreadable`, `missing`, `unsupported`, and `outdated` vocabulary.
+- Harden Codex resume lookup
+- Enforce staged runtime contract
+- Preserve reclaimable cache locks
+- Retire repair seeds after full refresh
+- Propagate authoritative launcher environment
+- Make repair cache retirement best effort
+- Lock reminder cache mutations
+- Diagnose launcher policy drift accurately
+- Rate-limit cross-cache source warnings
+- Report partial repair seed retirement
+- Recommend narrow launcher drift repair
+- Preserve actionable retirement retries
+- Preserve Rust 1.85 compatibility
+- Preserve contract parity declarations
+- Gate unix-only test helpers
+- Gate platform-specific restore code
+- Harden cross-platform vault checks
+- Allow trusted root path aliases
+- Share trusted root alias policy
+- Gate platform-specific tests
+- Gate Unix exec process tests
+- Avoid stranded nextest group tests
+- Canonicalize macOS vault fixtures
+- Canonicalize vault lifecycle fixtures
+- Canonicalize vault reveal fixtures
+- Gate backup formatting import on Linux
+- Harden launcher repair boundaries
+- Support large terminal buffers
+- Partition vault integration suites
+- Fail closed after recovery errors
+- Preserve protected input semantics
+- Stage value file validation
+- Bind import commits to previews
+- Reconcile lifecycle failures with storage
+- Retain activity audit verification
+- Skip no-op field kind writes
+- Confirm empty text replacements
+- Reject Windows reparse value sources
+- Strip passphrase env before parsing
+- Bind mutations to snapshot revisions
+- Erase poisoned session state
+- Confirm redaction downgrades
+- Discard import plans on cancel
+- Preserve derived rename errors
+- Bound interactive metadata input
+- Confirm import redaction downgrades
+- Preserve selection after recovery refresh
+- Reconcile vanished vault presence
+- Classify private output conflicts structurally
+- Protect vault-owned output paths
+- Preserve committed operation success
+- Reconcile all missing vault failures
+- Require plain import shortcuts
+- Gate private output by platform
+- Keep feedback visible while filtering
+- Sanitize delete confirmation labels
+- Make unsafe legacy deletion confirmable
+- Reject modified form characters uniformly
+- Validate value files from one handle
+- Suppress hidden undersized input
+- Offer restore only for absent homes
+- Validate initialization before side effects
+- Align input and render viewports
+- Preserve utf8 at peek boundary
+- Expose entries for group filters
+- Cancel import preparation safely
+- Gate input by visible screen layout
+- Resolve split peek boundary writes
+- Keep compact lock flow usable
+- Harden launcher repair boundaries
+- Avoid inferred Windows CI runners
+- Clarify supported runner fallback
+- Refine runner inference diagnostics
+- Complete platform inference review
+- Close final platform review gaps
+- Preserve startup failure causes
+- Normalize verified macOS root aliases
+- Move output conflict path
+- Age remaining quota with snapshot
+- Label sub-minute reset countdowns
+- Preserve usage freshness cues
+- Retain unexpected window durations
+- Expire quota independently of projections
+- Preserve compact rows at minimum height
+- Satisfy cross-platform PR gates
+- Normalize Windows Git template paths
+- Keep legacy modules LOC neutral
+- Normalize staged Git repository paths
+- Normalize staged Git metadata path
+- Normalize atomic publication paths
+- Release descendant handles before publish
+- Enforce application contract drift
+- Unify database bootstrap lifecycle
+- Harden generated CI prerequisites
+- Harden scaffold edge cases
+- Recover dead orphaned sessions
+- Clear confirmed failed spawns
+- Preserve uncertain process liveness
+- Distinguish uncertain PID status
+- Add explicit ambiguous orphan repair
+- Preserve orphan recovery evidence
+- Persist preflight cleanup obligations
+- Make ambiguous cleanup repair explicit
+- Persist completed preflight cleanup
+- Finalize every claimed session outcome
+- Show dev recoveries on stopped outcomes
+- Persist all confirmed preflight cleanup
+- Retain recoveries on launch failures
+- Derive status from one observation set
+- Retain pre-claim recovery evidence
+- Stabilize structured failure envelopes
+- Describe ambiguous orphan repair scope
+- Count apps retired by control path
+- Preserve stop recovery failures
+- Preserve primary preflight failures
+- Preserve stop warnings on failure
+- Centralize scaffold preset invariants
+- Validate Go modules before side effects
+- Align scaffold bootstrap lifecycle
+- Harden generated CI portability
+- Derive Go remediation from authority
+- Type backend selectors
+- Preserve migration policy paths
+- Centralize Go module naming rules
+- Align preset menu aliases
+- Validate backend-specific agent guides
+- Isolate migration bootstrap lifecycle
+- Join graceful API shutdown
+- Reprompt invalid Go modules
+- Disable unresolved schema links
+- Bound version authority reads
+- Harden generated shell checks
+- Enforce backend-specific scaffold inputs
+- Version backend configuration
+- Use go.mod as toolchain authority
+- Isolate Rust naming rules
+- Explain unavailable checks
+- Verify generated API clients
+- Show text field input safely
+- Harden toolchain and CI boundaries
+- Harden generated backend contracts
+- Centralize execution signal ownership
+- Decouple progress transport from supervision
+- Bound supervised execution output
+- Balance execution phase lifecycles
+- Record supervised command failures
+- Propagate operation cancellation
+- Flush progress before retiring signals
+- Make process output overflow policy explicit
+- Preserve cancellation through work checks
+- Bound status provider scheduling
+- Preserve pre-start cancellation semantics
+- Enforce fatal overflow after final drain
+- Scope freshness to source tree
+- Harden repository execution boundaries
+- Close repository execution review gaps
+- Make repository execution policies explicit
+- Make worker transcript policy explicit
+- Supervise native schema execution
+- Supervise GitHub loop commands
+- Reserve structural progress capacity
+- Make lifecycle reporting truthful
+- Reduce repository action bug surfaces
+- Preserve cancellation across PR repair boundaries
+- Respect durable command commit boundaries
+- Separate worker results from provider transcripts
+- Harden repository execution boundaries
+- Supervise PR manager git boundaries
+- Bound progress delivery during shutdown
+- Reduce repository execution bug surfaces
+- Release stderr ownership on progress timeout
+- Persist PR repairs after push commit
+- Reconcile ambiguous review thread mutations
+- Make runtime signal policy explicit
+- Harden repository execution invariants
+- Harden repository review boundaries
+- Restore realpath fallback
+- Preserve status provider v1 paths
+- Supervise Git probes
+- Resolve comprehensive review findings
+- Keep receipt finalization cancellable
+- Bound authoritative result while running
+- Make supported-host inventory fail closed
+- Close low-risk review findings
+- Separate support policy from release history
+- Preserve tool errors across progress flush
+- Decouple result inspection cadence
+- Enforce migration admission by tool identity
+- Preserve legacy migration tool requirements
+- Snapshot local templates through Git transport
+- Make repo-scoped restore portable
+- Align schema freshness action execution
+- Preserve repository action authority
+- Validate native action semantics
+- Serialize plan-linked execution
+- Close repository identity gaps
+- Preserve durable mixed repository execution
+- Bind generated CI to authored capabilities
+- Bind managed CI to exact targets
+- Preserve authored mixed backend answers
+- Track aggregate frontend inputs
+- Enforce repository execution isolation
+- Close checkout isolation gaps
+- Preserve authored bootstrap authority
+- Preserve projected repository state
+- Preserve execution liveness and Go inputs
+- Rebind compatibility and CI authority
+- Default mixed Go migrations from adapters
+- Fail closed on v6 execution authority
+- Preserve migration version ordering
+- Verify run archives before rewrite
+- Preserve native pre-start cancellation
+- Preserve source and Go root authority
+- Root Go scaffold outputs by authority
+- Align nested Go contract paths
+- Make repository action CI portable
+- Require Rust LOC work gate
+- Compile vault PTY setup on macOS
+- Harden repository execution coordination
+- Complete upstream contract integration
+- Gate Linux-only context import
+- Treat LOC roots as literal paths
+- Allow LOC checks before Rust exists
+- Harden LOC action cutover
+- Harden rust-library preset
+- Align file-budget launcher scope
+- Remove cache paths from agent map
+- Use canonical test module layout
+- Normalize macOS adoption fixture paths
+- Handle macOS temporary path aliases in tests
+- Publish every workspace crate
 
 ### Changed
 - Return unsuccessful CLI exit codes when loop ticks, dispatches, or runs fail or need attention
@@ -167,9 +425,287 @@
 - Isolate initial template policy
 - Centralize root command categories
 - Consolidate SQLx command modules
+- Extract owned process crate
+- Speed up the Rust test suite
+- Encapsulate brokered run audit lifecycle
+- Extract brokered process supervision
+- Split validated vault envelope phases
+- Record jig-vault refactor evidence
+- Record project vault implementation plan
+- Record vault read and inject milestone
+- Record transparent vault exec milestone
+- Record onepassword import milestone
+- Record vault recovery milestone
+- Record project vault evidence
+- Close project vault work
+- Split Codex resume selection phases
+- Consolidate Codex home workers
+- Encapsulate Codex app-server protocol
+- Avoid duplicate source validation
+- Clarify capability scope handling
+- Close contract v4 review plan
+- Centralize generated script inspection
+- Type launcher compatibility handoff
+- Isolate launcher repair cache lifecycle
+- Record refactoring validation receipts
+- Record rebase validation prerequisite
+- Satisfy changed-file size policy
+- Record rebase validation receipts
+- Split session discovery modules
+- Split oversized vault test modules
+- Split oversized test suites
+- Isolate resource-heavy vault suite
+- Record merge validation receipts
+- Model worker recovery states
+- Separate protected key modes
+- Add exact private output preconditions
+- Add one-shot import preconditions
+- Encapsulate backend session state
+- Add conditional audited edit seam
+- Share typed confirmation input
+- Remove unused unicode width dependency
+- Remove inert snapshot marker
+- Extract authenticated state revision
+- Centralize mutation commands
+- Centralize edit preconditions
+- Retain planned import field kinds
+- Model import field transitions
+- Model failure recovery policy
+- Make action dispatch exhaustive
+- Type private output conflicts
+- Centralize external output policy
+- Bind outputs to vault namespace
+- Model committed action outcomes
+- Make tool activation total
+- Separate platform command capabilities
+- Add prepared fuzzy search text
+- Cache quick access rankings
+- Type work gate evaluation
+- Isolate doctor signal lifecycle
+- Centralize delete display policy
+- Share Unix safety primitives
+- Cache prepared home search terms
+- Record vault tui follow-up evidence
+- Record refactoring evidence
+- Centralize viewport capability policy
+- Encapsulate browse snapshot state
+- Index browse metadata projection
+- Bound protected input masking work
+- Record vault tui hardening evidence
+- Model vault home lifecycle state
+- Centralize new passphrase policy
+- Centralize Ratatui viewport bounds
+- Record vault tui refactoring evidence
+- Type bootstrap vault planning
+- Share typed init preset metadata
+- Type init and vault reports
+- Split init preparation from execution
+- Isolate init orchestration module
+- Record vault tui review fix evidence
+- Record init refactoring evidence
+- Group import preview inputs
+- Record vault tui review fix evidence
+- Record master merge verification
+- Gate supported Linux and macOS hosts
+- Record CI repair verification
+- Gate full clippy on macos
+- Lint no-default test targets
+- Consolidate supported-platform coverage
+- Record review verification
+- Record green clippy gate
+- Record final locked tests
+- Record final clippy gate
+- Record nested-support clippy
+- Record final source gates
+- Record platform-boundary gates
+- Split vault TUI tests
+- Partition vault TUI tests
+- Record CI parity checks
+- Record final PR gates
+- Track dev startup diagnostics work
+- Record dev startup validation
+- Split startup publication modules
+- Track vault path normalization
+- Record vault path validation
+- Record master merge verification
+- Record post-merge verification
+- Split oversized modules
+- Model runtime diagnosis explicitly
+- Name usage snapshot assessment
+- Split launcher repair cache lifecycle
+- Separate update workflows
+- Centralize reset countdown formatting
+- Record refactoring verification
+- Record usage freshness verification
+- Centralize usage freshness state
+- Type projection window roles
+- Record Codex presentation verification
+- Separate quota and projection freshness
+- Record master merge verification
+- Record freshness hardening verification
+- Record latest master verification
+- Extract output error classification
+- Drop unsupported Windows jobs
+- Harden Go backend lifecycle
+- Record Go backend validation
+- Close Go backend hardening
+- Encapsulate app spawn evidence
+- Make uncertain liveness explicit
+- Record dev recovery verification
+- Record cleanup hardening gates
+- Split claimed session execution
+- Satisfy lifecycle clippy gate
+- Close cleanup hardening work
+- Open dev invariant hardening work
+- Name preflight cleanup evidence
+- Separate error kind from recovery evidence
+- Separate orphan assessment from probes
+- Record dev invariant baseline
+- Close dev invariant hardening work
+- Plan dev outcome hardening
+- Move recovery context to outcome boundary
+- Close dev outcome hardening work
+- Plan dev stop accounting correction
+- Isolate stopped app accounting
+- Close dev stop accounting work
+- Plan dev outcome composition hardening
+- Type stop phase failures
+- Close dev outcome composition work
+- Encapsulate stop progress
+- Harden Go scaffold invariants
+- Close Go scaffold hardening
+- Harden Go backend review findings
+- Close Go review hardening
+- Harden Go lifecycle invariants
+- Close Go lifecycle hardening
+- Harden Go backend boundaries
+- Unify backend authoring
+- Share client runtime templates
+- Close Go boundary hardening
+- Record review remediation evidence
+- Guard Codex worker lifecycle
+- Share bounded authority reads
+- Validate execution timeouts
+- Type execution progress lifecycle
+- Supervise Codex workers as owned processes
+- Encode backend-specific plans
+- Record execution refactor evidence
+- Group refinement execution inputs
+- Record supervision hardening evidence
+- Tighten status scheduler messages
+- Record execution hardening evidence
+- Record execution boundary evidence
+- Centralize authoritative command supervision
+- Record execution boundary verification
+- Close execution boundary work
+- Record cancellation boundary verification
+- Record execution boundary verification
+- Plan lifecycle boundary hardening
+- Record lifecycle boundary implementation
+- Record lifecycle boundary verification
+- Plan Windows surface removal
+- Remove Windows supervision backend
+- Remove Windows process and file backends
+- Remove Windows runtime implementation
+- Remove Windows runtime branches
+- Remove Windows host policy
+- Remove Windows-specific path semantics
+- Record Windows removal evidence
+- Plan review remediation
+- Enforce supported host surface
+- Close review remediation work
+- Keep migration layout changes within LOC policy
+- Centralize semantic tool admission
+- Extract tool execution failures
+- Retrigger pull request checks
+- Track generic monorepo epic
+- Split work check batch phases
+- Encode gate scope states explicitly
+- Split git receipt proof modules
+- Split oversized Rust sources
+- Record Rust LOC gate evidence
+- Complete contract v5 dogfooding
+- Share Linux group scanning
+- Share nonblocking pipe setup
+- Share JSON byte-range scanner
+- Share AAD field encoding
+- Use one render request DTO
+- Share terminal-safe character policy
+- Reuse nonblocking descriptor helper
+- Centralize passphrase environment names
+- Use canonical field kind labels
+- Give frontend scaffold named boundaries
+- Share ranked fuzzy search terms
+- Reduce dogfood suite feedback time
+- Scale dogfood suite across host CPUs
+- Record LOC action verification
+- Close template-owned LOC epic
+- Rename Beads epic prefix
+- Pin development Rust toolchain
+- Centralize scaffold preset capabilities
+- Sync local issue state
+- Record clean release validation
+- Install nextest for releases
+- Allow ephemeral release run journal
+
+### Documentation
+- Document project vault workflows
+- Preserve repair retirement diagnostics
+- Plan the vault TUI delivery
+- Record vault TUI verification
+- Close vault TUI work
+- Plan vault TUI hardening
+- Record vault KDF evidence
+- Close vault TUI hardening work
+- Plan vault TUI review hardening
+- Close vault TUI refactoring work
+- Plan vault TUI boundary hardening
+- Close vault TUI hardening plan
+- Record vault TUI hardening evidence
+- Plan vault TUI review fixes
+- Close vault TUI review plan
+- Record vault TUI review evidence
+- Plan vault TUI final hardening
+- Close vault TUI hardening plan
+- Plan vault TUI interaction polish
+- Close vault TUI polish plan
+- Plan vault TUI design hardening
+- Close vault TUI hardening work
+- State hardened file boundaries
+- Define supported host platforms
+- Remove downstream project references
+- Require generic open-source fixtures
+- Record state redaction migration
+- Make receipt redaction explicit
+- Mark retained unsupported host paths
+- Anonymize private project references
+- Correct verification summary
+- Close stop progress work
+- Complete backend key reference
+- Harden Go review findings
+- Close review remediation
+- Define agent-native repository model
+- Map agent-native migration
+- Define execution supervision boundaries
+- Define hardened execution boundaries
+- Close agent-native migration
+- Record freshness verification
+- State Linux and macOS support only
+- Record review remediation outcome
+- Align remediation slice count
+- Plan execution review hardening
+- Record execution review evidence
+- Plan review boundary hardening
+- Record boundary hardening evidence
+- Record migration layout validation
+- Record migration layout pull request
+- Plan migration admission hardening
+- Record migration admission verification
+- Plan Rust-only presets
+- Harden Rust preset delivery plan
+- Make Rust preset plan implementation-ready
 
 ### Tests
-- Run rendered-repository and runtime-source behavioral fixtures in pull-request CI.
 - Move doctor tests beside module
 - Move adopt inference tests beside module
 - Move git bootstrap tests beside module
@@ -179,6 +715,68 @@
 - Move windows launch tests beside module
 - Move cleanup tests beside module
 - Move dev session tests beside module
+- Tolerate parallel KDF load
+- Exercise runtime boundary fixtures
+- Gate Unix launcher repair fixtures
+- Cover cross-cache warning rate limits
+- Pin repair retry diagnostics
+- Make non-UTF8 import coverage portable
+- Use low-cost KDF fixtures
+- Gate Linux restore assertions
+- Gate Linux-only restore lifecycle
+- Keep root notice coverage modular
+- Include TUI in vault platform policy
+- Drive universal activity search
+- Characterize init output contracts
+- Isolate init report characterization
+- Replace downstream acceptance fixture
+- Drain large picker terminal output
+- Drain vault TUI output during shutdown
+- Synchronize vault browser resize
+- Isolate Git fixture environment
+- Split adoption inference tests
+- Use generic adoption fixture names
+- Harden PTY process waits
+- Clarify test synchronization boundaries
+- Share PTY drain helpers
+- Isolate shared PTY support
+- Nest shared PTY support
+- Document cross-platform fixtures
+- Harden macOS platform coverage
+- Serialize dev lifecycle process tests
+- Cover physical macOS paths
+- Stabilize macos signal helper readiness
+- Set Git Bash PATH in shell
+- Lock down legacy cleanup fallback
+- Align schema v3 integration fixture
+- Isolate PTY integration timing
+- Centralize PTY watchdogs
+- Reap children on failure
+- Isolate terminal test phase
+- Avoid ambiguous escape input
+- Await activity input readiness
+- Retry modal close input
+- Assert the next modal state
+- Await preview clear acknowledgement
+- Retain aggregate failure output
+- Cover verbose refinement evidence
+- Assert semantic review and activity boundaries
+- Stabilize lifecycle boundary verification
+- Poll progress child without SIGCHLD waiter
+- Isolate nested CLI fixtures from launcher context
+- Isolate PTY browser from KDF contention
+- Keep loaded PTY watchdog bounded
+- Isolate PTY suite process
+- Make worker overflow fixture deterministic
+- Cover dual-failure handler wiring
+- Make macOS path assertions portable
+- Inspect PTY state through master descriptor
+- Isolate git receipt environment mutations
+- Scope non-UTF-8 path fixtures off Apple
+- Create vault PTYs portably
+- Handle revoked macOS PTY after exit
+- Make Go format check hermetic
+- Canonicalize macOS report destination
 
 ### Other
 - Add generated gitignore template
@@ -220,6 +818,34 @@
 - [verified] Identify crates.io release probes
 - [verified] Allow complete release validation
 - [verified] Stabilize command inventory checks
+- Fix test isolation and preflight regressions
+- Fix cross-platform CI failures
+- Fix remaining Windows CI checks
+- Fix Windows clippy and test isolation
+- Preserve discovered repository path identity
+- Align platform CI with native test support
+- Serialize Codex signal integration tests
+- Report slow tests without premature termination
+- Stabilize concurrent state validation
+- Record final test receipt
+- Isolate Codex signal integration tests
+- Isolate macOS signal test runner
+- Use native test harness on macOS
+- Serialize Git environment test
+- Keep template test within size policy
+- Harden Rust React scaffold QA paths
+- Upgrade generated apps to SQLx 0.9
+- Preserve stop partial progress
+- Harden execution supervision boundaries
+- Close execution boundary gaps
+- Unify execution policy boundaries
+- Model SQL migration layouts explicitly
+- Trim generated Jig config output
+- Fix Rust 1.98 CI lint failures
+- Record final CI work-check receipts
+- Harden launcher test against ETXTBSY
+- Design universal repository file budgets
+- Finalize universal file-budget delivery graph
 
 ## v0.2.0-beta.1 - 2026-05-23
 

@@ -98,16 +98,16 @@ typescript_coverage_command = "<<[ typescript_coverage_command | replace("\\", "
 
 [% endif %]
 [dev]
-proxy_port = 1355
-https_port = 1443
-https = false
+proxy_port = <<[ dev.proxy_port ]>>
+https_port = <<[ dev.https_port ]>>
+https = <<[ dev.https ]>>
 # HTTPS listener ALPN only; cleartext proxy traffic remains HTTP/1.1.
-http2 = true
-lan = false
+http2 = <<[ dev.http2 ]>>
+lan = <<[ dev.lan ]>>
 # Must be localhost, local, test, internal, or a subdomain below one of them.
-tld = "localhost"
+tld = "<<[ dev.tld | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 # Set true to discover JavaScript workspace packages that expose dev scripts.
-workspace_discovery = false
+workspace_discovery = <<[ dev.workspace_discovery ]>>
 [% for app in dev_apps %]
 
 # Repo-local dev service.

@@ -9,8 +9,6 @@ use std::{
 
 use super::V1_SCHEMA_ID;
 
-// agentic-loc-exception: keep the v1 wire DTOs and semantic rules together for contract audits.
-
 /// Root document emitted by a status provider.
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 #[non_exhaustive]

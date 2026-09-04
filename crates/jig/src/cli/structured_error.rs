@@ -18,6 +18,12 @@ struct JsonReportedError(i32);
 #[derive(Debug)]
 struct JsonOutputAlreadyEmitted(anyhow::Error);
 
+#[derive(Debug)]
+struct FileBudgetExitStatus(i32);
+
+#[derive(Debug)]
+struct FileBudgetInvocationError(String);
+
 impl std::fmt::Display for JsonOkFalse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Command reported ok=false")
@@ -73,6 +79,34 @@ impl std::fmt::Display for JsonOutputAlreadyEmitted {
 }
 
 impl std::error::Error for JsonOutputAlreadyEmitted {}
+
+impl std::fmt::Display for FileBudgetExitStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "file-budget diagnostic exited with status {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for FileBudgetExitStatus {}
+
+impl std::fmt::Display for FileBudgetInvocationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FileBudgetInvocationError {}
+
+pub(super) fn file_budget_exit(exit_status: i32) -> anyhow::Error {
+    FileBudgetExitStatus(exit_status).into()
+}
+
+pub(super) fn file_budget_invocation_error(message: String) -> anyhow::Error {
+    FileBudgetInvocationError(message).into()
+}
 
 pub(super) fn json_error_payload(
     kind: &'static str,
@@ -157,6 +191,7 @@ pub(crate) fn is_structured_json_failure(error: &anyhow::Error) -> bool {
         || error.is::<VaultExecChildExit>()
         || error.is::<ForegroundInterrupted>()
         || error.is::<JsonReportedError>()
+        || error.is::<FileBudgetExitStatus>()
         || error.is::<crate::codex::CodexChildExitStatus>()
 }
 
@@ -164,6 +199,12 @@ pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
     error
         .downcast_ref::<VaultChildExitStatus>()
         .map(|error| error.0)
+        .or_else(|| {
+            error
+                .downcast_ref::<FileBudgetExitStatus>()
+                .map(|error| error.0)
+        })
+        .or_else(|| error.downcast_ref::<FileBudgetInvocationError>().map(|_| 2))
         .or_else(|| {
             error
                 .downcast_ref::<VaultExecChildExit>()

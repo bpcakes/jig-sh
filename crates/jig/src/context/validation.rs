@@ -117,6 +117,63 @@ pub(super) const fn default_proxy_https_port() -> Option<u16> {
     Some(1443)
 }
 
+pub(crate) fn validate_dev_proxy_settings(
+    http_port: u16,
+    https_port: Option<u16>,
+    tld: &str,
+    allow_ephemeral_http: bool,
+) -> Result<()> {
+    if http_port == 0 && !allow_ephemeral_http {
+        bail!("proxy HTTP port must be greater than 0");
+    }
+    if https_port == Some(0) {
+        bail!("proxy HTTPS port must be greater than 0");
+    }
+    if https_port == Some(http_port) {
+        bail!("proxy HTTP and HTTPS ports must be different");
+    }
+    validate_dev_tld(tld)
+}
+
+#[cfg(feature = "dev-proxy")]
+fn validate_dev_tld(tld: &str) -> Result<()> {
+    jig_dev_proxy::validate_tld(tld)
+}
+
+#[cfg(not(feature = "dev-proxy"))]
+fn validate_dev_tld(tld: &str) -> Result<()> {
+    // Keep this no-feature parser aligned with jig-dev-proxy::host. The vector
+    // test below runs in both default and --no-default-features builds so the
+    // shared init contract cannot silently widen when the proxy is absent.
+    const ALLOWED_TLD_SUFFIXES: &[&str] = &["localhost", "local", "test", "internal"];
+
+    if tld.is_empty() || tld.len() > 253 || tld.contains(':') {
+        bail!("invalid hostname '{tld}'");
+    }
+    for label in tld.split('.') {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        {
+            bail!("invalid hostname '{tld}'");
+        }
+    }
+    let normalized = tld.to_ascii_lowercase();
+    let labels = normalized.split('.').collect::<Vec<_>>();
+    if (labels.len() == 1 && ALLOWED_TLD_SUFFIXES.contains(&labels[0]))
+        || (labels.len() == 2 && ALLOWED_TLD_SUFFIXES.contains(&labels[1]))
+    {
+        return Ok(());
+    }
+    bail!(
+        "dev proxy TLD '{normalized}' is not allowed. Use a private/local suffix such as localhost, local, test, or internal."
+    )
+}
+
 pub(super) fn default_dev_tld() -> String {
     "localhost".into()
 }
@@ -453,4 +510,26 @@ pub(super) fn validate_dev_app_env_prefixes<'a>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod dev_proxy_validation_tests {
+    use super::*;
+
+    #[test]
+    fn dev_proxy_validation_vectors_match_the_runtime_contract() {
+        for tld in ["localhost", "Example.TEST", "corp.internal", "local"] {
+            validate_dev_proxy_settings(1355, Some(1443), tld, false).unwrap();
+        }
+        for tld in ["", "dev", "example.com", "too.deep.test", "bad,tld"] {
+            assert!(
+                validate_dev_proxy_settings(1355, Some(1443), tld, false).is_err(),
+                "accepted invalid dev TLD {tld:?}"
+            );
+        }
+        assert!(validate_dev_proxy_settings(0, Some(1443), "localhost", false).is_err());
+        assert!(validate_dev_proxy_settings(0, Some(1443), "localhost", true).is_ok());
+        assert!(validate_dev_proxy_settings(1355, Some(0), "localhost", false).is_err());
+        assert!(validate_dev_proxy_settings(1355, Some(1355), "localhost", false).is_err());
+    }
 }

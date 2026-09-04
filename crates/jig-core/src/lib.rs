@@ -7,6 +7,7 @@ const BOOTSTRAP_COMMAND: &str = "bootstrap_command";
 const COMMAND_KEYS: &[&str] = &[BOOTSTRAP_COMMAND, "contract_check_command"];
 const NATIVE_TOOLS: &[NativeToolDescriptor] = &[
     NativeToolDescriptor::new(tool::CONTRACT_CHECK, false, NativeToolKind::ContractCheck),
+    NativeToolDescriptor::new(tool::FILE_BUDGET, false, NativeToolKind::FileBudget),
     NativeToolDescriptor::new(tool::MIGRATION_ADD, true, NativeToolKind::MigrationAdd),
 ];
 const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];

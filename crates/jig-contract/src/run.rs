@@ -1,7 +1,12 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ActionEffect, ActionIntent, ActionRunner, ProfileId, ResultParser, TargetId};
+use serde_json::Value;
+
+use crate::{
+    ActionEffect, ActionIntent, ActionRunner, NativeFileBudgetConfigV1, ProfileId, ResultParser,
+    TargetId,
+};
 
 /// Closed arguments accepted by repository action runners.
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -92,6 +97,8 @@ pub struct PlannedTarget {
     pub selection_reasons_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_reasons_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_native_input: Option<PreparedNativeInputV1>,
 }
 
 impl PlannedTarget {
@@ -117,8 +124,184 @@ impl PlannedTarget {
             selection_reason_count: None,
             selection_reasons_truncated: false,
             selection_reasons_digest: None,
+            prepared_native_input: None,
         }
     }
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentViewV1 {
+    Worktree,
+    Index,
+    Inventory,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ExactTreeProvenanceV1 {
+    Explicit,
+    WorkPlan,
+    PushBefore,
+    UnbornWorktree,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum StrictInventoryReasonV1 {
+    ExplicitAudit,
+    ExplicitCheck,
+    MissingComparisonFallback,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ComparisonRequestV1 {
+    MergeBaseRef {
+        requested_ref: String,
+    },
+    ExactTree {
+        requested_oid: String,
+        provenance: ExactTreeProvenanceV1,
+    },
+    IndexAgainstHead,
+    StrictInventory {
+        reason: StrictInventoryReasonV1,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonPreparationFailureV1 {
+    pub code: String,
+    pub message: String,
+    pub failure_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrictInventoryFallbackV1 {
+    pub original_request: ComparisonRequestV1,
+    pub failure: ComparisonPreparationFailureV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempted_object_ids: Vec<String>,
+    pub failure_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ResolvedComparisonV1 {
+    MergeBase {
+        requested_ref: String,
+        resolved_ref_oid: String,
+        head_oid: String,
+        merge_base_oid: String,
+    },
+    ExactTree {
+        requested_oid: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peeled_commit_oid: Option<String>,
+        tree_oid: String,
+        provenance: ExactTreeProvenanceV1,
+    },
+    IndexAgainstHead {
+        head_or_empty_oid: String,
+    },
+    StrictInventory {
+        reason: StrictInventoryReasonV1,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_from: Option<StrictInventoryFallbackV1>,
+    },
+}
+
+impl ResolvedComparisonV1 {
+    #[must_use]
+    pub fn baseline_oid(&self) -> Option<&str> {
+        match self {
+            Self::MergeBase { merge_base_oid, .. } => Some(merge_base_oid),
+            Self::ExactTree { tree_oid, .. } => Some(tree_oid),
+            Self::IndexAgainstHead { head_or_empty_oid } => Some(head_or_empty_oid),
+            Self::StrictInventory { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicySourceV1 {
+    pub path: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyPreparationFailureV1 {
+    Missing,
+    Unreadable,
+    Invalid,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedDiagnosticV1 {
+    pub severity: FindingSeverity,
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PolicyPreparationV1 {
+    Ready {
+        policy_raw_digest: String,
+        policy_semantic_digest: String,
+    },
+    InvalidPolicy {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy_raw_digest: Option<String>,
+        reason: PolicyPreparationFailureV1,
+        diagnostics_count: u64,
+        diagnostics_digest: String,
+        diagnostics_preview: Vec<PreparedDiagnosticV1>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ComparisonPreparationV1 {
+    Ready {
+        comparison: ResolvedComparisonV1,
+    },
+    ComparisonUnavailable {
+        reason: ComparisonPreparationFailureV1,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attempted_object_ids: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedNativeInputV1 {
+    pub schema_version: u32,
+    pub view: CurrentViewV1,
+    pub request: ComparisonRequestV1,
+    pub configuration: NativeFileBudgetConfigV1,
+    pub policy_source: PolicySourceV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_plan_id: Option<String>,
+    pub policy: PolicyPreparationV1,
+    pub comparison: ComparisonPreparationV1,
+}
+
+impl PreparedNativeInputV1 {
+    pub const SCHEMA_VERSION: u32 = 1;
 }
 
 /// An immutable resolution of a selection request into exact executable targets.
@@ -141,7 +324,7 @@ pub struct RunPlan {
 }
 
 impl RunPlan {
-    pub const SCHEMA_VERSION: u32 = 2;
+    pub const SCHEMA_VERSION: u32 = 3;
 
     #[must_use]
     pub fn new(
@@ -268,6 +451,18 @@ pub struct TargetRunResult {
     pub findings: Vec<Finding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<EvidenceReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub findings_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_evidence: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluated_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until_ms: Option<u64>,
 }
 
 impl TargetRunResult {
@@ -289,8 +484,34 @@ impl TargetRunResult {
             input_digest: input_digest.into(),
             findings: Vec::new(),
             evidence: Vec::new(),
+            finding_count: None,
+            findings_truncated: false,
+            findings_digest: None,
+            native_evidence: None,
+            evaluated_at_ms: None,
+            valid_until_ms: None,
         }
     }
+}
+
+/// A typed, bounded result returned directly by an in-process native action.
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeActionResult {
+    pub conclusion: RunConclusion,
+    #[serde(default)]
+    pub findings: Vec<Finding>,
+    pub finding_count: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub findings_truncated: bool,
+    pub findings_digest: String,
+    #[serde(default)]
+    pub human_output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Value>,
+    pub evaluated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until_ms: Option<u64>,
 }
 
 /// The current folded state of one durable run.
@@ -363,7 +584,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(plan).unwrap(),
             serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "id": "run-plan_sha256",
                 "config_digest": "sha256:config",
                 "source": {"commit": "abc123", "worktree_fingerprint": "worktree-1"},
@@ -411,5 +632,48 @@ mod tests {
         let value = serde_json::to_value(target).unwrap();
         assert_eq!(value["status"], "queued");
         assert_eq!(value.get("conclusion"), None);
+    }
+
+    #[test]
+    fn schema_two_plans_and_pre_native_results_remain_readable() {
+        let old_plan = serde_json::json!({
+            "schema_version": 2,
+            "id": "run-plan_old",
+            "config_digest": "sha256:config",
+            "source": {"commit": "abc123", "worktree_fingerprint": "worktree-1"},
+            "targets": [{
+                "target": {"component": "api", "action": "test"},
+                "intent": "check",
+                "effects": ["read_only"],
+                "runner": {"kind": "native", "operation": "jig.schema_check"},
+                "input_digest": "sha256:input",
+                "reasons": []
+            }],
+            "execution_layers": [[{"component": "api", "action": "test"}]],
+            "effects": []
+        });
+        let plan: RunPlan = serde_json::from_value(old_plan).unwrap();
+        assert_eq!(plan.schema_version, 2);
+        assert!(plan.targets[0].prepared_native_input.is_none());
+        assert!(matches!(
+            &plan.targets[0].runner,
+            ActionRunner::Native {
+                configuration: None,
+                ..
+            }
+        ));
+
+        let old_result = serde_json::json!({
+            "target": {"component": "api", "action": "test"},
+            "status": "completed",
+            "conclusion": "success",
+            "config_digest": "sha256:config",
+            "input_digest": "sha256:input",
+            "findings": [],
+            "evidence": []
+        });
+        let result: TargetRunResult = serde_json::from_value(old_result).unwrap();
+        assert_eq!(result.finding_count, None);
+        assert_eq!(result.valid_until_ms, None);
     }
 }

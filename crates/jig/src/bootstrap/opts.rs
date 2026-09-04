@@ -5,6 +5,17 @@ use clap::Args;
 use super::{DevApp, FrontendApp, parse_frontend_app};
 use crate::context::{ExecutionConfig, RustMigrationLayout, StatusConfig};
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DevSettingsAnswers {
+    pub(crate) proxy_port: Option<u16>,
+    pub(crate) https_port: Option<u16>,
+    pub(crate) https: Option<bool>,
+    pub(crate) http2: Option<bool>,
+    pub(crate) lan: Option<bool>,
+    pub(crate) tld: Option<String>,
+    pub(crate) workspace_discovery: Option<bool>,
+}
+
 #[derive(Args, Clone, Debug, Default)]
 pub struct AnswerOpts {
     #[arg(
@@ -55,6 +66,9 @@ pub struct AnswerOpts {
     /// Set by an application scaffold; persisted so updates retain backend-specific policy.
     #[arg(skip)]
     pub(crate) backend_language: Option<crate::backend::BackendLanguage>,
+    /// Initial-render-only selection for authoring ordinary repository records.
+    #[arg(skip)]
+    pub(crate) repository_projection_hint: super::repository_model::RepositoryProjectionHint,
     /// Set by the Go scaffold to `none` or `postgres`.
     #[arg(skip)]
     pub(crate) go_database: Option<crate::backend::GoDatabase>,
@@ -200,6 +214,9 @@ pub struct AnswerOpts {
     pub(crate) frontend_workspace_roots: Vec<String>,
     #[arg(skip)]
     pub dev_apps: Vec<DevApp>,
+    /// Preserved scalar `[dev]` answers used by both harness and scaffold rendering.
+    #[arg(skip)]
+    pub(crate) dev_settings: Option<DevSettingsAnswers>,
     #[arg(skip)]
     pub(crate) status: Option<StatusConfig>,
     #[arg(skip)]

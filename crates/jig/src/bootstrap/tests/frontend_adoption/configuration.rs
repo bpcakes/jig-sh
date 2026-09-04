@@ -489,6 +489,164 @@ fn init_reports_and_preserves_legacy_dev_command_answer() {
     assert!(answers.contains("Deprecated and ignored by generated commands"));
 }
 
+fn assert_npm_adoption_report(output: &serde_json::Value) {
+    assert_json_array_contains(&output["notes"], "scripts/jig check agent-guides");
+    for command in [
+        "scripts/jig check typescript-lint",
+        "typescript-typecheck",
+        "typescript-build",
+        "typescript-coverage",
+    ] {
+        assert_json_array_contains(&output["notes"], command);
+    }
+    assert_json_array_contains(&output["render_report"]["files_created"], "scripts/jig");
+    assert_json_array_contains(
+        &output["adoption_profile"]["managed_files"],
+        ".github/workflows/webapp-checks.yml",
+    );
+    assert_json_array_contains_none(
+        &output["adoption_profile"]["retired_managed_files"],
+        ".github/workflows/webapp-checks.yml",
+    );
+    assert_json_array_contains(&output["render_report"]["todos"], "frontend app");
+}
+
+fn assert_npm_adoption_answers(repo: &Path) {
+    assert!(!repo.join("crates/api/AGENTS.md").exists());
+    assert!(!repo.join("Makefile").exists());
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert_text_contains_all(
+        &answers,
+        &[
+            "web_package_manager = \"npm\"",
+            "[[frontend_apps]]",
+            "[commands]",
+            "web_lint_command = \"scripts/check-webapps.sh check-one",
+            "repo_compat_typescript_lint_command = \"scripts/check-webapps.sh lint\"",
+            "kind = \"evidence\"",
+            "profile = \"verify\"",
+            "[[dev.apps]]",
+            "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]",
+        ],
+    );
+    assert_text_contains_none(
+        &answers,
+        &[
+            "tool = \"jig.typescript_lint\"",
+            "frontend-contract-drift",
+            "frontend-public-boundary",
+            "dev_command",
+        ],
+    );
+}
+
+fn assert_contract_runner_failure(repo: &Path, app: &str, expected_error: &str) {
+    let output = std::process::Command::new("bash")
+        .args(["scripts/check-webapps.sh", "contracts-drift-check", app])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_text_contains_all(&String::from_utf8_lossy(&output.stderr), &[expected_error]);
+}
+
+fn assert_npm_adoption_web_helpers(repo: &Path) {
+    let web_check = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    assert_text_contains_all(
+        &web_check,
+        &[
+            "app-check)",
+            "application-contracts)",
+            "public-artifacts)",
+            "if [ -f npm-shrinkwrap.json ]; then printf '%s\\n' \"npm-shrinkwrap.json\"",
+            "scripts/web-node.cjs",
+        ],
+    );
+    assert_text_contains_none(
+        &web_check,
+        &["--jig-workspace-metadata \"$operation\" \"$@\" <<'NODE'"],
+    );
+    assert!(!repo.join("scripts/contracts.mjs").exists());
+    assert_contract_runner_failure(
+        repo,
+        "apps/web",
+        "Required frontend contract runner scripts/contracts.mjs is missing",
+    );
+    assert_contract_runner_failure(
+        repo,
+        "apps/not-configured",
+        "is not configured in [[frontend_apps]]",
+    );
+    let web_node = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
+    let web_sources = format!("{web_check}\n{web_node}");
+    assert_text_contains_all(
+        &web_sources,
+        &[
+            "run_managed_npm_command install",
+            "run_managed_npm_command run-script",
+            "--location=project",
+            "dependencies_present",
+            "dependency_fingerprint",
+            "root.sha256",
+            "web-dependencies.lock",
+            "scripts/check-webapp-scripts.mjs",
+            "scripts/enforce-coverage.cjs",
+        ],
+    );
+    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
+    assert_text_contains_all(
+        &contract,
+        &[
+            "\"web_lint_command\"",
+            r#""name": "jig.typescript_lint""#,
+            r#""name": "jig.typescript_typecheck""#,
+            r#""name": "jig.typescript_build""#,
+            r#""name": "jig.typescript_coverage""#,
+        ],
+    );
+    assert!(repo.join("scripts/check-webapp-scripts.mjs").is_file());
+    assert_text_contains_all(
+        &fs::read_to_string(repo.join("scripts/check-webapp-scripts.mjs")).unwrap(),
+        &[
+            "typeof command !== \"string\"",
+            "command.trim().length === 0",
+        ],
+    );
+    assert_text_contains_all(&web_node, &["unknown workspace metadata operation"]);
+}
+
+fn assert_npm_adoption_workflows(repo: &Path) {
+    let web = fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
+    assert_text_contains_all(
+        &web,
+        &[
+            "actions/setup-node@v5",
+            "cache: npm",
+            "${{ matrix.app.dir }}/npm-shrinkwrap.json",
+            r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#,
+            "node scripts/check-webapp-scripts.mjs",
+            "node scripts/enforce-coverage.cjs",
+        ],
+    );
+    assert_text_contains_none(
+        &web,
+        &[
+            "Check generated API clients and public boundary",
+            "node scripts/contracts.mjs client-check",
+            "make enforce-coverage",
+            "oven-sh/setup-bun",
+        ],
+    );
+    assert_eq!(web.matches(r#"- "npm-shrinkwrap.json""#).count(), 2);
+    let rust = fs::read_to_string(repo.join(".github/workflows/rust-tests.yml")).unwrap();
+    assert_text_contains_all(&rust, &["scripts/jig check api:fmt"]);
+    assert_text_contains_none(&rust, &["scripts/jig fmt-check"]);
+    assert_eq!(rust.matches(r#"- "rust-toolchain""#).count(), 2);
+    let agent_map = fs::read_to_string(repo.join(".github/workflows/agent-map-check.yml")).unwrap();
+    assert_text_contains_all(&agent_map, &["scripts/jig check agent-map"]);
+    assert_text_contains_none(&agent_map, &["scripts/jig agent-map check"]);
+}
+
 #[test]
 fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     let _guard = lock_env();
@@ -547,349 +705,10 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     })
     .unwrap();
 
-    assert!(output["notes"].as_array().unwrap().iter().any(|note| {
-        note.as_str()
-            .unwrap()
-            .contains("scripts/jig check agent-guides")
-    }));
-    for command in [
-        "scripts/jig check typescript-lint",
-        "typescript-typecheck",
-        "typescript-build",
-        "typescript-coverage",
-    ] {
-        assert!(
-            output["notes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|note| note.as_str().unwrap().contains(command)),
-            "missing note for {command}"
-        );
-    }
-    assert!(
-        output["render_report"]["files_created"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == "scripts/jig")
-    );
-    assert!(
-        output["adoption_profile"]["managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == ".github/workflows/webapp-checks.yml")
-    );
-    assert!(
-        !output["adoption_profile"]["retired_managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == ".github/workflows/webapp-checks.yml")
-    );
-    assert!(
-        output["render_report"]["todos"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|todo| todo.as_str().unwrap().contains("frontend app"))
-    );
-    assert!(!repo.join("crates/api/AGENTS.md").exists());
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("web_package_manager = \"npm\""));
-    assert!(answers.contains("[[frontend_apps]]"));
-    assert!(answers.contains("[commands]"));
-    assert!(answers.contains("web_lint_command = \"scripts/check-webapps.sh check-one"));
-    assert!(
-        answers.contains("repo_compat_typescript_lint_command = \"scripts/check-webapps.sh lint\"")
-    );
-    assert!(answers.contains("kind = \"evidence\""));
-    assert!(answers.contains("profile = \"verify\""));
-    assert!(!answers.contains("tool = \"jig.typescript_lint\""));
-    assert!(!answers.contains("frontend-contract-drift"));
-    assert!(!answers.contains("frontend-public-boundary"));
-    assert!(answers.contains("[[dev.apps]]"));
-    assert!(answers.contains(
-        "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]"
-    ));
-    assert!(!answers.contains("dev_command"));
-
-    assert!(!repo.join("Makefile").exists());
-    let web_check = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
-    for compatibility_mode in ["app-check)", "application-contracts)", "public-artifacts)"] {
-        assert!(
-            web_check.contains(compatibility_mode),
-            "generated web helper must retain {compatibility_mode} for contract-v5 commands"
-        );
-    }
-    assert!(!repo.join("scripts/contracts.mjs").exists());
-    let missing_contract_runner = std::process::Command::new("bash")
-        .args([
-            "scripts/check-webapps.sh",
-            "contracts-drift-check",
-            "apps/web",
-        ])
-        .current_dir(&repo)
-        .output()
-        .unwrap();
-    assert!(!missing_contract_runner.status.success());
-    let missing_contract_stderr = String::from_utf8_lossy(&missing_contract_runner.stderr);
-    assert!(
-        missing_contract_stderr
-            .contains("Required frontend contract runner scripts/contracts.mjs is missing"),
-        "{missing_contract_stderr}"
-    );
-    let unconfigured_contract_app = std::process::Command::new("bash")
-        .args([
-            "scripts/check-webapps.sh",
-            "contracts-drift-check",
-            "apps/not-configured",
-        ])
-        .current_dir(&repo)
-        .output()
-        .unwrap();
-    assert!(!unconfigured_contract_app.status.success());
-    let unconfigured_stderr = String::from_utf8_lossy(&unconfigured_contract_app.stderr);
-    assert!(
-        unconfigured_stderr.contains("is not configured in [[frontend_apps]]"),
-        "{unconfigured_stderr}"
-    );
-    let web_node = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
-    let web_sources = format!("{web_check}\n{web_node}");
-    assert!(web_sources.contains("run_managed_npm_command install"));
-    assert!(web_sources.contains("run_managed_npm_command run-script"));
-    assert!(web_sources.contains("--location=project"));
-    assert!(
-        web_check
-            .contains("if [ -f npm-shrinkwrap.json ]; then printf '%s\\n' \"npm-shrinkwrap.json\"")
-    );
-    assert!(web_sources.contains("dependencies_present"));
-    assert!(web_sources.contains("dependency_fingerprint"));
-    assert!(web_sources.contains("root.sha256"));
-    assert!(web_sources.contains("web-dependencies.lock"));
-    assert!(web_sources.contains("scripts/check-webapp-scripts.mjs"));
-    assert!(web_sources.contains("scripts/enforce-coverage.cjs"));
-    assert!(web_check.contains("scripts/web-node.cjs"));
-    assert!(!web_check.contains("--jig-workspace-metadata \"$operation\" \"$@\" <<'NODE'"));
-    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains("\"web_lint_command\""));
-    assert!(contract.contains(r#""name": "jig.typescript_lint""#));
-    assert!(contract.contains(r#""name": "jig.typescript_typecheck""#));
-    assert!(contract.contains(r#""name": "jig.typescript_build""#));
-    assert!(contract.contains(r#""name": "jig.typescript_coverage""#));
-    assert!(repo.join("scripts/check-webapp-scripts.mjs").is_file());
-    let script_helper = fs::read_to_string(repo.join("scripts/check-webapp-scripts.mjs")).unwrap();
-    assert!(script_helper.contains("typeof command !== \"string\""));
-    assert!(script_helper.contains("command.trim().length === 0"));
-    let workspace_helper = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
-    assert!(workspace_helper.contains("unknown workspace metadata operation"));
-
-    let web_workflow =
-        fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
-    assert!(!web_workflow.contains("Check generated API clients and public boundary"));
-    assert!(!web_workflow.contains("node scripts/contracts.mjs client-check"));
-    assert!(web_workflow.contains("actions/setup-node@v5"));
-    assert!(web_workflow.contains("cache: npm"));
-    assert_eq!(
-        web_workflow.matches(r#"- "npm-shrinkwrap.json""#).count(),
-        2
-    );
-    assert!(web_workflow.contains("${{ matrix.app.dir }}/npm-shrinkwrap.json"));
-    assert!(web_workflow.contains(r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#));
-    assert!(web_workflow.contains("node scripts/check-webapp-scripts.mjs"));
-    assert!(web_workflow.contains("node scripts/enforce-coverage.cjs"));
-    assert!(!web_workflow.contains("make enforce-coverage"));
-    assert!(!web_workflow.contains("oven-sh/setup-bun"));
-
-    let rust_workflow = fs::read_to_string(repo.join(".github/workflows/rust-tests.yml")).unwrap();
-    assert!(rust_workflow.contains("scripts/jig check api:fmt"));
-    assert_eq!(rust_workflow.matches(r#"- "rust-toolchain""#).count(), 2);
-    assert!(!rust_workflow.contains("scripts/jig fmt-check"));
-
-    let agent_map_workflow =
-        fs::read_to_string(repo.join(".github/workflows/agent-map-check.yml")).unwrap();
-    assert!(agent_map_workflow.contains("scripts/jig check agent-map"));
-    assert!(!agent_map_workflow.contains("scripts/jig agent-map check"));
-}
-
-#[test]
-fn adopted_yarn_classic_repo_selects_a_compatible_corepack_version() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    fs::create_dir_all(repo.join("apps/web")).unwrap();
-    fs::write(
-        repo.join("package.json"),
-        r#"{"private":true,"workspaces":["apps/*"]}"#,
-    )
-    .unwrap();
-    fs::write(
-        repo.join("yarn.lock"),
-        "# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.\n# yarn lockfile v1\n",
-    )
-    .unwrap();
-    fs::write(
-        repo.join("apps/web/package.json"),
-        r#"{
-  "name": "web",
-  "scripts": {
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "build:bundle": "vite build",
-    "test:coverage": "vitest run --coverage",
-    "dev": "vite"
-  }
-}
-"#,
-    )
-    .unwrap();
-
-    run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            web_package_manager: Some("yarn".into()),
-            frontend_apps: vec![FrontendApp {
-                name: "web".into(),
-                dir: "apps/web".into(),
-                coverage_threshold: 80,
-                kind: "vite".into(),
-                role: "spa".into(),
-            }],
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    let resolve_spec = || {
-        let output = std::process::Command::new("bash")
-            .args([
-                "scripts/check-webapps.sh",
-                "package-manager-spec",
-                "apps/web",
-            ])
-            .current_dir(&repo)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "Yarn spec resolver failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    };
-
-    assert_eq!(resolve_spec(), "yarn@1.22.22");
-
-    fs::write(
-        repo.join("package.json"),
-        r#"{"private":true,"packageManager":"yarn@1.22.19"}"#,
-    )
-    .unwrap();
-    assert_eq!(resolve_spec(), "yarn@1.22.19");
-
-    fs::write(
-        repo.join("package.json"),
-        r#"{"private":true,"devEngines":{"packageManager":{"name":"yarn","version":"3.8.7"}}}"#,
-    )
-    .unwrap();
-    assert_eq!(resolve_spec(), "yarn@3.8.7");
-
-    fs::write(repo.join("package.json"), r#"{"private":true}"#).unwrap();
-    fs::write(repo.join("yarn.lock"), "__metadata:\n  version: 8\n").unwrap();
-    assert_eq!(resolve_spec(), "yarn@4.18.0");
-
-    let workflow = fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
-    assert!(workflow.contains("scripts/check-webapps.sh package-manager-spec"));
-    assert_eq!(workflow.matches(r#"- ".yarnrc""#).count(), 2);
-}
-
-#[test]
-fn adopt_with_project_owned_makefile_keeps_file_and_emits_direct_typescript_gates() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    fs::create_dir_all(repo.join("apps/web")).unwrap();
-    fs::write(repo.join("Makefile"), "project-owned:\n\t@true\n").unwrap();
-    fs::write(repo.join("package.json"), r#"{"private":true}"#).unwrap();
-    fs::write(repo.join("package-lock.json"), "{}").unwrap();
-    fs::write(
-        repo.join("apps/web/package.json"),
-        r#"{
-  "name": "web",
-  "scripts": {
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "build:bundle": "vite build",
-    "test:coverage": "vitest run --coverage",
-    "dev": "vite"
-  }
-}
-"#,
-    )
-    .unwrap();
-
-    run_adopt(AdoptOpts {
-        path: repo.clone(),
-        template: Some(template.path().display().to_string()),
-        template_mode: Some(TemplateMode::Committed),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            web_package_manager: Some("npm".into()),
-            frontend_apps: vec![FrontendApp {
-                name: "web".into(),
-                dir: "apps/web".into(),
-                coverage_threshold: 80,
-                kind: "vite".into(),
-                role: "spa".into(),
-            }],
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-
-    assert_eq!(
-        fs::read_to_string(repo.join("Makefile")).unwrap(),
-        "project-owned:\n\t@true\n"
-    );
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(!answers.contains("makefile_enabled"));
-    assert!(answers.contains("[[frontend_apps]]"));
-    assert!(answers.contains("[commands]"));
-    assert!(answers.contains("web_lint_command = \"scripts/check-webapps.sh check-one"));
-    assert!(answers.contains("jig.typescript_lint"));
-
-    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains("web_lint_command"));
-    assert!(contract.contains("jig.typescript_lint"));
-
-    let agent_guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
-    assert!(agent_guide.contains("scripts/jig check typescript-lint"));
-    assert!(!agent_guide.contains("make ci-webapps"));
+    assert_npm_adoption_report(&output);
+    assert_npm_adoption_answers(&repo);
+    assert_npm_adoption_web_helpers(&repo);
+    assert_npm_adoption_workflows(&repo);
 }
 
 mod package_managers;

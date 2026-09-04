@@ -1,5 +1,8 @@
 use super::*;
 
+mod root_authority;
+use root_authority::*;
+
 #[cfg(unix)]
 #[test]
 fn generated_web_checks_keep_app_local_yarn_lock_authoritative() {
@@ -312,11 +315,10 @@ esac
     assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "6");
 }
 
-#[cfg(unix)]
 #[test]
 fn generated_root_yarn_receipt_tracks_nested_app_authority_and_runtime_assets() {
     use std::ffi::OsString;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::PermissionsExt;
 
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -424,333 +426,20 @@ esac
     let mut path = OsString::from(fake_bin.as_os_str());
     path.push(":");
     path.push(std::env::var_os("PATH").unwrap_or_default());
-    let command = |mode: &str| {
-        std::process::Command::new("bash")
-            .args(["scripts/check-webapps.sh", mode, app_dir])
-            .current_dir(&repo)
-            .env("PATH", &path)
-            .env("INSTALL_COUNT", &install_count)
-            .env("YARN_EXECUTION_MARKER", &yarn_execution_marker)
-            .env("SYMLINKED_YARN_AUTHORITY", &symlinked_yarn_authority)
-            .env("YARN_PATH_PROBE", &yarn_path_probe)
-            .output()
-            .unwrap()
-    };
-    let resolve_spec = || {
-        let output = command("package-manager-spec");
-        assert!(
-            output.status.success(),
-            "nested root-workspace Yarn spec failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    };
-    let assert_install = |label: &str| {
-        let output = command("dependencies-install");
-        assert!(
-            output.status.success(),
-            "{label} failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let harness = RootYarnHarness {
+        repo,
+        app_dir,
+        path,
+        install_count,
+        yarn_execution_marker,
+        symlinked_yarn_authority,
+        yarn_path_probe,
     };
 
-    assert_eq!(resolve_spec(), "yarn@3.8.7");
-    assert_install("initial nested-authority install");
-    assert!(command("dependencies-ready").status.success());
-    assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "1");
-
-    fs::write(
-        repo.join("apps/group/package.json"),
-        r#"{"private":true,"packageManager":"yarn@3.8.8"}"#,
-    )
-    .unwrap();
-    assert_eq!(resolve_spec(), "yarn@3.8.8");
-    assert!(!command("dependencies-ready").status.success());
-    assert_install("changed intermediate package authority install");
-    assert!(command("dependencies-ready").status.success());
-
-    fs::write(
-        repo.join("apps/group/.yarnrc.yml"),
-        "checksumBehavior: reset\n",
-    )
-    .unwrap();
-    assert!(!command("dependencies-ready").status.success());
-    assert_install("changed intermediate Yarn config install");
-
-    fs::create_dir_all(repo.join("apps/group/.yarn/releases")).unwrap();
-    let runtime = repo.join("apps/group/.yarn/releases/yarn.cjs");
-    fs::write(&runtime, "runtime-v1\n").unwrap();
-    assert!(!command("dependencies-ready").status.success());
-    assert_install("added intermediate Yarn runtime install");
-    fs::write(&runtime, "runtime-v2\n").unwrap();
-    assert!(!command("dependencies-ready").status.success());
-    assert_install("changed intermediate Yarn runtime install");
-    assert!(command("dependencies-ready").status.success());
-
-    let outside_config_runtime = temp.path().join("outside-yarn-config-runtime");
-    fs::create_dir_all(&outside_config_runtime).unwrap();
-    fs::write(
-        outside_config_runtime.join("yarn.cjs"),
-        r#"#!/bin/sh
-set -eu
-: > "$YARN_EXECUTION_MARKER"
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(
-        outside_config_runtime.join("yarn.cjs"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    symlink(&outside_config_runtime, repo.join("tools")).unwrap();
-    for (label, config) in [
-        ("yarnPath", "yarnPath: ../../tools/yarn.cjs\n"),
-        (
-            "plugin path",
-            "plugins:\n  - path: ../../tools/yarn.cjs\n    spec: external-probe\n",
-        ),
-    ] {
-        fs::write(repo.join("apps/group/.yarnrc.yml"), config).unwrap();
-        let _ = fs::remove_file(&yarn_execution_marker);
-        let output = command("dependencies-ready");
-        assert!(!output.status.success(), "external {label} was accepted");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("symbolic link"),
-            "external {label} did not fail at the authority boundary: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !yarn_execution_marker.exists(),
-            "Yarn executed before external {label} was rejected"
-        );
-    }
-    fs::write(
-        repo.join("apps/group/.yarnrc.yml"),
-        "{ yarnPath: ../../tools/yarn.cjs }\n",
-    )
-    .unwrap();
-    let _ = fs::remove_file(&yarn_execution_marker);
-    let flow_config = command("dependencies-ready");
-    assert!(!flow_config.status.success());
-    assert!(
-        String::from_utf8_lossy(&flow_config.stderr).contains("unsupported top-level YAML"),
-        "flow-style Yarn runtime authority did not fail closed: {}",
-        String::from_utf8_lossy(&flow_config.stderr)
-    );
-    assert!(
-        !yarn_execution_marker.exists(),
-        "Yarn executed before a flow-style runtime authority was rejected"
-    );
-    fs::write(
-        repo.join("apps/group/.yarnrc.yml"),
-        "\"yarn\\u0050ath\": ../../tools/yarn.cjs\n",
-    )
-    .unwrap();
-    let _ = fs::remove_file(&yarn_execution_marker);
-    let escaped_key = command("dependencies-ready");
-    assert!(!escaped_key.status.success());
-    assert!(
-        String::from_utf8_lossy(&escaped_key.stderr).contains("unsupported top-level YAML"),
-        "escaped Yarn runtime key did not fail closed: {}",
-        String::from_utf8_lossy(&escaped_key.stderr)
-    );
-    assert!(
-        !yarn_execution_marker.exists(),
-        "Yarn executed before an escaped runtime key was rejected"
-    );
-
-    fs::write(
-        repo.join("apps/group/.yarnrc.yml"),
-        "checksumBehavior: reset\n",
-    )
-    .unwrap();
-    for (label, classic_config) in [
-        ("canonical", "yarn-path ../../tools/yarn.cjs\n"),
-        ("quoted", "\"yarn-path\" \"../../tools/yarn.cjs\"\n"),
-    ] {
-        fs::write(repo.join("apps/group/.yarnrc"), classic_config).unwrap();
-        let _ = fs::remove_file(&yarn_execution_marker);
-        let output = command("dependencies-ready");
-        assert!(
-            !output.status.success(),
-            "{label} Classic yarn-path was accepted"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("yarn-path")
-                || String::from_utf8_lossy(&output.stderr).contains("symbolic link"),
-            "{label} Classic yarn-path rejection was not diagnostic: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !yarn_execution_marker.exists(),
-            "Yarn executed before {label} Classic yarn-path was rejected"
-        );
-    }
-    fs::remove_file(repo.join("apps/group/.yarnrc")).unwrap();
-
-    for environment_name in [
-        "YARN_RC_FILENAME",
-        "YARN_YARN_PATH",
-        "YARN_PLUGINS",
-        "NPM_CONFIG_YARN_PATH",
-    ] {
-        let _ = fs::remove_file(&yarn_execution_marker);
-        let output = std::process::Command::new("bash")
-            .args(["scripts/check-webapps.sh", "dependencies-ready", app_dir])
-            .current_dir(&repo)
-            .env("PATH", &path)
-            .env("INSTALL_COUNT", &install_count)
-            .env("YARN_EXECUTION_MARKER", &yarn_execution_marker)
-            .env("SYMLINKED_YARN_AUTHORITY", &symlinked_yarn_authority)
-            .env("YARN_PATH_PROBE", &yarn_path_probe)
-            .env(environment_name, &yarn_path_probe)
-            .output()
-            .unwrap();
-        assert!(
-            !output.status.success(),
-            "ambient {environment_name} authority was accepted"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains(environment_name),
-            "ambient {environment_name} rejection was not diagnostic: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !yarn_execution_marker.exists(),
-            "Yarn executed before ambient {environment_name} was rejected"
-        );
-    }
-    fs::remove_file(repo.join("tools")).unwrap();
-    fs::write(
-        repo.join("apps/group/.yarnrc.yml"),
-        "checksumBehavior: reset\n",
-    )
-    .unwrap();
-    assert!(command("dependencies-ready").status.success());
-
-    let authority_failure_env = repo.join("yarn-authority-producer-failure");
-    fs::write(
-        &authority_failure_env,
-        r#"pwd() {
-  if [ "${FUNCNAME[1]:-}" = "yarn_scope_authority_paths" ]; then
-    return 41
-  fi
-  builtin pwd "$@"
-}
-"#,
-    )
-    .unwrap();
-    let authority_failure = |mode: &str| {
-        std::process::Command::new("/bin/bash")
-            .args(["scripts/check-webapps.sh", mode, app_dir])
-            .current_dir(&repo)
-            .env("PATH", &path)
-            .env("INSTALL_COUNT", &install_count)
-            .env("YARN_EXECUTION_MARKER", &yarn_execution_marker)
-            .env("SYMLINKED_YARN_AUTHORITY", &symlinked_yarn_authority)
-            .env("YARN_PATH_PROBE", &yarn_path_probe)
-            .env("BASH_ENV", &authority_failure_env)
-            .output()
-            .unwrap()
-    };
-    let invalid_readiness = authority_failure("dependencies-ready");
-    assert!(
-        invalid_readiness
-            .status
-            .code()
-            .is_some_and(|status| status >= 2),
-        "Yarn authority producer failure was downgraded to stale readiness: {:?}\n{}",
-        invalid_readiness.status.code(),
-        String::from_utf8_lossy(&invalid_readiness.stderr)
-    );
-
-    let stamp = repo.join(".agent/tmp/web-dependencies/root.sha256");
-    fs::remove_file(&stamp).unwrap();
-    let install_count_before_failure = fs::read_to_string(&install_count)
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
-    let invalid_install = authority_failure("dependencies-install");
-    assert!(
-        invalid_install
-            .status
-            .code()
-            .is_some_and(|status| status >= 2),
-        "Yarn install published an incomplete authority fingerprint: {:?}\n{}",
-        invalid_install.status.code(),
-        String::from_utf8_lossy(&invalid_install.stderr)
-    );
-    assert!(!stamp.exists());
-    assert!(!repo.join("node_modules/.jig-web-dependencies-v3").exists());
-    assert_eq!(
-        fs::read_to_string(&install_count)
-            .unwrap()
-            .trim()
-            .parse::<u32>()
-            .unwrap(),
-        install_count_before_failure + 1
-    );
-    assert_install("restore after Yarn authority producer failure");
-    assert!(command("dependencies-ready").status.success());
-
-    let outside_yarn = temp.path().join("outside-yarn-authority");
-    fs::create_dir_all(outside_yarn.join("releases")).unwrap();
-    fs::write(outside_yarn.join("releases/yarn.cjs"), "runtime-v2\n").unwrap();
-    fs::remove_dir_all(repo.join("apps/group/.yarn")).unwrap();
-    symlink(&outside_yarn, repo.join("apps/group/.yarn")).unwrap();
-    let symlinked_authority = command("dependencies-ready");
-    assert!(!symlinked_authority.status.success());
-    assert!(
-        String::from_utf8_lossy(&symlinked_authority.stderr).contains("symbolic link"),
-        "Yarn fingerprint followed an out-of-repository authority symlink: {}",
-        String::from_utf8_lossy(&symlinked_authority.stderr)
-    );
-    assert!(
-        !yarn_execution_marker.exists(),
-        "Yarn executed before inherited authority symlinks were rejected"
-    );
-
-    fs::remove_file(repo.join("apps/group/.yarn")).unwrap();
-    fs::write(
-        repo.join("package.json"),
-        r#"{"private":true,"workspaces":["apps/group/*"]}"#,
-    )
-    .unwrap();
-    fs::write(repo.join("apps/group/package.json"), r#"{"private":true}"#).unwrap();
-    let outside_lock = temp.path().join("outside-yarn.lock");
-    fs::write(&outside_lock, "# yarn lockfile v1\n").unwrap();
-    fs::remove_file(repo.join("yarn.lock")).unwrap();
-    symlink(&outside_lock, repo.join("yarn.lock")).unwrap();
-    let symlinked_lock = command("package-manager-spec");
-    assert_eq!(symlinked_lock.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&symlinked_lock.stderr).contains("symbolic link"),
-        "Yarn package-manager resolution followed an out-of-repository lock symlink: {}",
-        String::from_utf8_lossy(&symlinked_lock.stderr)
-    );
-    let _ = fs::remove_dir_all(repo.join(".agent/tmp/web-dependencies"));
-    let unready_symlinked_lock = command("dependencies-ready");
-    assert_eq!(
-        unready_symlinked_lock.status.code(),
-        Some(2),
-        "an absent receipt must not downgrade malformed Yarn lock authority"
-    );
-    let install_count_before_hard_failure = fs::read_to_string(&install_count).unwrap();
-    let install_with_symlinked_lock = command("dependencies-install");
-    assert_eq!(install_with_symlinked_lock.status.code(), Some(2));
-    assert_eq!(
-        fs::read_to_string(&install_count).unwrap(),
-        install_count_before_hard_failure,
-        "a hard readiness failure must not invoke Yarn install"
-    );
-    let node_version_with_symlinked_lock = command("node-version-file");
-    assert_eq!(
-        node_version_with_symlinked_lock.status.code(),
-        Some(2),
-        "root Node-version fallback must not mask malformed dependency scope authority"
-    );
+    assert_nested_yarn_authority_changes(&harness);
+    assert_external_yarn_runtime_authorities_are_rejected(&harness, temp.path());
+    assert_yarn_authority_producer_failures(&harness);
+    assert_symlinked_yarn_authorities_are_rejected(&harness, temp.path());
 }
 
 #[cfg(unix)]

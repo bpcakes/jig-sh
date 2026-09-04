@@ -5,6 +5,9 @@ version.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 <<[ package_name ]>> = { path = "../<<[ package_name ]>>"[% if db_enabled %], features = ["db"][% endif %] }
 <<[ package_name ]>>-http-common = { path = "../<<[ package_name ]>>-http-common" }

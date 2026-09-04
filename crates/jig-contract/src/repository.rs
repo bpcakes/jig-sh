@@ -325,6 +325,8 @@ pub enum ActionRunner {
     },
     Native {
         operation: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        configuration: Option<NativeActionConfigurationV1>,
     },
 }
 
@@ -342,8 +344,83 @@ impl ActionRunner {
     pub fn native(operation: impl Into<String>) -> Self {
         Self::Native {
             operation: operation.into(),
+            configuration: None,
         }
     }
+
+    #[must_use]
+    pub fn native_configured(
+        operation: impl Into<String>,
+        configuration: NativeActionConfigurationV1,
+    ) -> Self {
+        Self::Native {
+            operation: operation.into(),
+            configuration: Some(configuration),
+        }
+    }
+}
+
+/// Checked-in configuration for an in-process native action.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeActionConfigurationV1 {
+    FileBudget {
+        #[serde(flatten)]
+        config: NativeFileBudgetConfigV1,
+    },
+}
+
+impl NativeActionConfigurationV1 {
+    #[must_use]
+    pub fn file_budget(config: NativeFileBudgetConfigV1) -> Self {
+        Self::FileBudget { config }
+    }
+
+    #[must_use]
+    pub const fn as_file_budget(&self) -> Option<&NativeFileBudgetConfigV1> {
+        match self {
+            Self::FileBudget { config } => Some(config),
+        }
+    }
+}
+
+/// Behavior when requested comparison authority cannot be prepared.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingComparisonV1 {
+    #[default]
+    Block,
+    StrictInventory,
+}
+
+/// Fully defaulted checked-in limits and fallback authority for file budgets.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeFileBudgetConfigV1 {
+    #[serde(default = "default_file_budget_max_candidates_v1")]
+    pub max_candidates: u64,
+    #[serde(default = "default_file_budget_max_total_bytes_v1")]
+    pub max_total_bytes: u64,
+    #[serde(default)]
+    pub missing_comparison: MissingComparisonV1,
+}
+
+impl Default for NativeFileBudgetConfigV1 {
+    fn default() -> Self {
+        Self {
+            max_candidates: default_file_budget_max_candidates_v1(),
+            max_total_bytes: default_file_budget_max_total_bytes_v1(),
+            missing_comparison: MissingComparisonV1::default(),
+        }
+    }
+}
+
+pub const fn default_file_budget_max_candidates_v1() -> u64 {
+    10_000
+}
+
+pub const fn default_file_budget_max_total_bytes_v1() -> u64 {
+    256 * 1024 * 1024
 }
 
 /// How an action's output is normalized into findings.

@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "adoption_ownership_assertions.rs"]
+mod adoption_ownership_assertions;
+use adoption_ownership_assertions::*;
+
 #[test]
 fn adopt_defaults_to_tooling_only_when_sqlx_answers_are_omitted() {
     let _guard = lock_env();
@@ -133,101 +137,11 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
     })
     .unwrap();
 
-    assert_eq!(output["harness_footprint"], "minimal");
-    assert_eq!(output["ok"], true);
-    let generated_gates = output["adoption_profile"]["generated_gates"]
-        .as_array()
-        .unwrap();
-    assert!(
-        generated_gates
-            .iter()
-            .all(|gate| gate.as_str().unwrap().starts_with("jig "))
-    );
-    assert!(generated_gates.iter().any(|gate| gate == "jig bootstrap"));
-    let command_report = output["render_report"]["commands_detected_or_skipped"]
-        .as_array()
-        .unwrap();
-    assert!(
-        command_report
-            .iter()
-            .all(|command| { !command.as_str().unwrap().contains("scripts/jig") })
-    );
-    assert!(command_report.iter().any(|command| {
-        command
-            .as_str()
-            .unwrap()
-            .contains("bootstrap_command configured; run jig bootstrap")
-    }));
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("harness_footprint = \"minimal\""));
-    assert!(repo.join(".agent/jig-contract.json").is_file());
-    assert!(repo.join(".agent/PLANS.md").is_file());
-    assert!(repo.join(".agent/plans/.gitkeep").is_file());
-    assert!(repo.join(".agent/state/.gitkeep").is_file());
-    assert!(repo.join(".agent/.cache/.gitignore").is_file());
-    assert!(repo.join(managed_paths::MANIFEST_PATH).is_file());
-    assert!(repo.join(".gitignore").is_file());
-    assert!(repo.join(".gitattributes").is_file());
-    assert!(!repo.join("scripts/jig").exists());
-    assert!(!repo.join("scripts/install-jig.sh").exists());
-    assert!(!repo.join(".mcp.json").exists());
-    assert!(!repo.join("AGENTS.md").exists());
-    assert!(!repo.join("agent-map.md").exists());
-    assert!(!repo.join(".github/workflows/rust-tests.yml").exists());
-    assert!(!repo.join(".github/workflows/repo-policy.yml").exists());
-    assert!(!repo.join(".github/workflows/agent-map-check.yml").exists());
-    let manifest_paths = managed_manifest_paths(&repo);
-    assert_eq!(
-        manifest_paths,
-        output["adoption_profile"]["managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|path| path.as_str().unwrap().to_string())
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(
-        manifest_paths,
-        output["render_report"]["active_managed_paths"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|path| path.as_str().unwrap().to_string())
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        output["render_report"]["retired_managed_paths"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert!(manifest_paths.windows(2).all(|paths| paths[0] < paths[1]));
-    assert!(manifest_paths.iter().all(|path| repo.join(path).is_file()));
-    assert!(
-        manifest_paths
-            .iter()
-            .any(|path| path == managed_paths::MANIFEST_PATH)
-    );
-    assert!(manifest_paths.iter().all(|path| path != "AGENTS.md"));
-    assert!(
-        output["notes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|note| note.as_str().unwrap().contains("Minimal adoption"))
-    );
-    assert!(
-        output["next_steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step.as_str().unwrap().contains("jig loop"))
-    );
-
-    let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(ctx.repo_name(), "demo");
-    assert!(!ctx.required_commands().is_empty());
-    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
+    assert_minimal_report(&output);
+    assert_minimal_files(&repo);
+    assert_minimal_manifest(&repo, &output);
+    assert_minimal_guidance(&output);
+    assert_minimal_contract(&repo);
 
     run_update(UpdateOpts {
         path: repo.clone(),
@@ -575,11 +489,27 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
             "adopt-force",
         ] {
             let temp = tempdir().unwrap();
+            let main = temp.path().join("main");
+            fs::create_dir_all(&main).unwrap();
+            init_git_repo_for_test(&main);
+            git(&main, ["commit", "--allow-empty", "-m", "fixture"]).unwrap();
             let repo = temp.path().join("repo");
-            fs::create_dir_all(&repo).unwrap();
+            git(
+                &main,
+                [
+                    "worktree",
+                    "add",
+                    "--quiet",
+                    "-b",
+                    "fixture-worktree",
+                    repo.to_str().unwrap(),
+                ],
+            )
+            .unwrap();
             run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
 
-            fs::write(repo.join(".git"), "gitdir: ../main/.git/worktrees/demo\n").unwrap();
+            assert!(repo.join(".git").is_file());
+            let git_metadata_before = fs::read_to_string(repo.join(".git")).unwrap();
             fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
             let existing_backup = repo.join(".agent/.cache/adopt/backups/existing");
             fs::create_dir_all(&existing_backup).unwrap();
@@ -626,7 +556,7 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
             );
             assert_eq!(
                 fs::read_to_string(repo.join(".git")).unwrap(),
-                "gitdir: ../main/.git/worktrees/demo\n",
+                git_metadata_before,
                 "{alias}/{mode}: linked-worktree metadata changed"
             );
             assert_eq!(

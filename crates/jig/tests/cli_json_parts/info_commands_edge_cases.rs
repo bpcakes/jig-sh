@@ -1,118 +1,158 @@
 use super::*;
 
+fn assert_invalid_override_info(output: &Value, adopted: bool) {
+    assert_eq!(output["repo"]["name"], Value::Null);
+    assert_eq!(
+        output["repo"]["context_status"],
+        if adopted { "recovered" } else { "invalid" }
+    );
+    assert_eq!(command_status(output, "info"), "needs_setup");
+    assert_eq!(command_status(output, "prompt"), "ready");
+    assert_dev_proxy_status(output, "proxy", "needs_setup", "repo_context_unavailable");
+    if adopted {
+        assert_dev_proxy_status(output, "dev", "not_configured", "dev_apps_not_configured");
+    } else {
+        assert_dev_proxy_status(output, "dev", "needs_setup", "repo_context_unavailable");
+        #[cfg(feature = "dev-proxy")]
+        assert!(
+            command_by_name(output, "dev")["next_step"]
+                .as_str()
+                .unwrap()
+                .contains("JIG_REPO_ROOT")
+        );
+    }
+    assert_eq!(command_status(output, "vault"), "needs_setup");
+    assert_eq!(
+        command_by_name(output, "vault")["reason_code"],
+        "vault_not_initialized"
+    );
+}
+
+fn assert_invalid_override_next_steps(output: &Value, adopted: bool) {
+    assert!(
+        command_by_name(output, "info")["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("JIG_REPO_ROOT"),
+        "adopted={adopted}: info"
+    );
+    #[cfg(feature = "dev-proxy")]
+    assert!(
+        command_by_name(output, "proxy")["next_step"]
+            .as_str()
+            .unwrap()
+            .contains("JIG_REPO_ROOT"),
+        "adopted={adopted}: proxy"
+    );
+}
+
+fn assert_contextless_commands_run(
+    repo: &Path,
+    vault: &Path,
+    invalid_root: &Path,
+    proxy_state: &Path,
+    adopted: bool,
+) {
+    for args in [
+        &["vault", "status", "--json"][..],
+        &["prompt", "list", "--json"][..],
+    ] {
+        let command = jig()
+            .current_dir(repo)
+            .env("JIG_REPO_ROOT", invalid_root)
+            .env("JIG_VAULT_HOME", vault)
+            .env("JIG_PROXY_STATE_DIR", proxy_state)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            command.status.success(),
+            "adopted={adopted}: {}\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&command.stderr)
+        );
+    }
+}
+
+fn assert_proxy_and_dev_contextless_commands(
+    repo: &Path,
+    invalid_root: &Path,
+    vault: &Path,
+    proxy_state: &Path,
+    adopted: bool,
+) {
+    let proxy_list = jig()
+        .current_dir(repo)
+        .env("JIG_REPO_ROOT", invalid_root)
+        .env("JIG_VAULT_HOME", vault)
+        .env("JIG_PROXY_STATE_DIR", proxy_state)
+        .args(["proxy", "list", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        proxy_list.status.success(),
+        cfg!(feature = "dev-proxy"),
+        "adopted={adopted}: proxy list --json\n{}",
+        String::from_utf8_lossy(&proxy_list.stderr)
+    );
+
+    if adopted && cfg!(feature = "dev-proxy") {
+        let dev_status = jig()
+            .current_dir(repo)
+            .env("JIG_REPO_ROOT", invalid_root)
+            .env("JIG_PROXY_STATE_DIR", proxy_state)
+            .args(["dev", "status", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            dev_status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&dev_status.stderr)
+        );
+    }
+}
+
+fn assert_invalid_override_case(adopted: bool) {
+    let repo = tempdir().unwrap();
+    let vault = tempdir().unwrap();
+    if adopted {
+        write_info_commands_repo(repo.path());
+    }
+    let invalid_root = repo.path().join("missing-override");
+    let proxy_state = repo.path().join("proxy-state");
+    let output = jig()
+        .current_dir(repo.path())
+        .env("JIG_REPO_ROOT", &invalid_root)
+        .env("JIG_VAULT_HOME", vault.path())
+        .env("JIG_PROXY_STATE_DIR", &proxy_state)
+        .args(["info", "--commands", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "adopted={adopted}");
+    assert!(output.stderr.is_empty(), "adopted={adopted}");
+    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_invalid_override_info(&output, adopted);
+    assert_invalid_override_next_steps(&output, adopted);
+    assert_contextless_commands_run(
+        repo.path(),
+        vault.path(),
+        &invalid_root,
+        &proxy_state,
+        adopted,
+    );
+    assert_proxy_and_dev_contextless_commands(
+        repo.path(),
+        &invalid_root,
+        vault.path(),
+        &proxy_state,
+        adopted,
+    );
+}
+
 #[test]
 fn info_commands_matches_contextless_commands_with_an_invalid_override() {
     for adopted in [false, true] {
-        let repo = tempdir().unwrap();
-        let vault = tempdir().unwrap();
-        if adopted {
-            write_info_commands_repo(repo.path());
-        }
-        let invalid_root = repo.path().join("missing-override");
-        let proxy_state = repo.path().join("proxy-state");
-
-        let output = jig()
-            .current_dir(repo.path())
-            .env("JIG_REPO_ROOT", &invalid_root)
-            .env("JIG_VAULT_HOME", vault.path())
-            .env("JIG_PROXY_STATE_DIR", &proxy_state)
-            .args(["info", "--commands", "--json"])
-            .output()
-            .unwrap();
-
-        assert!(output.status.success(), "adopted={adopted}");
-        assert!(output.stderr.is_empty(), "adopted={adopted}");
-        let output: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(output["repo"]["name"], Value::Null);
-        assert_eq!(
-            output["repo"]["context_status"],
-            if adopted { "recovered" } else { "invalid" }
-        );
-        assert_eq!(command_status(&output, "info"), "needs_setup");
-        assert_eq!(command_status(&output, "prompt"), "ready");
-        assert_dev_proxy_status(&output, "proxy", "needs_setup", "repo_context_unavailable");
-        if adopted {
-            assert_dev_proxy_status(&output, "dev", "not_configured", "dev_apps_not_configured");
-        } else {
-            assert_dev_proxy_status(&output, "dev", "needs_setup", "repo_context_unavailable");
-            #[cfg(feature = "dev-proxy")]
-            assert!(
-                command_by_name(&output, "dev")["next_step"]
-                    .as_str()
-                    .unwrap()
-                    .contains("JIG_REPO_ROOT")
-            );
-        }
-        assert_eq!(command_status(&output, "vault"), "needs_setup");
-        assert_eq!(
-            command_by_name(&output, "vault")["reason_code"],
-            "vault_not_initialized"
-        );
-        assert!(
-            command_by_name(&output, "info")["next_step"]
-                .as_str()
-                .unwrap()
-                .contains("JIG_REPO_ROOT"),
-            "adopted={adopted}: info"
-        );
-        #[cfg(feature = "dev-proxy")]
-        assert!(
-            command_by_name(&output, "proxy")["next_step"]
-                .as_str()
-                .unwrap()
-                .contains("JIG_REPO_ROOT"),
-            "adopted={adopted}: proxy"
-        );
-
-        for args in [
-            &["vault", "status", "--json"][..],
-            &["prompt", "list", "--json"][..],
-        ] {
-            let command = jig()
-                .current_dir(repo.path())
-                .env("JIG_REPO_ROOT", &invalid_root)
-                .env("JIG_VAULT_HOME", vault.path())
-                .env("JIG_PROXY_STATE_DIR", &proxy_state)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                command.status.success(),
-                "adopted={adopted}: {}\n{}",
-                args.join(" "),
-                String::from_utf8_lossy(&command.stderr)
-            );
-        }
-
-        let proxy_list = jig()
-            .current_dir(repo.path())
-            .env("JIG_REPO_ROOT", &invalid_root)
-            .env("JIG_VAULT_HOME", vault.path())
-            .env("JIG_PROXY_STATE_DIR", &proxy_state)
-            .args(["proxy", "list", "--json"])
-            .output()
-            .unwrap();
-        assert_eq!(
-            proxy_list.status.success(),
-            cfg!(feature = "dev-proxy"),
-            "adopted={adopted}: proxy list --json\n{}",
-            String::from_utf8_lossy(&proxy_list.stderr)
-        );
-
-        if adopted && cfg!(feature = "dev-proxy") {
-            let dev_status = jig()
-                .current_dir(repo.path())
-                .env("JIG_REPO_ROOT", &invalid_root)
-                .env("JIG_PROXY_STATE_DIR", &proxy_state)
-                .args(["dev", "status", "--json"])
-                .output()
-                .unwrap();
-            assert!(
-                dev_status.status.success(),
-                "{}",
-                String::from_utf8_lossy(&dev_status.stderr)
-            );
-        }
+        assert_invalid_override_case(adopted);
     }
 }
 

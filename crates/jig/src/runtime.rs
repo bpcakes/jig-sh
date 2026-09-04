@@ -8,11 +8,12 @@ use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
-    RustFileLocInput, SqlxTodoInput,
+    SqlxTodoInput,
 };
 use crate::tool_defs::{self, MemoryTool, tool};
 
 mod agent;
+mod file_budget;
 mod loops;
 mod mcp_repository;
 mod migration;
@@ -24,6 +25,8 @@ mod vault;
 mod vault_env;
 mod vault_import;
 mod work;
+
+pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
 mod worker_runner;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -334,15 +337,6 @@ fn dispatch_check_with_observer(
             }),
         ),
         CheckCommand::AgentGuides => crate::policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
-        CheckCommand::RustFileLoc(opts) => crate::policy::run_check(
-            ctx,
-            PolicyCheckCommand::RustFileLoc(RustFileLocInput {
-                staged: opts.staged,
-                changed_against: opts.changed_against,
-                all: opts.all,
-            }),
-        ),
-        CheckCommand::NoModRs => crate::policy::run_check(ctx, PolicyCheckCommand::NoModRs),
         CheckCommand::MigrationImmutability(opts) => crate::policy::run_check(
             ctx,
             PolicyCheckCommand::MigrationImmutability(MigrationImmutabilityInput {
@@ -371,6 +365,7 @@ fn dispatch_named_check(
                 selectors: vec![selector.into()],
                 profile: None,
                 affected_base: None,
+                comparison: None,
                 explain: false,
                 fail_fast: false,
                 tool,
@@ -404,6 +399,13 @@ fn dispatch_repository_check_with_catalog(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     preserve_named_check_availability_diagnostic(ctx, catalog, &request.selectors)?;
+    if request.comparison.is_some()
+        && catalog.contract_version() < crate::repository::FILE_BUDGET_CONTRACT_VERSION
+    {
+        anyhow::bail!(
+            "explicit check comparison authority requires repository contract version 7 or later"
+        );
+    }
     let plan = crate::repository::plan_run(
         ctx,
         catalog,
@@ -411,6 +413,8 @@ fn dispatch_repository_check_with_catalog(
             selectors: request.selectors,
             profile: request.profile,
             affected_base: request.affected_base,
+            comparison: request.comparison,
+            work_plan_id: None,
         },
     )?;
     if request.explain {

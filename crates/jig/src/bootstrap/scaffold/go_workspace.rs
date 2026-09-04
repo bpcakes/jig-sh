@@ -135,7 +135,7 @@ impl InitScaffoldPlan {
             }
         };
         let mut commands = vec![in_component("go mod tidy")];
-        if !self.frontends.is_empty() {
+        if !self.frontends().is_empty() {
             commands.push("scripts/check-webapps.sh bootstrap".into());
         }
         if backend.database.is_postgres() {
@@ -144,7 +144,7 @@ impl InitScaffoldPlan {
                 "go tool sqlc generate && go run ./cmd/api --bootstrap-database",
             ));
         }
-        if !self.frontends.is_empty() {
+        if !self.frontends().is_empty() {
             commands.push("node scripts/contracts.mjs generate".into());
         }
         commands.join(" && ")

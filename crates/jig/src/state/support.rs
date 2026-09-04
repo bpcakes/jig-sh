@@ -1,13 +1,36 @@
 //! State helpers that are independent of durable record schemas and JSONL mechanics.
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use fs4::fs_std::FileExt;
 use ulid::Ulid;
 
 use crate::context::RepoContext;
+
+pub(super) struct AdvisoryLeaseFile(File);
+
+impl AdvisoryLeaseFile {
+    pub(super) fn new(file: File) -> Self {
+        Self(file)
+    }
+
+    #[cfg(test)]
+    pub(super) fn try_clone(&self) -> std::io::Result<File> {
+        self.0.try_clone()
+    }
+}
+
+impl Drop for AdvisoryLeaseFile {
+    fn drop(&mut self) {
+        // flock locks survive dup/fork as references to the same lock. Unlock
+        // explicitly so a short-lived inherited descriptor cannot extend a
+        // finished owner's lease until the child closes or execs it.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
 
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()

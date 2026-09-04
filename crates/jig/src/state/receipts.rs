@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use jig_contract::{Finding, TargetId};
+use jig_contract::{ActionId, ComponentId, Finding, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -73,6 +73,45 @@ pub(crate) struct TargetReceiptMetadata {
     pub(crate) config_digest: String,
     pub(crate) input_digest: String,
     pub(crate) findings: Vec<Finding>,
+    pub(crate) finding_count: Option<u64>,
+    pub(crate) findings_truncated: bool,
+    pub(crate) findings_digest: Option<String>,
+    pub(crate) evaluated_at_ms: Option<u64>,
+    pub(crate) valid_until_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FileBudgetLifecycleReceipt {
+    pub(crate) receipt_id: String,
+    pub(crate) config_digest: Option<String>,
+    pub(crate) input_digest: Option<String>,
+    pub(crate) exit_status: i32,
+    pub(crate) worktree_fingerprint: Option<String>,
+    pub(crate) worktree_fingerprint_error: Option<String>,
+    pub(crate) evaluated_at_ms: Option<u64>,
+    pub(crate) valid_until_ms: Option<u64>,
+    pub(crate) evidence: Option<Value>,
+}
+
+pub(crate) fn latest_file_budget_lifecycle_receipt(
+    ctx: &RepoContext,
+) -> Result<Option<FileBudgetLifecycleReceipt>> {
+    let target = TargetId::new(ComponentId::parse("repo")?, ActionId::parse("file-budget")?);
+    let (mut receipts, _) =
+        read_receipts_reverse(&ctx.state_file("receipts.jsonl"), 1, |receipt| {
+            receipt.target.as_ref() == Some(&target)
+        })?;
+    Ok(receipts.pop().map(|receipt| FileBudgetLifecycleReceipt {
+        receipt_id: receipt.id,
+        config_digest: receipt.config_digest,
+        input_digest: receipt.input_digest,
+        exit_status: receipt.exit_status,
+        worktree_fingerprint: receipt.worktree_fingerprint,
+        worktree_fingerprint_error: receipt.worktree_fingerprint_error,
+        evaluated_at_ms: receipt.evaluated_at_ms,
+        valid_until_ms: receipt.valid_until_ms,
+        evidence: receipt.evidence,
+    }))
 }
 
 pub(super) struct StateToolReceipt<'a> {
@@ -111,6 +150,8 @@ pub(crate) struct ToolReceiptStatus {
     pub(crate) diff_summary: String,
     pub(crate) worktree_fingerprint: Option<String>,
     pub(crate) worktree_fingerprint_error: Option<String>,
+    pub(crate) valid_until_ms: Option<u64>,
+    pub(crate) requires_time_validity: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -126,6 +167,8 @@ pub(crate) struct WorkReviewReceiptStatus {
     pub(crate) diff_summary: String,
     pub(crate) worktree_fingerprint: Option<String>,
     pub(crate) worktree_fingerprint_error: Option<String>,
+    pub(crate) valid_until_ms: Option<u64>,
+    pub(crate) requires_time_validity: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +205,10 @@ pub(crate) struct WorkCheckBatchEvidence {
     pub(crate) changed_paths_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) changed_paths_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) valid_until_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub(crate) requires_time_validity: bool,
     pub(crate) gates: Vec<WorkCheckGateEvidence>,
 }
 
@@ -172,6 +219,8 @@ impl WorkCheckBatchEvidence {
             changed_path_count,
             changed_paths_truncated,
             changed_paths_digest,
+            valid_until_ms,
+            requires_time_validity,
             mut gates,
             ..
         } = self;
@@ -182,6 +231,10 @@ impl WorkCheckBatchEvidence {
                 gate.changed_paths_truncated = changed_paths_truncated;
                 gate.changed_paths_digest.clone_from(&changed_paths_digest);
             }
+            if gate.valid_until_ms.is_none() {
+                gate.valid_until_ms = valid_until_ms;
+            }
+            gate.requires_time_validity |= requires_time_validity;
         }
         gates
     }
@@ -237,6 +290,10 @@ pub(crate) struct WorkCheckGateEvidence {
     pub(crate) source_batch_receipt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) source_tool_receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) valid_until_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub(crate) requires_time_validity: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +307,8 @@ pub(crate) struct ReusableWorkCheckEvidence {
     pub(crate) source_plan_id: String,
     pub(crate) source_batch_receipt_id: String,
     pub(crate) source_tool_receipt_id: String,
+    pub(crate) valid_until_ms: Option<u64>,
+    pub(crate) requires_time_validity: bool,
 }
 
 enum ReusableWorkCheckScanState {
@@ -436,6 +495,7 @@ pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
         .values()
         .map(|query| query.tool.as_str())
         .collect::<BTreeSet<_>>();
+    let scan_now_ms = now_ms();
     let mut successful_receipts = BTreeMap::new();
     let mut latest_matching_evidence = BTreeMap::new();
     let mut current_plan_evidence = BTreeSet::new();
@@ -443,7 +503,10 @@ pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
         ensure_receipt_scan_active(cancelled)?;
         let receipt = parse_raw_receipt(record, &path)?;
         if receipt.exit_status == 0 && requested_tools.contains(receipt.tool_name.as_str()) {
-            successful_receipts.insert(receipt.id.clone(), receipt.tool_name.clone());
+            successful_receipts.insert(
+                receipt.id.clone(),
+                (receipt.tool_name.clone(), tool_receipt_status(&receipt)),
+            );
         }
         if receipt.tool_name != tool::WORK_CHECK {
             return Ok(());
@@ -508,16 +571,35 @@ pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
                 continue;
             }
             let candidate = gate.tool_receipt_id.as_deref().and_then(|proving_receipt| {
+                let proving = successful_receipts.get(proving_receipt);
+                let valid_until_ms = [
+                    receipt.valid_until_ms,
+                    gate.valid_until_ms,
+                    proving.and_then(|(_, status)| status.valid_until_ms),
+                ]
+                .into_iter()
+                .flatten()
+                .min();
+                let requires_time_validity = evidence_requires_time_validity(
+                    receipt.evidence.as_ref().unwrap_or(&Value::Null),
+                ) || gate.requires_time_validity
+                    || proving.is_some_and(|(_, status)| status.requires_time_validity);
                 (receipt.exit_status == 0
                     && receipt.worktree_fingerprint.is_some()
                     && receipt.worktree_fingerprint_error.is_none()
                     && gate.status == "executed"
-                    && successful_receipts.get(proving_receipt).map(String::as_str)
-                        == Some(gate.tool.as_str()))
+                    && proving.map(|(tool, _)| tool.as_str()) == Some(gate.tool.as_str())
+                    && time_validity_is_current(
+                        valid_until_ms,
+                        requires_time_validity,
+                        scan_now_ms,
+                    ))
                 .then(|| ReusableWorkCheckEvidence {
                     source_plan_id: plan_id.to_string(),
                     source_batch_receipt_id: receipt.id.clone(),
                     source_tool_receipt_id: proving_receipt.to_string(),
+                    valid_until_ms,
+                    requires_time_validity,
                 })
             });
             latest_matching_evidence.insert(
@@ -539,6 +621,17 @@ pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
             ReusableWorkCheckScanState::Tombstone => None,
         })
         .collect())
+}
+
+pub(crate) const fn time_validity_is_current(
+    valid_until_ms: Option<u64>,
+    requires_time_validity: bool,
+    now_ms: u64,
+) -> bool {
+    match valid_until_ms {
+        Some(boundary) => now_ms < boundary,
+        None => !requires_time_validity,
+    }
 }
 
 pub(crate) fn work_gate_receipt_index_with_cancellation(

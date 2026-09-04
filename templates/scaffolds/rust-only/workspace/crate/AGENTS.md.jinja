@@ -1,0 +1,24 @@
+# <<[ package_name ]>> crate guide
+
+## Purpose
+
+This project-owned crate is the workspace's initial Rust [% if artifact_kind == "library" %]library[% else %]command-line artifact[% endif %]. Replace this purpose text when real behavior and ownership exist.
+
+## Key entrypoints
+
+- `src/[% if artifact_kind == "library" %]lib.rs[% else %]main.rs[% endif %]`: [% if artifact_kind == "library" %]library root[% else %]binary entrypoint[% endif %].
+
+## Edit here for X
+
+- Add the crate's [% if artifact_kind == "library" %]public contract and implementation[% else %]command behavior and process wiring[% endif %] under `src/`.
+
+## Invariants
+
+- Keep this guide aligned with the crate's real purpose, entrypoints, and boundaries.
+- Keep package publication and license metadata deliberate; the generated manifest begins with `publish = false` and no license grant.
+
+## Common commands
+
+- `cargo fmt --all -- --check`
+- `cargo clippy -p <<[ package_name ]>> --all-targets -- -D warnings`
+- `cargo test -p <<[ package_name ]>>`

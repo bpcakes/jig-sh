@@ -24,6 +24,11 @@ include!("tests_parts/part_02.rs");
 include!("tests_parts/part_03.rs");
 include!("tests_parts/part_04.rs");
 
+#[path = "tests_parts/comparison_scope.rs"]
+mod comparison_scope;
+#[path = "tests_parts/comparison_scope_regressions.rs"]
+mod comparison_scope_regressions;
+
 #[test]
 fn repository_source_identity_ignores_agent_only_commits() {
     let temp = tempdir().unwrap();

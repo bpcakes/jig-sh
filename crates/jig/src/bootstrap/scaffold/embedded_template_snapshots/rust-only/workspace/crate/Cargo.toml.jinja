@@ -1,0 +1,14 @@
+[package]
+name = "<<[ package_name ]>>"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+[% if artifact_kind == "cli" %]
+[[bin]]
+name = "<<[ package_name ]>>"
+path = "src/main.rs"
+[% endif %]

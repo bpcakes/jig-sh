@@ -13,8 +13,6 @@ use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
 
-// agentic-loc-exception: state projection and picker behavior remain co-located while focused projection types live in model/projection.rs.
-
 mod projection;
 
 pub(crate) use projection::{Projection, UsageSnapshotAssessment, WindowRole};

@@ -72,7 +72,7 @@ impl TargetFinisher<'_> {
                         exit_status: capture.receipt_exit_status,
                         stdout: &capture.stdout,
                         stderr: &capture.stderr,
-                        evidence: None,
+                        evidence: capture.native_evidence.clone(),
                         session_override: None,
                         collect_git_metadata: true,
                         collect_worktree_fingerprint: false,
@@ -84,6 +84,11 @@ impl TargetFinisher<'_> {
                         config_digest: self.run.plan.config_digest.clone(),
                         input_digest: input_digest.clone(),
                         findings: capture.findings.clone(),
+                        finding_count: capture.finding_count,
+                        findings_truncated: capture.findings_truncated,
+                        findings_digest: capture.findings_digest.clone(),
+                        evaluated_at_ms: capture.evaluated_at_ms,
+                        valid_until_ms: capture.valid_until_ms,
                     },
                 )
             })
@@ -101,6 +106,12 @@ impl TargetFinisher<'_> {
         result.exit_code = capture.exit_code;
         result.receipt_id.clone_from(&receipt_id);
         result.findings.clone_from(&capture.findings);
+        result.finding_count = capture.finding_count;
+        result.findings_truncated = capture.findings_truncated;
+        result.findings_digest.clone_from(&capture.findings_digest);
+        result.native_evidence.clone_from(&capture.native_evidence);
+        result.evaluated_at_ms = capture.evaluated_at_ms;
+        result.valid_until_ms = capture.valid_until_ms;
 
         let compatibility = started_at_ms.map(|_| {
             let alias = self
@@ -120,6 +131,11 @@ impl TargetFinisher<'_> {
                         "exit_status": capture.receipt_exit_status,
                         "stdout": capture.stdout,
                         "stderr": capture.stderr,
+                        "finding_count": capture.finding_count,
+                        "findings_truncated": capture.findings_truncated,
+                        "findings_digest": capture.findings_digest,
+                        "evaluated_at_ms": capture.evaluated_at_ms,
+                        "valid_until_ms": capture.valid_until_ms,
                     },
                     "receipt_id": receipt_id,
                 },
@@ -155,6 +171,12 @@ pub(super) struct TargetCapture {
     pub(super) command_key: Option<String>,
     pub(super) alias: Option<String>,
     pub(super) may_have_executed: bool,
+    pub(super) finding_count: Option<u64>,
+    pub(super) findings_truncated: bool,
+    pub(super) findings_digest: Option<String>,
+    pub(super) native_evidence: Option<Value>,
+    pub(super) evaluated_at_ms: Option<u64>,
+    pub(super) valid_until_ms: Option<u64>,
 }
 
 impl TargetCapture {
@@ -197,6 +219,37 @@ impl TargetCapture {
             command_key: None,
             alias: None,
             may_have_executed: true,
+            finding_count: None,
+            findings_truncated: false,
+            findings_digest: None,
+            native_evidence: None,
+            evaluated_at_ms: None,
+            valid_until_ms: None,
+        }
+    }
+
+    pub(super) fn from_native_action(result: jig_contract::NativeActionResult) -> Self {
+        let receipt_exit_status = if result.conclusion == RunConclusion::Success {
+            0
+        } else {
+            1
+        };
+        Self {
+            conclusion: result.conclusion,
+            exit_code: None,
+            receipt_exit_status,
+            stdout: result.human_output,
+            stderr: String::new(),
+            findings: result.findings,
+            command_key: None,
+            alias: None,
+            may_have_executed: true,
+            finding_count: Some(result.finding_count),
+            findings_truncated: result.findings_truncated,
+            findings_digest: Some(result.findings_digest),
+            native_evidence: result.evidence,
+            evaluated_at_ms: Some(result.evaluated_at_ms),
+            valid_until_ms: result.valid_until_ms,
         }
     }
 
@@ -212,6 +265,12 @@ impl TargetCapture {
             command_key: None,
             alias: None,
             may_have_executed: false,
+            finding_count: None,
+            findings_truncated: false,
+            findings_digest: None,
+            native_evidence: None,
+            evaluated_at_ms: None,
+            valid_until_ms: None,
         }
     }
 
@@ -248,6 +307,12 @@ impl TargetCapture {
             command_key: None,
             alias: None,
             may_have_executed: true,
+            finding_count: None,
+            findings_truncated: false,
+            findings_digest: None,
+            native_evidence: None,
+            evaluated_at_ms: None,
+            valid_until_ms: None,
         }
     }
 

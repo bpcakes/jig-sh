@@ -1,6 +1,4 @@
-// agentic-loc-exception: policy dispatch and repository-wide check implementations remain co-located for consistent Git boundary handling.
-
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
@@ -22,17 +20,6 @@ use crate::execution::{ExecutionCommandError, ExecutionControl};
 use crate::repository_path::validate_repository_directory_path;
 use crate::tool_defs::{self, kind};
 
-const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-// New or growing files above this fail unless an explicit exception is present.
-const HARD_LIMIT: usize = 800;
-// Files above this fail even with an exception unless they are legacy and non-increasing.
-const ABSOLUTE_MAX: usize = 1000;
-// Files entering this band warn but do not fail.
-const SOFT_LIMIT_START: usize = 500;
-// Files above this warn that they are approaching the hard limit.
-const SOFT_LIMIT_END: usize = 600;
-// Files above this emit informational guidance for agent-review ergonomics.
-const TARGET_HIGH: usize = 400;
 // Git output is sometimes repository authority rather than user-facing
 // diagnostics (for example an unborn schema snapshot's complete file list).
 // Keep that capture bounded, but large enough for ordinary repositories and
@@ -41,12 +28,6 @@ const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 
 pub(crate) struct AgentMapInput {
     pub(crate) map_path: PathBuf,
-}
-
-pub(crate) struct RustFileLocInput {
-    pub(crate) staged: bool,
-    pub(crate) changed_against: Option<String>,
-    pub(crate) all: bool,
 }
 
 pub(crate) struct MigrationImmutabilityInput {
@@ -100,8 +81,6 @@ pub(crate) fn run_direct(ctx: &RepoContext, command: PolicyDirectCommand) -> Res
 pub(crate) enum PolicyCheckCommand {
     AgentMap(AgentMapInput),
     AgentGuides,
-    RustFileLoc(RustFileLocInput),
-    NoModRs,
     MigrationImmutability(MigrationImmutabilityInput),
     SqlxUncheckedNonTest,
 }
@@ -110,8 +89,6 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
     match command {
         PolicyCheckCommand::AgentMap(opts) => agent_map::check(ctx, &opts),
         PolicyCheckCommand::AgentGuides => agent_map::check_guides(ctx),
-        PolicyCheckCommand::RustFileLoc(opts) => check_rust_file_loc(ctx, &opts),
-        PolicyCheckCommand::NoModRs => check_no_mod_rs(ctx),
         PolicyCheckCommand::MigrationImmutability(opts) => check_migration_immutability(ctx, &opts),
         PolicyCheckCommand::SqlxUncheckedNonTest => sqlx::check_non_test(ctx),
     }
@@ -149,23 +126,40 @@ pub(crate) fn validate_contract(
     ctx: &RepoContext,
 ) -> std::result::Result<(), ContractValidationError> {
     let mut errors = Vec::new();
-    let root = ctx.root();
-    let mcp_path = root.join(".mcp.json");
-    let jig_script = root.join("scripts/jig");
-    let install_script = root.join("scripts/install-jig.sh");
+    validate_contract_basics(ctx, &mut errors);
+    validate_required_commands(ctx, &mut errors);
+    let catalog = validate_repository_model(ctx, &mut errors);
+    validate_actions_and_evidence_gates(ctx, &mut errors);
 
+    validate_tool_definitions(ctx, catalog.as_ref(), &mut errors);
+    validate_work_tools(ctx, catalog.as_ref(), &mut errors);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ContractValidationError { errors })
+    }
+}
+
+fn validate_contract_basics(ctx: &RepoContext, errors: &mut Vec<String>) {
     if ctx.tool_specs().iter().any(|tool| tool.kind == "memory") {
         errors.push("Runtime state tools must not be declared in .agent/jig-contract.json.".into());
     }
     if !ctx.is_minimal_footprint() {
-        if !mcp_path.exists() {
-            errors.push("Missing .mcp.json.".into());
-        }
-        if !jig_script.exists() {
-            errors.push("Missing scripts/jig launcher.".into());
-        }
-        if !install_script.exists() {
-            errors.push("Missing scripts/install-jig.sh installer.".into());
+        for (path, message) in [
+            (ctx.root().join(".mcp.json"), "Missing .mcp.json."),
+            (
+                ctx.root().join("scripts/jig"),
+                "Missing scripts/jig launcher.",
+            ),
+            (
+                ctx.root().join("scripts/install-jig.sh"),
+                "Missing scripts/install-jig.sh installer.",
+            ),
+        ] {
+            if !path.exists() {
+                errors.push(message.into());
+            }
         }
     }
     if ctx.migration_policy_enabled() && ctx.migration_dir().trim().is_empty() {
@@ -174,73 +168,48 @@ pub(crate) fn validate_contract(
                 .into(),
         );
     }
+}
+
+fn validate_required_commands(ctx: &RepoContext, errors: &mut Vec<String>) {
     // RepoContext construction has already rejected unsupported contract epochs.
     for command_key in ctx.required_commands() {
         if !ctx.supports_command_key(command_key) {
             errors.push(format!(
                 "Unsupported required command in jig contract: {command_key}."
             ));
-            continue;
-        }
-        if let Err(error) = ctx.command_for_key(command_key) {
+        } else if let Err(error) = ctx.command_for_key(command_key) {
             errors.push(error.to_string());
         }
     }
-    let catalog = if ctx.contract_version() >= 6 {
-        match crate::repository::RepositoryCatalog::from_context(ctx) {
-            Ok(catalog) => {
-                for gate in ctx.work_gates() {
-                    let WorkGate::Evidence(gate) = gate else {
-                        continue;
-                    };
-                    if let Err(error) =
-                        crate::repository::resolve_evidence_targets(&catalog, &gate.selector)
-                    {
-                        errors.push(format!("Work gate '{}': {error}.", gate.id));
-                    }
-                }
-                Some(catalog)
-            }
-            Err(error) => {
-                errors.push(format!("Invalid repository model: {error}."));
-                None
-            }
+}
+
+fn validate_repository_model(
+    ctx: &RepoContext,
+    errors: &mut Vec<String>,
+) -> Option<crate::repository::RepositoryCatalog> {
+    if ctx.contract_version() < 6 {
+        return None;
+    }
+    let catalog = match crate::repository::RepositoryCatalog::from_context(ctx) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            errors.push(format!("Invalid repository model: {error}."));
+            return None;
         }
-    } else {
-        None
     };
-    if ctx.contract_version() >= 6 {
-        for action in ctx.action_specs() {
-            match &action.runner {
-                jig_contract::ActionRunner::Command { command, .. } => {
-                    if !ctx
-                        .required_commands()
-                        .iter()
-                        .any(|required| required == command)
-                    {
-                        errors.push(format!(
-                            "Target {} references command {command}, but it is not declared in required_commands.",
-                            action.target
-                        ));
-                    } else if let Err(error) = ctx.command_for_key(command) {
-                        errors.push(format!("Target {}: {error}.", action.target));
-                    }
-                }
-                jig_contract::ActionRunner::Native { operation } => {
-                    if !jig_features::is_supported_native_tool(operation) {
-                        errors.push(format!(
-                            "Target {} references unsupported native operation {operation}.",
-                            action.target
-                        ));
-                    } else if operation == jig_contract::tool::SCHEMA_CHECK
-                        && let Err(error) = schema::validate_runner(ctx, &action.target)
-                    {
-                        errors.push(format!("Target {}: {error}.", action.target));
-                    }
-                }
-            }
+    for gate in ctx.work_gates() {
+        let WorkGate::Evidence(gate) = gate else {
+            continue;
+        };
+        if let Err(error) = crate::repository::resolve_evidence_targets(&catalog, &gate.selector) {
+            errors.push(format!("Work gate '{}': {error}.", gate.id));
         }
-    } else {
+    }
+    Some(catalog)
+}
+
+fn validate_actions_and_evidence_gates(ctx: &RepoContext, errors: &mut Vec<String>) {
+    if ctx.contract_version() < 6 {
         for gate in ctx.work_gates() {
             if let WorkGate::Evidence(gate) = gate {
                 errors.push(format!(
@@ -249,8 +218,45 @@ pub(crate) fn validate_contract(
                 ));
             }
         }
+        return;
     }
+    for action in ctx.action_specs() {
+        match &action.runner {
+            jig_contract::ActionRunner::Command { command, .. } => {
+                if !ctx
+                    .required_commands()
+                    .iter()
+                    .any(|required| required == command)
+                {
+                    errors.push(format!(
+                        "Target {} references command {command}, but it is not declared in required_commands.",
+                        action.target
+                    ));
+                } else if let Err(error) = ctx.command_for_key(command) {
+                    errors.push(format!("Target {}: {error}.", action.target));
+                }
+            }
+            jig_contract::ActionRunner::Native { operation, .. } => {
+                if !jig_features::is_supported_native_tool(operation) {
+                    errors.push(format!(
+                        "Target {} references unsupported native operation {operation}.",
+                        action.target
+                    ));
+                } else if operation == jig_contract::tool::SCHEMA_CHECK
+                    && let Err(error) = schema::validate_runner(ctx, &action.target)
+                {
+                    errors.push(format!("Target {}: {error}.", action.target));
+                }
+            }
+        }
+    }
+}
 
+fn validate_tool_definitions(
+    ctx: &RepoContext,
+    catalog: Option<&crate::repository::RepositoryCatalog>,
+    errors: &mut Vec<String>,
+) {
     let tool_names = ctx
         .tool_specs()
         .iter()
@@ -262,89 +268,116 @@ pub(crate) fn validate_contract(
         }
     }
     for tool in ctx.tool_specs() {
-        let alias_action = catalog
-            .as_ref()
-            .and_then(|catalog| catalog.action_for_alias(&tool.name));
-        if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
-            errors.push(format!(
-                "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
-                tool.name
-            ));
-        }
-        let native_operation = alias_action.and_then(|action| match &action.runner {
-            jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
-            jig_contract::ActionRunner::Command { .. } => None,
-        });
-        let admission_name = native_operation.unwrap_or(&tool.name);
-        if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
-            errors.push(error);
-        }
-        match tool.kind.as_str() {
-            kind::NATIVE => {
-                if matches!(
-                    alias_action.map(|action| &action.runner),
-                    Some(jig_contract::ActionRunner::Command { .. })
-                ) {
-                    errors.push(format!(
-                        "Native tool {} aliases a command-backed action.",
-                        tool.name
-                    ));
-                    continue;
-                }
-                let operation = native_operation.unwrap_or(&tool.name);
-                if !jig_features::is_supported_native_tool(operation) {
-                    if operation == tool.name {
-                        errors.push(format!("Unsupported native tool: {}.", tool.name));
-                    } else {
-                        errors.push(format!(
-                            "Unsupported native operation {operation} for tool {}.",
-                            tool.name
-                        ));
-                    }
-                }
-            }
-            kind::COMMAND => {
-                if let Some(jig_contract::ActionRunner::Native { operation }) =
-                    alias_action.map(|action| &action.runner)
-                {
-                    errors.push(format!(
-                        "Command-backed tool {} aliases native operation {operation}.",
-                        tool.name
-                    ));
-                    continue;
-                }
-                let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty())
-                else {
-                    errors.push(format!(
-                        "Command-backed tool {} is missing command.",
-                        tool.name
-                    ));
-                    continue;
-                };
-                if let Some(jig_contract::ActionRunner::Command { command, .. }) =
-                    alias_action.map(|action| &action.runner)
-                    && command != command_key
-                {
-                    errors.push(format!(
-                        "Command-backed tool {} projects command {command_key}, but its owning action uses {command}.",
-                        tool.name
-                    ));
-                }
-                if !ctx
-                    .required_commands()
-                    .iter()
-                    .any(|required| required == command_key)
-                {
-                    errors.push(format!(
-                        "Command-backed tool {} references undeclared command {command_key}.",
-                        tool.name
-                    ));
-                }
-            }
-            other => errors.push(format!("Unsupported tool kind for {}: {other}.", tool.name)),
-        }
+        validate_tool_definition(ctx, catalog, tool, errors);
     }
+}
 
+fn validate_tool_definition(
+    ctx: &RepoContext,
+    catalog: Option<&crate::repository::RepositoryCatalog>,
+    tool: &jig_contract::ManifestTool,
+    errors: &mut Vec<String>,
+) {
+    let alias_action = catalog.and_then(|catalog| catalog.action_for_alias(&tool.name));
+    if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
+        errors.push(format!(
+            "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
+            tool.name
+        ));
+    }
+    let native_operation = alias_action.and_then(|action| match &action.runner {
+        jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
+        jig_contract::ActionRunner::Command { .. } => None,
+    });
+    let admission_name = native_operation.unwrap_or(&tool.name);
+    if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
+        errors.push(error);
+    }
+    match tool.kind.as_str() {
+        kind::NATIVE => validate_native_tool(tool, alias_action, native_operation, errors),
+        kind::COMMAND => validate_command_tool(ctx, tool, alias_action, errors),
+        other => errors.push(format!("Unsupported tool kind for {}: {other}.", tool.name)),
+    }
+}
+
+fn validate_native_tool(
+    tool: &jig_contract::ManifestTool,
+    alias_action: Option<&jig_contract::ActionSpec>,
+    native_operation: Option<&str>,
+    errors: &mut Vec<String>,
+) {
+    if matches!(
+        alias_action.map(|action| &action.runner),
+        Some(jig_contract::ActionRunner::Command { .. })
+    ) {
+        errors.push(format!(
+            "Native tool {} aliases a command-backed action.",
+            tool.name
+        ));
+        return;
+    }
+    let operation = native_operation.unwrap_or(&tool.name);
+    if jig_features::is_supported_native_tool(operation) {
+        return;
+    }
+    if operation == tool.name {
+        errors.push(format!("Unsupported native tool: {}.", tool.name));
+    } else {
+        errors.push(format!(
+            "Unsupported native operation {operation} for tool {}.",
+            tool.name
+        ));
+    }
+}
+
+fn validate_command_tool(
+    ctx: &RepoContext,
+    tool: &jig_contract::ManifestTool,
+    alias_action: Option<&jig_contract::ActionSpec>,
+    errors: &mut Vec<String>,
+) {
+    if let Some(jig_contract::ActionRunner::Native { operation, .. }) =
+        alias_action.map(|action| &action.runner)
+    {
+        errors.push(format!(
+            "Command-backed tool {} aliases native operation {operation}.",
+            tool.name
+        ));
+        return;
+    }
+    let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty()) else {
+        errors.push(format!(
+            "Command-backed tool {} is missing command.",
+            tool.name
+        ));
+        return;
+    };
+    if let Some(jig_contract::ActionRunner::Command { command, .. }) =
+        alias_action.map(|action| &action.runner)
+        && command != command_key
+    {
+        errors.push(format!(
+            "Command-backed tool {} projects command {command_key}, but its owning action uses {command}.",
+            tool.name
+        ));
+    }
+    if !ctx
+        .required_commands()
+        .iter()
+        .any(|required| required == command_key)
+    {
+        errors.push(format!(
+            "Command-backed tool {} references undeclared command {command_key}.",
+            tool.name
+        ));
+    }
+}
+
+fn validate_work_tools(
+    ctx: &RepoContext,
+    catalog: Option<&crate::repository::RepositoryCatalog>,
+    errors: &mut Vec<String>,
+) {
     let mut work_tools = HashSet::new();
     for name in ctx.work_check_tools() {
         if !work_tools.insert(name.clone()) {
@@ -363,10 +396,9 @@ pub(crate) fn validate_contract(
             continue;
         }
         let native_operation = catalog
-            .as_ref()
             .and_then(|catalog| catalog.action_for_alias(&name))
             .and_then(|action| match &action.runner {
-                jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+                jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
                 jig_contract::ActionRunner::Command { .. } => None,
             });
         if tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation) {
@@ -374,12 +406,6 @@ pub(crate) fn validate_contract(
                 "Configured work check or gate tool requires an argument: {name}."
             ));
         }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(ContractValidationError { errors })
     }
 }
 
@@ -601,107 +627,6 @@ pub(crate) fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> 
     agent_map::render(root, map_path)
 }
 
-fn check_no_mod_rs(ctx: &RepoContext) -> Result<Value> {
-    let tracked = git_list_files(ctx.root(), ctx.rust_crate_roots())?;
-    let violations = tracked
-        .into_iter()
-        .filter(|path| path == "mod.rs" || path.ends_with("/mod.rs"))
-        .collect::<Vec<_>>();
-    Ok(json!({ "ok": violations.is_empty(), "violations": violations }))
-}
-
-fn check_rust_file_loc(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<Value> {
-    let mode_count = [opts.staged, opts.changed_against.is_some(), opts.all]
-        .into_iter()
-        .filter(|value| *value)
-        .count();
-    if mode_count != 1 {
-        bail!("Exactly one of --staged, --changed-against, or --all is required.");
-    }
-    let previous_ref = if opts.staged {
-        if git_success(ctx.root(), &["rev-parse", "--verify", "HEAD"])? {
-            "HEAD".to_string()
-        } else {
-            EMPTY_TREE_HASH.into()
-        }
-    } else if let Some(ref_name) = &opts.changed_against {
-        ref_name.clone()
-    } else {
-        EMPTY_TREE_HASH.into()
-    };
-    let candidates = rust_candidate_files(ctx, opts)?;
-    let renames = if opts.all {
-        BTreeMap::new()
-    } else {
-        rust_renames(ctx, opts)?
-    };
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-    let mut infos = Vec::new();
-    for file in candidates {
-        if !ctx.root().join(&file).is_file() && !opts.staged {
-            continue;
-        }
-        let current = if opts.staged {
-            git_blob(ctx.root(), &format!(":{file}"))?
-        } else {
-            let path = ctx.root().join(&file);
-            fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read {}", path.display()))?
-        };
-        let current_count = current.lines().count();
-        let previous_count =
-            previous_line_count(ctx.root(), &previous_ref, &file, renames.get(&file))?;
-        let has_exception = current
-            .lines()
-            .take(40)
-            .any(|line| line.contains("agentic-loc-exception:") || line.contains("@generated"));
-        if current_count > ABSOLUTE_MAX {
-            if current_count <= previous_count && previous_count > ABSOLUTE_MAX {
-                warnings.push(format!(
-                    "{file} remains above the absolute max at {current_count} LOC but did not increase."
-                ));
-            } else {
-                errors.push(format!(
-                    "{file} is {current_count} LOC, above the absolute max of {ABSOLUTE_MAX}."
-                ));
-            }
-        } else if current_count > HARD_LIMIT {
-            if current_count <= previous_count && previous_count > HARD_LIMIT {
-                warnings.push(format!(
-                    "{file} remains above the hard limit at {current_count} LOC but did not increase."
-                ));
-            } else if has_exception {
-                warnings.push(format!(
-                    "{file} is {current_count} LOC and uses an explicit exception annotation."
-                ));
-            } else {
-                errors.push(format!(
-                    "{file} is {current_count} LOC, above the hard limit of {HARD_LIMIT}."
-                ));
-            }
-        } else if current_count > SOFT_LIMIT_END {
-            warnings.push(format!(
-                "{file} is {current_count} LOC and is approaching the hard limit."
-            ));
-        } else if current_count > SOFT_LIMIT_START {
-            warnings.push(format!(
-                "{file} is {current_count} LOC and is above the soft limit."
-            ));
-        } else if current_count > TARGET_HIGH {
-            infos.push(format!(
-                "{file} is {current_count} LOC and is approaching the soft limit."
-            ));
-        }
-    }
-    Ok(json!({
-        "ok": errors.is_empty(),
-        "errors": errors,
-        "warnings": warnings,
-        "infos": infos,
-    }))
-}
-
 fn check_migration_immutability(
     ctx: &RepoContext,
     opts: &MigrationImmutabilityInput,
@@ -758,102 +683,10 @@ fn migration_immutability_violations(bytes: &[u8]) -> Vec<String> {
     violations
 }
 
-fn rust_candidate_files(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<Vec<String>> {
-    let mut args = vec!["diff", "--name-only", "--diff-filter=AMRT", "-z"];
-    let changed_ref;
-    if opts.staged {
-        args.push("--cached");
-    } else if let Some(reference) = &opts.changed_against {
-        changed_ref = reference.as_str();
-        args.push(changed_ref);
-        args.push("HEAD");
-    }
-    if opts.all {
-        return git_list_files(ctx.root(), ctx.rust_crate_roots()).map(|files| {
-            files
-                .into_iter()
-                .filter(|path| path.ends_with(".rs"))
-                .collect::<Vec<_>>()
-        });
-    }
-    args.push("--");
-    let root_args = ctx
-        .rust_crate_roots()
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    args.extend(root_args);
-    Ok(split_nul(&git_output(ctx.root(), &args)?)
-        .into_iter()
-        .filter(|path| path.ends_with(".rs"))
-        .collect())
-}
-
-fn rust_renames(ctx: &RepoContext, opts: &RustFileLocInput) -> Result<BTreeMap<String, String>> {
-    let mut args = vec!["diff", "--name-status", "--diff-filter=R", "-z"];
-    if opts.staged {
-        args.push("--cached");
-    } else if let Some(reference) = &opts.changed_against {
-        args.push(reference);
-        args.push("HEAD");
-    }
-    args.push("--");
-    let root_args = ctx
-        .rust_crate_roots()
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    args.extend(root_args);
-    let entries = split_nul(&git_output(ctx.root(), &args)?);
-    let mut renames = BTreeMap::new();
-    let mut index = 0usize;
-    while index + 2 < entries.len() {
-        let _status = &entries[index];
-        let old = entries[index + 1].clone();
-        let new = entries[index + 2].clone();
-        renames.insert(new, old);
-        index += 3;
-    }
-    Ok(renames)
-}
-
-fn previous_line_count(
-    root: &Path,
-    reference: &str,
-    path: &str,
-    renamed_from: Option<&String>,
-) -> Result<usize> {
-    if let Some(contents) = git_blob_optional(root, &format!("{reference}:{path}"))? {
-        return Ok(contents.lines().count());
-    }
-    let Some(old) = renamed_from else {
-        return Ok(0);
-    };
-    Ok(git_blob_optional(root, &format!("{reference}:{old}"))?
-        .map(|contents| contents.lines().count())
-        .unwrap_or(0))
-}
-
 fn git_list_files(root: &Path, roots: &[String]) -> Result<Vec<String>> {
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend(roots.iter().map(String::as_str));
     Ok(split_nul(&git_output(root, &args)?))
-}
-
-fn git_blob(root: &Path, spec: &str) -> Result<String> {
-    git_text(root, &["show", spec])
-}
-
-fn git_blob_optional(root: &Path, spec: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["show", spec])
-        .stderr(Stdio::null())
-        .output()?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
 pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
@@ -864,10 +697,6 @@ pub(super) fn git_success(root: &Path, args: &[&str]) -> Result<bool> {
         .stderr(Stdio::null())
         .status()?
         .success())
-}
-
-fn git_text(root: &Path, args: &[&str]) -> Result<String> {
-    Ok(String::from_utf8_lossy(&git_output(root, args)?).into_owned())
 }
 
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {

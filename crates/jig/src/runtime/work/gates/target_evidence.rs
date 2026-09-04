@@ -58,6 +58,8 @@ impl TargetEvidenceEvaluation {
             "diff_summary": receipt.diff_summary,
             "receipt_worktree_fingerprint_error": receipt.receipt_worktree_fingerprint_error,
             "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
+            "valid_until_ms": receipt.valid_until_ms,
+            "requires_time_validity": receipt.requires_time_validity,
         })
     }
 }
@@ -203,10 +205,10 @@ impl EvidenceGateEvaluation {
     pub(super) fn to_latest_evidence(&self) -> Option<Value> {
         if self.index_error.is_some()
             || self.targets.is_empty()
-            || self
-                .targets
-                .iter()
-                .any(|target| target.receipt.exit_status != Some(0))
+            || self.targets.iter().any(|target| {
+                target.receipt.exit_status != Some(0)
+                    || target.receipt.freshness != GateFreshness::Fresh
+            })
         {
             return None;
         }
@@ -217,6 +219,15 @@ impl EvidenceGateEvaluation {
             .filter_map(|target| target.receipt.receipt_id.as_deref())
             .collect::<Vec<_>>();
         let receipt = self.receipt()?;
+        let valid_until_ms = self
+            .targets
+            .iter()
+            .filter_map(|target| target.receipt.valid_until_ms)
+            .min();
+        let requires_time_validity = self
+            .targets
+            .iter()
+            .any(|target| target.receipt.requires_time_validity);
         Some(json!({
             "tool": null,
             "skill": null,
@@ -237,6 +248,8 @@ impl EvidenceGateEvaluation {
             "changed_paths_digest": receipt.changed_paths_digest,
             "diff_summary": receipt.diff_summary,
             "ended_at_ms": receipt.ended_at_ms.unwrap_or(0),
+            "valid_until_ms": valid_until_ms,
+            "requires_time_validity": requires_time_validity,
             "targets": self.targets.iter().map(TargetEvidenceEvaluation::to_value).collect::<Vec<_>>(),
         }))
     }
@@ -261,6 +274,23 @@ fn target_evidence_freshness(
             "no receipt exists for this target in a compatible run".into(),
         );
     };
+    if !crate::state::time_validity_is_current(
+        receipt.valid_until_ms,
+        receipt.requires_time_validity,
+        crate::state::now_ms(),
+    ) {
+        return if receipt.valid_until_ms.is_some() {
+            (
+                GateFreshness::Stale,
+                "receipt time validity has expired".into(),
+            )
+        } else {
+            (
+                GateFreshness::Unknown,
+                "receipt requires time validity but recorded no boundary".into(),
+            )
+        };
+    }
     if receipt
         .config_digest
         .as_deref()
@@ -405,5 +435,67 @@ impl GateReceiptView for TargetReceiptStatus {
 
     fn worktree_fingerprint_error(&self) -> Option<&str> {
         self.worktree_fingerprint_error.as_deref()
+    }
+
+    fn valid_until_ms(&self) -> Option<u64> {
+        self.valid_until_ms
+    }
+
+    fn requires_time_validity(&self) -> bool {
+        self.requires_time_validity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target_receipt(
+        valid_until_ms: Option<u64>,
+        requires_time_validity: bool,
+    ) -> TargetReceiptStatus {
+        TargetReceiptStatus {
+            receipt_id: "receipt_target".into(),
+            run_id: "run_target".into(),
+            target: "repo:file-budget".parse().unwrap(),
+            config_digest: Some("sha256:config".into()),
+            input_digest: Some("sha256:input".into()),
+            exit_status: 0,
+            ended_at_ms: 1,
+            changed_paths: Vec::new(),
+            changed_path_count: 0,
+            changed_paths_truncated: false,
+            changed_paths_digest: None,
+            diff_summary: String::new(),
+            worktree_fingerprint: Some("fingerprint".into()),
+            worktree_fingerprint_error: None,
+            valid_until_ms,
+            requires_time_validity,
+        }
+    }
+
+    #[test]
+    fn target_evidence_enforces_time_validity_before_source_identity() {
+        let current = CurrentWorktreeFingerprint {
+            fingerprint: Some("fingerprint".into()),
+            error: None,
+        };
+        let (expired, reason) = target_evidence_freshness(
+            Some(&target_receipt(Some(0), true)),
+            "sha256:config",
+            Some("sha256:input"),
+            &current,
+        );
+        assert_eq!(expired, GateFreshness::Stale);
+        assert!(reason.contains("expired"));
+
+        let (missing, reason) = target_evidence_freshness(
+            Some(&target_receipt(None, true)),
+            "sha256:config",
+            Some("sha256:input"),
+            &current,
+        );
+        assert_eq!(missing, GateFreshness::Unknown);
+        assert!(reason.contains("no boundary"));
     }
 }

@@ -1,5 +1,3 @@
-// agentic-loc-exception: target execution, cancellation, and durable result transitions share one lifecycle boundary.
-
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Mutex;
@@ -30,6 +28,7 @@ use crate::state::{
 };
 
 use super::tool_execution::run_native_tool_with_control;
+use super::tool_execution::{NativeActionContext, run_prepared_native_action};
 
 const GENERIC_TARGET_TOOL: &str = "jig.target_run";
 const REPOSITORY_EXECUTION_LEASE_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -121,6 +120,7 @@ fn execute_freshly_planned_check_run_with_lease(
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
 ) -> Result<CheckRunExecution> {
+    validate_prepared_work_plan_identity(&plan, request.work_plan_id.as_deref())?;
     crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     // A nonempty run gets the same source check from its first target
     // precondition. An empty affected plan has no such target, so it must prove
@@ -175,6 +175,7 @@ pub(super) fn start_check_run(
     plan: RunPlan,
     work_plan_id: Option<String>,
 ) -> Result<(crate::state::DurableRun, crate::state::RunLease)> {
+    validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
     let repository_execution =
         crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
@@ -191,6 +192,7 @@ pub(super) fn start_check_run_with_event_cursor(
     crate::state::RunLease,
     crate::state::RunEventCursor,
 )> {
+    validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
     let repository_execution =
         crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
@@ -200,6 +202,32 @@ pub(super) fn start_check_run_with_event_cursor(
         work_plan_id,
         repository_execution,
     )
+}
+
+fn validate_prepared_work_plan_identity(plan: &RunPlan, supplied: Option<&str>) -> Result<()> {
+    let mut prepared = plan
+        .targets
+        .iter()
+        .filter_map(|target| target.prepared_native_input.as_ref())
+        .map(|input| input.work_plan_id.as_deref());
+    let Some(expected) = prepared.next() else {
+        return Ok(());
+    };
+    if prepared.any(|candidate| candidate != expected) {
+        bail!(
+            "run plan '{}' contains inconsistent prepared work-plan identities",
+            plan.id
+        );
+    }
+    if expected != supplied {
+        bail!(
+            "run plan '{}' was prepared for work_plan_id {:?}, but execution supplied {:?}",
+            plan.id,
+            expected,
+            supplied
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn execute_started_check_run(
@@ -404,7 +432,14 @@ fn execute_started_check_run_inner(
                     PhasePosition::new(target_index, target_count)
                         .expect("planned target position must be valid"),
                 );
-                let capture = run_target_capture(ctx, catalog, planned, control);
+                let capture = run_target_capture(
+                    ctx,
+                    catalog,
+                    &run_id,
+                    run.work_plan_id.as_deref(),
+                    planned,
+                    control,
+                );
                 let completed = CompletedTargetCapture::now(Some(started_at_ms), capture);
                 let (completed, fingerprint) =
                     source_epoch.finish_completed_target(ctx, planned, completed);
@@ -496,6 +531,8 @@ fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a Planne
 fn run_target_capture(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
+    run_id: &str,
+    work_plan_id: Option<&str>,
     planned: &PlannedTarget,
     run_control: &mut dyn RepositoryRunControl,
 ) -> TargetCapture {
@@ -513,7 +550,39 @@ fn run_target_capture(
             environment,
             &mut control,
         ),
-        ActionRunner::Native { operation } => match control.remaining() {
+        ActionRunner::Native { operation, .. } if operation == jig_contract::tool::FILE_BUDGET => {
+            match control.remaining() {
+                Err(stop) => stopped_before_start(planned, stop),
+                Ok(timeout) => {
+                    let deadline = Instant::now()
+                        .checked_add(timeout)
+                        .unwrap_or_else(Instant::now);
+                    match planned.prepared_native_input.as_ref() {
+                        Some(prepared_input) => {
+                            match run_prepared_native_action(NativeActionContext {
+                                repository: ctx,
+                                prepared_input,
+                                deadline,
+                                cancelled: &|| control.is_cancelled(),
+                                run_id,
+                                target: &planned.target,
+                                work_plan_id,
+                            }) {
+                                Ok(result) => TargetCapture::from_native_action(result),
+                                Err(error) => {
+                                    native_runner_error_capture(planned, operation, timeout, error)
+                                }
+                            }
+                        }
+                        None => TargetCapture::blocked(format!(
+                            "native target '{}' has no authenticated prepared input",
+                            planned.target
+                        )),
+                    }
+                }
+            }
+        }
+        ActionRunner::Native { operation, .. } => match control.remaining() {
             Err(stop) => stopped_before_start(planned, stop),
             Ok(timeout) => match run_native_tool_with_control(
                 ctx,
@@ -637,246 +706,8 @@ impl RepositoryRunControl for CancellationOnlyRunControl<'_> {
     }
 }
 
-struct TargetExecutionControl<'a> {
-    started: Instant,
-    timeout: Duration,
-    run_control: &'a mut dyn RepositoryRunControl,
-    poll_failure: Mutex<Option<String>>,
-}
-
-impl<'a> TargetExecutionControl<'a> {
-    fn new(
-        ctx: &RepoContext,
-        planned: &PlannedTarget,
-        run_control: &'a mut dyn RepositoryRunControl,
-    ) -> Self {
-        let timeout = planned
-            .timeout_seconds
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| ctx.command_timeout().duration());
-        Self {
-            started: Instant::now(),
-            timeout,
-            run_control,
-            poll_failure: Mutex::new(None),
-        }
-    }
-
-    fn remaining(&self) -> std::result::Result<Duration, TargetStop> {
-        match self.poll_cancelled() {
-            Ok(true) => return Err(TargetStop::Cancelled),
-            Ok(false) => {}
-            Err(message) => return Err(TargetStop::Blocked(message)),
-        }
-        let remaining = self.timeout.saturating_sub(self.started.elapsed());
-        if remaining.is_zero() {
-            Err(TargetStop::TimedOut)
-        } else {
-            Ok(remaining)
-        }
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.poll_cancelled().unwrap_or(true)
-    }
-
-    fn poll_cancelled(&self) -> std::result::Result<bool, String> {
-        if let Some(message) = self.poll_failure() {
-            return Err(message);
-        }
-        match self.run_control.cancelled() {
-            Ok(cancelled) => Ok(cancelled),
-            Err(error) => {
-                let message = format!("cancellation state could not be inspected: {error:#}");
-                *self
-                    .poll_failure
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.clone());
-                Err(message)
-            }
-        }
-    }
-
-    fn poll_failure(&self) -> Option<String> {
-        self.poll_failure
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    fn enforce_poll_health(&self, mut capture: TargetCapture) -> TargetCapture {
-        let Some(message) = self.poll_failure() else {
-            return capture;
-        };
-        capture.stderr.push_str(&format!("{message}\n"));
-        capture.findings.push(finding(message, "cancellation"));
-        if matches!(
-            capture.conclusion,
-            RunConclusion::Success | RunConclusion::Cancelled
-        ) {
-            capture.conclusion = RunConclusion::Blocked;
-            capture.receipt_exit_status = capture.receipt_exit_status.max(1);
-        }
-        capture
-    }
-}
-
-impl ExecutionObserver for TargetExecutionControl<'_> {
-    fn event(&mut self, event: ExecutionEvent<'_>) {
-        self.run_control.event(event);
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.run_control.flush()
-    }
-}
-
-impl ExecutionCancellation for TargetExecutionControl<'_> {
-    fn cancelled(&self) -> bool {
-        self.is_cancelled()
-    }
-}
-
-enum TargetStop {
-    Cancelled,
-    TimedOut,
-    Blocked(String),
-}
-
-fn stopped_before_start(planned: &PlannedTarget, stop: TargetStop) -> TargetCapture {
-    match stop {
-        TargetStop::Cancelled => TargetCapture::not_started(
-            RunConclusion::Cancelled,
-            format!("target '{}' was cancelled", planned.target),
-        ),
-        TargetStop::TimedOut => TargetCapture::not_started(
-            RunConclusion::TimedOut,
-            format!("target '{}' timed out", planned.target),
-        ),
-        TargetStop::Blocked(message) => TargetCapture::blocked(format!(
-            "target '{}' could not start because {message}",
-            planned.target
-        )),
-    }
-}
-
-fn run_command_target(
-    ctx: &RepoContext,
-    planned: &PlannedTarget,
-    command_key: &str,
-    working_directory: Option<&str>,
-    environment: &BTreeMap<String, String>,
-    control: &mut TargetExecutionControl<'_>,
-) -> TargetCapture {
-    let command_text = match ctx.command_for_key(command_key) {
-        Ok(command) => command,
-        Err(error) => {
-            return TargetCapture::blocked(format!(
-                "command runner '{command_key}' for target '{}' is unavailable: {error:#}",
-                planned.target
-            ))
-            .with_command_key(command_key);
-        }
-    };
-    let working_directory =
-        match resolve_repository_working_directory(ctx.root(), working_directory) {
-            Ok(path) => path,
-            Err(error) => {
-                return TargetCapture::blocked(format!(
-                    "target '{}' has an invalid working directory: {error:#}",
-                    planned.target
-                ))
-                .with_command_key(command_key);
-            }
-        };
-    if let Err(error) = validate_runner_environment(environment) {
-        return TargetCapture::blocked(format!(
-            "target '{}' has an invalid runner environment: {error:#}",
-            planned.target
-        ))
-        .with_command_key(command_key);
-    }
-
-    // Runner commands and their environment are checked-in execution
-    // authority, equivalent in trust to a repository shell script. Preserve
-    // the caller's ordinary environment and allow reviewed overrides such as
-    // PATH; Jig-owned native probes use narrower scrubbed environments.
-    let mut command = Command::new("bash");
-    command
-        .current_dir(working_directory)
-        .arg("-c")
-        .arg(command_text)
-        .envs(environment);
-    let timeout = match control.remaining() {
-        Ok(timeout) => timeout,
-        Err(conclusion) => {
-            return stopped_before_start(planned, conclusion).with_command_key(command_key);
-        }
-    };
-    let label = format!(
-        "Command runner '{command_key}' for target '{}'",
-        planned.target
-    );
-    match run_supervised_execution_command(
-        &mut command,
-        timeout,
-        ctx.command_output_limit(),
-        &label,
-        control,
-    ) {
-        Ok(output) => TargetCapture::from_process(
-            output.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&output.stdout).into_owned(),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-            planned.result_parser,
-        )
-        .with_command_key(command_key),
-        Err(SupervisedExecutionError::TimedOut) => TargetCapture::stopped_after_start(
-            RunConclusion::TimedOut,
-            format!(
-                "target '{}' exceeded its {timeout:?} timeout",
-                planned.target
-            ),
-        )
-        .with_command_key(command_key),
-        Err(SupervisedExecutionError::CancelledBeforeStart) => TargetCapture::not_started(
-            RunConclusion::Cancelled,
-            format!("target '{}' was cancelled", planned.target),
-        )
-        .with_command_key(command_key),
-        Err(SupervisedExecutionError::Cancelled) => TargetCapture::stopped_after_start(
-            RunConclusion::Cancelled,
-            format!("target '{}' was cancelled", planned.target),
-        )
-        .with_command_key(command_key),
-        Err(SupervisedExecutionError::OutputLimitExceeded {
-            stream,
-            stdout,
-            stderr,
-        }) => TargetCapture::failed_with_output(
-            format!(
-                "command runner '{command_key}' for target '{}' exceeded the {} byte {stream} capture limit",
-                planned.target,
-                ctx.command_output_limit().bytes()
-            ),
-            "execution_policy",
-            stdout,
-            stderr,
-        )
-        .with_command_key(command_key),
-        Err(SupervisedExecutionError::Failed {
-            error,
-            process_started,
-        }) => {
-            TargetCapture::blocked(format!(
-                "command runner '{command_key}' for target '{}' failed: {error:#}",
-                planned.target
-            ))
-            .with_maybe_executed(process_started)
-            .with_command_key(command_key)
-        }
-    }
-}
+mod target;
+use target::*;
 
 mod target_result;
 use target_result::*;

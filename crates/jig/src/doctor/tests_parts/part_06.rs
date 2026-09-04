@@ -635,6 +635,94 @@ fn doctor_environment_capture_audits_bash_startup_state_without_retaining_values
 }
 
 #[cfg(unix)]
+fn ambiguous_cargo_sqlx_check(case: &str) -> DoctorCheck {
+    let temp = tempdir().unwrap();
+    let command = match case {
+        "command_environment" => {
+            "CARGO_ALIAS_SQLX='run --package fake' cargo sqlx prepare -D sqlite:doctor.db"
+        }
+        "inline" => {
+            "cargo --config alias.sqlx='run --package fake' sqlx prepare -D sqlite:doctor.db"
+        }
+        "inline_include" => {
+            "cargo --config include='dispatch.toml' sqlx prepare -D sqlite:doctor.db"
+        }
+        "nested_config" => "cd crates/api && cargo sqlx prepare -D sqlite:doctor.db",
+        _ => "cargo sqlx prepare -D sqlite:doctor.db",
+    };
+    write_sqlx_doctor_fixture_with_command(temp.path(), command);
+    write_ambiguous_cargo_config(temp.path(), case);
+    let tools = tempdir().unwrap();
+    write_test_executable(&tools.path().join("cargo"), "#!/bin/sh\nexit 0\n");
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+    let mut environment = doctor_environment(tools.path(), None);
+    if case == "environment" {
+        environment.cargo_alias_sqlx = Some("run --package fake".into());
+    } else if case == "relative_cargo_home" {
+        environment.cargo_home = Some("relative-cargo-home".into());
+    }
+    required_tools_check_with_environment(&ctx, &environment)
+}
+
+#[cfg(unix)]
+fn write_ambiguous_cargo_config(root: &Path, case: &str) {
+    if !matches!(case, "config" | "config_include" | "nested_config") {
+        return;
+    }
+    let config_dir = if case == "nested_config" {
+        root.join("crates/api/.cargo")
+    } else {
+        root.join(".cargo")
+    };
+    fs::create_dir_all(&config_dir).unwrap();
+    let contents = if case == "config_include" {
+        "include = 'dispatch.toml'\n"
+    } else {
+        "[alias]\nsqlx = 'run --package fake'\n"
+    };
+    fs::write(config_dir.join("config.toml"), contents).unwrap();
+}
+
+#[cfg(unix)]
+fn assert_ambiguous_cargo_sqlx(case: &str, check: &DoctorCheck) {
+    assert!(check.ok, "{case}: {}", check.detail);
+    assert_eq!(check.status, "present_unverified", "{case}");
+    assert!(check.detail.contains("cargo sqlx dispatch"), "{case}");
+    if matches!(
+        case,
+        "inline" | "inline_include" | "config" | "config_include" | "nested_config"
+    ) {
+        assert!(check.detail.contains("config"), "{case}: {}", check.detail);
+    }
+    if matches!(case, "environment" | "command_environment") {
+        let detail = check.detail.to_ascii_lowercase();
+        assert!(
+            detail.contains("alias") || detail.contains("home"),
+            "{case}: {}",
+            check.detail,
+        );
+    }
+    if case == "relative_cargo_home" {
+        assert!(check.detail.contains("config"), "{case}: {}", check.detail);
+    }
+    assert_eq!(cargo_sqlx_program(check)["present"], true, "{case}");
+    assert_eq!(
+        cargo_sqlx_program(check)["driver_probe"]["status"],
+        "unverified",
+        "{case}",
+    );
+    assert!(
+        check.data["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|tool| tool["programs"].as_array().unwrap())
+            .all(|program| program["program"] != "cargo-sqlx"),
+        "{case}",
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn required_tools_does_not_trust_ambiguous_cargo_sqlx_dispatch() {
     for case in [
@@ -647,85 +735,8 @@ fn required_tools_does_not_trust_ambiguous_cargo_sqlx_dispatch() {
         "nested_config",
         "relative_cargo_home",
     ] {
-        let temp = tempdir().unwrap();
-        let command = match case {
-            "command_environment" => {
-                "CARGO_ALIAS_SQLX='run --package fake' cargo sqlx prepare -D sqlite:doctor.db"
-            }
-            "inline" => {
-                "cargo --config alias.sqlx='run --package fake' sqlx prepare -D sqlite:doctor.db"
-            }
-            "inline_include" => {
-                "cargo --config include='dispatch.toml' sqlx prepare -D sqlite:doctor.db"
-            }
-            "nested_config" => "cd crates/api && cargo sqlx prepare -D sqlite:doctor.db",
-            _ => "cargo sqlx prepare -D sqlite:doctor.db",
-        };
-        write_sqlx_doctor_fixture_with_command(temp.path(), command);
-        if matches!(case, "config" | "config_include" | "nested_config") {
-            let config_dir = if case == "nested_config" {
-                temp.path().join("crates/api/.cargo")
-            } else {
-                temp.path().join(".cargo")
-            };
-            fs::create_dir_all(&config_dir).unwrap();
-            fs::write(
-                config_dir.join("config.toml"),
-                if case == "config_include" {
-                    "include = 'dispatch.toml'\n"
-                } else {
-                    "[alias]\nsqlx = 'run --package fake'\n"
-                },
-            )
-            .unwrap();
-        }
-        let tools = tempdir().unwrap();
-        write_test_executable(&tools.path().join("cargo"), "#!/bin/sh\nexit 0\n");
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-        let mut environment = doctor_environment(tools.path(), None);
-        if case == "environment" {
-            environment.cargo_alias_sqlx = Some("run --package fake".into());
-        } else if case == "relative_cargo_home" {
-            environment.cargo_home = Some("relative-cargo-home".into());
-        }
-
-        let check = required_tools_check_with_environment(&ctx, &environment);
-
-        assert!(check.ok, "{case}: {}", check.detail);
-        assert_eq!(check.status, "present_unverified", "{case}");
-        assert!(check.detail.contains("cargo sqlx dispatch"), "{case}");
-        if matches!(
-            case,
-            "inline" | "inline_include" | "config" | "config_include" | "nested_config"
-        ) {
-            assert!(check.detail.contains("config"), "{case}: {}", check.detail);
-        }
-        if matches!(case, "environment" | "command_environment") {
-            let detail = check.detail.to_ascii_lowercase();
-            assert!(
-                detail.contains("alias") || detail.contains("home"),
-                "{case}: {}",
-                check.detail,
-            );
-        }
-        if case == "relative_cargo_home" {
-            assert!(check.detail.contains("config"), "{case}: {}", check.detail);
-        }
-        assert_eq!(cargo_sqlx_program(&check)["present"], true, "{case}");
-        assert_eq!(
-            cargo_sqlx_program(&check)["driver_probe"]["status"],
-            "unverified",
-            "{case}",
-        );
-        assert!(
-            check.data["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|tool| tool["programs"].as_array().unwrap())
-                .all(|program| program["program"] != "cargo-sqlx"),
-            "{case}",
-        );
+        let check = ambiguous_cargo_sqlx_check(case);
+        assert_ambiguous_cargo_sqlx(case, &check);
     }
 }
 

@@ -1,6 +1,7 @@
 use jig_contract::{
     ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
-    ManifestTool, ProfileId, ProfileSpec, TargetId, kind, tool,
+    ManifestTool, NativeActionConfigurationV1, NativeFileBudgetConfigV1, ProfileId, ProfileSpec,
+    TargetId, kind, tool,
 };
 use std::collections::BTreeSet;
 use tempfile::tempdir;
@@ -102,6 +103,81 @@ fn native_catalog_rejects_actions_without_effect_authority() {
     assert!(
         error.contains("execution isolation and approval"),
         "{error}"
+    );
+}
+
+fn file_budget_catalog(
+    contract_version: u32,
+    runner: ActionRunner,
+) -> anyhow::Result<RepositoryCatalog> {
+    let component = ComponentSpec::new(ComponentId::parse("repo").unwrap(), ".");
+    let target: TargetId = "repo:file-budget".parse().unwrap();
+    let mut action = ActionSpec::new(target.clone(), ActionIntent::Check, runner);
+    action.effects = vec![ActionEffect::ReadOnly];
+    action.inputs = vec!["**".into()];
+    let profile_id = ProfileId::parse("verify").unwrap();
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
+    RepositoryCatalog::from_native(
+        contract_version,
+        "sha256:config",
+        &[component],
+        &[action],
+        &[profile],
+        Some(&profile_id),
+    )
+}
+
+#[test]
+fn contract_v7_defaults_file_budget_configuration_in_catalog_authority() {
+    let catalog = file_budget_catalog(7, ActionRunner::native(tool::FILE_BUDGET)).unwrap();
+    let action = catalog.actions().next().unwrap();
+    let ActionRunner::Native { configuration, .. } = &action.runner else {
+        panic!("expected native runner");
+    };
+    assert_eq!(
+        configuration
+            .as_ref()
+            .and_then(NativeActionConfigurationV1::as_file_budget),
+        Some(&NativeFileBudgetConfigV1::default())
+    );
+}
+
+#[test]
+fn file_budget_configuration_is_epoch_operation_and_hard_cap_bound() {
+    let legacy = file_budget_catalog(6, ActionRunner::native(tool::FILE_BUDGET))
+        .unwrap_err()
+        .to_string();
+    assert!(legacy.contains("requires contract version 7"), "{legacy}");
+
+    let mismatch = file_budget_catalog(
+        7,
+        ActionRunner::native_configured(
+            tool::SCHEMA_CHECK,
+            NativeActionConfigurationV1::file_budget(NativeFileBudgetConfigV1::default()),
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        mismatch.contains("only valid for 'jig.file_budget'"),
+        "{mismatch}"
+    );
+
+    let too_large = file_budget_catalog(
+        7,
+        ActionRunner::native_configured(
+            tool::FILE_BUDGET,
+            NativeActionConfigurationV1::file_budget(NativeFileBudgetConfigV1 {
+                max_candidates: super::FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1 + 1,
+                ..NativeFileBudgetConfigV1::default()
+            }),
+        ),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        too_large.contains("max_candidates must be between"),
+        "{too_large}"
     );
 }
 

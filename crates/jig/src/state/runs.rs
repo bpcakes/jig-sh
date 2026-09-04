@@ -1,5 +1,3 @@
-// agentic-loc-exception: durable run replay, leases, cancellation, and result invariants remain co-located for atomicity audits.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -26,7 +24,7 @@ use super::jsonl::{
     scan_jsonl_raw, scan_jsonl_raw_from, scan_jsonl_raw_locked, with_jsonl_write_lock,
 };
 use super::records::RunEventRecord;
-use super::support::{ensure_state_layout, new_id, now_ms};
+use super::support::{AdvisoryLeaseFile, ensure_state_layout, new_id, now_ms};
 use super::{
     MAINTENANCE_WRITER_COORDINATION_NOTE,
     compression::{
@@ -68,7 +66,7 @@ pub(crate) struct RunLease {
     // The path is deliberately stable for the repository lifetime. Removing
     // an advisory-lock file after unlock permits another process to open and
     // lock a new inode while an inspector still holds the old inode.
-    _file: File,
+    _file: AdvisoryLeaseFile,
     _work_plan: Option<super::plans::ActivePlanRunLease>,
     _repository_execution: Option<super::RepositoryExecutionLease>,
 }
@@ -251,7 +249,7 @@ fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
     file.lock_exclusive()
         .with_context(|| format!("Failed to acquire worker lease for run '{run_id}'"))?;
     Ok(RunLease {
-        _file: file,
+        _file: AdvisoryLeaseFile::new(file),
         _work_plan: None,
         _repository_execution: None,
     })
@@ -267,7 +265,7 @@ pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> R
     match file.try_lock_exclusive() {
         Ok(true) => {
             let _lease = RunLease {
-                _file: file,
+                _file: AdvisoryLeaseFile::new(file),
                 _work_plan: None,
                 _repository_execution: None,
             };

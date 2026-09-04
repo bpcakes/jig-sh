@@ -20,6 +20,10 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "Cargo.toml",
     },
     ScaffoldTemplateFile {
+        template: "rust-common/workspace/clippy.toml.jinja",
+        output: "clippy.toml",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/core/Cargo.toml.jinja",
         output: "crates/{package}-core/Cargo.toml",
     },
@@ -248,7 +252,7 @@ impl InitScaffoldPlan {
             .chain(postgres_templates)
     }
 
-    fn template_output_path(&self, file: &ScaffoldTemplateFile) -> String {
+    pub(super) fn template_output_path(&self, file: &ScaffoldTemplateFile) -> String {
         file.output.replace("{package}", &self.package_name)
     }
 
@@ -293,7 +297,7 @@ impl InitScaffoldPlan {
     }
 
     pub(super) fn has_admin_frontend(&self) -> bool {
-        self.frontends
+        self.frontends()
             .iter()
             .any(|frontend| frontend.kind == super::ScaffoldFrontendKind::Admin)
     }

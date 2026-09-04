@@ -62,6 +62,7 @@ pub(super) fn infer_commands(
         out.rust_clippy_command.get_or_insert(nested.clippy);
         out.rust_test_command.get_or_insert(nested.test);
     }
+    warn_if_generated_clippy_checks_all_features(&mut out, warnings);
 
     if let Some(nextest) = detect_nextest(root, scan, warnings) {
         out.rust_tools.push(DetectedTool {
@@ -96,6 +97,22 @@ pub(super) fn infer_commands(
     warn_if_mixed_rust_test_runners(&mut out);
     dedup_tools(&mut out.rust_tools);
     out
+}
+
+fn warn_if_generated_clippy_checks_all_features(
+    out: &mut CommandInference,
+    warnings: &mut Vec<String>,
+) {
+    let Some(candidate) = out
+        .rust_clippy_command
+        .as_mut()
+        .filter(|candidate| candidate.from_nested_manifest_scan)
+    else {
+        return;
+    };
+    let warning = crate::bootstrap::clippy_policy::ALL_FEATURES_ADOPTION_WARNING.to_owned();
+    candidate.warnings.push(warning.clone());
+    warnings.push(warning);
 }
 
 impl CommandInference {

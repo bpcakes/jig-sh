@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "inference_assertions.rs"]
+mod inference_assertions;
+use inference_assertions::*;
+
 #[test]
 fn adopt_infers_repo_shape_before_resolving_answers() {
     let _guard = lock_env();
@@ -88,179 +92,12 @@ sqlx = { workspace = true }
     })
     .unwrap();
 
-    assert_eq!(output["detection_report"]["repo_name"], "inferred-demo");
-    assert_eq!(output["detection_report"]["rust_crate_roots"][0], "crates");
-    assert_eq!(output["detection_report"]["sqlx_enabled"], true);
-    assert_eq!(
-        output["detection_report"]["rust_migration_dir"],
-        "migrations"
-    );
-    assert_eq!(output["detection_report"]["web_package_manager"], "pnpm");
-    assert_eq!(output["detection_report"]["frontend_apps"][0]["dir"], "web");
-    assert_eq!(
-        output["detection_report"]["metadata"]["sqlx_enabled"]["confidence"],
-        "high"
-    );
-    assert!(
-        output["detection_report"]["metadata"]["sqlx_enabled"]["sources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|source| source.as_str().unwrap().contains("workspace.dependencies"))
-    );
-    assert!(
-        output["detection_report"]["metadata"]["sqlx_enabled"]["sources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|source| source.as_str() == Some("migrations/0001_init.sql"))
-    );
-    assert_eq!(
-        output["adoption_profile"]["detected_stack"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["Rust workspace", "SQLx", "pnpm", "Vite", "GitHub Actions"]
-    );
-    assert_eq!(
-        output["adoption_profile"]["ci_shape"]["workflow_files"][0],
-        ".github/workflows/rust.yml"
-    );
-    assert_eq!(
-        output["adoption_profile"]["ci_shape"]["generated_jig_checks_role"],
-        "supplement_existing_ci"
-    );
-    assert!(
-        !output["adoption_review"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item.as_str().unwrap().contains("overrides:"))
-    );
-    assert!(
-        output["adoption_profile"]["generated_gates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gate| gate == "scripts/jig check sqlx")
-    );
-    assert!(
-        !output["adoption_profile"]["generated_gates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gate| gate == "scripts/jig check schema")
-    );
-    assert!(
-        output["adoption_profile"]["generated_gates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|gate| gate == "scripts/jig check typescript-coverage")
-    );
-    assert!(
-        output["adoption_profile"]["generated_gates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|gate| gate.as_str().unwrap().starts_with("scripts/jig "))
-    );
-    assert!(
-        output["render_report"]["commands_detected_or_skipped"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|command| command.as_str().unwrap().contains("scripts/jig"))
-    );
-    assert!(
-        output["adoption_profile"]["managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == ".jig.toml")
-    );
-    assert!(
-        !output["adoption_profile"]["managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == "scripts/check-agent-guides.sh")
-    );
-    assert!(
-        !output["adoption_profile"]["retired_managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == "scripts/check-agent-guides.sh")
-    );
-    assert!(
-        !output["adoption_profile"]["retired_managed_files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == ".jig.toml")
-    );
-    assert!(
-        output["adoption_profile"]["assumptions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|assumption| assumption
-                .as_str()
-                .unwrap()
-                .contains("online cargo sqlx prepare"))
-    );
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("repo_name = \"inferred-demo\""));
-    assert!(answers.contains("default_branch = \"main\""));
-    assert!(answers.contains("ci_github_runner = \"ubuntu-24.04\""));
-    assert!(answers.contains("sqlx_enabled = true"));
-    assert!(answers.contains("rust_crate_roots = [\"crates\"]"));
-    assert!(answers.contains("rust_migration_dir = \"migrations\""));
-    assert!(answers.contains("rust_sqlx_metadata_dir = \".sqlx\""));
-    assert!(answers.contains("schema_dump_enabled = false"));
-    assert!(!answers.contains("schema_dump_command"));
-    assert!(answers.contains("sqlx_check_command = "));
-    assert!(answers.contains("cargo sqlx prepare --check"));
-    assert!(answers.contains("web_package_manager = \"pnpm\""));
-    assert!(answers.contains("[[frontend_apps]]"));
-    assert!(answers.contains("name = \"web\""));
-    assert!(answers.contains("dir = \"web\""));
-    assert!(answers.contains("argv = [\"pnpm\", \"run\", \"dev\"]"));
-    let generated_gates = output["adoption_profile"]["generated_gates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|gate| gate.as_str().unwrap())
-        .collect::<Vec<_>>();
-    let rendered_work_gate_tools = answers
-        .lines()
-        .filter_map(|line| {
-            line.trim()
-                .strip_prefix("tool = \"")
-                .and_then(|value| value.strip_suffix('"'))
-        })
-        .collect::<Vec<_>>();
-    for tool in rendered_work_gate_tools {
-        let expected = match tool {
-            "jig.contract_check" => "scripts/jig check contract",
-            "jig.test" => "scripts/jig check test",
-            "jig.typescript_lint" => "scripts/jig check typescript-lint",
-            "jig.typescript_typecheck" => "scripts/jig check typescript-typecheck",
-            "jig.typescript_build" => "scripts/jig check typescript-build",
-            "jig.typescript_coverage" => "scripts/jig check typescript-coverage",
-            "jig.sqlx_check" => "scripts/jig check sqlx",
-            "jig.schema_check" => "scripts/jig check schema",
-            "jig.schema_dump" => "scripts/jig sqlx schema dump",
-            other => panic!("unmapped rendered work gate tool {other}"),
-        };
-        assert!(
-            generated_gates.contains(&expected),
-            "generated_gates missing rendered work gate command {expected}"
-        );
-    }
+    assert_inferred_detection(&output);
+    assert_inferred_profile(&output);
+    assert_inferred_gates(&output);
+    assert_inferred_ownership(&output);
+    let answers = assert_inferred_config(&repo);
+    assert_rendered_work_gates(&output, &answers);
     assert!(!repo.join("crates/api/AGENTS.md").exists());
 }
 
@@ -590,6 +427,21 @@ test-locked:
     assert_eq!(
         output["detection_report"]["rust_test_locked_command"],
         "make test-locked"
+    );
+    let clippy_policy_warning = "cannot verify that it enforces `clippy::mod_module_files`";
+    assert!(
+        output["detection_report"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains(clippy_policy_warning))
+    );
+    assert!(
+        output["detection_report"]["metadata"]["rust_clippy_command"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains(clippy_policy_warning))
     );
     assert!(
         output["detection_report"]["metadata"]["rust_fmt_check_command"]["warnings"]

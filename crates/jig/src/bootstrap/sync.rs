@@ -23,9 +23,10 @@ use super::path::{
     validate_portable_planned_file_collisions, validate_repository_relative_file_leaf,
 };
 use super::staged_render::StagedRender;
+use super::update_transaction::RepositoryUpdateTransaction;
 use crate::progress::CliProgress;
 
-pub(super) struct ApplyRenderOptions<'a> {
+pub(super) struct ApplyRenderOptions<'a, 'lock> {
     pub(super) conflict_policy: ApplyRenderConflictPolicy<'a>,
     pub(super) dry_run: bool,
     pub(super) allow_answers_overwrite: bool,
@@ -34,6 +35,7 @@ pub(super) struct ApplyRenderOptions<'a> {
     pub(super) backup_root: Option<&'a Path>,
     pub(super) progress: CliProgress,
     pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
+    pub(super) update_transaction: Option<&'a mut RepositoryUpdateTransaction<'lock>>,
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +53,8 @@ pub(super) struct ApplyRenderReport {
     pub(super) files_modified: Vec<String>,
     pub(super) files_removed: Vec<String>,
     pub(super) files_unchanged: Vec<String>,
+    pub(super) authored_files_seeded: Vec<String>,
+    pub(super) authored_files_preserved: Vec<String>,
     pub(super) managed_blocks_inserted: Vec<String>,
     pub(super) managed_blocks_rendered: Vec<String>,
     pub(super) backups: Vec<ApplyRenderBackup>,
@@ -81,57 +85,15 @@ pub(super) enum RenderConflictKind {
 pub(super) fn apply_staged_render(
     staged: &StagedRender,
     destination: &Path,
-    mut options: ApplyRenderOptions<'_>,
+    mut options: ApplyRenderOptions<'_, '_>,
 ) -> Result<ApplyRenderReport> {
+    if options.init_transaction.is_some() && options.update_transaction.is_some() {
+        bail!("Internal error: render cannot use init and update transactions together");
+    }
     validate_portable_planned_file_collisions(&staged.active_paths)?;
     preflight_apply_paths(staged, destination, options.backup_root)?;
 
-    let conflicts = match options.conflict_policy {
-        ApplyRenderConflictPolicy::Accept => {
-            options.progress.step(
-                "check conflicts",
-                "--force supplied; accepting rendered output",
-            );
-            staged_render_conflicts(
-                staged,
-                destination,
-                options.allow_answers_overwrite,
-                options.allow_contract_overwrite,
-                options.allow_manifest_overwrite,
-            )?
-        }
-        ApplyRenderConflictPolicy::Reject(conflict_message) => {
-            options
-                .progress
-                .step("check conflicts", "compare rendered managed paths");
-            let conflicts = options
-                .progress
-                .log_blocked_on_err(staged_render_conflicts(
-                    staged,
-                    destination,
-                    options.allow_answers_overwrite,
-                    options.allow_contract_overwrite,
-                    options.allow_manifest_overwrite,
-                ))?;
-            if !conflicts.is_empty() {
-                let message = conflict_count_message(conflicts.len());
-                if options.dry_run {
-                    options.progress.info("conflicts", message);
-                    for line in conflict_lines(&conflicts) {
-                        options.progress.info("conflict", line);
-                    }
-                } else {
-                    options.progress.blocked(message);
-                    bail!(
-                        "{}\n{}",
-                        conflict_message,
-                        conflict_lines(&conflicts).join("\n")
-                    );
-                }
-            }
-            conflicts
-        }
-    };
+    let conflicts = resolve_render_conflicts(staged, destination, &options)?;
 
     options.progress.step(
         if options.dry_run {
@@ -156,45 +118,165 @@ pub(super) fn apply_staged_render(
         conflicts,
         ..ApplyRenderReport::default()
     };
+    apply_authored_seeds(staged, destination, &mut options, &mut report)?;
     for relative in ordered_operation_paths(staged) {
-        let rendered_path = staged.destination.join(relative);
-        let destination_path = destination.join(relative);
-        let relative_text = repository_relative_path_string(relative);
-        validate_managed_destination_leaf(destination, relative)?;
-        if path_exists(&rendered_path) {
-            if path_exists(&destination_path) {
-                if files_match(&rendered_path, &destination_path)? {
-                    report.files_unchanged.push(relative_text.clone());
-                    continue;
-                } else {
-                    report.files_modified.push(relative_text.clone());
-                    if let Some(spec) = managed_paths::managed_block_spec(relative)
-                        && managed_block_inserted(&rendered_path, Some(&destination_path), spec)?
-                    {
-                        report.managed_blocks_inserted.push(relative_text.clone());
+        apply_operation_path(staged, destination, relative, &mut options, &mut report)?;
+    }
+    Ok(report)
+}
+
+fn resolve_render_conflicts(
+    staged: &StagedRender,
+    destination: &Path,
+    options: &ApplyRenderOptions<'_, '_>,
+) -> Result<Vec<RenderConflict>> {
+    let conflicts = staged_render_conflicts(
+        staged,
+        destination,
+        options.allow_answers_overwrite,
+        options.allow_contract_overwrite,
+        options.allow_manifest_overwrite,
+    );
+    match options.conflict_policy {
+        ApplyRenderConflictPolicy::Accept => {
+            options.progress.step(
+                "check conflicts",
+                "--force supplied; accepting rendered output",
+            );
+            conflicts
+        }
+        ApplyRenderConflictPolicy::Reject(conflict_message) => {
+            options
+                .progress
+                .step("check conflicts", "compare rendered managed paths");
+            let conflicts = options.progress.log_blocked_on_err(conflicts)?;
+            if conflicts.is_empty() {
+                return Ok(conflicts);
+            }
+            let message = conflict_count_message(conflicts.len());
+            if options.dry_run {
+                options.progress.info("conflicts", message);
+                for line in conflict_lines(&conflicts) {
+                    options.progress.info("conflict", line);
+                }
+                Ok(conflicts)
+            } else {
+                options.progress.blocked(message);
+                bail!(
+                    "{}\n{}",
+                    conflict_message,
+                    conflict_lines(&conflicts).join("\n")
+                )
+            }
+        }
+    }
+}
+
+fn apply_authored_seeds(
+    staged: &StagedRender,
+    destination: &Path,
+    options: &mut ApplyRenderOptions<'_, '_>,
+    report: &mut ApplyRenderReport,
+) -> Result<()> {
+    for relative in staged.authored_seed_paths() {
+        let rendered_path = staged.destination.join(&relative);
+        let destination_path = destination.join(&relative);
+        let relative_text = repository_relative_path_string(&relative);
+        match validate_managed_destination_leaf(destination, &relative)? {
+            RepositoryFileLeaf::RegularFile => {
+                report.authored_files_preserved.push(relative_text);
+                continue;
+            }
+            RepositoryFileLeaf::Symlink => {
+                bail!(
+                    "Refusing to preserve authored policy through symlink {}",
+                    destination_path.display()
+                );
+            }
+            RepositoryFileLeaf::Missing => {}
+        }
+        report.authored_files_seeded.push(relative_text);
+        if options.dry_run {
+            continue;
+        }
+        if let Some(transaction) = options.update_transaction.as_deref_mut() {
+            options
+                .progress
+                .log_blocked_on_err(transaction.apply_path(&relative))?;
+        } else {
+            if let Some(transaction) = options.init_transaction.as_deref_mut() {
+                transaction.prepare_file_publication(&relative)?;
+            }
+            let published = options.progress.log_blocked_on_err(copy_rendered_path(
+                &rendered_path,
+                destination,
+                &destination_path,
+                &relative,
+                options.init_transaction.as_deref_mut(),
+            ))?;
+            if let Some(transaction) = options.init_transaction.as_deref_mut() {
+                match published {
+                    PublishedRepositoryPath::Regular(commit) => {
+                        transaction.record_regular_commit(&relative, commit)?;
+                    }
+                    PublishedRepositoryPath::Symlink(commit) => {
+                        transaction.record_symlink_commit(&relative, commit)?;
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_operation_path(
+    staged: &StagedRender,
+    destination: &Path,
+    relative: &Path,
+    options: &mut ApplyRenderOptions<'_, '_>,
+    report: &mut ApplyRenderReport,
+) -> Result<()> {
+    let rendered_path = staged.destination.join(relative);
+    let destination_path = destination.join(relative);
+    let relative_text = repository_relative_path_string(relative);
+    validate_managed_destination_leaf(destination, relative)?;
+    if path_exists(&rendered_path) {
+        if path_exists(&destination_path) {
+            if files_match(&rendered_path, &destination_path)? {
+                report.files_unchanged.push(relative_text);
+                return Ok(());
             } else {
-                report.files_created.push(relative_text.clone());
+                report.files_modified.push(relative_text.clone());
                 if let Some(spec) = managed_paths::managed_block_spec(relative)
-                    && managed_block_inserted(&rendered_path, None, spec)?
+                    && managed_block_inserted(&rendered_path, Some(&destination_path), spec)?
                 {
-                    report.managed_blocks_rendered.push(relative_text.clone());
+                    report.managed_blocks_inserted.push(relative_text);
                 }
             }
-            if !options.dry_run {
-                validate_managed_destination_leaf(destination, relative)?;
-                if path_exists(&destination_path)
-                    && !files_match(&rendered_path, &destination_path)?
-                {
-                    backup_destination_path(
-                        destination,
-                        &destination_path,
-                        relative,
-                        options.backup_root,
-                        &mut report,
-                    )?;
-                }
+        } else {
+            report.files_created.push(relative_text.clone());
+            if let Some(spec) = managed_paths::managed_block_spec(relative)
+                && managed_block_inserted(&rendered_path, None, spec)?
+            {
+                report.managed_blocks_rendered.push(relative_text);
+            }
+        }
+        if !options.dry_run {
+            validate_managed_destination_leaf(destination, relative)?;
+            if path_exists(&destination_path) && !files_match(&rendered_path, &destination_path)? {
+                backup_destination_path(
+                    destination,
+                    &destination_path,
+                    relative,
+                    options.backup_root,
+                    report,
+                )?;
+            }
+            if let Some(transaction) = options.update_transaction.as_deref_mut() {
+                options
+                    .progress
+                    .log_blocked_on_err(transaction.apply_path(relative))?;
+            } else {
                 if let Some(transaction) = options.init_transaction.as_deref_mut() {
                     transaction.prepare_file_publication(relative)?;
                 }
@@ -216,33 +298,34 @@ pub(super) fn apply_staged_render(
                     }
                 }
             }
-        } else if path_exists(&destination_path) {
-            report.files_removed.push(relative_text.clone());
-            if !options.dry_run {
+        }
+    } else if path_exists(&destination_path) {
+        report.files_removed.push(relative_text);
+        if !options.dry_run {
+            validate_managed_destination_leaf(destination, relative)?;
+            backup_destination_path(
+                destination,
+                &destination_path,
+                relative,
+                options.backup_root,
+                report,
+            )?;
+            if let Some(transaction) = options.update_transaction.as_deref_mut() {
+                options
+                    .progress
+                    .log_blocked_on_err(transaction.apply_path(relative))?;
+            } else if let Some(transaction) = options.init_transaction.as_deref_mut() {
+                transaction.prepare_file_publication(relative)?;
+                transaction.record_missing_commit(relative)?;
+            } else {
                 validate_managed_destination_leaf(destination, relative)?;
-                backup_destination_path(
-                    destination,
-                    &destination_path,
-                    relative,
-                    options.backup_root,
-                    &mut report,
-                )?;
-                if let Some(transaction) = options.init_transaction.as_deref_mut() {
-                    transaction.prepare_file_publication(relative)?;
-                    transaction.record_missing_commit(relative)?;
-                } else {
-                    validate_managed_destination_leaf(destination, relative)?;
-                    options
-                        .progress
-                        .log_blocked_on_err(remove_managed_destination_leaf(
-                            destination,
-                            relative,
-                        ))?;
-                }
+                options
+                    .progress
+                    .log_blocked_on_err(remove_managed_destination_leaf(destination, relative))?;
             }
         }
     }
-    Ok(report)
+    Ok(())
 }
 
 fn staged_render_conflicts(
@@ -321,7 +404,11 @@ fn preflight_apply_paths(
     destination: &Path,
     backup_root: Option<&Path>,
 ) -> Result<()> {
-    for relative in ordered_operation_paths(staged) {
+    let authored_seed_paths = staged.authored_seed_paths();
+    for relative in authored_seed_paths
+        .iter()
+        .chain(ordered_operation_paths(staged))
+    {
         validate_managed_destination_leaf(destination, relative)?;
         if let Some(backup_root) = backup_root {
             let backup_path = backup_root.join(relative);

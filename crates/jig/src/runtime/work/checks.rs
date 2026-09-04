@@ -1,4 +1,3 @@
-// agentic-loc-exception: work-check orchestration stays cohesive with its receipt and status transitions.
 use std::collections::BTreeSet;
 
 use anyhow::{Result, anyhow, bail};
@@ -289,6 +288,8 @@ fn check_configured_with_execution(
             selectors: targets.iter().map(ToString::to_string).collect(),
             profile: None,
             affected_base: None,
+            comparison: None,
+            work_plan_id: Some(plan_id.to_owned()),
         },
     )?;
     let evidence = execution.execute_evidence(
@@ -819,6 +820,7 @@ fn run_check(
         bail!("Cancelled tool returned a successful result");
     }
     let tool_receipt_id = result["receipt_id"].as_str().map(str::to_string);
+    let (valid_until_ms, requires_time_validity) = result_time_validity(&result);
     let gate_evidence = runnable.gate.map(|gate| {
         let status = if was_cancelled {
             "cancelled"
@@ -846,7 +848,7 @@ fn run_check(
                 message,
             )
         } else {
-            gate_evidence_from_scope(
+            let mut evidence = gate_evidence_from_scope(
                 gate.gate,
                 status,
                 gate.scope,
@@ -854,7 +856,10 @@ fn run_check(
                 Some(exit_status),
                 gate.forced,
                 None,
-            )
+            );
+            evidence.valid_until_ms = valid_until_ms;
+            evidence.requires_time_validity = requires_time_validity;
+            evidence
         }
     });
     let failure = if was_cancelled {
@@ -906,6 +911,15 @@ fn record_check_batch_receipt(
         .map(|failure| format!("{:#}", failure.error))
         .unwrap_or_default();
     let cancellation_active = observer.cancelled();
+    let valid_until_ms = outcome
+        .gate_evidence
+        .iter()
+        .filter_map(|gate| gate.valid_until_ms)
+        .min();
+    let requires_time_validity = outcome
+        .gate_evidence
+        .iter()
+        .any(|gate| gate.requires_time_validity);
     let receipt_input = ReceiptInput {
         tool_name: tool::WORK_CHECK,
         args: json!({
@@ -930,6 +944,8 @@ fn record_check_batch_receipt(
             changed_path_count: batch.changes.path_count,
             changed_paths_truncated: batch.changes.paths_truncated,
             changed_paths_digest: batch.changes.paths_digest.clone(),
+            valid_until_ms,
+            requires_time_validity,
             gates: outcome.gate_evidence.clone(),
         })?),
         session_override: None,
@@ -945,43 +961,6 @@ fn record_check_batch_receipt(
     } else {
         record_receipt_with_cancellation(ctx, receipt_input, &|| observer.cancelled())
     }
-}
-
-#[cfg(test)]
-mod compatibility_tests {
-    use super::EMPTY_CHECK_SELECTION_MESSAGE;
-
-    #[test]
-    fn empty_selection_guidance_is_truthful_for_legacy_and_current_contracts() {
-        assert!(EMPTY_CHECK_SELECTION_MESSAGE.contains("check gate"));
-        assert!(EMPTY_CHECK_SELECTION_MESSAGE.contains("--gate"));
-        assert!(EMPTY_CHECK_SELECTION_MESSAGE.contains("--tool"));
-        assert!(!EMPTY_CHECK_SELECTION_MESSAGE.contains("required"));
-        assert!(!EMPTY_CHECK_SELECTION_MESSAGE.contains("optional"));
-    }
-}
-
-fn revalidate_gate_scopes(
-    ctx: &RepoContext,
-    plan_id: &str,
-    initial: &[(crate::context::WorkCheckGate, GateScopeEvaluation)],
-    cancelled: &dyn Fn() -> bool,
-) -> std::result::Result<(), String> {
-    if initial.is_empty() {
-        return Ok(());
-    }
-    let final_context = PlanGateContext::load_with_cancellation(ctx, plan_id, cancelled)
-        .map_err(|error| format!("Failed to reload work gate scopes after checks: {error:#}"))?;
-    for (gate, before) in initial {
-        let after = final_context.evaluate_with_cancellation(ctx, gate, cancelled);
-        if &after != before {
-            return Err(format!(
-                "work gate '{}' scope changed during work check; rerun after repository inputs settle",
-                gate.id
-            ));
-        }
-    }
-    Ok(())
 }
 
 enum PreparedCheck {

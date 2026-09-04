@@ -1,11 +1,10 @@
 use super::*;
 
-#[cfg(unix)]
+mod dependency_scope;
+use dependency_scope::assert_dependency_scope_case;
+
 #[test]
 fn generated_web_dependency_scope_requires_workspace_membership_and_honors_app_locks() {
-    use std::ffi::OsString;
-    use std::os::unix::fs::PermissionsExt;
-
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let generated_scripts = generated_web_check_scripts();
@@ -18,321 +17,14 @@ fn generated_web_dependency_scope_requires_workspace_membership_and_honors_app_l
         ("yarn", "yarn", "yarn.lock"),
     ] {
         for workspace_member in [false, true] {
-            let case = if workspace_member {
-                "workspace"
-            } else {
-                "standalone"
-            };
-            let repo = temp.path().join(format!("{case_name}-{case}"));
-            generated_scripts[package_manager].install(&repo);
-
-            fs::create_dir_all(repo.join("apps/web")).unwrap();
-            fs::write(
-                repo.join("apps/web/package.json"),
-                r#"{"name":"web","scripts":{"lint":"true"}}"#,
-            )
-            .unwrap();
-            if workspace_member {
-                fs::write(
-                    repo.join("package.json"),
-                    r#"{"private":true,"workspaces":["apps/*"]}"#,
-                )
-                .unwrap();
-            } else {
-                fs::write(
-                    repo.join("package.json"),
-                    r#"{"private":true,"workspaces":["tools/*","!apps/web"]}"#,
-                )
-                .unwrap();
-                fs::write(
-                    repo.join(lockfile),
-                    if package_manager == "yarn" {
-                        "__metadata:\n  version: 8\n"
-                    } else {
-                        "unrelated-root-lock\n"
-                    },
-                )
-                .unwrap();
-                fs::create_dir_all(repo.join("node_modules")).unwrap();
-            }
-            if package_manager == "pnpm" {
-                fs::write(
-                    repo.join("pnpm-workspace.yaml"),
-                    if workspace_member {
-                        "packages:\n  - 'apps/**'\n"
-                    } else {
-                        "packages: ['apps/**', '!apps/web']\n"
-                    },
-                )
-                .unwrap();
-            }
-            if package_manager == "yarn" {
-                fs::write(repo.join(".yarnrc.yml"), "nodeLinker: node-modules\n").unwrap();
-            }
-
-            let fake_bin = repo.join("fake-bin");
-            fs::create_dir_all(&fake_bin).unwrap();
-            let fake_manager = fake_bin.join(package_manager);
-            fs::write(
-                &fake_manager,
-                r#"#!/bin/sh
-set -eu
-case "${1:-}" in
-  --version)
-    case "$(basename "$0")" in
-      pnpm) printf '%s\n' '10.12.1' ;;
-      yarn) printf '%s\n' '4.17.1' ;;
-      *) exit 2 ;;
-    esac
-    ;;
-  install|ci)
-    count=0
-    if [ -f "$INSTALL_COUNT" ]; then count="$(cat "$INSTALL_COUNT")"; fi
-    printf '%s\n' "$((count + 1))" > "$INSTALL_COUNT"
-    pwd > "$INSTALL_CWD"
-    if [ "$(basename "$0")" = yarn ]; then
-      [ -f "$LOCK_NAME" ] || printf '%s\n' '__metadata:' '  version: 8' > "$LOCK_NAME"
-    else
-      printf '%s\n' 'installed-lock' > "$LOCK_NAME"
-    fi
-    mkdir -p node_modules/test-package
-    printf '%s\n' '{"name":"test-package"}' > node_modules/test-package/package.json
-    ;;
-  config)
-    if [ "$(basename "$0")" = pnpm ]; then
-      [ "${2:-}" = list ] && [ "${3:-}" = --json ] || exit 2
-      printf '%s\n' '{"sharedWorkspaceLockfile":true,"enableGlobalVirtualStore":false}'
-      exit 0
-    fi
-    [ "$(basename "$0")" = yarn ] && [ "${2:-}" = --json ] || exit 2
-    scope="$(pwd -P)"
-    printf '%s\n' '{"key":"nodeLinker","effective":"node-modules"}'
-    printf '{"key":"cacheFolder","effective":"%s/.yarn/cache"}\n' "$scope"
-    printf '{"key":"installStatePath","effective":"%s/.yarn/install-state.gz"}\n' "$scope"
-    printf '{"key":"pnpUnpluggedFolder","effective":"%s/.yarn/unplugged"}\n' "$scope"
-    printf '%s\n' '{"key":"pnpEnableInlining","effective":true}'
-    printf '%s\n' '{"key":"pnpEnableEsmLoader","effective":false}'
-    ;;
-  pkg)
-    [ "$(basename "$0")" = pnpm ] && [ "${NPM_CONFIG_IGNORE_PNPMFILE:-}" = true ] && [ "${PNPM_CONFIG_IGNORE_PNPMFILE:-}" = true ] && [ -z "${npm_config_ignore_pnpmfile+x}" ] && [ -z "${pnpm_config_ignore_pnpmfile+x}" ] || exit 2
-    printf '%s\n' '{}'
-    ;;
-  run) ;;
-  *) exit 2 ;;
-esac
-"#,
-            )
-            .unwrap();
-            fs::set_permissions(&fake_manager, fs::Permissions::from_mode(0o755)).unwrap();
-
-            let install_count = repo.join("install-count");
-            let install_cwd = repo.join("install-cwd");
-            let mut path = OsString::from(fake_bin.as_os_str());
-            path.push(":");
-            path.push(std::env::var_os("PATH").unwrap_or_default());
-            let run = |mode: &str| {
-                std::process::Command::new("/bin/bash")
-                    .args(["scripts/check-webapps.sh", mode, "apps/web"])
-                    .current_dir(&repo)
-                    .env("PATH", &path)
-                    .env("INSTALL_COUNT", &install_count)
-                    .env("INSTALL_CWD", &install_cwd)
-                    .env("LOCK_NAME", lockfile)
-                    .output()
-                    .unwrap()
-            };
-
-            let before = run("dependencies-ready");
-            assert!(
-                !before.status.success(),
-                "artifact-only {package_manager} {case} state was accepted"
+            assert_dependency_scope_case(
+                temp.path(),
+                &generated_scripts[package_manager],
+                case_name,
+                package_manager,
+                lockfile,
+                workspace_member,
             );
-            let bootstrap = std::process::Command::new("/bin/bash")
-                .args(["scripts/check-webapps.sh", "bootstrap"])
-                .current_dir(&repo)
-                .env("PATH", &path)
-                .env("INSTALL_COUNT", &install_count)
-                .env("INSTALL_CWD", &install_cwd)
-                .env("LOCK_NAME", lockfile)
-                .output()
-                .unwrap();
-            assert!(
-                bootstrap.status.success(),
-                "{package_manager} {case} bootstrap failed:\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&bootstrap.stdout),
-                String::from_utf8_lossy(&bootstrap.stderr)
-            );
-            let expected_cwd = if workspace_member {
-                fs::canonicalize(&repo).unwrap()
-            } else {
-                fs::canonicalize(repo.join("apps/web")).unwrap()
-            };
-            assert_eq!(
-                fs::read_to_string(&install_cwd).unwrap().trim(),
-                expected_cwd.display().to_string(),
-                "wrong {package_manager} {case} install scope"
-            );
-            assert!(run("dependencies-ready").status.success());
-            assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "1");
-
-            let installed_node_modules = if workspace_member {
-                repo.join("node_modules")
-            } else {
-                repo.join("apps/web/node_modules")
-            };
-            let dependency_marker = installed_node_modules.join(".jig-web-dependencies-v3");
-            let dependency_stamp = if workspace_member {
-                repo.join(".agent/tmp/web-dependencies/root.sha256")
-            } else {
-                repo.join(".agent/tmp/web-dependencies/apps/apps/web.sha256")
-            };
-            let marker_before_runtime_caches = fs::read(&dependency_marker).unwrap();
-            let stamp_before_runtime_caches = fs::read(&dependency_stamp).unwrap();
-            assert!(marker_before_runtime_caches.starts_with(b"v2 "));
-            assert!(stamp_before_runtime_caches.starts_with(b"v5 "));
-
-            let runtime_node_modules = repo.join("apps/web/node_modules");
-            if workspace_member {
-                assert!(
-                    !runtime_node_modules.exists(),
-                    "fake {package_manager} root install unexpectedly populated its workspace member"
-                );
-            }
-            for cache_name in [".astro", ".cache", ".vite", ".vite-temp", ".tmp"] {
-                let cache = runtime_node_modules.join(cache_name);
-                fs::create_dir_all(cache.join("nested")).unwrap();
-                fs::write(
-                    cache.join("nested/runtime-state"),
-                    "generated runtime state\n",
-                )
-                .unwrap();
-            }
-            fs::write(runtime_node_modules.join(".DS_Store"), "finder state\n").unwrap();
-            let cached_ready = run("dependencies-ready");
-            assert!(
-                cached_ready.status.success(),
-                "top-level runtime caches invalidated {package_manager} {case} readiness:\n{}",
-                String::from_utf8_lossy(&cached_ready.stderr)
-            );
-            assert_eq!(
-                fs::read(&dependency_marker).unwrap(),
-                marker_before_runtime_caches,
-                "runtime caches rewrote the {package_manager} {case} dependency marker"
-            );
-            assert_eq!(
-                fs::read(&dependency_stamp).unwrap(),
-                stamp_before_runtime_caches,
-                "runtime caches rewrote the {package_manager} {case} dependency stamp"
-            );
-
-            if workspace_member {
-                for cache_name in [".astro", ".cache", ".vite", ".vite-temp", ".tmp"] {
-                    fs::remove_dir_all(runtime_node_modules.join(cache_name)).unwrap();
-                }
-                fs::remove_file(runtime_node_modules.join(".DS_Store")).unwrap();
-                assert!(
-                    run("dependencies-ready").status.success(),
-                    "an empty runtime-created member node_modules invalidated {package_manager} readiness"
-                );
-
-                if case_name == "npm-package-lock" {
-                    let unknown_empty = runtime_node_modules.join("unknown-empty-directory");
-                    fs::create_dir(&unknown_empty).unwrap();
-                    assert!(
-                        !run("dependencies-ready").status.success(),
-                        "an unknown empty workspace-member directory was normalized away"
-                    );
-                    fs::remove_dir(&unknown_empty).unwrap();
-                    assert!(run("dependencies-ready").status.success());
-                }
-            }
-
-            if !workspace_member && lockfile == "npm-shrinkwrap.json" {
-                let inactive_lock = repo.join("apps/web/package-lock.json");
-                fs::write(&inactive_lock, "inactive-app-lock-v1\n").unwrap();
-                assert!(
-                    run("dependencies-ready").status.success(),
-                    "an app package-lock replaced its authoritative npm shrinkwrap"
-                );
-                fs::write(&inactive_lock, "inactive-app-lock-v2\n").unwrap();
-                assert!(
-                    run("dependencies-ready").status.success(),
-                    "app receipt fingerprint included inactive package-lock content"
-                );
-            }
-
-            fs::write(
-                repo.join("apps/web/package.json"),
-                r#"{"name":"web","version":"2","scripts":{"lint":"true"}}"#,
-            )
-            .unwrap();
-            assert!(
-                !run("dependencies-ready").status.success(),
-                "stale {package_manager} {case} stamp was accepted"
-            );
-            let install = run("dependencies-install");
-            assert!(
-                install.status.success(),
-                "{package_manager} {case} frozen install failed:\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&install.stdout),
-                String::from_utf8_lossy(&install.stderr)
-            );
-            assert!(run("dependencies-ready").status.success());
-            assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "2");
-
-            if workspace_member {
-                let app_lock = repo.join("apps/web").join(lockfile);
-                if package_manager == "yarn" {
-                    fs::write(&app_lock, "# yarn lockfile v1\n").unwrap();
-                    assert!(
-                        run("dependencies-ready").status.success(),
-                        "a Yarn Classic member lock incorrectly replaced its root workspace"
-                    );
-
-                    fs::write(&app_lock, "__metadata:\n  version: 8\n").unwrap();
-                    assert!(
-                        !run("dependencies-ready").status.success(),
-                        "a nested Yarn Berry project reused root artifacts"
-                    );
-                    let app_bootstrap = std::process::Command::new("/bin/bash")
-                        .args(["scripts/check-webapps.sh", "bootstrap"])
-                        .current_dir(&repo)
-                        .env("PATH", &path)
-                        .env("INSTALL_COUNT", &install_count)
-                        .env("INSTALL_CWD", &install_cwd)
-                        .env("LOCK_NAME", lockfile)
-                        .output()
-                        .unwrap();
-                    assert!(
-                        app_bootstrap.status.success(),
-                        "Yarn Berry nested-project bootstrap failed:\nstdout:\n{}\nstderr:\n{}",
-                        String::from_utf8_lossy(&app_bootstrap.stdout),
-                        String::from_utf8_lossy(&app_bootstrap.stderr)
-                    );
-                    assert_eq!(
-                        fs::read_to_string(&install_cwd).unwrap().trim(),
-                        fs::canonicalize(repo.join("apps/web"))
-                            .unwrap()
-                            .display()
-                            .to_string()
-                    );
-                    assert!(run("dependencies-ready").status.success());
-                    assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "3");
-                } else {
-                    fs::write(&app_lock, "ignored-member-lock\n").unwrap();
-                    assert!(
-                        run("dependencies-ready").status.success(),
-                        "{package_manager} let a nested member lock replace the root workspace"
-                    );
-                    let bootstrap = run("bootstrap");
-                    assert!(bootstrap.status.success());
-                    assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "2");
-                    assert_eq!(
-                        fs::read_to_string(&install_cwd).unwrap().trim(),
-                        fs::canonicalize(&repo).unwrap().display().to_string()
-                    );
-                }
-            }
         }
     }
 }
@@ -1083,16 +775,12 @@ fn generated_pnpm_reads_alternate_manifests_without_loading_pnpmfile_hooks() {
 
     assert_eq!(run("dependencies-ready").status.code(), Some(1));
     let install = run("dependencies-install");
-    assert!(
-        install.status.success(),
-        "alternate-manifest install failed:\n{}",
-        String::from_utf8_lossy(&install.stderr)
-    );
+    assert_output_succeeded("alternate-manifest install", &install);
     assert!(
         !hook_marker.exists(),
         "pnpmfile hook ran during manifest inspection"
     );
-    assert!(run("dependencies-ready").status.success());
+    assert_output_succeeded("alternate-manifest readiness", &run("dependencies-ready"));
 
     for (relative, changed) in [
         (
@@ -1108,13 +796,10 @@ fn generated_pnpm_reads_alternate_manifests_without_loading_pnpmfile_hooks() {
         let original = fs::read(&manifest).unwrap();
         fs::write(&manifest, changed).unwrap();
         let stale = run("dependencies-ready");
-        assert!(
-            !stale.status.success(),
-            "selected alternate manifest {relative} was omitted from the fingerprint"
-        );
+        assert_output_failed("changed alternate manifest", &stale);
         assert_eq!(stale.status.code(), Some(1));
         fs::write(&manifest, original).unwrap();
-        assert!(run("dependencies-ready").status.success());
+        assert_output_succeeded("restored alternate manifest", &run("dependencies-ready"));
     }
     assert!(!hook_marker.exists());
 
@@ -1455,13 +1140,12 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
         &install_cwd,
         "dependencies-install",
     );
-    assert!(
-        !inactive_local_yaml.status.success(),
-        "scope-local YAML patches that --ignore-workspace cannot apply were accepted"
-    );
+    assert_output_failed("inactive scope-local YAML patches", &inactive_local_yaml);
     let stderr = String::from_utf8_lossy(&inactive_local_yaml.stderr);
-    assert!(stderr.contains("apps/web/pnpm-workspace.yaml"), "{stderr}");
-    assert!(stderr.contains("--ignore-workspace"), "{stderr}");
+    assert_text_contains_all(
+        &stderr,
+        &["apps/web/pnpm-workspace.yaml", "--ignore-workspace"],
+    );
     assert!(!install_count.exists());
 
     fs::remove_file(repo.join("apps/web/pnpm-workspace.yaml")).unwrap();
@@ -1472,12 +1156,7 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
         &install_cwd,
         "dependencies-install",
     );
-    assert!(
-        standalone.status.success(),
-        "standalone legacy patches failed after removing inactive local YAML:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&standalone.stdout),
-        String::from_utf8_lossy(&standalone.stderr)
-    );
+    assert_output_succeeded("standalone legacy patches", &standalone);
     assert_eq!(
         fs::read_to_string(&install_cwd).unwrap().trim(),
         fs::canonicalize(repo.join("apps/web"))
@@ -1524,11 +1203,10 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
         &install_cwd,
         "dependencies-ready",
     );
-    assert!(!linked_scope.status.success());
-    assert!(
-        String::from_utf8_lossy(&linked_scope.stderr).contains("symbolic links"),
-        "symlinked app-scope ancestry omitted its diagnostic:\n{}",
-        String::from_utf8_lossy(&linked_scope.stderr)
+    assert_output_failed("symlinked app-scope ancestry", &linked_scope);
+    assert_text_contains_all(
+        &String::from_utf8_lossy(&linked_scope.stderr),
+        &["symbolic links"],
     );
     fs::remove_file(&app_scope).unwrap();
     fs::rename(&real_app_scope, &app_scope).unwrap();
@@ -1574,12 +1252,7 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
         &install_cwd,
         "dependencies-install",
     );
-    assert!(
-        root_install.status.success(),
-        "root pnpm install failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&root_install.stdout),
-        String::from_utf8_lossy(&root_install.stderr)
-    );
+    assert_output_succeeded("root pnpm install", &root_install);
     assert_eq!(
         fs::read_to_string(&install_cwd).unwrap().trim(),
         fs::canonicalize(&repo).unwrap().display().to_string()
@@ -1597,11 +1270,13 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
         &install_cwd,
         "dependencies-ready",
     );
-    assert!(!linked_workspace_ancestor.status.success());
-    assert!(
-        String::from_utf8_lossy(&linked_workspace_ancestor.stderr).contains("symbolic link"),
-        "selected workspace-member ancestor symlink omitted its diagnostic:\n{}",
-        String::from_utf8_lossy(&linked_workspace_ancestor.stderr)
+    assert_output_failed(
+        "linked workspace-member ancestor",
+        &linked_workspace_ancestor,
+    );
+    assert_text_contains_all(
+        &String::from_utf8_lossy(&linked_workspace_ancestor.stderr),
+        &["symbolic link"],
     );
     fs::remove_file(&apps).unwrap();
     fs::rename(&real_apps, &apps).unwrap();
@@ -1661,11 +1336,7 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
         &install_cwd,
         "package-manager-spec",
     );
-    assert!(
-        trailing_comma.status.success(),
-        "valid YAML flow trailing comma was rejected:\n{}",
-        String::from_utf8_lossy(&trailing_comma.stderr)
-    );
+    assert_output_succeeded("YAML flow trailing comma", &trailing_comma);
     fs::write(repo.join("pnpm-workspace.yaml"), &valid_root_workspace).unwrap();
 
     let invalid_workspaces = [
@@ -1738,15 +1409,8 @@ fn generated_pnpm_workspace_metadata_uses_root_keys_and_keeps_selected_build_nam
             &install_cwd,
             "dependencies-ready",
         );
-        assert!(
-            !invalid.status.success(),
-            "invalid YAML was accepted: {workspace}"
-        );
-        assert!(
-            String::from_utf8_lossy(&invalid.stderr).contains(diagnostic),
-            "invalid YAML omitted {diagnostic:?}:\n{}",
-            String::from_utf8_lossy(&invalid.stderr)
-        );
+        assert_output_failed("invalid pnpm workspace YAML", &invalid);
+        assert_text_contains_all(&String::from_utf8_lossy(&invalid.stderr), &[diagnostic]);
     }
     fs::write(repo.join("pnpm-workspace.yaml"), valid_root_workspace).unwrap();
     assert!(
@@ -1803,12 +1467,7 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
         &install_cwd,
         "dependencies-install",
     );
-    assert!(
-        install.status.success(),
-        "custom-patch install failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&install.stdout),
-        String::from_utf8_lossy(&install.stderr)
-    );
+    assert_output_succeeded("custom-patch install", &install);
     assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "1");
 
     let active_patch = "custom/root.patch";
@@ -1888,9 +1547,12 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
         &install_cwd,
         "dependencies-ready",
     );
-    assert!(!missing.status.success());
+    assert_output_failed("missing configured patch", &missing);
     assert_eq!(missing.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&missing.stderr).contains("does not exist"));
+    assert_text_contains_all(
+        &String::from_utf8_lossy(&missing.stderr),
+        &["does not exist"],
+    );
     fs::write(&root_patch, &root_contents).unwrap();
 
     let symlink_target = repo.join("custom/root-real.patch");
@@ -1903,9 +1565,12 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
         &install_cwd,
         "dependencies-ready",
     );
-    assert!(!linked_file.status.success());
+    assert_output_failed("symlinked patch file", &linked_file);
     assert_eq!(linked_file.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&linked_file.stderr).contains("symbolic links"));
+    assert_text_contains_all(
+        &String::from_utf8_lossy(&linked_file.stderr),
+        &["symbolic links"],
+    );
     fs::remove_file(&root_patch).unwrap();
     fs::rename(&symlink_target, &root_patch).unwrap();
 
@@ -1920,9 +1585,12 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
         &install_cwd,
         "dependencies-ready",
     );
-    assert!(!linked_directory.status.success());
+    assert_output_failed("symlinked patch directory", &linked_directory);
     assert_eq!(linked_directory.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&linked_directory.stderr).contains("symbolic links"));
+    assert_text_contains_all(
+        &String::from_utf8_lossy(&linked_directory.stderr),
+        &["symbolic links"],
+    );
     fs::remove_file(&linked_parent).unwrap();
     fs::rename(&real_parent, &linked_parent).unwrap();
 
@@ -1952,20 +1620,13 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
             &install_cwd,
             "dependencies-install",
         );
-        assert!(
-            !invalid.status.success(),
-            "invalid patch path {configured_path} was accepted"
-        );
+        assert_output_failed("invalid patch path", &invalid);
         assert_eq!(
             invalid.status.code(),
             Some(2),
             "invalid patch path {configured_path} was not a hard authority error"
         );
-        assert!(
-            String::from_utf8_lossy(&invalid.stderr).contains(diagnostic),
-            "invalid patch path {configured_path} omitted {diagnostic:?}:\n{}",
-            String::from_utf8_lossy(&invalid.stderr)
-        );
+        assert_text_contains_all(&String::from_utf8_lossy(&invalid.stderr), &[diagnostic]);
         assert_eq!(
             fs::read_to_string(&install_count).unwrap().trim(),
             "1",
@@ -1986,11 +1647,14 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
         &install_cwd,
         "dependencies-install",
     );
-    assert!(!malformed_manifest.status.success());
+    assert_output_failed(
+        "malformed patchedDependencies manifest",
+        &malformed_manifest,
+    );
     assert_eq!(malformed_manifest.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&malformed_manifest.stderr)
-            .contains("pnpm.patchedDependencies must be an object")
+    assert_text_contains_all(
+        &String::from_utf8_lossy(&malformed_manifest.stderr),
+        &["pnpm.patchedDependencies must be an object"],
     );
     assert_eq!(fs::read_to_string(&install_count).unwrap().trim(), "1");
 
@@ -2016,12 +1680,7 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
         &install_cwd,
         "dependencies-install",
     );
-    assert!(
-        restored_install.status.success(),
-        "restoring valid patch metadata did not reuse the existing receipt:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&restored_install.stdout),
-        String::from_utf8_lossy(&restored_install.stderr)
-    );
+    assert_output_succeeded("restored valid patch metadata", &restored_install);
     assert_eq!(
         fs::read_to_string(&install_count).unwrap().trim(),
         "1",

@@ -5,6 +5,9 @@ version.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 [% if sqlx_driver == "sqlite" %]

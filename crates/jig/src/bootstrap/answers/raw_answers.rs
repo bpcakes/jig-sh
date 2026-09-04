@@ -1,5 +1,12 @@
 use super::*;
 
+use crate::bootstrap::clippy_policy::{
+    DEFAULT_RUST_CLIPPY_COMMAND, classify_generated_rust_clippy_command,
+};
+
+mod clippy_migration;
+pub(super) use clippy_migration::*;
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub(super) struct RawAnswers {
     pub(super) repository: Option<AuthoredRepositoryModel>,
@@ -12,6 +19,8 @@ pub(super) struct RawAnswers {
     #[serde(default)]
     pub(super) harness_footprint: Option<HarnessFootprint>,
     pub(super) backend_language: Option<BackendLanguage>,
+    #[serde(skip)]
+    pub(super) repository_projection_hint: RepositoryProjectionHint,
     pub(super) go_database: Option<GoDatabase>,
     pub(super) sqlx_enabled: Option<bool>,
     pub(super) rust_crate_roots: Option<Vec<String>>,
@@ -51,6 +60,8 @@ pub(super) struct RawAnswers {
     pub(super) status: Option<StatusConfig>,
     pub(super) execution: Option<ExecutionConfig>,
     pub(super) agent_tooling: Option<AgentToolingAnswers>,
+    #[serde(flatten)]
+    pub(super) extra_top_level: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -82,6 +93,10 @@ pub(super) struct CodexMarketplaceAnswers {
 }
 
 impl RawAnswers {
+    pub(super) fn first_extra_top_level_key(&self) -> Option<&str> {
+        self.extra_top_level.keys().next().map(String::as_str)
+    }
+
     pub(super) fn normalize_repository_model(&mut self, table: &toml::Table) {
         let Some(repository) = table.get("repository").and_then(toml::Value::as_table) else {
             return;
@@ -189,24 +204,6 @@ impl RawAnswers {
         );
     }
 
-    pub(super) fn from_file(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        let value = toml::from_str::<toml::Value>(&text)
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        let table = value
-            .as_table()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
-        let mut raw = value
-            .try_into::<Self>()
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        raw.normalize_repository_model(&table);
-        raw.normalize_app_dirs()?;
-        raw.normalize_legacy_frontend_metadata(&table);
-        Ok(raw)
-    }
-
     pub(super) fn normalize_legacy_frontend_metadata(&mut self, table: &toml::Table) {
         let Some(frontend_apps) = self.frontend_apps.as_mut() else {
             return;
@@ -263,6 +260,7 @@ impl RawAnswers {
         );
         merge_option(&mut self.harness_footprint, opts.harness_footprint);
         merge_option(&mut self.backend_language, opts.backend_language);
+        self.repository_projection_hint = opts.repository_projection_hint;
         merge_option(&mut self.go_database, opts.go_database);
         merge_option(&mut self.sqlx_enabled, opts.sqlx_enabled);
         if !opts.rust_crate_roots.is_empty() {
@@ -334,6 +332,11 @@ impl RawAnswers {
                 .get_or_insert_with(dev::RawDevAnswers::default)
                 .apps = Some(opts.dev_apps.clone());
         }
+        if let Some(settings) = &opts.dev_settings {
+            self.dev
+                .get_or_insert_with(dev::RawDevAnswers::default)
+                .merge_settings(settings);
+        }
         merge_option(&mut self.status, opts.status.clone());
         merge_option(&mut self.execution, opts.execution.clone());
     }
@@ -370,7 +373,13 @@ impl RawAnswers {
     }
 
     pub(super) fn into_answer_opts(self, answers_file: Option<PathBuf>) -> AnswerOpts {
-        let dev_apps = self.dev.and_then(|dev| dev.apps).unwrap_or_default();
+        let (dev_settings, dev_apps) = self.dev.map_or_else(
+            || (None, Vec::new()),
+            |dev| {
+                let (settings, apps) = dev.into_parts();
+                (Some(settings), apps)
+            },
+        );
         AnswerOpts {
             answers_file,
             repo_name: self.repo_name.filter(|value| !value.is_empty()),
@@ -381,6 +390,7 @@ impl RawAnswers {
             template_source_url: self.template_source_url,
             harness_footprint: self.harness_footprint,
             backend_language: self.backend_language,
+            repository_projection_hint: self.repository_projection_hint,
             go_database: self.go_database,
             scaffold_go_component_roots: Vec::new(),
             sqlx_enabled: self.sqlx_enabled,
@@ -407,6 +417,7 @@ impl RawAnswers {
             frontend_apps: self.frontend_apps.unwrap_or_default(),
             frontend_workspace_roots: self.frontend_workspace_roots.unwrap_or_default(),
             dev_apps,
+            dev_settings,
             status: self.status,
             execution: self.execution,
         }
@@ -430,15 +441,20 @@ impl RawAnswers {
             &mut self.rust_fmt_check_command,
             "cargo fmt --all -- --check",
         );
-        normalize_legacy_command_default(
-            &mut self.rust_clippy_command,
-            "cargo clippy --workspace --all-targets --locked -- -D warnings",
-        );
+        self.normalize_generated_clippy_default();
         normalize_legacy_command_default(&mut self.rust_test_command, "cargo test --workspace");
         normalize_legacy_command_default(
             &mut self.rust_test_locked_command,
             "cargo test --workspace --locked",
         );
+    }
+
+    pub(super) fn normalize_generated_clippy_default(&mut self) {
+        if let Some(command) = self.rust_clippy_command.as_deref()
+            && let Some(generated) = classify_generated_rust_clippy_command(command)
+        {
+            self.rust_clippy_command = generated.upgraded_nested_command();
+        }
     }
 
     pub(super) fn apply_sqlx_default_for_cli_defaults(&mut self) -> bool {
@@ -468,32 +484,47 @@ impl RawAnswers {
 
     #[cfg(test)]
     pub(super) fn resolve(self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
-        self.resolve_with_authored_repository(default_repo_name, None)
+        self.resolve_with_authored_repository(default_repo_name, None, None)
     }
 
     pub(super) fn resolve_with_authored_repository(
         mut self,
         default_repo_name: Option<String>,
         authored_repository: Option<AuthoredRepositoryModel>,
+        authored_repository_commands: Option<&BTreeMap<String, String>>,
     ) -> Result<RenderAnswers> {
         self.normalize_app_dirs()?;
         let authored_has_rust_backend = authored_repository
             .as_ref()
             .is_some_and(|model| model.has_adapter("rust") || model.has_adapter("sqlx"));
         let authored_rust_crate_roots = authored_repository.as_ref().map(|model| {
-            model
-                .components
-                .iter()
-                .filter(|component| {
-                    component
-                        .adapters
-                        .iter()
-                        .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
-                })
-                .map(|component| component.root.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>()
+            if model.rust_workspace_guidance_enabled() {
+                self.rust_crate_roots
+                    .clone()
+                    .unwrap_or_else(|| vec!["crates".into()])
+            } else {
+                model
+                    .components
+                    .iter()
+                    .filter(|component| {
+                        component
+                            .adapters
+                            .iter()
+                            .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
+                    })
+                    .map(|component| component.root.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            }
+        });
+        let authored_uses_managed_loc_checker = authored_repository.as_ref().is_some_and(|model| {
+            authored_repository_commands.is_some_and(|commands| {
+                model
+                    .actions
+                    .iter()
+                    .any(|action| action_uses_managed_rust_file_loc_checker(action, commands))
+            })
         });
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
@@ -559,6 +590,7 @@ impl RawAnswers {
         frontend_workspace_roots.sort();
         frontend_workspace_roots.dedup();
         let dev::ResolvedDevApps {
+            settings: dev,
             dev_apps,
             generated_frontend_dev_apps,
         } = dev::resolve(frontend_apps.as_slice(), self.dev)?;
@@ -613,11 +645,28 @@ impl RawAnswers {
             legacy_rust_migration_dir
         };
 
+        // The generated repo:rust-file-loc action deliberately keeps its
+        // dedicated template roots. Component roots own generic Rust adapter
+        // capabilities; they become authoritative once that exact repository
+        // action is replaced or removed.
+        let rust_crate_roots = match authored_rust_crate_roots {
+            Some(authored_roots) if authored_uses_managed_loc_checker => {
+                self.rust_crate_roots.take().unwrap_or(authored_roots)
+            }
+            Some(authored_roots) => authored_roots,
+            None if backend_language == BackendLanguage::Go => Vec::new(),
+            None => self
+                .rust_crate_roots
+                .take()
+                .unwrap_or_else(|| vec!["crates".into()]),
+        };
+
         Ok(RenderAnswers {
             authored_repository,
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
             go_postgres_integration_script: false,
+            repository_projection_hint: self.repository_projection_hint,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),
             ci_github_runner: self
@@ -632,14 +681,7 @@ impl RawAnswers {
             go_database,
             go_toolchain_authority_path: GO_TOOLCHAIN_AUTHORITY_PATH,
             sqlx_enabled,
-            rust_crate_roots: authored_rust_crate_roots.unwrap_or_else(|| {
-                if backend_language == BackendLanguage::Go {
-                    Vec::new()
-                } else {
-                    self.rust_crate_roots
-                        .unwrap_or_else(|| vec!["crates".into()])
-                }
-            }),
+            rust_crate_roots,
             rust_migration_dir,
             migration_dir,
             rust_migration_layout,
@@ -659,10 +701,7 @@ impl RawAnswers {
                 .rust_fmt_check_command
                 .unwrap_or_else(|| optional_cargo_command("cargo fmt --all -- --check", "fmt")),
             rust_clippy_command: self.rust_clippy_command.unwrap_or_else(|| {
-                optional_cargo_command(
-                    "cargo clippy --workspace --all-targets --locked -- -D warnings",
-                    "clippy",
-                )
+                optional_cargo_command(DEFAULT_RUST_CLIPPY_COMMAND, "clippy")
             }),
             rust_test_command: self
                 .rust_test_command
@@ -702,6 +741,7 @@ impl RawAnswers {
             typescript_coverage_command: self
                 .typescript_coverage_command
                 .unwrap_or_else(|| "scripts/check-webapps.sh coverage".into()),
+            dev,
             dev_apps,
             generated_frontend_dev_apps,
             frontend_apps,

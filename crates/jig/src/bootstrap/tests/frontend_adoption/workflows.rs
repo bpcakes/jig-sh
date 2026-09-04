@@ -269,12 +269,7 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
     ];
     for (app_dir, suffix) in [("apps/web", "workspace"), ("standalone", "standalone")] {
         let (output, argv, cwd, environment) = run_script(app_dir, "probe", suffix);
-        assert!(
-            output.status.success(),
-            "npm run-script failed for {app_dir}:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_output_succeeded("npm run-script", &output);
         assert_eq!(
             fs::read_to_string(argv).unwrap(),
             format!("{}\n", expected_argv.join("\n"))
@@ -287,54 +282,45 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
                 .to_string()
         );
         let environment = fs::read_to_string(environment).unwrap();
-        for removed in [
-            "NPM_CONFIG_OMIT=",
-            "NPM_CONFIG_INCLUDE=",
-            "NPM_CONFIG_PRODUCTION=",
-            "NPM_CONFIG_OPTIONAL=",
-            "NPM_CONFIG_ONLY=",
-            "NPM_CONFIG_DEV=",
-            "NPM_CONFIG_ALSO=",
-            "Npm_Config_Workspace=",
-            "npm_CONFIG_workspaces=",
-            "NPM_CONFIG_INCLUDE_WORKSPACE_ROOT=",
-            "npm_config_include-workspace-root=",
-            "NPM_CONFIG_PREFIX=",
-            "NPM_CONFIG_GLOBAL=",
-            "Npm_Config_Location=",
-            "npm_CONFIG_if_present=",
-            "NPM_CONFIG_IF-PRESENT=",
-        ] {
-            assert!(
-                !environment.lines().any(|line| line.starts_with(removed)),
-                "npm run-script inherited shaping input {removed}:\n{environment}"
-            );
-        }
+        assert_environment_contains_none(
+            &environment,
+            &[
+                "NPM_CONFIG_OMIT=",
+                "NPM_CONFIG_INCLUDE=",
+                "NPM_CONFIG_PRODUCTION=",
+                "NPM_CONFIG_OPTIONAL=",
+                "NPM_CONFIG_ONLY=",
+                "NPM_CONFIG_DEV=",
+                "NPM_CONFIG_ALSO=",
+                "Npm_Config_Workspace=",
+                "npm_CONFIG_workspaces=",
+                "NPM_CONFIG_INCLUDE_WORKSPACE_ROOT=",
+                "npm_config_include-workspace-root=",
+                "NPM_CONFIG_PREFIX=",
+                "NPM_CONFIG_GLOBAL=",
+                "Npm_Config_Location=",
+                "npm_CONFIG_if_present=",
+                "NPM_CONFIG_IF-PRESENT=",
+            ],
+        );
         let expected_node_environment = if suffix == "standalone" {
             "NODE_ENV=production"
         } else {
             "NODE_ENV=test"
         };
-        assert!(
-            environment
-                .lines()
-                .any(|line| line == expected_node_environment),
-            "npm run-script changed explicit {expected_node_environment}:\n{environment}"
+        assert_environment_contains_all(&environment, &[expected_node_environment]);
+        assert_environment_contains_all(
+            &environment,
+            &[
+                "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
+                "npm_config_install_strategy=nested",
+                "NPM_CONFIG_LEGACY_PEER_DEPS=true",
+                "NPM_CONFIG_STRICT_PEER_DEPS=true",
+                "NPM_CONFIG_IGNORE_SCRIPTS=true",
+                "NPM_CONFIG_FOREGROUND_SCRIPTS=true",
+                "NPM_CONFIG_SCRIPT_SHELL=/bin/sh",
+            ],
         );
-        for preserved in [
-            "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
-            "npm_config_install_strategy=nested",
-            "NPM_CONFIG_LEGACY_PEER_DEPS=true",
-            "NPM_CONFIG_STRICT_PEER_DEPS=true",
-            "NPM_CONFIG_IGNORE_SCRIPTS=true",
-            "NPM_CONFIG_FOREGROUND_SCRIPTS=true",
-            "NPM_CONFIG_SCRIPT_SHELL=/bin/sh",
-        ] {
-            assert!(
-                environment.lines().any(|line| line == preserved),
-                "npm run-script removed supported input {preserved}:\n{environment}"
-            );
-        }
         #[cfg(target_os = "macos")]
         assert!(
             environment
@@ -434,8 +420,8 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
     assert!(checker.contains(r#"[ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]"#));
 
     let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
-    assert!(policy.contains("JIG_DEFAULT_BRANCH:"));
-    assert!(policy.contains(r#"run: scripts/check-rust-file-loc.sh "$JIG_DEFAULT_BRANCH""#));
+    assert!(policy.contains("scripts/jig check repo:file-budget"));
+    assert!(policy.contains("JIG_PUSH_BEFORE: ${{ github.event.before }}"));
     assert!(!policy.contains(&format!("origin/{default_branch}")));
 }
 

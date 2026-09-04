@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use jig_contract::ComparisonRequestV1;
+
 use super::ToolRequest;
 
 #[derive(Debug)]
@@ -22,8 +24,6 @@ pub(crate) enum CheckCommand {
     Contract(ToolRequest),
     AgentMap(AgentMapRequest),
     AgentGuides,
-    RustFileLoc(RustFileLocRequest),
-    NoModRs,
     MigrationImmutability(MigrationImmutabilityRequest),
     SqlxUncheckedNonTest,
 }
@@ -33,6 +33,7 @@ pub(crate) struct RepositoryCheckRequest {
     pub(crate) selectors: Vec<String>,
     pub(crate) profile: Option<String>,
     pub(crate) affected_base: Option<String>,
+    pub(crate) comparison: Option<ComparisonRequestV1>,
     pub(crate) explain: bool,
     pub(crate) fail_fast: bool,
     pub(crate) tool: ToolRequest,
@@ -48,13 +49,6 @@ pub(crate) enum AgentMapCommand {
 #[derive(Debug)]
 pub(crate) struct AgentMapRequest {
     pub(crate) map_path: PathBuf,
-}
-
-#[derive(Debug)]
-pub(crate) struct RustFileLocRequest {
-    pub(crate) staged: bool,
-    pub(crate) changed_against: Option<String>,
-    pub(crate) all: bool,
 }
 
 #[derive(Debug)]

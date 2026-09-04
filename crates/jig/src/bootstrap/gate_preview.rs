@@ -33,8 +33,14 @@ pub(super) fn generated_gates(ctx: &RepoContext, answers: &RenderAnswers) -> Res
                 format!("{launcher} check fmt"),
                 format!("{launcher} check clippy"),
                 format!("{launcher} check test"),
-                format!("{launcher} run repo:rust-file-loc"),
             ]);
+        }
+        if ctx
+            .action_specs()
+            .iter()
+            .any(|action| action.target.to_string() == "repo:file-budget")
+        {
+            gates.push(format!("{launcher} check repo:file-budget"));
         }
         if answers.sqlx_enabled() {
             gates.push(format!("{launcher} check sqlx"));

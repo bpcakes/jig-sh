@@ -437,6 +437,7 @@ pub(super) fn parse_name_status_paths_z(
     entry_limit: usize,
     label: &str,
 ) -> Result<Vec<NameStatusPath>> {
+    require_nul_terminated(stdout, "git diff --name-status -z")?;
     let mut fields = stdout.split(|byte| *byte == 0).peekable();
     let mut paths = Vec::new();
     while let Some(status) = fields.next() {
@@ -479,6 +480,7 @@ pub(super) fn parse_nul_utf8_paths_with_limit(
     entry_limit: usize,
     discovery_label: &str,
 ) -> Result<Vec<String>> {
+    require_nul_terminated(stdout, label)?;
     let mut paths = Vec::new();
     let mut fields = stdout.split(|byte| *byte == 0).peekable();
     while let Some(path) = fields.next() {
@@ -500,6 +502,13 @@ pub(super) fn parse_nul_utf8_paths_with_limit(
         );
     }
     Ok(paths)
+}
+
+pub(super) fn require_nul_terminated(stdout: &[u8], label: &str) -> Result<()> {
+    if !stdout.is_empty() && !stdout.ends_with(&[0]) {
+        bail!("Malformed {label} output: missing NUL terminator");
+    }
+    Ok(())
 }
 
 pub(super) fn gate_scope_input_fingerprint(

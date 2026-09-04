@@ -9,7 +9,7 @@ use super::super::super::{
 };
 use super::super::templates::{ensure_scaffold_template_paths, render_scaffold_template};
 use super::super::write::{ScaffoldFile, scaffold_file};
-use super::super::{ScaffoldDb, ScaffoldFrontendKind, ScaffoldPreset};
+use super::super::{ScaffoldDb, ScaffoldFrontendKind, ScaffoldPreset, optional_cargo_command};
 use super::app::{FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold};
 use super::templates::frontend_workspace_template_files_for_backend;
 
@@ -216,10 +216,4 @@ pub(in crate::bootstrap::scaffold) fn frontend_workspace_relative_paths_for_back
         .into_iter()
         .map(|file| PathBuf::from(file.output))
         .collect()
-}
-
-pub(super) fn optional_cargo_command(command: &str, action: &str) -> String {
-    format!(
-        "if [ -f Cargo.toml ]; then {command}; else printf '%s\\n' 'No Cargo.toml found; skipping cargo {action}.'; fi"
-    )
 }

@@ -9,13 +9,17 @@ PACKAGE_NAME="jig-sh"
 PUBLISH_PACKAGE_NAMES=(
   "jig-contract"
   "jig-core"
+  "jig-file-budget"
+  "jig-owned-process"
   "jig-rust"
   "jig-sqlx"
   "jig-typescript"
+  "jig-go"
   "jig-features"
   "jig-vault"
   "jig-dev-proxy"
   "jig-tui"
+  "jig-vault-tui"
   "jig-status-tui"
   "jig-codex-tui"
   "jig-ui"
@@ -87,13 +91,17 @@ crate_dir_for_package() {
   case "$1" in
     jig-contract) printf '%s\n' "crates/jig-contract" ;;
     jig-core) printf '%s\n' "crates/jig-core" ;;
+    jig-file-budget) printf '%s\n' "crates/jig-file-budget" ;;
+    jig-owned-process) printf '%s\n' "crates/jig-owned-process" ;;
     jig-rust) printf '%s\n' "crates/jig-rust" ;;
     jig-sqlx) printf '%s\n' "crates/jig-sqlx" ;;
     jig-typescript) printf '%s\n' "crates/jig-typescript" ;;
+    jig-go) printf '%s\n' "crates/jig-go" ;;
     jig-features) printf '%s\n' "crates/jig-features" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
+    jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
     jig-status-tui) printf '%s\n' "crates/jig-status-tui" ;;
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
@@ -231,14 +239,22 @@ PY
 }
 
 require_clean_tree() {
+  local status
+
   if [[ "${ALLOW_DIRTY:-}" == "1" ]]; then
     echo "ALLOW_DIRTY=1 set; skipping clean working tree requirement." >&2
     return 0
   fi
 
-  if [[ -n "$(git status --short --untracked-files=all)" ]]; then
+  status="$(git status --short --untracked-files=all)"
+  if [[ "${ALLOW_RELEASE_RUN_JOURNAL_DIRTY:-}" == "1" && "$status" == " M .agent/state/runs.jsonl" ]]; then
+    echo "ALLOW_RELEASE_RUN_JOURNAL_DIRTY=1 set; allowing the ephemeral release-check run journal." >&2
+    return 0
+  fi
+
+  if [[ -n "$status" ]]; then
     echo "Working tree is not clean. Commit or discard changes before releasing." >&2
-    git status --short --untracked-files=all >&2
+    printf '%s\n' "$status" >&2
     exit 1
   fi
 }
@@ -631,8 +647,10 @@ run_ci_checks() {
   else
     base_ref="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
   fi
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check rust-file-loc --changed-against "$base_ref"
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check no-mod-rs
+  run env JIG_DEV_BIN=target/debug/jig scripts/jig check repo:file-budget \
+    --comparison-exact-tree "$base_ref" \
+    --comparison-provenance explicit \
+    --no-receipt
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-map
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-guides
   check_launcher_template
@@ -651,6 +669,7 @@ release_check() {
 
   run_ci_checks
   run bash scripts/validate-fixtures.sh
+  run env JIG_DEV_BIN=target/debug/jig bash scripts/check-generated-rust-clippy.sh
   for package_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
     dependency_status="$(crate_version_status "$package_name" "$version")"
     case "$dependency_status" in

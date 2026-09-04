@@ -1,6 +1,115 @@
 use super::*;
 
 #[cfg(unix)]
+fn assert_activity_and_audit(backend: &VaultTuiBackend) {
+    let VaultActionResult::Activity(activity) = backend
+        .execute(VaultAction::Activity { limit: 10 })
+        .unwrap()
+    else {
+        panic!("expected activity");
+    };
+    assert!(!activity.records.is_empty());
+    assert_eq!(activity.audit.torn_tail_bytes, 0);
+    assert!(!format!("{activity:?}").contains("lifecycle-secret-sentinel"));
+    let VaultActionResult::Audit(verification) = backend.execute(VaultAction::VerifyAudit).unwrap()
+    else {
+        panic!("expected audit verification");
+    };
+    assert_eq!(verification.torn_tail_bytes, 0);
+}
+
+#[cfg(unix)]
+fn assert_export_and_peek(backend: &VaultTuiBackend, temp: &tempfile::TempDir) {
+    let export = temp.path().join("token.bin");
+    let VaultActionResult::Exported {
+        bytes_written,
+        snapshot,
+        ..
+    } = backend
+        .execute(VaultAction::ExportField {
+            reference: "jig://Production/TOKEN".parse().unwrap(),
+            output: export.clone(),
+            overwrite: false,
+        })
+        .unwrap()
+    else {
+        panic!("expected export result");
+    };
+    assert_eq!(bytes_written, b"lifecycle-secret-sentinel".len());
+    assert_eq!(snapshot.fields.len(), 1);
+    assert_eq!(
+        std::fs::read(&export).unwrap(),
+        b"lifecycle-secret-sentinel"
+    );
+    let collision = backend
+        .execute(VaultAction::ExportField {
+            reference: "jig://Production/TOKEN".parse().unwrap(),
+            output: export,
+            overwrite: false,
+        })
+        .unwrap_err();
+    assert_eq!(collision.kind(), VaultUiErrorKind::Conflict);
+
+    let mut peeked = zeroize::Zeroizing::new(Vec::new());
+    let peeked_len = backend
+        .peek(&"jig://Production/TOKEN".parse().unwrap(), &mut *peeked)
+        .unwrap();
+    assert_eq!(peeked_len, b"lifecycle-secret-sentinel".len());
+    assert_eq!(&peeked[..], b"lifecycle-secret-sentinel");
+}
+
+#[cfg(unix)]
+fn assert_backup_created(backend: &VaultTuiBackend, temp: &tempfile::TempDir) {
+    let VaultActionResult::BackupCreated {
+        bytes_written,
+        backup_version,
+        ..
+    } = backend
+        .execute(VaultAction::CreateBackup {
+            output: lifecycle_backup_path(temp),
+            overwrite: false,
+        })
+        .unwrap()
+    else {
+        panic!("expected backup result");
+    };
+    assert!(bytes_written > 0);
+    assert_eq!(backup_version, jig_vault::BACKUP_FORMAT_VERSION);
+    let collision = backend
+        .execute(VaultAction::CreateBackup {
+            output: lifecycle_backup_path(temp),
+            overwrite: false,
+        })
+        .unwrap_err();
+    assert_eq!(collision.kind(), VaultUiErrorKind::Conflict);
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn assert_backup_restores(temp: &tempfile::TempDir) {
+    let restored_home = temp.path().join("restored-vault");
+    let backend = VaultTuiBackend::new(request(restored_home.clone())).unwrap();
+    let VaultActionResult::Restored {
+        root,
+        format_version,
+        ..
+    } = backend
+        .execute(VaultAction::RestoreBackup {
+            input: lifecycle_backup_path(temp),
+            passphrase: SecretBytes::new(b"correct horse battery staple".to_vec()),
+        })
+        .unwrap()
+    else {
+        panic!("expected restore result");
+    };
+    assert_eq!(root, restored_home);
+    assert_eq!(format_version, 2);
+    let restored = backend
+        .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+        .unwrap();
+    assert_eq!(restored.fields.len(), 1);
+}
+
+#[cfg(unix)]
 #[test]
 fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
     use std::os::unix::fs::PermissionsExt;
@@ -24,104 +133,13 @@ fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
         .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
         .unwrap();
 
-    let VaultActionResult::Activity(activity) = backend
-        .execute(VaultAction::Activity { limit: 10 })
-        .unwrap()
-    else {
-        panic!("expected activity");
-    };
-    assert!(!activity.records.is_empty());
-    assert_eq!(activity.audit.torn_tail_bytes, 0);
-    assert!(!format!("{activity:?}").contains("lifecycle-secret-sentinel"));
-    let VaultActionResult::Audit(verification) = backend.execute(VaultAction::VerifyAudit).unwrap()
-    else {
-        panic!("expected audit verification");
-    };
-    assert_eq!(verification.torn_tail_bytes, 0);
-
-    let export = temp.path().join("token.bin");
-    let VaultActionResult::Exported {
-        bytes_written,
-        snapshot,
-        ..
-    } = backend
-        .execute(VaultAction::ExportField {
-            reference: "jig://Production/TOKEN".parse().unwrap(),
-            output: export.clone(),
-            overwrite: false,
-        })
-        .unwrap()
-    else {
-        panic!("expected export result");
-    };
-    assert_eq!(bytes_written, b"lifecycle-secret-sentinel".len());
-    assert_eq!(snapshot.fields.len(), 1);
-    assert_eq!(
-        std::fs::read(&export).unwrap(),
-        b"lifecycle-secret-sentinel"
-    );
-    let export_collision = backend
-        .execute(VaultAction::ExportField {
-            reference: "jig://Production/TOKEN".parse().unwrap(),
-            output: export,
-            overwrite: false,
-        })
-        .unwrap_err();
-    assert_eq!(export_collision.kind(), VaultUiErrorKind::Conflict);
-
-    let mut peeked = zeroize::Zeroizing::new(Vec::new());
-    let peeked_len = backend
-        .peek(&"jig://Production/TOKEN".parse().unwrap(), &mut *peeked)
-        .unwrap();
-    assert_eq!(peeked_len, b"lifecycle-secret-sentinel".len());
-    assert_eq!(&peeked[..], b"lifecycle-secret-sentinel");
-
-    let VaultActionResult::BackupCreated {
-        bytes_written,
-        backup_version,
-        ..
-    } = backend
-        .execute(VaultAction::CreateBackup {
-            output: lifecycle_backup_path(&temp),
-            overwrite: false,
-        })
-        .unwrap()
-    else {
-        panic!("expected backup result");
-    };
-    assert!(bytes_written > 0);
-    assert_eq!(backup_version, jig_vault::BACKUP_FORMAT_VERSION);
-    let collision = backend
-        .execute(VaultAction::CreateBackup {
-            output: lifecycle_backup_path(&temp),
-            overwrite: false,
-        })
-        .unwrap_err();
-    assert_eq!(collision.kind(), VaultUiErrorKind::Conflict);
+    assert_activity_and_audit(&backend);
+    assert_export_and_peek(&backend, &temp);
+    assert_backup_created(&backend, &temp);
 
     #[cfg(target_os = "linux")]
     {
-        let restored_home = temp.path().join("restored-vault");
-        let restored_backend = VaultTuiBackend::new(request(restored_home.clone())).unwrap();
-        let VaultActionResult::Restored {
-            root,
-            format_version,
-            ..
-        } = restored_backend
-            .execute(VaultAction::RestoreBackup {
-                input: lifecycle_backup_path(&temp),
-                passphrase: SecretBytes::new(b"correct horse battery staple".to_vec()),
-            })
-            .unwrap()
-        else {
-            panic!("expected restore result");
-        };
-        assert_eq!(root, restored_home);
-        assert_eq!(format_version, 2);
-        let restored = restored_backend
-            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
-            .unwrap();
-        assert_eq!(restored.fields.len(), 1);
+        assert_backup_restores(&temp);
     }
 
     #[cfg(not(target_os = "linux"))]

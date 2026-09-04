@@ -39,6 +39,7 @@ fn run_init_rust_react_scaffold_omits_admin_contract_without_admin_frontend() {
 
     let workspace_cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
     assert!(workspace_cargo.contains("rust-version = \"1.94\""));
+    assert_generated_rust_clippy_defaults(&destination);
     assert!(!workspace_cargo.contains("sqlx ="));
     let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
     assert!(root_readme.contains("Prerequisites: Rust 1.94 or newer"));
@@ -290,6 +291,34 @@ fn scaffold_options_require_preset() {
     .to_string();
 
     assert!(error.contains("Scaffold options require --preset rust-react"));
+}
+
+#[test]
+fn go_module_rejects_non_go_presets_with_stable_errors() {
+    for (preset, expected) in [
+        (None, "--go-module requires --preset go-react"),
+        (
+            Some(ScaffoldPreset::RustReact),
+            "--go-module requires --preset go-react",
+        ),
+        (
+            Some(ScaffoldPreset::HarnessOnly),
+            "--preset harness-only cannot be combined with --db, --go-module, --frontend, or --frontends",
+        ),
+    ] {
+        let error = ScaffoldOpts {
+            preset,
+            ..ScaffoldOpts::default()
+        }
+        .validate_init_invariants(&AnswerOpts {
+            go_module: Some("example.com/ExampleProject".into()),
+            ..AnswerOpts::default()
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains(expected), "{preset:?}: {error}");
+    }
 }
 
 #[test]

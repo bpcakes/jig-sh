@@ -7,7 +7,9 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
+use super::file_budget_lifecycle::prepare_legacy_migration;
 use super::launcher_repair_cache::{FullRefreshRuntimePolicy, finish_full_refresh};
+use super::update_transaction::{RepositoryUpdateLock, RepositoryUpdateTransaction};
 use super::{
     ANSWERS_FILE, ApplyRenderConflictPolicy, ApplyRenderOptions, CliProgress,
     EMBEDDED_TEMPLATE_SOURCE, HarnessFootprint, InitMutationTransaction,
@@ -26,6 +28,7 @@ struct PreparedUpdate {
     prior_managed_paths: BTreeSet<PathBuf>,
     legacy_manifest_missing: bool,
     answers_path: PathBuf,
+    update_lock: RepositoryUpdateLock,
 }
 
 pub fn run_update(opts: UpdateOpts) -> Result<Value> {
@@ -55,6 +58,8 @@ fn prepare_update(opts: &UpdateOpts) -> Result<PreparedUpdate> {
     progress.step("validate destination", "adopted repository directory");
     progress.log_blocked_on_err(validate_update_destination(&destination))?;
     progress.log_blocked_on_err(reject_newer_declared_contract(&destination))?;
+    progress.step("recover update", "durable repository transaction");
+    let update_lock = progress.log_blocked_on_err(RepositoryUpdateLock::acquire(&destination))?;
     let (prior_managed_paths, legacy_manifest_missing) = match progress
         .log_blocked_on_err(managed_paths::load_manifest(&destination))?
     {
@@ -85,6 +90,7 @@ fn prepare_update(opts: &UpdateOpts) -> Result<PreparedUpdate> {
         prior_managed_paths,
         legacy_manifest_missing,
         answers_path,
+        update_lock,
     })
 }
 
@@ -97,6 +103,7 @@ fn run_launcher_only_update(prepared: PreparedUpdate) -> Result<Value> {
         prior_managed_paths,
         legacy_manifest_missing,
         answers_path,
+        update_lock: _update_lock,
     } = prepared;
     let destination_contract_version = progress.log_blocked_on_err(
         RepoContext::supported_contract_version_from_root(&destination),
@@ -189,6 +196,7 @@ fn run_launcher_only_update(prepared: PreparedUpdate) -> Result<Value> {
                 backup_root: None,
                 progress,
                 init_transaction: Some(&mut transaction),
+                update_transaction: None,
             },
         )?;
         progress.step("seed repair runtime", "managed launcher cache");
@@ -253,6 +261,7 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
         mode,
         prior_managed_paths,
         answers_path,
+        update_lock,
         ..
     } = prepared;
     progress.step("read answers", answers_path.display());
@@ -269,12 +278,14 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
             "Missing template source metadata in {ANSWERS_FILE}. Re-adopt the repo before running jig update."
         );
     };
-    let answers = progress.log_blocked_on_err(RenderAnswers::from_answers_file(&answers_path))?;
+    let (answers, mut warnings) = progress.log_blocked_on_err(
+        RenderAnswers::from_managed_answers_file(&answers_path, &destination),
+    )?;
     let runtime_policy =
         FullRefreshRuntimePolicy::for_render(answers.harness_footprint(), update_template.source());
     let reconcile_runtime_config =
         crate::context::RepoContext::validate_config_file(&destination).is_ok();
-    let staged = stage_render(RenderStageRequest {
+    let mut staged = stage_render(RenderStageRequest {
         template: &update_template,
         answers: &answers,
         seed_repo_path: Some(&destination),
@@ -287,7 +298,28 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
         contract_version: None,
         progress,
     })?;
-    let render_report = apply_staged_render(
+    progress.step("plan lifecycle", "legacy file-budget migration");
+    let lifecycle = progress.log_blocked_on_err(prepare_legacy_migration(
+        &destination,
+        &mut staged,
+        &prior_managed_paths,
+    ))?;
+    if let Some(command) = lifecycle.rerun_command {
+        progress.info(
+            "migration",
+            format!("{}; run `{command}`", lifecycle.reason),
+        );
+    } else {
+        progress.info("migration", &lifecycle.reason);
+    }
+    let mut transaction = progress.log_blocked_on_err(RepositoryUpdateTransaction::prepare(
+        &update_lock,
+        &destination,
+        &staged,
+        opts.recopy,
+        lifecycle.proof.clone(),
+    ))?;
+    let render_result = apply_staged_render(
         &staged,
         &destination,
         ApplyRenderOptions {
@@ -305,9 +337,26 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
             backup_root: None,
             progress,
             init_transaction: None,
+            update_transaction: Some(&mut transaction),
         },
-    )?;
-    let warnings = finish_full_refresh(&destination, runtime_policy, progress, "update complete");
+    );
+    let render_report = match render_result {
+        Ok(report) => {
+            progress.step("commit update", "durable repository transaction");
+            progress.log_blocked_on_err(transaction.commit())?;
+            report
+        }
+        Err(error) => return Err(transaction.finish_failed(error)),
+    };
+    for warning in &warnings {
+        progress.info("migration", warning);
+    }
+    warnings.extend(finish_full_refresh(
+        &destination,
+        runtime_policy,
+        progress,
+        "update complete",
+    ));
 
     Ok(json!({
         "ok": true,
@@ -317,6 +366,7 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
         "answers_file": ANSWERS_FILE,
         "git_initialized": false,
         "render_report": render_report,
+        "legacy_file_budget_migration": lifecycle,
         "warnings": warnings,
     }))
 }

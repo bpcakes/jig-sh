@@ -24,6 +24,10 @@ version = "0.1.0"
 license = "MIT"
 rust-version = "1.94"
 
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+mod_module_files = "warn"
+
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"

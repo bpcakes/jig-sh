@@ -71,7 +71,6 @@ const MINIMAL_MANAGED_PATHS: &[&str] = &[
     MANIFEST_PATH,
     ROOT_GITATTRIBUTES_PATH,
     ROOT_GITIGNORE_PATH,
-    "scripts/check-rust-file-loc.sh",
 ];
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -242,16 +241,15 @@ pub(super) fn should_omit_unmanaged_rendered_path(
     relative: &Path,
     answers: &RenderAnswers,
 ) -> bool {
-    if relative == Path::new("Makefile")
+    if (relative == Path::new(super::staged_render::FILE_BUDGET_POLICY_PATH)
+        && answers.is_minimal_footprint())
+        || relative == Path::new("Makefile")
         || (answers.frontend_apps().is_empty() && is_web_managed_path(relative))
         || (!answers.rust_ci_workflow_enabled()
             && relative == Path::new(".github/workflows/rust-tests.yml"))
         || (!answers.go_ci_workflow_enabled()
             && relative == Path::new(".github/workflows/go-tests.yml"))
-        || (!(answers.go_ci_workflow_enabled()
-            || answers.rust_backend_enabled()
-            || answers.sqlx_enabled()
-            || answers.go_postgres_enabled())
+        || (!answers.repo_policy_ci_enabled()
             && relative == Path::new(".github/workflows/repo-policy.yml"))
     {
         return true;

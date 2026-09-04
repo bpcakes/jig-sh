@@ -8,6 +8,10 @@
 *.db-fsqlite-*
 # fsqlite one-time migration metadata
 *.db.fsqlite-migration-state
+*-fsqlite-ns-gate
+*-fsqlite-ns-use
+*.vacuum-wal-cert*
+*.fsqlite-migration-state
 
 # Lock files
 .write.lock

@@ -67,11 +67,14 @@ use template_source::{
 };
 
 mod adopt_infer;
+mod adoption_file_budget;
 mod answers;
 #[cfg(test)]
 pub(crate) use crate::backend::BackendLanguage;
+pub(crate) mod clippy_policy;
 mod crate_classification;
 mod embedded_templates;
+mod file_budget_lifecycle;
 mod file_copy;
 mod gate_preview;
 mod git;
@@ -95,6 +98,7 @@ mod staged_render;
 mod sync;
 mod template_source;
 mod update;
+mod update_transaction;
 
 pub(crate) use launcher_repair_cache::LAUNCHER_REPAIR_SEED_STAMP_HEADER;
 use launcher_repair_cache::{
@@ -114,8 +118,12 @@ use launcher_repair_cache::{
 use launcher_repair_cache::{is_root_owned_nonwritable_path, root_owned_nonwritable_component};
 
 pub use answers::HarnessFootprint;
+pub(crate) use answers::PreparedInitAnswers;
+#[cfg(test)]
 pub(crate) use init::run_init;
+pub(crate) use init::run_prepared_init;
 pub use opts::AnswerOpts;
+pub(crate) use opts::DevSettingsAnswers;
 pub use presets::scaffold_presets_report;
 pub use update::run_update;
 pub(crate) use update::{

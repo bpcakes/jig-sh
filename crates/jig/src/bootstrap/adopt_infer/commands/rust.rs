@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::super::scan::{RepoScan, push_scan_warning, read_limited_text, relative_path_string};
 use super::CommandCandidate;
+use crate::bootstrap::clippy_policy::NESTED_MANIFEST_RUST_CLIPPY_COMMAND;
 
 #[derive(Default)]
 pub(super) struct RustWrapperCommands {
@@ -90,6 +91,7 @@ pub(super) fn infer_rust_wrapper_commands(
         }
     }
     out.warn_if_mixed_sources();
+    out.warn_if_clippy_policy_unverified(warnings);
     out
 }
 
@@ -102,7 +104,7 @@ pub(super) fn nested_manifest_commands(manifest_paths: &[String]) -> NestedManif
         ),
         clippy: nested_manifest_candidate(
             manifest_paths,
-            "cargo clippy --manifest-path \"$jig_manifest\" --all-targets -- -D warnings",
+            NESTED_MANIFEST_RUST_CLIPPY_COMMAND,
             "clippy",
         ),
         test: nested_manifest_candidate(
@@ -221,6 +223,18 @@ impl RustWrapperCommands {
         {
             candidate.warnings.push(warning.clone());
         }
+    }
+
+    fn warn_if_clippy_policy_unverified(&mut self, warnings: &mut Vec<String>) {
+        let Some(candidate) = &mut self.clippy else {
+            return;
+        };
+        let warning = format!(
+            "Clippy wrapper command `{}` was inferred by recipe name; Jig cannot verify that it enforces `clippy::mod_module_files`. Review the wrapper and add the lint policy there or in inherited Cargo workspace lints.",
+            candidate.command
+        );
+        candidate.warnings.push(warning.clone());
+        warnings.push(warning);
     }
 }
 

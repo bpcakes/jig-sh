@@ -8,12 +8,12 @@ use jig_contract::ActionEffect;
 
 use crate::context::RepoContext;
 
-use super::support::ensure_state_layout;
+use super::support::{AdvisoryLeaseFile, ensure_state_layout};
 
 const REPOSITORY_EXECUTION_LEASE: &str = ".agent/.cache/repository-execution.lock";
 
 pub(crate) struct RepositoryExecutionLease {
-    _file: File,
+    _file: AdvisoryLeaseFile,
     exclusive: bool,
 }
 
@@ -44,7 +44,7 @@ pub(crate) fn acquire_repository_execution_lease(
             .context("Failed to acquire shared repository execution lease")?;
     }
     Ok(RepositoryExecutionLease {
-        _file: file,
+        _file: AdvisoryLeaseFile::new(file),
         exclusive,
     })
 }
@@ -69,7 +69,7 @@ pub(crate) fn try_acquire_repository_execution_lease(
         }
     };
     Ok(acquired.then_some(RepositoryExecutionLease {
-        _file: file,
+        _file: AdvisoryLeaseFile::new(file),
         exclusive,
     }))
 }

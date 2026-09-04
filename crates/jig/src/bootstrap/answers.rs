@@ -1,5 +1,3 @@
-// agentic-loc-exception: legacy answer normalization remains centralized during contract-v5 rollout.
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -8,10 +6,13 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
-use super::repository_model::{AuthoredRepositoryModel, frontend_component_id};
+use super::repository_model::{
+    AuthoredRepositoryModel, RepositoryProjectionHint, action_uses_managed_rust_file_loc_checker,
+    frontend_component_id,
+};
 use super::{
-    AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
-    generated_package_manager_version,
+    AnswerOpts, DevApp, DevSettingsAnswers, FrontendApp, GENERATED_NODE_VERSION, ScaffoldOpts,
+    ScaffoldPreset, generated_package_manager_spec, generated_package_manager_version,
 };
 use crate::backend::{
     BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase,
@@ -54,6 +55,8 @@ pub(super) struct RenderAnswers {
     scaffolded_frontend_contracts: bool,
     #[serde(skip)]
     go_postgres_integration_script: bool,
+    #[serde(skip)]
+    repository_projection_hint: RepositoryProjectionHint,
     repo_name: String,
     default_branch: String,
     ci_github_runner: String,
@@ -102,6 +105,7 @@ pub(super) struct RenderAnswers {
     typescript_typecheck_command: String,
     typescript_build_command: String,
     typescript_coverage_command: String,
+    dev: ResolvedDevSettings,
     dev_apps: Vec<DevApp>,
     frontend_apps: Vec<FrontendApp>,
     frontend_workspace_roots: Vec<String>,
@@ -122,15 +126,24 @@ pub(super) struct AnswerResolution {
     notes: Vec<String>,
 }
 
+#[derive(Debug)]
 pub(super) struct AnswerInput {
     raw: RawAnswers,
     shape: AnswerInputShape,
     authored_repository_commands: Option<BTreeMap<String, String>>,
     preserve_repository_model: bool,
+    migration_notes: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedInitAnswers {
+    input: AnswerInput,
+    effective: Option<AnswerOpts>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct AnswerInputShape {
+    top_level_keys: BTreeSet<String>,
     keys: BTreeSet<String>,
     sqlx_enabled: Option<bool>,
     schema_dump_enabled: Option<bool>,
@@ -147,172 +160,76 @@ const SQLX_SHAPED_ANSWER_KEYS: &[&str] = &[
     "migration_add_command",
 ];
 
-impl AnswerInput {
-    pub(super) fn from_opts(opts: &AnswerOpts) -> Result<Self> {
-        let Some(path) = opts.answers_file.as_deref() else {
-            return Ok(Self {
-                raw: RawAnswers::default(),
-                shape: AnswerInputShape::default(),
-                authored_repository_commands: Some(BTreeMap::new()),
-                preserve_repository_model: false,
-            });
-        };
-        Self::from_explicit_file(path)
-    }
-
-    pub(super) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
-        let Some(path) = opts.answers_file.as_deref() else {
-            return Ok(Self {
-                raw: RawAnswers::default(),
-                shape: AnswerInputShape::default(),
-                authored_repository_commands: Some(BTreeMap::new()),
-                preserve_repository_model: false,
-            });
-        };
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            path_base.join(path)
-        };
-        Self::from_explicit_file(&path)
-    }
-
-    pub(super) fn from_file(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        let value = toml::from_str::<toml::Value>(&text)
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        let table = value
-            .as_table()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
-        let mut raw = value
-            .try_into::<RawAnswers>()
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        raw.normalize_repository_model(&table);
-        raw.normalize_app_dirs()?;
-        raw.normalize_legacy_frontend_metadata(&table);
-        let authored_repository_commands = authored_repository_commands_from_table(&table);
-        let preserve_repository_model =
-            loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
+impl PreparedInitAnswers {
+    pub(crate) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
+        let input = AnswerInput::from_init_opts_at(opts, path_base)?;
+        let effective = input.effective_opts(opts)?;
         Ok(Self {
-            raw,
-            shape: AnswerInputShape::from_table(&table),
-            authored_repository_commands,
-            preserve_repository_model,
+            input,
+            effective: Some(effective),
         })
     }
 
-    fn from_explicit_file(path: &Path) -> Result<Self> {
-        let mut input = Self::from_file(path)?;
-        if input
-            .raw
-            .repository
-            .as_ref()
-            .is_some_and(AuthoredRepositoryModel::is_complete)
-            && input.authored_repository_commands.is_none()
+    #[cfg(test)]
+    pub(crate) fn from_opts_at_with_reader(
+        opts: &AnswerOpts,
+        path_base: &Path,
+        read: impl FnOnce(&Path) -> std::io::Result<String>,
+    ) -> Result<Self> {
+        let input = AnswerInput::from_init_opts_at_with_reader(opts, path_base, read)?;
+        let effective = input.effective_opts(opts)?;
+        Ok(Self {
+            input,
+            effective: Some(effective),
+        })
+    }
+
+    pub(crate) fn move_effective_to(&mut self, answers: &mut AnswerOpts) -> Result<()> {
+        *answers = self
+            .effective
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("prepared init answers were already installed"))?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_selected_preset(
+        &self,
+        scaffold: &ScaffoldOpts,
+        answers: &AnswerOpts,
+    ) -> Result<()> {
+        if let Some(preset @ (ScaffoldPreset::RustLibrary | ScaffoldPreset::RustCli)) =
+            scaffold.preset
         {
-            bail!(
-                "A complete authored [repository] model requires [commands] to be a table of string values"
-            );
+            return self.input.validate_rust_only(preset, scaffold, answers);
         }
-        input.preserve_repository_model = true;
-        Ok(input)
+        self.input.validate_explicit_file_semantics()
     }
 
-    pub(super) const fn shape(&self) -> &AnswerInputShape {
-        &self.shape
-    }
-
-    pub(super) fn preferred_rendered_command_keys(&self, cli: &AnswerOpts) -> BTreeSet<String> {
-        let mut keys = BTreeSet::new();
-        for (answer_key, command_key, cli_supplied) in [
-            (
-                "bootstrap_command",
-                "repo_bootstrap_command",
-                cli.bootstrap_command.is_some(),
-            ),
-            (
-                "rust_fmt_check_command",
-                "api_fmt_command",
-                cli.rust_fmt_check_command.is_some(),
-            ),
-            (
-                "rust_clippy_command",
-                "api_clippy_command",
-                cli.rust_clippy_command.is_some(),
-            ),
-            (
-                "rust_test_command",
-                "api_test_command",
-                cli.rust_test_command.is_some(),
-            ),
-            (
-                "rust_test_locked_command",
-                "api_test_locked_command",
-                cli.rust_test_locked_command.is_some(),
-            ),
-            (
-                "sqlx_check_command",
-                "api_sqlx_command",
-                cli.sqlx_check_command.is_some(),
-            ),
-            (
-                "schema_dump_command",
-                "api_schema_dump_command",
-                cli.schema_dump_command.is_some(),
-            ),
-            ("go_fmt_check_command", "api_fmt_command", false),
-            ("go_lint_command", "api_lint_command", false),
-            ("go_test_command", "api_test_command", false),
-            ("go_test_locked_command", "api_test_locked_command", false),
-            ("sqlc_check_command", "api_sqlc_command", false),
-            (
-                "typescript_lint_command",
-                "repo_compat_typescript_lint_command",
-                false,
-            ),
-            (
-                "typescript_typecheck_command",
-                "repo_compat_typescript_typecheck_command",
-                false,
-            ),
-            (
-                "typescript_build_command",
-                "repo_compat_typescript_build_command",
-                false,
-            ),
-            (
-                "typescript_coverage_command",
-                "repo_compat_typescript_coverage_command",
-                false,
-            ),
-        ] {
-            if cli_supplied || self.shape.contains_key(answer_key) {
-                keys.insert(command_key.to_owned());
-            }
+    pub(super) fn into_input(self) -> Result<AnswerInput> {
+        if self.effective.is_some() {
+            bail!("prepared init answers were not installed before bootstrap");
         }
-        keys
+        Ok(self.input)
     }
+}
 
-    pub(super) fn effective_opts(&self, cli: &AnswerOpts) -> Result<AnswerOpts> {
-        let mut raw = self.raw.clone();
-        raw.merge_opts(cli);
-        raw.normalize_app_dirs()?;
-        let scaffold_go_component_roots = raw
-            .repository
-            .as_ref()
-            .map(AuthoredRepositoryModel::scaffold_go_component_roots)
-            .unwrap_or_default();
-        let mut answers = raw.into_answer_opts(cli.answers_file.clone());
-        answers.scaffold_go_component_roots = scaffold_go_component_roots;
-        Ok(answers)
-    }
+include!("answers/input.rs");
+
+fn nonempty_answer_string(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+fn reject_rust_only_input(preset: ScaffoldPreset, input: &str) -> Result<()> {
+    bail!(
+        "--preset {} cannot be combined with incompatible input `{input}`; remove that input or select a matching preset",
+        preset.as_str()
+    )
 }
 
 impl AnswerInputShape {
     pub(super) fn from_table(table: &toml::Table) -> Self {
-        let mut keys = table.keys().cloned().collect::<BTreeSet<_>>();
+        let top_level_keys = table.keys().cloned().collect::<BTreeSet<_>>();
+        let mut keys = top_level_keys.clone();
         if let Some(repository) = table.get("repository").and_then(toml::Value::as_table) {
             keys.insert("backend_language".into());
             let has_adapter = |expected: &str| {
@@ -386,6 +303,7 @@ impl AnswerInputShape {
             }
         }
         Self {
+            top_level_keys,
             sqlx_enabled: table.get("sqlx_enabled").and_then(toml::Value::as_bool),
             schema_dump_enabled: table
                 .get("schema_dump_enabled")
@@ -396,6 +314,10 @@ impl AnswerInputShape {
 
     pub(super) fn contains_key(&self, key: &str) -> bool {
         self.keys.contains(key)
+    }
+
+    fn contains_top_level_key(&self, key: &str) -> bool {
+        self.top_level_keys.contains(key)
     }
 
     pub(super) fn explicit_sqlx_enabled(&self, answers: &AnswerOpts) -> Option<bool> {
@@ -438,12 +360,8 @@ impl AnswerResolution {
         destination: &Path,
         use_defaults: bool,
     ) -> Result<Self> {
-        let AnswerInput {
-            mut raw,
-            authored_repository_commands,
-            preserve_repository_model,
-            ..
-        } = input;
+        let (mut raw, authored_repository_commands, preserve_repository_model, mut notes) =
+            input.into_parts();
         raw.merge_opts(opts);
         let vault_note = raw.apply_existing_vault_default(destination)?;
         let sqlx_defaulted_to_tooling_only = if use_defaults {
@@ -457,7 +375,6 @@ impl AnswerResolution {
             authored_repository_commands,
             preserve_repository_model,
         )?;
-        let mut notes = Vec::new();
         if sqlx_defaulted_to_tooling_only {
             notes.push(
                 "SQLx answers were omitted under --defaults, so Jig rendered a tooling-only profile. Pass --sqlx-enabled true --rust-migration-dir <dir> for SQLx repos, or pass --sqlx-enabled false for tooling-only repos."
@@ -477,8 +394,8 @@ impl AnswerResolution {
 
 impl RenderAnswers {
     pub(super) fn from_answers_file(path: &Path) -> Result<Self> {
-        let authored_repository_commands = authored_repository_commands(path)?;
-        let mut raw = RawAnswers::from_file(path)?;
+        let (mut raw, authored_repository_commands, _, _) =
+            AnswerInput::from_file(path)?.into_parts();
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
         let mut answers = resolve_render_answers(raw, None, authored_repository_commands, true)?;
@@ -486,38 +403,6 @@ impl RenderAnswers {
             .parent()
             .is_some_and(has_go_postgres_integration_script);
         Ok(answers)
-    }
-
-    pub(super) const fn authored_repository(&self) -> Option<&AuthoredRepositoryModel> {
-        self.authored_repository.as_ref()
-    }
-
-    pub(super) const fn authored_repository_commands(&self) -> &BTreeMap<String, String> {
-        &self.authored_repository_commands
-    }
-
-    pub(super) fn default_branch(&self) -> &str {
-        &self.default_branch
-    }
-
-    pub(super) fn template_source_url(&self) -> &str {
-        &self.template_source_url
-    }
-
-    pub(super) fn frontend_apps(&self) -> &[FrontendApp] {
-        &self.frontend_apps
-    }
-
-    pub(super) fn frontend_workspace_roots(&self) -> &[String] {
-        &self.frontend_workspace_roots
-    }
-
-    pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
-        self.harness_footprint
-    }
-
-    pub(super) const fn backend_language(&self) -> BackendLanguage {
-        self.backend_language
     }
 
     fn authored_repository_has_adapter(&self, expected: &str) -> Option<bool> {
@@ -595,15 +480,27 @@ impl RenderAnswers {
     }
 
     pub(super) fn rust_fmt_ci_target(&self) -> Option<String> {
-        self.managed_ci_target(tool::FMT_CHECK, &["rust", "sqlx"], "api:fmt")
+        let generated = format!(
+            "{}:fmt",
+            self.repository_projection_hint.rust_component_id()
+        );
+        self.managed_ci_target(tool::FMT_CHECK, &["rust", "sqlx"], &generated)
     }
 
     pub(super) fn rust_clippy_ci_target(&self) -> Option<String> {
-        self.managed_ci_target(tool::CLIPPY, &["rust", "sqlx"], "api:clippy")
+        let generated = format!(
+            "{}:clippy",
+            self.repository_projection_hint.rust_component_id()
+        );
+        self.managed_ci_target(tool::CLIPPY, &["rust", "sqlx"], &generated)
     }
 
     pub(super) fn rust_test_locked_ci_target(&self) -> Option<String> {
-        self.managed_ci_target(tool::TEST_LOCKED, &["rust", "sqlx"], "api:test-locked")
+        let generated = format!(
+            "{}:test-locked",
+            self.repository_projection_hint.rust_component_id()
+        );
+        self.managed_ci_target(tool::TEST_LOCKED, &["rust", "sqlx"], &generated)
     }
 
     pub(super) fn go_sqlc_ci_target(&self) -> Option<String> {
@@ -748,6 +645,8 @@ impl RenderAnswers {
 mod raw_answers;
 use raw_answers::*;
 
+mod file_budget;
+
 fn inherit_repository_command(destination: &mut Option<String>, commands: &toml::Table, key: &str) {
     if destination.is_none() {
         *destination = commands
@@ -755,17 +654,6 @@ fn inherit_repository_command(destination: &mut Option<String>, commands: &toml:
             .and_then(toml::Value::as_str)
             .map(str::to_owned);
     }
-}
-
-fn authored_repository_commands(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let value = toml::from_str::<toml::Value>(&text)
-        .with_context(|| format!("Failed to parse {}", path.display()))?;
-    let table = value
-        .as_table()
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
-    Ok(authored_repository_commands_from_table(table))
 }
 
 fn authored_repository_commands_from_table(
@@ -801,7 +689,8 @@ fn loaded_repository_model_is_custom(
 
     let mut generated_raw = raw.clone();
     generated_raw.repository = None;
-    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None) else {
+    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None, None)
+    else {
         return true;
     };
     let Ok(generated) =
@@ -823,8 +712,11 @@ fn resolve_render_answers(
         .flatten()
         .filter(AuthoredRepositoryModel::is_complete)
         .filter(|_| authored_repository_commands.is_some());
-    let mut answers =
-        raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
+    let mut answers = raw.resolve_with_authored_repository(
+        default_repo_name,
+        authored_repository,
+        authored_repository_commands.as_ref(),
+    )?;
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()
     {
@@ -964,34 +856,16 @@ pub(super) fn web_run_command(package_manager: &str) -> &'static str {
     }
 }
 
-fn normalize_generated_gate_root(value: &str, label: &str) -> Result<String> {
-    let normalized = normalize_portable_repo_path(value, label)?;
-    if normalized.chars().any(|character| {
-        character.is_control() || matches!(character, '*' | '?' | '[' | ']' | '{' | '}')
-    }) {
-        bail!(
-            "{label} '{value}' cannot be represented safely as a literal generated gate path; control characters and glob metacharacters (*, ?, [, ], {{, }}) are unsupported"
-        );
-    }
-    let pattern = if normalized == "." {
-        "**".to_string()
-    } else {
-        format!("{normalized}/**")
-    };
-    validate_gate_path_pattern("generated-policy", label, &pattern).with_context(|| {
-        format!("{label} '{value}' cannot be represented safely as a generated gate path")
-    })?;
-    Ok(normalized)
-}
+mod generated_gate;
+pub(super) use generated_gate::frontend_gate_key;
+use generated_gate::normalize_generated_gate_root;
 
-pub(super) fn frontend_gate_key(name: &str) -> String {
-    name.to_ascii_lowercase().replace('-', "_")
-}
-
+mod accessors;
 mod serialization;
 use serialization::*;
 
 mod dev;
+pub(crate) use dev::{ResolvedDevSettings, resolve_settings as resolve_dev_settings};
 #[cfg(test)]
 #[path = "answers_tests.rs"]
 mod tests;

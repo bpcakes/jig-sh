@@ -276,6 +276,11 @@ edition = "2024"
         inference.report()["metadata"]["rust_crate_roots"]["sources"][0],
         "Cargo.toml [package]"
     );
+    assert!(
+        inference
+            .warnings()
+            .contains(&crate::bootstrap::clippy_policy::ALL_FEATURES_ADOPTION_WARNING.to_owned())
+    );
 }
 
 #[test]
@@ -349,16 +354,27 @@ edition = "2024"
 
     let inference = infer_adopt_answers(temp.path());
     let command = inference.rust_test_command.as_deref().unwrap();
+    let clippy_command = inference.rust_clippy_command.as_deref().unwrap();
 
     assert_eq!(inference.rust_crate_roots, vec!["."]);
     assert!(command.contains("jig_manifest=api/Cargo.toml"));
     assert!(!command.contains("examples/demo/Cargo.toml"));
+    assert!(!clippy_command.contains("--locked"));
+    assert!(clippy_command.contains("--all-targets --all-features"));
+    assert!(clippy_command.contains("-D warnings -D clippy::mod_module_files"));
     assert!(
-        !inference
-            .rust_clippy_command
-            .as_deref()
+        inference
+            .warnings()
+            .contains(&crate::bootstrap::clippy_policy::ALL_FEATURES_ADOPTION_WARNING.to_owned())
+    );
+    assert!(
+        inference.report()["metadata"]["rust_clippy_command"]["warnings"]
+            .as_array()
             .unwrap()
-            .contains("--locked")
+            .iter()
+            .any(
+                |warning| warning == crate::bootstrap::clippy_policy::ALL_FEATURES_ADOPTION_WARNING
+            )
     );
     assert!(inference.rust_test_locked_command.is_none());
     assert!(

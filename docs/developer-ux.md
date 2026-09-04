@@ -15,7 +15,7 @@ Jig splits the first-run experience into two cases:
 
 Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, `.mcp.json`, root agent guidance, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, plans, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
 
-The entry commands are intentionally separate. Start a new repo with `jig init`; add Jig to a repo that already exists with `jig adopt .`, which previews by default and applies only when re-run with `--write`. A bare terminal `jig init /path/to/new-repo` guides the project shape, database, and frontend choices using the same descriptions as `jig presets`. `--defaults` skips only the project-shape wizard and fills omitted shape choices with Rust React, no database, and `web`; initial vault setup can still request a passphrase unless `JIG_VAULT_PASSPHRASE` or `--no-vault` is used. `--no-input` skips the wizard but requires a complete explicit shape and never prompts for a vault passphrase. Non-terminal init follows the strict behavior unless `--defaults` is supplied. Use `--preset harness-only --no-input --no-vault` for an unattended full harness without starter application code. An answers file with `harness_footprint = "minimal"` is itself a complete harness-only shape in every interaction mode and rejects Rust/database/frontend scaffold choices. Global `--json` only selects output format and never changes these interaction rules.
+The entry commands are intentionally separate. Start a new repo with `jig init`; add Jig to a repo that already exists with `jig adopt .`, which previews by default and applies only when re-run with `--write`. A bare terminal `jig init /path/to/new-repo` guides the project shape using the same five descriptions as `jig presets`; only the Rust React and Go React application choices continue to database and frontend questions. `--defaults` skips only the project-shape wizard and fills omitted shape choices with Rust React, no database, and `web`; initial vault setup can still request a passphrase unless `JIG_VAULT_PASSPHRASE` or `--no-vault` is used. `--no-input` skips the wizard but requires a complete explicit shape and never prompts for a vault passphrase. Non-terminal init follows the strict behavior unless `--defaults` is supplied. `harness-only`, `rust-library`, and `rust-cli` are complete when named explicitly and reject application-shape flags. Use `--preset harness-only --no-input --no-vault` for an unattended full harness without starter project code. An answers file with `harness_footprint = "minimal"` is itself a complete harness-only shape in every interaction mode and rejects Rust/database/frontend scaffold choices. Global `--json` only selects output format and never changes these interaction rules.
 
 The practical result is that a new contributor can start with a small command set:
 
@@ -51,7 +51,30 @@ For greenfield repositories, `jig init` gives developers an immediate typed cont
 jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
 ```
 
-For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, or `harness-only`; the app path then asks for its supported database and frontend selection. Go asks for a module import path and supports `none`/`postgres` plus `web`/`landing`; Rust additionally supports SQLite and `admin`. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
+For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, `harness-only`, `rust-library`, or `rust-cli`. The application path then asks for its supported database and frontend selection: Go also asks for a module import path and supports `none`/`postgres` plus `web`/`landing`; Rust React additionally supports SQLite and `admin`. The harness-only and Rust-only paths ask no database or frontend questions. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
+
+For a new Rust repository without an application stack, use one of the explicit Rust-only presets:
+
+| Preset | Initial virtual-workspace member | Starter artifact |
+| --- | --- | --- |
+| `rust-library` | `crates/<repo>` | `src/lib.rs` library |
+| `rust-cli` | `crates/<repo>` | `src/main.rs` binary with an explicit `[[bin]]` target |
+
+```sh
+jig init /path/to/example-library --preset rust-library --no-input --no-vault
+jig init /path/to/example-cli --preset rust-cli --no-input --no-vault
+```
+
+Both presets use Rust 2024 and the top-level Jig Rust 1.88 baseline. Like `rust-react`, they enable Clippy's `cognitive_complexity` nursery lint at warning level with a threshold of 20 and the `mod_module_files` restriction lint, and every generated workspace member inherits that policy. The strict Clippy command checks all targets and features, denies warnings, and explicitly denies `mod_module_files`, so a heuristic score above 20 or a feature-gated `mod.rs` module layout fails the gate even if a later workspace member forgets `[lints] workspace = true`. This policy covers compiled workspace targets, not every tracked Rust file, an excluded crate, or code selected only on another target platform. Clippy cautions that the complexity score is not an objective measurement; the generated Cargo and Clippy configuration is project-owned and can be adjusted when the policy does not fit the codebase. Their one seed package starts non-publishable and without license metadata. They add no database, SQLx, application contract, frontend, API, dev app, release workflow, or extra crate layer. The CLI starter uses only std and prints its package name and version; its argument parsing and logging choices remain project decisions. There is no public `rust-workspace` preset—choose the artifact the initial crate actually provides. If the Rust repository already exists, run `jig adopt .` instead so Jig previews and preserves its project-owned structure.
+
+The generated Rust-only README gives the complete command list. The minimum post-init workflow is:
+
+```sh
+scripts/jig setup
+scripts/jig check test
+```
+
+Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI share the resolution. The root/member Cargo manifests, root `clippy.toml`, seed source, crate guide, and scaffold README are generated once and become project-owned. `jig update` maintains the harness without rewriting them. Root guidance talks about the Rust workspace and crate ownership, and neither preset configures or recommends `scripts/jig dev`.
 
 When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
 

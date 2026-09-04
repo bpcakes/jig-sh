@@ -150,29 +150,40 @@ fn seed_answers_only_serializes_provided_values() {
     assert!(!mapping.contains_key("default_branch"));
 }
 
-#[test]
-fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
-    assert_eq!(template_progress_label(None), "default jig-sh template");
-    assert_eq!(template_progress_label(Some("/tmp/jig-sh")), "/tmp/jig-sh");
-
-    let destination = PathBuf::from("/tmp/demo");
-    let result = initial_copy::BootstrapCopyResult {
+fn copy_result(bootstrap: bool, dry_run: bool, minimal: bool) -> initial_copy::BootstrapCopyResult {
+    initial_copy::BootstrapCopyResult {
         default_branch: Some("main".into()),
-        bootstrap_command_configured: true,
-        frontend_apps_configured: true,
-        dev_apps_configured: true,
-        sqlx_enabled: true,
-        schema_dump_enabled: true,
-        minimal_footprint: false,
+        bootstrap_command_configured: bootstrap,
+        frontend_apps_configured: bootstrap,
+        dev_apps_configured: bootstrap,
+        sqlx_enabled: bootstrap,
+        schema_dump_enabled: bootstrap,
+        minimal_footprint: minimal,
         full_to_minimal_transition: false,
         render_preview: initial_copy::AdoptionRenderPreview::default(),
-        apply_report: sync::ApplyRenderReport::default(),
+        apply_report: sync::ApplyRenderReport {
+            dry_run,
+            ..sync::ApplyRenderReport::default()
+        },
         notes: Vec::new(),
-    };
+    }
+}
 
-    let steps = initial_next_steps(InitialCommand::Adopt, &destination, &result, false);
-    let command_report = initial_command_report(&result);
+#[test]
+fn template_progress_labels_name_the_selected_source() {
+    assert_eq!(template_progress_label(None), "default jig-sh template");
+    assert_eq!(template_progress_label(Some("/tmp/jig-sh")), "/tmp/jig-sh");
+}
 
+#[test]
+fn adopted_full_harness_next_steps_cover_configured_capabilities() {
+    let result = copy_result(true, false, false);
+    let steps = initial_next_steps(
+        InitialCommand::Adopt,
+        Path::new("/tmp/demo"),
+        &result,
+        false,
+    );
     assert_eq!(steps[0], "cd /tmp/demo");
     for expected in [
         "scripts/jig setup",
@@ -181,33 +192,30 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
     ] {
         assert!(steps.iter().any(|step| step == expected));
     }
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.contains("scripts/jig check sqlx"))
-    );
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.contains("scripts/dump-schema.sh"))
-    );
-    assert!(
-        steps
-            .iter()
-            .any(|step| step.contains("Commit the adoption diff"))
-    );
+    for expected in [
+        "scripts/jig check sqlx",
+        "scripts/dump-schema.sh",
+        "Commit the adoption diff",
+    ] {
+        assert!(steps.iter().any(|step| step.contains(expected)));
+    }
     assert!(!steps.iter().any(|step| step.starts_with("Review ")));
+
+    let commands = initial_command_report(&result);
     assert!(
-        command_report
+        commands
             .iter()
             .all(|command| !command.contains("run jig ") && !command.contains("through jig "))
     );
     assert!(
-        command_report
+        commands
             .iter()
             .all(|command| command.contains("scripts/jig"))
     );
+}
 
+#[test]
+fn initial_notes_cover_review_and_required_checks() {
     let notes = initial_notes(Vec::new(), true, None, false);
     for expected in [
         "Review generated .jig.toml",
@@ -216,111 +224,58 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
     ] {
         assert!(notes.iter().any(|note| note.contains(expected)));
     }
+}
 
-    let preview_steps = initial_next_steps(
+#[test]
+fn preview_next_steps_do_not_run_generated_commands() {
+    let steps = initial_next_steps(
         InitialCommand::Adopt,
         Path::new("/tmp/preview"),
-        &initial_copy::BootstrapCopyResult {
-            default_branch: Some("main".into()),
-            bootstrap_command_configured: true,
-            frontend_apps_configured: true,
-            dev_apps_configured: true,
-            sqlx_enabled: true,
-            schema_dump_enabled: true,
-            minimal_footprint: false,
-            full_to_minimal_transition: false,
-            render_preview: initial_copy::AdoptionRenderPreview::default(),
-            apply_report: sync::ApplyRenderReport {
-                dry_run: true,
-                ..sync::ApplyRenderReport::default()
-            },
-            notes: Vec::new(),
-        },
+        &copy_result(true, true, false),
         false,
     );
     assert!(
-        preview_steps
+        steps
             .iter()
             .any(|step| step.contains("jig adopt . --write"))
     );
     assert!(
-        preview_steps
+        steps
             .iter()
             .any(|step| step == "No files were changed by this preview.")
     );
-    assert!(
-        !preview_steps
-            .iter()
-            .any(|step| step.starts_with("scripts/jig"))
-    );
+    assert!(!steps.iter().any(|step| step.starts_with("scripts/jig")));
+}
 
-    let quoted_steps = initial_next_steps(
+#[test]
+fn init_next_steps_quote_destinations_with_spaces() {
+    let steps = initial_next_steps(
         InitialCommand::Init,
         Path::new("/tmp/demo repo"),
-        &initial_copy::BootstrapCopyResult {
-            default_branch: Some("main".into()),
-            bootstrap_command_configured: true,
-            frontend_apps_configured: false,
-            dev_apps_configured: false,
-            sqlx_enabled: false,
-            schema_dump_enabled: false,
-            minimal_footprint: false,
-            full_to_minimal_transition: false,
-            render_preview: initial_copy::AdoptionRenderPreview::default(),
-            apply_report: sync::ApplyRenderReport::default(),
-            notes: Vec::new(),
-        },
+        &copy_result(false, false, false),
         false,
     );
-    assert_eq!(quoted_steps[0], "cd '/tmp/demo repo'");
+    assert_eq!(steps[0], "cd '/tmp/demo repo'");
+}
 
-    let no_bootstrap_steps = initial_next_steps(
+#[test]
+fn init_without_bootstrap_uses_setup_and_reports_the_skip() {
+    let result = copy_result(false, false, false);
+    let steps = initial_next_steps(
         InitialCommand::Init,
         Path::new("/tmp/no-bootstrap"),
-        &initial_copy::BootstrapCopyResult {
-            default_branch: Some("main".into()),
-            bootstrap_command_configured: false,
-            frontend_apps_configured: false,
-            dev_apps_configured: false,
-            sqlx_enabled: false,
-            schema_dump_enabled: false,
-            minimal_footprint: false,
-            full_to_minimal_transition: false,
-            render_preview: initial_copy::AdoptionRenderPreview::default(),
-            apply_report: sync::ApplyRenderReport::default(),
-            notes: Vec::new(),
-        },
+        &result,
         false,
     );
-    assert!(
-        !no_bootstrap_steps
-            .iter()
-            .any(|step| step == "scripts/jig bootstrap")
-    );
-    assert!(
-        no_bootstrap_steps
-            .iter()
-            .any(|step| step == "scripts/jig setup")
-    );
-    let no_bootstrap_report = initial_command_report(&initial_copy::BootstrapCopyResult {
-        default_branch: Some("main".into()),
-        bootstrap_command_configured: false,
-        frontend_apps_configured: false,
-        dev_apps_configured: false,
-        sqlx_enabled: false,
-        schema_dump_enabled: false,
-        minimal_footprint: true,
-        full_to_minimal_transition: false,
-        render_preview: initial_copy::AdoptionRenderPreview::default(),
-        apply_report: sync::ApplyRenderReport::default(),
-        notes: Vec::new(),
-    });
+    assert!(!steps.iter().any(|step| step == "scripts/jig bootstrap"));
+    assert!(steps.iter().any(|step| step == "scripts/jig setup"));
+    let commands = initial_command_report(&copy_result(false, false, true));
     assert_eq!(
-        no_bootstrap_report[0],
+        commands[0],
         "bootstrap_command not configured; skip jig bootstrap"
     );
     assert!(
-        no_bootstrap_report
+        commands
             .iter()
             .all(|command| !command.contains("scripts/jig"))
     );
@@ -438,6 +393,7 @@ fn apply_staged_render_does_not_rewrite_preserved_files() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -488,6 +444,7 @@ fn apply_staged_render_writes_the_managed_path_manifest_last() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -531,6 +488,7 @@ fn apply_staged_render_reports_managed_block_insertions_only_when_inserted() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -550,6 +508,7 @@ fn apply_staged_render_reports_managed_block_insertions_only_when_inserted() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -596,6 +555,7 @@ fn apply_staged_render_allows_root_agents_managed_block_update_without_force() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -640,6 +600,7 @@ fn apply_staged_render_hard_fails_on_blocking_ancestors_before_preview_or_write(
                 backup_root: None,
                 progress: CliProgress::new("test"),
                 init_transaction: None,
+                update_transaction: None,
             },
         )
         .unwrap_err()
@@ -709,6 +670,7 @@ fn apply_staged_render_rejects_reserved_git_metadata_aliases_before_any_operatio
                     backup_root: None,
                     progress: CliProgress::new("test"),
                     init_transaction: None,
+                    update_transaction: None,
                 },
             )
             .unwrap_err()
@@ -792,6 +754,7 @@ fn apply_staged_render_rejects_active_and_retired_directory_leaves_before_any_op
                 backup_root: None,
                 progress: CliProgress::new("test"),
                 init_transaction: None,
+                update_transaction: None,
             },
         )
         .unwrap_err()
@@ -849,6 +812,7 @@ fn apply_staged_render_retires_leaf_symlink_without_touching_its_target() {
             backup_root: None,
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap();
@@ -900,6 +864,7 @@ fn apply_staged_render_rejects_unsafe_backup_leaves_before_managed_mutation() {
                 backup_root: Some(&destination.path().join("backups")),
                 progress: CliProgress::new("test"),
                 init_transaction: None,
+                update_transaction: None,
             },
         )
         .unwrap_err()
@@ -958,6 +923,7 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
             backup_root: Some(&backup_root),
             progress: CliProgress::new("test"),
             init_transaction: None,
+            update_transaction: None,
         },
     )
     .unwrap_err()
@@ -971,60 +937,6 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
     assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
 }
 
-#[cfg(unix)]
-#[test]
-fn rendered_conflicts_detects_executable_bit_changes() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let rendered = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    write_answers_fixture(rendered.path(), Some(true));
-    fs::create_dir_all(rendered.path().join("scripts")).unwrap();
-    fs::create_dir_all(destination.path().join("scripts")).unwrap();
-    fs::write(rendered.path().join("scripts/jig"), "same").unwrap();
-    fs::write(destination.path().join("scripts/jig"), "same").unwrap();
-    fs::set_permissions(
-        rendered.path().join("scripts/jig"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    fs::set_permissions(
-        destination.path().join("scripts/jig"),
-        fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
-
-    let conflicts = rendered_conflicts(rendered.path(), destination.path()).unwrap();
-    assert_eq!(conflicts, vec!["scripts/jig"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn rendered_conflicts_detects_file_replacing_symlink() {
-    let rendered = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    write_answers_fixture(rendered.path(), Some(true));
-    fs::create_dir_all(rendered.path().join("scripts")).unwrap();
-    fs::create_dir_all(destination.path().join("scripts")).unwrap();
-    fs::write(rendered.path().join("scripts/jig"), "same").unwrap();
-    fs::write(destination.path().join("scripts/target"), "same").unwrap();
-    create_symlink(Path::new("target"), &destination.path().join("scripts/jig")).unwrap();
-
-    let conflicts = rendered_conflicts(rendered.path(), destination.path()).unwrap();
-    assert_eq!(conflicts, vec!["scripts/jig"]);
-}
-
-#[test]
-fn rendered_conflicts_detects_blocking_ancestor_file() {
-    let rendered = tempdir().unwrap();
-    let destination = tempdir().unwrap();
-    write_answers_fixture(rendered.path(), Some(true));
-    fs::create_dir_all(rendered.path().join("scripts")).unwrap();
-    fs::write(rendered.path().join("scripts/jig"), "rendered").unwrap();
-    fs::write(destination.path().join("scripts"), "blocking file").unwrap();
-
-    let conflicts = rendered_conflicts(rendered.path(), destination.path()).unwrap();
-    assert_eq!(conflicts, vec!["scripts"]);
-}
+include!("rendering/leaf_conflicts.rs");
 
 mod guide_preview;

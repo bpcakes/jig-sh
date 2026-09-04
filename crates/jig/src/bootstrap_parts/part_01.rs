@@ -26,7 +26,7 @@ Templates:
   Unreleased local builds use templates embedded in the jig binary unless --vcs-ref is supplied.
 
 Scaffold ownership:
-  Presets create starter application code once. After creation, that app code is project-owned.
+  Presets create starter project code once. After creation, that project code is project-owned.
   `jig update` keeps the Jig harness current; it does not rewrite scaffolded app code.
 
 Interaction modes:
@@ -38,6 +38,8 @@ Examples:
   jig init /path/to/new-repo
   jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
   jig init /path/to/new-repo --preset harness-only --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-library --no-input --no-vault
+  jig init /path/to/new-repo --preset rust-cli --no-input --no-vault
   jig init /path/to/new-repo --preset rust-react
   jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
   jig init /path/to/new-repo --preset go-react --db postgres --frontends web --go-module github.com/acme/new-repo
@@ -88,7 +90,7 @@ pub struct InitOpts {
         long,
         help_heading = "Automation",
         help = "Skip the init wizard and require an explicit, complete project shape instead of prompting",
-        long_help = "Skip the init wizard and require --preset. Application presets require an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file; go-react also requires --go-module. The harness-only preset rejects database and scaffold frontend flags. Non-terminal execution without --defaults follows this strict behavior."
+        long_help = "Skip the init wizard and require --preset. The rust-react and go-react application presets require an explicit --db choice plus --frontend/--frontends or effective frontend_apps from --answers-file; go-react also requires --go-module. The harness-only, rust-library, and rust-cli presets need no database or frontend choice and reject those scaffold flags. Non-terminal execution without --defaults follows this strict behavior."
     )]
     pub no_input: bool,
     #[arg(
@@ -322,6 +324,8 @@ pub enum ScaffoldPreset {
     RustReact,
     GoReact,
     HarnessOnly,
+    RustLibrary,
+    RustCli,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -353,11 +357,11 @@ impl TemplateMode {
     }
 }
 
-pub(crate) fn merge_init_answer_file_for_interaction(answers: &mut AnswerOpts) -> Result<()> {
+pub(crate) fn prepare_init_answers_for_interaction(
+    answers: &AnswerOpts,
+) -> Result<PreparedInitAnswers> {
     let invocation_cwd = bootstrap_invocation_cwd()?;
-    let input = AnswerInput::from_opts_at(answers, &invocation_cwd)?;
-    *answers = input.effective_opts(answers)?;
-    Ok(())
+    PreparedInitAnswers::from_opts_at(answers, &invocation_cwd)
 }
 
 pub(crate) fn should_default_init_sqlx_disabled(answers: &AnswerOpts) -> bool {
@@ -636,6 +640,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         scaffolded_frontend_contracts: false,
         scaffolded_go_postgres_integration: false,
         init_transaction: None,
+        use_update_transaction: opts.write,
         progress,
     })?;
     if opts.write {
@@ -679,6 +684,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
             &copy_result.render_preview.generated_gates,
             &copy_result.render_preview.managed_files,
             &copy_result.render_preview.retired_managed_files,
+            &copy_result.render_preview.file_budget,
             &opts.answers,
             &answer_shape,
         ),

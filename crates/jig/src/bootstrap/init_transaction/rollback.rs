@@ -114,28 +114,8 @@ impl InitMutationTransaction {
     }
 
     fn rollback_armed(&mut self) -> Result<()> {
-        let staged_boundary = self
-            .staged_publication
-            .as_ref()
-            .map(|_| verify_tracked_init_directories(&self.directory_identities));
-        if let Some(publication) = self.staged_publication.as_mut() {
-            if let Some(staging_root) = publication.staging_root.take() {
-                if let Some(Err(error)) = staged_boundary {
-                    let preserved = staging_root.keep();
-                    bail!(
-                        "Private init work tree changed before cleanup: {error:#}. Preserving the complete staging tree at {}",
-                        preserved.display()
-                    );
-                }
-                return cleanup_private_staging(staging_root, &publication.publish_source_identity)
-                    .with_context(|| {
-                        format!(
-                            "Failed to remove private failed-init staging tree beside {}",
-                            self.final_destination.display()
-                        )
-                    });
-            }
-            return Ok(());
+        if self.staged_publication.is_some() {
+            return self.rollback_staged_publication();
         }
 
         let mut failures = Vec::new();
@@ -149,6 +129,48 @@ impl InitMutationTransaction {
             return Err(anyhow::anyhow!(failures.join("\n")));
         }
 
+        self.rollback_files(&mut failures);
+
+        if let Err(error) = self.close_write_staging() {
+            failures.push(format!("private write staging cleanup failed: {error:#}"));
+        }
+
+        self.rollback_owned_directories(&mut failures);
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            bail!("{}", failures.join("\n"))
+        }
+    }
+
+    fn rollback_staged_publication(&mut self) -> Result<()> {
+        let boundary = verify_tracked_init_directories(&self.directory_identities);
+        let publication = self
+            .staged_publication
+            .as_mut()
+            .expect("staged rollback requires a publication");
+        let Some(staging_root) = publication.staging_root.take() else {
+            return Ok(());
+        };
+        if let Err(error) = boundary {
+            let preserved = staging_root.keep();
+            bail!(
+                "Private init work tree changed before cleanup: {error:#}. Preserving the complete staging tree at {}",
+                preserved.display()
+            );
+        }
+        cleanup_private_staging(staging_root, &publication.publish_source_identity).with_context(
+            || {
+                format!(
+                    "Failed to remove private failed-init staging tree beside {}",
+                    self.final_destination.display()
+                )
+            },
+        )
+    }
+
+    fn rollback_files(&mut self, failures: &mut Vec<String>) {
         let mutations = self
             .files
             .iter()
@@ -273,11 +295,9 @@ impl InitMutationTransaction {
                     ));
             }
         }
+    }
 
-        if let Err(error) = self.close_write_staging() {
-            failures.push(format!("private write staging cleanup failed: {error:#}"));
-        }
-
+    fn rollback_owned_directories(&mut self, failures: &mut Vec<String>) {
         let mut directories = self.owned_directories.keys().cloned().collect::<Vec<_>>();
         directories.sort_by(|left, right| {
             right
@@ -358,12 +378,6 @@ impl InitMutationTransaction {
                     )),
                 }
             }
-        }
-
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            bail!("{}", failures.join("\n"))
         }
     }
 

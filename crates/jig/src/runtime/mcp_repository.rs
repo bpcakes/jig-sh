@@ -203,6 +203,8 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
             selectors: args.selectors,
             profile: args.profile,
             affected_base: args.affected_base,
+            comparison: args.comparison,
+            work_plan_id: args.work_plan_id,
         },
         arguments,
     )?;

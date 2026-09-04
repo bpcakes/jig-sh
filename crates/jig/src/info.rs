@@ -360,6 +360,54 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
+    fn assert_repo_metadata(output: &Value) {
+        assert_eq!(output["command"], "info");
+        assert_eq!(output["repo"]["name"], "demo");
+        assert_eq!(output["repo"]["template_source"], "/tmp/template");
+        assert_eq!(output["repo"]["template_commit"], "abc123");
+        assert_eq!(output["repo"]["runtime_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(output["repo"]["contract_version"], 3);
+        assert_eq!(output["repo"]["jig_version"], "0.2.0-beta.1");
+    }
+
+    fn assert_repo_capabilities(output: &Value) {
+        let capabilities = &output["capabilities"];
+        assert_eq!(capabilities["sqlx"], true);
+        assert_eq!(capabilities["schema_dumps"], true);
+        assert_eq!(capabilities["frontend_apps"], true);
+        assert_eq!(capabilities["dev_proxy"], true);
+        assert_eq!(capabilities["vault"], true);
+        assert_eq!(capabilities["vault_available"], true);
+        assert_eq!(capabilities["vault_initialized"], true);
+        assert_eq!(capabilities["vault_home"], "/tmp/vault");
+        assert_eq!(capabilities["vault_scope"], "repo");
+        assert_eq!(capabilities["vault_scope_id"], "scope_1");
+    }
+
+    fn assert_repo_integrations(output: &Value) {
+        assert_eq!(output["check_tools"][0], "jig.test");
+        assert_eq!(output["work_gates"][0]["id"], "tests");
+        assert_eq!(output["dev_apps"][0]["name"], "web");
+        assert_eq!(output["frontend_apps"][0]["kind"], "vite");
+        assert_eq!(output["frontend_apps"][0]["role"], "spa");
+        assert_eq!(output["mcp_command"], "scripts/jig mcp");
+        assert_eq!(output["mcp_command_source"], "default");
+        assert_eq!(output["mcp_command_error"], Value::Null);
+    }
+
+    fn assert_repo_summary(output: &Value) {
+        let summary = format_summary(output);
+        assert!(summary.contains("Jig info: demo"));
+        assert!(summary.contains("Template source: /tmp/template @ abc123"));
+        assert!(summary.contains(&format!(
+            "Runtime: jig {} · contract v3",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(summary.contains(
+            "Capabilities: SQLx, schema dumps, frontend apps, dev proxy, vault initialized"
+        ));
+    }
+
     #[test]
     fn reports_repo_contract_capabilities_and_dev_apps() {
         let temp = tempdir().unwrap();
@@ -378,42 +426,10 @@ mod tests {
             },
         );
 
-        assert_eq!(output["command"], "info");
-        assert_eq!(output["repo"]["name"], "demo");
-        assert_eq!(output["repo"]["template_source"], "/tmp/template");
-        assert_eq!(output["repo"]["template_commit"], "abc123");
-        assert_eq!(output["repo"]["runtime_version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(output["repo"]["contract_version"], 3);
-        assert_eq!(output["repo"]["jig_version"], "0.2.0-beta.1");
-        assert_eq!(output["capabilities"]["sqlx"], true);
-        assert_eq!(output["capabilities"]["schema_dumps"], true);
-        assert_eq!(output["capabilities"]["frontend_apps"], true);
-        assert_eq!(output["capabilities"]["dev_proxy"], true);
-        assert_eq!(output["capabilities"]["vault"], true);
-        assert_eq!(output["capabilities"]["vault_available"], true);
-        assert_eq!(output["capabilities"]["vault_initialized"], true);
-        assert_eq!(output["capabilities"]["vault_home"], "/tmp/vault");
-        assert_eq!(output["capabilities"]["vault_scope"], "repo");
-        assert_eq!(output["capabilities"]["vault_scope_id"], "scope_1");
-        assert_eq!(output["check_tools"][0], "jig.test");
-        assert_eq!(output["work_gates"][0]["id"], "tests");
-        assert_eq!(output["dev_apps"][0]["name"], "web");
-        assert_eq!(output["frontend_apps"][0]["kind"], "vite");
-        assert_eq!(output["frontend_apps"][0]["role"], "spa");
-        assert_eq!(output["mcp_command"], "scripts/jig mcp");
-        assert_eq!(output["mcp_command_source"], "default");
-        assert_eq!(output["mcp_command_error"], Value::Null);
-
-        let summary = format_summary(&output);
-        assert!(summary.contains("Jig info: demo"));
-        assert!(summary.contains("Template source: /tmp/template @ abc123"));
-        assert!(summary.contains(&format!(
-            "Runtime: jig {} · contract v3",
-            env!("CARGO_PKG_VERSION")
-        )));
-        assert!(summary.contains(
-            "Capabilities: SQLx, schema dumps, frontend apps, dev proxy, vault initialized"
-        ));
+        assert_repo_metadata(&output);
+        assert_repo_capabilities(&output);
+        assert_repo_integrations(&output);
+        assert_repo_summary(&output);
     }
 
     #[test]

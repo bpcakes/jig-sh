@@ -1,3 +1,146 @@
+impl EvaluatedReceipt {
+    fn new<T: GateReceiptView>(
+        receipt: Option<&T>,
+        freshness_receipt: Option<&T>,
+        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
+    ) -> Self {
+        let freshness = gate_freshness(freshness_receipt, current_fingerprint);
+        let freshness_reason = freshness
+            .reason(freshness_receipt, current_fingerprint)
+            .to_string();
+        Self::with_freshness(
+            receipt,
+            freshness_receipt,
+            current_fingerprint,
+            freshness,
+            freshness_reason,
+        )
+    }
+
+    fn with_freshness<T: GateReceiptView>(
+        receipt: Option<&T>,
+        freshness_receipt: Option<&T>,
+        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
+        freshness: GateFreshness,
+        freshness_reason: String,
+    ) -> Self {
+        let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
+            gate_changed_paths(freshness_receipt);
+        Self {
+            receipt_id: receipt.map(|receipt| receipt.receipt_id().to_string()),
+            freshness_receipt_id: freshness_receipt.map(|receipt| receipt.receipt_id().to_string()),
+            exit_status: receipt.map(GateReceiptView::exit_status),
+            ended_at_ms: receipt.map(GateReceiptView::ended_at_ms),
+            freshness,
+            freshness_reason,
+            changed_paths,
+            changed_path_count,
+            changed_paths_truncated,
+            changed_paths_digest,
+            diff_summary: freshness_receipt.map(|receipt| receipt.diff_summary().to_string()),
+            receipt_worktree_fingerprint_error: freshness_receipt
+                .and_then(GateReceiptView::worktree_fingerprint_error)
+                .map(str::to_string),
+            current_worktree_fingerprint_error: current_fingerprint.error.clone(),
+            valid_until_ms: freshness_receipt.and_then(GateReceiptView::valid_until_ms),
+            requires_time_validity: freshness_receipt
+                .is_some_and(GateReceiptView::requires_time_validity),
+        }
+    }
+
+    fn scoped(
+        status: &crate::state::WorkCheckGateReceiptStatus,
+        current: &GateScopeEvaluation,
+    ) -> Self {
+        let evidence = &status.evidence;
+        let valid_until_ms = [evidence.valid_until_ms, status.batch.valid_until_ms]
+            .into_iter()
+            .flatten()
+            .min();
+        let requires_time_validity =
+            evidence.requires_time_validity || status.batch.requires_time_validity;
+        let (freshness, freshness_reason) = if !crate::state::time_validity_is_current(
+            valid_until_ms,
+            requires_time_validity,
+            crate::state::now_ms(),
+        ) {
+            if valid_until_ms.is_some() {
+                (
+                    GateFreshness::Stale,
+                    "receipt time validity has expired".into(),
+                )
+            } else {
+                (
+                    GateFreshness::Unknown,
+                    "receipt requires time validity but recorded no boundary".into(),
+                )
+            }
+        } else if let Some(error) = status.batch.worktree_fingerprint_error.as_deref() {
+            (
+                GateFreshness::Unknown,
+                format!("work-check batch could not prove a stable worktree: {error}"),
+            )
+        } else if let Some(error) = current.error() {
+            (
+                GateFreshness::Unknown,
+                format!("current gate scope could not be collected: {error}"),
+            )
+        } else if evidence.gate_signature != current.gate_signature() {
+            (
+                GateFreshness::Stale,
+                "gate policy or execution definition changed since the receipt".into(),
+            )
+        } else {
+            match (
+                evidence.scope_fingerprint.as_deref(),
+                current.scope_fingerprint(),
+            ) {
+                (Some(receipt), Some(current)) if receipt == current => (
+                    GateFreshness::Fresh,
+                    "receipt matches the current gate-scoped fingerprint".into(),
+                ),
+                (Some(_), Some(_)) => (
+                    GateFreshness::Stale,
+                    "receipt was recorded for a different gate-scoped fingerprint".into(),
+                ),
+                _ => (
+                    GateFreshness::Unknown,
+                    "gate-scoped freshness could not be determined".into(),
+                ),
+            }
+        };
+        Self {
+            receipt_id: evidence
+                .tool_receipt_id
+                .clone()
+                .or_else(|| Some(status.batch.receipt_id.clone())),
+            freshness_receipt_id: Some(status.batch.receipt_id.clone()),
+            exit_status: match evidence.status.as_str() {
+                "executed" | "failed" | "cancelled" => evidence.exit_status,
+                "reused" | "not_applicable" => Some(0),
+                "unknown" => None,
+                _ => None,
+            },
+            ended_at_ms: Some(status.batch.ended_at_ms),
+            freshness,
+            freshness_reason,
+            changed_paths: evidence.changed_paths.clone(),
+            changed_path_count: evidence.changed_path_count,
+            changed_paths_truncated: evidence.changed_paths_truncated,
+            changed_paths_digest: evidence.changed_paths_digest.clone(),
+            diff_summary: Some(status.batch.diff_summary.clone()),
+            receipt_worktree_fingerprint_error: status
+                .batch
+                .worktree_fingerprint_error
+                .clone()
+                .or_else(|| evidence.scope_error.clone()),
+            current_worktree_fingerprint_error: current.error().map(str::to_string),
+            valid_until_ms,
+            requires_time_validity,
+        }
+    }
+}
+
 fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<&'static str> {
     Ok(match plan_status(ctx, plan_id)? {
         Some(PlanStatus::Open) => "open",
@@ -278,6 +421,8 @@ trait GateReceiptView {
     fn diff_summary(&self) -> &str;
     fn worktree_fingerprint(&self) -> Option<&str>;
     fn worktree_fingerprint_error(&self) -> Option<&str>;
+    fn valid_until_ms(&self) -> Option<u64>;
+    fn requires_time_validity(&self) -> bool;
 }
 
 impl GateReceiptView for ToolReceiptStatus {
@@ -319,6 +464,14 @@ impl GateReceiptView for ToolReceiptStatus {
 
     fn worktree_fingerprint_error(&self) -> Option<&str> {
         self.worktree_fingerprint_error.as_deref()
+    }
+
+    fn valid_until_ms(&self) -> Option<u64> {
+        self.valid_until_ms
+    }
+
+    fn requires_time_validity(&self) -> bool {
+        self.requires_time_validity
     }
 }
 
@@ -362,6 +515,14 @@ impl GateReceiptView for WorkReviewReceiptStatus {
     fn worktree_fingerprint_error(&self) -> Option<&str> {
         self.worktree_fingerprint_error.as_deref()
     }
+
+    fn valid_until_ms(&self) -> Option<u64> {
+        self.valid_until_ms
+    }
+
+    fn requires_time_validity(&self) -> bool {
+        self.requires_time_validity
+    }
 }
 
 fn gate_changed_paths<T: GateReceiptView>(
@@ -392,6 +553,17 @@ fn gate_freshness<T: GateReceiptView>(
     let Some(receipt) = receipt else {
         return GateFreshness::Missing;
     };
+    if !crate::state::time_validity_is_current(
+        receipt.valid_until_ms(),
+        receipt.requires_time_validity(),
+        crate::state::now_ms(),
+    ) {
+        return if receipt.valid_until_ms().is_some() {
+            GateFreshness::Stale
+        } else {
+            GateFreshness::Unknown
+        };
+    }
     let Some(receipt_fingerprint) = receipt.worktree_fingerprint() else {
         return GateFreshness::Unknown;
     };
@@ -424,7 +596,8 @@ fn concise_error(error: &str) -> String {
 mod tests {
     use super::{
         CheckGateEvaluation, EvaluatedReceipt, GateEvaluation, GateFreshness, GateOutcome,
-        GateReport, GateScopeEvaluation, RequiredGateFailures, concise_error, latest_passing_gates,
+        GateReport, GateScopeEvaluation, RequiredGateFailures, concise_error, gate_freshness,
+        latest_passing_gates,
     };
 
     fn passing_check(id: &str, receipt_id: &str) -> GateEvaluation {
@@ -451,6 +624,8 @@ mod tests {
                 diff_summary: None,
                 receipt_worktree_fingerprint_error: None,
                 current_worktree_fingerprint_error: None,
+                valid_until_ms: None,
+                requires_time_validity: false,
             },
             current_scope: GateScopeEvaluation::test_known(
                 "signature",
@@ -524,6 +699,50 @@ mod tests {
                 .with_freshness(GateFreshness::Unknown)
                 .as_str(),
             "failed"
+        );
+    }
+
+    fn time_receipt(
+        valid_until_ms: Option<u64>,
+        requires_time_validity: bool,
+    ) -> crate::state::ToolReceiptStatus {
+        crate::state::ToolReceiptStatus {
+            receipt_id: "receipt-time".into(),
+            exit_status: 0,
+            ended_at_ms: 1,
+            changed_paths: Vec::new(),
+            changed_path_count: 0,
+            changed_paths_truncated: false,
+            changed_paths_digest: None,
+            diff_summary: String::new(),
+            worktree_fingerprint: Some("fingerprint".into()),
+            worktree_fingerprint_error: None,
+            valid_until_ms,
+            requires_time_validity,
+        }
+    }
+
+    #[test]
+    fn direct_gate_freshness_enforces_expiry_and_required_boundaries() {
+        let current = crate::state::CurrentWorktreeFingerprint {
+            fingerprint: Some("fingerprint".into()),
+            error: None,
+        };
+        assert_eq!(
+            gate_freshness(Some(&time_receipt(Some(0), true)), &current),
+            GateFreshness::Stale
+        );
+        assert_eq!(
+            gate_freshness(Some(&time_receipt(None, true)), &current),
+            GateFreshness::Unknown
+        );
+        assert_eq!(
+            gate_freshness(Some(&time_receipt(Some(u64::MAX), true)), &current),
+            GateFreshness::Fresh
+        );
+        assert_eq!(
+            gate_freshness(Some(&time_receipt(None, false)), &current),
+            GateFreshness::Fresh
         );
     }
 }
