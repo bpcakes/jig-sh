@@ -21,13 +21,59 @@ use crate::cancellation::ensure_status_collection_active;
 use super::records::ReceiptRecord;
 
 const JSONL_READ_CHUNK: usize = 16 * 1024;
+pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RawJsonlRecord<'a> {
     pub(super) line_number: u64,
+    pub(super) start_offset: u64,
     pub(super) bytes: &'a [u8],
     pub(super) terminated: bool,
 }
+
+#[derive(Debug)]
+pub(crate) struct JsonlRecordTooLarge {
+    path: PathBuf,
+    start_offset: u64,
+    limit: usize,
+}
+
+impl JsonlRecordTooLarge {
+    #[cfg(test)]
+    pub(crate) fn start_offset(&self) -> u64 {
+        self.start_offset
+    }
+
+    #[cfg(test)]
+    pub(crate) fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+impl std::fmt::Display for JsonlRecordTooLarge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let recovery = match self.path.file_name().and_then(|name| name.to_str()) {
+            Some("sessions.jsonl") => {
+                "run `scripts/jig state diagnose --deep`, then preview `scripts/jig state compact sessions --dry-run`"
+            }
+            Some("receipts.jsonl") => {
+                "run `scripts/jig state diagnose --deep`, then preview `scripts/jig state archive --before <cutoff> --dry-run`"
+            }
+            _ => {
+                "run `scripts/jig state diagnose --deep`; this stream has no automatic compaction command"
+            }
+        };
+        write!(
+            formatter,
+            "JSONL record at byte {} in {} exceeds the {}-byte dashboard read limit; {recovery}",
+            self.start_offset,
+            self.path.display(),
+            self.limit
+        )
+    }
+}
+
+impl std::error::Error for JsonlRecordTooLarge {}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct JsonlScanStats {
@@ -84,22 +130,6 @@ pub(super) fn append_jsonl_locked<T: Serialize>(
     file.write_all(b"\n")?;
     file.sync_data()?;
     Ok(file.metadata()?.len())
-}
-
-pub(super) fn append_text(path: &Path, content: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    with_jsonl_write_lock(path, |_guard| {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .with_context(|| format!("Failed to open {}", path.display()))?;
-        file.write_all(content)?;
-        file.sync_data()?;
-        Ok(())
-    })
 }
 
 pub(super) struct JsonlWriteGuard {
@@ -490,7 +520,76 @@ pub(super) fn lock_existing_cache_with_cancellation(
 pub(super) fn scan_jsonl_raw(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
+    visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+) -> Result<JsonlScanStats> {
+    scan_jsonl_raw_with_limit(path, cancelled, None, visitor)
+}
+
+pub(crate) fn scan_dashboard_jsonl_raw(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+) -> Result<JsonlScanStats> {
+    scan_jsonl_raw_with_limit(path, cancelled, Some(DASHBOARD_JSONL_RECORD_BYTES), visitor)
+}
+
+pub(crate) fn read_dashboard_jsonl<T: DeserializeOwned>(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<T>> {
+    let mut items = Vec::new();
+    scan_dashboard_jsonl_raw(path, cancelled, |record| {
+        let value = serde_json::from_slice(record.bytes).with_context(|| {
+            format!(
+                "Failed to parse dashboard JSONL record {} at byte {} in {}",
+                record.line_number,
+                record.start_offset,
+                path.display()
+            )
+        })?;
+        items.push(value);
+        Ok(())
+    })?;
+    Ok(items)
+}
+
+fn scan_jsonl_raw_with_limit(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    max_record_bytes: Option<usize>,
+    visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+) -> Result<JsonlScanStats> {
+    scan_jsonl_raw_with_limit_and_lock(
+        path,
+        cancelled,
+        max_record_bytes,
+        visitor,
+        FileExt::try_lock_shared,
+    )
+}
+
+#[cfg(test)]
+fn scan_dashboard_jsonl_raw_with_lock(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+    lock_data: impl FnMut(&File) -> io::Result<bool>,
+) -> Result<JsonlScanStats> {
+    scan_jsonl_raw_with_limit_and_lock(
+        path,
+        cancelled,
+        Some(DASHBOARD_JSONL_RECORD_BYTES),
+        visitor,
+        lock_data,
+    )
+}
+
+fn scan_jsonl_raw_with_limit_and_lock(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    max_record_bytes: Option<usize>,
     mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+    mut lock_data: impl FnMut(&File) -> io::Result<bool>,
 ) -> Result<JsonlScanStats> {
     ensure_state_read_active(cancelled)?;
     loop {
@@ -505,16 +604,18 @@ pub(super) fn scan_jsonl_raw(
         };
         ensure_state_read_active(cancelled)?;
         loop {
-            match FileExt::try_lock_shared(&file) {
+            match lock_data(&file) {
                 Ok(true) => break,
                 Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                     let snapshot = stable_unlocked_raw_snapshot(path, cancelled)?;
-                    return scan_jsonl_reader(
+                    return scan_jsonl_reader_with_limit_allow_unterminated(
                         BufReader::with_capacity(JSONL_READ_CHUNK, snapshot),
                         path,
                         cancelled,
+                        max_record_bytes,
+                        true,
                         &mut visitor,
                     );
                 }
@@ -534,7 +635,9 @@ pub(super) fn scan_jsonl_raw(
             }
         };
         let is_current = opened_file_is_current(&file, path)?;
-        let result = is_current.then(|| scan_jsonl_file(&file, path, cancelled, &mut visitor));
+        let result = is_current.then(|| {
+            scan_jsonl_file_with_limit(&file, path, cancelled, max_record_bytes, &mut visitor)
+        });
         let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
         let data_unlock = FileExt::unlock(&file);
         match (result, cache_unlock, data_unlock) {
@@ -649,7 +752,9 @@ pub(super) fn scan_jsonl_raw_locked(
 }
 
 mod reverse;
-pub(super) use reverse::{read_receipt_window, read_receipts_reverse, receipts_for_plan};
+#[allow(unused_imports)]
+pub(crate) use reverse::read_receipts_reverse_with_cancellation;
+pub(super) use reverse::{read_receipt_window, read_receipts_reverse};
 #[cfg(test)]
 pub(super) use reverse::{read_receipt_window_with_bytes, receipts_for_plan_with_lock};
 

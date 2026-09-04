@@ -592,9 +592,8 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
             if record.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            // Continue to byte zero after finding queued: fold_events can
-            // reject an older duplicate only when this scan retains it. The
-            // cheap identity prefilter avoids deserializing unrelated older
+            // Continue to byte zero after finding queued; duplicate rejection requires retaining it.
+            // The cheap identity prefilter avoids deserializing unrelated older
             // records. Decode the candidate JSON string, and fall back to the
             // authoritative parser when an escape could rewrite a key, so
             // valid JSON rewrites cannot hide duplicated events.
@@ -604,6 +603,7 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
             let raw = RawJsonlRecord {
                 bytes: record,
                 line_number: 0,
+                start_offset: 0,
                 terminated: true,
             };
             let identity = parse_run_event_identity(raw, path)?;

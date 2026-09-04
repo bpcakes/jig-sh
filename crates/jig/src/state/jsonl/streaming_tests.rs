@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::fs;
+use std::io::{self, BufRead, Read};
 
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -22,6 +23,7 @@ fn raw_scanner_visits_one_record_at_a_time_and_reports_exact_stats() {
     let stats = scan_jsonl_raw(&path, &|| false, |record| {
         visited.push((
             record.line_number,
+            record.start_offset,
             record.bytes.len(),
             record.bytes.len() as u64 + u64::from(record.terminated),
             record.terminated,
@@ -33,8 +35,14 @@ fn raw_scanner_visits_one_record_at_a_time_and_reports_exact_stats() {
     assert_eq!(
         visited,
         vec![
-            (1, first.len(), first.len() as u64 + 1, true),
-            (3, final_record.len(), final_record.len() as u64, false,),
+            (1, 0, first.len(), first.len() as u64 + 1, true),
+            (
+                3,
+                first.len() as u64 + 4,
+                final_record.len(),
+                final_record.len() as u64,
+                false,
+            ),
         ]
     );
     assert_eq!(stats.file_bytes, source.len() as u64);
@@ -44,6 +52,183 @@ fn raw_scanner_visits_one_record_at_a_time_and_reports_exact_stats() {
     assert_eq!(stats.max_line_bytes, first.len() as u64 + 1);
     assert_eq!(stats.max_line_number, Some(1));
     assert!(stats.unterminated_final_record);
+}
+
+struct VirtualLine {
+    remaining: usize,
+    newline_pending: bool,
+}
+
+impl VirtualLine {
+    fn new(bytes: usize) -> Self {
+        Self {
+            remaining: bytes,
+            newline_pending: true,
+        }
+    }
+}
+
+impl Read for VirtualLine {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let available = self.fill_buf()?;
+        let read = available.len().min(output.len());
+        output[..read].copy_from_slice(&available[..read]);
+        self.consume(read);
+        Ok(read)
+    }
+}
+
+impl BufRead for VirtualLine {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        static PAYLOAD: [u8; 64 * 1024] = [b'x'; 64 * 1024];
+        static NEWLINE: [u8; 1] = *b"\n";
+        if self.remaining > 0 {
+            Ok(&PAYLOAD[..self.remaining.min(PAYLOAD.len())])
+        } else if self.newline_pending {
+            Ok(&NEWLINE)
+        } else {
+            Ok(&[])
+        }
+    }
+
+    fn consume(&mut self, amount: usize) {
+        if self.remaining > 0 {
+            self.remaining -= amount.min(self.remaining);
+        } else if amount > 0 {
+            self.newline_pending = false;
+        }
+    }
+}
+
+#[test]
+fn dashboard_scanner_accepts_the_exact_record_limit_and_reports_its_offset() {
+    let path = Path::new("virtual.jsonl");
+    let mut visited = Vec::new();
+
+    let stats = scan_jsonl_reader_with_limit(
+        VirtualLine::new(DASHBOARD_JSONL_RECORD_BYTES),
+        path,
+        &|| false,
+        Some(DASHBOARD_JSONL_RECORD_BYTES),
+        &mut |record| {
+            visited.push((record.start_offset, record.bytes.len()));
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(visited, [(0, DASHBOARD_JSONL_RECORD_BYTES)]);
+    assert_eq!(stats.file_bytes, DASHBOARD_JSONL_RECORD_BYTES as u64 + 1);
+}
+
+#[test]
+fn dashboard_scanner_discards_a_virtual_huge_record_with_bounded_storage() {
+    let path = Path::new("virtual.jsonl");
+    let visited = Cell::new(false);
+
+    let error = scan_jsonl_reader_with_limit(
+        VirtualLine::new(300 * 1024 * 1024),
+        path,
+        &|| false,
+        Some(DASHBOARD_JSONL_RECORD_BYTES),
+        &mut |_| {
+            visited.set(true);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    let oversized = error.downcast_ref::<JsonlRecordTooLarge>().unwrap();
+
+    assert_eq!(oversized.start_offset(), 0);
+    assert_eq!(oversized.limit(), DASHBOARD_JSONL_RECORD_BYTES);
+    assert!(!visited.get());
+}
+
+#[test]
+fn dashboard_scanner_reports_a_later_oversized_record_offset() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    let prefix = b"{}\n";
+    let mut bytes = prefix.to_vec();
+    bytes.extend(std::iter::repeat_n(b'x', DASHBOARD_JSONL_RECORD_BYTES + 1));
+    bytes.push(b'\n');
+    fs::write(&path, bytes).unwrap();
+
+    let error = scan_dashboard_jsonl_raw(&path, &|| false, |_| Ok(())).unwrap_err();
+    let oversized = error.downcast_ref::<JsonlRecordTooLarge>().unwrap();
+
+    assert_eq!(oversized.start_offset(), prefix.len() as u64);
+    assert!(
+        error
+            .to_string()
+            .contains("no automatic compaction command")
+    );
+}
+
+#[test]
+fn dashboard_scanner_cancels_while_discarding_an_oversized_record() {
+    let checks = Cell::new(0_usize);
+
+    let error = scan_jsonl_reader_with_limit(
+        VirtualLine::new(300 * 1024 * 1024),
+        Path::new("virtual.jsonl"),
+        &|| {
+            checks.set(checks.get() + 1);
+            checks.get() > 20
+        },
+        Some(DASHBOARD_JSONL_RECORD_BYTES),
+        &mut |_| panic!("an oversized record must never reach the visitor"),
+    )
+    .unwrap_err();
+
+    assert!(crate::cancellation::is_status_collection_cancellation(
+        &error
+    ));
+    assert!(checks.get() > 20);
+}
+
+#[test]
+fn unlocked_dashboard_scan_ignores_only_the_unterminated_tail() {
+    let source = std::io::Cursor::new(b"{}\n{\"torn\":".to_vec());
+    let mut visited = Vec::new();
+
+    let stats = scan_jsonl_reader_with_limit_allow_unterminated(
+        source,
+        Path::new("plans.jsonl"),
+        &|| false,
+        Some(DASHBOARD_JSONL_RECORD_BYTES),
+        true,
+        &mut |record| {
+            visited.push(record.bytes.to_vec());
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(visited, [b"{}".to_vec()]);
+    assert_eq!(stats.records, 1);
+    assert_eq!(stats.file_bytes, 11);
+}
+
+#[test]
+fn unsupported_lock_dashboard_fallback_ignores_a_torn_plan_tail() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("plans.jsonl");
+    fs::write(&path, b"{}\n{\"torn\":").unwrap();
+    let mut visited = Vec::new();
+
+    scan_dashboard_jsonl_raw_with_lock(
+        &path,
+        &|| false,
+        |record| {
+            visited.push(record.bytes.to_vec());
+            Ok(())
+        },
+        |_| Err(io::Error::from(io::ErrorKind::Unsupported)),
+    )
+    .unwrap();
+
+    assert_eq!(visited, [b"{}".to_vec()]);
 }
 
 #[test]

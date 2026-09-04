@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 
 use anyhow::Result;
 use jig_ui::{
@@ -14,8 +13,9 @@ use serde_json::Value;
 use crate::context::RepoContext;
 use crate::runtime::{loop_status_snapshot, work_gates_snapshot};
 use crate::state::{
-    DecisionStreamRecord, PlanStreamEvent, ReceiptStreamRecord, StateStreams, current_session,
-    now_ms, plan_detail_streams, plan_receipts, state_streams,
+    DecisionStreamRecord, PlanFileError, PlanFileErrorKind, PlanStreamEvent, ReceiptStreamRecord,
+    StateStreams, current_session, now_ms, plan_detail_streams, plan_receipts, read_plan_body,
+    state_streams,
 };
 use crate::text::truncate_chars;
 
@@ -23,7 +23,6 @@ const TIMELINE_RECEIPT_SCAN_LIMIT: usize = 400;
 const HISTORY_LIMIT: usize = 10;
 const FAILURES_LIMIT: usize = 10;
 const PLAN_RECEIPTS_LIMIT: usize = 50;
-const PLAN_BODY_CHAR_LIMIT: usize = 20_000;
 const FAILURE_PREVIEW_CHARS: usize = 400;
 const DETAIL_PREVIEW_CHARS: usize = 1_000;
 const RATIONALE_PREVIEW_CHARS: usize = 300;
@@ -305,17 +304,22 @@ fn tool_stats(receipts: &[ReceiptStreamRecord]) -> Vec<ToolStatView> {
 }
 
 fn plan_body_text(ctx: &RepoContext, plan_id: &str) -> (Option<String>, Option<String>) {
-    let path = ctx.plan_body_path(plan_id);
-    match fs::read_to_string(&path) {
-        Ok(body) => (Some(truncate_chars(&body, PLAN_BODY_CHAR_LIMIT)), None),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
-        Err(error) => (
-            None,
-            Some(format!(
-                "Failed to read plan body {}: {error}",
-                path.display()
-            )),
-        ),
+    match read_plan_body(ctx, plan_id, &|| false) {
+        Ok(body) => {
+            let mut text = body.text;
+            if body.truncated {
+                text.push('…');
+            }
+            (Some(text), None)
+        }
+        Err(error)
+            if error
+                .downcast_ref::<PlanFileError>()
+                .is_some_and(|error| error.kind() == PlanFileErrorKind::NotFound) =>
+        {
+            (None, None)
+        }
+        Err(error) => (None, Some(format!("Failed to read plan body: {error}"))),
     }
 }
 

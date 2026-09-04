@@ -252,14 +252,24 @@ schedule = "* * * * *""#,
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
+set -eu
 cat >/dev/null
 printf 'started\n' >> "$JIG_TEST_TASK_START_LOG"
+durable_schedule="$JIG_TEST_TASK_REPO/.git/jig/loop/schedule.json"
+baseline_schedule="$(mktemp "${TMPDIR:-/tmp}/jig-schedule.XXXXXX")"
+trap 'rm -f "$baseline_schedule"' EXIT
+cp "$durable_schedule" "$baseline_schedule"
 printf '%s\n' '{"schema_version":4,"occurrences":{}}' \
   > "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json"
 printf '%s\n' 'not valid marker JSON' \
   > "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.initialized"
 rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/schedule.json"
-sleep 1
+attempt=0
+while cmp -s "$durable_schedule" "$baseline_schedule"; do
+  attempt=$((attempt + 1))
+  test "$attempt" -lt 100
+  sleep 0.05
+done
 touch "$JIG_TEST_TASK_COMPLETION_MARKER"
 printf 'task complete\n'
 "#,

@@ -15,8 +15,12 @@ use cap_std::{
 };
 use fs4::fs_std::FileExt;
 
-use super::bounded_json::read_bounded_json;
+use super::bounded_json::{encode_bounded_json, read_bounded_json};
 use super::*;
+
+#[cfg(test)]
+#[path = "json_cache/limit_tests.rs"]
+mod limit_tests;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -354,6 +358,7 @@ impl StateDirectory {
         let tmp_name = temporary_file_name(data_name);
         let tmp_path = data_path.parent().unwrap_or(data_path).join(&tmp_name);
         let result = (|| {
+            let encoded = encode_bounded_json(value, data_path)?;
             let mut tmp = open_regular_file(
                 &self.directory,
                 tmp_name.as_os_str(),
@@ -362,10 +367,8 @@ impl StateDirectory {
                 true,
                 &tmp_path,
             )?;
-            tmp.write_all(
-                &serde_json::to_vec_pretty(value).context("Failed to encode loop state JSON")?,
-            )
-            .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+            tmp.write_all(&encoded)
+                .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
             drop(tmp);
             self.directory
                 .rename(&tmp_name, &self.directory, data_name)
@@ -437,6 +440,7 @@ impl StateDirectory {
         let _ = self.exists(data_name, data_path)?;
         let tmp_name = temporary_file_name(data_name);
         let tmp_path = data_path.parent().unwrap_or(data_path).join(&tmp_name);
+        let encoded = encode_bounded_json(value, data_path)?;
         let result = publish_durable_json(
             data_path,
             || {
@@ -448,11 +452,8 @@ impl StateDirectory {
                     true,
                     &tmp_path,
                 )?;
-                tmp.write_all(
-                    &serde_json::to_vec_pretty(value)
-                        .context("Failed to encode loop state JSON")?,
-                )
-                .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
+                tmp.write_all(&encoded)
+                    .with_context(|| format!("Failed to write {}", tmp_path.display()))?;
                 tmp.sync_all()
                     .with_context(|| format!("Failed to sync {}", tmp_path.display()))?;
                 drop(tmp);

@@ -306,7 +306,11 @@ fn snapshot_timeline_filter_narrows_kinds() {
 fn plan_snapshot_reports_non_utf8_body_error() {
     let temp = tempdir().unwrap();
     let ctx = seeded_context(temp.path());
-    fs::write(ctx.plan_body_path("plan_ui"), [0xff, 0xfe]).unwrap();
+    fs::write(
+        crate::state::plan_body_path(&ctx, "plan_ui").unwrap(),
+        [0xff, 0xfe],
+    )
+    .unwrap();
 
     let plan = super::snapshot::plan_snapshot(&ctx, "plan_ui")
         .unwrap()

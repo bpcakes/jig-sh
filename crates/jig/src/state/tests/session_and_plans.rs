@@ -278,7 +278,7 @@ fn plans_append_serializes_concurrent_writers() {
         });
     });
 
-    let body = fs::read_to_string(ctx.plan_body_path(&plan_id)).unwrap();
+    let body = fs::read_to_string(plan_body_path(&ctx, &plan_id).unwrap()).unwrap();
     assert!(body.contains("Initial body"));
     assert!(body.contains("First append"));
     assert!(body.contains("Second append"));
@@ -499,7 +499,7 @@ fn plans_append_requires_progress_text_without_mutating_plan() {
     )
     .unwrap();
     let plan_id = plan["plan_id"].as_str().unwrap();
-    let plan_path = ctx.plan_body_path(plan_id);
+    let plan_path = plan_body_path(&ctx, plan_id).unwrap();
     let body_before = fs::read_to_string(&plan_path).unwrap();
     let state_before = state_summary(&ctx).unwrap();
     let empty_body_file = temp.path().join("empty-progress.md");

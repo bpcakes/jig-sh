@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::context::RepoContext;
 
-use super::jsonl::{read_jsonl, read_receipt_window, receipts_for_plan};
+use super::jsonl::{read_jsonl, read_receipt_window, read_receipts_reverse};
 use super::receipts::receipt_diff_summary;
 use super::records::{DecisionRecord, PlanBaseline, PlanEvent, ReceiptRecord, SessionEvent};
 use super::sessions::read_session_events;
@@ -222,10 +222,13 @@ pub(crate) fn plan_receipts(
     limit: usize,
 ) -> Result<Vec<ReceiptStreamRecord>> {
     Ok(
-        receipts_for_plan(&ctx.state_file("receipts.jsonl"), plan_id, limit)?
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        read_receipts_reverse(&ctx.state_file("receipts.jsonl"), limit, |receipt| {
+            receipt.plan_id.as_deref() == Some(plan_id)
+        })?
+        .0
+        .into_iter()
+        .map(Into::into)
+        .collect(),
     )
 }
 

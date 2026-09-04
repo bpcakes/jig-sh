@@ -3,11 +3,11 @@ use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 
 use super::ensure_status_active;
 
-pub(super) const MAX_LOOP_STATE_BYTES: u64 = 16 * 1024 * 1024;
+pub(super) const MAX_LOOP_STATE_BYTES: u64 = 8 * 1024 * 1024;
 const LOOP_STATE_READ_CHUNK_BYTES: usize = 64 * 1024;
 
 pub(super) fn read_bounded_json<T>(
@@ -23,6 +23,12 @@ where
         .with_context(|| format!("Failed to inspect {}", path.display()))?
         .len();
     read_bounded_json_from(file, path, initial_len, cancelled)
+}
+
+pub(super) fn encode_bounded_json<T: Serialize>(value: &T, path: &Path) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec_pretty(value).context("Failed to encode loop state JSON")?;
+    require_state_size_within_limit(path, bytes.len() as u64)?;
+    Ok(bytes)
 }
 
 fn read_bounded_json_from<T>(
@@ -56,7 +62,7 @@ where
 fn require_state_size_within_limit(path: &Path, bytes: u64) -> Result<()> {
     if bytes > MAX_LOOP_STATE_BYTES {
         bail!(
-            "Loop coordination state {} exceeds the {MAX_LOOP_STATE_BYTES}-byte read limit",
+            "Loop coordination state {} exceeds the {MAX_LOOP_STATE_BYTES}-byte safety limit; stop loop dispatchers and inspect or repair this file before retrying",
             path.display()
         );
     }
@@ -65,6 +71,7 @@ fn require_state_size_within_limit(path: &Path, bytes: u64) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io::Cursor;
 
     use serde_json::Value;
@@ -105,7 +112,23 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("16777216-byte read limit"));
+        assert!(error.to_string().contains("8388608-byte safety limit"));
+    }
+
+    #[test]
+    fn loop_state_reader_rejects_a_preexisting_twelve_mib_file_without_allocating_it() {
+        let mut source = Cursor::new(b"{}".to_vec());
+
+        let error = read_bounded_json_from::<Value>(
+            &mut source,
+            Path::new("attempts.json"),
+            12 * 1024 * 1024,
+            &|| false,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("8388608-byte safety limit"));
+        assert!(error.to_string().contains("inspect or repair"));
     }
 
     #[test]
@@ -117,6 +140,36 @@ mod tests {
             read_bounded_json_from::<Value>(&mut source, Path::new("schedule.json"), 2, &|| false)
                 .unwrap_err();
 
-        assert!(error.to_string().contains("16777216-byte read limit"));
+        assert!(error.to_string().contains("8388608-byte safety limit"));
+    }
+
+    #[test]
+    fn loop_state_reader_polls_cancellation_between_chunks() {
+        let bytes = valid_json_with_size(LOOP_STATE_READ_CHUNK_BYTES * 8);
+        let mut source = Cursor::new(bytes);
+        let checks = Cell::new(0_usize);
+
+        let error = read_bounded_json_from::<Value>(
+            &mut source,
+            Path::new("attempts.json"),
+            (LOOP_STATE_READ_CHUNK_BYTES * 8) as u64,
+            &|| {
+                checks.set(checks.get() + 1);
+                checks.get() > 3
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "status collection was cancelled");
+        assert!(checks.get() > 3);
+    }
+
+    #[test]
+    fn loop_state_encoder_rejects_output_over_the_read_limit() {
+        let value = serde_json::json!({ "payload": "x".repeat(MAX_LOOP_STATE_BYTES as usize) });
+
+        let error = encode_bounded_json(&value, Path::new("attempts.json")).unwrap_err();
+
+        assert!(error.to_string().contains("8388608-byte safety limit"));
     }
 }

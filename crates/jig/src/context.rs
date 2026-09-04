@@ -759,10 +759,6 @@ impl RepoContext {
         self.state_dir().join(name)
     }
 
-    pub(crate) fn plan_body_path(&self, plan_id: &str) -> PathBuf {
-        self.root.join(".agent/plans").join(format!("{plan_id}.md"))
-    }
-
     pub(crate) fn current_session_path(&self) -> PathBuf {
         self.current_session_path.clone()
     }

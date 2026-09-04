@@ -25,7 +25,7 @@ fn mcp_work_append_rejects_blank_progress_without_mutating_plan() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let plan_path = ctx.plan_body_path("plan_1");
+    let plan_path = crate::state::plan_body_path(&ctx, "plan_1").unwrap();
     let body_before = fs::read_to_string(&plan_path).unwrap();
     let state_before = crate::state::state_summary(&ctx).unwrap();
 

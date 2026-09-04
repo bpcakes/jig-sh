@@ -12,6 +12,7 @@ pub(crate) use execution_leases::{
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
+pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, plan_body_path, read_plan_body};
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,
@@ -80,6 +81,7 @@ mod execution_leases;
 mod json_scan;
 mod jsonl;
 mod maintenance;
+mod plan_files;
 mod plans;
 mod privacy;
 mod receipts;

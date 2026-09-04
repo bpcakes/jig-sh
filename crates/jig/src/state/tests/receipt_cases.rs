@@ -135,6 +135,30 @@ fn state_summary_is_read_only_and_counts_state_records() {
 }
 
 #[test]
+fn legacy_state_summary_accepts_records_above_the_dashboard_limit() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    ensure_state_layout(&ctx).unwrap();
+    let mut receipt = receipt_record("receipt_large", tool::TEST, 0, DiffStat::default());
+    receipt.stdout_preview = "x".repeat(super::jsonl::DASHBOARD_JSONL_RECORD_BYTES + 1);
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt).unwrap();
+
+    let summary = state_summary(&ctx).unwrap();
+    let bounded_error =
+        super::sessions::state_summary_with_cancellation(&ctx, &|| false).unwrap_err();
+    let session = session_start(&ctx).unwrap();
+
+    assert_eq!(summary["counts"]["receipts"], 1);
+    assert_eq!(session["ok"], true);
+    assert!(
+        bounded_error
+            .downcast_ref::<super::jsonl::JsonlRecordTooLarge>()
+            .is_some()
+    );
+}
+
+#[test]
 fn cancellable_state_summary_stops_during_stream_collection() {
     use std::sync::{
         Arc,
