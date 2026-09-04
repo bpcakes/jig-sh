@@ -21,7 +21,8 @@ pub(crate) use plans::{
 };
 #[cfg(test)]
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
-pub(crate) use receipts::latest_file_budget_lifecycle_receipt;
+#[cfg(test)]
+pub(crate) use receipts::receipt_append_may_have_landed_for_test;
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ReusableWorkCheckEvidence, ReusableWorkCheckQuery,
     TargetReceiptStatus, ToolReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence,
@@ -35,11 +36,13 @@ pub(crate) use receipts::{
 };
 pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
-    record_receipt_with_cancellation,
+    record_receipt_with_cancellation, record_receipt_with_cancellation_until,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
 pub(crate) use receipts::{TargetReceiptMetadata, record_target_receipt};
+pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
+pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
 #[cfg(test)]
 pub(crate) use receipts::{
     reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,

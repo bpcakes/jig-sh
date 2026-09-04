@@ -688,3 +688,5 @@ fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
 mod info_commands_edge_cases;
 mod support;
 use info_commands_edge_cases::*;
+
+include!("cli_json_parts/loop_commands.rs");

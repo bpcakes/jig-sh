@@ -123,7 +123,7 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evid
     let mut commands = (0..8)
         .map(|index| {
             format!(
-                "touch .agent/.cache/parallel-started-{index}; for attempt in $(seq 1 200); do [ \"$(find .agent/.cache -name 'parallel-started-*' | wc -l)\" -eq 8 ] && {{ sleep 0.5; exit 0; }}; sleep 0.01; done; exit 9"
+                "touch .agent/.cache/parallel-started-{index}; for attempt in $(seq 1 200); do grep -q 'invalid contract' .agent/jig-contract.json && exit 0; sleep 0.01; done; exit 9"
             )
         })
         .chain(std::iter::once("exit 0".to_owned()))

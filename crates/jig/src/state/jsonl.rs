@@ -67,17 +67,23 @@ pub(super) fn append_jsonl_with_end_offset<T: Serialize>(path: &Path, value: &T)
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    with_jsonl_write_lock(path, |_guard| {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .with_context(|| format!("Failed to open {}", path.display()))?;
-        serde_json::to_writer(&mut file, value)?;
-        file.write_all(b"\n")?;
-        file.sync_data()?;
-        Ok(file.metadata()?.len())
-    })
+    with_jsonl_write_lock(path, |guard| append_jsonl_locked(guard, path, value))
+}
+
+pub(super) fn append_jsonl_locked<T: Serialize>(
+    _guard: &JsonlWriteGuard,
+    path: &Path,
+    value: &T,
+) -> Result<u64> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("Failed to open {}", path.display()))?;
+    serde_json::to_writer(&mut file, value)?;
+    file.write_all(b"\n")?;
+    file.sync_data()?;
+    Ok(file.metadata()?.len())
 }
 
 pub(super) fn append_text(path: &Path, content: &[u8]) -> Result<()> {

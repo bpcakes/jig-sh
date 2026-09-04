@@ -393,7 +393,7 @@ codex_home = "work"
     .unwrap();
 
     let error = validate_config(&config).unwrap_err().to_string();
-    assert!(error.contains("can set codex_home only when kind = 'pr_manager'"));
+    assert!(error.contains("can set codex_home only when kind is 'pr_manager' or 'codex_task'"));
 }
 
 #[test]
@@ -604,3 +604,5 @@ mod runtime;
 mod strict_config;
 
 include!("tests_parts/part_01.rs");
+
+include!("tests/loop_schedule.rs");

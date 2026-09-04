@@ -705,6 +705,18 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
     assert!(!test_command_reports_failure_with_ok(&CommandKind::Vault(
         VaultCommand::Status(VaultStatusOpts::default())
     )));
+    for args in [
+        ["jig", "loop", "tick"],
+        ["jig", "loop", "dispatch"],
+        ["jig", "loop", "run"],
+    ] {
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(test_command_reports_failure_with_ok(&cli.command));
+    }
+    let status = Cli::try_parse_from(["jig", "loop", "status"]).unwrap();
+    // Status is a diagnostic report: its JSON may carry `ok: false`, but the
+    // command remains inspectable without turning that report into a CLI error.
+    assert!(!test_command_reports_failure_with_ok(&status.command));
 }
 
 mod child_exit;

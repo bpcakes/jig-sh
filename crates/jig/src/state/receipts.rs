@@ -21,7 +21,7 @@ use crate::git_receipts::{
 };
 use crate::tool_defs::tool;
 
-use super::jsonl::{RawJsonlRecord, append_jsonl, read_receipts_reverse, scan_jsonl_raw};
+use super::jsonl::{RawJsonlRecord, read_receipts_reverse, scan_jsonl_raw};
 use super::privacy::{
     redact_repository_root, redact_repository_root_in_value, repository_root_spellings,
 };
@@ -30,13 +30,19 @@ use super::sessions::current_session;
 use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
 mod archive;
+mod journal;
 mod target_evidence;
-
 pub(super) use archive::parse_archive_before_ms;
 use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
 use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
 pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
+#[cfg(test)]
+pub(crate) use journal::receipt_append_may_have_landed_for_test;
+pub(crate) use journal::{
+    receipt_append_may_have_landed, receipt_record_id, with_receipt_journal_writer,
+    with_receipt_journal_writer_until,
+};
 pub(crate) use target_evidence::TargetReceiptStatus;
 use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
 
@@ -790,6 +796,5 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
 }
 
 include!("receipts/tail.rs");
-
 #[cfg(test)]
 mod tests;

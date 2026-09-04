@@ -48,19 +48,32 @@ pub(crate) enum SupervisedExecutionError {
 pub(crate) enum ExecutionCommandError {
     CancelledBeforeStart,
     Cancelled,
-    Failed(anyhow::Error),
+    Failed {
+        error: anyhow::Error,
+        process_started: bool,
+    },
 }
 
 impl ExecutionCommandError {
     pub(crate) fn failed(error: impl Into<anyhow::Error>) -> Self {
-        Self::Failed(error.into())
+        Self::Failed {
+            error: error.into(),
+            process_started: false,
+        }
+    }
+
+    pub(crate) fn failed_after_start(error: impl Into<anyhow::Error>) -> Self {
+        Self::Failed {
+            error: error.into(),
+            process_started: true,
+        }
     }
 
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::CancelledBeforeStart => anyhow!("Execution was cancelled before it started"),
             Self::Cancelled => anyhow!("Execution was cancelled"),
-            Self::Failed(error) => error,
+            Self::Failed { error, .. } => error,
         }
     }
 }
@@ -72,7 +85,7 @@ impl fmt::Display for ExecutionCommandError {
                 formatter.write_str("Execution was cancelled before it started")
             }
             Self::Cancelled => formatter.write_str("Execution was cancelled"),
-            Self::Failed(error) => fmt::Display::fmt(error, formatter),
+            Self::Failed { error, .. } => fmt::Display::fmt(error, formatter),
         }
     }
 }
@@ -80,7 +93,7 @@ impl fmt::Display for ExecutionCommandError {
 impl std::error::Error for ExecutionCommandError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Failed(error) => error.source(),
+            Self::Failed { error, .. } => error.source(),
             Self::CancelledBeforeStart | Self::Cancelled => None,
         }
     }
@@ -88,7 +101,7 @@ impl std::error::Error for ExecutionCommandError {
 
 impl From<anyhow::Error> for ExecutionCommandError {
     fn from(error: anyhow::Error) -> Self {
-        Self::Failed(error)
+        Self::failed(error)
     }
 }
 
@@ -99,8 +112,24 @@ pub(crate) fn run_authoritative_execution_command(
     label: &str,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ExecutionCommandOutput, ExecutionCommandError> {
-    run_supervised_execution_command(command, timeout.duration(), output_limit, label, observer)
-        .map_err(|error| execution_command_error(error, timeout, output_limit, label))
+    run_authoritative_execution_command_for_duration(
+        command,
+        timeout.duration(),
+        output_limit,
+        label,
+        observer,
+    )
+}
+
+pub(crate) fn run_authoritative_execution_command_for_duration(
+    command: &mut Command,
+    timeout: Duration,
+    output_limit: CommandOutputLimit,
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ExecutionCommandOutput, ExecutionCommandError> {
+    run_supervised_execution_command(command, timeout, output_limit, label, observer)
+        .map_err(|error| execution_command_error_for_duration(error, timeout, output_limit, label))
 }
 
 /// Runs a repository-owned command under the complete non-interactive process
@@ -143,9 +172,18 @@ pub(crate) fn run_supervised_execution_command(
     })
 }
 
-fn execution_command_error(
+pub(crate) fn execution_command_error(
     error: SupervisedExecutionError,
     timeout: CommandTimeout,
+    output_limit: CommandOutputLimit,
+    label: &str,
+) -> ExecutionCommandError {
+    execution_command_error_for_duration(error, timeout.duration(), output_limit, label)
+}
+
+fn execution_command_error_for_duration(
+    error: SupervisedExecutionError,
+    timeout: Duration,
     output_limit: CommandOutputLimit,
     label: &str,
 ) -> ExecutionCommandError {
@@ -155,15 +193,31 @@ fn execution_command_error(
         }
         SupervisedExecutionError::Cancelled => return ExecutionCommandError::Cancelled,
         SupervisedExecutionError::TimedOut => {
-            anyhow!("{label} timed out after {} seconds", timeout.as_secs())
+            anyhow!("{label} timed out after {}", timeout_description(timeout))
         }
         SupervisedExecutionError::OutputLimitExceeded { stream, .. } => anyhow!(
             "{label} exceeded the {} byte {stream} capture limit",
             output_limit.bytes()
         ),
-        SupervisedExecutionError::Failed { error, .. } => error,
+        SupervisedExecutionError::Failed {
+            error,
+            process_started,
+        } => {
+            return ExecutionCommandError::Failed {
+                error,
+                process_started,
+            };
+        }
     };
-    ExecutionCommandError::Failed(error)
+    ExecutionCommandError::failed_after_start(error)
+}
+
+fn timeout_description(timeout: Duration) -> String {
+    if timeout.subsec_nanos() == 0 {
+        format!("{} seconds", timeout.as_secs())
+    } else {
+        format!("{timeout:?}")
+    }
 }
 
 fn supervised_execution_error(
@@ -374,6 +428,39 @@ pub(crate) trait ExecutionControl: ExecutionObserver + ExecutionCancellation {}
 
 impl<T> ExecutionControl for T where T: ExecutionObserver + ExecutionCancellation + ?Sized {}
 
+pub(crate) struct AdditionalCancellationControl<'a> {
+    control: &'a mut dyn ExecutionControl,
+    additional_cancelled: &'a dyn Fn() -> bool,
+}
+
+impl<'a> AdditionalCancellationControl<'a> {
+    pub(crate) fn new(
+        control: &'a mut dyn ExecutionControl,
+        additional_cancelled: &'a dyn Fn() -> bool,
+    ) -> Self {
+        Self {
+            control,
+            additional_cancelled,
+        }
+    }
+}
+
+impl ExecutionObserver for AdditionalCancellationControl<'_> {
+    fn event(&mut self, event: ExecutionEvent<'_>) {
+        self.control.event(event);
+    }
+
+    fn flush(&mut self) -> anyhow::Result<()> {
+        self.control.flush()
+    }
+}
+
+impl ExecutionCancellation for AdditionalCancellationControl<'_> {
+    fn cancelled(&self) -> bool {
+        self.control.cancelled() || (self.additional_cancelled)()
+    }
+}
+
 pub(crate) struct NoopExecutionObserver;
 
 impl ExecutionObserver for NoopExecutionObserver {}
@@ -551,6 +638,8 @@ impl OwnedProcessObserver for ProcessExecutionObserver<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     struct CancelledControl;
@@ -561,6 +650,65 @@ mod tests {
         fn cancelled(&self) -> bool {
             true
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingControl {
+        event_count: usize,
+        flush_count: usize,
+        cancelled: bool,
+        fail_flush: bool,
+    }
+
+    impl ExecutionObserver for RecordingControl {
+        fn event(&mut self, _event: ExecutionEvent<'_>) {
+            self.event_count += 1;
+        }
+
+        fn flush(&mut self) -> anyhow::Result<()> {
+            self.flush_count += 1;
+            if self.fail_flush {
+                return Err(anyhow!("injected flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    impl ExecutionCancellation for RecordingControl {
+        fn cancelled(&self) -> bool {
+            self.cancelled
+        }
+    }
+
+    #[test]
+    fn additional_cancellation_control_preserves_the_observer_contract() {
+        let additional_cancelled = Cell::new(false);
+        let mut control = RecordingControl::default();
+        {
+            let additional = || additional_cancelled.get();
+            let mut wrapper = AdditionalCancellationControl::new(&mut control, &additional);
+            wrapper.event(ExecutionEvent::Heartbeat {
+                label: "test",
+                elapsed: Duration::ZERO,
+            });
+            wrapper.flush().unwrap();
+            assert!(!wrapper.cancelled());
+            additional_cancelled.set(true);
+            assert!(wrapper.cancelled());
+        }
+        assert_eq!(control.event_count, 1);
+        assert_eq!(control.flush_count, 1);
+
+        control.cancelled = true;
+        control.fail_flush = true;
+        additional_cancelled.set(false);
+        let additional = || additional_cancelled.get();
+        let mut wrapper = AdditionalCancellationControl::new(&mut control, &additional);
+        assert!(wrapper.cancelled());
+        assert_eq!(
+            wrapper.flush().unwrap_err().to_string(),
+            "injected flush failure"
+        );
     }
 
     #[test]

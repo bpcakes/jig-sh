@@ -89,12 +89,15 @@ fn assert_json_array_contains_none(value: &serde_json::Value, forbidden: &str) {
 }
 
 #[cfg(unix)]
-fn wait_for_positive_pid_file(path: &std::path::Path, timeout: std::time::Duration) -> u32 {
+fn wait_for_positive_pid_file(
+    path: &std::path::Path,
+    timeout: std::time::Duration,
+) -> std::result::Result<u32, String> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         let observation = match fs::read_to_string(path) {
             Ok(contents) => match contents.trim().parse::<u32>() {
-                Ok(pid) if pid > 0 => return pid,
+                Ok(pid) if pid > 0 => return Ok(pid),
                 Ok(pid) => format!("invalid non-positive PID {pid}"),
                 Err(error) => format!("unparseable contents {contents:?}: {error}"),
             },
@@ -103,11 +106,12 @@ fn wait_for_positive_pid_file(path: &std::path::Path, timeout: std::time::Durati
             }
             Err(error) => format!("could not read file: {error}"),
         };
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out waiting for a parseable PID in {} ({observation})",
-            path.display()
-        );
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for a parseable PID in {} ({observation})",
+                path.display()
+            ));
+        }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }

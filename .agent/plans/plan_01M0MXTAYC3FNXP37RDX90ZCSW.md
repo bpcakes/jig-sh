@@ -1,0 +1,1 @@
+Introduce typed scheduled outcomes and occurrence states, preserve completion evidence and attention, split LOC-policy hotspots by responsibility, close compatibility and observability gaps, and verify the branch.

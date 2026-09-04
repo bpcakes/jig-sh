@@ -101,13 +101,48 @@ pub(crate) fn record_receipt_with_cancellation(
     record_receipt_inner(ctx, input, None, Some(cancelled))
 }
 
+pub(crate) fn record_receipt_with_cancellation_until(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    cancelled: &dyn Fn() -> bool,
+    deadline: std::time::Instant,
+) -> Result<String> {
+    record_receipt_inner_until(ctx, input, None, Some(cancelled), deadline, cancelled)
+}
+
 fn record_receipt_inner(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
     target: Option<TargetReceiptMetadata>,
     cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<String> {
-    ensure_state_layout(ctx)?;
+    record_receipt_inner_with_writer(ctx, input, target, cancelled, |receipt| {
+        with_receipt_journal_writer(ctx, |writer| writer.append(receipt))
+    })
+}
+
+fn record_receipt_inner_until(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    target: Option<TargetReceiptMetadata>,
+    cancelled: Option<&dyn Fn() -> bool>,
+    deadline: std::time::Instant,
+    lock_cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    record_receipt_inner_with_writer(ctx, input, target, cancelled, |receipt| {
+        with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
+            writer.append(receipt)
+        })
+    })
+}
+
+fn record_receipt_inner_with_writer(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    target: Option<TargetReceiptMetadata>,
+    cancelled: Option<&dyn Fn() -> bool>,
+    append: impl FnOnce(&ReceiptRecord) -> Result<()>,
+) -> Result<String> {
     let mut git_metadata = receipt_git_metadata(
         ctx,
         input.collect_git_metadata,
@@ -224,7 +259,7 @@ fn record_receipt_inner(
             .map(|value| redact_repository_root(&value, &root_spellings)),
     };
     let receipt_id = receipt.id.clone();
-    append_jsonl(&ctx.state_file("receipts.jsonl"), &receipt)?;
+    append(&receipt)?;
     Ok(receipt_id)
 }
 

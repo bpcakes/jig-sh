@@ -227,6 +227,19 @@ Provider failures remain visible as partial status instead of hiding available l
 
 ### State maintenance
 
+`jig ui` serves a read-only loopback dashboard over `.agent/state/`: open plans with gate status and the next command to unblock them, recent failures with stderr, finished work with resolutions, per-tool check health, loop workflows with scheduled Codex-task run state and attempt budgets, and a filterable timeline of sessions, plans, receipts, and decisions. Plan ids link to detail pages with the plan body, gate evidence, decisions, and per-receipt output. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
+
+```sh
+scripts/jig ui               # prints a one-time loopback sign-in URL
+scripts/jig ui --port 0      # pick any free port
+```
+
+The dashboard validates the exact loopback `Host` and `Origin` and requires a
+session cookie established by the printed one-time URL. Proxy aliases are not
+supported because accepting arbitrary hostnames would reopen DNS-rebinding
+access to receipt and plan contents.
+
+The printed unguessable namespace contains JSON snapshot and plan endpoints returning the same joined data. The server binds `127.0.0.1` only and records no receipts. See [Developer UX](docs/developer-ux.md#flight-recorder-ui).
 Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
 ### Vault

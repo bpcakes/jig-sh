@@ -35,7 +35,8 @@ pub(crate) use check::{
 pub(crate) use codex::CodexCommand;
 pub(crate) use file_budget::FileBudgetCommand;
 pub(crate) use loops::{
-    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
+    LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
+    LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
 pub(crate) use migration::{MigrationAddOpts, MigrationCommand};
 pub(crate) use prompt::PromptCommand;

@@ -39,7 +39,7 @@ pub(crate) use runtime::{
 };
 
 pub(crate) use execution_config::ExecutionConfig;
-pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
+pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cron};
 pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migration_backend};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 use vault_config::{VaultConfig, VaultScopeConfig};

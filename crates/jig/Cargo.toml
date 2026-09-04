@@ -37,7 +37,12 @@ dev-proxy = ["dep:jig-dev-proxy"]
 
 [dependencies]
 anyhow.workspace = true
+cap-fs-ext.workspace = true
+cap-std.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
 clap.workspace = true
+croner.workspace = true
 dirs.workspace = true
 dotenvy.workspace = true
 fs4.workspace = true

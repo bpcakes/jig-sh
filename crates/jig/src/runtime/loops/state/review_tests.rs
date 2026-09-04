@@ -1,0 +1,758 @@
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, symlink};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::Duration;
+
+use fs4::fs_std::FileExt;
+use serde_json::Value;
+use tempfile::tempdir;
+
+use super::*;
+use crate::runtime::loops::workflow::NOOP_STATUS_KIND;
+
+#[test]
+fn read_only_loop_cache_scan_observes_cancellation_between_chunks() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("large.json");
+    fs::write(
+        &path,
+        format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024)),
+    )
+    .unwrap();
+    let checks = AtomicUsize::new(0);
+
+    let error = read_json_or_default_with_cancellation::<Value>(&path, &|| {
+        checks.fetch_add(1, Ordering::SeqCst) >= 2
+    })
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "status collection was cancelled");
+}
+
+#[test]
+fn locked_loop_cache_reads_observe_cancellation_between_chunks() {
+    for (name, compensating) in [("leases", false), ("attempts", true)] {
+        let temp = tempdir().unwrap();
+        let data_path = temp.path().join(format!("{name}.json"));
+        let original = format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024));
+        fs::write(&data_path, &original).unwrap();
+        let location = JsonLocation::new(
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+            name,
+            JsonWriteMode::Cache,
+        );
+        let checks = AtomicUsize::new(0);
+        let action_ran = AtomicBool::new(false);
+        let cancelled = || checks.fetch_add(1, Ordering::SeqCst) >= 3;
+
+        let error = if compensating {
+            json_cache::with_json_cache_lock_compensating_until(
+                &location,
+                loop_state_lock_deadline(),
+                &cancelled,
+                |_: &mut Value| {
+                    action_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+                |_, _| Ok(()),
+            )
+            .map(|_| ())
+            .unwrap_err()
+        } else {
+            json_cache::with_json_cache_lock_until(
+                &location,
+                loop_state_lock_deadline(),
+                &cancelled,
+                |_: &mut Value| {
+                    action_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap_err()
+        };
+
+        assert_eq!(error.to_string(), "status collection was cancelled");
+        assert!(!action_ran.load(Ordering::SeqCst));
+        assert_eq!(fs::read_to_string(data_path).unwrap(), original);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_cache_directory_symlink_cannot_redirect_parent_state_mutations() {
+    let temp = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let cache_parent = temp.path().join(".agent/.cache");
+    fs::create_dir_all(&cache_parent).unwrap();
+    let outside_temp = outside.path().join("leases.json.tmp-ExampleOutside");
+    fs::write(&outside_temp, b"outside").unwrap();
+    symlink(outside.path(), cache_parent.join("loop")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = match LeaseStore::new(&ctx).acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("a symlinked loop cache must be rejected"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(error.contains("without following links"), "{error}");
+    assert_eq!(fs::read(&outside_temp).unwrap(), b"outside");
+    assert!(!outside.path().join("leases.json").exists());
+    assert!(!outside.path().join("leases.lock").exists());
+}
+
+#[test]
+fn dispatch_preflight_fails_closed_for_lease_corruption_and_recovers_attempts() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let cache_dir = temp.path().join(LOOP_CACHE_DIR);
+    fs::create_dir_all(&cache_dir).unwrap();
+    fs::write(cache_dir.join("leases.json"), b"{").unwrap();
+    fs::write(cache_dir.join("attempts.json"), b"{").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = prepare_coordination_state_for_dispatch(&ctx, &|| false)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("leases.json"), "{error}");
+    assert_eq!(fs::read(cache_dir.join("leases.json")).unwrap(), b"{");
+    fs::write(cache_dir.join("leases.json"), br#"{"leases":{}}"#).unwrap();
+    let recovery = prepare_coordination_state_for_dispatch(&ctx, &|| false).unwrap();
+    assert!(recovery.attempt_cache_reset);
+    let mut leases = LeaseStore::new(&ctx);
+    assert!(matches!(
+        leases.acquire("workflow:ExampleProject", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    let attempts = AttemptStore::new(&ctx);
+    assert!(attempts.snapshot().unwrap().is_empty());
+
+    serde_json::from_slice::<Value>(&fs::read(cache_dir.join("attempts.json")).unwrap()).unwrap();
+}
+
+#[test]
+fn branch_leases_are_shared_across_linked_worktrees() {
+    let container = tempdir().unwrap();
+    let main = container.path().join("main");
+    let linked = container.path().join("linked");
+    fs::create_dir(&main).unwrap();
+    write_loop_fixture_repo(&main);
+    for args in [
+        &["init"][..],
+        &["config", "user.email", "fixture@example.com"],
+        &["config", "user.name", "Fixture"],
+        &["add", "."],
+        &["commit", "-m", "fixture"],
+    ] {
+        let output = Command::new("git")
+            .current_dir(&main)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+    }
+    let output = Command::new("git")
+        .current_dir(&main)
+        .args(["worktree", "add", "--detach", linked.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let main_ctx = RepoContext::load_from(&main).unwrap();
+    let linked_ctx = RepoContext::load_from(&linked).unwrap();
+    let mut main_branches = LeaseStore::new_repository(&main_ctx);
+    let LeaseAcquire::Acquired(branch_lease) =
+        main_branches.acquire("branch:repair/example", 60).unwrap()
+    else {
+        panic!("main worktree should acquire the repository branch lease");
+    };
+    let mut linked_branches = LeaseStore::new_repository(&linked_ctx);
+    let LeaseAcquire::Held(observed) = linked_branches
+        .acquire("branch:repair/example", 60)
+        .unwrap()
+    else {
+        panic!("linked worktree must observe the repository branch lease");
+    };
+
+    assert_eq!(observed.owner, branch_lease.owner);
+    let mut main_workflows = LeaseStore::new(&main_ctx);
+    let mut linked_workflows = LeaseStore::new(&linked_ctx);
+    assert!(matches!(
+        main_workflows.acquire("workflow:fixture", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    assert!(matches!(
+        linked_workflows.acquire("workflow:fixture", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+}
+
+#[test]
+fn lease_acquisition_observes_cancellation_while_waiting_for_its_state_lock() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut leases = LeaseStore::new(&ctx);
+    assert!(matches!(
+        leases.acquire("workflow:existing", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    let lock_path = temp.path().join(LOOP_CACHE_DIR).join("leases.lock");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    assert!(lock.try_lock_exclusive().unwrap());
+    let polls = AtomicUsize::new(0);
+
+    let error = match leases.acquire_with_cancellation("workflow:cancelled", 60, &|| {
+        polls.fetch_add(1, Ordering::SeqCst) > 0
+    }) {
+        Ok(_) => panic!("cancelled lease acquisition must not mutate state"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        error.contains("Execution was cancelled while waiting for loop state lock"),
+        "{error}"
+    );
+    drop(lock);
+    assert!(
+        leases
+            .active_leases()
+            .unwrap()
+            .iter()
+            .all(|lease| !lease.matches_key("workflow:cancelled"))
+    );
+}
+
+#[test]
+fn git_state_migrates_legacy_leases_and_attempts_to_protected_authority() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let legacy_ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut legacy_leases = LeaseStore::new(&legacy_ctx);
+    let LeaseAcquire::Acquired(lease) = legacy_leases
+        .acquire("workflow:ExampleProject", 60)
+        .unwrap()
+    else {
+        panic!("expected legacy lease acquisition");
+    };
+    let workflow = example_workflow();
+    AttemptStore::new(&legacy_ctx)
+        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
+        .unwrap();
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    prepare_coordination_state_for_dispatch(&ctx, &|| false).unwrap();
+
+    let mut leases = LeaseStore::new(&ctx);
+    let LeaseAcquire::Held(migrated) = leases.acquire("workflow:ExampleProject", 60).unwrap()
+    else {
+        panic!("protected authority must retain the legacy lease");
+    };
+    assert_eq!(migrated.owner, lease.owner);
+    let attempts = AttemptStore::new(&ctx);
+    assert_eq!(attempts.snapshot().unwrap().len(), 1);
+
+    let protected_leases = leases
+        .persistence
+        .protected_path()
+        .unwrap()
+        .expect("Git repositories need protected lease authority");
+    let protected_attempts = attempts
+        .persistence
+        .protected_path()
+        .unwrap()
+        .expect("Git repositories need protected attempt authority");
+    assert!(protected_leases.is_file());
+    assert!(protected_attempts.is_file());
+    assert!(
+        serde_json::from_slice::<LeaseFile>(&fs::read(leases.persistence.legacy_path()).unwrap())
+            .is_err(),
+        "the legacy lease file must block older runtimes after cutover"
+    );
+    assert_eq!(
+        leases.persistence.protected_write_mode().unwrap(),
+        Some(JsonWriteMode::Durable),
+        "protected lease authority must use crash-durable replacement"
+    );
+    assert_eq!(
+        attempts.persistence.protected_write_mode().unwrap(),
+        Some(JsonWriteMode::Durable),
+        "protected attempt authority must use crash-durable replacement"
+    );
+}
+
+#[test]
+fn writable_checkout_cache_tampering_cannot_change_protected_loop_authority() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut leases = LeaseStore::new(&ctx);
+    let LeaseAcquire::Acquired(lease) = leases.acquire("checkout:repo", 60).unwrap() else {
+        panic!("expected protected lease acquisition");
+    };
+    let workflow = example_workflow();
+    let mut attempts = AttemptStore::new(&ctx);
+    attempts
+        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
+        .unwrap();
+
+    fs::write(leases.persistence.legacy_path(), br#"{"leases":{}}"#).unwrap();
+    fs::write(attempts.persistence.legacy_path(), br#"{"attempts":{}}"#).unwrap();
+
+    let LeaseAcquire::Held(current) = leases.acquire("checkout:repo", 60).unwrap() else {
+        panic!("checkout-local tampering must not release protected lease authority");
+    };
+    assert_eq!(current.owner, lease.owner);
+    assert_eq!(attempts.snapshot().unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn initialized_protected_attempt_reads_do_not_rewrite_authority() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = example_workflow();
+    let mut attempts = AttemptStore::new(&ctx);
+    attempts
+        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
+        .unwrap();
+    let protected_path = attempts
+        .persistence
+        .protected_path()
+        .unwrap()
+        .unwrap()
+        .to_path_buf();
+    let inode_before = fs::metadata(&protected_path).unwrap().ino();
+
+    assert!(attempts.get(&workflow.id, "pr-17").unwrap().is_some());
+
+    assert_eq!(
+        fs::metadata(&protected_path).unwrap().ino(),
+        inode_before,
+        "a serialized attempt read must not replace initialized authority"
+    );
+}
+
+#[test]
+fn git_dispatch_preflight_fails_closed_for_protected_leases_and_resets_attempts() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut leases = LeaseStore::new(&ctx);
+    leases.acquire("workflow:ExampleProject", 60).unwrap();
+    let mut attempts = AttemptStore::new(&ctx);
+    attempts
+        .record_attempt_for_transition(
+            &example_workflow(),
+            "pr-17",
+            Some("observed"),
+            None,
+            "failed",
+        )
+        .unwrap();
+    let lease_path = leases.persistence.protected_path().unwrap().unwrap();
+    let attempt_path = attempts.persistence.protected_path().unwrap().unwrap();
+    let valid_leases = fs::read(lease_path).unwrap();
+    fs::write(lease_path, b"{").unwrap();
+
+    let error = prepare_coordination_state_for_dispatch(&ctx, &|| false)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("leases.json"), "{error}");
+    assert_eq!(fs::read(lease_path).unwrap(), b"{");
+    fs::write(lease_path, valid_leases).unwrap();
+    fs::write(attempt_path, b"{").unwrap();
+
+    let recovery = prepare_coordination_state_for_dispatch(&ctx, &|| false).unwrap();
+
+    assert!(recovery.attempt_cache_reset);
+    assert!(AttemptStore::new(&ctx).snapshot().unwrap().is_empty());
+}
+
+#[test]
+fn protected_coordination_state_rejects_an_unknown_schema_without_rewriting_it() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut leases = LeaseStore::new(&ctx);
+    let protected_path = leases
+        .persistence
+        .protected_path()
+        .unwrap()
+        .unwrap()
+        .to_path_buf();
+    fs::create_dir_all(protected_path.parent().unwrap()).unwrap();
+    let unsupported = br#"{"schema_version":2,"state":{"leases":{}}}"#;
+    fs::write(&protected_path, unsupported).unwrap();
+
+    let error = leases.active_leases().unwrap_err().to_string();
+
+    assert!(
+        error.contains("Unsupported protected loop state schema version 2"),
+        "{error}"
+    );
+    assert_eq!(fs::read(protected_path).unwrap(), unsupported);
+}
+
+#[test]
+fn attempt_decision_read_waits_for_compensating_rollback() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let workflow = example_workflow();
+    let mut attempts = AttemptStore::new(&ctx);
+    attempts
+        .record_attempt_for_transition(&workflow, "pr-17", Some("observed"), None, "failed")
+        .unwrap();
+    let (start_read, read_start) = std::sync::mpsc::channel();
+    let (read_result, result_read) = std::sync::mpsc::channel();
+    let root = temp.path().to_path_buf();
+    let reader = std::thread::spawn(move || {
+        read_start.recv().unwrap();
+        let ctx = RepoContext::load_from(&root).unwrap();
+        read_result
+            .send(AttemptStore::new(&ctx).get("ExampleProject", "pr-17"))
+            .unwrap();
+    });
+
+    let error = attempts
+        .clear_attempt_and_then("ExampleProject", "pr-17", &|| false, |cleared, _| {
+            assert!(cleared);
+            start_read.send(()).unwrap();
+            assert!(matches!(
+                result_read.recv_timeout(Duration::from_millis(100)),
+                Err(RecvTimeoutError::Timeout)
+            ));
+            Err::<(), _>(anyhow!("injected receipt failure"))
+        })
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "injected receipt failure");
+    let restored = result_read
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(restored.is_some());
+    reader.join().unwrap();
+}
+
+#[test]
+fn legacy_migration_marker_cannot_redirect_state_to_another_authority() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut leases = LeaseStore::new(&ctx);
+    let legacy_path = leases.persistence.legacy_path().to_path_buf();
+    fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+    fs::write(
+        legacy_path,
+        br#"{"schema_version":1,"protected_state_path":"jig/loop/attempts.json","state":{"leases":{}}}"#,
+    )
+    .unwrap();
+
+    let error = match leases.acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("cross-authority migration marker must fail closed"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        error.contains("points to jig/loop/attempts.json; expected jig/loop/leases.json"),
+        "{error}"
+    );
+    assert!(
+        !leases
+            .persistence
+            .protected_path()
+            .unwrap()
+            .unwrap()
+            .exists()
+    );
+}
+
+#[test]
+fn failed_protected_mutation_after_cutover_does_not_recover_stale_state() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let legacy_ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut legacy = LeaseStore::new(&legacy_ctx);
+    let LeaseAcquire::Acquired(_) = legacy.acquire("workflow:ExampleProject", 60).unwrap() else {
+        panic!("expected legacy lease acquisition");
+    };
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = JsonStatePersistence::new(&ctx, "leases");
+    let protected_path = persistence.protected_path().unwrap().unwrap().to_path_buf();
+
+    let error = persistence
+        .with_locked::<_, LeaseFile>(|store| {
+            store.leases.clear();
+            fs::remove_file(&protected_path).unwrap();
+            fs::create_dir(&protected_path).unwrap();
+            Ok(())
+        })
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("Loop cache path is not a regular file"),
+        "{error}"
+    );
+    assert!(
+        serde_json::from_slice::<LeaseFile>(&fs::read(persistence.legacy_path()).unwrap()).is_err(),
+        "a completed legacy marker must block an older runtime"
+    );
+    fs::remove_dir(&protected_path).unwrap();
+    let marker: Value =
+        serde_json::from_slice(&fs::read(persistence.legacy_path()).unwrap()).unwrap();
+    assert!(marker.get("state").is_none());
+    let error = match LeaseStore::new(&ctx).acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("completed migration must not re-adopt stale legacy state"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("migration marker exists without protected state"),
+        "{error}"
+    );
+    assert!(!protected_path.exists());
+}
+
+#[test]
+fn completed_coordination_migration_does_not_resurrect_stale_state() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let legacy_ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut legacy = LeaseStore::new(&legacy_ctx);
+    assert!(matches!(
+        legacy.acquire("workflow:ExampleProject", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+    git_init(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let persistence = JsonStatePersistence::new(&ctx, "leases");
+    let protected_path = persistence.protected_path().unwrap().unwrap().to_path_buf();
+    let mut migrated = LeaseStore::new(&ctx);
+    assert!(matches!(
+        migrated.acquire("workflow:ExampleVault", 60).unwrap(),
+        LeaseAcquire::Acquired(_)
+    ));
+
+    let marker: Value =
+        serde_json::from_slice(&fs::read(persistence.legacy_path()).unwrap()).unwrap();
+    assert_eq!(marker["schema_version"], 1);
+    assert_eq!(marker["protected_state_path"], "jig/loop/leases.json");
+    assert!(marker.get("state").is_none());
+    fs::remove_file(&protected_path).unwrap();
+
+    let error = match LeaseStore::new(&ctx).acquire("workflow:ExampleProject", 60) {
+        Ok(_) => panic!("completed migration must not re-adopt stale legacy state"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("migration marker exists without protected state"),
+        "{error}"
+    );
+    assert!(!protected_path.exists());
+}
+
+#[test]
+fn lease_guard_cannot_finalize_after_another_owner_reacquires_the_key() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = LeaseStore::new(&ctx);
+    let LeaseAcquire::Acquired(first) = store.acquire("workflow:paused", 60).unwrap() else {
+        panic!("expected first lease acquisition");
+    };
+    let guard = LeaseGuard::start_for_test(
+        store.clone(),
+        "workflow:paused",
+        &first,
+        60,
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    store.release("workflow:paused", &first.owner).unwrap();
+    let LeaseAcquire::Acquired(second) = store.acquire("workflow:paused", 60).unwrap() else {
+        panic!("expected replacement lease acquisition");
+    };
+
+    let error = guard.finish().unwrap_err().to_string();
+
+    assert!(error.contains("owned by another worker"), "{error}");
+    let LeaseAcquire::Held(current) = store.acquire("workflow:paused", 60).unwrap() else {
+        panic!("replacement lease must remain held");
+    };
+    assert_eq!(current.owner, second.owner);
+}
+
+#[test]
+fn lease_guard_refresh_refuses_cleanup_authority_after_reacquisition() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = LeaseStore::new(&ctx);
+    let LeaseAcquire::Acquired(first) = store.acquire("branch:repair/example", 60).unwrap() else {
+        panic!("expected first lease acquisition");
+    };
+    let mut guard = LeaseGuard::start(store.clone(), "branch:repair/example", &first, 60).unwrap();
+    store
+        .release("branch:repair/example", &first.owner)
+        .unwrap();
+    let LeaseAcquire::Acquired(replacement) = store.acquire("branch:repair/example", 60).unwrap()
+    else {
+        panic!("expected replacement lease acquisition");
+    };
+
+    let error = guard.refresh().unwrap_err().to_string();
+
+    assert!(error.contains("owned by another worker"), "{error}");
+    let LeaseAcquire::Held(current) = store.acquire("branch:repair/example", 60).unwrap() else {
+        panic!("replacement lease must remain held");
+    };
+    assert_eq!(current.owner, replacement.owner);
+}
+
+#[test]
+fn release_rejects_an_expired_lease() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = LeaseStore::new(&ctx);
+    let LeaseAcquire::Acquired(lease) = store.acquire("workflow:expired", 60).unwrap() else {
+        panic!("expected lease acquisition");
+    };
+
+    let error = store
+        .release_at("workflow:expired", &lease.owner, lease.expires_at_ms)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("expired before release"), "{error}");
+}
+
+#[test]
+fn lease_renewal_is_owner_checked_and_cannot_revive_expired_lease() {
+    let temp = tempdir().unwrap();
+    write_loop_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut store = LeaseStore::new(&ctx);
+    let LeaseAcquire::Acquired(lease) = store.acquire("workflow:owner", 60).unwrap() else {
+        panic!("expected lease acquisition");
+    };
+
+    assert!(
+        store
+            .renew_at(
+                "workflow:owner",
+                "another-owner",
+                60,
+                lease.acquired_at_ms + 1
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("owned by another worker")
+    );
+    assert!(
+        store
+            .renew_at("workflow:owner", &lease.owner, 60, lease.expires_at_ms)
+            .unwrap_err()
+            .to_string()
+            .contains("expired before renewal")
+    );
+}
+
+#[test]
+fn lease_renewal_retries_transient_state_failure_before_expiry() {
+    use std::cell::{Cell, RefCell};
+
+    let failed = AtomicBool::new(false);
+    let calls = AtomicUsize::new(0);
+    let now_ms = Cell::new(0_u64);
+    let waits = RefCell::new(Vec::new());
+
+    super::super::renewal::run_with_wait(
+        Duration::from_millis(300),
+        900,
+        &failed,
+        |_| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(super::super::renewal::RenewalAttemptError::Retryable(
+                    anyhow!("injected transient lease state failure"),
+                ));
+            }
+            Ok(1_800)
+        },
+        || now_ms.get(),
+        |wait| {
+            if calls.load(Ordering::SeqCst) >= 2 {
+                return Err(RecvTimeoutError::Disconnected);
+            }
+            waits.borrow_mut().push(wait);
+            now_ms.set(
+                now_ms
+                    .get()
+                    .saturating_add(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+            );
+            Err(RecvTimeoutError::Timeout)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        waits.into_inner(),
+        [Duration::from_millis(300), Duration::from_millis(75)]
+    );
+    assert!(!failed.load(Ordering::Acquire));
+}
+
+fn write_loop_fixture_repo(root: &Path) {
+    crate::test_env::TestRepoBuilder::new(root)
+        .required_commands(Vec::<String>::new())
+        .write();
+}
+
+fn git_init(root: &Path) {
+    let output = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn example_workflow() -> ResolvedWorkflow {
+    ResolvedWorkflow {
+        id: "ExampleProject".into(),
+        kind: NOOP_STATUS_KIND.into(),
+        enabled: true,
+        configured: true,
+        lease_ttl_seconds: 60,
+        max_attempts: 2,
+        backoff_seconds: 1,
+        codex_home_configured: None,
+        schedule: None,
+        codex_task: None,
+    }
+}

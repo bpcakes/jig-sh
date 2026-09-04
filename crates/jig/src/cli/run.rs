@@ -402,10 +402,11 @@ fn run_command(cli: Cli) -> Result<()> {
             )
         }
         CommandKind::Loop(command) => {
+            let require_ok = loop_command_reports_failure_with_ok(&command);
             let human_output = loop_human_output(&command);
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Loop(command.into()),
-                false,
+                require_ok,
                 json_output,
                 human_output,
             )
@@ -655,6 +656,7 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
+        CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
         CommandKind::Check(_) => true,
         _ => false,
     }
@@ -664,6 +666,12 @@ const fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
     matches!(command, AgentCommand::Doctor)
 }
 
+const fn loop_command_reports_failure_with_ok(command: &LoopCommand) -> bool {
+    matches!(
+        command,
+        LoopCommand::Tick(_) | LoopCommand::Dispatch(_) | LoopCommand::Run(_)
+    )
+}
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {
         AgentCommand::Doctor => HumanOutput::AgentDoctor,
@@ -692,9 +700,11 @@ const fn work_human_output(command: &WorkCommand) -> HumanOutput {
 const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
     match command {
         LoopCommand::Tick(_) => HumanOutput::LoopTick,
+        LoopCommand::Dispatch(_) => HumanOutput::LoopDispatch,
         LoopCommand::Status(_) => HumanOutput::LoopStatus,
         LoopCommand::Run(_) => HumanOutput::LoopRun,
         LoopCommand::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
+        LoopCommand::AcknowledgeOccurrence(_) => HumanOutput::LoopAcknowledgeOccurrence,
     }
 }
 

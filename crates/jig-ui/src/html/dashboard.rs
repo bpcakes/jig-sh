@@ -1,7 +1,10 @@
 use std::fmt::Write as _;
 
-use super::{escape, format_duration, format_ms, page_shell, plan_link, render_gates_table};
-use crate::{DashboardSnapshot, TimelineItem};
+use super::{
+    escape, format_duration, format_ms, page_shell, plan_link, render_gates_table,
+    status_badge_class,
+};
+use crate::{DashboardSnapshot, ScheduledOccurrenceView, TimelineItem};
 
 pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) -> String {
     let mut body = String::with_capacity(16 * 1024);
@@ -143,15 +146,37 @@ fn render_loops(out: &mut String, snapshot: &DashboardSnapshot) {
         if loops.workflows.is_empty() {
             out.push_str("<div class=\"muted\">No loop workflows configured.</div>\n");
         } else {
-            out.push_str("<table><tr><th>workflow</th><th>kind</th><th>enabled</th></tr>");
+            out.push_str("<table><tr><th>workflow</th><th>kind</th><th>enabled</th><th>schedule</th><th>last run</th><th>next run</th></tr>");
             for w in &loops.workflows {
+                let schedule = w.schedule.as_ref().map_or_else(
+                    || "manual".into(),
+                    |schedule| format!("{} ({})", schedule.cron, schedule.timezone),
+                );
+                let last_run = w.schedule_state.as_ref().map_or_else(
+                    || "—".into(),
+                    |state| {
+                        state.last_status.as_ref().map_or_else(
+                            || "never".into(),
+                            |status| {
+                                format!("{} ({})", status, format_ms(state.last_scheduled_at_ms))
+                            },
+                        )
+                    },
+                );
+                let next_run = w
+                    .schedule_state
+                    .as_ref()
+                    .map_or_else(|| "—".into(), |state| format_ms(Some(state.next_at_ms)));
                 let _ = writeln!(
                     out,
-                    "<tr><td class=\"mono\">{}</td><td class=\"muted\">{}</td><td><span class=\"badge {}\">{}</span></td></tr>",
+                    "<tr><td class=\"mono\">{}</td><td class=\"muted\">{}</td><td><span class=\"badge {}\">{}</span></td><td class=\"mono muted\">{}</td><td>{}</td><td>{}</td></tr>",
                     escape(&w.id),
                     escape(&w.kind),
                     if w.enabled { "ok" } else { "idle" },
-                    if w.enabled { "enabled" } else { "disabled" }
+                    if w.enabled { "enabled" } else { "disabled" },
+                    escape(&schedule),
+                    escape(&last_run),
+                    escape(&next_run),
                 );
             }
             out.push_str("</table>\n");
@@ -164,12 +189,37 @@ fn render_loops(out: &mut String, snapshot: &DashboardSnapshot) {
                 format_ms(lease.expires_at_ms)
             );
         }
+        if !loops.scheduled_occurrences.is_empty() {
+            out.push_str("<h3>Loop runs</h3><table><tr><th>workflow</th><th>when</th><th>status</th><th>worker receipt</th><th>retained worktree</th></tr>");
+            for occurrence in occurrences_by_recency(&loops.scheduled_occurrences) {
+                let _ = writeln!(
+                    out,
+                    "<tr><td class=\"mono\">{}</td><td>{}</td><td><span class=\"badge {}\">{}</span></td><td class=\"mono muted\">{}</td><td class=\"mono muted\">{}</td></tr>",
+                    escape(&occurrence.workflow_id),
+                    occurrence_time(occurrence),
+                    status_badge_class(&occurrence.status),
+                    escape(&occurrence.status),
+                    escape(occurrence.worker_receipt_id.as_deref().unwrap_or("—")),
+                    escape(occurrence.worktree.as_deref().unwrap_or("—")),
+                );
+            }
+            out.push_str("</table>\n");
+        }
         for a in &loops.needs_attention.exhausted_attempts {
             let _ = writeln!(
                 out,
                 "<div class=\"hint\">needs attention: <span class=\"mono\">{} / {}</span> exhausted its attempt budget.</div>",
-                escape(&a.workflow),
-                escape(&a.item)
+                escape(&a.workflow_id),
+                escape(&a.item_key)
+            );
+        }
+        for occurrence in &loops.needs_attention.scheduled_occurrences {
+            let detail = occurrence.error.as_deref().unwrap_or("claim expired");
+            let _ = writeln!(
+                out,
+                "<div class=\"hint\">scheduled run needs attention: <span class=\"mono\">{}</span> — {}</div>",
+                escape(&occurrence.occurrence_id),
+                escape(detail),
             );
         }
     }
@@ -204,6 +254,36 @@ fn render_timeline_section(out: &mut String, snapshot: &DashboardSnapshot, names
             render_timeline(out, item, namespace);
         }
         out.push_str("</table>\n");
+    }
+}
+
+fn occurrence_time(occurrence: &ScheduledOccurrenceView) -> String {
+    if occurrence.scheduled_at_ms != 0 {
+        return format_ms(Some(occurrence.scheduled_at_ms));
+    }
+    if occurrence.started_at_ms == 0 {
+        return "Manual".into();
+    }
+    format!("Manual ({})", format_ms(Some(occurrence.started_at_ms)))
+}
+
+fn occurrences_by_recency(
+    occurrences: &[ScheduledOccurrenceView],
+) -> Vec<&ScheduledOccurrenceView> {
+    let mut occurrences = occurrences.iter().collect::<Vec<_>>();
+    occurrences.sort_by(|left, right| {
+        occurrence_recency(right)
+            .cmp(&occurrence_recency(left))
+            .then_with(|| left.occurrence_id.cmp(&right.occurrence_id))
+    });
+    occurrences
+}
+
+fn occurrence_recency(occurrence: &ScheduledOccurrenceView) -> u64 {
+    if occurrence.scheduled_at_ms == 0 {
+        occurrence.started_at_ms
+    } else {
+        occurrence.scheduled_at_ms
     }
 }
 
@@ -261,4 +341,81 @@ fn render_timeline(out: &mut String, item: &TimelineItem, namespace: &str) {
         what,
         plan_link(namespace, item.plan_id())
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_occurrence_uses_its_start_time_instead_of_the_epoch_sentinel() {
+        let occurrence = serde_json::from_value::<ScheduledOccurrenceView>(serde_json::json!({
+            "occurrence_id": "example@manual",
+            "workflow_id": "example",
+            "scheduled_at_ms": 0,
+            "started_at_ms": 1_788_134_400_000_u64,
+            "status": "succeeded",
+            "finished_at_ms": 1_788_134_401_000_u64,
+            "worker_receipt_id": null,
+            "worktree": null,
+            "error": null
+        }))
+        .unwrap();
+
+        let rendered = occurrence_time(&occurrence);
+
+        assert!(rendered.starts_with("Manual ("), "{rendered}");
+        assert!(!rendered.contains("1970"), "{rendered}");
+    }
+
+    #[test]
+    fn legacy_manual_occurrence_without_a_start_time_still_avoids_the_epoch() {
+        let occurrence = serde_json::from_value::<ScheduledOccurrenceView>(serde_json::json!({
+            "occurrence_id": "example@manual",
+            "workflow_id": "example",
+            "scheduled_at_ms": 0,
+            "status": "failed",
+            "finished_at_ms": null,
+            "worker_receipt_id": null,
+            "worktree": null,
+            "error": null
+        }))
+        .unwrap();
+
+        assert_eq!(occurrence_time(&occurrence), "Manual");
+    }
+
+    #[test]
+    fn loop_runs_are_ordered_by_recency_across_workflows_and_manual_runs() {
+        let occurrences = [
+            ("alpha-old", "alpha", 100, 101),
+            ("zeta-new", "zeta", 300, 301),
+            ("manual-middle", "alpha", 0, 250),
+        ]
+        .into_iter()
+        .map(
+            |(occurrence_id, workflow_id, scheduled_at_ms, started_at_ms)| {
+                serde_json::from_value::<ScheduledOccurrenceView>(serde_json::json!({
+                    "occurrence_id": occurrence_id,
+                    "workflow_id": workflow_id,
+                    "scheduled_at_ms": scheduled_at_ms,
+                    "started_at_ms": started_at_ms,
+                    "status": "succeeded",
+                    "finished_at_ms": null,
+                    "worker_receipt_id": null,
+                    "worktree": null,
+                    "error": null
+                }))
+                .unwrap()
+            },
+        )
+        .collect::<Vec<_>>();
+
+        let ordered = occurrences_by_recency(&occurrences)
+            .into_iter()
+            .map(|occurrence| occurrence.occurrence_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordered, ["zeta-new", "manual-middle", "alpha-old"]);
+    }
 }
