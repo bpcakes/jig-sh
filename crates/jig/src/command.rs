@@ -114,7 +114,6 @@ impl RuntimeCommand {
                 | CheckCommand::Contract(_) => Cooperative,
                 CheckCommand::AgentMap(_)
                 | CheckCommand::AgentGuides
-                | CheckCommand::NoModRs
                 | CheckCommand::MigrationImmutability(_)
                 | CheckCommand::SqlxUncheckedNonTest => Native,
             },

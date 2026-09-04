@@ -563,7 +563,6 @@ fn legacy_check_commands_get_actionable_hint() {
         ("schema-check", "jig check schema"),
         ("contract-check", "jig check contract"),
         ("check-agent-guides", "jig check agent-guides"),
-        ("check-no-mod-rs", "jig check no-mod-rs"),
         (
             "check-migration-immutability",
             "jig check migration-immutability",

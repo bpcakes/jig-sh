@@ -249,11 +249,7 @@ pub(super) fn should_omit_unmanaged_rendered_path(
             && relative == Path::new(".github/workflows/rust-tests.yml"))
         || (!answers.go_ci_workflow_enabled()
             && relative == Path::new(".github/workflows/go-tests.yml"))
-        || (!(answers.go_ci_workflow_enabled()
-            || answers.rust_backend_enabled()
-            || answers.sqlx_enabled()
-            || answers.go_postgres_enabled()
-            || answers.file_budget_ci_enabled())
+        || (!answers.repo_policy_ci_enabled()
             && relative == Path::new(".github/workflows/repo-policy.yml"))
     {
         return true;

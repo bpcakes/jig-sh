@@ -14,7 +14,7 @@ This matrix captures what was extracted from the source application workflow and
 | `scripts/jig codex homes` + `scripts/jig codex launch` + `scripts/jig codex resume` | Runtime-owned | Discovers separate `CODEX_HOME` account/state roots through the Codex app-server API, launches Codex with a selected home, and resolves a session ID to its owning home before resume. CLI-only; no rendered launcher or MCP surface. |
 | `.mcp.json` | Templated | Repo-local MCP entrypoint that launches `scripts/jig mcp`. |
 | `crates/jig` | Added | Publishable runtime that exposes the typed CLI/MCP surface over the generated command contract and runtime-owned state. |
-| Agent map, guide, Rust LOC, `mod.rs`, migration immutability, and SQLx unchecked-query checks | Runtime-owned | Implemented natively in `crates/jig`; generated repos call `scripts/jig ...` instead of rendered helper scripts. |
+| Agent map, guide, Rust LOC, migration immutability, and SQLx unchecked-query checks | Runtime-owned | Implemented natively in `crates/jig`; generated repos call `scripts/jig ...` instead of rendered helper scripts. |
 | `scripts/jig migration add` | Runtime-owned | Adds a timestamped migration stub in the configured Go/Goose backend or a SQLx backend using `rust_migration_layout = "flat_migrations"`; versioned artifact layouts reject it before mutation, and the SQLx-namespaced and flattened compatibility paths follow the same rule. |
 | `scripts/jig check contract` | Runtime-owned | Validates runtime wiring and manifest drift. |
 | `scripts/install-jig.sh` + `scripts/jig` | Templated | Contract/profile-compatible runtime launcher and installer for generated repos. |

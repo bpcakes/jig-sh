@@ -132,6 +132,7 @@ pub(super) struct AnswerInput {
     shape: AnswerInputShape,
     authored_repository_commands: Option<BTreeMap<String, String>>,
     preserve_repository_model: bool,
+    migration_notes: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -359,12 +360,8 @@ impl AnswerResolution {
         destination: &Path,
         use_defaults: bool,
     ) -> Result<Self> {
-        let AnswerInput {
-            mut raw,
-            authored_repository_commands,
-            preserve_repository_model,
-            ..
-        } = input;
+        let (mut raw, authored_repository_commands, preserve_repository_model, mut notes) =
+            input.into_parts();
         raw.merge_opts(opts);
         let vault_note = raw.apply_existing_vault_default(destination)?;
         let sqlx_defaulted_to_tooling_only = if use_defaults {
@@ -378,7 +375,6 @@ impl AnswerResolution {
             authored_repository_commands,
             preserve_repository_model,
         )?;
-        let mut notes = Vec::new();
         if sqlx_defaulted_to_tooling_only {
             notes.push(
                 "SQLx answers were omitted under --defaults, so Jig rendered a tooling-only profile. Pass --sqlx-enabled true --rust-migration-dir <dir> for SQLx repos, or pass --sqlx-enabled false for tooling-only repos."
@@ -398,8 +394,8 @@ impl AnswerResolution {
 
 impl RenderAnswers {
     pub(super) fn from_answers_file(path: &Path) -> Result<Self> {
-        let authored_repository_commands = authored_repository_commands(path)?;
-        let mut raw = RawAnswers::from_file(path)?;
+        let (mut raw, authored_repository_commands, _, _) =
+            AnswerInput::from_file(path)?.into_parts();
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
         let mut answers = resolve_render_answers(raw, None, authored_repository_commands, true)?;
@@ -658,17 +654,6 @@ fn inherit_repository_command(destination: &mut Option<String>, commands: &toml:
             .and_then(toml::Value::as_str)
             .map(str::to_owned);
     }
-}
-
-fn authored_repository_commands(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let value = toml::from_str::<toml::Value>(&text)
-        .with_context(|| format!("Failed to parse {}", path.display()))?;
-    let table = value
-        .as_table()
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
-    Ok(authored_repository_commands_from_table(table))
 }
 
 fn authored_repository_commands_from_table(

@@ -1,5 +1,12 @@
 use super::*;
 
+use crate::bootstrap::clippy_policy::{
+    DEFAULT_RUST_CLIPPY_COMMAND, classify_generated_rust_clippy_command,
+};
+
+mod clippy_migration;
+pub(super) use clippy_migration::*;
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub(super) struct RawAnswers {
     pub(super) repository: Option<AuthoredRepositoryModel>,
@@ -195,24 +202,6 @@ impl RawAnswers {
             commands,
             "repo_compat_typescript_coverage_command",
         );
-    }
-
-    pub(super) fn from_file(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        let value = toml::from_str::<toml::Value>(&text)
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        let table = value
-            .as_table()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
-        let mut raw = value
-            .try_into::<Self>()
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        raw.normalize_repository_model(&table);
-        raw.normalize_app_dirs()?;
-        raw.normalize_legacy_frontend_metadata(&table);
-        Ok(raw)
     }
 
     pub(super) fn normalize_legacy_frontend_metadata(&mut self, table: &toml::Table) {
@@ -452,15 +441,20 @@ impl RawAnswers {
             &mut self.rust_fmt_check_command,
             "cargo fmt --all -- --check",
         );
-        normalize_legacy_command_default(
-            &mut self.rust_clippy_command,
-            "cargo clippy --workspace --all-targets --locked -- -D warnings",
-        );
+        self.normalize_generated_clippy_default();
         normalize_legacy_command_default(&mut self.rust_test_command, "cargo test --workspace");
         normalize_legacy_command_default(
             &mut self.rust_test_locked_command,
             "cargo test --workspace --locked",
         );
+    }
+
+    pub(super) fn normalize_generated_clippy_default(&mut self) {
+        if let Some(command) = self.rust_clippy_command.as_deref()
+            && let Some(generated) = classify_generated_rust_clippy_command(command)
+        {
+            self.rust_clippy_command = generated.upgraded_nested_command();
+        }
     }
 
     pub(super) fn apply_sqlx_default_for_cli_defaults(&mut self) -> bool {
@@ -707,10 +701,7 @@ impl RawAnswers {
                 .rust_fmt_check_command
                 .unwrap_or_else(|| optional_cargo_command("cargo fmt --all -- --check", "fmt")),
             rust_clippy_command: self.rust_clippy_command.unwrap_or_else(|| {
-                optional_cargo_command(
-                    "cargo clippy --workspace --all-targets --locked -- -D warnings",
-                    "clippy",
-                )
+                optional_cargo_command(DEFAULT_RUST_CLIPPY_COMMAND, "clippy")
             }),
             rust_test_command: self
                 .rust_test_command

@@ -428,6 +428,21 @@ test-locked:
         output["detection_report"]["rust_test_locked_command"],
         "make test-locked"
     );
+    let clippy_policy_warning = "cannot verify that it enforces `clippy::mod_module_files`";
+    assert!(
+        output["detection_report"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains(clippy_policy_warning))
+    );
+    assert!(
+        output["detection_report"]["metadata"]["rust_clippy_command"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains(clippy_policy_warning))
+    );
     assert!(
         output["detection_report"]["metadata"]["rust_fmt_check_command"]["warnings"]
             .as_array()

@@ -177,6 +177,10 @@ mod tests {
             root["workspace"]["lints"]["clippy"]["cognitive_complexity"].as_str(),
             Some("warn")
         );
+        assert_eq!(
+            root["workspace"]["lints"]["clippy"]["mod_module_files"].as_str(),
+            Some("warn")
+        );
         assert_eq!(package["lints"]["workspace"].as_bool(), Some(true));
         assert_eq!(
             rendered.get("clippy.toml").map(String::as_str),

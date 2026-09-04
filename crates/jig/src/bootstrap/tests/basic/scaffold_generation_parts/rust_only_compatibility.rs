@@ -110,6 +110,10 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
         Some("warn")
     );
     assert_eq!(
+        cargo["workspace"]["lints"]["clippy"]["mod_module_files"].as_str(),
+        Some("warn")
+    );
+    assert_eq!(
         fs::read_to_string(destination.join("clippy.toml")).unwrap(),
         "cognitive-complexity-threshold = 20\n"
     );

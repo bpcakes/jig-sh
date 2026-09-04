@@ -34,7 +34,6 @@ pub(crate) const CHECK_SUBCOMMAND_NAMES: &[&str] = &[
     tool_defs::cli_command::CHECK_CONTRACT,
     tool_defs::cli_command::CHECK_AGENT_MAP,
     tool_defs::cli_command::CHECK_AGENT_GUIDES,
-    tool_defs::cli_command::CHECK_NO_MOD_RS,
     tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY,
     tool_defs::cli_command::CHECK_SQLX_UNCHECKED_NON_TEST,
 ];
@@ -222,7 +221,6 @@ impl CheckCommand {
             | Self::Contract(opts) => !opts.selectors.is_empty(),
             Self::AgentMap(_)
             | Self::AgentGuides
-            | Self::NoModRs
             | Self::MigrationImmutability(_)
             | Self::SqlxUncheckedNonTest
             | Self::Selectors(_) => false,
@@ -277,9 +275,6 @@ pub(crate) enum CheckCommand {
     /// Verify crate-level AGENTS.md guide coverage and required sections.
     #[command(name = tool_defs::cli_command::CHECK_AGENT_GUIDES)]
     AgentGuides,
-    /// Fail if disallowed mod.rs files exist under configured crate roots.
-    #[command(name = tool_defs::cli_command::CHECK_NO_MOD_RS)]
-    NoModRs,
     /// Verify existing migrations were not mutated.
     #[command(name = tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY)]
     MigrationImmutability(CheckMigrationImmutabilityOpts),

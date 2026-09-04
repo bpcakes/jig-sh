@@ -23,7 +23,7 @@ scripts/jig check contract
 
 Setup creates `Cargo.lock`; commit it so locked checks and CI use the same dependency resolution.
 
-The workspace enables Clippy's `cognitive_complexity` restriction lint with a threshold of 20. Clippy describes this score as a heuristic rather than an objective complexity measurement. The strict `scripts/jig check clippy` command treats all warnings as failures; adjust or remove this project-owned policy when it does not fit the codebase.
+The workspace enables Clippy's `cognitive_complexity` nursery lint with a threshold of 20 and its `mod_module_files` restriction lint to reject `mod.rs` module layouts. Clippy describes the complexity score as a heuristic rather than an objective measurement. The strict `scripts/jig check clippy` command checks all targets and features, treats all warnings as failures, and explicitly denies `mod_module_files`, so the layout policy still applies to feature-gated modules and if a workspace member forgets to inherit workspace lints. Clippy checks compiled workspace targets rather than every tracked Rust file or code selected only on another target platform; adjust or remove this project-owned policy when it does not fit the codebase.
 [% if artifact_kind == "cli" %]
 Run the replaceable starter binary with:
 

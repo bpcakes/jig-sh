@@ -65,26 +65,6 @@ jobs:
         run: scripts/jig check <<[ go_sqlc_ci_target ]>>
 [% endif %]
 [% endif %]
-[% if rust_backend_enabled %]
-  no-mod-rs:
-    name: Check for disallowed mod.rs files
-    runs-on: <<[ ci_github_runner | tojson ]>>
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Detect disallowed mod.rs files
-        run: |
-          scripts/jig check no-mod-rs
-[% endif %]
-
 [% if file_budget_ci_enabled %]
   file-budget:
     name: Enforce repository file budgets

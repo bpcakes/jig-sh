@@ -81,7 +81,6 @@ pub(crate) fn run_direct(ctx: &RepoContext, command: PolicyDirectCommand) -> Res
 pub(crate) enum PolicyCheckCommand {
     AgentMap(AgentMapInput),
     AgentGuides,
-    NoModRs,
     MigrationImmutability(MigrationImmutabilityInput),
     SqlxUncheckedNonTest,
 }
@@ -90,7 +89,6 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
     match command {
         PolicyCheckCommand::AgentMap(opts) => agent_map::check(ctx, &opts),
         PolicyCheckCommand::AgentGuides => agent_map::check_guides(ctx),
-        PolicyCheckCommand::NoModRs => check_no_mod_rs(ctx),
         PolicyCheckCommand::MigrationImmutability(opts) => check_migration_immutability(ctx, &opts),
         PolicyCheckCommand::SqlxUncheckedNonTest => sqlx::check_non_test(ctx),
     }
@@ -627,15 +625,6 @@ pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
 
 pub(crate) fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     agent_map::render(root, map_path)
-}
-
-fn check_no_mod_rs(ctx: &RepoContext) -> Result<Value> {
-    let tracked = git_list_files(ctx.root(), ctx.rust_crate_roots())?;
-    let violations = tracked
-        .into_iter()
-        .filter(|path| path == "mod.rs" || path.ends_with("/mod.rs"))
-        .collect::<Vec<_>>();
-    Ok(json!({ "ok": violations.is_empty(), "violations": violations }))
 }
 
 fn check_migration_immutability(

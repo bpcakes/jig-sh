@@ -509,7 +509,6 @@ fn assert_generated_ci_workflows(destination: &Path) {
         (
             "repo-policy.yml",
             &[
-                "no-mod-rs",
                 "file-budget",
                 "sqlx-unchecked-queries",
                 "migration-immutability",

@@ -1,0 +1,1 @@
+Replace the custom no-mod-rs policy with the inherited Clippy mod_module_files lint, update generated workflows and scaffold templates, then run focused and repository verification.

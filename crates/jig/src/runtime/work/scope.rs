@@ -635,7 +635,10 @@ fn canonical_cargo_command(command: &str, expected_subcommand: &[&str]) -> bool 
     {
         return false;
     }
-    tokens[1 + expected_subcommand.len()..].iter().all(|token| {
+    let arguments = &tokens[1 + expected_subcommand.len()..];
+    let separator = arguments.iter().position(|token| *token == "--");
+    let cargo_arguments = separator.map_or(arguments, |index| &arguments[..index]);
+    if !cargo_arguments.iter().all(|token| {
         matches!(
             *token,
             "--all"
@@ -645,12 +648,38 @@ fn canonical_cargo_command(command: &str, expected_subcommand: &[&str]) -> bool 
                 | "--no-default-features"
                 | "--no-fail-fast"
                 | "--workspace"
-                | "--"
                 | "--check"
-                | "-D"
-                | "warnings"
         )
-    })
+    }) {
+        return false;
+    }
+    let Some(separator) = separator else {
+        return true;
+    };
+    canonical_cargo_trailing_arguments(expected_subcommand, &arguments[separator + 1..])
+}
+
+fn canonical_cargo_trailing_arguments(expected_subcommand: &[&str], arguments: &[&str]) -> bool {
+    match expected_subcommand {
+        ["fmt"] => arguments == ["--check"],
+        ["clippy"] => {
+            let (pairs, remainder) = arguments.as_chunks::<2>();
+            !pairs.is_empty()
+                && remainder.is_empty()
+                && pairs
+                    .iter()
+                    .all(|pair| pair[0] == "-D" && canonical_rust_lint_name(pair[1]))
+        }
+        _ => false,
+    }
+}
+
+fn canonical_rust_lint_name(lint: &str) -> bool {
+    let lint = lint.strip_prefix("clippy::").unwrap_or(lint);
+    !lint.is_empty()
+        && lint.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 include!("scope/tail.rs");

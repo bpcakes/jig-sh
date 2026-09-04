@@ -90,7 +90,7 @@ scripts/jig check contract
 ```
 
 [% if backend_language == "rust" %]
-The workspace enables Clippy's `cognitive_complexity` restriction lint with a threshold of 20. Clippy describes this score as a heuristic rather than an objective complexity measurement. The strict `scripts/jig check clippy` command treats all warnings as failures. The root Cargo and Clippy configuration is project-owned after init, so adjust or remove this policy when it does not fit the codebase.
+The workspace enables Clippy's `cognitive_complexity` nursery lint with a threshold of 20 and its `mod_module_files` restriction lint to reject `mod.rs` module layouts. Clippy describes the complexity score as a heuristic rather than an objective measurement. The strict `scripts/jig check clippy` command checks all targets and features, treats all warnings as failures, and explicitly denies `mod_module_files`, so the layout policy still applies to feature-gated modules and if a workspace member forgets to inherit workspace lints. Clippy checks compiled workspace targets rather than every tracked Rust file or code selected only on another target platform. The root Cargo and Clippy configuration is project-owned after init, so adjust or remove this policy when it does not fit the codebase.
 
 [% endif %]
 

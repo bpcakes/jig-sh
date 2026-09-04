@@ -6,6 +6,7 @@ impl AnswerInput {
                 shape: AnswerInputShape::default(),
                 authored_repository_commands: Some(BTreeMap::new()),
                 preserve_repository_model: false,
+                migration_notes: Vec::new(),
             });
         };
         Self::from_explicit_file(path)
@@ -18,6 +19,7 @@ impl AnswerInput {
                 shape: AnswerInputShape::default(),
                 authored_repository_commands: Some(BTreeMap::new()),
                 preserve_repository_model: false,
+                migration_notes: Vec::new(),
             });
         };
         let path = if path.is_absolute() {
@@ -43,6 +45,7 @@ impl AnswerInput {
                 shape: AnswerInputShape::default(),
                 authored_repository_commands: Some(BTreeMap::new()),
                 preserve_repository_model: false,
+                migration_notes: Vec::new(),
             });
         };
         let path = if path.is_absolute() {
@@ -76,7 +79,12 @@ impl AnswerInput {
         raw.normalize_repository_model(&table);
         raw.normalize_app_dirs()?;
         raw.normalize_legacy_frontend_metadata(&table);
-        let authored_repository_commands = authored_repository_commands_from_table(&table);
+        let mut authored_repository_commands = authored_repository_commands_from_table(&table);
+        let migration_notes = normalize_generated_clippy_defaults(
+            &mut raw,
+            &mut authored_repository_commands,
+        )
+        .warnings();
         let preserve_repository_model =
             loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
         Ok(Self {
@@ -84,7 +92,24 @@ impl AnswerInput {
             shape: AnswerInputShape::from_table(&table),
             authored_repository_commands,
             preserve_repository_model,
+            migration_notes,
         })
+    }
+
+    pub(in crate::bootstrap::answers) fn into_parts(
+        self,
+    ) -> (
+        RawAnswers,
+        Option<BTreeMap<String, String>>,
+        bool,
+        Vec<String>,
+    ) {
+        (
+            self.raw,
+            self.authored_repository_commands,
+            self.preserve_repository_model,
+            self.migration_notes,
+        )
     }
 
     fn from_explicit_file(path: &Path) -> Result<Self> {

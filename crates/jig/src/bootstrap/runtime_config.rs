@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::ANSWERS_FILE;
+use super::clippy_policy::is_generated_rust_clippy_command;
 use super::repository_model::{RUST_FILE_LOC_COMMAND_KEY, is_generated_rust_file_loc_command};
 use crate::context::RepoContext;
 use crate::tool_defs;
@@ -123,6 +124,14 @@ fn reconcile_commands(
         {
             continue;
         }
+        if value.as_str().is_some_and(is_generated_rust_clippy_command)
+            && rendered_commands
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .is_some_and(is_generated_rust_clippy_command)
+        {
+            continue;
+        }
         let is_retired_per_app_default = prior_generated_per_app_commands
             .get(key)
             .is_some_and(|generated_value| value.as_str() == Some(generated_value.as_str()));
@@ -145,6 +154,14 @@ fn reconcile_commands(
                     .required_commands()
                     .iter()
                     .any(|required| required == replacement);
+                if value.as_str().is_some_and(is_generated_rust_clippy_command)
+                    && rendered_commands
+                        .get(replacement)
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(is_generated_rust_clippy_command)
+                {
+                    continue;
+                }
                 if replacement_is_required
                     && value
                         .as_str()

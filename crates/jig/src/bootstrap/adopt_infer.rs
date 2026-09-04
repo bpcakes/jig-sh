@@ -103,6 +103,9 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
     let nested_manifest_paths =
         scanned_rust_packages.then_some(rust_crate_roots.scanned_manifest_paths.as_slice());
     let commands = infer_commands(root, &scan, nested_manifest_paths, &mut warnings);
+    if !rust_crate_roots.roots.is_empty() && commands.rust_clippy_command.is_none() {
+        warnings.push(crate::bootstrap::clippy_policy::ALL_FEATURES_ADOPTION_WARNING.to_owned());
+    }
     if scanned_rust_packages && commands.rust_test_locked_command.is_none() {
         warnings.push(
             "nested Rust manifest scan did not infer rust_test_locked_command; add a project-owned locked command once lockfiles are committed"

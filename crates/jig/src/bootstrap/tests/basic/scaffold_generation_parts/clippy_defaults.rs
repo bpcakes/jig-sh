@@ -9,11 +9,16 @@ fn assert_generated_rust_clippy_defaults(destination: &Path) {
         Some("warn")
     );
     assert_eq!(
+        root_manifest["workspace"]["lints"]["clippy"]["mod_module_files"].as_str(),
+        Some("warn")
+    );
+    assert_eq!(
         fs::read_to_string(destination.join("clippy.toml")).unwrap(),
         "cognitive-complexity-threshold = 20\n"
     );
     let readme = fs::read_to_string(destination.join("README.md")).unwrap();
-    assert!(readme.contains("`cognitive_complexity` restriction lint"));
+    assert!(readme.contains("`cognitive_complexity` nursery lint"));
+    assert!(readme.contains("`mod_module_files` restriction lint"));
     assert!(readme.contains("treats all warnings as failures"));
     assert!(readme.contains("Clippy configuration is project-owned after init"));
 

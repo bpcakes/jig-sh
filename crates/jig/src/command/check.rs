@@ -24,7 +24,6 @@ pub(crate) enum CheckCommand {
     Contract(ToolRequest),
     AgentMap(AgentMapRequest),
     AgentGuides,
-    NoModRs,
     MigrationImmutability(MigrationImmutabilityRequest),
     SqlxUncheckedNonTest,
 }

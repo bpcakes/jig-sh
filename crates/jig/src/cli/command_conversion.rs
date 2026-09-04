@@ -176,10 +176,6 @@ fn direct_check_command(
             reject_repository_options(&parent_tool)?;
             command::CheckCommand::AgentGuides
         }
-        CheckCommand::NoModRs => {
-            reject_repository_options(&parent_tool)?;
-            command::CheckCommand::NoModRs
-        }
         CheckCommand::MigrationImmutability(opts) => {
             reject_repository_options(&parent_tool)?;
             command::CheckCommand::MigrationImmutability(opts.into())
@@ -212,7 +208,6 @@ fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTarg
         CheckCommand::Contract(opts) => Ok(("contract", opts)),
         CheckCommand::AgentMap(_)
         | CheckCommand::AgentGuides
-        | CheckCommand::NoModRs
         | CheckCommand::MigrationImmutability(_)
         | CheckCommand::SqlxUncheckedNonTest => {
             bail!(

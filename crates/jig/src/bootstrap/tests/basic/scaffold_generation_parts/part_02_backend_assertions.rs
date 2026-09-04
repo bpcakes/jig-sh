@@ -488,6 +488,7 @@ fn assert_rendered_jig_answers(destination: &Path) {
             "rust_sqlx_metadata_dir = \".sqlx\"",
             "schema_dump_enabled = false",
             "rust_crate_roots = [\"apps\", \"crates\"]",
+            "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files",
             "web_package_manager = \"bun\"",
             "if [ -f Cargo.toml ]; then cargo fetch;",
             "cargo run -p my-app-api -- --bootstrap-database",

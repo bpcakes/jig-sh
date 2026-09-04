@@ -189,7 +189,6 @@ web_lint_command = "scripts/check-webapps.sh app-check apps/web lint"
             paths_ignore: Vec::new(),
             reuse: false,
         };
-
         assert!(gate_command_scope_is_safe(&ctx, &rust));
         assert!(gate_command_scope_is_safe(&ctx, &web));
         assert!(canonical_cargo_command(
@@ -237,6 +236,56 @@ web_lint_command = "scripts/check-webapps.sh app-check apps/web lint"
         assert!(!canonical_schema_dump_command("scripts/dump-schema.sh"));
         assert!(!canonical_schema_dump_command(
             "cargo run --manifest-path tools/schema/Cargo.toml"
+        ));
+    }
+
+    #[test]
+    fn generated_clippy_command_retains_safe_path_scope() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+            .config(format!(
+                "rust_clippy_command = {:?}\n",
+                crate::bootstrap::clippy_policy::DEFAULT_RUST_CLIPPY_COMMAND
+            ))
+            .required_commands(["rust_clippy_command"])
+            .tool(json!({
+                "name": "jig.clippy",
+                "kind": "command",
+                "description": "Clippy.",
+                "command": "rust_clippy_command"
+            }))
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let gate = WorkCheckGate {
+            id: "rust-clippy".into(),
+            tool: "jig.clippy".into(),
+            required: true,
+            paths: Some(vec!["crates/**".into()]),
+            paths_ignore: Vec::new(),
+            reuse: true,
+        };
+
+        assert!(gate_command_scope_is_safe(&ctx, &gate));
+        assert!(canonical_cargo_command(
+            crate::bootstrap::clippy_policy::DEFAULT_RUST_CLIPPY_COMMAND,
+            &["clippy"]
+        ));
+        let optional_clippy = format!(
+            "{}{}{}printf '%s\\n' 'No Cargo.toml found; skipping cargo clippy.'{}",
+            crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+            crate::bootstrap::clippy_policy::DEFAULT_RUST_CLIPPY_COMMAND,
+            crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+            crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+        );
+        assert!(canonical_cargo_command(&optional_clippy, &["clippy"]));
+        assert!(canonical_cargo_command(
+            "cargo clippy --workspace -- -D warnings -D clippy::mod-module-files",
+            &["clippy"]
+        ));
+        assert!(!canonical_cargo_command(
+            "cargo clippy --workspace -- -D warnings scripts/extra.sh",
+            &["clippy"]
         ));
     }
 

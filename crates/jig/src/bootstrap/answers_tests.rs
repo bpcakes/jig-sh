@@ -3,6 +3,9 @@ use std::{fs, process::Command};
 use tempfile::tempdir;
 
 use super::*;
+use crate::bootstrap::clippy_policy::{
+    DEFAULT_RUST_CLIPPY_COMMAND, NESTED_MANIFEST_RUST_CLIPPY_COMMAND,
+};
 use crate::bootstrap::{ScaffoldDb, ScaffoldOpts, ScaffoldPreset, scaffold};
 
 #[test]
@@ -490,4 +493,266 @@ fn recopy_normalizes_exact_former_generated_sqlx_default() {
         customized.sqlx_check_command.as_deref(),
         Some(format!("{former_default} --custom").as_str())
     );
+}
+
+#[test]
+fn recopy_upgrades_only_exact_generated_rust_clippy_defaults() {
+    let former_default = "cargo clippy --workspace --all-targets --locked -- -D warnings";
+    let pre_all_features_default = concat!(
+        "cargo clippy --workspace --all-targets --locked -- ",
+        "-D warnings -D clippy::mod_module_files"
+    );
+    let current_default = concat!(
+        "cargo clippy --workspace --all-targets --all-features --locked -- ",
+        "-D warnings -D clippy::mod_module_files"
+    );
+    let mut raw = RawAnswers {
+        repo_name: Some("ExampleProject".into()),
+        sqlx_enabled: Some(false),
+        schema_dump_enabled: Some(false),
+        rust_clippy_command: Some(former_default.into()),
+        ..RawAnswers::default()
+    };
+
+    raw.normalize_legacy_generated_cargo_command_defaults();
+    assert_eq!(raw.rust_clippy_command, None);
+    assert!(
+        raw.resolve(None)
+            .unwrap()
+            .rust_clippy_command
+            .contains(current_default)
+    );
+
+    let mut opted_out = RawAnswers {
+        rust_clippy_command: Some(pre_all_features_default.into()),
+        ..RawAnswers::default()
+    };
+    opted_out.normalize_legacy_generated_cargo_command_defaults();
+    assert_eq!(
+        opted_out.rust_clippy_command.as_deref(),
+        Some(pre_all_features_default)
+    );
+
+    let custom = format!("{former_default} --custom");
+    let mut customized = RawAnswers {
+        rust_clippy_command: Some(custom.clone()),
+        ..RawAnswers::default()
+    };
+    customized.normalize_legacy_generated_cargo_command_defaults();
+    assert_eq!(
+        customized.rust_clippy_command.as_deref(),
+        Some(custom.as_str())
+    );
+
+    let mut commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        former_default.into(),
+    )]));
+    let migrations = normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut commands);
+    assert_eq!(
+        commands.unwrap()["api_clippy_command"],
+        DEFAULT_RUST_CLIPPY_COMMAND
+    );
+    let warnings = migrations.warnings();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("commands.api_clippy_command"));
+    assert!(warnings[0].contains("--all-features"));
+
+    let mut opted_out_commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        pre_all_features_default.into(),
+    )]));
+    let migrations =
+        normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut opted_out_commands);
+    assert_eq!(
+        opted_out_commands.unwrap()["api_clippy_command"],
+        pre_all_features_default
+    );
+    assert!(migrations.warnings().is_empty());
+
+    let legacy_optional = optional_cargo_command(former_default, "clippy");
+    let mut optional_commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        legacy_optional,
+    )]));
+    normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut optional_commands);
+    assert_eq!(
+        optional_commands.unwrap()["api_clippy_command"],
+        optional_cargo_command(DEFAULT_RUST_CLIPPY_COMMAND, "clippy")
+    );
+
+    let mut optional_raw = RawAnswers {
+        rust_clippy_command: Some(optional_cargo_command(former_default, "clippy")),
+        ..RawAnswers::default()
+    };
+    optional_raw.normalize_legacy_generated_cargo_command_defaults();
+    assert_eq!(optional_raw.rust_clippy_command, None);
+
+    let legacy_nested_cargo =
+        "cargo clippy --manifest-path \"$jig_manifest\" --all-targets -- -D warnings";
+    let legacy_nested = format!(
+        "( found=0; rc=0; jig_manifest=api/Cargo.toml; if [ -f \"$jig_manifest\" ]; then found=1; {legacy_nested_cargo} || rc=$?; fi; if [ \"$found\" -eq 0 ]; then printf '%s\\n' 'No Cargo.toml found; skipping cargo clippy.'; fi; exit \"$rc\" )"
+    );
+    let current_nested =
+        legacy_nested.replace(legacy_nested_cargo, NESTED_MANIFEST_RUST_CLIPPY_COMMAND);
+    let mut nested_raw = RawAnswers {
+        rust_clippy_command: Some(legacy_nested.clone()),
+        ..RawAnswers::default()
+    };
+    nested_raw.normalize_legacy_generated_cargo_command_defaults();
+    assert_eq!(
+        nested_raw.rust_clippy_command.as_deref(),
+        Some(current_nested.as_str())
+    );
+
+    let mut nested_commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        legacy_nested,
+    )]));
+    normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut nested_commands);
+    assert_eq!(
+        nested_commands.unwrap()["api_clippy_command"],
+        current_nested
+    );
+
+    let opted_out_nested = current_nested.replace("--all-features ", "");
+    let mut opted_out_nested_commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        opted_out_nested.clone(),
+    )]));
+    let migrations = normalize_generated_clippy_defaults(
+        &mut RawAnswers::default(),
+        &mut opted_out_nested_commands,
+    );
+    assert_eq!(
+        opted_out_nested_commands.unwrap()["api_clippy_command"],
+        opted_out_nested
+    );
+    assert!(migrations.warnings().is_empty());
+}
+
+#[test]
+fn file_input_reports_only_effective_custom_clippy_commands_missing_the_policy_lint() {
+    let former_default = "cargo clippy --workspace --all-targets --locked -- -D warnings";
+    let pre_all_features_default = concat!(
+        "cargo clippy --workspace --all-targets --locked -- ",
+        "-D warnings -D clippy::mod_module_files"
+    );
+    let custom = format!("{former_default} --custom");
+    let mut custom_commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        custom.clone(),
+    )]));
+    let migrations =
+        normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut custom_commands);
+    assert_eq!(custom_commands.unwrap()["api_clippy_command"], custom);
+    let warnings = migrations.warnings();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Could not verify `clippy::mod_module_files`"));
+    assert!(warnings[0].contains("commands.api_clippy_command"));
+
+    let custom_with_lint = format!("{pre_all_features_default} --custom");
+    let mut custom_with_lint_commands = Some(BTreeMap::from([(
+        "api_clippy_command".into(),
+        custom_with_lint.clone(),
+    )]));
+    let migrations = normalize_generated_clippy_defaults(
+        &mut RawAnswers::default(),
+        &mut custom_with_lint_commands,
+    );
+    assert_eq!(
+        custom_with_lint_commands.unwrap()["api_clippy_command"],
+        custom_with_lint
+    );
+    assert!(migrations.warnings().is_empty());
+
+    let unrelated_legacy = optional_cargo_command(former_default, "clippy");
+    let mut unrelated_commands = Some(BTreeMap::from([(
+        "unrelated_command".into(),
+        unrelated_legacy.clone(),
+    )]));
+    let migrations =
+        normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut unrelated_commands);
+    assert_eq!(
+        unrelated_commands.unwrap()["unrelated_command"],
+        unrelated_legacy
+    );
+    assert!(migrations.warnings().is_empty());
+}
+
+#[test]
+fn file_input_does_not_confuse_lint_mentions_with_policy_enforcement() {
+    let legacy_nested_cargo =
+        "cargo clippy --manifest-path \"$jig_manifest\" --all-targets -- -D warnings";
+    let mixed_nested = format!(
+        "( found=0; rc=0; jig_manifest=api/Cargo.toml; if [ -f \"$jig_manifest\" ]; then found=1; {legacy_nested_cargo} || rc=$?; fi; jig_manifest=worker/Cargo.toml; if [ -f \"$jig_manifest\" ]; then found=1; {NESTED_MANIFEST_RUST_CLIPPY_COMMAND} || rc=$?; fi; if [ \"$found\" -eq 0 ]; then printf '%s\\n' 'No Cargo.toml found; skipping cargo clippy.'; fi; exit \"$rc\" )"
+    );
+    for command in [
+        "cargo clippy --workspace -- -A clippy::mod_module_files".into(),
+        "cargo clippy --workspace -- -D clippy::mod_module_files -A clippy::mod_module_files"
+            .into(),
+        "cargo clippy --workspace -- -D clippy::mod_module_files $EXTRA_FLAGS".into(),
+        "printf '%s' clippy::mod_module_files".into(),
+        mixed_nested,
+    ] {
+        let mut commands = Some(BTreeMap::from([(
+            "api_clippy_command".into(),
+            command.clone(),
+        )]));
+        let diagnostics =
+            normalize_generated_clippy_defaults(&mut RawAnswers::default(), &mut commands);
+
+        assert_eq!(commands.unwrap()["api_clippy_command"], command);
+        let warnings = diagnostics.warnings();
+        assert_eq!(warnings.len(), 1, "{command}");
+        assert!(
+            warnings[0].contains("Could not verify `clippy::mod_module_files`"),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn file_input_checks_every_literal_or_aliased_clippy_action() {
+    let mut raw = toml::from_str::<RawAnswers>(
+        r#"
+[repository]
+default_check_profile = "verify"
+
+[[repository.actions]]
+target = { component = "api", action = "lint-rust" }
+intent = "check"
+effects = ["read_only", "process"]
+legacy_aliases = ["jig.clippy"]
+runner = { kind = "command", command = "primary_clippy_command" }
+
+[[repository.actions]]
+target = { component = "worker", action = "clippy" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "worker_clippy_command" }
+"#,
+    )
+    .unwrap();
+    let legacy = "cargo clippy --workspace --all-targets --locked -- -D warnings";
+    let custom = "cargo clippy --workspace -- -A clippy::mod_module_files";
+    let mut commands = Some(BTreeMap::from([
+        ("primary_clippy_command".into(), legacy.into()),
+        ("worker_clippy_command".into(), custom.into()),
+        ("unrelated_command".into(), legacy.into()),
+    ]));
+
+    let diagnostics = normalize_generated_clippy_defaults(&mut raw, &mut commands);
+
+    let commands = commands.unwrap();
+    assert_eq!(
+        commands["primary_clippy_command"],
+        DEFAULT_RUST_CLIPPY_COMMAND
+    );
+    assert_eq!(commands["worker_clippy_command"], custom);
+    assert_eq!(commands["unrelated_command"], legacy);
+    let warnings = diagnostics.warnings();
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings[0].contains("commands.primary_clippy_command"));
+    assert!(warnings[1].contains("commands.worker_clippy_command"));
 }

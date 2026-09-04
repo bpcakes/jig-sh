@@ -71,6 +71,7 @@ mod adoption_file_budget;
 mod answers;
 #[cfg(test)]
 pub(crate) use crate::backend::BackendLanguage;
+pub(crate) mod clippy_policy;
 mod crate_classification;
 mod embedded_templates;
 mod file_budget_lifecycle;

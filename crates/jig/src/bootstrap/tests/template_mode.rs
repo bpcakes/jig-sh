@@ -3,6 +3,8 @@ use crate::bootstrap::repository_model::RepositoryRenderModel;
 use jig_contract::{ActionRunner, ComparisonRequestV1, StrictInventoryReasonV1};
 use sha2::{Digest, Sha256};
 
+mod clippy_migration;
+
 #[test]
 fn adopt_local_git_template_defaults_to_committed_mode() {
     let _guard = lock_env();
@@ -216,64 +218,6 @@ fn update_replaces_jig_block_without_overwriting_custom_root_agents() {
 }
 
 #[test]
-fn update_recopy_normalizes_legacy_schema_dump_true_when_sqlx_disabled() {
-    let _guard = lock_env();
-    let temp = tempdir().unwrap();
-    let repo = temp.path().join("repo");
-    let template = materialize_template_git_worktree();
-    write_test_crate_guide(&repo);
-
-    adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
-    let answers_path = repo.join(".jig.toml");
-    let mut answers = read_answers_toml(&answers_path).unwrap();
-    answers.insert("schema_dump_enabled".into(), TomlValue::Boolean(true));
-    answers.insert(
-        "bootstrap_command".into(),
-        TomlValue::String("cargo fetch".into()),
-    );
-    answers.insert(
-        "rust_fmt_check_command".into(),
-        TomlValue::String("cargo fmt --all -- --check".into()),
-    );
-    answers.insert(
-        "rust_clippy_command".into(),
-        TomlValue::String("cargo clippy --workspace --all-targets --locked -- -D warnings".into()),
-    );
-    answers.insert(
-        "rust_test_command".into(),
-        TomlValue::String("cargo test --workspace".into()),
-    );
-    answers.insert(
-        "rust_test_locked_command".into(),
-        TomlValue::String("cargo test --workspace --locked".into()),
-    );
-    write_answers_toml(&answers_path, &answers).unwrap();
-
-    run_update(UpdateOpts {
-        path: repo.clone(),
-        template: None,
-        template_mode: None,
-        recopy: true,
-        launcher_only: false,
-        force: true,
-        vcs_ref: None,
-        defaults: true,
-        no_input: true,
-    })
-    .unwrap();
-
-    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("sqlx_enabled = false"));
-    assert!(answers.contains("schema_dump_enabled = false"));
-    assert!(answers.contains("No Cargo.toml found; skipping cargo bootstrap."));
-    assert!(answers.contains("No Cargo.toml found; skipping cargo fmt."));
-    assert!(answers.contains("No Cargo.toml found; skipping cargo clippy."));
-    assert!(answers.contains("No Cargo.toml found; skipping cargo test."));
-    assert!(answers.contains("No Cargo.toml found; skipping cargo test-locked."));
-    assert!(!answers.contains("tool = \"jig.schema_check\""));
-}
-
-#[test]
 fn update_recopy_seeds_then_preserves_authored_file_budget_policy() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -419,7 +363,7 @@ fn update_recopy_preserves_authored_file_budget_action_alias_and_profile_removal
         }
         write_answers_toml(&answers_path, &answers).unwrap();
 
-        run_update(UpdateOpts {
+        let output = run_update(UpdateOpts {
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -447,20 +391,37 @@ fn update_recopy_preserves_authored_file_budget_action_alias_and_profile_removal
             .actions
             .iter()
             .find(|action| action.target.to_string() == "repo:file-budget");
-        let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
-        serde_yaml_ng::from_str::<serde_json::Value>(&policy)
-            .unwrap_or_else(|error| panic!("repo policy was invalid YAML: {error}\n{policy}"));
+        let policy_path = repo.join(".github/workflows/repo-policy.yml");
         match choice {
             "action" => {
                 assert!(budget.is_none());
-                assert!(!policy.contains("scripts/jig check repo:file-budget"));
+                assert!(
+                    !policy_path.exists(),
+                    "repo-policy.yml must be omitted when no jobs remain"
+                );
+                assert!(
+                    output["render_report"]["files_removed"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|path| path == ".github/workflows/repo-policy.yml"),
+                    "the update report must expose retirement of the stale managed workflow: {output}"
+                );
             }
             "alias" => {
                 assert!(budget.unwrap().legacy_aliases.is_empty());
+                let policy = fs::read_to_string(&policy_path).unwrap();
+                serde_yaml_ng::from_str::<serde_json::Value>(&policy).unwrap_or_else(|error| {
+                    panic!("repo policy was invalid YAML: {error}\n{policy}")
+                });
                 assert!(policy.contains("scripts/jig check repo:file-budget"));
             }
             "profile" => {
                 assert!(budget.is_some());
+                let policy = fs::read_to_string(&policy_path).unwrap();
+                serde_yaml_ng::from_str::<serde_json::Value>(&policy).unwrap_or_else(|error| {
+                    panic!("repo policy was invalid YAML: {error}\n{policy}")
+                });
                 assert!(policy.contains("scripts/jig check repo:file-budget"));
                 assert!(model.profiles.iter().all(|profile| {
                     profile

@@ -35,6 +35,7 @@ version = "0.2.0"
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
 large_stack_arrays = "deny"
+mod_module_files = "warn"
 redundant_clone = "deny"
 
 [workspace.dependencies]

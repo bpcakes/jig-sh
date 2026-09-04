@@ -183,6 +183,10 @@ fn assert_rust_only_manifests_and_source(destination: &Path, case: RustOnlyAccep
         Some("warn")
     );
     assert_eq!(
+        root_manifest["workspace"]["lints"]["clippy"]["mod_module_files"].as_str(),
+        Some("warn")
+    );
+    assert_eq!(
         fs::read_to_string(destination.join("clippy.toml")).unwrap(),
         "cognitive-complexity-threshold = 20\n"
     );
@@ -243,7 +247,8 @@ fn assert_rust_only_readme_and_config(destination: &Path, case: RustOnlyAcceptan
             "scripts/jig setup",
             "Setup creates `Cargo.lock`; commit it",
             "`clippy.toml` sets the project-owned",
-            "`cognitive_complexity` restriction lint",
+            "`cognitive_complexity` nursery lint",
+            "`mod_module_files` restriction lint",
             "treats all warnings as failures",
             "publish = false",
         ],
@@ -256,6 +261,13 @@ fn assert_rust_only_readme_and_config(destination: &Path, case: RustOnlyAcceptan
     let config = toml::from_str::<toml::Value>(&config_text).unwrap();
     assert_eq!(config["sqlx_enabled"].as_bool(), Some(false));
     assert_eq!(config["schema_dump_enabled"].as_bool(), Some(false));
+    assert!(
+        config["commands"]["workspace_clippy_command"]
+            .as_str()
+            .is_some_and(|command| command.contains(
+                "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files"
+            ))
+    );
     assert_eq!(
         config["rust_crate_roots"].as_array().unwrap(),
         &[toml::Value::String("crates".into())]

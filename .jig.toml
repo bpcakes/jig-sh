@@ -27,7 +27,7 @@ plugins = [
 source = "bpcakes/jig-skills"
 
 [commands]
-api_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+api_clippy_command = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files"
 api_fmt_command = "scripts/check-rust-format.sh"
 api_test_command = "cargo nextest run --workspace -P local --status-level fail --final-status-level fail"
 api_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' --status-level fail --final-status-level fail && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' --status-level fail --final-status-level fail && cargo nextest run -p jig-sh --test vault_tui --locked -j 1 --status-level fail --final-status-level fail"

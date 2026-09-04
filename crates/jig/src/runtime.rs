@@ -337,7 +337,6 @@ fn dispatch_check_with_observer(
             }),
         ),
         CheckCommand::AgentGuides => crate::policy::run_check(ctx, PolicyCheckCommand::AgentGuides),
-        CheckCommand::NoModRs => crate::policy::run_check(ctx, PolicyCheckCommand::NoModRs),
         CheckCommand::MigrationImmutability(opts) => crate::policy::run_check(
             ctx,
             PolicyCheckCommand::MigrationImmutability(MigrationImmutabilityInput {

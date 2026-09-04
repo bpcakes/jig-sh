@@ -651,7 +651,6 @@ run_ci_checks() {
     --comparison-exact-tree "$base_ref" \
     --comparison-provenance explicit \
     --no-receipt
-  run env JIG_DEV_BIN=target/debug/jig scripts/jig check no-mod-rs
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-map
   run env JIG_DEV_BIN=target/debug/jig scripts/jig check agent-guides
   check_launcher_template
