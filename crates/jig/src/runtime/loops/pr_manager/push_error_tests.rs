@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod push_error_tests {
+    #[cfg(target_os = "linux")]
+    use std::ffi::OsStr;
     #[cfg(unix)]
-    use std::ffi::{OsStr, OsString};
+    use std::ffi::OsString;
     #[cfg(unix)]
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
     #[cfg(unix)]
