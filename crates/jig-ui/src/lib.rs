@@ -9,6 +9,7 @@ pub mod dashboard;
 mod html;
 mod model;
 mod server;
+pub mod terminal;
 
 pub use model::*;
 pub use server::UiServer;

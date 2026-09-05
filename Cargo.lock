@@ -1645,9 +1645,13 @@ name = "jig-ui"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "crossterm",
  "getrandom 0.3.4",
  "jig-contract",
+ "jig-tui",
  "jig-ui",
+ "libc",
+ "ratatui",
  "serde",
  "serde_json",
  "subtle",

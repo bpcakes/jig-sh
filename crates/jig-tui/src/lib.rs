@@ -20,7 +20,7 @@ use crossterm::{
         enable_raw_mode,
     },
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 
 /// Requires both terminal input and output for a full-screen interface.
 pub fn require_terminal(command: &str, fallback: &str) -> Result<()> {
@@ -52,6 +52,24 @@ pub fn require_terminal_with_state(
 /// Returns true for key presses and repeats, excluding release-only events.
 pub const fn is_actionable_key(key: KeyEvent) -> bool {
     matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+}
+
+/// Clamps a Ratatui render area so its linear cell indexes fit in `u16`.
+///
+/// Ratatui 0.29 represents [`Rect::area`] as `u32`, but its buffer diff path
+/// still narrows cell positions to `u16`. Every Jig TUI should render and make
+/// layout decisions against this area rather than an unclamped frame area.
+pub const fn ratatui_render_area(area: Rect) -> Rect {
+    match u16::MAX.checked_div(area.width) {
+        None => area,
+        Some(safe_height) => Rect::new(area.x, area.y, area.width, {
+            if area.height < safe_height {
+                area.height
+            } else {
+                safe_height
+            }
+        }),
+    }
 }
 
 /// Replaces terminal control and unsafe directional-format characters in display text.
@@ -485,6 +503,19 @@ mod tests {
             KeyModifiers::NONE,
             KeyEventKind::Release
         )));
+    }
+
+    #[test]
+    fn ratatui_render_area_bounds_linear_cell_indices() {
+        let area = ratatui_render_area(Rect::new(0, 0, 608, 113));
+        assert_eq!(area, Rect::new(0, 0, 608, 107));
+        assert!(area.area() <= u32::from(u16::MAX));
+
+        assert_eq!(
+            ratatui_render_area(Rect::new(0, 0, 6_000, 20)),
+            Rect::new(0, 0, 6_000, 10)
+        );
+        assert_eq!(ratatui_render_area(Rect::ZERO), Rect::ZERO);
     }
 
     #[test]
