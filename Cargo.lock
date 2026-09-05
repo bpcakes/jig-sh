@@ -1580,7 +1580,6 @@ dependencies = [
  "jig-features",
  "jig-file-budget",
  "jig-owned-process",
- "jig-status-tui",
  "jig-tui",
  "jig-ui",
  "jig-vault",
@@ -1612,18 +1611,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jig-status-tui"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "jig-tui",
- "ratatui",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "jig-tui"
 version = "0.3.0"
 dependencies = [
@@ -1646,7 +1633,6 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "crossterm",
- "getrandom 0.3.4",
  "jig-contract",
  "jig-tui",
  "jig-ui",
@@ -1654,7 +1640,6 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "subtle",
  "time",
  "unicode-width 0.2.0",
 ]

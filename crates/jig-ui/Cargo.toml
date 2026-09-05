@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Internal loopback dashboard used by the matching jig-sh CLI release."
+description = "Internal terminal dashboard used by the matching jig-sh CLI release."
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 keywords = ["agents", "dashboard", "development-tools"]
-categories = ["command-line-utilities", "development-tools", "web-programming"]
+categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 name = "jig_ui"
@@ -20,13 +20,11 @@ test-support = []
 [dependencies]
 anyhow.workspace = true
 crossterm.workspace = true
-getrandom.workspace = true
 jig-contract.workspace = true
 jig-tui.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-subtle.workspace = true
 time.workspace = true
 unicode-width.workspace = true
 

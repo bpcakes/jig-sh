@@ -9,30 +9,13 @@ use jig_ui::dashboard::{
     DashboardSource, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest, TimelineLimit,
 };
 use jig_ui::terminal::{DashboardOptions, InitialTab};
-use jig_ui::{DashboardSnapshot, PlanSnapshot, SnapshotProvider, UiQuery, UiServer};
 
 use crate::cli::UiOpts;
 use crate::context::RepoContext;
 
-mod snapshot;
 mod source;
 
 pub(crate) use source::RepoDashboardSource;
-
-#[allow(dead_code)]
-pub(crate) const DEFAULT_UI_PORT: u16 = jig_ui::DEFAULT_UI_PORT;
-
-impl SnapshotProvider for RepoContext {
-    fn dashboard_snapshot(&self, query: UiQuery) -> Result<DashboardSnapshot> {
-        let current = crate::runtime::refreshed_repository_context(self)?;
-        snapshot::snapshot_with_query(&current, query)
-    }
-
-    fn plan_snapshot(&self, plan_id: &str) -> Result<Option<PlanSnapshot>> {
-        let current = crate::runtime::refreshed_repository_context(self)?;
-        snapshot::plan_snapshot(&current, plan_id)
-    }
-}
 
 pub(crate) fn run(ctx: RepoContext, opts: UiOpts, json_output: bool) -> Result<()> {
     let timeline_limit = usize::try_from(opts.effective_timeline_limit())
@@ -152,36 +135,6 @@ fn supervised<T>(operation: impl FnOnce(&dyn Fn() -> bool) -> Result<T>) -> Resu
     {
         operation(&|| false)
     }
-}
-
-#[allow(dead_code)]
-fn serve_legacy(ctx: &RepoContext, port: u16, json_output: bool) -> Result<()> {
-    let server = UiServer::bind(port)?;
-    let url = server.bootstrap_url();
-    let origin = server.origin().to_string();
-    let snapshot_path = server.snapshot_path();
-    if json_output {
-        println!(
-            "{}",
-            serde_json::json!({
-                "ok": true,
-                "command": "ui",
-                "url": url,
-                "origin": origin,
-                "snapshot_path": snapshot_path,
-            })
-        );
-    } else {
-        println!("Jig UI serving at {url} (Ctrl-C to stop)");
-        println!("Open this one-time URL to establish a browser session.");
-        println!("Snapshot API after sign-in: {origin}{snapshot_path}");
-    }
-    std::io::stdout().flush()?;
-    let result = server.serve(ctx);
-    if json_output {
-        return result.map_err(crate::cli::json_output_already_emitted);
-    }
-    result
 }
 
 #[cfg(test)]

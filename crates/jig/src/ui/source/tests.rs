@@ -73,6 +73,106 @@ fn recorder_request(mode: RecorderMode) -> RecorderRequest {
     }
 }
 
+fn relative_tree_paths(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn collect(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        paths: &mut Vec<std::path::PathBuf>,
+    ) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            paths.push(path.strip_prefix(root).unwrap().to_path_buf());
+            if path.is_dir() {
+                collect(root, &path, paths);
+            }
+        }
+    }
+
+    let mut paths = Vec::new();
+    collect(root, root, &mut paths);
+    paths.sort();
+    paths
+}
+
+#[test]
+fn recorder_on_uninitialized_state_creates_no_runtime_directories() {
+    let root = tempdir().unwrap();
+    TestRepoBuilder::new(root.path()).write();
+    let source = RepoDashboardSource::new(RepoContext::load_from(root.path()).unwrap());
+
+    let refresh = source
+        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
+        .unwrap();
+
+    assert!(refresh.recorder.ok);
+    assert!(!root.path().join(".agent/state").exists());
+    assert!(!root.path().join(".agent/plans").exists());
+    assert!(!root.path().join(".agent/.cache").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn recorder_reads_existing_read_only_state_without_creating_loop_cache() {
+    use std::os::unix::fs::PermissionsExt;
+
+    fn set_file_modes(root: &std::path::Path, mode: u32) {
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                set_file_modes(&path, mode);
+            } else {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        }
+    }
+
+    fn set_directory_modes(root: &std::path::Path, mode: u32) {
+        if !root.exists() {
+            return;
+        }
+        fs::set_permissions(root, fs::Permissions::from_mode(mode)).unwrap();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                set_directory_modes(&path, mode);
+            }
+        }
+    }
+
+    let (root, source) = source_fixture();
+    let agent = root.path().join(".agent");
+    let paths_before = relative_tree_paths(&agent);
+    set_file_modes(&agent, 0o444);
+    set_directory_modes(&agent, 0o555);
+
+    let result = source.recorder(recorder_request(RecorderMode::Refresh), &|| false);
+
+    set_directory_modes(&agent, 0o755);
+    set_file_modes(&agent, 0o644);
+    let refresh = result.unwrap();
+    assert!(refresh.recorder.ok);
+    assert!(!agent.join(".cache/loop").exists());
+    assert_eq!(relative_tree_paths(&agent), paths_before);
+}
+
+#[test]
+fn recorder_refreshes_repository_metadata_after_source_construction() {
+    let (root, source) = source_fixture();
+    let config_path = root.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace("repo_name = \"demo\"", "repo_name = \"RenamedExample\""),
+    )
+    .unwrap();
+
+    let refresh = source
+        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
+        .unwrap();
+
+    assert_eq!(refresh.recorder.repo.name, "RenamedExample");
+}
+
 #[test]
 fn recorder_refresh_pairs_one_epoch_and_reuse_performs_no_refresh() {
     let (_root, source) = source_fixture();

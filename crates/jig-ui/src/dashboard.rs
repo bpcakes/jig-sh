@@ -1,8 +1,7 @@
 //! Typed contracts for the unified terminal dashboard.
 //!
-//! These contracts are additive while the loopback dashboard remains the
-//! active implementation. They deliberately live below a namespace so the
-//! cutover can coexist with the legacy root-level web DTOs until routing moves.
+//! The CLI owns repository access and supplies data through these contracts;
+//! this crate owns only bounded projection and presentation.
 
 mod bounded;
 mod identity;

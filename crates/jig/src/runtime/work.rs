@@ -109,11 +109,6 @@ pub(super) fn dispatch_with_observer(
     }
 }
 
-/// Read-only gate status used by `jig ui`; same evaluation as `work gates`.
-pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Result<Value> {
-    gates::gates(ctx, WorkGatesRequest { plan_id })
-}
-
 pub(super) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],

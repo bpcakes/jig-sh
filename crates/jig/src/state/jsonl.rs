@@ -774,11 +774,12 @@ pub(super) fn scan_jsonl_raw_locked(
 }
 
 mod reverse;
-#[allow(unused_imports)]
+pub(super) use reverse::read_receipts_reverse;
 pub(crate) use reverse::read_receipts_reverse_with_cancellation;
-pub(super) use reverse::{read_receipt_window, read_receipts_reverse};
 #[cfg(test)]
-pub(super) use reverse::{read_receipt_window_with_bytes, receipts_for_plan_with_lock};
+pub(super) use reverse::{
+    read_receipt_window, read_receipt_window_with_bytes, receipts_for_plan_with_lock,
+};
 
 mod snapshot;
 use snapshot::*;

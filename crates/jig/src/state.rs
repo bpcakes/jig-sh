@@ -82,10 +82,6 @@ pub(crate) use support::set_test_now_ms;
 #[cfg(test)]
 use support::truncate;
 use support::{ensure_state_layout, new_id};
-pub(crate) use timeline::{
-    DecisionStreamRecord, PlanStreamEvent, ReceiptStreamRecord, StateStreams, plan_detail_streams,
-    plan_receipts, state_streams,
-};
 
 mod compression;
 mod diagnostics;
@@ -103,7 +99,6 @@ mod runs;
 mod session_compaction;
 mod sessions;
 mod support;
-mod timeline;
 
 pub(super) const MAINTENANCE_WRITER_COORDINATION_NOTE: &str = "Before applying a state rewrite, stop Jig processes launched with older runtimes that wrote through a pre-opened state-file handle. Current runtimes coordinate through the repository state lock.";
 

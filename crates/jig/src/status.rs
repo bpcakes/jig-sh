@@ -32,7 +32,6 @@ use crate::runtime::{
 use crate::state::{now_ms, state_summary_with_cancellation};
 
 pub(crate) mod git;
-pub(crate) mod tui;
 
 #[cfg(test)]
 use git::input_freshness;
@@ -51,6 +50,7 @@ pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {
     snapshot_with_cancellation(ctx, &|| false)
 }
 
+#[cfg(any(not(unix), test))]
 pub(crate) fn snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,

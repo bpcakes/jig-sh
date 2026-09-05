@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use super::*;
 
+#[cfg(test)]
 pub(in crate::state) fn read_receipt_window(
     path: &Path,
     limit: usize,
@@ -44,9 +45,8 @@ pub(in crate::state) fn read_receipts_reverse(
     })
 }
 
-// Task B2 wires this into the worker-owned dashboard source. Keeping the
-// primitive separate prevents today's uncancellable web path from polling.
-#[allow(dead_code)]
+// Dashboard collection uses nonblocking lock acquisition so cancellation can
+// interrupt a reader waiting behind a state writer.
 pub(crate) fn read_receipts_reverse_with_cancellation(
     path: &Path,
     limit: usize,

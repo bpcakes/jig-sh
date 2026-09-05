@@ -10,6 +10,35 @@ use crate::state::{ReceiptInput, record_receipt};
 use super::{recorder_request, source_fixture};
 
 #[test]
+fn invalid_utf8_plan_body_is_a_typed_partial_error() {
+    let (root, source) = source_fixture();
+    let epoch = source
+        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
+        .unwrap()
+        .recorder
+        .epoch_id;
+    fs::write(root.path().join(".agent/plans/plan_example.md"), [0xff]).unwrap();
+
+    let PlanSnapshotResult::Found(plan) = source
+        .plan(
+            PlanBasis::RecorderEpoch(epoch),
+            "plan_example".to_string(),
+            &|| false,
+        )
+        .unwrap()
+    else {
+        panic!("open plan should remain available");
+    };
+
+    assert!(plan.body.is_none());
+    assert!(plan.errors.iter().any(|error| {
+        error.scope() == CollectionDomain::Body.as_str()
+            && error.code() == "body_invalid_utf8"
+            && error.subject_id() == Some("plan_example")
+    }));
+}
+
+#[test]
 fn open_and_closed_plan_details_use_the_epoch_basis_and_bounded_single_pass_reads() {
     let (root, source) = source_fixture();
     let decisions = (0..=LimitId::PlanDecisions.ceiling())

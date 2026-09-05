@@ -1,8 +1,7 @@
 //! Unified read-only terminal dashboard.
 //!
-//! The terminal application is additive while the legacy HTTP dashboard and
-//! status TUI remain routed. Its source boundary is owned by the matching
-//! `jig-sh` release; this crate owns only application state and presentation.
+//! Its source boundary is owned by the matching `jig-sh` release; this crate
+//! owns only application state and presentation.
 
 use std::time::Duration;
 

@@ -72,10 +72,6 @@ fn recursive_legacy_session_summaries_stay_readable_and_append_shallow_history()
         "legacy-session"
     );
     assert!(summary["recent_sessions"][0]["summary"].is_null());
-    let streams = state_streams(&ctx, 10).unwrap();
-    assert_eq!(streams.session_events.len(), 1);
-    assert_eq!(streams.session_events[0].event, "start");
-    assert_eq!(streams.session_events[0].session_id, "legacy-session");
     assert_eq!(fs::read(&sessions_path).unwrap(), original);
 
     let started = session_start(&ctx).unwrap();

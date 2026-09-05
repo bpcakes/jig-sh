@@ -20,7 +20,6 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-dev-proxy"
   "jig-tui"
   "jig-vault-tui"
-  "jig-status-tui"
   "jig-codex-tui"
   "jig-ui"
   "$PACKAGE_NAME"
@@ -102,7 +101,6 @@ crate_dir_for_package() {
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
     jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-vault-tui) printf '%s\n' "crates/jig-vault-tui" ;;
-    jig-status-tui) printf '%s\n' "crates/jig-status-tui" ;;
     jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;

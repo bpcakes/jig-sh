@@ -1,0 +1,126 @@
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn manifest(path: &Path) -> toml::Value {
+    toml::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn workspace_and_release_exclude_the_obsolete_status_package() {
+    let root = repo_root();
+    let workspace = manifest(&root.join("Cargo.toml"));
+    let members = workspace["workspace"]["members"].as_array().unwrap();
+    assert!(
+        members
+            .iter()
+            .all(|member| member.as_str() != Some("crates/jig-status-tui"))
+    );
+    assert!(
+        workspace["workspace"]["dependencies"]
+            .get("jig-status-tui")
+            .is_none()
+    );
+
+    let cli = manifest(&root.join("crates/jig/Cargo.toml"));
+    assert!(cli["dependencies"].get("jig-status-tui").is_none());
+    assert!(!root.join("crates/jig-status-tui").exists());
+
+    let release = fs::read_to_string(root.join("scripts/release.sh")).unwrap();
+    assert!(!release.contains("jig-status-tui"));
+}
+
+#[test]
+fn dashboard_manifest_has_no_web_only_direct_dependencies() {
+    let root = repo_root();
+    let dashboard = manifest(&root.join("crates/jig-ui/Cargo.toml"));
+    let mut dependencies = BTreeSet::new();
+    collect_dependency_names(&dashboard, &mut dependencies);
+
+    // These are the template, capability-randomness, and constant-time
+    // comparison crates used by the retired dashboard server.
+    for dependency in ["askama", "getrandom", "subtle"] {
+        assert!(
+            !dependencies.contains(dependency),
+            "jig-ui must not directly depend on web-only crate {dependency}"
+        );
+    }
+}
+
+#[test]
+fn production_tree_contains_no_http_surface() {
+    let root = repo_root();
+    for relative in [
+        "crates/jig-ui/src/server.rs",
+        "crates/jig-ui/src/html.rs",
+        "crates/jig-ui/src/html",
+        "crates/jig-ui/src/model.rs",
+        "crates/jig/src/ui/snapshot.rs",
+        "crates/jig/src/status/tui.rs",
+    ] {
+        assert!(
+            !root.join(relative).exists(),
+            "retired dashboard source remains at {relative}"
+        );
+    }
+
+    let dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    let mut cli_source = fs::read_to_string(root.join("crates/jig/src/ui.rs")).unwrap();
+    cli_source.push_str(&read_rust_tree(&root.join("crates/jig/src/ui")));
+    cli_source.push_str(&fs::read_to_string(root.join("crates/jig/src/status.rs")).unwrap());
+    cli_source.push_str(&read_rust_tree(&root.join("crates/jig/src/status")));
+    for forbidden in [
+        "TcpListener",
+        "UiServer",
+        "SnapshotProvider",
+        "DEFAULT_UI_PORT",
+        "HttpResponse",
+        "SESSION_COOKIE",
+    ] {
+        assert!(
+            !dashboard_source.contains(forbidden) && !cli_source.contains(forbidden),
+            "retired dashboard server symbol remains: {forbidden}"
+        );
+    }
+}
+
+fn collect_dependency_names(value: &toml::Value, names: &mut BTreeSet<String>) {
+    let Some(table) = value.as_table() else {
+        return;
+    };
+    for (key, value) in table {
+        if matches!(
+            key.as_str(),
+            "dependencies" | "dev-dependencies" | "build-dependencies"
+        ) {
+            names.extend(value.as_table().unwrap().keys().cloned());
+        } else {
+            collect_dependency_names(value, names);
+        }
+    }
+}
+
+fn read_rust_tree(root: &Path) -> String {
+    let mut pending = vec![root.to_path_buf()];
+    let mut paths = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+}

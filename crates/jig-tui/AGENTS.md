@@ -13,7 +13,7 @@
 - Change raw-mode, alternate-screen, cursor, or restoration behavior: `src/lib.rs` in `TerminalSession`.
 - Change shared worker cancellation or joining behavior: `src/lib.rs` in `CooperativeWorker`.
 - Change terminal-safe text handling: `src/lib.rs` in `sanitize_text`.
-- Change status-specific interaction: `crates/jig-status-tui/`.
+- Change unified dashboard interaction: `crates/jig-ui/`.
 - Change Codex-picker interaction: `crates/jig-codex-tui/`.
 - Change Vault-manager interaction: `crates/jig-vault-tui/`.
 
@@ -29,6 +29,6 @@
 
 - `cargo test -p jig-tui`
 - `cargo clippy -p jig-tui --all-targets -- -D warnings`
-- `cargo test -p jig-status-tui`
+- `cargo test -p jig-ui`
 - `cargo test -p jig-codex-tui`
 - `cargo test -p jig-vault-tui`

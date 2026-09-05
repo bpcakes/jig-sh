@@ -12,10 +12,9 @@
 - `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
 - `src/mcp.rs`: JSON-RPC/MCP stdio server.
 - `src/state.rs`: sessions, plans, receipts, and decisions stored under `.agent/state`.
-- `src/ui.rs`: `jig ui` CLI adapter for the separately owned `jig-ui` server and presentation crate.
-- `src/ui/snapshot.rs`: joins Jig-owned state, work-gate, and loop data for the UI provider boundary.
+- `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
+- `src/ui/source.rs`: typed recorder, plan, and status source with retained local epochs.
 - `src/status.rs`: configured status-provider execution, validation, freshness, and aggregate snapshots.
-- `src/status/tui.rs`: adapter from cancellable aggregate snapshots to the separately owned `jig-status-tui` crate.
 - `src/runtime/vault/tui.rs`: fixed-scope, process-local credential adapter for the separately owned `jig-vault-tui` crate.
 - `src/bootstrap.rs`: init/adopt/update command surface.
 - `src/bootstrap/`: bootstrap support for native template rendering, git, staged renders, and template-source handling.
@@ -26,10 +25,10 @@
 - Change make-tool behavior or receipt recording around command execution: `src/runtime.rs`.
 - Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
 - Change session, plan, receipt, or decision persistence: `src/state.rs`.
-- Change the data exposed by `jig ui`: `src/ui/snapshot.rs`.
-- Change `jig ui` routes, query parsing, server behavior, or rendering: `crates/jig-ui/`.
+- Change the data exposed by the unified dashboard: `src/ui/source/`.
+- Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.
 - Change status provider execution or aggregate facts: `src/status.rs` and `src/status/`.
-- Change terminal status navigation, refresh runtime, or rendering: `crates/jig-status-tui/`.
+- Change terminal status navigation, refresh runtime, or rendering: `crates/jig-ui/src/terminal/`.
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: `src/process.rs` and
   `src/process/tests.rs`.
