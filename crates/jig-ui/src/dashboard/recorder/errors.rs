@@ -14,6 +14,8 @@ pub const SNAPSHOT_ERROR_SCOPES: &[&str] = &[
 ];
 pub const SNAPSHOT_ERROR_CODES: &[&str] = &[
     "git_observation_failed",
+    "git_upstream_comparison_failed",
+    "git_upstream_output_invalid",
     "stream_open_failed",
     "stream_read_failed",
     "record_too_large",
@@ -102,6 +104,8 @@ impl<'de> Deserialize<'de> for SnapshotError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SnapshotErrorCode {
     GitObservationFailed,
+    GitUpstreamComparisonFailed,
+    GitUpstreamOutputInvalid,
     StreamOpenFailed,
     StreamReadFailed,
     RecordTooLarge,
@@ -121,6 +125,8 @@ impl SnapshotErrorCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GitObservationFailed => "git_observation_failed",
+            Self::GitUpstreamComparisonFailed => "git_upstream_comparison_failed",
+            Self::GitUpstreamOutputInvalid => "git_upstream_output_invalid",
             Self::StreamOpenFailed => "stream_open_failed",
             Self::StreamReadFailed => "stream_read_failed",
             Self::RecordTooLarge => "record_too_large",

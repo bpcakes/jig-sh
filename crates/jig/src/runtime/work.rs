@@ -122,6 +122,11 @@ pub(super) fn open_plan_gate_snapshots_with_cancellation(
     gates::open_plan_snapshots_with_cancellation(ctx, plan_ids, cancelled)
 }
 
+pub(crate) use gates::{
+    DashboardGateReport, dashboard_gate_receipt_indexes,
+    dashboard_open_plan_reports_with_cancellation,
+};
+
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     // Resolve and validate all caller-controlled plan input before starting a
     // durable session. CLI parsing catches common conflicts, while this keeps

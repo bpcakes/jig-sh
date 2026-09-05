@@ -12,6 +12,22 @@ use serde::Serialize;
 
 use super::sanitize_observer_environment;
 
+#[cfg(test)]
+thread_local! {
+    static GIT_OBSERVATION_COUNTS: std::cell::RefCell<BTreeMap<std::path::PathBuf, usize>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_git_observation_counts() {
+    GIT_OBSERVATION_COUNTS.with(|counts| counts.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn git_observation_count(path: &Path) -> usize {
+    GIT_OBSERVATION_COUNTS.with(|counts| counts.borrow().get(path).copied().unwrap_or(0))
+}
+
 const GIT_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const GIT_STDERR_LIMIT: usize = 64 * 1024;
@@ -32,6 +48,21 @@ pub(super) struct InputFreshness {
     dirty: Option<bool>,
     pub(super) status: &'static str,
     reason: Option<String>,
+}
+
+impl InputFreshness {
+    pub(super) fn into_dashboard(self) -> jig_ui::dashboard::InputFreshness {
+        jig_ui::dashboard::InputFreshness {
+            name: self.name,
+            kind: self.kind,
+            path: self.path,
+            expected_revision: self.expected_revision,
+            observed_revision: self.observed_revision,
+            dirty: self.dirty,
+            status: self.status.to_string(),
+            reason: self.reason,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -110,6 +141,11 @@ pub(super) fn observe_git_checkout_with_cancellation(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<GitCheckoutObservation, GitProbeError> {
+    #[cfg(test)]
+    GIT_OBSERVATION_COUNTS.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        *counts.entry(path.to_path_buf()).or_default() += 1;
+    });
     let mut errors = Vec::new();
     let revision =
         match git_text_with_cancellation(path, &["rev-parse", "--verify", "HEAD"], cancelled) {

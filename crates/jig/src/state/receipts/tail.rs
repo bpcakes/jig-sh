@@ -427,7 +427,8 @@ fn work_review_receipt_status(receipt: &ReceiptRecord) -> WorkReviewReceiptStatu
 }
 
 fn work_review_receipt_evidence(evidence: &Value) -> WorkReviewReceiptEvidence {
-    let retained_finding_count = evidence["findings"].as_array().map(Vec::len);
+    let finding_values = evidence["findings"].as_array();
+    let retained_finding_count = finding_values.map(Vec::len);
     let retained_actionable_count = evidence["actionable_findings"].as_array().map(Vec::len);
     let mut parse_error = evidence["parse_error"].as_str().map(str::to_string);
     if parse_error.is_none() && evidence["status"].as_str().is_none() {
@@ -445,6 +446,27 @@ fn work_review_receipt_evidence(evidence: &Value) -> WorkReviewReceiptEvidence {
     {
         parse_error = Some("review evidence actionable_findings is not an array".into());
     }
+    let mut findings = Vec::new();
+    for finding in finding_values.into_iter().flatten() {
+        let Some(message) = finding.get("issue").and_then(Value::as_str) else {
+            continue;
+        };
+        let code = finding
+            .get("fingerprint")
+            .and_then(Value::as_str)
+            .or_else(|| finding.get("severity").and_then(Value::as_str))
+            .unwrap_or("review_finding")
+            .to_string();
+        findings.push(super::WorkReviewFinding {
+            code,
+            message: message.to_string(),
+            path: finding
+                .get("path")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            line: finding.get("line").and_then(Value::as_u64),
+        });
+    }
     WorkReviewReceiptEvidence {
         status: evidence["status"].as_str().map(str::to_string),
         finding_count: evidence["raw_finding_count"]
@@ -458,6 +480,7 @@ fn work_review_receipt_evidence(evidence: &Value) -> WorkReviewReceiptEvidence {
         findings_truncated: evidence["findings_truncated"].as_bool(),
         actionable_findings_truncated: evidence["actionable_findings_truncated"].as_bool(),
         threshold: evidence["threshold"].as_str().map(str::to_string),
+        findings,
         parse: parse_error.map_or(
             WorkReviewEvidenceParse::Valid,
             WorkReviewEvidenceParse::Invalid,
@@ -465,7 +488,7 @@ fn work_review_receipt_evidence(evidence: &Value) -> WorkReviewReceiptEvidence {
     }
 }
 
-pub(super) fn receipt_diff_summary(receipt: &ReceiptRecord) -> String {
+pub(crate) fn receipt_diff_summary(receipt: &ReceiptRecord) -> String {
     if receipt.git_status_error.is_some() || receipt.git_diff_stat_error.is_some() {
         return "git metadata unavailable".to_string();
     }

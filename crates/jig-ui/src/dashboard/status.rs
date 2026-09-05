@@ -282,12 +282,16 @@ impl Serialize for StatusGate {
             }
             .serialize(serializer),
             Self::Unsupported(fields) => {
-                let mut map = serializer.serialize_map(Some(5 + fields.extensions.len()))?;
+                let mut map = serializer.serialize_map(Some(
+                    4 + usize::from(fields.reason.is_some()) + fields.extensions.len(),
+                ))?;
                 map.serialize_entry("kind", &fields.kind)?;
                 map.serialize_entry("id", &fields.id)?;
                 map.serialize_entry("required", &fields.required)?;
                 map.serialize_entry("status", &fields.status)?;
-                map.serialize_entry("reason", &fields.reason)?;
+                if let Some(reason) = &fields.reason {
+                    map.serialize_entry("reason", reason)?;
+                }
                 for (key, value) in &fields.extensions {
                     if !matches!(
                         key.as_str(),
@@ -404,7 +408,7 @@ pub struct StatusCheckGate {
 pub struct StatusEvidenceGate {
     pub id: String,
     pub required: bool,
-    pub target: Option<jig_contract::TargetId>,
+    pub target: Option<String>,
     pub profile: Option<String>,
     pub conclusion: String,
     pub status: String,

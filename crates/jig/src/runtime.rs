@@ -155,6 +155,20 @@ pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     work::open_plan_gate_snapshots_with_cancellation(&current, plan_ids, cancelled)
 }
 
+pub(crate) use work::{DashboardGateReport, dashboard_gate_receipt_indexes};
+
+pub(crate) fn dashboard_open_plan_reports_with_cancellation(
+    ctx: &RepoContext,
+    baselines: &std::collections::BTreeMap<String, Option<crate::state::PlanBaseline>>,
+    indexes: std::collections::BTreeMap<String, crate::state::WorkGateReceiptIndex>,
+    plan_state: &'static str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<std::collections::BTreeMap<String, DashboardGateReport>> {
+    work::dashboard_open_plan_reports_with_cancellation(
+        ctx, baselines, indexes, plan_state, cancelled,
+    )
+}
+
 pub(crate) fn refreshed_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
     let current = RepoContext::load_from_root(ctx.root().to_path_buf())
         .context("Failed to refresh repository authority")?;
@@ -178,6 +192,17 @@ pub(crate) fn loop_status_snapshot_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     loops::status_with_cancellation(
+        ctx,
+        crate::command::LoopStatusRequest { workflow: None },
+        cancelled,
+    )
+}
+
+pub(crate) fn typed_loop_status_snapshot_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+    loops::typed_status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },
         cancelled,

@@ -7,7 +7,7 @@ use jig_ui::dashboard::{
     SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, SnapshotError, SnapshotErrorCode, SourceError,
     TimelineLimit, root_limit, scenarios, validate_input_bytes,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[test]
 fn recorder_schema_one_matches_checked_in_golden() {
@@ -73,6 +73,36 @@ fn status_contract_has_the_existing_schema_one_root() {
 }
 
 #[test]
+fn status_gate_wire_shapes_preserve_legacy_target_and_optional_reason() {
+    let evidence = json!({
+        "kind": "evidence",
+        "id": "api-evidence",
+        "required": true,
+        "target": "api:test",
+        "profile": null,
+        "conclusion": "success",
+        "status": "passed",
+        "run_id": null,
+        "freshness": "fresh",
+        "freshness_reason": "current",
+        "targets": []
+    });
+    let decoded: jig_ui::dashboard::StatusGate = serde_json::from_value(evidence.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), evidence);
+
+    let unsupported = json!({
+        "kind": "future_gate",
+        "id": "future",
+        "required": false,
+        "status": "unsupported",
+        "future": 7
+    });
+    let decoded: jig_ui::dashboard::StatusGate =
+        serde_json::from_value(unsupported.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), unsupported);
+}
+
+#[test]
 fn accepted_provider_report_serializes_the_exact_raw_document_only() {
     let raw = scenarios::provider_raw_report();
     let accepted = AcceptedProviderReport::from_raw(raw.clone()).unwrap();
@@ -129,25 +159,43 @@ fn raw_identity_controls_selection_when_display_text_collides() {
 
 #[test]
 fn unsupported_status_gate_kinds_round_trip_without_loss() {
-    for wire in [
-        serde_json::json!({
+    for (wire, expected) in [
+        (
+            serde_json::json!({
             "kind": "future_gate",
             "id": "future",
             "required": true,
             "status": "unsupported",
             "reason": "new producer kind",
             "future_policy": {"mode": "strict"}
-        }),
-        serde_json::json!({
-            "kind": "check",
-            "id": "future-check-shape",
-            "required": false,
-            "status": "unsupported",
-            "reason": null
-        }),
+            }),
+            serde_json::json!({
+                "kind": "future_gate",
+                "id": "future",
+                "required": true,
+                "status": "unsupported",
+                "reason": "new producer kind",
+                "future_policy": {"mode": "strict"}
+            }),
+        ),
+        (
+            serde_json::json!({
+                "kind": "check",
+                "id": "future-check-shape",
+                "required": false,
+                "status": "unsupported",
+                "reason": null
+            }),
+            serde_json::json!({
+                "kind": "check",
+                "id": "future-check-shape",
+                "required": false,
+                "status": "unsupported"
+            }),
+        ),
     ] {
-        let decoded: jig_ui::dashboard::StatusGate = serde_json::from_value(wire.clone()).unwrap();
-        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+        let decoded: jig_ui::dashboard::StatusGate = serde_json::from_value(wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
     }
 }
 
@@ -320,7 +368,7 @@ fn error_scope_and_code_registries_are_exact_and_unique() {
         ]
     );
     assert_eq!(SNAPSHOT_ERROR_SCOPES.len(), 8);
-    assert_eq!(SNAPSHOT_ERROR_CODES.len(), 13);
+    assert_eq!(SNAPSHOT_ERROR_CODES.len(), 15);
     assert_eq!(
         SNAPSHOT_ERROR_CODES
             .iter()

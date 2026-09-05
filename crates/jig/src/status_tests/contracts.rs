@@ -46,14 +46,14 @@ fn decoder_preserves_additive_fields_and_builds_normalized_summary() {
     )
     .unwrap();
 
-    assert_eq!(decoded.raw["future_report_field"]["kept"], true);
+    assert_eq!(decoded.raw()["future_report_field"]["kept"], true);
     assert_eq!(
-        decoded.raw["provider"]["future_provider_field"],
+        decoded.raw()["provider"]["future_provider_field"],
         "also kept"
     );
-    let summary = serde_json::to_value(ProviderSummary::from_report(&decoded.decoded)).unwrap();
+    let summary = serde_json::to_value(ProviderSummary::from_report(decoded.decoded())).unwrap();
     let dashboard_summary = serde_json::to_value(jig_ui::dashboard::ProviderSummary::from_report(
-        &decoded.decoded,
+        decoded.decoded(),
     ))
     .unwrap();
     assert_eq!(dashboard_summary, summary);

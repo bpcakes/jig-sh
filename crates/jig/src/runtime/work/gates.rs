@@ -777,12 +777,6 @@ fn evaluate_gate_report_from_index(
     })
 }
 
-struct GateReportPlanInput<'a> {
-    plan_id: &'a str,
-    plan_state: &'static str,
-    prepared_scope: Option<PlanGateContext>,
-}
-
 pub(super) fn open_plan_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],
@@ -885,6 +879,12 @@ fn plan_change_cache_key(baseline: &PlanBaseline) -> Option<String> {
 
 include!("gates/tail.rs");
 
+mod dashboard;
+use dashboard::GateReportPlanInput;
+pub(crate) use dashboard::{
+    DashboardGateReport, gate_receipt_indexes as dashboard_gate_receipt_indexes,
+    open_plan_reports_with_cancellation as dashboard_open_plan_reports_with_cancellation,
+};
 mod target_evidence;
 
 fn repository_for_evidence_gates(

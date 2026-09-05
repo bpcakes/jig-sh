@@ -23,12 +23,28 @@ use super::records::ReceiptRecord;
 const JSONL_READ_CHUNK: usize = 16 * 1024;
 pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    static DASHBOARD_SCAN_COUNTS: std::cell::RefCell<std::collections::BTreeMap<PathBuf, usize>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_dashboard_scan_counts() {
+    DASHBOARD_SCAN_COUNTS.with(|counts| counts.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(crate) fn dashboard_scan_count(path: &Path) -> usize {
+    DASHBOARD_SCAN_COUNTS.with(|counts| counts.borrow().get(path).copied().unwrap_or(0))
+}
+
 #[derive(Clone, Copy, Debug)]
-pub(super) struct RawJsonlRecord<'a> {
-    pub(super) line_number: u64,
-    pub(super) start_offset: u64,
-    pub(super) bytes: &'a [u8],
-    pub(super) terminated: bool,
+pub(crate) struct RawJsonlRecord<'a> {
+    pub(crate) line_number: u64,
+    pub(crate) start_offset: u64,
+    pub(crate) bytes: &'a [u8],
+    pub(crate) terminated: bool,
 }
 
 #[derive(Debug)]
@@ -76,7 +92,7 @@ impl std::fmt::Display for JsonlRecordTooLarge {
 impl std::error::Error for JsonlRecordTooLarge {}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct JsonlScanStats {
+pub(crate) struct JsonlScanStats {
     pub(super) file_bytes: u64,
     pub(super) physical_lines: u64,
     pub(super) records: u64,
@@ -530,6 +546,12 @@ pub(crate) fn scan_dashboard_jsonl_raw(
     cancelled: &dyn Fn() -> bool,
     visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
 ) -> Result<JsonlScanStats> {
+    #[cfg(test)]
+    DASHBOARD_SCAN_COUNTS.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        let count = counts.entry(path.to_path_buf()).or_default();
+        *count = count.saturating_add(1);
+    });
     scan_jsonl_raw_with_limit(path, cancelled, Some(DASHBOARD_JSONL_RECORD_BYTES), visitor)
 }
 

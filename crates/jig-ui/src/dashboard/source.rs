@@ -179,6 +179,7 @@ impl CollectionDomain {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceError {
     Cancelled,
+    NoCurrentEpoch,
     Collection {
         domain: CollectionDomain,
         message: String,
@@ -192,6 +193,7 @@ impl fmt::Display for SourceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cancelled => formatter.write_str("dashboard collection cancelled"),
+            Self::NoCurrentEpoch => formatter.write_str("no recorder epoch is available for reuse"),
             Self::Collection { domain, message } => {
                 write!(
                     formatter,

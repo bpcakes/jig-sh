@@ -12,6 +12,10 @@ pub(crate) use execution_leases::{
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
+pub(crate) use jsonl::read_receipts_reverse_with_cancellation;
+pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl_raw};
+#[cfg(test)]
+pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
 pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, plan_body_path, read_plan_body};
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
@@ -24,12 +28,13 @@ pub(crate) use plans::{
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
 #[cfg(test)]
 pub(crate) use receipts::receipt_append_may_have_landed_for_test;
+pub(crate) use receipts::receipt_diff_summary;
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ReusableWorkCheckEvidence, ReusableWorkCheckQuery,
     TargetReceiptStatus, ToolReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence,
     WorkCheckGateEvidence, WorkCheckGateReceiptStatus, WorkGateReceiptIndex,
-    WorkReviewReceiptEvidence, WorkReviewReceiptStatus, current_worktree_fingerprint,
-    current_worktree_fingerprint_for_receipt_with_cancellation,
+    WorkGateReceiptIndexes, WorkReviewFinding, WorkReviewReceiptEvidence, WorkReviewReceiptStatus,
+    current_worktree_fingerprint, current_worktree_fingerprint_for_receipt_with_cancellation,
     current_worktree_fingerprint_with_cancellation,
     reusable_work_check_evidence_batch_with_cancellation, time_validity_is_current,
     work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
@@ -50,6 +55,10 @@ pub(crate) use receipts::{
 };
 use records::DecisionRecord;
 pub(crate) use records::PlanBaseline;
+pub(crate) use records::{
+    DecisionRecord as DashboardDecisionRecord, PlanEvent as DashboardPlanEvent,
+    ReceiptRecord as DashboardReceiptRecord, SessionEventEnvelope as DashboardSessionEvent,
+};
 #[cfg(test)]
 use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
@@ -64,9 +73,12 @@ pub(crate) use runs::{start_run, start_run_with_event_cursor};
 use sessions::build_summary;
 pub(crate) use sessions::current_session;
 pub(crate) use sessions::{
-    SessionEndRequest, session_end, session_start, state_summary, state_summary_with_cancellation,
+    SessionEndRequest, public_source_path, session_end, session_start, state_summary,
+    state_summary_with_cancellation,
 };
 pub(crate) use support::now_ms;
+#[cfg(test)]
+pub(crate) use support::set_test_now_ms;
 #[cfg(test)]
 use support::truncate;
 use support::{ensure_state_layout, new_id};

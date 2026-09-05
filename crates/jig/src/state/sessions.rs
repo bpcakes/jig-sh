@@ -23,7 +23,7 @@ use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
 
-fn public_source_path(ctx: &RepoContext) -> String {
+pub(crate) fn public_source_path(ctx: &RepoContext) -> String {
     redact_repository_root(ctx.source_path(), &repository_root_spellings(ctx.root()))
 }
 

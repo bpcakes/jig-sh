@@ -15,6 +15,11 @@ use crate::cli::UiOpts;
 use crate::context::RepoContext;
 
 mod snapshot;
+#[allow(dead_code)]
+mod source;
+
+#[allow(unused_imports)]
+pub(crate) use source::RepoDashboardSource;
 
 pub(crate) const DEFAULT_UI_PORT: u16 = jig_ui::DEFAULT_UI_PORT;
 

@@ -126,7 +126,7 @@ fn runner_accepts_one_valid_document_and_never_trusts_nonzero_stdout() {
 
     let valid = provider(vec!["cat".into(), report.display().to_string()]);
     let output = run_provider_inner(temp.path(), &valid).unwrap();
-    assert_eq!(output.decoded.provider.id, PROVIDER_ID);
+    assert_eq!(output.decoded().provider.id, PROVIDER_ID);
 
     let read_only_git = provider(vec![
         "sh".into(),
@@ -134,7 +134,7 @@ fn runner_accepts_one_valid_document_and_never_trusts_nonzero_stdout() {
         "test \"$GIT_OPTIONAL_LOCKS\" = 0 && cat report.json".into(),
     ]);
     let output = run_provider_inner(temp.path(), &read_only_git).unwrap();
-    assert_eq!(output.decoded.provider.id, PROVIDER_ID);
+    assert_eq!(output.decoded().provider.id, PROVIDER_ID);
 
     let failed = provider(vec![
         "sh".into(),

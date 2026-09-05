@@ -23,9 +23,9 @@ mod status;
 mod unexecuted;
 
 pub(super) use maintenance::{acknowledge_occurrence, clear_attempt};
-pub(super) use status::status_with_cancellation;
 #[cfg(test)]
 pub(super) use status::{status, status_at_with_cancellation};
+pub(super) use status::{status_with_cancellation, typed_status_with_cancellation};
 
 use manual_occurrence::ManualOccurrenceGuard;
 use runtime_state::{TickRuntimeState, append_tick_error};

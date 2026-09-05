@@ -13,6 +13,7 @@ use jig_owned_process::{
     OwnedProcessTreeError, ProcessOutputLimits, format_exit_status,
     run_owned_process_tree_with_output_limits,
 };
+use jig_ui::dashboard::{AcceptedProviderReport, ProviderReportError};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -30,7 +31,7 @@ use crate::runtime::{
 };
 use crate::state::{now_ms, state_summary_with_cancellation};
 
-mod git;
+pub(crate) mod git;
 pub(crate) mod tui;
 
 #[cfg(test)]
@@ -615,11 +616,7 @@ struct ProviderRun {
     failure: Option<ProviderFailure>,
 }
 
-#[derive(Debug)]
-struct ValidatedReport {
-    raw: Value,
-    decoded: Report,
-}
+type ValidatedReport = AcceptedProviderReport;
 
 #[derive(Serialize)]
 struct ProviderSnapshot {
@@ -868,40 +865,36 @@ fn decode_report(
         stderr: None,
         stderr_truncated: false,
     })?;
-    let decoded =
-        serde_json::from_value::<Report>(raw.clone()).map_err(|error| ProviderFailure {
-            code: "invalid_report",
-            message: format!(
-                "Status provider '{}' did not emit a jig.status-provider/v1 report: {error}",
+    let accepted = AcceptedProviderReport::from_raw(raw).map_err(|error| ProviderFailure {
+        code: "invalid_report",
+        message: match error {
+            ProviderReportError::Decode(message) => format!(
+                "Status provider '{}' did not emit a jig.status-provider/v1 report: {message}",
                 provider.id
             ),
-            exit_status: None,
-            stderr: None,
-            stderr_truncated: false,
-        })?;
-    decoded.validate().map_err(|error| ProviderFailure {
-        code: "invalid_report",
-        message: format!(
-            "Status provider '{}' emitted an invalid report: {error}",
-            provider.id
-        ),
+            ProviderReportError::Validation(message) => format!(
+                "Status provider '{}' emitted an invalid report: {message}",
+                provider.id
+            ),
+        },
         exit_status: None,
         stderr: None,
         stderr_truncated: false,
     })?;
-    if decoded.provider.id != provider.id {
+    if accepted.decoded().provider.id != provider.id {
         return Err(ProviderFailure {
             code: "provider_id_mismatch",
             message: format!(
                 "Configured status provider id '{}' does not match report provider id '{}'",
-                provider.id, decoded.provider.id
+                provider.id,
+                accepted.decoded().provider.id
             ),
             exit_status: None,
             stderr: None,
             stderr_truncated: false,
         });
     }
-    Ok(ValidatedReport { raw, decoded })
+    Ok(accepted)
 }
 
 fn sanitize_observer_environment(command: &mut Command) {
@@ -934,12 +927,12 @@ fn provider_snapshot(
             error: run.failure,
         });
     };
-    let status = match report.decoded.outcome {
+    let status = match report.decoded().outcome {
         Outcome::Complete => "complete",
         Outcome::Partial => "partial",
     };
-    let mut freshness = Vec::with_capacity(report.decoded.inputs.len());
-    for input in &report.decoded.inputs {
+    let mut freshness = Vec::with_capacity(report.decoded().inputs.len());
+    for input in &report.decoded().inputs {
         ensure_collection_active(cancelled)?;
         freshness.push(propagate_git_cancellation(
             input_freshness_with_cancellation(root, input, git_inputs, cancelled),
@@ -950,12 +943,18 @@ fn provider_snapshot(
         id: run.id,
         status,
         duration_ms: run.duration_ms,
-        summary: Some(ProviderSummary::from_report(&report.decoded)),
-        report: Some(report.raw),
+        summary: Some(ProviderSummary::from_report(report.decoded())),
+        report: Some(report.raw().clone()),
         input_freshness: freshness,
         error: None,
     })
 }
+
+mod dashboard;
+pub(crate) use dashboard::{
+    provider_snapshot_with_cancellation as dashboard_provider_snapshot_with_cancellation,
+    repository_snapshot_with_cancellation as dashboard_repository_snapshot_with_cancellation,
+};
 
 mod summary;
 use summary::ProviderSummary;

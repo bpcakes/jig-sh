@@ -9,7 +9,7 @@ use crate::git_receipts::DiffStat;
 use jig_contract::{Finding, RunConclusion, RunPlan, TargetId, TargetRunResult};
 
 #[derive(Clone, Debug)]
-pub(super) enum SessionEvent {
+pub(crate) enum SessionEvent {
     Start {
         id: String,
         session_id: String,
@@ -107,7 +107,7 @@ pub(crate) struct PlanBaseline {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum PlanEvent {
+pub(crate) enum PlanEvent {
     Open {
         id: String,
         plan_id: String,
@@ -253,12 +253,12 @@ struct LegacySessionEvent {
 // ignored-value path instead of materializing recursively embedded snapshots.
 // Never use this lossy type to rewrite the append-only session stream.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub(super) struct SessionEventEnvelope {
-    pub(super) id: String,
-    pub(super) session_id: String,
-    pub(super) event: String,
-    pub(super) timestamp_ms: u64,
-    pub(super) outcome: Option<String>,
+pub(crate) struct SessionEventEnvelope {
+    pub(crate) id: String,
+    pub(crate) session_id: String,
+    pub(crate) event: String,
+    pub(crate) timestamp_ms: u64,
+    pub(crate) outcome: Option<String>,
 }
 
 impl SessionEventEnvelope {
@@ -470,57 +470,57 @@ impl<'de> Deserialize<'de> for PlanEvent {
 }
 
 #[derive(Debug, Serialize, serde::Deserialize)]
-pub(super) struct ReceiptRecord {
-    pub(super) id: String,
-    pub(super) session_id: Option<String>,
-    pub(super) plan_id: Option<String>,
-    pub(super) tool_name: String,
-    pub(super) args: Value,
+pub(crate) struct ReceiptRecord {
+    pub(crate) id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) plan_id: Option<String>,
+    pub(crate) tool_name: String,
+    pub(crate) args: Value,
     #[serde(default)]
-    pub(super) invoked_command_key: Option<String>,
-    pub(super) started_at_ms: u64,
-    pub(super) ended_at_ms: u64,
-    pub(super) exit_status: i32,
-    pub(super) stdout_preview: String,
-    pub(super) stderr_preview: String,
+    pub(crate) invoked_command_key: Option<String>,
+    pub(crate) started_at_ms: u64,
+    pub(crate) ended_at_ms: u64,
+    pub(crate) exit_status: i32,
+    pub(crate) stdout_preview: String,
+    pub(crate) stderr_preview: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) evidence: Option<Value>,
+    pub(crate) evidence: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) run_id: Option<String>,
+    pub(crate) run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) target: Option<TargetId>,
+    pub(crate) target: Option<TargetId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) config_digest: Option<String>,
+    pub(crate) config_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) input_digest: Option<String>,
+    pub(crate) input_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(super) findings: Vec<Finding>,
+    pub(crate) findings: Vec<Finding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) finding_count: Option<u64>,
+    pub(crate) finding_count: Option<u64>,
     #[serde(default)]
-    pub(super) findings_truncated: bool,
+    pub(crate) findings_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) findings_digest: Option<String>,
+    pub(crate) findings_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) evaluated_at_ms: Option<u64>,
+    pub(crate) evaluated_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) valid_until_ms: Option<u64>,
-    pub(super) changed_paths: Vec<String>,
+    pub(crate) valid_until_ms: Option<u64>,
+    pub(crate) changed_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) changed_path_count: Option<usize>,
+    pub(crate) changed_path_count: Option<usize>,
     #[serde(default)]
-    pub(super) changed_paths_truncated: bool,
+    pub(crate) changed_paths_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) changed_paths_digest: Option<String>,
-    pub(super) diff_stat: DiffStat,
+    pub(crate) changed_paths_digest: Option<String>,
+    pub(crate) diff_stat: DiffStat,
     #[serde(default)]
-    pub(super) git_status_error: Option<String>,
+    pub(crate) git_status_error: Option<String>,
     #[serde(default)]
-    pub(super) git_diff_stat_error: Option<String>,
+    pub(crate) git_diff_stat_error: Option<String>,
     #[serde(default)]
-    pub(super) worktree_fingerprint: Option<String>,
+    pub(crate) worktree_fingerprint: Option<String>,
     #[serde(default)]
-    pub(super) worktree_fingerprint_error: Option<String>,
+    pub(crate) worktree_fingerprint_error: Option<String>,
 }
 
 /// One append-only transition in a durable target run.
@@ -546,13 +546,13 @@ pub(super) struct RunEventRecord {
 }
 
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
-pub(super) struct DecisionRecord {
-    pub(super) id: String,
-    pub(super) session_id: Option<String>,
-    pub(super) plan_id: Option<String>,
-    pub(super) title: String,
-    pub(super) selected_option: String,
-    pub(super) rationale: String,
-    pub(super) alternatives: Vec<String>,
-    pub(super) timestamp_ms: u64,
+pub(crate) struct DecisionRecord {
+    pub(crate) id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) plan_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) selected_option: String,
+    pub(crate) rationale: String,
+    pub(crate) alternatives: Vec<String>,
+    pub(crate) timestamp_ms: u64,
 }
