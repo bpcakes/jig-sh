@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 - 2026-08-31
 
 ### Added
+
 - Add the explicit `rust-library` init preset for a virtual Rust 2024 workspace with one documented, non-publishable library crate and no application, database, frontend, or dev-app state.
 - Add the contract-v6 agent-native repository model with checked-in components, actions, profiles, affected-selection policy, immutable content-addressed run plans, durable target runs, and target/profile evidence gates.
 - Add `jig check` selectors with `--profile`, `--affected`, `--explain`, and `--fail-fast`, plus repository-aware `jig info` subjects and `jig migration add`.
@@ -14,93 +15,6 @@
 - Harden the Rust/React OpenAPI split with an optional, independently deployable admin HTTP crate and binary, transactional all-contract generation, public-artifact boundary scans, and request-ID-bearing JSON API errors.
 - Generate split Utoipa public/admin OpenAPI contracts and separately owned Hey API TypeScript clients in the Rust/React scaffold.
 - Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
-
-### Changed
-- Migration: repositories adopted before the loop runtime ignore rule must run `scripts/jig update --recopy` so `.agent/runtime/` is ignored before `jig loop dispatch` or `jig loop tick` can publish state.
-- Breaking: replace the generated tracked-file `mod.rs` policy check with Clippy's `mod_module_files` restriction lint. Exact generated Clippy command defaults, including nested-manifest wrappers, migrate automatically; generated and inferred Clippy commands now check all targets and features. Because Cargo features are expected to be additive but can be mutually exclusive in existing repositories, this migration can expose feature-combination failures or new warnings. Fresh adoption explains the feature-coverage opt-out; updates and file-backed re-adoption report generated inputs that gain `--all-features`, resolve effective Clippy runners through the `jig.clippy` capability alias, warn without rewriting unless every direct or nested invocation structurally denies or forbids `mod_module_files`, and leave unrelated command values untouched. Wrapper-inferred Clippy commands carry the same policy-verification warning. To opt out while retaining the module-layout policy, remove only `--all-features` from the generated Clippy command in `.jig.toml`; that explicit feature-coverage customization is preserved by later updates. Other customized commands must add `-D clippy::mod_module_files` explicitly to retain the policy. Clippy covers compiled Cargo targets rather than excluded crates, code for other target platforms, or every tracked Rust file.
-- Breaking: Contract-v6 MCP clients use the stable `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` surface instead of directly invoking per-manifest execution tools; submitted plans are re-derived from current checked-in authority before execution.
-- Keep read-only work-gate, evidence, and status inspection available when a configured tool, repository target, profile, or catalog no longer resolves; report the affected required gate in-band as `unsupported` with a reason while contract validation, execution, and work finish continue to fail closed.
-- Make configured checks non-interactive and uniformly supervised for timeout, cancellation, process-tree cleanup, and bounded stdout/stderr capture.
-- Let `jig work check` finish configured evidence targets after a legacy check fails so one invocation records complete gate evidence, while preserving a failing batch result and collecting each configured tool error in structured output.
-- Rename the generated harness-wiring gate from `contract` to `jig-contract`, clarify that it is not an application API contract check, make optional gates truly optional during contract-v5 default work checks, preserve the all-gate default for older contract epochs, and migrate generated gate policy only through exact identities or the documented `contract`/`tests` aliases.
-- Migration: remove the ambient `SCHEMA_DOCS_DIR` override; repositories that used it must persist the same repository-relative value as `schema_docs_dir` in `.jig.toml`, which is now the single generation and freshness authority.
-- Breaking: Limit the Jig CLI, generated harness, development proxy, Vault, and owned-process supervision to Linux and macOS hosts; native Windows host support is removed in this release.
-- Raise the Jig workspace minimum supported Rust version to 1.88 and lift dependency pins that only preserved Rust 1.85 compatibility.
-- Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
-- Require Rust 1.94 in every generated Rust/React workspace, update database variants to SQLx 0.9, and make Doctor reject an older Rust runtime or a SQLx CLI from a different minor line.
-- Bootstrap the frontend workspace and create its selected root lockfile before checking PostgreSQL configuration, so database availability no longer blocks frontend setup.
-- Keep Codex usage projections fixed to their inspection sample while showing the sample age in the selected-account details.
-- Keep available-window projections visible and clearly labeled as partial while withholding recommendations until every returned window has projection metadata; usage samples older than 15 minutes are also excluded from ranking.
-- Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
-
-### Fixed
-- Recollect the complete bounded pull-request review-thread snapshot immediately before committing a repair, retain completed local work when trusted unresolved feedback, reviewer authorization, or the PR head changed, and percent-encode every GitHub API path segment.
-- Keep review-reply retries idempotent when worker wording changes, distinguish trusted human marker quotations from Jig-authored replies, give each actionable review-thread intent a fair slice of the bounded post-push GitHub budget, and skip mutations the observed viewer cannot perform.
-- Bind review-thread replies and resolution to the live repaired PR head, make stale-reconciliation enrichment depend on the recorded expiry transition instead of error prose, and use a recoverable two-phase checkout witness before protected schedule mutations so every partial cutover fails closed without Git authority.
-- Bound serialized GitHub loop evidence, omit redundant raw payload copies, and make dispatch receipts reference their detailed tick receipts so one large observation is not journaled twice.
-- Normalize PR head identity strictly from the owner/name fields emitted by GitHub CLI, accept valid failed-check JSON from legacy nonzero `gh pr checks` exits, bind review replies and resolution to complete comment generations, preserve native non-UTF-8 worktree paths across retained authority, terminal PR actions, cleanup, and Git metadata reads, decode exhausted attempts and order loop runs chronologically in Jig UI, report force-with-lease pushes accurately, retain pre-existing repair worktrees on unexecuted retries, and validate repository-common PR branch leases before occurrence claims.
-- Keep every locked schedule read, cleanup, and durable publication on retained no-follow directory capabilities; authenticate existing PR-manager worktrees before destructive reuse; require stable review-thread pagination and an unchanged comment witness before resolution; serialize first receipt appends with legacy writers while retaining state when a receipt append may already have landed; back off and retry receipt writes when an atomic rewrite replaced the inode opened before lock acquisition; avoid durable rewrites for initialized protected-state reads; keep post-work state snapshots and locked state reads cancellation-aware; recheck protected coordination state when migration compaction races a read-only observer; compact successful coordination migrations to state-free downgrade markers so protected-state loss cannot resurrect a stale cutover snapshot; record every review-thread intent skipped by cancellation; preserve subsecond precision in aggregate GitHub deadlines; and report only GitHub snapshot requests that passed pre-launch budget validation.
-- Reserve task and PR worktree paths in owner-checked occurrence state before Git can create or reuse them, open schedule locks through no-follow directory capabilities, and serialize PR attempt decisions with compensating attempt repairs.
-- Make repo-root workspace-write tasks mutually exclusive with every managed-worktree occurrence and block them while any retained task or PR evidence remains reachable below that writable root.
-- Preserve each workflow's latest scheduled occurrence as a non-prunable dispatch watermark, and keep PR-worktree inspection and removal behind repeated branch-lease validation with renewal-loss cancellation.
-- Move Git-backed lease and attempt authority outside repo-mode workspace-write sandboxes with typed legacy migration barriers; keep non-Git cache access beneath no-follow directory capabilities; require exact same-repository PR head metadata before origin branch mutation; namespace manual occurrence identities at their owning store; keep acknowledgement/attempt state receipts cancelable without running Git inspection inside the schedule commit boundary; restore state when those receipts cannot be published within the shared bounded lock deadline; and use file-handle lock guards so post-commit unlock cleanup cannot misreport a durable receipt as failed.
-- Keep PR-manager Git staging and commits parent-owned across workspace-write conflict repairs, collapse duplicate review-thread intents before mutation, roll back occurrence acknowledgement when receipt publication fails, and apply retained-worktree backpressure consistently to PR-manager workflows.
-- Keep receipt journal reads, locks, and appends beneath no-follow repository directory capabilities after unattended workers run; scope PR-manager post-commit whitespace checks to worker-authored history after any clean base merge; and document safe malformed-lease recovery.
-- Bound each loop renewal lock attempt by the remaining lease cancellation window, share one deadline across the schedule ledger's ordered locks, preserve late terminal worker evidence after stale reconciliation, and label manual loop runs by their start time instead of the Unix epoch.
-- Reject symlinked ancestors across loop schedule and managed worktree roots, reject dangling `.git` redirection, scrub repository-selecting environment from GitHub CLI calls, preserve cancellation classification through shared-checkout preflight, and bound all review-thread update and reconciliation requests under one aggregate budget.
-- Defer every PR-manager preparation cleanup to the lease-refreshing outcome finalizer, quarantine only the PR whose review history is truncated, retain the newest manual occurrences during bounded pruning, and preserve non-ownership renewal shutdown failures as state evidence.
-- Keep PR-manager worktree inspection and cleanup behind a freshly renewed branch lease, retain authority-lost paths without touching them, store retained PR evidence outside disposable cache, bound composed GitHub snapshots across nested requests and payloads, and preserve truthful staged occurrence diagnostics through stale reconciliation.
-- Make PR-manager repair publication compare-and-swap the exact GitHub-observed remote head, reject non-descendant worker history, and page nested review comments backward so older trusted feedback cannot disappear behind GitHub's per-connection limit.
-- Omit the generated repository-policy workflow when no conditional jobs remain, and keep generated Clippy policy probes isolated across library, CLI, and Rust/React scaffolds.
-- Preserve validated scalar `[dev]` settings across init/update rendering and keep generated Vite fallback origins aligned with the configured proxy port and private TLD.
-- Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy without imposing scaffold-only CI selectors, reject symlink-redirection in Go component roots, and make generated Go CI resolve nested component module authorities, observe vendored modules and SQL inputs, and reserve Linux for Docker-backed PostgreSQL tests.
-- Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
-- Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
-- Make Vault PTY integration tests own their private controlling terminal so `/dev/tty` sizing and resize-clear assertions stay hermetic under TTY-wrapped gate runners.
-- Make run cancellation cursors atomic with queued-event persistence, preserve prior target failures during abandoned-run recovery, reject unsafe run identifiers and live-journal restores, and retain bounded stdout/stderr evidence for configured-command and schema-generator overflow failures.
-- Preserve non-UTF-8 untracked paths in schema snapshots, reject truncated Git authority output, and keep receipt-overflow uncertainty anchored to the exact boundary record.
-- Preserve both bounded output streams in overflow diagnostics, route native pre-start stops through the shared target finalizer, track Go workspace/module inputs in every generated policy workflow, avoid duplicate frontend artifact scans, and omit database configuration from database-free Go scaffolds.
-- Preserve project-owned legacy Go/PostgreSQL `sqlc_check_command` overrides across init and update, validate frontend contract-check app arguments and action working directories before execution, bound archive evidence indexing and fail closed when exact protection cannot be computed, keep superseded duplicate receipt groups closed, terminalize accepted foreground runs after infrastructure errors, and reconcile lease-abandoned runs before applying run-history archival.
-- Keep source-epoch trust anchored when a declared worktree-mutating target never executes, and pass schema output directories to Git as literal pathspecs.
-- Resolve contract-v6 schema freshness checks through the owning schema-dump action's complete command runner, omit the obsolete duplicate top-level generator from new v6 renders, and preserve executed generator exits as target failures with their child status and output.
-- Keep native contract checks behind complete execution authority, require native migration actions to declare their mutating semantics, delegate contract-v6 compatibility aliases to their owning action runners and arity, validate schema action environments and output paths consistently, keep active plan-linked repository runs from racing work-plan closure, and accept built-in action names in multi-selector `jig check` requests regardless of selector order.
-- Restore live target phases, stdout/stderr, and heartbeats for foreground contract-v6 checks; preserve feature-specific unavailable-check diagnostics when repository flags are present; expose the bounded count and elapsed time of source observations; revalidate queued parallel targets before they start; and reject synchronous MCP work-check contention without blocking the transport.
-- Keep affected frontend public-boundary checks sensitive to their ignored-by-default documentation artifact roots, and reject cyclic component or action dependency graphs when the repository catalog loads.
-- Make scheduled loop claims power-loss durable, reclaim interrupted schedule publications, retry transient workflow and occurrence renewals before the cancellation window, derive each occurrence outcome independently from coherent worker evidence and diagnostics, distinguish deferred work from idle work while preserving the schema-version-1 skipped aggregate, keep retained task worktrees outside disposable cache, supervise bounded checkout Git subprocesses and prompt reads, preserve dispatch receipts across cancellable post-work state reads, report scheduled and exhausted attention separately, search review replies newest-first with GitHub's direct viewer-authorship fact under one reconciliation deadline, and fail closed on ambiguous migration or reconciliation state. Machine-global attention now makes tick/run unsuccessful; dirty shared task checkouts and unconfirmed started PR pushes become backpressured attention, and a schedule-ledger schema barrier prevents downgrades after whole-second cron identities are published.
-- Require unexpired workflow-lease ownership at loop finalization, retry scheduled cancellation proven to occur before worker start, fail closed on unreadable lease coordination, report attempt-cache recovery and per-workflow schedule errors in-band, and backpressure isolated scheduled tasks while retained worktrees await cleanup.
-- Make scheduled claims reject stale chronology and unresolved attention atomically, preserve typed pre-worker setup and receipt failures for retry, retain cleanup failures as discoverable attention, and classify status from one sampled clock.
-- Preserve ambiguous manual and post-start PR-manager work as durable operator attention, make tick/run attention machine-global, stop occurrence renewal immediately on typed ownership loss, and authenticate the append-only receipt prefix before excluding it from shared-checkout dirtiness. Derive PR worktree paths from workflow-ID digests and preserve checkout error chains in structured diagnostics.
-- Make the changed-file Rust source-size policy a required work gate, and route both local work checks and repository-policy CI through the same merge-base-aware script so work cannot finish with an untested LOC violation.
-- Fail closed when a staged deletion is recreated at the same ignored worktree path, preserve non-UTF-8 temporary order-file paths in canonical Git proofs, and omit child exit statuses from unknown gate evidence.
-- Frame untracked whole-worktree entries and gate-signature path lists unambiguously; probe only changed Gitlink candidates with byte-preserving literal pathspecs; treat malformed selected batches as reuse tombstones while keeping reused records inert; reject nonliteral generated policy roots while preserving the optional empty migration-directory sentinel; and derive adoption previews from the staged closure gates instead of repository utilities.
-- Let the latest exact gate outcome supersede older reusable evidence even when it failed, preserve non-UTF-8 tracked path bytes in legacy whole-worktree fingerprints, and TOML-escape every dynamic generated gate path.
-- Select live templates and native identity inputs through one validated checkout/package layout; require an explicit v1 application-contract checker marker before adoption infers required gates; and distinguish diagnostic punctuation from legal punctuation-prefixed sibling paths during root redaction.
-- Redact repository-root tokens before common trailing diagnostic delimiters, report failed and cancelled gate evidence in work-check summaries, and refresh embedded template snapshots before hashing the native build identity so refresh builds are fixed points.
-- Keep malformed, failed, or cancelled superseding work-check batches as archive tombstones so compaction cannot reveal an older gate pass; make native build-identity inputs emit matching Cargo environment invalidators; require two-sided repository-root redaction boundaries; and complete the generic-fixture privacy migration for historical plans and status-provider examples.
-- Make interrupted work-check batches supersede every selected gate with explicit failed, cancelled, or unknown evidence; reject duplicate plan-open records consistently; retire only unchanged generated commands for removed frontend apps; and serialize the final build-policy environment test.
-- Pin scoped and whole-worktree Git proofs against external diff drivers, text conversions, and ambient file-mode policy; bound scoped diff output and recursive submodule cleanliness probes; share repository-root redaction across receipts and session summaries without rewriting sibling path prefixes; and migrate previously persisted private absolute paths to neutral markers with an ID-preserving decision record.
-- Give serialized Vault TUI integration children their own session and PTY controlling terminal, and wait for the complete activity-modal frame before injecting the close key, so outer terminal ownership cannot make the interaction test lose input.
-- Isolate every known-root Git evidence probe from ambient repository, index, object, replacement-ref, namespace, and command-scoped configuration redirects; bound whole-worktree status/binary-diff proofs and entry counts; make dependency-scope preparation safe on Bash 3.2 without a root package; reject root/reserved schema destinations and symlinked native build inputs; redact repository-root spellings before receipt persistence; and keep empty-selection guidance accurate across supported contract epochs.
-- Make schema freshness expose ignored and ambient-hidden untracked output and reject non-attestable destinations; include Cargo/toolchain authorities in SQLx scopes; prefer exact generated gates over migration aliases; bind native receipts to target/features/profile/compiler/package/template build configuration; prepare every distinct application-contract dependency scope; and bound changed-path discovery by bytes and entry count.
-- Reject evidence reuse from mutating or failed source batches, reuse only direct executed proof, and execute a gate on repeat checks after the current plan has any evidence instead of alternating back to an older plan.
-- Include Rustfmt, Clippy, and Nextest configuration authorities in their generated gate scopes, cache baseline-wide Git discovery once per work check, and let an explicitly forced gate execute without claiming closure when applicability cannot be classified.
-- Make change-aware gates safe on unborn repositories with an explicit empty-tree baseline; treat Jig config and command manifests as global authorities; hash only classifier-selected literal paths under pinned Git diff settings; include untracked executable mode; refresh generated scopes during readoption; cover every app in application-contract gates; continue refinement after unknown applicability while failing its aggregate verdict; and batch multi-plan baseline/fingerprint collection.
-- Treat customized commands behind generated gate tools as conservatively unconditional unless they retain a proven canonical command shape; bind native evidence to the Jig build identity; force tracked mode detection, fully pin Git diff rendering, and chunk large literal path sets; share same-baseline proofs across plans; restore legacy direct `--tool` ordering and duplicates; and label empty-tree baselines in human work output.
-- Make native build identities work from both source checkouts and registry packages; require strict generated Cargo/SQLx grammars and exact per-app tool binding; keep schema dump as an explicit mutating utility rather than a required gate; fail closed on dirty gitlinks and untracked embedded repositories; persist arbitrary non-app frontend workspace ownership with exclusions; and store plan-wide changed paths once per work-check batch.
-- Classify and prove both staged-index and worktree inputs, reject partially staged scoped evidence, bind schema output ownership to committed literal-path configuration, include migration and public-doc runtime inputs in generated gates, keep overlapping frontend ownership out of ignores, revalidate scopes inside the stable-worktree interval, and distinguish Jig checkouts from packaged dependencies with source-specific sentinels.
-- Keep gate applicability and scoped Git fingerprints on one strict glob grammar by rejecting brace expansion, stream unique scoped patches through bounded memory, cache equivalent gate-policy inputs, and batch cross-plan reuse lookup into one receipt scan.
-- Cover generated Rust, frontend, application-contract, and public-artifact gates with their command-authority manifests, locks, toolchain/package-manager configuration, patches/plugins, shared packages, and helper scripts.
-- Reject v5-only path/reuse policy in contracts v2-v4, retain failed child exit statuses in aggregate work evidence, reject readoption gate-ID collisions with another tool, and align the MCP work-check selector schema with runtime empty-array semantics.
-- Let Linux vault restore prepare a crash-durable, verified owner-only missing parent chain for a fresh repo-scoped destination while preserving safe relative path support and the atomic absent-home install boundary; reject unsafe group-writable creation boundaries and traversal through missing components, handle restrictive `umask` values, document retained empty parents plus explicit legacy selection, and keep its contract-v4 fallback compatible.
-- Let explicit dev stop and replacement recover definitively dead orphaned session records and exact-owned stale routes without signaling persisted PIDs; persist preflight-cleanup and pre-spawn obligations, distinguish uncertain process observations, preserve ambiguous records by default, add a targeted `dev stop --forget-ambiguous-orphans` repair that never signals stored PIDs or overrides a live or uncertain registered identity, and report successful recoveries with retained app diagnostics and typed forgotten ambiguities separately from blocking warnings.
-- Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
-- Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
-
-## v0.2.0 - 2026-08-31
-
-### Added
-- Add scheduled `codex_task` loop workflows, durable occurrence claims, and `jig loop dispatch`
-- Show loop schedules, recent occurrences, and retained worktrees in status and Jig UI
 - Add status-provider v1 protocol
 - Manage repo-scoped dev sessions
 - Run and aggregate status providers
@@ -151,253 +65,30 @@
 - Expose rust-library preset
 - Complete Rust-only presets
 - Ship universal repository file budgets
-
-### Fixed
-- Renew workflow and branch leases while long-running loop workers are active
-- Serialize repository-checkout Codex tasks, keep retained task worktrees discoverable until cleanup, and preserve typed scheduled-task evidence
-- Prevent repeated `codex_task` execution through `loop run`, keep scheduled `needs_attention` failures durable, and harden cancellable worker waiting
-- Preserve ambiguous scheduled outcomes across later bookkeeping failures, keep their complete diagnostics, and avoid duplicating retry-exhaustion alerts across occurrence and attempt repair surfaces
-- Move the scheduled occurrence ledger out of disposable cache with a fail-closed migration, and add an idempotent acknowledgement transition that resolves attention without reopening an occurrence
-- Keep dev session cleanup signal-responsive
-- Harden Codex resume lookup
-- Enforce staged runtime contract
-- Preserve reclaimable cache locks
-- Retire repair seeds after full refresh
-- Propagate authoritative launcher environment
-- Make repair cache retirement best effort
-- Lock reminder cache mutations
-- Diagnose launcher policy drift accurately
-- Rate-limit cross-cache source warnings
-- Report partial repair seed retirement
-- Recommend narrow launcher drift repair
-- Preserve actionable retirement retries
-- Preserve Rust 1.85 compatibility
-- Preserve contract parity declarations
-- Gate unix-only test helpers
-- Gate platform-specific restore code
-- Harden cross-platform vault checks
-- Allow trusted root path aliases
-- Share trusted root alias policy
-- Gate platform-specific tests
-- Gate Unix exec process tests
-- Avoid stranded nextest group tests
-- Canonicalize macOS vault fixtures
-- Canonicalize vault lifecycle fixtures
-- Canonicalize vault reveal fixtures
-- Gate backup formatting import on Linux
-- Harden launcher repair boundaries
-- Support large terminal buffers
-- Partition vault integration suites
-- Fail closed after recovery errors
-- Preserve protected input semantics
-- Stage value file validation
-- Bind import commits to previews
-- Reconcile lifecycle failures with storage
-- Retain activity audit verification
-- Skip no-op field kind writes
-- Confirm empty text replacements
-- Reject Windows reparse value sources
-- Strip passphrase env before parsing
-- Bind mutations to snapshot revisions
-- Erase poisoned session state
-- Confirm redaction downgrades
-- Discard import plans on cancel
-- Preserve derived rename errors
-- Bound interactive metadata input
-- Confirm import redaction downgrades
-- Preserve selection after recovery refresh
-- Reconcile vanished vault presence
-- Classify private output conflicts structurally
-- Protect vault-owned output paths
-- Preserve committed operation success
-- Reconcile all missing vault failures
-- Require plain import shortcuts
-- Gate private output by platform
-- Keep feedback visible while filtering
-- Sanitize delete confirmation labels
-- Make unsafe legacy deletion confirmable
-- Reject modified form characters uniformly
-- Validate value files from one handle
-- Suppress hidden undersized input
-- Offer restore only for absent homes
-- Validate initialization before side effects
-- Align input and render viewports
-- Preserve utf8 at peek boundary
-- Expose entries for group filters
-- Cancel import preparation safely
-- Gate input by visible screen layout
-- Resolve split peek boundary writes
-- Keep compact lock flow usable
-- Harden launcher repair boundaries
-- Avoid inferred Windows CI runners
-- Clarify supported runner fallback
-- Refine runner inference diagnostics
-- Complete platform inference review
-- Close final platform review gaps
-- Preserve startup failure causes
-- Normalize verified macOS root aliases
-- Move output conflict path
-- Age remaining quota with snapshot
-- Label sub-minute reset countdowns
-- Preserve usage freshness cues
-- Retain unexpected window durations
-- Expire quota independently of projections
-- Preserve compact rows at minimum height
-- Satisfy cross-platform PR gates
-- Normalize Windows Git template paths
-- Keep legacy modules LOC neutral
-- Normalize staged Git repository paths
-- Normalize staged Git metadata path
-- Normalize atomic publication paths
-- Release descendant handles before publish
-- Enforce application contract drift
-- Unify database bootstrap lifecycle
-- Harden generated CI prerequisites
-- Harden scaffold edge cases
-- Recover dead orphaned sessions
-- Clear confirmed failed spawns
-- Preserve uncertain process liveness
-- Distinguish uncertain PID status
-- Add explicit ambiguous orphan repair
-- Preserve orphan recovery evidence
-- Persist preflight cleanup obligations
-- Make ambiguous cleanup repair explicit
-- Persist completed preflight cleanup
-- Finalize every claimed session outcome
-- Show dev recoveries on stopped outcomes
-- Persist all confirmed preflight cleanup
-- Retain recoveries on launch failures
-- Derive status from one observation set
-- Retain pre-claim recovery evidence
-- Stabilize structured failure envelopes
-- Describe ambiguous orphan repair scope
-- Count apps retired by control path
-- Preserve stop recovery failures
-- Preserve primary preflight failures
-- Preserve stop warnings on failure
-- Centralize scaffold preset invariants
-- Validate Go modules before side effects
-- Align scaffold bootstrap lifecycle
-- Harden generated CI portability
-- Derive Go remediation from authority
-- Type backend selectors
-- Preserve migration policy paths
-- Centralize Go module naming rules
-- Align preset menu aliases
-- Validate backend-specific agent guides
-- Isolate migration bootstrap lifecycle
-- Join graceful API shutdown
-- Reprompt invalid Go modules
-- Disable unresolved schema links
-- Bound version authority reads
-- Harden generated shell checks
-- Enforce backend-specific scaffold inputs
-- Version backend configuration
-- Use go.mod as toolchain authority
-- Isolate Rust naming rules
-- Explain unavailable checks
-- Verify generated API clients
-- Show text field input safely
-- Harden toolchain and CI boundaries
-- Harden generated backend contracts
-- Centralize execution signal ownership
-- Decouple progress transport from supervision
-- Bound supervised execution output
-- Balance execution phase lifecycles
-- Record supervised command failures
-- Propagate operation cancellation
-- Flush progress before retiring signals
-- Make process output overflow policy explicit
-- Preserve cancellation through work checks
-- Bound status provider scheduling
-- Preserve pre-start cancellation semantics
-- Enforce fatal overflow after final drain
-- Scope freshness to source tree
-- Harden repository execution boundaries
-- Close repository execution review gaps
-- Make repository execution policies explicit
-- Make worker transcript policy explicit
-- Supervise native schema execution
-- Supervise GitHub loop commands
-- Reserve structural progress capacity
-- Make lifecycle reporting truthful
-- Reduce repository action bug surfaces
-- Preserve cancellation across PR repair boundaries
-- Respect durable command commit boundaries
-- Separate worker results from provider transcripts
-- Harden repository execution boundaries
-- Supervise PR manager git boundaries
-- Bound progress delivery during shutdown
-- Reduce repository execution bug surfaces
-- Release stderr ownership on progress timeout
-- Persist PR repairs after push commit
-- Reconcile ambiguous review thread mutations
-- Make runtime signal policy explicit
-- Harden repository execution invariants
-- Harden repository review boundaries
-- Restore realpath fallback
-- Preserve status provider v1 paths
-- Supervise Git probes
-- Resolve comprehensive review findings
-- Keep receipt finalization cancellable
-- Bound authoritative result while running
-- Make supported-host inventory fail closed
-- Close low-risk review findings
-- Separate support policy from release history
-- Preserve tool errors across progress flush
-- Decouple result inspection cadence
-- Enforce migration admission by tool identity
-- Preserve legacy migration tool requirements
-- Snapshot local templates through Git transport
-- Make repo-scoped restore portable
-- Align schema freshness action execution
-- Preserve repository action authority
-- Validate native action semantics
-- Serialize plan-linked execution
-- Close repository identity gaps
-- Preserve durable mixed repository execution
-- Bind generated CI to authored capabilities
-- Bind managed CI to exact targets
-- Preserve authored mixed backend answers
-- Track aggregate frontend inputs
-- Enforce repository execution isolation
-- Close checkout isolation gaps
-- Preserve authored bootstrap authority
-- Preserve projected repository state
-- Preserve execution liveness and Go inputs
-- Rebind compatibility and CI authority
-- Default mixed Go migrations from adapters
-- Fail closed on v6 execution authority
-- Preserve migration version ordering
-- Verify run archives before rewrite
-- Preserve native pre-start cancellation
-- Preserve source and Go root authority
-- Root Go scaffold outputs by authority
-- Align nested Go contract paths
-- Make repository action CI portable
-- Require Rust LOC work gate
-- Compile vault PTY setup on macOS
-- Harden repository execution coordination
-- Complete upstream contract integration
-- Gate Linux-only context import
-- Treat LOC roots as literal paths
-- Allow LOC checks before Rust exists
-- Harden LOC action cutover
-- Harden rust-library preset
-- Align file-budget launcher scope
-- Remove cache paths from agent map
-- Use canonical test module layout
-- Normalize macOS adoption fixture paths
-- Handle macOS temporary path aliases in tests
-- Publish every workspace crate
+- Add `jig info --commands` for repository-specific command availability before and after adoption, stable machine-readable status and reason codes, and actionable setup guidance.
+- Add `jig adopt --minimal` to render `.jig.toml` and `.agent/` scaffolding without scripts, workflows, or agent context files; stores `harness_footprint = "minimal"` so `jig update` keeps the thin footprint until a full re-adopt.
+- Add `.agent/jig-managed-paths.json` as the strict exact-path authority for managed-file retirement; older adopted repositories establish it with an explicit same-footprint re-adopt before updating or contracting.
+- Add `scripts/jig doctor` and `scripts/jig info` / `scripts/jig explain` for repo readiness and configuration snapshots.
+- Add `scripts/jig work evidence` and the `jig.work_evidence` MCP tool for fresh/stale gate evidence inspection.
+- Add `scripts/jig vault run --file VAR=SECRET` for Unix-only secret-file delivery and human-readable vault run summaries by default (`--json` for the full buffered payload).
+- Add a private, canonical-repo-scoped dev-session registry plus `scripts/jig dev status` and idempotent `scripts/jig dev stop`, with sanitized human/JSON diagnostics, authenticated supervisor-owned cleanup, and retained fail-closed evidence when cleanup cannot be confirmed.
 
 ### Changed
-- Return unsuccessful CLI exit codes when loop ticks, dispatches, or runs fail or need attention
-- Replace generated Jig product-version locks with contract-v4 runtime/profile compatibility, contract-keyed caches, explicit PATH-binary trust, and a launcher-only repair path for legacy repositories.
+
+- Breaking: Contract-v6 MCP clients use the stable `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` surface instead of directly invoking per-manifest execution tools; submitted plans are re-derived from current checked-in authority before execution.
+- Keep read-only work-gate, evidence, and status inspection available when a configured tool, repository target, profile, or catalog no longer resolves; report the affected required gate in-band as `unsupported` with a reason while contract validation, execution, and work finish continue to fail closed.
+- Make configured checks non-interactive and uniformly supervised for timeout, cancellation, process-tree cleanup, and bounded stdout/stderr capture.
+- Let `jig work check` finish configured evidence targets after a legacy check fails so one invocation records complete gate evidence, while preserving a failing batch result and collecting each configured tool error in structured output.
+- Rename the generated harness-wiring gate from `contract` to `jig-contract`, clarify that it is not an application API contract check, make optional gates truly optional during contract-v5 default work checks, preserve the all-gate default for older contract epochs, and migrate generated gate policy only through exact identities or the documented `contract`/`tests` aliases.
+- Migration: remove the ambient `SCHEMA_DOCS_DIR` override; repositories that used it must persist the same repository-relative value as `schema_docs_dir` in `.jig.toml`, which is now the single generation and freshness authority.
+- Breaking: Limit the Jig CLI, generated harness, development proxy, Vault, and owned-process supervision to Linux and macOS hosts; native Windows host support is removed in this release.
+- Raise the Jig workspace minimum supported Rust version to 1.88 and lift dependency pins that only preserved Rust 1.85 compatibility.
+- Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
+- Require Rust 1.94 in every generated Rust/React workspace, update database variants to SQLx 0.9, and make Doctor reject an older Rust runtime or a SQLx CLI from a different minor line.
+- Bootstrap the frontend workspace and create its selected root lockfile before checking PostgreSQL configuration, so database availability no longer blocks frontend setup.
 - Keep Codex usage projections fixed to their inspection sample while showing the sample age in the selected-account details.
 - Keep available-window projections visible and clearly labeled as partial while withholding recommendations until every returned window has projection metadata; usage samples older than 15 minutes are also excluded from ranking.
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
-- Treat `_commit` as an installer source locator rather than a runtime product lock: a proven same-contract runtime, including an explicitly recorded repair seed, may satisfy the cache until the configured source state changes.
 - Plan dev session management
 - Split dev lifecycle modules
 - Close dev session management work
@@ -504,7 +195,6 @@
 - Record vault tui review fix evidence
 - Record init refactoring evidence
 - Group import preview inputs
-- Record vault tui review fix evidence
 - Record master merge verification
 - Gate supported Linux and macOS hosts
 - Record CI repair verification
@@ -527,7 +217,6 @@
 - Split startup publication modules
 - Track vault path normalization
 - Record vault path validation
-- Record master merge verification
 - Record post-merge verification
 - Split oversized modules
 - Model runtime diagnosis explicitly
@@ -541,7 +230,6 @@
 - Type projection window roles
 - Record Codex presentation verification
 - Separate quota and projection freshness
-- Record master merge verification
 - Record freshness hardening verification
 - Record latest master verification
 - Extract output error classification
@@ -599,7 +287,6 @@
 - Record execution boundary verification
 - Close execution boundary work
 - Record cancellation boundary verification
-- Record execution boundary verification
 - Plan lifecycle boundary hardening
 - Record lifecycle boundary implementation
 - Record lifecycle boundary verification
@@ -647,8 +334,369 @@
 - Record clean release validation
 - Install nextest for releases
 - Allow ephemeral release run journal
+- Allow `pr_manager` loop workflows to configure the exact Codex home used by unattended repair workers. Conventional bare names resolve deterministically, non-conventional homes require explicit paths, omission continues to inherit ambient `CODEX_HOME`, and same-version loop JSON distinguishes `codex_home_configured` from `codex_home_resolved` without changing the generated contract version.
+- Close a Unix process-group late-member race in doctor/preflight probes, supervised development apps, and vault brokered runs. While the exact direct child remains unreaped and pins its PGID generation, forced cleanup now re-sends group `SIGKILL` under the original absolute deadline before each Linux live-member scan or macOS exact sole-leader proof; `ESRCH` and Darwin `EPERM` remain inconclusive, and unpinned numeric-PID stops are not retried.
+- Keep generated Rust/React source rustfmt- and strict-Clippy-clean across supported repository names, every database branch, and custom migration paths by isolating rendered crate identifiers behind fixed aliases, rendering dynamic string/macro operands in stable blocks, and narrowly acknowledging the intentional literal-only `concat!` blocks. Reject normalized Rust package stems above Cargo's usable 216-byte generated-artifact boundary before destination mutation, and bound long-name fallback API host labels without changing short-name output.
+- Normalize a missing, empty, or exact cache-only real `node_modules` install root to the same dependency-proof state, so ordinary Vite, Vitest, TypeScript, and Playwright caches cannot stale a root-hoisted workspace receipt after bootstrap. Unknown entries, type replacements, nested caches, packages, metadata, symlinks, and launcher bytes/modes remain attested; the v5 stamp and v3/v2 node-modules marker formats remain unchanged, though an older receipt stamped with an already-present cache-only root safely reattests once.
+- Route every generated web workflow package script through the configured-app checker boundary, including lint, typecheck, build, coverage, and browser E2E. npm uses an exact current-package execution contract that ignores hostile ambient workspace, global, missing-script, and dependency-omit selectors while preserving explicit application environment plus registry, authentication, layout, peer, and lifecycle policy; Yarn revalidates its authority immediately before execution. User-authored dev commands continue inheriting the caller environment unchanged.
+- Keep generated dependency checks portable and identity-safe on the supported Unix shell surface: stock macOS Bash 3.2 handles root and standalone scopes with no workspace-member arguments, Yarn authority enumeration propagates producer failures before stamping, and install coordinators use Bash's owned job table instead of probing a reaped numeric PID. The dependency receipt and node-modules marker versions are unchanged because successful fingerprints and artifact proofs do not change.
+- Serialize and reuse cleanly retired doctor signal sessions in long-lived MCP processes while permanently poisoning unsafe retirement, retaining the session guard through restored-signal redelivery, and failing closed if handler quiescence times out after a signal was recorded. Jig-owned Codex capability probes now scrub executable Bash startup, option, trace, and exported-function controls. Existing-destination init uses a conservative two-generations-per-path plus explicit-repeat descriptor budget, allowing the default scaffold under macOS's soft limit of 256 without weakening rollback identity.
+- Make generated npm installs immune to ambient dry-run, lock-only, bin-link, workspace-selection, platform, and related install-shaping settings before recording dependency readiness; old receipts from the weaker command contract are invalidated. PostgreSQL browser E2E now uses an Ubuntu service-container runner independently of the repository-wide CI runner, database workflows carry their SQLx metadata authority explicitly, and SQLx 0.8 Rust/React scaffolds reject unsupported custom metadata directories before creating output.
+- Follow npm's real dependency authority throughout generated repositories: `npm-shrinkwrap.json` takes precedence over `package-lock.json`, both names schedule and key the relevant workflows, and frozen/bootstrap installs explicitly include development, optional, and peer dependencies despite ambient omit settings. Generated Rust and E2E workflows also watch both supported rustup toolchain filenames.
+- Harden Jig-owned Bash probes by removing inherited startup, option, trace, and byte-exact exported-function controls without changing the normal environment inherited by configured repository commands. Linux doctor, vault, and dev-proxy cleanup now check one absolute phase deadline at every procfs/result boundary, and proxy leader exit no longer replenishes TERM or SIGKILL-confirmation time.
+- Make native-Windows doctor proxy diagnostics execute the repository launcher through a sanitized Bash boundary, preserving its proxy-capable profile selection. Linux process-group cleanup now carries one absolute deadline through procfs enumeration, stat reads, and fallback membership probes, and generated Node 22 workspaces compile against matching Node 22 typings from one rendered authority.
+- Close the final signal and external-process ownership cutovers: post-retirement handlers take the safe conventional-exit claim before stale-generation returns, and doctor supervises SQLx, Codex marketplace, and proxy/service subprocesses under one bounded cancelable session in every feature mode. Windows argv launch now fails when no inspected executable or batch shim resolves instead of delegating a filtered bare name back to ambient PATH lookup; platform-specific regressions, helpers, imports, and metadata predicates compile cleanly on their supported targets, with native Windows default and no-default all-target Clippy enforcing that boundary.
+- Close the remaining doctor and path-lifecycle boundaries: one serialized signal owner spans every external check in a doctor invocation, reaps before restored signal redelivery, and permits a later invocation only after clean retirement; proxy JSON has a separate bounded stdout allowance tied to route-state size; escaped-pipe tests use exact PID/start identities and confirmed cleanup. Managed output components now require valid Unicode, Windows PATH search skips drive-relative entries, and foreground termination retires resource/generation state before restoring handlers so a final signal cannot be erased.
+- Complete managed-output portability by rejecting Win32-forbidden punctuation, control bytes, and raw backslash aliases before init, adopt, or update mutation. Tooling-only fixture assertions now use fixed-string contract keys, generated API tracing enables its binary target as well as library/HTTP targets, and dev preflight skips only historical checkers that do not advertise dependency readiness.
+- Reject Windows drive-relative development executables, retain targeted CTRL+BREAK grace for Job-owned descendants after a wrapper exits, and make termination-session retirement hand late signals to the existing exit claim instead of erasing them. No-default doctor proxy diagnostics now use bounded owned-tree capture, overflowing process deadlines remain genuinely unbounded, and signal/process regressions use atomic markers, kernel-assigned proxy ports, exact identities, and semantic barriers. An explicit `--http-port 0` exposes that ephemeral runtime mode while configured and service ports remain stable and nonzero.
+- Make generated Node-version policy fail closed: applicable `.node-version` files must be bounded real regular files reached through stable repository directories and contain one version token, true absence is the only fallback status, and CI writes its pinned fallback only to runner-owned temporary storage. SPA coverage now follows production `src` files instead of enumerating starter modules, generated SQLite locking uses `fs4`, E2E workflow path filters share one template authority, and Bun versions remain YAML strings.
+- Preserve ordered doctor semantics across a plain leading `! DATABASE_URL=...` prefix, retain every distinct termination signal observed during one owned SQLx probe while keeping the first reason sticky, and redeliver those signals only after cleanup and handler restoration. Vault supervision now keeps completed capture/observer outcomes ahead of a newly expired deadline and treats platform-proven process-group quiescence as authoritative after a successful direct fallback.
+- Resolve Windows `cmd.exe`, `taskkill.exe`, and `icacls.exe` from the native system directory instead of PATH or a hard-coded drive, while requiring an explicit `ComSpec` to be absolute and usable. Generated dependency probes likewise reject missing or relative `ComSpec` values instead of invoking a bare `cmd.exe`. Foreground route cleanup shares one absolute lock deadline across every child, retry, and Drop fallback; process tests use Rust-owned listeners and semantic synchronization instead of Python, free-port handoffs, or scheduler ceilings, and Windows CI pins the generated-test Node runtime.
+- Apply portable file-plan collision validation to managed harness-only, adopt, and update outputs even when no scaffold is selected. Remote template clone commands retain a narrow Git transport/authentication environment while repository/object/index/config/trace redirections stay scrubbed and mutating Git commands remain isolated.
+- Harden initialization and subprocess authority at the remaining race boundaries: validate both pre-existing and concurrently published Git metadata as the exact destination worktree, preflight the real filesystem's no-replace directory semantics, quarantine identity-checked cleanup entries, and supervise doctor probes until their retained process tree is proven quiescent under one cleanup deadline. Windows foreground cleanup now attempts targeted CTRL+BREAK before its bounded fallback/Job force path, and direct native executables no longer inherit batch-only path limits.
+- Make init reject parent-relative and incomplete Windows destinations before prompts or filesystem mutation, canonicalize the deepest existing ancestor, privately stage and atomically publish wholly new repositories, and quarantine existing entries before replacement so rollback restores only exact Jig generations while preserving contention and recovery material. Git initialization now scrubs repository-redirection inputs, uses explicit contained paths, validates self-contained metadata, and publishes without replacement; portable output-collision preflight is O(n log n), and targets without a safe no-replace primitive reject init before interaction. Normalize portable frontend/dev directory identities while keeping canonical filesystem paths through readiness and converting Windows paths only at process spawn.
+- Strengthen generated dependency receipts across every authoritative workspace member, content-hash executable launchers, bind pnpm's hook-disabled layout/configuration/environment contract, and exclude only type-checked top-level tool runtime caches from each actual node-modules install root. Dependency queries now preserve their verified-absence versus invalid-authority exit status, pnpm honors the effective `package.json` / `package.json5` / `package.yaml` authority through a bounded hook-disabled parser, and Yarn validates root-lock authority before reporting Node policy. Add explicit dev-only dependency bootstrap guidance and include PID namespaces plus exact worker generations in install ownership. Windows pnpm/Yarn metadata lookup now uses validated `PATHEXT` search, and Bun workflow values are serialized as YAML strings.
+- Arm proxy cleanup before startup spawn, preserve graceful handling for the first signal, condition route deletion on exact process ownership, bound unsupported-platform output cleanup, and give Windows Job Objects generation-owned final handles. Astro opts out of agent background mode correctly, and in-memory SQLite pools retain a database-owning connection without idle/lifetime reaping or cancellable pre-acquire health checks; private cache additionally serializes checkouts.
+- Treat derived `JIG_DEV_<APP>` coordinates as current-session topology, prefer the managed API origin in generated SPA/admin Vite configs, and make Playwright overwrite both generic and namespaced origins for its isolated real backend.
+- Make Windows required-tool PATH lookup prefer validated executable extensions for bare commands while preserving literal-first explicit extensionless paths, preventing an unrelated extensionless file from shadowing an adjacent executable.
+- Default new and adopted repos to repo-scoped local vaults with `--no-vault` and explicit `--global` escape hatches; in scoped repos, malformed `.jig.toml` vault policy blocks vault commands instead of falling back to legacy/global vaults, `JIG_VAULT_HOME` is now a vault base, and repo vault homes resolve below `$JIG_VAULT_HOME/scopes/` using a trusted local repo namespace.
+- Breaking: Treat whitespace-only `rust_migration_dir` values as invalid during contract checks and report affected migration workflows as needing setup with direct re-adoption guidance instead of claiming they are ready.
+- Label the proxy readiness check as `Dev proxy` in human and JSON doctor output so it is distinct from generic network proxies; its stable JSON `id` remains `proxy`.
+- Breaking: Make global `--json` cover CLI usage errors and pre-output command failures with a stable error envelope on stdout while retaining nonzero exit statuses; scripts that consumed failures from stderr must read the JSON envelope instead. `prompt get --json` now returns the standard command envelope instead of the bare rendered body. Commands that already emitted JSON do not append a second document, and MCP continues to reserve stdout for protocol framing.
+- Breaking: Require exactly one nonblank `--body` or `--body-file` when appending structured-work progress; body-less `work append` invocations must provide progress text.
+- Validate structured-work start body sources before durable session mutation, label aggregate snapshot completeness as collection state, and make `state summary` report persisted record/event counts instead of duplicating `work status`. Reorder root help around setup, development, structured work, project data, local services, and agent automation, with a compact common-workflows footer.
+- Make scaffolded init validate its destination before wizard or vault interaction and again before mutation, reject a symlink destination plus portable exact, case-folded, file/descendant, and Windows-alias output collisions even with `--force`, publish ordinary files atomically within verified parents, and roll back only empty directories atomically created by the failed init. Existing Windows drive/share roots remain accepted when a denied create can be verified as a real directory. Direct `--frontend-app` metadata now fails during CLI parsing, and init/adopt resolve relative answer files from the launcher invocation directory.
+- Make required-tool doctor analysis check recognized external `env`, `nohup`, and `time` wrapper chains plus their terminal target in execution order and under each stage's effective lookup context; preserve unsupported or dynamic wrapper ambiguity instead of falsely passing it, model ordered environment assignment/scrubbing, command-local literal PATH, inherited Bash startup/function state, hidden substitutions, expansion-capable heredocs, and prior dispatch-mutating builtins without exposing configured commands or credentials. External `env` assignments use its nonempty-name grammar, and PostgreSQL capability output must match the complete synthetic invalid-`sslmode` diagnostic on one line.
+- Make foreground development startup locks and route publication interruptible, apply explicit app selection before selected-directory resolution, and harden Windows PATH, Job Object, graceful-fallback, and portable Unix termination behavior. Windows app launch keeps canonical containment checks while converting supported drive/UNC paths for child use, tries literal explicit extensionless commands before `PATHEXT`, preserves quoted/non-Unicode PATH entries, and rejects unsafe device namespaces.
+- Keep bare `scripts/jig dev` as the launch form and add `--replace` for safe same-repository conflict replacement; cross-repository, unregistered, ad-hoc, and concurrently observed ownership is never terminated or silently taken over.
+- Align unattended harness-only/tooling-only examples and fixtures, prove harness-only rendering before fixture stubs are added, exercise the generated SQLx command through a controlled executable, and align empty frontend output declarations, historical admin role inference, and dev-app kind error attribution with the actual generated contract.
+- Minimal frontend adoption now retains frontend/dev metadata while deferring TypeScript commands, contract tools, work gates, scripts, workflows, and package validation until full-harness adoption.
+- Breaking: CLI commands now print human-readable output by default. Pass global `--json` for structured automation output. The per-command `--summary` flag is removed; scripts that parsed default JSON must add `--json`, and scripts that passed `--summary` should drop that flag.
+- Breaking: `jig init`, `jig adopt`, and `jig update` now print human-readable summaries by default and only print their full structured reports when `--json` is supplied.
+- Keep `jig init`, `jig adopt`, and `jig update` terminal output human-oriented by default; scripts that consumed the previous implicit JSON output must now pass `jig init --json`, `jig adopt --json`, or `jig update --json` for the full structured bootstrap report. `jig adopt` now previews by default, returns `render_mode = "preview"` until `--write` applies files, confirms interactive writes unless `--defaults` or `--no-input` is supplied, records `.agent/state/adopt-last.json` with backups for overwritten managed files, and reports conflicts in preview instead of blocking before review.
+- `scripts/jig work gates` now prints freshness reasons, receipt diffs, changed paths, and plan-state-aware next steps; automation should pass `--json` instead of grepping human text.
+- `scripts/jig work receipts` and `scripts/jig vault run` preserve short multiline output previews for readability; automation should pass `--json`.
+- Behavior change: SQLx adoption now leaves schema dumps disabled unless `schema_dump_enabled = true` or an explicit `schema_dump_command` is supplied, so first-run `scripts/jig doctor` does not require a repo-owned `scripts/dump-schema.sh` before the repo has implemented one.
+- `scripts/jig doctor` now includes the detail for required failing checks and safely verifies that a trusted direct SQLx CLI includes the SQLite or PostgreSQL driver configured by `DATABASE_URL` without exposing credentials or contacting the configured database. Cargo-dispatched SQLx commands remain visible but unverified because aliases, included configuration, home overrides, and wrappers can change the executable Cargo actually runs; fresh scaffolds therefore default to direct `CARGO=cargo sqlx prepare`, which also supplies the dispatcher input required by SQLx CLI 0.9.
+- Preset init now resolves `--answers-file` before the wizard and scaffold plan, with one explicit precedence (`CLI > answers file > preset defaults > renderer defaults`) so repository names, branches, package managers, commands, frontends, Git HEAD, and generated workflows cannot contradict one another.
+- Generated database bootstrap accepts an exported `DATABASE_URL` without requiring a physical `.env`, orders database setup before bootstrap in next steps, and bounds default PostgreSQL database identifiers to 63 bytes with a stable suffix hash.
+- Generated frontend dependency handling now resolves real workspace membership, records a versioned scope-specific readiness fingerprint, rejects unrelated or stale install artifacts in `scripts/jig dev`, and safely waits for verified live installers without recommending deletion of their locks.
+- Fresh Yarn 4 scaffolds use the `node-modules` linker, admin Vite apps honor injected `PORT`, and generated E2E workflows safely serialize branch names containing YAML-significant characters.
+- Preserve the advertised Rust 1.85 minimum across all targets and features by avoiding let-chains and disabling unused dependency features that raised transitive MSRV requirements.
+- Generated Rust workspaces now declare and inherit `rust-version = "1.85"` and use Cargo resolver 3, so lockfiles created by newer Cargo versions prefer transitive releases compatible with the scaffold's advertised minimum.
+- SQLx doctor now honors literal command-local `--database-url` and `DATABASE_URL` values before environment/dotenv defaults, redacts inline URLs from reports, and reports ambiguous or heuristic probe results as present but unverified while retaining a blocking known-missing-driver result.
+- SQLx doctor now separates executable presence from probe trust: only bare allowlisted tools resolved through canonical non-repository PATH entries are executed, under a scrubbed isolated environment. Explicit, repo-local, relative, symlink-mediated, or shell-ambiguous tools remain present but unverified; PATHEXT lookup, heredocs, guarded cwd changes, and later URL mutations are modeled conservatively.
+- Init automation now distinguishes `--defaults` (Rust React, no database, `web`) from strict `--no-input`/non-terminal execution, adds explicit `--preset harness-only`, and rejects minimal-harness/scaffold contradictions before vault or destination writes.
+- Answers files with `harness_footprint = "minimal"` now resolve as a complete harness-only init shape in interactive, defaulted, strict, and non-terminal modes, while explicit Rust/database/frontend combinations still fail before writes. Legacy frontend entries recover kind/role from matching dev metadata and historical admin names, then persist both fields.
+- Doctor now recognizes and redacts Cargo-dispatched, direct `sqlx`, and `cargo-sqlx` forms including `-D`, retains shell quote and literal cwd context, probes only trusted direct executables, and fails open as `present_unverified` for Cargo dispatch, wrappers, redirects, missing URLs, substituted values, or ambiguous expansion without leaking secrets.
+- Generated frontend dependency receipts now prove the selected manager-specific inputs and installed artifact, and a dedicated identity-checked install worker prevents wrapper death, stale metadata, or unverifiable owners from enabling overlapping installs. A verified coordinator handoff no longer expires after an arbitrary scheduler delay; only unresolved identity has a bounded retry window. Fresh pnpm workspaces explicitly disable the global virtual store so local and CI validation share one repository-local layout, and the normalized setting is contract-bound rather than ambient. Only pnpm 10/11's exact-root regular workspace-validation cache files are excluded; symlink, directory, nested-file, executable-shim, package-tree, semantic metadata, and manager-authority changes remain attested. Browser E2E CI uses the same dependency authority.
+- Generated frontend dependency scope now follows real manager boundaries: declared root membership wins for npm, pnpm, Bun, and Yarn Classic, while nested Yarn Berry projects remain independent. Unsupported workspace syntax fails closed; receipts cover every member manifest, patch/config input, complete PnP companions, and truly dependency-free installs; install ownership uses timezone-stable process identities.
+- pnpm dependency receipts now bind the configured Corepack spec, actual executable/version, shared-lock mode, lockfile stability, and the pnpm 10/11-specific active patch source. The checker supports pnpm's JSON, JSON5, and YAML manifests; disables hooks during metadata queries with the version-compatible npm/pnpm configuration namespaces; rejects inherited overrides, unsafe workspace metadata, traversal, runtime drift, and scope-local YAML patches that standalone `--ignore-workspace` would silently ignore; and retains selected members named like generated output directories. Generated CI resolves the scope-aware pnpm spec and watches authoritative manifests and patch files. Standalone installs continue to ignore inactive parent patch settings. Forced proxy cleanup also attempts an immediately available route lock before honoring cancellation, so dead routes are not left behind unnecessarily.
+- Generated package-manager metadata probes resolve native Windows executables and invoke Corepack/npm `.cmd` or `.bat` shims through an explicit, fixed-argument `cmd.exe` boundary, covering pnpm alternate manifests plus Yarn Classic/Berry configuration without the deprecated `shell: true` argument path.
+- Rust React init now reserves the case-insensitive `api` dev identity for its backend before prompting or writing files. Generated admin source is clean under its pinned Prettier configuration, the standard lint gate enforces that check, and derived `dist/` output stays excluded from formatting.
+- Generated web and E2E workflows provision a fallback Node before invoking the Node-backed scope checker, synthesize a pinned version file only for the checker's explicit no-file status, preserve all other resolver failures and the configured GitHub runner, and invalidate on authoritative patches/PnP artifacts. SPA/admin Vite configs ignore blank origin overrides, Playwright treats blank numeric variables as omitted, and admin theme state is applied before hydration.
+- Yarn readiness now supports the bounded generated PnP state formats used by Yarn 2, 3, and 4, defaults the historically omitted ESM-loader setting correctly, and proves only referenced Berry archives or Classic external-cache packages while keeping local workspace source outside dependency readiness.
+- Generated real-backend E2E suites scope duplicate `Ready` text to the accessible Rust API card, clear SQLite rollback/WAL/SHM sidecars, and receive a 30-minute CI job budget around Playwright's computed server/test budget. Git Bash dependency ownership uses validated Cygwin/MSYS procfs identity and process-group data instead of unsupported BSD `ps -o` options.
+- Generated workflows quote user-controlled branch, runner, app-name, directory, and path scalars; direct Vite launches use strict ports; and adoption gives recognized Vite/Astro scripts precedence over incidental dependencies.
+- Foreground development cleanup now distinguishes SIGINT, SIGHUP, and SIGTERM end to end, reports statuses 130/129/143, closes child-exit races, and normalizes ordinary signal-terminated children. Concurrent generated database creation safely reuses the winner's database.
+- Unix foreground signal handlers are now installed transactionally for one session and restore the prior dispositions afterward. The first termination reason is sticky; any later termination signal accelerates owned process-tree cleanup without orphaning children or replacing the selected outcome.
+- `proxy run` now shares the structured signal/exit contract with `dev`; repeated matching termination accelerates bounded cleanup during blocked startup, and route-cleanup errors no longer discard a failed child's output tail. Database bootstrap requires an exported URL or a real `.env` assignment rather than accepting any `.env` file.
+- Scaffold reports now separate frontend execution `kind` from semantic `role`, and rendered shadcn dependency/docs/components metadata comes from the same provenance constants reported by init.
+- `scripts/jig work gates` now defaults to the single open work plan, matching `scripts/jig work evidence`; pass `--plan-id` when multiple plans are open or to inspect a closed plan.
+- `scripts/jig doctor` now reports missing Codex Jig skills as optional setup instead of blocking overall repo readiness.
+- Generated `--preset rust-react` frontend dev scripts remain launch-only; run `scripts/jig bootstrap` to install or refresh the dependency fingerprint before `scripts/jig dev`.
+- Generated development apps now launch portably on native Windows: the Rust API uses direct Cargo argv and consumes Jig's injected `HOST`/`PORT`, Astro reads the same values with strict-port behavior and stays foreground under Jig even in agent environments, and npm/Corepack `.cmd` or `.bat` shims run through a validated `ComSpec` boundary while native executables remain direct. Jig assigns each suspended app to a kill-on-close Job Object before resuming it, so descendants remain owned after a batch wrapper exits.
+- Frontend dependency preflight now follows the actual selected configured/discovered launch plan, including package-manager `run dev` apps such as Astro, and supervises the readiness checker with a bounded owned process tree. Typed cancellation preserves cleanup and checker failures, inherited Bash startup/function overrides cannot spoof readiness, and bounded pipe capture cannot leave detached readers. Historical four-part `admin` / `admin-panel` frontend entries retain their Admin role, empty migration answers resolve consistently across noninteractive policies, and recopy migrates the former generated SQLx command default.
+- Generated SQLite bootstrap creates nested database directories, distinguishes semantic in-memory URLs, canonicalizes filesystem aliases for migration locking, and serializes full migrations across processes, including Windows' platform-specific file-lock contention result. Yarn receipts and workflows now cover the closest in-repository package-manager declaration plus every ancestor config/runtime input; external or dynamic Yarn runtime/plugin authorities fail before Yarn executes, an interrupted worker generation retains its lock while descendants survive, install-lock waiters use cheap ownership polling, and browser E2E CI caches its pinned Playwright browser from root and app dependency authorities.
+- Generated SPA TypeScript configuration separates browser and Node globals, rejects identical API/web E2E ports, safely passes matrix directories through the shell environment, and serializes workspace paths as JSON/YAML strings.
+- Foreground cleanup now lets any later termination signal accelerate cleanup without replacing the first reason, preserves Unix process-group identity until descendants are stopped, and uses deterministic lifecycle barriers in its real-signal regressions.
+- Required-tool doctor diagnostics now treat command-local or persistent `PATH` changes as unverified executable identity, emit nullable presence instead of resolving the wrong ambient tool, and skip SQLx capability probes at that boundary. Windows probe children use a separate console process group so Ctrl-C remains a structured cancellation.
+- Generated workflow jobs select Bash explicitly on every configured runner. Real-backend Playwright startup overrides `HOST`, `PORT`, and `BIND_ADDR` together, and private-cache in-memory SQLite pools serialize checkouts onto their one schema.
+- Foreground signal registration is process-one-shot, with generation-scoped callbacks and fail-closed retirement; another foreground dev/proxy command requires a new Jig process. Doctor probing instead serializes each complete external-check batch and permits later same-process batches after clean handler retirement; an unsafe retirement permanently disables later batches in that host process. Linux process-group cleanup skips unreadable `/proc` entries only when `getpgid` proves they are unrelated or gone, and any uncertain or empty SIGTERM-phase scan escalates to SIGKILL before post-kill absence is accepted.
+- Append-only session state now reads legacy recursively embedded start summaries through an iterative metadata-only compatibility path, while new recent-session references are shallow and cannot grow JSON depth with every `work start`. Committed-checkout fixtures create a bare remote through init/push instead of the intermittently failing local no-hardlinks clone path.
+- Replace generated Jig product-version locks with contract-v4 runtime/profile compatibility, contract-keyed caches, explicit PATH-binary trust, and a launcher-only repair path for legacy repositories.
+- Treat `_commit` as an installer source locator rather than a runtime product lock: a proven same-contract runtime, including an explicitly recorded repair seed, may satisfy the cache until the configured source state changes.
+
+### Fixed
+
+- Preserve validated scalar `[dev]` settings across init/update rendering and keep generated Vite fallback origins aligned with the configured proxy port and private TLD.
+- Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy without imposing scaffold-only CI selectors, reject symlink-redirection in Go component roots, and make generated Go CI resolve nested component module authorities, observe vendored modules and SQL inputs, and reserve Linux for Docker-backed PostgreSQL tests.
+- Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
+- Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
+- Make Vault PTY integration tests own their private controlling terminal so `/dev/tty` sizing and resize-clear assertions stay hermetic under TTY-wrapped gate runners.
+- Make run cancellation cursors atomic with queued-event persistence, preserve prior target failures during abandoned-run recovery, reject unsafe run identifiers and live-journal restores, and retain bounded stdout/stderr evidence for configured-command and schema-generator overflow failures.
+- Preserve non-UTF-8 untracked paths in schema snapshots, reject truncated Git authority output, and keep receipt-overflow uncertainty anchored to the exact boundary record.
+- Preserve both bounded output streams in overflow diagnostics, route native pre-start stops through the shared target finalizer, track Go workspace/module inputs in every generated policy workflow, avoid duplicate frontend artifact scans, and omit database configuration from database-free Go scaffolds.
+- Preserve project-owned legacy Go/PostgreSQL `sqlc_check_command` overrides across init and update, validate frontend contract-check app arguments and action working directories before execution, bound archive evidence indexing and fail closed when exact protection cannot be computed, keep superseded duplicate receipt groups closed, terminalize accepted foreground runs after infrastructure errors, and reconcile lease-abandoned runs before applying run-history archival.
+- Keep source-epoch trust anchored when a declared worktree-mutating target never executes, and pass schema output directories to Git as literal pathspecs.
+- Resolve contract-v6 schema freshness checks through the owning schema-dump action's complete command runner, omit the obsolete duplicate top-level generator from new v6 renders, and preserve executed generator exits as target failures with their child status and output.
+- Keep native contract checks behind complete execution authority, require native migration actions to declare their mutating semantics, delegate contract-v6 compatibility aliases to their owning action runners and arity, validate schema action environments and output paths consistently, keep active plan-linked repository runs from racing work-plan closure, and accept built-in action names in multi-selector `jig check` requests regardless of selector order.
+- Restore live target phases, stdout/stderr, and heartbeats for foreground contract-v6 checks; preserve feature-specific unavailable-check diagnostics when repository flags are present; expose the bounded count and elapsed time of source observations; revalidate queued parallel targets before they start; and reject synchronous MCP work-check contention without blocking the transport.
+- Keep affected frontend public-boundary checks sensitive to their ignored-by-default documentation artifact roots, and reject cyclic component or action dependency graphs when the repository catalog loads.
+- Make the changed-file Rust source-size policy a required work gate, and route both local work checks and repository-policy CI through the same merge-base-aware script so work cannot finish with an untested LOC violation.
+- Fail closed when a staged deletion is recreated at the same ignored worktree path, preserve non-UTF-8 temporary order-file paths in canonical Git proofs, and omit child exit statuses from unknown gate evidence.
+- Frame untracked whole-worktree entries and gate-signature path lists unambiguously; probe only changed Gitlink candidates with byte-preserving literal pathspecs; treat malformed selected batches as reuse tombstones while keeping reused records inert; reject nonliteral generated policy roots while preserving the optional empty migration-directory sentinel; and derive adoption previews from the staged closure gates instead of repository utilities.
+- Let the latest exact gate outcome supersede older reusable evidence even when it failed, preserve non-UTF-8 tracked path bytes in legacy whole-worktree fingerprints, and TOML-escape every dynamic generated gate path.
+- Select live templates and native identity inputs through one validated checkout/package layout; require an explicit v1 application-contract checker marker before adoption infers required gates; and distinguish diagnostic punctuation from legal punctuation-prefixed sibling paths during root redaction.
+- Redact repository-root tokens before common trailing diagnostic delimiters, report failed and cancelled gate evidence in work-check summaries, and refresh embedded template snapshots before hashing the native build identity so refresh builds are fixed points.
+- Keep malformed, failed, or cancelled superseding work-check batches as archive tombstones so compaction cannot reveal an older gate pass; make native build-identity inputs emit matching Cargo environment invalidators; require two-sided repository-root redaction boundaries; and complete the generic-fixture privacy migration for historical plans and status-provider examples.
+- Make interrupted work-check batches supersede every selected gate with explicit failed, cancelled, or unknown evidence; reject duplicate plan-open records consistently; retire only unchanged generated commands for removed frontend apps; and serialize the final build-policy environment test.
+- Pin scoped and whole-worktree Git proofs against external diff drivers, text conversions, and ambient file-mode policy; bound scoped diff output and recursive submodule cleanliness probes; share repository-root redaction across receipts and session summaries without rewriting sibling path prefixes; and migrate previously persisted private absolute paths to neutral markers with an ID-preserving decision record.
+- Give serialized Vault TUI integration children their own session and PTY controlling terminal, and wait for the complete activity-modal frame before injecting the close key, so outer terminal ownership cannot make the interaction test lose input.
+- Isolate every known-root Git evidence probe from ambient repository, index, object, replacement-ref, namespace, and command-scoped configuration redirects; bound whole-worktree status/binary-diff proofs and entry counts; make dependency-scope preparation safe on Bash 3.2 without a root package; reject root/reserved schema destinations and symlinked native build inputs; redact repository-root spellings before receipt persistence; and keep empty-selection guidance accurate across supported contract epochs.
+- Make schema freshness expose ignored and ambient-hidden untracked output and reject non-attestable destinations; include Cargo/toolchain authorities in SQLx scopes; prefer exact generated gates over migration aliases; bind native receipts to target/features/profile/compiler/package/template build configuration; prepare every distinct application-contract dependency scope; and bound changed-path discovery by bytes and entry count.
+- Reject evidence reuse from mutating or failed source batches, reuse only direct executed proof, and execute a gate on repeat checks after the current plan has any evidence instead of alternating back to an older plan.
+- Include Rustfmt, Clippy, and Nextest configuration authorities in their generated gate scopes, cache baseline-wide Git discovery once per work check, and let an explicitly forced gate execute without claiming closure when applicability cannot be classified.
+- Make change-aware gates safe on unborn repositories with an explicit empty-tree baseline; treat Jig config and command manifests as global authorities; hash only classifier-selected literal paths under pinned Git diff settings; include untracked executable mode; refresh generated scopes during readoption; cover every app in application-contract gates; continue refinement after unknown applicability while failing its aggregate verdict; and batch multi-plan baseline/fingerprint collection.
+- Treat customized commands behind generated gate tools as conservatively unconditional unless they retain a proven canonical command shape; bind native evidence to the Jig build identity; force tracked mode detection, fully pin Git diff rendering, and chunk large literal path sets; share same-baseline proofs across plans; restore legacy direct `--tool` ordering and duplicates; and label empty-tree baselines in human work output.
+- Make native build identities work from both source checkouts and registry packages; require strict generated Cargo/SQLx grammars and exact per-app tool binding; keep schema dump as an explicit mutating utility rather than a required gate; fail closed on dirty gitlinks and untracked embedded repositories; persist arbitrary non-app frontend workspace ownership with exclusions; and store plan-wide changed paths once per work-check batch.
+- Classify and prove both staged-index and worktree inputs, reject partially staged scoped evidence, bind schema output ownership to committed literal-path configuration, include migration and public-doc runtime inputs in generated gates, keep overlapping frontend ownership out of ignores, revalidate scopes inside the stable-worktree interval, and distinguish Jig checkouts from packaged dependencies with source-specific sentinels.
+- Keep gate applicability and scoped Git fingerprints on one strict glob grammar by rejecting brace expansion, stream unique scoped patches through bounded memory, cache equivalent gate-policy inputs, and batch cross-plan reuse lookup into one receipt scan.
+- Cover generated Rust, frontend, application-contract, and public-artifact gates with their command-authority manifests, locks, toolchain/package-manager configuration, patches/plugins, shared packages, and helper scripts.
+- Reject v5-only path/reuse policy in contracts v2-v4, retain failed child exit statuses in aggregate work evidence, reject readoption gate-ID collisions with another tool, and align the MCP work-check selector schema with runtime empty-array semantics.
+- Let Linux vault restore prepare a crash-durable, verified owner-only missing parent chain for a fresh repo-scoped destination while preserving safe relative path support and the atomic absent-home install boundary; reject unsafe group-writable creation boundaries and traversal through missing components, handle restrictive `umask` values, document retained empty parents plus explicit legacy selection, and keep its contract-v4 fallback compatible.
+- Let explicit dev stop and replacement recover definitively dead orphaned session records and exact-owned stale routes without signaling persisted PIDs; persist preflight-cleanup and pre-spawn obligations, distinguish uncertain process observations, preserve ambiguous records by default, add a targeted `dev stop --forget-ambiguous-orphans` repair that never signals stored PIDs or overrides a live or uncertain registered identity, and report successful recoveries with retained app diagnostics and typed forgotten ambiguities separately from blocking warnings.
+- Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
+- Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
+- Keep dev session cleanup signal-responsive
+- Harden Codex resume lookup
+- Enforce staged runtime contract
+- Preserve reclaimable cache locks
+- Retire repair seeds after full refresh
+- Propagate authoritative launcher environment
+- Make repair cache retirement best effort
+- Lock reminder cache mutations
+- Diagnose launcher policy drift accurately
+- Rate-limit cross-cache source warnings
+- Report partial repair seed retirement
+- Recommend narrow launcher drift repair
+- Preserve actionable retirement retries
+- Preserve Rust 1.85 compatibility
+- Preserve contract parity declarations
+- Gate unix-only test helpers
+- Gate platform-specific restore code
+- Harden cross-platform vault checks
+- Allow trusted root path aliases
+- Share trusted root alias policy
+- Gate platform-specific tests
+- Gate Unix exec process tests
+- Avoid stranded nextest group tests
+- Canonicalize macOS vault fixtures
+- Canonicalize vault lifecycle fixtures
+- Canonicalize vault reveal fixtures
+- Gate backup formatting import on Linux
+- Harden launcher repair boundaries
+- Support large terminal buffers
+- Partition vault integration suites
+- Fail closed after recovery errors
+- Preserve protected input semantics
+- Stage value file validation
+- Bind import commits to previews
+- Reconcile lifecycle failures with storage
+- Retain activity audit verification
+- Skip no-op field kind writes
+- Confirm empty text replacements
+- Reject Windows reparse value sources
+- Strip passphrase env before parsing
+- Bind mutations to snapshot revisions
+- Erase poisoned session state
+- Confirm redaction downgrades
+- Discard import plans on cancel
+- Preserve derived rename errors
+- Bound interactive metadata input
+- Confirm import redaction downgrades
+- Preserve selection after recovery refresh
+- Reconcile vanished vault presence
+- Classify private output conflicts structurally
+- Protect vault-owned output paths
+- Preserve committed operation success
+- Reconcile all missing vault failures
+- Require plain import shortcuts
+- Gate private output by platform
+- Keep feedback visible while filtering
+- Sanitize delete confirmation labels
+- Make unsafe legacy deletion confirmable
+- Reject modified form characters uniformly
+- Validate value files from one handle
+- Suppress hidden undersized input
+- Offer restore only for absent homes
+- Validate initialization before side effects
+- Align input and render viewports
+- Preserve utf8 at peek boundary
+- Expose entries for group filters
+- Cancel import preparation safely
+- Gate input by visible screen layout
+- Resolve split peek boundary writes
+- Keep compact lock flow usable
+- Avoid inferred Windows CI runners
+- Clarify supported runner fallback
+- Refine runner inference diagnostics
+- Complete platform inference review
+- Close final platform review gaps
+- Preserve startup failure causes
+- Normalize verified macOS root aliases
+- Move output conflict path
+- Age remaining quota with snapshot
+- Label sub-minute reset countdowns
+- Preserve usage freshness cues
+- Retain unexpected window durations
+- Expire quota independently of projections
+- Preserve compact rows at minimum height
+- Satisfy cross-platform PR gates
+- Normalize Windows Git template paths
+- Keep legacy modules LOC neutral
+- Normalize staged Git repository paths
+- Normalize staged Git metadata path
+- Normalize atomic publication paths
+- Release descendant handles before publish
+- Enforce application contract drift
+- Unify database bootstrap lifecycle
+- Harden generated CI prerequisites
+- Harden scaffold edge cases
+- Recover dead orphaned sessions
+- Clear confirmed failed spawns
+- Preserve uncertain process liveness
+- Distinguish uncertain PID status
+- Add explicit ambiguous orphan repair
+- Preserve orphan recovery evidence
+- Persist preflight cleanup obligations
+- Make ambiguous cleanup repair explicit
+- Persist completed preflight cleanup
+- Finalize every claimed session outcome
+- Show dev recoveries on stopped outcomes
+- Persist all confirmed preflight cleanup
+- Retain recoveries on launch failures
+- Derive status from one observation set
+- Retain pre-claim recovery evidence
+- Stabilize structured failure envelopes
+- Describe ambiguous orphan repair scope
+- Count apps retired by control path
+- Preserve stop recovery failures
+- Preserve primary preflight failures
+- Preserve stop warnings on failure
+- Centralize scaffold preset invariants
+- Validate Go modules before side effects
+- Align scaffold bootstrap lifecycle
+- Harden generated CI portability
+- Derive Go remediation from authority
+- Type backend selectors
+- Preserve migration policy paths
+- Centralize Go module naming rules
+- Align preset menu aliases
+- Validate backend-specific agent guides
+- Isolate migration bootstrap lifecycle
+- Join graceful API shutdown
+- Reprompt invalid Go modules
+- Disable unresolved schema links
+- Bound version authority reads
+- Harden generated shell checks
+- Enforce backend-specific scaffold inputs
+- Version backend configuration
+- Use go.mod as toolchain authority
+- Isolate Rust naming rules
+- Explain unavailable checks
+- Verify generated API clients
+- Show text field input safely
+- Harden toolchain and CI boundaries
+- Harden generated backend contracts
+- Centralize execution signal ownership
+- Decouple progress transport from supervision
+- Bound supervised execution output
+- Balance execution phase lifecycles
+- Record supervised command failures
+- Propagate operation cancellation
+- Flush progress before retiring signals
+- Make process output overflow policy explicit
+- Preserve cancellation through work checks
+- Bound status provider scheduling
+- Preserve pre-start cancellation semantics
+- Enforce fatal overflow after final drain
+- Scope freshness to source tree
+- Harden repository execution boundaries
+- Close repository execution review gaps
+- Make repository execution policies explicit
+- Make worker transcript policy explicit
+- Supervise native schema execution
+- Supervise GitHub loop commands
+- Reserve structural progress capacity
+- Make lifecycle reporting truthful
+- Reduce repository action bug surfaces
+- Preserve cancellation across PR repair boundaries
+- Respect durable command commit boundaries
+- Separate worker results from provider transcripts
+- Supervise PR manager git boundaries
+- Bound progress delivery during shutdown
+- Reduce repository execution bug surfaces
+- Release stderr ownership on progress timeout
+- Persist PR repairs after push commit
+- Reconcile ambiguous review thread mutations
+- Make runtime signal policy explicit
+- Harden repository execution invariants
+- Harden repository review boundaries
+- Restore realpath fallback
+- Preserve status provider v1 paths
+- Supervise Git probes
+- Resolve comprehensive review findings
+- Keep receipt finalization cancellable
+- Bound authoritative result while running
+- Make supported-host inventory fail closed
+- Close low-risk review findings
+- Separate support policy from release history
+- Preserve tool errors across progress flush
+- Decouple result inspection cadence
+- Enforce migration admission by tool identity
+- Preserve legacy migration tool requirements
+- Snapshot local templates through Git transport
+- Make repo-scoped restore portable
+- Align schema freshness action execution
+- Preserve repository action authority
+- Validate native action semantics
+- Serialize plan-linked execution
+- Close repository identity gaps
+- Preserve durable mixed repository execution
+- Bind generated CI to authored capabilities
+- Bind managed CI to exact targets
+- Preserve authored mixed backend answers
+- Track aggregate frontend inputs
+- Enforce repository execution isolation
+- Close checkout isolation gaps
+- Preserve authored bootstrap authority
+- Preserve projected repository state
+- Preserve execution liveness and Go inputs
+- Rebind compatibility and CI authority
+- Default mixed Go migrations from adapters
+- Fail closed on v6 execution authority
+- Preserve migration version ordering
+- Verify run archives before rewrite
+- Preserve native pre-start cancellation
+- Preserve source and Go root authority
+- Root Go scaffold outputs by authority
+- Align nested Go contract paths
+- Make repository action CI portable
+- Require Rust LOC work gate
+- Compile vault PTY setup on macOS
+- Harden repository execution coordination
+- Complete upstream contract integration
+- Gate Linux-only context import
+- Treat LOC roots as literal paths
+- Allow LOC checks before Rust exists
+- Harden LOC action cutover
+- Harden rust-library preset
+- Align file-budget launcher scope
+- Remove cache paths from agent map
+- Use canonical test module layout
+- Normalize macOS adoption fixture paths
+- Handle macOS temporary path aliases in tests
+- Publish every workspace crate
+
+### Security
+
+- Supervise brokered vault commands with a retained process-tree identity and one wall-clock deadline: Linux/macOS leaders remain unreaped until their isolated group is signaled, Windows children enter a kill-on-close Job Object before resume, unsupported targets fail before execution, and nonblocking capped output drains cannot hang on inherited pipes or signal a recycled PID/PGID. Non-consuming Unix observation distinguishes exit, signal, stop, trap, and continue records; macOS accepts group `EPERM` only after an atomic snapshot proves the exact exited leader is the sole remaining member.
+- Apply the same retained-identity proof to macOS development-app cleanup: stopped, trapped, and continued leaders remain running, and group `EPERM` is accepted only after an atomic snapshot proves the exact exited-unreaped leader is the sole member. Additional members remain pending through bounded confirmation so transient zombies can drain while live unsignalable members still fail closed. Lifecycle regressions no longer probe a recyclable numeric process group after reaping its leader, recover their serialization lock after an earlier panic, and release test helpers before reporting cleanup failures.
+- Treat only `ESRCH` as proof that an owned process or process group is gone; `EPERM` and unexpected probe failures remain live/unverified so cleanup and dependency-lock recovery fail closed instead of signaling or stealing a recycled identity.
 
 ### Documentation
+
 - Document project vault workflows
 - Preserve repair retirement diagnostics
 - Plan the vault TUI delivery
@@ -666,11 +714,9 @@
 - Close vault TUI review plan
 - Record vault TUI review evidence
 - Plan vault TUI final hardening
-- Close vault TUI hardening plan
 - Plan vault TUI interaction polish
 - Close vault TUI polish plan
 - Plan vault TUI design hardening
-- Close vault TUI hardening work
 - State hardened file boundaries
 - Define supported host platforms
 - Remove downstream project references
@@ -706,6 +752,7 @@
 - Make Rust preset plan implementation-ready
 
 ### Tests
+
 - Move doctor tests beside module
 - Move adopt inference tests beside module
 - Move git bootstrap tests beside module
@@ -779,6 +826,7 @@
 - Canonicalize macOS report destination
 
 ### Other
+
 - Add generated gitignore template
 - Implement V2 repo-scoped vault model for init, adopt, and vault commands
 - Refactor bootstrap answers into modular structure with dev and vault submodules
@@ -849,36 +897,83 @@
 
 ## v0.2.0-beta.1 - 2026-05-23
 
+### Added
+
+- Add `scripts/jig doctor --summary` and `scripts/jig info` / `scripts/jig explain --summary` for repo readiness and configuration snapshots.
+- Add `scripts/jig work evidence --summary` and the `jig.work_evidence` MCP tool for fresh/stale gate evidence inspection.
+- Add `scripts/jig vault run --file VAR=SECRET` for Unix-only secret-file delivery and `scripts/jig vault run --summary` for a human brokered-run summary.
+- Add Jig local development proxy commands for stable repo-scoped dev hostnames, HTTP/HTTPS forwarding, WebSocket support, workspace app discovery, local certificates, and service file generation.
+- Add `scripts/jig dev` and `scripts/jig proxy {start,stop,list,prune,run,alias}` runtime flows for supervised app processes, aliases, and route listing/pruning.
+- Add `scripts/jig proxy cert {generate,status,trust,untrust}` and `scripts/jig proxy service {install,status,uninstall}` for certificate trust management and user service installation; trust-store mutations require `--accept-trust-scope`, and `proxy service install` requires `--accept-service-scope`.
+- Enable the `dev-proxy` Cargo feature by default while preserving `--no-default-features` builds for contract/MCP-only consumers.
+
 ### Changed
-- Allow `pr_manager` loop workflows to configure the exact Codex home used by unattended repair workers. Conventional bare names resolve deterministically, non-conventional homes require explicit paths, omission continues to inherit ambient `CODEX_HOME`, and same-version loop JSON distinguishes `codex_home_configured` from `codex_home_resolved` without changing the generated contract version.
-- Close a Unix process-group late-member race in doctor/preflight probes, supervised development apps, and vault brokered runs. While the exact direct child remains unreaped and pins its PGID generation, forced cleanup now re-sends group `SIGKILL` under the original absolute deadline before each Linux live-member scan or macOS exact sole-leader proof; `ESRCH` and Darwin `EPERM` remain inconclusive, and unpinned numeric-PID stops are not retried.
-- Keep generated Rust/React source rustfmt- and strict-Clippy-clean across supported repository names, every database branch, and custom migration paths by isolating rendered crate identifiers behind fixed aliases, rendering dynamic string/macro operands in stable blocks, and narrowly acknowledging the intentional literal-only `concat!` blocks. Reject normalized Rust package stems above Cargo's usable 216-byte generated-artifact boundary before destination mutation, and bound long-name fallback API host labels without changing short-name output.
-- Normalize a missing, empty, or exact cache-only real `node_modules` install root to the same dependency-proof state, so ordinary Vite, Vitest, TypeScript, and Playwright caches cannot stale a root-hoisted workspace receipt after bootstrap. Unknown entries, type replacements, nested caches, packages, metadata, symlinks, and launcher bytes/modes remain attested; the v5 stamp and v3/v2 node-modules marker formats remain unchanged, though an older receipt stamped with an already-present cache-only root safely reattests once.
-- Route every generated web workflow package script through the configured-app checker boundary, including lint, typecheck, build, coverage, and browser E2E. npm uses an exact current-package execution contract that ignores hostile ambient workspace, global, missing-script, and dependency-omit selectors while preserving explicit application environment plus registry, authentication, layout, peer, and lifecycle policy; Yarn revalidates its authority immediately before execution. User-authored dev commands continue inheriting the caller environment unchanged.
-- Keep generated dependency checks portable and identity-safe on the supported Unix shell surface: stock macOS Bash 3.2 handles root and standalone scopes with no workspace-member arguments, Yarn authority enumeration propagates producer failures before stamping, and install coordinators use Bash's owned job table instead of probing a reaped numeric PID. The dependency receipt and node-modules marker versions are unchanged because successful fingerprints and artifact proofs do not change.
-- Serialize and reuse cleanly retired doctor signal sessions in long-lived MCP processes while permanently poisoning unsafe retirement, retaining the session guard through restored-signal redelivery, and failing closed if handler quiescence times out after a signal was recorded. Jig-owned Codex capability probes now scrub executable Bash startup, option, trace, and exported-function controls. Existing-destination init uses a conservative two-generations-per-path plus explicit-repeat descriptor budget, allowing the default scaffold under macOS's soft limit of 256 without weakening rollback identity.
-- Make generated npm installs immune to ambient dry-run, lock-only, bin-link, workspace-selection, platform, and related install-shaping settings before recording dependency readiness; old receipts from the weaker command contract are invalidated. PostgreSQL browser E2E now uses an Ubuntu service-container runner independently of the repository-wide CI runner, database workflows carry their SQLx metadata authority explicitly, and SQLx 0.8 Rust/React scaffolds reject unsupported custom metadata directories before creating output.
-- Follow npm's real dependency authority throughout generated repositories: `npm-shrinkwrap.json` takes precedence over `package-lock.json`, both names schedule and key the relevant workflows, and frozen/bootstrap installs explicitly include development, optional, and peer dependencies despite ambient omit settings. Generated Rust and E2E workflows also watch both supported rustup toolchain filenames.
-- Harden Jig-owned Bash probes by removing inherited startup, option, trace, and byte-exact exported-function controls without changing the normal environment inherited by configured repository commands. Linux doctor, vault, and dev-proxy cleanup now check one absolute phase deadline at every procfs/result boundary, and proxy leader exit no longer replenishes TERM or SIGKILL-confirmation time.
-- Make native-Windows doctor proxy diagnostics execute the repository launcher through a sanitized Bash boundary, preserving its proxy-capable profile selection. Linux process-group cleanup now carries one absolute deadline through procfs enumeration, stat reads, and fallback membership probes, and generated Node 22 workspaces compile against matching Node 22 typings from one rendered authority.
-- Close the final signal and external-process ownership cutovers: post-retirement handlers take the safe conventional-exit claim before stale-generation returns, and doctor supervises SQLx, Codex marketplace, and proxy/service subprocesses under one bounded cancelable session in every feature mode. Windows argv launch now fails when no inspected executable or batch shim resolves instead of delegating a filtered bare name back to ambient PATH lookup; platform-specific regressions, helpers, imports, and metadata predicates compile cleanly on their supported targets, with native Windows default and no-default all-target Clippy enforcing that boundary.
-- Close the remaining doctor and path-lifecycle boundaries: one serialized signal owner spans every external check in a doctor invocation, reaps before restored signal redelivery, and permits a later invocation only after clean retirement; proxy JSON has a separate bounded stdout allowance tied to route-state size; escaped-pipe tests use exact PID/start identities and confirmed cleanup. Managed output components now require valid Unicode, Windows PATH search skips drive-relative entries, and foreground termination retires resource/generation state before restoring handlers so a final signal cannot be erased.
-- Complete managed-output portability by rejecting Win32-forbidden punctuation, control bytes, and raw backslash aliases before init, adopt, or update mutation. Tooling-only fixture assertions now use fixed-string contract keys, generated API tracing enables its binary target as well as library/HTTP targets, and dev preflight skips only historical checkers that do not advertise dependency readiness.
-- Reject Windows drive-relative development executables, retain targeted CTRL+BREAK grace for Job-owned descendants after a wrapper exits, and make termination-session retirement hand late signals to the existing exit claim instead of erasing them. No-default doctor proxy diagnostics now use bounded owned-tree capture, overflowing process deadlines remain genuinely unbounded, and signal/process regressions use atomic markers, kernel-assigned proxy ports, exact identities, and semantic barriers. An explicit `--http-port 0` exposes that ephemeral runtime mode while configured and service ports remain stable and nonzero.
-- Make generated Node-version policy fail closed: applicable `.node-version` files must be bounded real regular files reached through stable repository directories and contain one version token, true absence is the only fallback status, and CI writes its pinned fallback only to runner-owned temporary storage. SPA coverage now follows production `src` files instead of enumerating starter modules, generated SQLite locking uses `fs4`, E2E workflow path filters share one template authority, and Bun versions remain YAML strings.
-- Preserve ordered doctor semantics across a plain leading `! DATABASE_URL=...` prefix, retain every distinct termination signal observed during one owned SQLx probe while keeping the first reason sticky, and redeliver those signals only after cleanup and handler restoration. Vault supervision now keeps completed capture/observer outcomes ahead of a newly expired deadline and treats platform-proven process-group quiescence as authoritative after a successful direct fallback.
-- Resolve Windows `cmd.exe`, `taskkill.exe`, and `icacls.exe` from the native system directory instead of PATH or a hard-coded drive, while requiring an explicit `ComSpec` to be absolute and usable. Generated dependency probes likewise reject missing or relative `ComSpec` values instead of invoking a bare `cmd.exe`. Foreground route cleanup shares one absolute lock deadline across every child, retry, and Drop fallback; process tests use Rust-owned listeners and semantic synchronization instead of Python, free-port handoffs, or scheduler ceilings, and Windows CI pins the generated-test Node runtime.
-- Apply portable file-plan collision validation to managed harness-only, adopt, and update outputs even when no scaffold is selected. Remote template clone commands retain a narrow Git transport/authentication environment while repository/object/index/config/trace redirections stay scrubbed and mutating Git commands remain isolated.
-- Harden initialization and subprocess authority at the remaining race boundaries: validate both pre-existing and concurrently published Git metadata as the exact destination worktree, preflight the real filesystem's no-replace directory semantics, quarantine identity-checked cleanup entries, and supervise doctor probes until their retained process tree is proven quiescent under one cleanup deadline. Windows foreground cleanup now attempts targeted CTRL+BREAK before its bounded fallback/Job force path, and direct native executables no longer inherit batch-only path limits.
-- Make init reject parent-relative and incomplete Windows destinations before prompts or filesystem mutation, canonicalize the deepest existing ancestor, privately stage and atomically publish wholly new repositories, and quarantine existing entries before replacement so rollback restores only exact Jig generations while preserving contention and recovery material. Git initialization now scrubs repository-redirection inputs, uses explicit contained paths, validates self-contained metadata, and publishes without replacement; portable output-collision preflight is O(n log n), and targets without a safe no-replace primitive reject init before interaction. Normalize portable frontend/dev directory identities while keeping canonical filesystem paths through readiness and converting Windows paths only at process spawn.
-- Strengthen generated dependency receipts across every authoritative workspace member, content-hash executable launchers, bind pnpm's hook-disabled layout/configuration/environment contract, and exclude only type-checked top-level tool runtime caches from each actual node-modules install root. Dependency queries now preserve their verified-absence versus invalid-authority exit status, pnpm honors the effective `package.json` / `package.json5` / `package.yaml` authority through a bounded hook-disabled parser, and Yarn validates root-lock authority before reporting Node policy. Add explicit dev-only dependency bootstrap guidance and include PID namespaces plus exact worker generations in install ownership. Windows pnpm/Yarn metadata lookup now uses validated `PATHEXT` search, and Bun workflow values are serialized as YAML strings.
-- Arm proxy cleanup before startup spawn, preserve graceful handling for the first signal, condition route deletion on exact process ownership, bound unsupported-platform output cleanup, and give Windows Job Objects generation-owned final handles. Astro opts out of agent background mode correctly, and in-memory SQLite pools retain a database-owning connection without idle/lifetime reaping or cancellable pre-acquire health checks; private cache additionally serializes checkouts.
-- Treat derived `JIG_DEV_<APP>` coordinates as current-session topology, prefer the managed API origin in generated SPA/admin Vite configs, and make Playwright overwrite both generic and namespaced origins for its isolated real backend.
-- Make Windows required-tool PATH lookup prefer validated executable extensions for bare commands while preserving literal-first explicit extensionless paths, preventing an unrelated extensionless file from shadowing an adjacent executable.
+
 - Extract tests into dedicated modules
-- Default new and adopted repos to repo-scoped local vaults with `--no-vault` and explicit `--global` escape hatches; in scoped repos, malformed `.jig.toml` vault policy blocks vault commands instead of falling back to legacy/global vaults, `JIG_VAULT_HOME` is now a vault base, and repo vault homes resolve below `$JIG_VAULT_HOME/scopes/` using a trusted local repo namespace.
+- Breaking: `jig init` and `jig adopt` now print human-readable summaries by default and only print their full structured reports when `--json` is supplied; `jig update` keeps its existing JSON default.
+- Default release builds of `jig init` and `jig adopt` to the official `jig-sh` template source pinned to the installed Jig version's release tag; unreleased or dirty local builds now use templates embedded in the binary when `--template` is omitted, with a checked-in snapshot for packaged builds and generated launchers that reuse a same-version `jig` on `PATH` and require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before falling back to configured or official install sources. `--template /path/to/jig-sh` and `--vcs-ref <ref>` remain available for explicit checkout or remote template code.
+- Keep `jig init` and `jig adopt` terminal output human-oriented by default; scripts that consumed the previous implicit JSON output must now pass `jig init --json` or `jig adopt --json` for the full structured bootstrap report. `jig adopt` now previews by default, returns `render_mode = "preview"` until `--write` applies files, confirms interactive writes unless `--defaults` or `--no-input` is supplied, records `.agent/state/adopt-last.json` with backups for overwritten managed files, and reports conflicts in preview instead of blocking before review. `jig update` continues to print JSON by default.
+- Stop generating placeholder crate-level `AGENTS.md` files during adoption; `scripts/jig check agent-guides` now validates existing crate guides instead of requiring low-signal stubs for every crate.
+- Remove generated Makefile support and hard cut the runtime to command-backed `scripts/jig` execution. Root `Makefile` files remain project-owned during adoption.
+- Route generated TypeScript/web checks through direct `scripts/jig check typescript-*` commands backed by `scripts/check-webapps.sh`.
+- Change the default generated `bootstrap_command` from `make deps` to `cargo fetch` so default command-backed repos do not require a project Makefile. Repos with web apps should set an explicit `bootstrap_command` when bootstrap must install web dependencies.
+- Render schema-check commands, tools, and gates only when both SQLx and schema dumps are enabled; SQLx-only repos keep `sqlx-check` and migration support without a disabled placeholder schema gate.
+- Command-backed `.jig.toml` `*_command` values now run through non-login `bash -c`; put any required toolchain setup in the configured command or project-owned scripts. `scripts/jig bootstrap` is available in supported command-backed repos.
+- Generated Cargo command defaults now skip with exit 0 and a stdout note when no root `Cargo.toml` exists, so harness-only repos can verify immediately after `jig init`.
+- Regenerating defaults with `jig update --recopy` rewrites `bootstrap_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, and `rust_test_locked_command` to the no-root-`Cargo.toml` skip form unless the repo has customized those answers.
+- `scripts/jig work check` now rejects unknown or closed plan IDs before running tools; `scripts/jig work gates` still reports status for any existing plan, including closed plans.
+- `scripts/jig work gates` and `scripts/jig work evidence` keep top-level `ok` as command success and expose gate health through `overall`, `gates_ok`, and per-gate `status`.
+- `scripts/jig work gates --summary` now prints freshness reasons, receipt diffs, changed paths, and plan-state-aware next steps; text-grepping scripts should use default JSON instead.
+- `scripts/jig work receipts --summary` and `scripts/jig vault run --summary` preserve short multiline output previews for readability; automation should read the default JSON output.
+- `scripts/jig vault secret set NAME` now defaults to hidden terminal input when run interactively; non-interactive callers must pass `--value-stdin`.
+- `scripts/jig dev` now prints a compact APP / URL / STATUS / PID table and dev-proxy failures include more specific likely-fix guidance.
+- Release automation that builds Jig from a git checkout should fetch tags before building, or set `JIG_ASSUME_RELEASE_BUILD=1` after validating the workspace version and release tag.
+- BREAKING for local dogfooding: resolve `JIG_DEV_BIN` directly instead of copying it into the Jig cache, so local runtime changes use the current development binary after version validation.
+- Hard-fail `scripts/install-jig.sh` when `JIG_DEV_BIN` is set but missing, non-executable, or resolves to a binary whose version does not match the generated repo instead of falling back to cached runtime selection. Direct callers of `scripts/install-jig.sh` should use `scripts/jig`, set a matching `JIG_DEV_BIN`, unset it, or run the normal cached installer path.
+- Split the local development proxy runtime into the `jig-dev-proxy` workspace crate used by the `jig-sh` CLI.
+- Refuse to share an unrelated proxy found on the requested HTTP port unless it is registered in the same proxy state directory.
+- Proxy list/status output now includes loopback health-probe fields such as `health_pid`, `handshake_ok`, `pid_matches_proxy`, and `running`.
+- Prune legacy live process routes that do not have process start tokens on platforms where Jig can verify process start identity.
+- BREAKING: Strictly reject unknown `.jig.toml` config fields so typos and stale local config fail fast.
+- Migration note: remove or rename unknown `.jig.toml` keys reported by the load error before rerunning `scripts/jig`; previously ignored local keys now block startup. This applies to top-level keys plus `[work]`, `[agent_tooling]`, `[agent_tooling.codex]`, `[dev]`, `[[dev.apps]]`, and legacy `[[frontend_apps]]` entries.
+- BREAKING migration note: Jig now rejects new `schema_dump_enabled = true` answers unless `sqlx_enabled = true`; `jig update --recopy` normalizes legacy SQLx-disabled repos that still have `schema_dump_enabled = true` back to `false`.
+- `jig-sh` now enables the `dev-proxy` feature by default, which pulls in the TLS/HTTP proxy stack for library consumers unless they opt into `default-features = false`.
+- MCP/contract-only consumers can build with `default-features = false`; in that profile, `dev` and `proxy` still parse but return clear unsupported-feature errors instead of linking the proxy stack.
+- Keep `web_package_manager = "bun"` as the default for legacy `[[frontend_apps]]`; configure `dev.apps` or set explicit commands when legacy apps should launch with another package manager.
+- `jig init` and `jig adopt --defaults` now default omitted SQLx answers to a tooling-only profile unless a migration directory is supplied, emit a note about that inference, and keep noninteractive adoption usable without extra SQLx flags.
+- Behavior change: SQLx adoption now leaves schema dumps disabled unless `schema_dump_enabled = true` or an explicit `schema_dump_command` is supplied, so first-run `scripts/jig doctor --summary` does not require a repo-owned `scripts/dump-schema.sh` before the repo has implemented one.
+- `jig adopt --json` now reports retired cleanup paths separately as `adoption_profile.retired_managed_files` instead of mixing them into active `managed_files`.
+- `jig init --json` and `jig adopt --json` now expose the managed-file summary as `render_report`.
+- Backend-only adoption no longer writes disabled web workflow/scripts; previously generated backend-only web scaffolding is now treated as retired managed output during refresh.
+- Generated frontend coverage enforcement now uses `scripts/enforce-coverage.cjs` so ESM packages with `"type": "module"` can run the gate; old `scripts/enforce-coverage.js` is retired, and generated guidance now names the required `coverage/coverage-summary.json` artifact.
+- `jig adopt` now detects nested Rust crates even when a repo has no root `Cargo.toml`, and generated Rust check commands run each inferred nested manifest instead of reporting a false skip.
+- `scripts/jig doctor --summary` now includes the detail for required failing checks, and required-tool probing recognizes `cargo sqlx` as needing the `cargo-sqlx` subcommand.
+- `scripts/jig work gates --summary` now defaults to the single open work plan, matching `scripts/jig work evidence --summary`; pass `--plan-id` when multiple plans are open or to inspect a closed plan.
+- `scripts/jig doctor --summary` now reports missing Codex Jig skills as optional setup instead of blocking overall repo readiness.
+- Behavior change: repo-local `scripts/jig` launchers now run the Jig binary from the owning repository root even when invoked by absolute path from another current directory. This makes check/dev/proxy/agent commands consistently operate on the owning repo; `jig init`, `jig adopt`, and `jig update` still resolve relative destination/template paths against the caller's original directory.
+- Require `--accept-trust-scope` before installing the Jig Dev Proxy local CA through the platform trust tooling.
+- Vite proxy host support relies on Vite's `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` compatibility hook; configure Vite `server.allowedHosts` explicitly if a Vite release changes that hook.
+- Windows builds parse and run non-certificate proxy flows, but automatic HTTPS certificate generation/trust remains unsupported until owner-only ACL hardening for private key files is implemented.
+- Document `JIG_PROXY_STATE_DIR`, proxy CA trust scope, and local dev proxy usage more explicitly.
+- Generated `--preset rust-react` bootstrap commands now install generated frontend app dependencies before `scripts/jig dev` runs them.
+- Generated `--preset rust-react` frontend dev scripts now install missing app dependencies before launching the dev server, so a fresh scaffold can run `scripts/jig dev` even before an explicit `scripts/jig bootstrap`.
+
+### Security
+
+- `vault run --file` writes each secret to a private Unix `0600` temp file under a `0700` temp directory, wipes brokered temp files before normal cleanup, and removes the temp directory when the brokered process exits; this promotes `tempfile` to a runtime dependency of `jig-vault`.
+- Harden proxy stop, certificate writes, CA regeneration, and TLS handshake behavior for local development sessions.
+- Harden Vite argument handling, including rejection of mismatched explicit Vite port flags, backend response parsing, WebSocket proxy-header scrubbing, and route-cache invalidation.
+- Harden LAN proxy exposure, alias registration, workspace discovery traversal, process-route liveness checks, and route persistence.
+- Harden state directory permissions, service-file quoting, and local proxy shutdown behavior.
+- Harden background proxy startup, runtime file replacement, request-host validation, installer locking, private-key reads, and workspace config file reads.
+- Reverify process-route listener ownership while holding the route lock, restore the previous route file after failed route publication, isolate service temp paths, harden certificate/trust temporary reads, prefer recorded template commits for remote runtime installs, and defer release tag pushes until all crates publish successfully.
+- Treat template source metadata as a runtime-install trust boundary: recorded hex `_commit` values pin the exact remote Jig revision used by `scripts/install-jig.sh`, and contract checks now keep the installer script and template mirror in sync.
+- Bound the Jig Dev Proxy local CA lifetime to two years, avoid broad bare-TLD CA constraints for non-`.localhost` TLDs, and verify macOS trust installation before recording Jig's trusted-CA marker.
+- Reject backend response headers with whitespace before the colon, retry transient TLS leaf cert/key rotation mismatches, escape `$` in systemd `ExecStart` values, fail closed on oversized workspace glob expansion, and extend proxy state lock waits.
+- Document that shell-form `[[dev.apps]].command` and top-level `.jig.toml` `*_command` values are trusted repo-configured shell execution; prefer `argv` when app arguments should be passed literally.
 
 ### Other
+
 - Implement scripts/jig agent doctor/bootstrap for Jig skills setup
 - Migrate .jig configuration from YAML to TOML format
 - Add GitHub Actions release workflow and CHANGELOG
@@ -916,131 +1011,6 @@
 - Improve adopt inference and reporting
 - Add rust-react scaffold templates
 - Improve init preset discovery UX
-
-## Unreleased
-
-### Added
-- Add `jig info --commands` for repository-specific command availability before and after adoption, stable machine-readable status and reason codes, and actionable setup guidance.
-- Add `jig adopt --minimal` to render `.jig.toml` and `.agent/` scaffolding without scripts, workflows, or agent context files; stores `harness_footprint = "minimal"` so `jig update` keeps the thin footprint until a full re-adopt.
-- Add `.agent/jig-managed-paths.json` as the strict exact-path authority for managed-file retirement; older adopted repositories establish it with an explicit same-footprint re-adopt before updating or contracting.
-- Add `scripts/jig doctor` and `scripts/jig info` / `scripts/jig explain` for repo readiness and configuration snapshots.
-- Add `scripts/jig work evidence` and the `jig.work_evidence` MCP tool for fresh/stale gate evidence inspection.
-- Add `scripts/jig vault run --file VAR=SECRET` for Unix-only secret-file delivery and human-readable vault run summaries by default (`--json` for the full buffered payload).
-- Add Jig local development proxy commands for stable repo-scoped dev hostnames, HTTP/HTTPS forwarding, WebSocket support, workspace app discovery, local certificates, and service file generation.
-- Add `scripts/jig dev` and `scripts/jig proxy {start,stop,list,prune,run,alias}` runtime flows for supervised app processes, aliases, and route listing/pruning.
-- Add a private, canonical-repo-scoped dev-session registry plus `scripts/jig dev status` and idempotent `scripts/jig dev stop`, with sanitized human/JSON diagnostics, authenticated supervisor-owned cleanup, and retained fail-closed evidence when cleanup cannot be confirmed.
-- Add `scripts/jig proxy cert {generate,status,trust,untrust}` and `scripts/jig proxy service {install,status,uninstall}` for certificate trust management and user service installation; trust-store mutations require `--accept-trust-scope`, and `proxy service install` requires `--accept-service-scope`.
-- Enable the `dev-proxy` Cargo feature by default while preserving `--no-default-features` builds for contract/MCP-only consumers.
-
-### Changed
-- Breaking: Treat whitespace-only `rust_migration_dir` values as invalid during contract checks and report affected migration workflows as needing setup with direct re-adoption guidance instead of claiming they are ready.
-- Label the proxy readiness check as `Dev proxy` in human and JSON doctor output so it is distinct from generic network proxies; its stable JSON `id` remains `proxy`.
-- Breaking: Make global `--json` cover CLI usage errors and pre-output command failures with a stable error envelope on stdout while retaining nonzero exit statuses; scripts that consumed failures from stderr must read the JSON envelope instead. `prompt get --json` now returns the standard command envelope instead of the bare rendered body. Commands that already emitted JSON do not append a second document, and MCP continues to reserve stdout for protocol framing.
-- Breaking: Require exactly one nonblank `--body` or `--body-file` when appending structured-work progress; body-less `work append` invocations must provide progress text.
-- Validate structured-work start body sources before durable session mutation, label aggregate snapshot completeness as collection state, and make `state summary` report persisted record/event counts instead of duplicating `work status`. Reorder root help around setup, development, structured work, project data, local services, and agent automation, with a compact common-workflows footer.
-- Make scaffolded init validate its destination before wizard or vault interaction and again before mutation, reject a symlink destination plus portable exact, case-folded, file/descendant, and Windows-alias output collisions even with `--force`, publish ordinary files atomically within verified parents, and roll back only empty directories atomically created by the failed init. Existing Windows drive/share roots remain accepted when a denied create can be verified as a real directory. Direct `--frontend-app` metadata now fails during CLI parsing, and init/adopt resolve relative answer files from the launcher invocation directory.
-- Make required-tool doctor analysis check recognized external `env`, `nohup`, and `time` wrapper chains plus their terminal target in execution order and under each stage's effective lookup context; preserve unsupported or dynamic wrapper ambiguity instead of falsely passing it, model ordered environment assignment/scrubbing, command-local literal PATH, inherited Bash startup/function state, hidden substitutions, expansion-capable heredocs, and prior dispatch-mutating builtins without exposing configured commands or credentials. External `env` assignments use its nonempty-name grammar, and PostgreSQL capability output must match the complete synthetic invalid-`sslmode` diagnostic on one line.
-- Make foreground development startup locks and route publication interruptible, apply explicit app selection before selected-directory resolution, and harden Windows PATH, Job Object, graceful-fallback, and portable Unix termination behavior. Windows app launch keeps canonical containment checks while converting supported drive/UNC paths for child use, tries literal explicit extensionless commands before `PATHEXT`, preserves quoted/non-Unicode PATH entries, and rejects unsafe device namespaces.
-- Keep bare `scripts/jig dev` as the launch form and add `--replace` for safe same-repository conflict replacement; cross-repository, unregistered, ad-hoc, and concurrently observed ownership is never terminated or silently taken over.
-- Align unattended harness-only/tooling-only examples and fixtures, prove harness-only rendering before fixture stubs are added, exercise the generated SQLx command through a controlled executable, and align empty frontend output declarations, historical admin role inference, and dev-app kind error attribution with the actual generated contract.
-- Minimal frontend adoption now retains frontend/dev metadata while deferring TypeScript commands, contract tools, work gates, scripts, workflows, and package validation until full-harness adoption.
-- Breaking: CLI commands now print human-readable output by default. Pass global `--json` for structured automation output. The per-command `--summary` flag is removed; scripts that parsed default JSON must add `--json`, and scripts that passed `--summary` should drop that flag.
-- Breaking: `jig init`, `jig adopt`, and `jig update` now print human-readable summaries by default and only print their full structured reports when `--json` is supplied.
-- Default release builds of `jig init` and `jig adopt` to the official `jig-sh` template source pinned to the installed Jig version's release tag; unreleased or dirty local builds now use templates embedded in the binary when `--template` is omitted, with a checked-in snapshot for packaged builds and generated launchers that reuse a same-version `jig` on `PATH` and require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before falling back to configured or official install sources. `--template /path/to/jig-sh` and `--vcs-ref <ref>` remain available for explicit checkout or remote template code.
-- Keep `jig init`, `jig adopt`, and `jig update` terminal output human-oriented by default; scripts that consumed the previous implicit JSON output must now pass `jig init --json`, `jig adopt --json`, or `jig update --json` for the full structured bootstrap report. `jig adopt` now previews by default, returns `render_mode = "preview"` until `--write` applies files, confirms interactive writes unless `--defaults` or `--no-input` is supplied, records `.agent/state/adopt-last.json` with backups for overwritten managed files, and reports conflicts in preview instead of blocking before review.
-- Stop generating placeholder crate-level `AGENTS.md` files during adoption; `scripts/jig check agent-guides` now validates existing crate guides instead of requiring low-signal stubs for every crate.
-- Remove generated Makefile support and hard cut the runtime to command-backed `scripts/jig` execution. Root `Makefile` files remain project-owned during adoption.
-- Route generated TypeScript/web checks through direct `scripts/jig check typescript-*` commands backed by `scripts/check-webapps.sh`.
-- Change the default generated `bootstrap_command` from `make deps` to `cargo fetch` so default command-backed repos do not require a project Makefile. Repos with web apps should set an explicit `bootstrap_command` when bootstrap must install web dependencies.
-- Render schema-check commands, tools, and gates only when both SQLx and schema dumps are enabled; SQLx-only repos keep `sqlx-check` and migration support without a disabled placeholder schema gate.
-- Command-backed `.jig.toml` `*_command` values now run through non-login `bash -c`; put any required toolchain setup in the configured command or project-owned scripts. `scripts/jig bootstrap` is available in supported command-backed repos.
-- Generated Cargo command defaults now skip with exit 0 and a stdout note when no root `Cargo.toml` exists, so harness-only repos can verify immediately after `jig init`.
-- Regenerating defaults with `jig update --recopy` rewrites `bootstrap_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, and `rust_test_locked_command` to the no-root-`Cargo.toml` skip form unless the repo has customized those answers.
-- `scripts/jig work check` now rejects unknown or closed plan IDs before running tools; `scripts/jig work gates` still reports status for any existing plan, including closed plans.
-- `scripts/jig work gates` and `scripts/jig work evidence` keep top-level `ok` as command success and expose gate health through `overall`, `gates_ok`, and per-gate `status`.
-- `scripts/jig work gates` now prints freshness reasons, receipt diffs, changed paths, and plan-state-aware next steps; automation should pass `--json` instead of grepping human text.
-- `scripts/jig work receipts` and `scripts/jig vault run` preserve short multiline output previews for readability; automation should pass `--json`.
-- `scripts/jig vault secret set NAME` now defaults to hidden terminal input when run interactively; non-interactive callers must pass `--value-stdin`.
-- `scripts/jig dev` now prints a compact APP / URL / STATUS / PID table and dev-proxy failures include more specific likely-fix guidance.
-- Release automation that builds Jig from a git checkout should fetch tags before building, or set `JIG_ASSUME_RELEASE_BUILD=1` after validating the workspace version and release tag.
-- BREAKING for local dogfooding: resolve `JIG_DEV_BIN` directly instead of copying it into the Jig cache, so local runtime changes use the current development binary after version validation.
-- Hard-fail `scripts/install-jig.sh` when `JIG_DEV_BIN` is set but missing, non-executable, or resolves to a binary whose version does not match the generated repo instead of falling back to cached runtime selection. Direct callers of `scripts/install-jig.sh` should use `scripts/jig`, set a matching `JIG_DEV_BIN`, unset it, or run the normal cached installer path.
-- Split the local development proxy runtime into the `jig-dev-proxy` workspace crate used by the `jig-sh` CLI.
-- Refuse to share an unrelated proxy found on the requested HTTP port unless it is registered in the same proxy state directory.
-- Proxy list/status output now includes loopback health-probe fields such as `health_pid`, `handshake_ok`, `pid_matches_proxy`, and `running`.
-- Prune legacy live process routes that do not have process start tokens on platforms where Jig can verify process start identity.
-- BREAKING: Strictly reject unknown `.jig.toml` config fields so typos and stale local config fail fast.
-- Migration note: remove or rename unknown `.jig.toml` keys reported by the load error before rerunning `scripts/jig`; previously ignored local keys now block startup. This applies to top-level keys plus `[work]`, `[agent_tooling]`, `[agent_tooling.codex]`, `[dev]`, `[[dev.apps]]`, and legacy `[[frontend_apps]]` entries.
-- BREAKING migration note: Jig now rejects new `schema_dump_enabled = true` answers unless `sqlx_enabled = true`; `jig update --recopy` normalizes legacy SQLx-disabled repos that still have `schema_dump_enabled = true` back to `false`.
-- `jig-sh` now enables the `dev-proxy` feature by default, which pulls in the TLS/HTTP proxy stack for library consumers unless they opt into `default-features = false`.
-- MCP/contract-only consumers can build with `default-features = false`; in that profile, `dev` and `proxy` still parse but return clear unsupported-feature errors instead of linking the proxy stack.
-- Keep `web_package_manager = "bun"` as the default for legacy `[[frontend_apps]]`; configure `dev.apps` or set explicit commands when legacy apps should launch with another package manager.
-- `jig init` and `jig adopt --defaults` now default omitted SQLx answers to a tooling-only profile unless a migration directory is supplied, emit a note about that inference, and keep noninteractive adoption usable without extra SQLx flags.
-- Behavior change: SQLx adoption now leaves schema dumps disabled unless `schema_dump_enabled = true` or an explicit `schema_dump_command` is supplied, so first-run `scripts/jig doctor` does not require a repo-owned `scripts/dump-schema.sh` before the repo has implemented one.
-- `jig adopt --json` now reports retired cleanup paths separately as `adoption_profile.retired_managed_files` instead of mixing them into active `managed_files`.
-- `jig init --json` and `jig adopt --json` now expose the managed-file summary as `render_report`.
-- Backend-only adoption no longer writes disabled web workflow/scripts; previously generated backend-only web scaffolding is now treated as retired managed output during refresh.
-- Generated frontend coverage enforcement now uses `scripts/enforce-coverage.cjs` so ESM packages with `"type": "module"` can run the gate; old `scripts/enforce-coverage.js` is retired, and generated guidance now names the required `coverage/coverage-summary.json` artifact.
-- `jig adopt` now detects nested Rust crates even when a repo has no root `Cargo.toml`, and generated Rust check commands run each inferred nested manifest instead of reporting a false skip.
-- `scripts/jig doctor` now includes the detail for required failing checks and safely verifies that a trusted direct SQLx CLI includes the SQLite or PostgreSQL driver configured by `DATABASE_URL` without exposing credentials or contacting the configured database. Cargo-dispatched SQLx commands remain visible but unverified because aliases, included configuration, home overrides, and wrappers can change the executable Cargo actually runs; fresh scaffolds therefore default to direct `CARGO=cargo sqlx prepare`, which also supplies the dispatcher input required by SQLx CLI 0.9.
-- Preset init now resolves `--answers-file` before the wizard and scaffold plan, with one explicit precedence (`CLI > answers file > preset defaults > renderer defaults`) so repository names, branches, package managers, commands, frontends, Git HEAD, and generated workflows cannot contradict one another.
-- Generated database bootstrap accepts an exported `DATABASE_URL` without requiring a physical `.env`, orders database setup before bootstrap in next steps, and bounds default PostgreSQL database identifiers to 63 bytes with a stable suffix hash.
-- Generated frontend dependency handling now resolves real workspace membership, records a versioned scope-specific readiness fingerprint, rejects unrelated or stale install artifacts in `scripts/jig dev`, and safely waits for verified live installers without recommending deletion of their locks.
-- Fresh Yarn 4 scaffolds use the `node-modules` linker, admin Vite apps honor injected `PORT`, and generated E2E workflows safely serialize branch names containing YAML-significant characters.
-- Preserve the advertised Rust 1.85 minimum across all targets and features by avoiding let-chains and disabling unused dependency features that raised transitive MSRV requirements.
-- Generated Rust workspaces now declare and inherit `rust-version = "1.85"` and use Cargo resolver 3, so lockfiles created by newer Cargo versions prefer transitive releases compatible with the scaffold's advertised minimum.
-- SQLx doctor now honors literal command-local `--database-url` and `DATABASE_URL` values before environment/dotenv defaults, redacts inline URLs from reports, and reports ambiguous or heuristic probe results as present but unverified while retaining a blocking known-missing-driver result.
-- SQLx doctor now separates executable presence from probe trust: only bare allowlisted tools resolved through canonical non-repository PATH entries are executed, under a scrubbed isolated environment. Explicit, repo-local, relative, symlink-mediated, or shell-ambiguous tools remain present but unverified; PATHEXT lookup, heredocs, guarded cwd changes, and later URL mutations are modeled conservatively.
-- Init automation now distinguishes `--defaults` (Rust React, no database, `web`) from strict `--no-input`/non-terminal execution, adds explicit `--preset harness-only`, and rejects minimal-harness/scaffold contradictions before vault or destination writes.
-- Answers files with `harness_footprint = "minimal"` now resolve as a complete harness-only init shape in interactive, defaulted, strict, and non-terminal modes, while explicit Rust/database/frontend combinations still fail before writes. Legacy frontend entries recover kind/role from matching dev metadata and historical admin names, then persist both fields.
-- Doctor now recognizes and redacts Cargo-dispatched, direct `sqlx`, and `cargo-sqlx` forms including `-D`, retains shell quote and literal cwd context, probes only trusted direct executables, and fails open as `present_unverified` for Cargo dispatch, wrappers, redirects, missing URLs, substituted values, or ambiguous expansion without leaking secrets.
-- Generated frontend dependency receipts now prove the selected manager-specific inputs and installed artifact, and a dedicated identity-checked install worker prevents wrapper death, stale metadata, or unverifiable owners from enabling overlapping installs. A verified coordinator handoff no longer expires after an arbitrary scheduler delay; only unresolved identity has a bounded retry window. Fresh pnpm workspaces explicitly disable the global virtual store so local and CI validation share one repository-local layout, and the normalized setting is contract-bound rather than ambient. Only pnpm 10/11's exact-root regular workspace-validation cache files are excluded; symlink, directory, nested-file, executable-shim, package-tree, semantic metadata, and manager-authority changes remain attested. Browser E2E CI uses the same dependency authority.
-- Generated frontend dependency scope now follows real manager boundaries: declared root membership wins for npm, pnpm, Bun, and Yarn Classic, while nested Yarn Berry projects remain independent. Unsupported workspace syntax fails closed; receipts cover every member manifest, patch/config input, complete PnP companions, and truly dependency-free installs; install ownership uses timezone-stable process identities.
-- pnpm dependency receipts now bind the configured Corepack spec, actual executable/version, shared-lock mode, lockfile stability, and the pnpm 10/11-specific active patch source. The checker supports pnpm's JSON, JSON5, and YAML manifests; disables hooks during metadata queries with the version-compatible npm/pnpm configuration namespaces; rejects inherited overrides, unsafe workspace metadata, traversal, runtime drift, and scope-local YAML patches that standalone `--ignore-workspace` would silently ignore; and retains selected members named like generated output directories. Generated CI resolves the scope-aware pnpm spec and watches authoritative manifests and patch files. Standalone installs continue to ignore inactive parent patch settings. Forced proxy cleanup also attempts an immediately available route lock before honoring cancellation, so dead routes are not left behind unnecessarily.
-- Generated package-manager metadata probes resolve native Windows executables and invoke Corepack/npm `.cmd` or `.bat` shims through an explicit, fixed-argument `cmd.exe` boundary, covering pnpm alternate manifests plus Yarn Classic/Berry configuration without the deprecated `shell: true` argument path.
-- Rust React init now reserves the case-insensitive `api` dev identity for its backend before prompting or writing files. Generated admin source is clean under its pinned Prettier configuration, the standard lint gate enforces that check, and derived `dist/` output stays excluded from formatting.
-- Generated web and E2E workflows provision a fallback Node before invoking the Node-backed scope checker, synthesize a pinned version file only for the checker's explicit no-file status, preserve all other resolver failures and the configured GitHub runner, and invalidate on authoritative patches/PnP artifacts. SPA/admin Vite configs ignore blank origin overrides, Playwright treats blank numeric variables as omitted, and admin theme state is applied before hydration.
-- Yarn readiness now supports the bounded generated PnP state formats used by Yarn 2, 3, and 4, defaults the historically omitted ESM-loader setting correctly, and proves only referenced Berry archives or Classic external-cache packages while keeping local workspace source outside dependency readiness.
-- Generated real-backend E2E suites scope duplicate `Ready` text to the accessible Rust API card, clear SQLite rollback/WAL/SHM sidecars, and receive a 30-minute CI job budget around Playwright's computed server/test budget. Git Bash dependency ownership uses validated Cygwin/MSYS procfs identity and process-group data instead of unsupported BSD `ps -o` options.
-- Generated workflows quote user-controlled branch, runner, app-name, directory, and path scalars; direct Vite launches use strict ports; and adoption gives recognized Vite/Astro scripts precedence over incidental dependencies.
-- Foreground development cleanup now distinguishes SIGINT, SIGHUP, and SIGTERM end to end, reports statuses 130/129/143, closes child-exit races, and normalizes ordinary signal-terminated children. Concurrent generated database creation safely reuses the winner's database.
-- Unix foreground signal handlers are now installed transactionally for one session and restore the prior dispositions afterward. The first termination reason is sticky; any later termination signal accelerates owned process-tree cleanup without orphaning children or replacing the selected outcome.
-- `proxy run` now shares the structured signal/exit contract with `dev`; repeated matching termination accelerates bounded cleanup during blocked startup, and route-cleanup errors no longer discard a failed child's output tail. Database bootstrap requires an exported URL or a real `.env` assignment rather than accepting any `.env` file.
-- Scaffold reports now separate frontend execution `kind` from semantic `role`, and rendered shadcn dependency/docs/components metadata comes from the same provenance constants reported by init.
-- `scripts/jig work gates` now defaults to the single open work plan, matching `scripts/jig work evidence`; pass `--plan-id` when multiple plans are open or to inspect a closed plan.
-- `scripts/jig doctor` now reports missing Codex Jig skills as optional setup instead of blocking overall repo readiness.
-- Behavior change: repo-local `scripts/jig` launchers now run the Jig binary from the owning repository root even when invoked by absolute path from another current directory. This makes check/dev/proxy/agent commands consistently operate on the owning repo; `jig init`, `jig adopt`, and `jig update` still resolve relative destination/template paths against the caller's original directory.
-- Require `--accept-trust-scope` before installing the Jig Dev Proxy local CA through the platform trust tooling.
-- Vite proxy host support relies on Vite's `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` compatibility hook; configure Vite `server.allowedHosts` explicitly if a Vite release changes that hook.
-- Windows builds parse and run non-certificate proxy flows, but automatic HTTPS certificate generation/trust remains unsupported until owner-only ACL hardening for private key files is implemented.
-- Document `JIG_PROXY_STATE_DIR`, proxy CA trust scope, and local dev proxy usage more explicitly.
-- Generated `--preset rust-react` bootstrap commands now install generated frontend app dependencies before `scripts/jig dev` runs them.
-- Generated `--preset rust-react` frontend dev scripts remain launch-only; run `scripts/jig bootstrap` to install or refresh the dependency fingerprint before `scripts/jig dev`.
-- Generated development apps now launch portably on native Windows: the Rust API uses direct Cargo argv and consumes Jig's injected `HOST`/`PORT`, Astro reads the same values with strict-port behavior and stays foreground under Jig even in agent environments, and npm/Corepack `.cmd` or `.bat` shims run through a validated `ComSpec` boundary while native executables remain direct. Jig assigns each suspended app to a kill-on-close Job Object before resuming it, so descendants remain owned after a batch wrapper exits.
-- Frontend dependency preflight now follows the actual selected configured/discovered launch plan, including package-manager `run dev` apps such as Astro, and supervises the readiness checker with a bounded owned process tree. Typed cancellation preserves cleanup and checker failures, inherited Bash startup/function overrides cannot spoof readiness, and bounded pipe capture cannot leave detached readers. Historical four-part `admin` / `admin-panel` frontend entries retain their Admin role, empty migration answers resolve consistently across noninteractive policies, and recopy migrates the former generated SQLx command default.
-- Generated SQLite bootstrap creates nested database directories, distinguishes semantic in-memory URLs, canonicalizes filesystem aliases for migration locking, and serializes full migrations across processes, including Windows' platform-specific file-lock contention result. Yarn receipts and workflows now cover the closest in-repository package-manager declaration plus every ancestor config/runtime input; external or dynamic Yarn runtime/plugin authorities fail before Yarn executes, an interrupted worker generation retains its lock while descendants survive, install-lock waiters use cheap ownership polling, and browser E2E CI caches its pinned Playwright browser from root and app dependency authorities.
-- Generated SPA TypeScript configuration separates browser and Node globals, rejects identical API/web E2E ports, safely passes matrix directories through the shell environment, and serializes workspace paths as JSON/YAML strings.
-- Foreground cleanup now lets any later termination signal accelerate cleanup without replacing the first reason, preserves Unix process-group identity until descendants are stopped, and uses deterministic lifecycle barriers in its real-signal regressions.
-- Required-tool doctor diagnostics now treat command-local or persistent `PATH` changes as unverified executable identity, emit nullable presence instead of resolving the wrong ambient tool, and skip SQLx capability probes at that boundary. Windows probe children use a separate console process group so Ctrl-C remains a structured cancellation.
-- Generated workflow jobs select Bash explicitly on every configured runner. Real-backend Playwright startup overrides `HOST`, `PORT`, and `BIND_ADDR` together, and private-cache in-memory SQLite pools serialize checkouts onto their one schema.
-- Foreground signal registration is process-one-shot, with generation-scoped callbacks and fail-closed retirement; another foreground dev/proxy command requires a new Jig process. Doctor probing instead serializes each complete external-check batch and permits later same-process batches after clean handler retirement; an unsafe retirement permanently disables later batches in that host process. Linux process-group cleanup skips unreadable `/proc` entries only when `getpgid` proves they are unrelated or gone, and any uncertain or empty SIGTERM-phase scan escalates to SIGKILL before post-kill absence is accepted.
-- Append-only session state now reads legacy recursively embedded start summaries through an iterative metadata-only compatibility path, while new recent-session references are shallow and cannot grow JSON depth with every `work start`. Committed-checkout fixtures create a bare remote through init/push instead of the intermittently failing local no-hardlinks clone path.
-
-### Security
-- Supervise brokered vault commands with a retained process-tree identity and one wall-clock deadline: Linux/macOS leaders remain unreaped until their isolated group is signaled, Windows children enter a kill-on-close Job Object before resume, unsupported targets fail before execution, and nonblocking capped output drains cannot hang on inherited pipes or signal a recycled PID/PGID. Non-consuming Unix observation distinguishes exit, signal, stop, trap, and continue records; macOS accepts group `EPERM` only after an atomic snapshot proves the exact exited leader is the sole remaining member.
-- Apply the same retained-identity proof to macOS development-app cleanup: stopped, trapped, and continued leaders remain running, and group `EPERM` is accepted only after an atomic snapshot proves the exact exited-unreaped leader is the sole member. Additional members remain pending through bounded confirmation so transient zombies can drain while live unsignalable members still fail closed. Lifecycle regressions no longer probe a recyclable numeric process group after reaping its leader, recover their serialization lock after an earlier panic, and release test helpers before reporting cleanup failures.
-- `vault run --file` writes each secret to a private Unix `0600` temp file under a `0700` temp directory, wipes brokered temp files before normal cleanup, and removes the temp directory when the brokered process exits; this promotes `tempfile` to a runtime dependency of `jig-vault`.
-- Harden proxy stop, certificate writes, CA regeneration, and TLS handshake behavior for local development sessions.
-- Harden Vite argument handling, including rejection of mismatched explicit Vite port flags, backend response parsing, WebSocket proxy-header scrubbing, and route-cache invalidation.
-- Harden LAN proxy exposure, alias registration, workspace discovery traversal, process-route liveness checks, and route persistence.
-- Harden state directory permissions, service-file quoting, and local proxy shutdown behavior.
-- Harden background proxy startup, runtime file replacement, request-host validation, installer locking, private-key reads, and workspace config file reads.
-- Reverify process-route listener ownership while holding the route lock, restore the previous route file after failed route publication, isolate service temp paths, harden certificate/trust temporary reads, prefer recorded template commits for remote runtime installs, and defer release tag pushes until all crates publish successfully.
-- Treat template source metadata as a runtime-install trust boundary: recorded hex `_commit` values pin the exact remote Jig revision used by `scripts/install-jig.sh`, and contract checks now keep the installer script and template mirror in sync.
-- Bound the Jig Dev Proxy local CA lifetime to two years, avoid broad bare-TLD CA constraints for non-`.localhost` TLDs, and verify macOS trust installation before recording Jig's trusted-CA marker.
-- Treat only `ESRCH` as proof that an owned process or process group is gone; `EPERM` and unexpected probe failures remain live/unverified so cleanup and dependency-lock recovery fail closed instead of signaling or stealing a recycled identity.
-- Reject backend response headers with whitespace before the colon, retry transient TLS leaf cert/key rotation mismatches, escape `$` in systemd `ExecStart` values, fail closed on oversized workspace glob expansion, and extend proxy state lock waits.
-- Document that shell-form `[[dev.apps]].command` and top-level `.jig.toml` `*_command` values are trusted repo-configured shell execution; prefer `argv` when app arguments should be passed literally.
 
 ## v0.1.0 - 2026-05-12
 
