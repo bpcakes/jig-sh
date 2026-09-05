@@ -5,7 +5,9 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
-use jig_ui::dashboard::{PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS};
+use jig_ui::dashboard::{
+    PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
+};
 
 mod support;
 
@@ -126,10 +128,13 @@ fn recorder_plan_and_status_json_entrypoints_remain_portable_after_deletion() {
 
     let status = success_json(jig(root.path(), &["status", "--json"]));
     assert_eq!(status["command"], "status");
-    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["schema_version"], STATUS_SCHEMA_VERSION);
     assert_eq!(status["outcome"], "complete");
     assert_eq!(status["repository"]["name"], "ExampleProject");
     assert_eq!(status["repository"]["branch"], "main");
     assert!(status["repository"]["head_revision"].as_str().is_some());
     assert_exact_root_fields(&status, STATUS_ROOT_FIELDS);
+    for removed in ["providers", "packages", "blockers"] {
+        assert!(status.get(removed).is_none(), "unexpected {removed} field");
+    }
 }
