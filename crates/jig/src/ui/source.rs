@@ -189,6 +189,8 @@ impl DashboardSource for RepoDashboardSource {
         Ok(StatusRefresh {
             status,
             recorder: local.recorder(request.timeline_limit)?,
+            local_observed_at_ms: status_local.observed_at_ms,
+            provider_observed_at_ms: providers.observed_at_ms,
         })
     }
 

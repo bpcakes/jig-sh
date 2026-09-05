@@ -146,6 +146,10 @@ pub struct RecorderRefresh {
 pub struct StatusRefresh {
     pub status: StatusSnapshot,
     pub recorder: RecorderSnapshot,
+    /// Observation time for the local recorder-backed partition.
+    pub local_observed_at_ms: u64,
+    /// Observation time for the external-provider partition.
+    pub provider_observed_at_ms: u64,
 }
 
 #[derive(Clone, Debug)]

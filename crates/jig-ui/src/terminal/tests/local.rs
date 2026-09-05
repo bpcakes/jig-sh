@@ -1,14 +1,16 @@
 use crate::{
     dashboard::{
         BoundedRows, BoundedText, CollectionDomain, DecisionTimelineRow, LimitId, LoopStateError,
-        PlanSnapshotResult, PlanTimelineRow, RecorderEpochId, ScheduledOccurrence,
-        SessionTimelineRow, SnapshotError, SnapshotErrorCode, StatusRefresh, TimelineRow,
-        scenarios,
+        PlanSnapshotResult, PlanTimelineRow, ReceiptTimelineRow, RecorderEpochId, Remediation,
+        ScheduledOccurrence, SessionTimelineRow, SnapshotError, SnapshotErrorCode, StatusRefresh,
+        TimelineRow, scenarios,
     },
     terminal::model::{App, BaseDetail, PlanSection, Tab, TimelineFilter},
 };
 
 use super::{normalized, render_text};
+
+mod parity;
 
 fn app_with_local(tab: Tab) -> App {
     let mut app = App::new(tab);
@@ -26,212 +28,211 @@ fn assert_contains_all(rendered: &str, expected: &[&str]) {
 }
 
 #[test]
-fn work_timeline_and_health_render_typed_parity_fields() {
-    let mut app = app_with_local(Tab::Work);
-    let work = normalized(&render_text(&app, 120, 36));
+fn failure_stderr_is_bounded_and_scrollable() {
+    let mut recorder = scenarios::recorder_snapshot();
+    let mut older = recorder.failures[0].clone();
+    older.id = "receipt_older".to_string();
+    older.ended_at_ms = Some(scenarios::OBSERVED_AT_MS - 5_000);
+    recorder.failures.push(older);
+    let stderr = format!("first\n{}\nlast", "x".repeat(389));
+    recorder.failures[0].stderr_preview =
+        BoundedText::for_limit(stderr, Some(425), LimitId::FailureStderrChars).unwrap();
+    let mut app = App::new(Tab::Health);
+    app.recorder.data = Some(recorder.into());
+
+    let failures = &app.recorder.data.as_ref().unwrap().failures;
+    assert_eq!(failures[0].id, "receipt_failed");
+    assert_eq!(failures[1].id, "receipt_older");
+    let failure = app.selected_health().unwrap();
+    assert_eq!(failure.identity, "failure:receipt_failed");
     assert_contains_all(
-        &work,
+        &failure.detail.lines.join(" "),
+        &[
+            "Stderr:",
+            "first",
+            "last",
+            "limit 400 characters; 25 omitted",
+        ],
+    );
+    assert!(app.open_selected_detail());
+    let rendered = normalized(&render_text(&app, 80, 16));
+    assert_contains_all(&rendered, &["Failure detail", "Stderr:", "first"]);
+    assert!(app.detail.scroll_limit() > 0);
+    app.move_detail_to_edge(true);
+    let end = normalized(&render_text(&app, 80, 16));
+    assert!(end.contains("limit 400 characters; 25 omitted"));
+}
+
+#[test]
+fn gate_error_preserves_other_plans() {
+    let mut recorder = scenarios::recorder_snapshot();
+    recorder.open_plans[0].gates = None;
+    recorder.open_plans[0].gates_error = Some("gate collection unavailable".to_string());
+    recorder.errors.push(SnapshotError::new(
+        CollectionDomain::Gates,
+        SnapshotErrorCode::GateObservationFailed,
+        Some("plan_example".to_string()),
+        "gate collection unavailable",
+    ));
+    let mut app = App::new(Tab::Work);
+    app.recorder.data = Some(recorder.into());
+
+    let rendered = normalized(&render_text(&app, 120, 36));
+    assert_contains_all(
+        &rendered,
         &[
             "plan_example",
-            "Example plan",
             "plan_closed",
-            "completed",
-            "Gates: pass",
-            "Runtime: 0.3.0",
-            "contract 8",
-            "/example/source",
+            "Gate collection error: gate collection unavailable",
         ],
     );
+}
 
-    app.select_tab(Tab::Timeline);
-    let timeline = normalized(&render_text(&app, 120, 36));
+#[test]
+fn tool_health_renders_all_aggregates() {
+    let app = app_with_local(Tab::Health);
+    let item = app
+        .recorder
+        .data
+        .as_ref()
+        .unwrap()
+        .health
+        .iter()
+        .find(|item| item.section == "Check health")
+        .unwrap();
+    assert_eq!(item.identity, "tool:jig.test");
     assert_contains_all(
-        &timeline,
+        &item.detail.lines.join(" "),
         &[
-            "receipt_failed",
             "Tool: jig.test",
-            "Exit: 1",
-            "1 file changed",
+            "Last status: exit 1",
+            "Last run:",
+            "Runs: 3",
+            "Failures: 1",
+            "Average duration: 250ms",
         ],
     );
-
-    app.select_tab(Tab::Health);
-    app.move_selection(2);
-    let health = normalized(&render_text(&app, 120, 36));
-    assert!(health.contains("Recent failures"));
-    assert!(health.contains("Check health"));
-    assert!(health.contains("Loop collection"));
-    assert!(health.contains("limit 1000 workflows"));
 }
 
 #[test]
-fn local_views_remain_reachable_at_compact_and_micro_sizes() {
-    for tab in [Tab::Work, Tab::Timeline, Tab::Health] {
-        let app = app_with_local(tab);
-        let compact = render_text(&app, 60, 15);
-        assert!(compact.contains("Enter"), "{tab:?}:\n{compact}");
-        let micro = render_text(&app, 39, 11);
-        assert!(micro.contains("Jig"), "{tab:?}:\n{micro}");
-        assert!(
-            micro.contains("Selected")
-                || micro.contains("receipt")
-                || micro.contains("Recent failures")
-        );
-    }
-}
-
-#[test]
-fn timeline_filters_cover_every_kind_and_preserve_raw_identity() {
-    let mut snapshot = scenarios::recorder_snapshot();
-    snapshot.timeline.extend([
-        TimelineRow::Plan(PlanTimelineRow {
-            stable_identity: "plan:event:1".to_string(),
-            timestamp_ms: Some(scenarios::OBSERVED_AT_MS - 2_000),
-            id: "plan-event".to_string(),
-            event: "closed".to_string(),
-            plan_id: "plan_closed".to_string(),
-            title: Some("Closed example".to_string()),
-            resolution: Some("completed".to_string()),
-        }),
-        TimelineRow::Session(SessionTimelineRow {
-            stable_identity: "session:event:1".to_string(),
-            timestamp_ms: Some(scenarios::OBSERVED_AT_MS - 3_000),
-            id: "session-event".to_string(),
-            event: "finished".to_string(),
-            session_id: "session_example".to_string(),
-            outcome: Some("success".to_string()),
-        }),
-        TimelineRow::Decision(DecisionTimelineRow {
-            stable_identity: "decision:\u{1b}[31mraw".to_string(),
-            timestamp_ms: Some(scenarios::OBSERVED_AT_MS - 4_000),
-            id: "decision-1".to_string(),
-            plan_id: None,
-            title: "Choose safely".to_string(),
-            selected_option: "A".to_string(),
-            rationale: BoundedText::for_limit(
-                "because",
-                Some(7),
-                LimitId::TimelineDecisionRationaleChars,
-            )
-            .unwrap(),
-        }),
-    ]);
-    let mut app = App::new(Tab::Timeline);
-    app.recorder.data = Some(snapshot.into());
-
-    let expected = [
-        (TimelineFilter::All, 4),
-        (TimelineFilter::Receipts, 1),
-        (TimelineFilter::Failures, 1),
-        (TimelineFilter::Plans, 1),
-        (TimelineFilter::Sessions, 1),
-        (TimelineFilter::Decisions, 1),
-    ];
-    for (filter, count) in expected {
-        assert_eq!(app.timeline_filter, filter);
-        assert_eq!(app.timeline_rows().len(), count);
-        app.cycle_timeline_filter(false);
-    }
-    assert_eq!(app.timeline_filter, TimelineFilter::All);
-
-    app.cycle_timeline_filter(true);
-    assert_eq!(app.timeline_filter, TimelineFilter::Decisions);
-    assert_eq!(
-        app.selected_timeline().unwrap().identity,
-        "decision:\u{1b}[31mraw"
-    );
-    let rendered = render_text(&app, 120, 36);
-    assert!(!rendered.contains('\u{1b}'));
-}
-
-#[test]
-fn plan_detail_preserves_sections_errors_and_inert_argv() {
-    let mut app = app_with_local(Tab::Work);
-    assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    assert_eq!(plan_id, "plan_example");
-    assert_eq!(
-        basis,
-        crate::dashboard::PlanBasis::RecorderEpoch(crate::dashboard::RecorderEpochId::FIRST)
-    );
-
-    let mut snapshot = scenarios::plan_snapshot();
-    let gates = snapshot.gates.as_mut().unwrap();
-    let mut gate = gates.gates.items()[0].clone();
-    gate.remediation.as_mut().unwrap().argv = vec![
-        "scripts/jig".to_string(),
-        "check".to_string(),
-        "two words".to_string(),
-        "$(unsafe)".to_string(),
-        "a'b".to_string(),
-    ];
-    gates.gates = BoundedRows::for_limit(vec![gate], Some(1), LimitId::GateRows).unwrap();
-    snapshot.errors.push(SnapshotError::new(
-        CollectionDomain::Body,
-        SnapshotErrorCode::BodyReadFailed,
-        Some("plan_example".to_string()),
-        "body read was partial",
-    ));
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(snapshot)),
-    );
-
-    assert!(matches!(app.detail.base, Some(BaseDetail::Plan(_))));
-    let summary = render_text(&app, 120, 36);
-    assert!(summary.contains("basis epoch 1"));
-    assert!(summary.contains("h/l horizontal"));
-    assert!(!summary.contains("Enter opens"));
-    app.cycle_detail_section(false);
-    assert_eq!(app.detail.section, PlanSection::Body);
-    let body = render_text(&app, 120, 36);
-    assert!(body.contains("# Example plan"));
-    assert!(body.contains("body read was partial"));
-    app.cycle_detail_section(false);
-    let gates = normalized(&render_text(&app, 120, 36));
-    assert!(gates.contains("'two words'"));
-    assert!(gates.contains("'$(unsafe)'"));
-    assert!(gates.contains("'a'\"'\"'b'"));
-}
-
-#[test]
-fn plan_detail_leaf_navigation_preserves_parent_state() {
-    let mut app = app_with_local(Tab::Work);
-    assert!(app.open_selected_detail());
-    let (basis, plan_id) = app.take_plan_request().unwrap();
-    app.accept_plan_result(
-        basis,
-        &plan_id,
-        PlanSnapshotResult::Found(Box::new(scenarios::plan_snapshot())),
-    );
-    for _ in 0..3 {
-        app.cycle_detail_section(false);
-    }
-    assert_eq!(app.detail.section, PlanSection::Decisions);
-    app.open_detail_leaf_or_close();
-    assert!(app.detail.leaf.is_some());
-    assert!(render_text(&app, 80, 24).contains("A is deterministic"));
-    app.move_detail_selection(3);
-    assert_eq!(app.detail.leaf_scroll, 3);
-    app.close_detail();
-    assert!(app.detail.leaf.is_none());
-    assert_eq!(app.detail.section, PlanSection::Decisions);
-    assert_eq!(app.detail.section_scroll[PlanSection::Decisions.index()], 0);
-
-    app.cycle_detail_section(false);
-    assert_eq!(app.detail.section, PlanSection::Receipts);
-    app.open_detail_leaf_or_close();
-    let receipt = normalized(&render_text(&app, 120, 36));
+fn loop_health_renders_workflow_and_lease_fields() {
+    let app = app_with_local(Tab::Health);
+    let health = &app.recorder.data.as_ref().unwrap().health;
+    let workflow = health
+        .iter()
+        .find(|item| item.section == "Loop workflows")
+        .unwrap();
     assert_contains_all(
-        &receipt,
+        &workflow.detail.lines.join(" "),
         &[
-            "example output",
-            "src/example.rs",
-            "1 file changed",
-            "200ms",
+            "Workflow: workflow-example",
+            "Kind: queue",
+            "Enabled: true",
+            "Configured: true",
         ],
     );
+    let lease = health
+        .iter()
+        .find(|item| item.section == "Active leases")
+        .unwrap();
+    assert_contains_all(
+        &lease.detail.lines.join(" "),
+        &[
+            "Key: item-example",
+            "Owner: worker-example",
+            "Acquired:",
+            "Expires:",
+        ],
+    );
+}
+
+#[test]
+fn exhausted_attempt_keeps_identity_and_inert_recovery_argv() {
+    let mut snapshot = scenarios::recorder_snapshot();
+    let attempts = &mut snapshot
+        .loops
+        .as_mut()
+        .unwrap()
+        .needs_attention
+        .exhausted_attempts;
+    let mut attempt = attempts.items()[0].clone();
+    attempt.key = "workflow with space:$(unsafe) 'quote'".to_string();
+    attempt.workflow_id = "workflow with space".to_string();
+    attempt.item_key = "$(unsafe) 'quote'".to_string();
+    attempt.remediation = Some(Remediation {
+        argv: vec![
+            "scripts/jig".to_string(),
+            "loop".to_string(),
+            "clear-attempt".to_string(),
+            "--workflow".to_string(),
+            "workflow with space".to_string(),
+            "--item".to_string(),
+            "$(unsafe) 'quote'".to_string(),
+        ],
+        display: "producer display must not be executed".to_string(),
+    });
+    *attempts =
+        BoundedRows::for_limit(vec![attempt], Some(1), LimitId::LoopExhaustedAttempts).unwrap();
+    let mut app = App::new(Tab::Health);
+    app.recorder.data = Some(snapshot.into());
+    let exhausted = app
+        .recorder
+        .data
+        .as_ref()
+        .unwrap()
+        .health
+        .iter()
+        .find(|item| item.detail.title == "Loop attention")
+        .unwrap();
+    assert_eq!(
+        exhausted.identity,
+        "attention:workflow with space:$(unsafe) 'quote'"
+    );
+    assert_contains_all(
+        &exhausted.detail.lines.join(" "),
+        &[
+            "Workflow: workflow with space",
+            "Item: $(unsafe) 'quote'",
+            "Exhausted: true",
+            "Recovery argv: scripts/jig loop clear-attempt --workflow 'workflow with space' --item '$(unsafe) '\"'\"'quote'\"'\"''",
+        ],
+    );
+}
+
+#[test]
+fn timeline_enter_uses_raw_plan_identity() {
+    let raw_plan_id = "plan\u{1b}[31m-raw";
+    let mut recorder = scenarios::recorder_snapshot();
+    recorder.timeline.insert(
+        0,
+        TimelineRow::Plan(PlanTimelineRow {
+            stable_identity: "plan:event:raw".to_string(),
+            timestamp_ms: Some(scenarios::OBSERVED_AT_MS),
+            id: "plan-event".to_string(),
+            event: "opened".to_string(),
+            plan_id: raw_plan_id.to_string(),
+            title: Some("Raw plan".to_string()),
+            resolution: None,
+        }),
+    );
+    let mut app = App::new(Tab::Timeline);
+    app.recorder.data = Some(recorder.into());
+
+    assert!(app.open_selected_detail());
+    let (_, requested_plan_id) = app.take_plan_request().unwrap();
+    assert_eq!(requested_plan_id, raw_plan_id);
+    assert!(!render_text(&app, 80, 24).contains('\u{1b}'));
+}
+
+#[test]
+fn plan_summary_renders_baseline_values_and_errors() {
+    let mut app = app_with_local(Tab::Work);
+    let present = normalized(&render_text(&app, 120, 36));
+    assert!(present.contains("Baseline: HEAD 0123456789abcdef"));
+
+    app.move_selection(1);
+    let unavailable = normalized(&render_text(&app, 120, 36));
+    assert!(unavailable.contains("Baseline error: baseline unavailable"));
 }
 
 #[test]
@@ -307,6 +308,8 @@ fn recorder_refresh_reconciles_selection_without_discarding_bounded_closed_detai
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     assert_eq!(app.selected_work().unwrap().plan_id, "plan_closed");
     assert!(app.take_plan_request().is_none());
@@ -316,6 +319,8 @@ fn recorder_refresh_reconciles_selection_without_discarding_bounded_closed_detai
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     assert!(app.detail_is_open());
     assert_eq!(app.detail.plan().unwrap().raw_plan_id, "plan_closed");
@@ -407,6 +412,8 @@ fn detail_scroll_edges_clamp_and_open_leaf_survives_epoch_refresh() {
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     assert!(app.detail.leaf.is_some());
     let (basis, requested) = app.take_plan_request().unwrap();
@@ -459,6 +466,8 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     app.health_index = app
         .recorder
@@ -494,6 +503,8 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     assert_eq!(app.selected_health().unwrap().identity, identity);
     let error_ids = app
@@ -723,6 +734,8 @@ fn long_detail_lines_are_reachable_horizontally_and_item_details_become_stale() 
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     assert!(render_text(&app, 120, 36).contains("stale"));
 }

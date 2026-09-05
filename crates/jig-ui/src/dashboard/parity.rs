@@ -11,365 +11,438 @@ pub struct ParityEntry {
     pub key: &'static str,
     pub capability: &'static str,
     pub area: ParityArea,
+    /// Repository-relative source that declares `behavioral_test`.
+    pub test_source: &'static str,
+    /// Exact Rust test function that exercises this capability.
     pub behavioral_test: &'static str,
 }
 
 macro_rules! parity {
-    ($key:literal, $capability:literal, $area:ident, $test:literal) => {
+    ($key:literal, $capability:literal, $area:ident, $source:expr, $test:literal) => {
         ParityEntry {
             key: $key,
             capability: $capability,
             area: ParityArea::$area,
+            test_source: $source,
             behavioral_test: $test,
         }
     };
 }
 
+const DASHBOARD_CONTRACT_TESTS: &str = "crates/jig-ui/tests/dashboard_contract.rs";
+const DASHBOARD_LOCAL_TESTS: &str = "crates/jig-ui/src/terminal/tests/local.rs";
+const DASHBOARD_LOCAL_PARITY_TESTS: &str = "crates/jig-ui/src/terminal/tests/local/parity.rs";
+const DASHBOARD_MODEL_TESTS: &str = "crates/jig-ui/src/terminal/tests.rs";
+const DASHBOARD_STATUS_TESTS: &str = "crates/jig-ui/src/terminal/tests/status.rs";
+const DASHBOARD_REGRESSION_TESTS: &str = "crates/jig-ui/src/terminal/tests/regressions.rs";
+const DASHBOARD_EVENT_LOOP_TESTS: &str = "crates/jig-ui/src/terminal/runtime/event_loop.rs";
+const DASHBOARD_SCHEDULER_TESTS: &str = "crates/jig-ui/src/terminal/runtime/scheduler/tests.rs";
+const DASHBOARD_WORKER_TESTS: &str = "crates/jig-ui/src/terminal/runtime/worker/tests.rs";
+const CLI_CUTOVER_TESTS: &str = "crates/jig/tests/ui_cutover.rs";
+const CLI_ARCHITECTURE_TESTS: &str = "crates/jig/tests/ui_architecture.rs";
+
 /// One entry for every row in project-plan section 5.6.
 ///
-/// The named tests are implemented by the owning delivery tasks. Keeping the
-/// registry here makes omissions visible before the terminal cutover.
+/// Every entry points to a real test in `test_source`. The owning dashboard
+/// contract suite resolves those references before release validation.
 pub const PARITY_REGISTRY: &[ParityEntry] = &[
     parity!(
         "repository_identity",
         "Repository, harness, and default-branch identity",
         Shared,
-        "header_renders_repository_harness_and_default_branch"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "repository_open_plans_failures_and_tool_times_keep_exact_semantics"
     ),
     parity!(
         "current_revision",
         "Current branch or detached revision",
         Shared,
-        "header_renders_branch_and_detached_revision"
+        DASHBOARD_LOCAL_TESTS,
+        "local_header_reports_default_branch_age_and_detached_state_on_every_local_tab"
     ),
     parity!(
         "state_counts",
         "Session, plan, and decision counts",
         Recorder,
-        "work_summary_renders_seeded_state_counts"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "work_timeline_and_health_render_typed_parity_fields"
     ),
     parity!(
         "open_plans",
         "Open plans",
         Recorder,
-        "work_list_selects_every_open_plan"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "repository_open_plans_failures_and_tool_times_keep_exact_semantics"
     ),
     parity!(
         "gate_table",
         "Gate table",
         Recorder,
-        "gate_detail_exposes_every_gate_field"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "plan_detail_preserves_sections_errors_and_inert_argv"
     ),
     parity!(
         "gate_remediation",
         "Gate remediation command",
         Recorder,
-        "gate_remediation_preserves_inert_argv"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "plan_detail_preserves_sections_errors_and_inert_argv"
     ),
     parity!(
         "gate_error",
         "Gate collection error",
         Recorder,
+        DASHBOARD_LOCAL_TESTS,
         "gate_error_preserves_other_plans"
     ),
     parity!(
         "recent_failures",
         "Recent failures",
         Recorder,
-        "health_failures_are_complete_and_newest_first"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "repository_open_plans_failures_and_tool_times_keep_exact_semantics"
     ),
     parity!(
         "failure_stderr",
         "Failure stderr",
         Recorder,
+        DASHBOARD_LOCAL_TESTS,
         "failure_stderr_is_bounded_and_scrollable"
     ),
     parity!(
         "closed_history",
         "Closed work history",
         Recorder,
-        "closed_history_renders_resolution_and_duration"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "work_timeline_and_health_render_typed_parity_fields"
     ),
     parity!(
         "tool_statistics",
         "Tool statistics",
         Recorder,
+        DASHBOARD_LOCAL_TESTS,
         "tool_health_renders_all_aggregates"
     ),
     parity!(
         "loop_workflows",
         "Loop workflows",
         Recorder,
-        "loop_health_renders_kind_and_enabled_state"
+        DASHBOARD_LOCAL_TESTS,
+        "loop_health_renders_workflow_and_lease_fields"
     ),
     parity!(
         "loop_leases",
         "Loop leases",
         Recorder,
-        "loop_health_renders_lease_key_and_expiry"
+        DASHBOARD_LOCAL_TESTS,
+        "loop_health_renders_workflow_and_lease_fields"
     ),
     parity!(
         "exhausted_attempts",
         "Exhausted attempts",
         Recorder,
-        "exhausted_attempt_uses_producer_native_identity"
+        DASHBOARD_LOCAL_TESTS,
+        "exhausted_attempt_keeps_identity_and_inert_recovery_argv"
     ),
     parity!(
         "loop_clear_attempt",
         "Loop clear-attempt command",
         Recorder,
-        "loop_recovery_preserves_inert_argv"
+        DASHBOARD_LOCAL_TESTS,
+        "exhausted_attempt_keeps_identity_and_inert_recovery_argv"
     ),
     parity!(
         "mixed_timeline",
         "Mixed timeline",
         Recorder,
-        "timeline_renders_every_kind_newest_first"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "mixed_timeline_is_newest_first_and_every_plan_row_opens_its_raw_id"
     ),
     parity!(
         "timeline_plan_link",
         "Plan-linked timeline navigation",
         Recorder,
-        "timeline_enter_uses_raw_plan_identity"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "mixed_timeline_is_newest_first_and_every_plan_row_opens_its_raw_id"
     ),
     parity!(
         "timeline_filter",
         "Timeline kind filter",
         Recorder,
-        "timeline_filter_covers_every_kind"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "timeline_filters_cover_every_kind_and_preserve_raw_identity"
     ),
     parity!(
         "timeline_limit",
         "Timeline limit",
         Recorder,
-        "timeline_limit_enforces_one_and_one_thousand"
+        DASHBOARD_EVENT_LOOP_TESTS,
+        "timeline_limit_endpoints_and_plus_minus_controls_are_enforced"
     ),
     parity!(
         "plan_body",
         "Plan body",
         Recorder,
-        "plan_body_is_bounded_and_sanitized_for_display"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "bounded_plan_body_and_fifty_receipts_remain_reachable"
     ),
     parity!(
         "plan_body_error",
         "Plan body error",
         Recorder,
-        "plan_body_error_preserves_other_detail"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "plan_detail_preserves_sections_errors_and_inert_argv"
     ),
     parity!(
         "plan_baseline",
         "Plan baseline",
         Recorder,
-        "plan_summary_renders_all_baseline_states"
+        DASHBOARD_LOCAL_TESTS,
+        "plan_summary_renders_baseline_values_and_errors"
     ),
     parity!(
         "plan_decisions",
         "Plan decisions",
         Recorder,
-        "plan_decisions_render_selection_alternatives_and_rationale"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "plan_detail_leaf_navigation_preserves_parent_state"
     ),
     parity!(
         "plan_receipts",
         "Plan receipts",
         Recorder,
-        "plan_receipts_cap_and_preserve_selection"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "bounded_plan_body_and_fifty_receipts_remain_reachable"
     ),
     parity!(
         "receipt_output",
         "Receipt stdout/stderr",
         Recorder,
-        "receipt_output_previews_are_independently_bounded"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "receipt_output_and_paths_keep_independent_bounds"
     ),
     parity!(
         "receipt_paths",
         "Receipt changed paths",
         Recorder,
-        "receipt_paths_render_omission_count"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "receipt_output_and_paths_keep_independent_bounds"
     ),
     parity!(
         "receipt_diff_duration",
         "Receipt diff and duration",
         Recorder,
-        "receipt_detail_renders_diff_and_duration"
+        DASHBOARD_LOCAL_PARITY_TESTS,
+        "plan_detail_leaf_navigation_preserves_parent_state"
     ),
     parity!(
         "dashboard_json",
         "Dashboard JSON route",
         Recorder,
-        "ui_json_emits_one_recorder_document"
+        CLI_CUTOVER_TESTS,
+        "recorder_json_exits_without_binding_or_running_providers"
     ),
     parity!(
         "plan_json",
         "Plan JSON route",
         Recorder,
-        "ui_plan_json_handles_found_and_not_found"
+        CLI_CUTOVER_TESTS,
+        "plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors"
     ),
     parity!(
         "auto_refresh",
         "Browser auto-refresh",
         Recorder,
-        "recorder_refresh_is_completion_relative"
+        DASHBOARD_SCHEDULER_TESTS,
+        "automatic_work_is_completion_relative_and_does_not_duplicate_pending"
     ),
     parity!(
         "status_overview",
         "Status overview structure",
         Status,
-        "status_overview_migrates_existing_assertions"
+        DASHBOARD_STATUS_TESTS,
+        "status_overview_local_counts_and_errors_are_reachable"
     ),
     parity!(
         "repository_cleanliness",
         "Repository cleanliness and revision",
         Status,
-        "status_repository_renders_clean_dirty_branch_and_detached"
+        DASHBOARD_STATUS_TESTS,
+        "status_repository_and_upstream_variants_are_rendered"
     ),
     parity!(
         "upstream",
         "Upstream tracking",
         Status,
-        "status_upstream_renders_every_state_and_basis"
+        DASHBOARD_STATUS_TESTS,
+        "status_repository_and_upstream_variants_are_rendered"
     ),
     parity!(
         "provider_identity",
         "Provider identity",
         Status,
-        "provider_identity_keeps_raw_id_name_and_version"
+        DASHBOARD_STATUS_TESTS,
+        "provider_identity_progress_and_failure_fields_are_reachable"
     ),
     parity!(
         "provider_status",
         "Provider status and duration",
         Status,
-        "provider_header_renders_status_and_duration"
+        DASHBOARD_STATUS_TESTS,
+        "provider_status_variants_keep_status_and_duration_distinct"
     ),
     parity!(
         "provider_failure",
         "Provider failure detail",
         Status,
-        "provider_failure_renders_bounded_diagnostics"
+        DASHBOARD_STATUS_TESTS,
+        "provider_identity_progress_and_failure_fields_are_reachable"
     ),
     parity!(
         "provider_progress",
         "Provider progress categories",
         Status,
-        "provider_progress_renders_all_totals_and_categories"
+        DASHBOARD_STATUS_TESTS,
+        "provider_identity_progress_and_failure_fields_are_reachable"
     ),
     parity!(
         "provider_freshness",
         "Provider input freshness",
         Status,
-        "provider_freshness_renders_all_fields"
+        DASHBOARD_STATUS_TESTS,
+        "provider_freshness_and_diagnostics_are_reachable"
     ),
     parity!(
         "provider_diagnostics",
         "Provider diagnostics",
         Status,
-        "provider_diagnostics_render_all_fields"
+        DASHBOARD_STATUS_TESTS,
+        "provider_freshness_and_diagnostics_are_reachable"
     ),
     parity!(
         "aggregate_errors",
         "Aggregate collection errors",
         Status,
-        "status_errors_preserve_provider_and_local_data"
+        DASHBOARD_STATUS_TESTS,
+        "status_overview_local_counts_and_errors_are_reachable"
     ),
     parity!(
         "status_local_counts",
         "Status local work and loop counts",
         Status,
-        "status_local_summary_renders_all_counts"
+        DASHBOARD_REGRESSION_TESTS,
+        "recorder_refresh_reprojects_local_status_without_replacing_providers"
     ),
     parity!(
         "partition_age",
         "Status partition observation age",
         Status,
-        "status_partitions_age_independently"
+        DASHBOARD_REGRESSION_TESTS,
+        "status_and_recorder_partitions_render_independent_ages"
     ),
     parity!(
         "provider_switching",
         "Provider switching",
         Status,
-        "provider_selection_survives_reorder_by_raw_id"
+        DASHBOARD_MODEL_TESTS,
+        "typed_snapshot_keeps_colliding_raw_identities_distinct_across_refresh"
     ),
     parity!(
         "package_selection",
         "Package list and selection",
         Status,
-        "package_selection_survives_refresh_by_raw_id"
+        DASHBOARD_MODEL_TESTS,
+        "navigation_filters_and_preserves_stable_selection_across_refresh"
     ),
     parity!(
         "blocked_filter",
         "Blocked-only package filter",
         Status,
-        "blocked_filter_clamps_raw_selection"
+        DASHBOARD_MODEL_TESTS,
+        "navigation_filters_and_preserves_stable_selection_across_refresh"
     ),
     parity!(
         "package_preview",
         "Package compact preview",
         Status,
-        "package_preview_renders_at_supported_width"
+        DASHBOARD_STATUS_TESTS,
+        "package_preview_facets_and_dependencies_are_reachable"
     ),
     parity!(
         "package_facets",
         "Package facet detail",
         Status,
-        "package_detail_renders_all_facet_fields"
+        DASHBOARD_STATUS_TESTS,
+        "package_preview_facets_and_dependencies_are_reachable"
     ),
     parity!(
         "package_dependencies",
         "Package dependencies",
         Status,
-        "package_detail_reaches_every_dependency"
+        DASHBOARD_STATUS_TESTS,
+        "package_preview_facets_and_dependencies_are_reachable"
     ),
     parity!(
         "package_acceptance",
         "Package acceptance checks",
         Status,
-        "package_detail_renders_acceptance_fields"
+        DASHBOARD_STATUS_TESTS,
+        "package_acceptance_blockers_and_evidence_are_reachable"
     ),
     parity!(
         "package_blockers",
         "Package blockers",
         Status,
-        "package_detail_renders_blocker_fields"
+        DASHBOARD_STATUS_TESTS,
+        "package_acceptance_blockers_and_evidence_are_reachable"
     ),
     parity!(
         "package_evidence",
         "Package evidence",
         Status,
-        "package_detail_renders_evidence_fields"
+        DASHBOARD_STATUS_TESTS,
+        "package_acceptance_blockers_and_evidence_are_reachable"
     ),
     parity!(
         "package_extensions",
         "Package extensions",
         Status,
-        "package_extensions_preserve_namespaced_collisions"
+        DASHBOARD_MODEL_TESTS,
+        "extension_key_sanitization_preserves_colliding_entries_for_rendering"
     ),
     parity!(
         "blocker_navigation",
         "Blocker queue navigation",
         Status,
-        "blocker_queue_uses_stable_composite_keys"
+        DASHBOARD_MODEL_TESTS,
+        "blocker_selection_survives_insertions_duplicate_codes_and_display_changes"
     ),
     parity!(
         "blocker_detail",
         "Blocker detail",
         Status,
-        "blocker_detail_renders_all_fields"
+        DASHBOARD_STATUS_TESTS,
+        "package_acceptance_blockers_and_evidence_are_reachable"
     ),
     parity!(
         "provider_additive_fields",
         "Provider additive fields",
         Status,
-        "provider_unknown_fields_round_trip_and_render"
+        DASHBOARD_CONTRACT_TESTS,
+        "accepted_provider_report_serializes_the_exact_raw_document_only"
     ),
     parity!(
         "status_refresh",
         "Status refresh lifecycle",
         Status,
-        "status_refresh_preserves_and_strengthens_lifecycle"
+        DASHBOARD_WORKER_TESTS,
+        "phase_events_are_generation_tagged_and_preemption_joins_before_local_start"
     ),
     parity!(
         "http_authentication",
         "HTTP authentication",
         Removal,
+        CLI_ARCHITECTURE_TESTS,
         "production_tree_contains_no_http_surface"
     ),
 ];

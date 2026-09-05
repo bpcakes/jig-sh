@@ -31,6 +31,7 @@ unicode-width.workspace = true
 [dev-dependencies]
 jig-ui = { path = ".", features = ["test-support"] }
 libc.workspace = true
+syn.workspace = true
 
 [lints]
 workspace = true

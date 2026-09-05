@@ -247,6 +247,12 @@ fn status_announces_provider_then_local_and_returns_paired_epoch() {
     );
     assert_eq!(refresh.recorder.open_plans[0].plan_id, "plan_example");
     assert_eq!(
+        refresh.local_observed_at_ms,
+        refresh.recorder.generated_at_ms
+    );
+    assert!(refresh.provider_observed_at_ms > 0);
+    assert!(refresh.provider_observed_at_ms <= refresh.status.observed_at_ms);
+    assert_eq!(
         refresh.status.work.state.as_ref().unwrap().open_plans[0].plan_id,
         "plan_example"
     );

@@ -36,7 +36,13 @@ pub(crate) struct LocalDashboard {
 }
 
 impl From<RecorderSnapshot> for LocalDashboard {
-    fn from(snapshot: RecorderSnapshot) -> Self {
+    fn from(mut snapshot: RecorderSnapshot) -> Self {
+        snapshot
+            .failures
+            .sort_by_key(|failure| std::cmp::Reverse(failure.ended_at_ms));
+        snapshot
+            .timeline
+            .sort_by_key(|row| std::cmp::Reverse(timeline_timestamp(row)));
         let failures = snapshot
             .failures
             .into_iter()
@@ -75,6 +81,15 @@ impl From<RecorderSnapshot> for LocalDashboard {
             limits: snapshot.limits.into(),
             errors: snapshot.errors.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+fn timeline_timestamp(row: &TimelineRow) -> Option<u64> {
+    match row {
+        TimelineRow::Receipt(row) => row.timestamp_ms,
+        TimelineRow::Plan(row) => row.timestamp_ms,
+        TimelineRow::Session(row) => row.timestamp_ms,
+        TimelineRow::Decision(row) => row.timestamp_ms,
     }
 }
 

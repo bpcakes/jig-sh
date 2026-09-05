@@ -5,6 +5,7 @@
 
 mod bounded;
 mod identity;
+#[cfg(any(test, feature = "test-support"))]
 mod parity;
 mod recorder;
 mod source;
@@ -15,6 +16,7 @@ pub mod scenarios;
 
 pub use bounded::*;
 pub use identity::*;
+#[cfg(any(test, feature = "test-support"))]
 pub use parity::*;
 pub use recorder::*;
 pub use source::*;

@@ -592,6 +592,8 @@ mod tests {
             Ok(StatusRefresh {
                 status: crate::dashboard::scenarios::status_snapshot(),
                 recorder: crate::dashboard::scenarios::recorder_snapshot(),
+                local_observed_at_ms: crate::dashboard::scenarios::OBSERVED_AT_MS,
+                provider_observed_at_ms: crate::dashboard::scenarios::OBSERVED_AT_MS,
             })
         }
 
@@ -604,7 +606,6 @@ mod tests {
             Ok(crate::dashboard::PlanSnapshotResult::NotFound)
         }
     }
-
     #[test]
     #[cfg(unix)]
     fn pty_child_runs_dashboard() {
@@ -644,8 +645,7 @@ mod tests {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        // SAFETY: openpty initializes both owned descriptors on success. Each
-        // descriptor is wrapped exactly once below and closed by File/Stdio.
+        // SAFETY: openpty initializes each descriptor, which is wrapped and closed exactly once.
         let result = unsafe {
             libc::openpty(
                 &mut controller_fd,

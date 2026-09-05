@@ -9,6 +9,7 @@ use crate::dashboard::{AcceptedProviderReport, scenarios};
 
 mod local;
 mod regressions;
+mod status;
 
 fn fixture() -> Value {
     json!({
@@ -47,8 +48,10 @@ fn fixture() -> Value {
             }]
         },
         "loops": {
+            "workflows": [{}, {}, {}],
             "leases": [{}],
             "attempts": [{}, {}],
+            "waiting_attempts": [{}, {}, {}, {}],
             "needs_attention": {"exhausted_attempts": [{}]}
         },
         "providers": [{
@@ -120,11 +123,17 @@ fn fixture() -> Value {
                     },
                     "implementation": {
                         "state": "not_started",
-                        "category": "pending"
+                        "category": "pending",
+                        "summary": "Implementation has not started",
+                        "source": {"path": "src/order.rs", "line": 20, "column": 4},
+                        "digest": "sha256:implementation"
                     },
                     "verification": {
                         "state": "unverified",
-                        "category": "pending"
+                        "category": "pending",
+                        "summary": "Verification is outstanding",
+                        "source": {"path": "tests/order.rs", "line": 30, "column": 5},
+                        "digest": "sha256:verification"
                     },
                     "dependencies": ["WP-000"],
                     "acceptance_checks": [{
@@ -211,58 +220,6 @@ fn fixture() -> Value {
             "message": "Gate snapshot failed"
         }]
     })
-}
-
-#[test]
-fn model_decodes_version_one_and_ignores_additive_fields() {
-    let dashboard = Dashboard::from_value(fixture()).unwrap();
-
-    assert_eq!(dashboard.repository.name, "rewrite");
-    assert_eq!(dashboard.work.open_plans, 2);
-    assert_eq!(dashboard.work.gate_errors, 1);
-    assert_eq!(dashboard.loops.exhausted_attempts, 1);
-    assert_eq!(dashboard.providers.len(), 2);
-    assert_eq!(dashboard.providers[0].packages.len(), 2);
-    assert_eq!(dashboard.providers[0].blockers.len(), 1);
-    assert_eq!(dashboard.providers[0].packages[1].acceptance_complete, 1);
-    assert_eq!(
-        dashboard.providers[0].packages[0].acceptance_checks[0]
-            .target
-            .as_deref(),
-        Some("test/models/order_test.rb:42")
-    );
-    assert_eq!(
-        dashboard.providers[0].packages[0]
-            .specification
-            .digest
-            .as_deref(),
-        Some("sha256:specification")
-    );
-    assert_eq!(dashboard.providers[0].input_freshness[0].status, "stale");
-
-    let mut unsupported = fixture();
-    unsupported["schema_version"] = json!(2);
-    let error = Dashboard::from_value(unsupported).unwrap_err();
-    assert!(error.contains("unsupported status aggregate schema version 2"));
-
-    let mut unsafe_text = fixture();
-    unsafe_text["providers"][0]["report"]["diagnostics"][0]["message"] =
-        json!("unsafe\u{1b}[31m \u{202e}diagnostic\u{2069}");
-    let dashboard = Dashboard::from_value(unsafe_text).unwrap();
-    assert_eq!(
-        dashboard.providers[0].diagnostics[0].message,
-        "unsafe\u{fffd}[31m \u{fffd}diagnostic\u{fffd}"
-    );
-
-    let mut unsafe_key = fixture();
-    unsafe_key["providers"][0]["report"]["work_packages"][0]["extensions"] =
-        json!({"unsafe\u{1b}[31m": {"value": true}});
-    let dashboard = Dashboard::from_value(unsafe_key).unwrap();
-    assert!(
-        dashboard.providers[0].packages[0]
-            .extensions
-            .contains_key("unsafe\u{1b}[31m")
-    );
 }
 
 #[test]

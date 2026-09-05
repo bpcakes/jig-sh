@@ -82,7 +82,8 @@ impl Tab {
 #[derive(Clone, Debug)]
 pub(crate) struct Dashboard {
     pub(crate) outcome: String,
-    pub(crate) observed_at_ms: u64,
+    pub(crate) local_observed_at_ms: u64,
+    pub(crate) provider_observed_at_ms: u64,
     pub(crate) repository: RepositoryView,
     pub(crate) work: WorkView,
     pub(crate) loops: LoopView,
@@ -105,7 +106,8 @@ impl Dashboard {
 
         Ok(Self {
             outcome: fallback(wire.outcome, "unknown"),
-            observed_at_ms: wire.observed_at_ms,
+            local_observed_at_ms: wire.observed_at_ms,
+            provider_observed_at_ms: wire.observed_at_ms,
             repository: wire.repository.into(),
             work: WorkView::from_value(&wire.work),
             loops: LoopView::from_value(&wire.loops),
@@ -114,7 +116,11 @@ impl Dashboard {
         })
     }
 
-    pub(crate) fn from_snapshot(snapshot: StatusSnapshot) -> Result<Self, String> {
+    pub(crate) fn from_snapshot(
+        snapshot: StatusSnapshot,
+        local_observed_at_ms: u64,
+        provider_observed_at_ms: u64,
+    ) -> Result<Self, String> {
         if snapshot.schema_version != STATUS_SCHEMA_VERSION {
             return Err(format!(
                 "unsupported status aggregate schema version {}; this TUI supports version {STATUS_SCHEMA_VERSION}",
@@ -128,7 +134,8 @@ impl Dashboard {
                 StatusOutcome::Partial => "partial",
             }
             .to_string(),
-            observed_at_ms: snapshot.observed_at_ms,
+            local_observed_at_ms,
+            provider_observed_at_ms,
             repository: snapshot.repository.into(),
             work: WorkView::from_snapshot(&snapshot.work),
             loops: LoopView::from_snapshot(snapshot.loops.as_ref()),
@@ -142,7 +149,7 @@ impl Dashboard {
     }
 
     pub(crate) fn apply_local_snapshot(&mut self, snapshot: StatusLocalSnapshot) {
-        self.observed_at_ms = snapshot.observed_at_ms;
+        self.local_observed_at_ms = snapshot.observed_at_ms;
         self.repository = snapshot.repository.into();
         self.work = WorkView::from_snapshot(&snapshot.work);
         self.loops = LoopView::from_snapshot(snapshot.loops.as_ref());
@@ -267,8 +274,10 @@ impl WorkView {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LoopView {
+    pub(crate) workflows: usize,
     pub(crate) leases: usize,
     pub(crate) attempts: usize,
+    pub(crate) waiting_attempts: usize,
     pub(crate) exhausted_attempts: usize,
 }
 
@@ -276,8 +285,10 @@ impl LoopView {
     #[cfg(test)]
     fn from_value(loops: &Value) -> Self {
         Self {
+            workflows: array_len(loops, "workflows"),
             leases: array_len(loops, "leases"),
             attempts: array_len(loops, "attempts"),
+            waiting_attempts: array_len(loops, "waiting_attempts"),
             exhausted_attempts: loops
                 .get("needs_attention")
                 .map(|attention| array_len(attention, "exhausted_attempts"))
@@ -287,8 +298,10 @@ impl LoopView {
 
     fn from_snapshot(loops: Option<&StatusLoopObservation>) -> Self {
         loops.map_or_else(Self::default, |loops| Self {
+            workflows: loops.workflows.len(),
             leases: loops.leases.len(),
             attempts: loops.attempts.len(),
+            waiting_attempts: loops.waiting_attempts.len(),
             exhausted_attempts: loops.needs_attention.exhausted_attempts.len(),
         })
     }

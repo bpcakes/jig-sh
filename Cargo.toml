@@ -96,6 +96,7 @@ serde_yaml_ng = "0.10.0"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 subtle = "2.6.1"
+syn = { version = "2.0.117", features = ["full"] }
 tempfile = "3.23.0"
 terminal_size = "0.4.3"
 time = "0.3.44"

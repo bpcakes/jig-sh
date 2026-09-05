@@ -1,4 +1,6 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 use jig_ui::dashboard::{
     AcceptedProviderReport, BoundUnit, BoundedRows, BoundedText, CollectionDomain, LIMIT_SPECS,
@@ -8,6 +10,9 @@ use jig_ui::dashboard::{
     TimelineLimit, root_limit, scenarios, validate_input_bytes,
 };
 use serde_json::{Value, json};
+
+#[path = "dashboard_contract/parity_resolver.rs"]
+mod parity_resolver;
 
 #[test]
 fn recorder_schema_one_matches_checked_in_golden() {
@@ -412,16 +417,176 @@ fn parity_registry_has_one_named_oracle_for_every_matrix_row() {
         .iter()
         .map(|entry| entry.capability)
         .collect::<BTreeSet<_>>();
-    let tests = PARITY_REGISTRY
-        .iter()
-        .map(|entry| entry.behavioral_test)
-        .collect::<BTreeSet<_>>();
     assert_eq!(keys.len(), PARITY_REGISTRY.len());
     assert_eq!(capabilities.len(), PARITY_REGISTRY.len());
-    assert_eq!(tests.len(), PARITY_REGISTRY.len());
     assert!(PARITY_REGISTRY.iter().all(|entry| {
-        !entry.key.is_empty() && !entry.capability.is_empty() && !entry.behavioral_test.is_empty()
+        !entry.key.is_empty()
+            && !entry.capability.is_empty()
+            && !entry.test_source.is_empty()
+            && !entry.behavioral_test.is_empty()
     }));
+    let mut fanout = BTreeMap::new();
+    for entry in PARITY_REGISTRY {
+        *fanout
+            .entry((entry.test_source, entry.behavioral_test))
+            .or_insert(0_usize) += 1;
+    }
+    assert!(
+        fanout.values().all(|count| *count <= 5),
+        "one parity oracle is responsible for too many unrelated rows: {fanout:?}"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir.join("../..");
+    for entry in PARITY_REGISTRY {
+        let relative = Path::new(entry.test_source);
+        assert!(
+            is_safe_repository_relative_path(relative),
+            "parity row {} has an unsafe test source: {}",
+            entry.key,
+            entry.test_source
+        );
+        assert_test_source_is_collected(manifest_dir, &root, entry.test_source);
+        let Some(source_path) = resolve_test_source(manifest_dir, &root, entry.test_source) else {
+            // Published jig-ui archives do not contain the jig CLI's integration
+            // tests. Their exact allowlist is still checked above; a workspace
+            // checkout resolves and validates them normally.
+            continue;
+        };
+        let source = fs::read_to_string(&source_path).unwrap_or_else(|error| {
+            panic!(
+                "parity row {} cannot read test source {}: {error}",
+                entry.key, entry.test_source
+            )
+        });
+        assert!(
+            source_declares_active_test(&source, entry.behavioral_test).unwrap_or_else(|error| {
+                panic!(
+                    "parity row {} cannot parse test source {}: {error}",
+                    entry.key, entry.test_source
+                )
+            }),
+            "parity row {} references missing, ignored, or cfg-gated test {} in {}",
+            entry.key,
+            entry.behavioral_test,
+            entry.test_source
+        );
+    }
+}
+
+fn is_safe_repository_relative_path(path: &Path) -> bool {
+    path.is_relative()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn resolve_test_source(manifest_dir: &Path, root: &Path, source: &str) -> Option<PathBuf> {
+    if let Some(local) = source.strip_prefix("crates/jig-ui/") {
+        return Some(manifest_dir.join(local));
+    }
+    let path = root.join(source);
+    path.is_file().then_some(path)
+}
+
+fn source_declares_active_test(source: &str, test_name: &str) -> syn::Result<bool> {
+    let file = syn::parse_file(source)?;
+    Ok(items_declare_active_test(&file.items, test_name, false))
+}
+
+fn items_declare_active_test(items: &[syn::Item], test_name: &str, inherited_cfg: bool) -> bool {
+    items.iter().any(|item| match item {
+        syn::Item::Fn(function) => {
+            !inherited_cfg
+                && function.sig.ident == test_name
+                && function
+                    .attrs
+                    .iter()
+                    .any(|attribute| attribute.path().is_ident("test"))
+                && !has_disabling_test_attribute(&function.attrs)
+        }
+        syn::Item::Mod(module) => module.content.as_ref().is_some_and(|(_, items)| {
+            items_declare_active_test(
+                items,
+                test_name,
+                inherited_cfg || has_disabling_cfg_attribute(&module.attrs),
+            )
+        }),
+        _ => false,
+    })
+}
+
+fn has_disabling_test_attribute(attributes: &[syn::Attribute]) -> bool {
+    attributes
+        .iter()
+        .any(|attribute| attribute.path().is_ident("ignore"))
+        || has_disabling_cfg_attribute(attributes)
+}
+
+fn has_disabling_cfg_attribute(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("cfg_attr")
+            || (attribute.path().is_ident("cfg") && !is_test_cfg(attribute))
+    })
+}
+
+fn is_test_cfg(attribute: &syn::Attribute) -> bool {
+    let syn::Meta::List(list) = &attribute.meta else {
+        return false;
+    };
+    list.tokens.to_string() == "test"
+}
+
+fn source_declares_active_module(source: &str, module_name: &str) -> syn::Result<bool> {
+    let file = syn::parse_file(source)?;
+    Ok(file.items.iter().any(|item| {
+        let syn::Item::Mod(module) = item else {
+            return false;
+        };
+        module.ident == module_name && !has_disabling_cfg_attribute(&module.attrs)
+    }))
+}
+
+fn assert_test_source_is_collected(manifest_dir: &Path, root: &Path, source: &str) {
+    let (module_source, module_name) = match source {
+        "crates/jig-ui/src/terminal/tests.rs" => ("crates/jig-ui/src/terminal.rs", "tests"),
+        "crates/jig-ui/src/terminal/tests/local.rs" => {
+            ("crates/jig-ui/src/terminal/tests.rs", "local")
+        }
+        "crates/jig-ui/src/terminal/tests/local/parity.rs" => {
+            ("crates/jig-ui/src/terminal/tests/local.rs", "parity")
+        }
+        "crates/jig-ui/src/terminal/tests/regressions.rs" => {
+            ("crates/jig-ui/src/terminal/tests.rs", "regressions")
+        }
+        "crates/jig-ui/src/terminal/tests/status.rs" => {
+            ("crates/jig-ui/src/terminal/tests.rs", "status")
+        }
+        "crates/jig-ui/src/terminal/runtime/event_loop.rs" => {
+            ("crates/jig-ui/src/terminal/runtime.rs", "event_loop")
+        }
+        "crates/jig-ui/src/terminal/runtime/scheduler/tests.rs" => {
+            ("crates/jig-ui/src/terminal/runtime/scheduler.rs", "tests")
+        }
+        "crates/jig-ui/src/terminal/runtime/worker/tests.rs" => {
+            ("crates/jig-ui/src/terminal/runtime/worker.rs", "tests")
+        }
+        "crates/jig-ui/tests/dashboard_contract.rs"
+        | "crates/jig/tests/ui_cutover.rs"
+        | "crates/jig/tests/ui_architecture.rs" => {
+            return;
+        }
+        _ => panic!("parity registry uses an uncollected test source: {source}"),
+    };
+    let parent_path = resolve_test_source(manifest_dir, root, module_source)
+        .unwrap_or_else(|| panic!("module source is unavailable: {module_source}"));
+    let parent = fs::read_to_string(parent_path).unwrap();
+    assert!(
+        source_declares_active_module(&parent, module_name).unwrap_or_else(|error| {
+            panic!("cannot parse module source {module_source}: {error}")
+        }),
+        "{source} is not collected: {module_source} lacks an unconditional mod {module_name}"
+    );
 }
 
 #[test]

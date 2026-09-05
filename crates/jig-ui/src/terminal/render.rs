@@ -231,10 +231,18 @@ fn repository_and_work_lines(app: &App) -> Vec<Line<'static>> {
             dashboard.work.gate_snapshots, dashboard.work.gate_errors
         )),
         Line::from(format!(
-            "Loops: {} leases, {} attempts, {} exhausted",
-            dashboard.loops.leases, dashboard.loops.attempts, dashboard.loops.exhausted_attempts
+            "Loops: {} workflows, {} leases, {} attempts, {} waiting, {} exhausted",
+            dashboard.loops.workflows,
+            dashboard.loops.leases,
+            dashboard.loops.attempts,
+            dashboard.loops.waiting_attempts,
+            dashboard.loops.exhausted_attempts
         )),
-        Line::from(format!("Observed: {}", age_label(dashboard.observed_at_ms))),
+        Line::from(format!(
+            "Observed: local {}, providers {}",
+            age_label(dashboard.local_observed_at_ms),
+            age_label(dashboard.provider_observed_at_ms)
+        )),
     ]
 }
 
@@ -731,6 +739,10 @@ pub(super) fn age_label(observed_at_ms: u64) -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
+    age_label_at(observed_at_ms, now_ms)
+}
+
+pub(super) fn age_label_at(observed_at_ms: u64, now_ms: u64) -> String {
     if observed_at_ms == 0 || observed_at_ms > now_ms {
         return "unknown".to_owned();
     }

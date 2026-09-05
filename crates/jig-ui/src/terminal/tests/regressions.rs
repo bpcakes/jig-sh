@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::{fixture, normalized, render_text};
+use super::{fixture, normalized, render::age_label_at, render_text};
 use crate::{
     dashboard::{
         AcceptedProviderReport, RecorderRefresh, StatusLocalSnapshot, StatusRefresh, scenarios,
@@ -148,6 +148,8 @@ fn schema_failures_are_domain_local_and_retain_last_good_recorder() {
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder: invalid_recorder,
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
     assert_eq!(
         app.recorder.data.as_ref().unwrap().schema_version,
@@ -170,6 +172,8 @@ fn successful_status_refresh_satisfies_a_queued_local_projection() {
     app.accept_status_refresh(StatusRefresh {
         status: scenarios::status_snapshot(),
         recorder: scenarios::recorder_snapshot(),
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
     });
 
     assert!(!app.recorder.refresh_queued);
@@ -179,12 +183,21 @@ fn successful_status_refresh_satisfies_a_queued_local_projection() {
 #[test]
 fn recorder_refresh_reprojects_local_status_without_replacing_providers() {
     let mut app = App::default();
-    app.accept_status_snapshot(scenarios::status_snapshot());
+    let provider_observed_at_ms = scenarios::OBSERVED_AT_MS - 1_000;
+    app.accept_status_refresh(StatusRefresh {
+        status: scenarios::status_snapshot(),
+        recorder: scenarios::recorder_snapshot(),
+        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
+        provider_observed_at_ms,
+    });
     let provider_id = app.current_provider().unwrap().id.clone();
     let mut local = scenarios::status_snapshot();
     local.repository.name = "new-local-repository".to_string();
     local.observed_at_ms += 10;
     local.work.state.as_mut().unwrap().counts.open_plans = 42;
+    let loops = local.loops.as_mut().unwrap();
+    loops.workflows.push(loops.workflows[0].clone());
+    loops.waiting_attempts = vec![loops.attempts[0].clone(); 3];
     let recorder = scenarios::recorder_snapshot();
     let status_local = StatusLocalSnapshot {
         epoch_id: recorder.epoch_id,
@@ -203,7 +216,45 @@ fn recorder_refresh_reprojects_local_status_without_replacing_providers() {
     let status = app.status.data.as_ref().unwrap();
     assert_eq!(status.repository.name, "new-local-repository");
     assert_eq!(status.work.open_plans, 42);
+    assert_eq!(status.loops.workflows, 2);
+    assert_eq!(status.loops.leases, 1);
+    assert_eq!(status.loops.attempts, 1);
+    assert_eq!(status.loops.waiting_attempts, 3);
+    assert_eq!(status.loops.exhausted_attempts, 1);
+    assert_eq!(status.local_observed_at_ms, local.observed_at_ms);
+    assert_eq!(status.provider_observed_at_ms, provider_observed_at_ms);
     assert_eq!(app.current_provider().unwrap().id, provider_id);
+}
+
+#[test]
+fn status_and_recorder_partitions_render_independent_ages() {
+    let now_ms = 1_800_000_000_000_u64;
+    let mut status = scenarios::status_snapshot();
+    status.observed_at_ms = now_ms.saturating_sub(3_600_000);
+    let mut recorder = scenarios::recorder_snapshot();
+    recorder.generated_at_ms = now_ms.saturating_sub(7_200_000);
+
+    let mut app = App::default();
+    app.accept_status_refresh(StatusRefresh {
+        status,
+        recorder,
+        local_observed_at_ms: now_ms.saturating_sub(7_200_000),
+        provider_observed_at_ms: now_ms.saturating_sub(3_600_000),
+    });
+    let dashboard = app.status.data.as_ref().unwrap();
+    assert_eq!(
+        age_label_at(dashboard.local_observed_at_ms, now_ms),
+        "2h ago"
+    );
+    assert_eq!(
+        age_label_at(dashboard.provider_observed_at_ms, now_ms),
+        "1h ago"
+    );
+    app.select_tab(Tab::Work);
+    assert_eq!(
+        app.recorder.data.as_ref().unwrap().generated_at_ms,
+        now_ms.saturating_sub(7_200_000)
+    );
 }
 
 #[test]

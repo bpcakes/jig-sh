@@ -546,8 +546,13 @@ mod tests {
     }
 
     #[test]
-    fn timeline_limit_keys_are_scoped_to_the_timeline_tab() {
+    fn timeline_limit_endpoints_and_plus_minus_controls_are_enforced() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        assert_eq!(TIMELINE_LIMIT_STEPS.first(), Some(&1));
+        assert_eq!(TIMELINE_LIMIT_STEPS.last(), Some(&1_000));
+        assert!(TimelineLimit::new(0).is_err());
+        assert!(TimelineLimit::new(1_001).is_err());
 
         let mut app = App::new(Tab::Timeline);
         for (key, action) in [
@@ -772,6 +777,8 @@ mod tests {
             Ok(RefreshResult::Status(crate::dashboard::StatusRefresh {
                 status,
                 recorder,
+                local_observed_at_ms: crate::dashboard::scenarios::OBSERVED_AT_MS,
+                provider_observed_at_ms: crate::dashboard::scenarios::OBSERVED_AT_MS,
             })),
         ));
         assert!(app.status.data.is_some());

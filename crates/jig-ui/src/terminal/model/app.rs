@@ -27,7 +27,6 @@ impl<T> Default for DomainState<T> {
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct App {
     pub(crate) status: DomainState<Dashboard>,
     pub(crate) recorder: DomainState<LocalDashboard>,
@@ -119,12 +118,21 @@ impl App {
     }
 
     pub(crate) fn accept_status_refresh(&mut self, refresh: StatusRefresh) -> bool {
-        let StatusRefresh { status, recorder } = refresh;
+        let StatusRefresh {
+            status,
+            recorder,
+            local_observed_at_ms,
+            provider_observed_at_ms,
+        } = refresh;
         let published_local = self.accept_recorder_snapshot(recorder);
         if published_local {
             self.recorder.refresh_queued = false;
         }
-        self.accept_status_snapshot(status);
+        self.accept_status_snapshot_with_partition_times(
+            status,
+            local_observed_at_ms,
+            provider_observed_at_ms,
+        );
         published_local
     }
 
@@ -181,13 +189,25 @@ impl App {
     }
 
     pub(crate) fn accept_status_snapshot(&mut self, snapshot: StatusSnapshot) -> bool {
-        let dashboard = match Dashboard::from_snapshot(snapshot) {
-            Ok(dashboard) => dashboard,
-            Err(error) => {
-                self.accept_error(Tab::Status, error);
-                return false;
-            }
-        };
+        let observed_at_ms = snapshot.observed_at_ms;
+        self.accept_status_snapshot_with_partition_times(snapshot, observed_at_ms, observed_at_ms)
+    }
+
+    fn accept_status_snapshot_with_partition_times(
+        &mut self,
+        snapshot: StatusSnapshot,
+        local_observed_at_ms: u64,
+        provider_observed_at_ms: u64,
+    ) -> bool {
+        let dashboard =
+            match Dashboard::from_snapshot(snapshot, local_observed_at_ms, provider_observed_at_ms)
+            {
+                Ok(dashboard) => dashboard,
+                Err(error) => {
+                    self.accept_error(Tab::Status, error);
+                    return false;
+                }
+            };
         self.replace_dashboard(dashboard);
         true
     }

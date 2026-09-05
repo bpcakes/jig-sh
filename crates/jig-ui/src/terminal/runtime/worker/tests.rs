@@ -326,6 +326,8 @@ fn invalid_status_recorder_projection_is_not_reported_as_local_publication() {
         Ok(RefreshResult::Status(StatusRefresh {
             status: crate::dashboard::scenarios::status_snapshot(),
             recorder,
+            local_observed_at_ms: crate::dashboard::scenarios::OBSERVED_AT_MS,
+            provider_observed_at_ms: crate::dashboard::scenarios::OBSERVED_AT_MS,
         })),
     );
 
