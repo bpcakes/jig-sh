@@ -21,7 +21,7 @@ After this change, Jig has no status-provider protocol, provider configuration, 
 - [x] (2026-09-05 22:10Z) Deleted the public provider contract, configuration surface, process execution, and generated configuration artifacts without compatibility aliases or parsers.
 - [x] (2026-09-05 22:25Z) Collapsed the TUI to four local views and one recorder refresh domain, including removing the provider/package/blocker model, renderer, worker, and scheduler paths.
 - [x] (2026-09-05 22:40Z) Removed provider documentation and tests; added exact schema-two, rejected-input, absence, cutover, single-domain, and local-view regression coverage.
-- [ ] Run focused and repository gates, inspect the final diff, finish structured work, and close the Bead.
+- [x] (2026-09-05 23:59Z) Ran focused and repository gates, inspected the final diff and active-source search, recorded a passing structured-work batch, closed the work plan, and synchronized the completed Bead.
 
 ## Surprises & Discoveries
 
@@ -31,6 +31,7 @@ After this change, Jig has no status-provider protocol, provider configuration, 
 - `RecorderRefresh` already carries both `RecorderSnapshot` and `StatusLocalSnapshot`, so the local Status view can be served by the same atomic refresh result as Work, Timeline, and Health.
 - Clippy exposed that the combined refresh-result enum retained a large recorder variant after its status sibling was deleted. Boxing the recorder result makes the channel message and worker stack smaller without adding another ownership model.
 - The first workspace gate run exercised a committed-template clone while the implementation was still uncommitted. The clone therefore contained the old `status.providers` template expression while the new binary correctly omitted `status` from its render context. The direct cut must be committed as one coherent version before those committed-template tests can pass; adding a legacy render value would reintroduce the compatibility surface this change removes.
+- The next full gate run found one stale cross-entrypoint oracle in `ui_json_portability.rs`: it still hard-coded status schema version one. Replacing the literal with `STATUS_SCHEMA_VERSION` and asserting the removed root fields are absent made that test cover the direct cut instead of contradicting the dedicated schema-two contract test.
 - Post-removal debug measurements are about 30.15 seconds for `jig status --json` and 30.61 seconds for `jig ui --json`, down from roughly 42–45 seconds but still too slow. The remaining delay is in local repository collection and repeated owned-process scans on this unusually process-heavy host, not in retained provider execution or TUI scheduling.
 
 ## Decision Log
@@ -57,7 +58,13 @@ After this change, Jig has no status-provider protocol, provider configuration, 
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. Record the final behavior, verification results, and any remaining risks here before closing the work.
+The external status-provider vertical slice is gone rather than deprecated. Jig no longer contains its public Rust DTOs, JSON schema/example, configuration parser, render answers, command runner, process limits, concurrency and phase machinery, freshness aggregation, provider summaries, package/blocker models, detail renderers, tabs, scheduler slot, worker messages, dedicated fixtures, or maintained documentation. Generated repositories do not emit `[status]`; old `[status]` input and `jig ui --status-refresh-seconds` fail as unknown input.
+
+The retained product is smaller and native to Jig: `jig status --json` emits schema two with exactly the local repository, work, loop, and collection-error roots, and the TUI exposes Status, Work, Timeline, and Health from one atomic `RecorderRefresh`. The runtime scheduler has only recorder and plan-detail work. A final cleanup removed the now-meaningless tab parameter and mutable domain wrapper so the model API also expresses that single refresh domain directly.
+
+Verification completed with the development binary and the repository harness. Focused `jig-ui` testing passed 40 unit and 21 contract tests; `jig-contract`, UI architecture/cutover, schema, rejected-input, generated-template, and portability regressions passed. The final structured batch passed format, strict Clippy (including `clippy::mod_module_files`), contract, file budget, 3,067 core tests, 112 frontend/scaffold tests, 443 vault tests plus the two serialized vault-TUI tests, 209 process tests, and all 3,833 workspace tests. The active-source audit leaves only negative-removal assertions and the current breaking-change note; older changelog and append-only issue/state records remain as historical evidence.
+
+Residual risk is confined to the retained local status collector's latency on hosts with thousands of processes. Removing the joined provider phase reduced measured debug startup by roughly twelve seconds, but local JSON collection is still about thirty seconds on this machine. That performance path is separate from the deleted subsystem and should be optimized as owned-process/repository-observation work rather than by restoring another status domain.
 
 ## Context and Orientation
 
@@ -164,3 +171,5 @@ At completion:
 - Status JSON root fields are `ok`, `command`, `schema_version`, `observed_at_ms`, `outcome`, `repository`, `work`, `loops`, and `errors`.
 
 Revision note (2026-09-05): Initial plan written after adoption and architecture research established that the provider subsystem is an isolated parallel model and should be removed as a direct cut.
+
+Revision note (2026-09-05): Completed the direct deletion, recorded the mixed-version template and stale portability-oracle findings, and documented the passing final gates and residual local-collector latency.
