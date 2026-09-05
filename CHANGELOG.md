@@ -1,5 +1,149 @@
 # Changelog
 
+## v0.3.0 - 2026-09-05
+
+### Added
+- Run codex tasks on schedule
+- Harden scheduled workflow execution
+- Enforce cognitive complexity defaults
+
+### Fixed
+- Harden scheduled task lifecycle
+- Model checkout lifecycle invariants
+- Harden scheduling policy
+- Preserve scheduled completion evidence
+- Make schedule state durable and resolvable
+- Satisfy loop branch policy gates
+- Stabilize cognitive complexity CI
+- Release advisory leases explicitly
+- Preserve loop evidence across stale observations
+- Bind loop mutations to durable authority
+- Make review follow-ups retry-safe
+- Harden review follow-up boundaries
+- Isolate review thread mutation budgets
+- Revalidate loop effects at commit boundaries
+- Refresh PR review authority before commit
+- Make authority witnesses complete
+- Make schedule authority cutover recoverable
+- Restore loop branch CI
+- Gate Linux-only test import
+
+### Changed
+- Split runtime by responsibility
+
+### Documentation
+- Improve Jig onboarding and track follow-up work
+- Reconcile changelog release boundaries
+
+### Tests
+- Canonicalize macos worktree paths
+- Keep path assertion within loc policy
+- Isolate scaffold Clippy fixtures from Bun
+
+### Other
+- Fix loop runtime review findings
+- Fix loop review boundary failures
+- Fix transactional loop review findings
+- Fix ambiguous loop lifecycle outcomes
+- Fix loop attention and receipt boundaries
+- Fix shared loop authority boundaries
+- Fix loop execution authority gaps
+- Fix loop review lifecycle gaps
+- Fix pr manager lifecycle review findings
+- Fix loop state review boundaries
+- Fix loop execution evidence boundaries
+- Keep cancellation regressions within rust loc limit
+- Record passing loop remediation gates
+- Fix loop authority ownership boundaries
+- Chore record round eleven fmt evidence
+- Chore record round eleven gate evidence
+- Fix loop authority and preparation boundaries
+- Chore record round twelve gate evidence
+- Fix loop trust and mutation boundaries
+- Chore record round thirteen remediation
+- Chore satisfy Rust file size gate
+- Chore record round thirteen gate evidence
+- Fix loop review observation boundaries
+- Chore record round fourteen evidence
+- Fix loop worker authority boundaries
+- Test enforce exclusive worker receipt append
+- Fix preserve loop authority boundaries
+- Chore record round sixteen gates
+- Fix keep manual occurrence through receipt
+- Chore record round seventeen gates
+- Fix guard PR repair snapshot boundaries
+- Test isolate branch lease loss
+- Chore record round eighteen gates
+- Fix close loop finalization boundaries
+- Chore record round nineteen gates
+- Fix loop authority and observation boundaries
+- Chore record round twenty gates
+- Harden loop mutation boundaries
+- Record loop hardening gate evidence
+- Harden loop renewal and stale finalization
+- Record loop renewal gate evidence
+- Harden receipt and PR validation boundaries
+- Record receipt hardening gate evidence
+- Harden loop transaction and worker boundaries
+- Record loop transaction gate evidence
+- Preserve loop schedule and cleanup authority
+- Record schedule authority gate evidence
+- Harden loop cache and PR authority
+- Preserve read-only loop cache status
+- Record loop cache authority gate evidence
+- Protect loop coordination authority
+- Record coordination authority gate evidence
+- Make loop state receipts transactional
+- Record transactional receipt gate evidence
+- Make receipt journal locks RAII guards
+- Record receipt lock gate evidence
+- Serialize shared-root loop workers
+- Record shared-root gate evidence
+- Close loop authority race windows
+- Record loop authority gate evidence
+- Harden loop authority boundaries
+- Record loop authority gate evidence
+- Harden PR manager observation and authority
+- Record PR manager hardening gate evidence
+- Close PR manager witness and path gaps
+- Align PR manager integration fixtures
+- Split PR manager conflict integration test
+- Record Round 34 remediation gate evidence
+- Preserve PR manager native path boundaries
+- Record Round 35 remediation gate evidence
+- Close PR manager authority boundaries
+- Centralize workflow claim preflight
+- Record Round 36 remediation gate evidence
+- Harden PR manager mutation boundaries
+- Cover PR reply freshness in loop integration
+- Model live PR witness transitions in loop tests
+- Record Round 37 remediation gate evidence
+- Harden loop authority publication and cancellation
+- Encapsulate loop JSON publication policy
+- Record Round 38 remediation gate evidence
+- Harden loop state review boundaries
+- Complete review-thread evidence coverage
+- Record Round 39 remediation gates
+- Reject unresolved PR merge markers
+- Record Round 40 remediation gates
+- Harden loop validation and state locks
+- Record Round 41 remediation gates
+- Harden loop post-work evidence
+- Record Round 42 remediation gates
+- Harden loop migration cutover
+- Align protected lease loss evidence
+- Record Round 43 remediation gates
+- Bound loop snapshot evidence
+- Split loop receipt evidence tests
+- Record Round 44 remediation gates
+- Harden loop observation cutovers
+- Record Round 45 remediation gates
+- Preserve precise GitHub deadlines
+- Record Round 46 remediation gates
+- Record clean Round 47 review
+- Close loop review work plan
+- Replace no-mod-rs check with Clippy policy
+
 ## v0.2.0 - 2026-08-31
 
 ### Added
