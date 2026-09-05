@@ -1,11 +1,10 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use jig_ui::dashboard::{
     CollectionDomain, DashboardSource, PlanBasis, PlanSnapshotResult, RecorderEpochId,
-    RecorderMode, SourceError, StatusPhase, StatusRequest, TimelineRow,
+    RecorderMode, SourceError, TimelineRow,
 };
 use serde_json::json;
 
@@ -147,18 +146,12 @@ fn oversized_status_record_has_only_the_documented_partial_delta() {
 
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
     let refresh = source
-        .status(
-            StatusRequest {
-                timeline_limit: jig_ui::dashboard::TimelineLimit::new(25).unwrap(),
-            },
-            &|_| {},
-            &|| false,
-        )
+        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
         .unwrap();
-    let typed = serde_json::to_value(refresh.status).unwrap();
+    let typed = serde_json::to_value(refresh.status_local).unwrap();
 
-    assert_eq!(typed, legacy);
-    assert_eq!(typed["outcome"], "partial");
+    assert_eq!(typed["work"], legacy["work"]);
+    assert_eq!(typed["errors"], legacy["errors"]);
     assert!(typed["work"]["state"].is_null());
     assert_eq!(typed["work"]["gates"], json!([]));
     let oversized_errors = typed["errors"]
@@ -234,7 +227,7 @@ fn timeline_identity_survives_append_but_changes_with_replacement_bytes() {
 }
 
 #[test]
-fn cancellation_in_each_status_phase_keeps_the_retained_epoch() {
+fn cancelled_recorder_refresh_keeps_the_retained_epoch() {
     let (_root, source) = source_fixture();
     let retained = source
         .recorder(recorder_request(RecorderMode::Refresh), &|| false)
@@ -242,29 +235,16 @@ fn cancellation_in_each_status_phase_keeps_the_retained_epoch() {
         .recorder
         .epoch_id;
 
-    for cancelled_phase in [StatusPhase::Providers, StatusPhase::LocalEpoch] {
-        let cancelled = AtomicBool::new(false);
-        let result = source.status(
-            StatusRequest {
-                timeline_limit: recorder_request(RecorderMode::Refresh).timeline_limit,
-            },
-            &|phase| {
-                if phase == cancelled_phase {
-                    cancelled.store(true, Ordering::SeqCst);
-                }
-            },
-            &|| cancelled.load(Ordering::SeqCst),
-        );
-        assert_eq!(result.unwrap_err(), SourceError::Cancelled);
-        assert_eq!(
-            source
-                .recorder(recorder_request(RecorderMode::ReuseCurrent), &|| false)
-                .unwrap()
-                .recorder
-                .epoch_id,
-            retained
-        );
-    }
+    let result = source.recorder(recorder_request(RecorderMode::Refresh), &|| true);
+    assert_eq!(result.unwrap_err(), SourceError::Cancelled);
+    assert_eq!(
+        source
+            .recorder(recorder_request(RecorderMode::ReuseCurrent), &|| false)
+            .unwrap()
+            .recorder
+            .epoch_id,
+        retained
+    );
 }
 
 #[test]

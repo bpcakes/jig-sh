@@ -22,7 +22,7 @@
 - Restore raw mode, alternate-screen state, and cursor visibility on every ordinary return and unwind.
 - Direct output must remain an immediate borrowed writer, be erased before Ratatui resumes, and be cleared again during session drop so unwind cannot leave the alternate screen populated.
 - A `CooperativeWorker` must signal cancellation and join its owned thread before drop returns.
-- Keep this crate free of repository, status-provider, Codex, state, process-launch, and MCP policy.
+- Keep this crate free of repository, Codex, state, process-launch, and MCP policy.
 - Feature-specific crates own event mappings and rendering; this crate owns only reusable mechanics.
 
 ## Common commands

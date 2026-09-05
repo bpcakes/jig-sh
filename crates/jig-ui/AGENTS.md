@@ -9,7 +9,7 @@
 - `src/lib.rs`: public dashboard and terminal module boundary.
 - `src/dashboard.rs`: bounded snapshot contracts and the typed source interface.
 - `src/terminal.rs`: dashboard options and public TUI entrypoint.
-- `src/terminal/model.rs`: six-tab application state and typed view projection.
+- `src/terminal/model.rs`: four-tab application state and typed view projection.
 - `src/terminal/render.rs`: Ratatui layout, widgets, colors, and responsive presentation.
 - `src/terminal/runtime.rs`: terminal lifecycle, scheduling, refresh workers, and cancellation.
 
@@ -19,11 +19,11 @@
 - Change tabs, navigation, selection preservation, filters, or detail state: `src/terminal/model/`.
 - Change terminal layout or presentation: `src/terminal/render/`.
 - Change refresh timing, preemption, keyboard events, or terminal cleanup: `src/terminal/runtime/`.
-- Change how repository state, gates, loops, or providers become snapshots: `crates/jig/src/ui/source/`, not this crate.
+- Change how repository state, gates, or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
 
 ## Invariants
 
-- Keep this crate independent from `RepoContext`, provider commands, state storage, runtime policy, MCP, and templates.
+- Keep this crate independent from `RepoContext`, state storage, runtime policy, MCP, and templates.
 - Consume repository data only through `DashboardSource`; do not read `.agent/state` directly.
 - Keep every rendered collection and text field within its declared bound, preserving explicit omission counts.
 - Keep the dashboard read-only. It must not mutate state, record receipts, fetch remotes, or execute displayed remediation commands.

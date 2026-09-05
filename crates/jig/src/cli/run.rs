@@ -285,18 +285,7 @@ fn run_command(cli: Cli) -> Result<()> {
             #[cfg(all(unix, not(test)))]
             let cancellation = signal_session.cancellation();
             #[cfg(all(unix, not(test)))]
-            let mut observer =
-                crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
-                    cancellation.cancelled()
-                });
-            #[cfg(all(unix, not(test)))]
-            let outcome = status::snapshot_with_cancellation_and_observer(
-                &ctx,
-                &|| cancellation.cancelled(),
-                &mut observer,
-            );
-            #[cfg(all(unix, not(test)))]
-            let outcome = observer.finish_with(outcome);
+            let outcome = status::snapshot_with_cancellation(&ctx, &|| cancellation.cancelled());
             #[cfg(all(unix, not(test)))]
             let outcome = crate::codex::finish_signal_supervised(
                 outcome,

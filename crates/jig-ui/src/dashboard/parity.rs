@@ -29,15 +29,11 @@ macro_rules! parity {
     };
 }
 
-const DASHBOARD_CONTRACT_TESTS: &str = "crates/jig-ui/tests/dashboard_contract.rs";
 const DASHBOARD_LOCAL_TESTS: &str = "crates/jig-ui/src/terminal/tests/local.rs";
 const DASHBOARD_LOCAL_PARITY_TESTS: &str = "crates/jig-ui/src/terminal/tests/local/parity.rs";
 const DASHBOARD_MODEL_TESTS: &str = "crates/jig-ui/src/terminal/tests.rs";
-const DASHBOARD_STATUS_TESTS: &str = "crates/jig-ui/src/terminal/tests/status.rs";
-const DASHBOARD_REGRESSION_TESTS: &str = "crates/jig-ui/src/terminal/tests/regressions.rs";
 const DASHBOARD_EVENT_LOOP_TESTS: &str = "crates/jig-ui/src/terminal/runtime/event_loop.rs";
-const DASHBOARD_SCHEDULER_TESTS: &str = "crates/jig-ui/src/terminal/runtime/scheduler/tests.rs";
-const DASHBOARD_WORKER_TESTS: &str = "crates/jig-ui/src/terminal/runtime/worker/tests.rs";
+const DASHBOARD_SCHEDULER_TESTS: &str = "crates/jig-ui/src/terminal/runtime/scheduler.rs";
 const CLI_CUTOVER_TESTS: &str = "crates/jig/tests/ui_cutover.rs";
 const CLI_ARCHITECTURE_TESTS: &str = "crates/jig/tests/ui_architecture.rs";
 
@@ -240,7 +236,7 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "Dashboard JSON route",
         Recorder,
         CLI_CUTOVER_TESTS,
-        "recorder_json_exits_without_binding_or_running_providers"
+        "recorder_json_emits_one_local_snapshot"
     ),
     parity!(
         "plan_json",
@@ -251,192 +247,52 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
     ),
     parity!(
         "auto_refresh",
-        "Browser auto-refresh",
+        "Terminal auto-refresh",
         Recorder,
         DASHBOARD_SCHEDULER_TESTS,
-        "automatic_work_is_completion_relative_and_does_not_duplicate_pending"
+        "automatic_refresh_is_completion_relative_and_single_domain"
     ),
     parity!(
         "status_overview",
         "Status overview structure",
         Status,
-        DASHBOARD_STATUS_TESTS,
-        "status_overview_local_counts_and_errors_are_reachable"
+        DASHBOARD_MODEL_TESTS,
+        "status_view_surfaces_local_repository_work_loops_and_errors"
     ),
     parity!(
         "repository_cleanliness",
         "Repository cleanliness and revision",
         Status,
-        DASHBOARD_STATUS_TESTS,
-        "status_repository_and_upstream_variants_are_rendered"
+        DASHBOARD_MODEL_TESTS,
+        "status_view_surfaces_local_repository_work_loops_and_errors"
     ),
     parity!(
         "upstream",
         "Upstream tracking",
         Status,
-        DASHBOARD_STATUS_TESTS,
-        "status_repository_and_upstream_variants_are_rendered"
-    ),
-    parity!(
-        "provider_identity",
-        "Provider identity",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "provider_identity_progress_and_failure_fields_are_reachable"
-    ),
-    parity!(
-        "provider_status",
-        "Provider status and duration",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "provider_status_variants_keep_status_and_duration_distinct"
-    ),
-    parity!(
-        "provider_failure",
-        "Provider failure detail",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "provider_identity_progress_and_failure_fields_are_reachable"
-    ),
-    parity!(
-        "provider_progress",
-        "Provider progress categories",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "provider_identity_progress_and_failure_fields_are_reachable"
-    ),
-    parity!(
-        "provider_freshness",
-        "Provider input freshness",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "provider_freshness_and_diagnostics_are_reachable"
-    ),
-    parity!(
-        "provider_diagnostics",
-        "Provider diagnostics",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "provider_freshness_and_diagnostics_are_reachable"
+        DASHBOARD_MODEL_TESTS,
+        "status_view_surfaces_local_repository_work_loops_and_errors"
     ),
     parity!(
         "aggregate_errors",
         "Aggregate collection errors",
         Status,
-        DASHBOARD_STATUS_TESTS,
-        "status_overview_local_counts_and_errors_are_reachable"
+        DASHBOARD_MODEL_TESTS,
+        "status_view_surfaces_local_repository_work_loops_and_errors"
     ),
     parity!(
         "status_local_counts",
         "Status local work and loop counts",
         Status,
-        DASHBOARD_REGRESSION_TESTS,
-        "recorder_refresh_reprojects_local_status_without_replacing_providers"
-    ),
-    parity!(
-        "partition_age",
-        "Status partition observation age",
-        Status,
-        DASHBOARD_REGRESSION_TESTS,
-        "status_and_recorder_partitions_render_independent_ages"
-    ),
-    parity!(
-        "provider_switching",
-        "Provider switching",
-        Status,
         DASHBOARD_MODEL_TESTS,
-        "typed_snapshot_keeps_colliding_raw_identities_distinct_across_refresh"
-    ),
-    parity!(
-        "package_selection",
-        "Package list and selection",
-        Status,
-        DASHBOARD_MODEL_TESTS,
-        "navigation_filters_and_preserves_stable_selection_across_refresh"
-    ),
-    parity!(
-        "blocked_filter",
-        "Blocked-only package filter",
-        Status,
-        DASHBOARD_MODEL_TESTS,
-        "navigation_filters_and_preserves_stable_selection_across_refresh"
-    ),
-    parity!(
-        "package_preview",
-        "Package compact preview",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_preview_facets_and_dependencies_are_reachable"
-    ),
-    parity!(
-        "package_facets",
-        "Package facet detail",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_preview_facets_and_dependencies_are_reachable"
-    ),
-    parity!(
-        "package_dependencies",
-        "Package dependencies",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_preview_facets_and_dependencies_are_reachable"
-    ),
-    parity!(
-        "package_acceptance",
-        "Package acceptance checks",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_acceptance_blockers_and_evidence_are_reachable"
-    ),
-    parity!(
-        "package_blockers",
-        "Package blockers",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_acceptance_blockers_and_evidence_are_reachable"
-    ),
-    parity!(
-        "package_evidence",
-        "Package evidence",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_acceptance_blockers_and_evidence_are_reachable"
-    ),
-    parity!(
-        "package_extensions",
-        "Package extensions",
-        Status,
-        DASHBOARD_MODEL_TESTS,
-        "extension_key_sanitization_preserves_colliding_entries_for_rendering"
-    ),
-    parity!(
-        "blocker_navigation",
-        "Blocker queue navigation",
-        Status,
-        DASHBOARD_MODEL_TESTS,
-        "blocker_selection_survives_insertions_duplicate_codes_and_display_changes"
-    ),
-    parity!(
-        "blocker_detail",
-        "Blocker detail",
-        Status,
-        DASHBOARD_STATUS_TESTS,
-        "package_acceptance_blockers_and_evidence_are_reachable"
-    ),
-    parity!(
-        "provider_additive_fields",
-        "Provider additive fields",
-        Status,
-        DASHBOARD_CONTRACT_TESTS,
-        "accepted_provider_report_serializes_the_exact_raw_document_only"
+        "status_view_surfaces_local_repository_work_loops_and_errors"
     ),
     parity!(
         "status_refresh",
-        "Status refresh lifecycle",
+        "Single-domain status refresh lifecycle",
         Status,
-        DASHBOARD_WORKER_TESTS,
-        "phase_events_are_generation_tagged_and_preemption_joins_before_local_start"
+        DASHBOARD_EVENT_LOOP_TESTS,
+        "every_view_refreshes_the_single_recorder_domain"
     ),
     parity!(
         "http_authentication",

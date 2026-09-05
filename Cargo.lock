@@ -1462,7 +1462,6 @@ dependencies = [
 name = "jig-contract"
 version = "0.3.0"
 dependencies = [
- "jsonschema",
  "schemars",
  "serde",
  "serde_json",

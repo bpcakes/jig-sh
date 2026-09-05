@@ -4,7 +4,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
     DEFAULT_TIMELINE_ROWS, MAX_TIMELINE_ROWS, PlanSnapshot, RecorderSnapshot, StatusLocalSnapshot,
-    StatusSnapshot,
 };
 
 /// Supplies bounded dashboard observations to the serialized terminal worker.
@@ -20,13 +19,6 @@ pub trait DashboardSource: Send + Sync {
         request: RecorderRequest,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<RecorderRefresh, SourceError>;
-
-    fn status(
-        &self,
-        request: StatusRequest,
-        phase_changed: &dyn Fn(StatusPhase),
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<StatusRefresh, SourceError>;
 
     fn plan(
         &self,
@@ -125,31 +117,10 @@ pub struct RecorderRequest {
     pub timeline_limit: TimelineLimit,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StatusRequest {
-    pub timeline_limit: TimelineLimit,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StatusPhase {
-    Providers,
-    LocalEpoch,
-}
-
 #[derive(Clone, Debug)]
 pub struct RecorderRefresh {
     pub recorder: RecorderSnapshot,
     pub status_local: StatusLocalSnapshot,
-}
-
-#[derive(Clone, Debug)]
-pub struct StatusRefresh {
-    pub status: StatusSnapshot,
-    pub recorder: RecorderSnapshot,
-    /// Observation time for the local recorder-backed partition.
-    pub local_observed_at_ms: u64,
-    /// Observation time for the external-provider partition.
-    pub provider_observed_at_ms: u64,
 }
 
 #[derive(Clone, Debug)]

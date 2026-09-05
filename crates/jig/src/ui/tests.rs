@@ -1,13 +1,9 @@
 #[test]
-fn status_compatibility_keeps_local_default_and_configures_provider_cadence() {
+fn status_entrypoint_uses_requested_refresh_cadence() {
     let interval = std::time::Duration::from_secs(3_600);
     let options = super::status_dashboard_options(interval);
 
-    assert_eq!(
-        options.local_refresh_interval,
-        std::time::Duration::from_secs(10)
-    );
-    assert_eq!(options.status_refresh_interval, interval);
+    assert_eq!(options.refresh_interval, interval);
 }
 
 #[test]
@@ -15,7 +11,6 @@ fn work_options_preserve_cli_refresh_limit_and_initial_plan() {
     let options = super::work_dashboard_options(
         crate::cli::UiOpts {
             refresh_seconds: Some(11),
-            status_refresh_seconds: Some(31),
             timeline_limit: Some(250),
             plan: Some("plan_example".to_string()),
             retired_port: None,
@@ -25,14 +20,7 @@ fn work_options_preserve_cli_refresh_limit_and_initial_plan() {
     .unwrap();
 
     assert_eq!(options.initial_tab, jig_ui::terminal::InitialTab::Work);
-    assert_eq!(
-        options.local_refresh_interval,
-        std::time::Duration::from_secs(11)
-    );
-    assert_eq!(
-        options.status_refresh_interval,
-        std::time::Duration::from_secs(31)
-    );
+    assert_eq!(options.refresh_interval, std::time::Duration::from_secs(11));
     assert_eq!(options.timeline_limit.get(), 250);
     assert_eq!(options.initial_plan.as_deref(), Some("plan_example"));
 }

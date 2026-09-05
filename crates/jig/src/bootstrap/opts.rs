@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use super::{DevApp, FrontendApp, parse_frontend_app};
-use crate::context::{ExecutionConfig, RustMigrationLayout, StatusConfig};
+use crate::context::{ExecutionConfig, RustMigrationLayout};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DevSettingsAnswers {
@@ -217,8 +217,6 @@ pub struct AnswerOpts {
     /// Preserved scalar `[dev]` answers used by both harness and scaffold rendering.
     #[arg(skip)]
     pub(crate) dev_settings: Option<DevSettingsAnswers>,
-    #[arg(skip)]
-    pub(crate) status: Option<StatusConfig>,
     #[arg(skip)]
     pub(crate) execution: Option<ExecutionConfig>,
 }

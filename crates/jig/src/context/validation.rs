@@ -236,7 +236,8 @@ pub(super) fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_schema_docs_dir(&config.schema_docs_dir)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
-    status_config::validate_runtime_config(config)
+    config.work.validate()?;
+    config.loop_config.validate()
 }
 
 pub(super) fn default_schema_docs_dir() -> String {

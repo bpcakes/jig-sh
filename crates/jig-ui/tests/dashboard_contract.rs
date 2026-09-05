@@ -3,11 +3,11 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use jig_ui::dashboard::{
-    AcceptedProviderReport, BoundUnit, BoundedRows, BoundedText, CollectionDomain, LIMIT_SPECS,
-    LimitError, LimitId, LimitShape, PARITY_REGISTRY, PLAN_ROOT_FIELDS, ProviderReportError,
-    RECORDER_ROOT_FIELDS, ROOT_LIMIT_KEYS, RecorderEpochId, SNAPSHOT_ERROR_CODES,
-    SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, SnapshotError, SnapshotErrorCode, SourceError,
-    TimelineLimit, root_limit, scenarios, validate_input_bytes,
+    BoundUnit, BoundedRows, BoundedText, CollectionDomain, LIMIT_SPECS, LimitError, LimitId,
+    LimitShape, PARITY_REGISTRY, PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, ROOT_LIMIT_KEYS,
+    RecorderEpochId, SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS,
+    SnapshotError, SnapshotErrorCode, SourceError, TimelineLimit, root_limit, scenarios,
+    validate_input_bytes,
 };
 use serde_json::{Value, json};
 
@@ -58,14 +58,15 @@ fn versioned_snapshots_round_trip_without_contract_loss() {
 }
 
 #[test]
-fn status_contract_has_the_existing_schema_one_root() {
+fn status_contract_has_the_local_schema_two_root() {
     let actual = serde_json::to_value(scenarios::status_snapshot()).unwrap();
-    let expected: Value = serde_json::from_str(include_str!("fixtures/status-v1.json")).unwrap();
-    assert_eq!(actual, expected);
     assert_root_fields(&actual, STATUS_ROOT_FIELDS);
     assert_eq!(actual["command"], "status");
-    assert_eq!(actual["schema_version"], 1);
+    assert_eq!(actual["schema_version"], 2);
     assert_eq!(actual["outcome"], "complete");
+    assert!(actual.get("providers").is_none());
+    assert!(!actual.to_string().contains("work_packages"));
+    assert!(!actual.to_string().contains("blockers"));
     assert!(actual["work"]["state"]["open_plans"][0]["baseline"].is_object());
     assert!(actual["work"]["gates"][0]["snapshot"]["gates"].is_array());
     assert!(actual["loops"]["attempts"].is_array());
@@ -108,41 +109,6 @@ fn status_gate_wire_shapes_preserve_legacy_target_and_optional_reason() {
 }
 
 #[test]
-fn accepted_provider_report_serializes_the_exact_raw_document_only() {
-    let raw = scenarios::provider_raw_report();
-    let accepted = AcceptedProviderReport::from_raw(raw.clone()).unwrap();
-
-    assert_eq!(accepted.decoded().provider.id, "example-provider");
-    assert_eq!(
-        accepted.decoded().extensions["example.root"]["preserved"],
-        true
-    );
-    assert_eq!(
-        accepted.decoded().provider.extensions["example.identity"]["preserved"],
-        true
-    );
-    assert_eq!(
-        accepted.decoded().work_packages[0].extensions["example.package"]["preserved"],
-        true
-    );
-    assert_eq!(accepted.raw(), &raw);
-    assert_eq!(serde_json::to_value(&accepted).unwrap(), raw);
-
-    let round_trip: AcceptedProviderReport = serde_json::from_value(raw.clone()).unwrap();
-    assert_eq!(serde_json::to_value(round_trip).unwrap(), raw);
-}
-
-#[test]
-fn accepted_provider_report_rejects_semantically_invalid_input() {
-    let mut raw = scenarios::provider_raw_report();
-    raw["provider"]["id"] = Value::String(String::new());
-    assert!(matches!(
-        AcceptedProviderReport::from_raw(raw),
-        Err(ProviderReportError::Validation(_))
-    ));
-}
-
-#[test]
 fn raw_identity_controls_selection_when_display_text_collides() {
     let (left, right) = scenarios::colliding_identities();
     assert_eq!(left.display(), right.display());
@@ -158,8 +124,8 @@ fn raw_identity_controls_selection_when_display_text_collides() {
     assert_eq!(identities.len(), 2);
 
     let ordered = identities.into_iter().collect::<BTreeSet<_>>();
-    assert_eq!(ordered.first().unwrap().raw(), "provider\u{1b}[31mA");
-    assert_eq!(ordered.last().unwrap().raw(), "provider\u{202e}A");
+    assert_eq!(ordered.first().unwrap().raw(), "raw\u{1b}[31mA");
+    assert_eq!(ordered.last().unwrap().raw(), "raw\u{202e}A");
 }
 
 #[test]
@@ -565,6 +531,9 @@ fn assert_test_source_is_collected(manifest_dir: &Path, root: &Path, source: &st
         "crates/jig-ui/src/terminal/runtime/event_loop.rs" => {
             ("crates/jig-ui/src/terminal/runtime.rs", "event_loop")
         }
+        "crates/jig-ui/src/terminal/runtime/scheduler.rs" => {
+            ("crates/jig-ui/src/terminal/runtime.rs", "scheduler")
+        }
         "crates/jig-ui/src/terminal/runtime/scheduler/tests.rs" => {
             ("crates/jig-ui/src/terminal/runtime/scheduler.rs", "tests")
         }
@@ -681,10 +650,9 @@ fn snapshot_errors_use_registered_domains_and_codes() {
 }
 
 #[test]
-fn source_contracts_keep_modes_bases_partitions_and_partial_data_distinct() {
+fn source_contracts_keep_modes_bases_and_partial_data_distinct() {
     use jig_ui::dashboard::{
-        Observation, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest, StatusPhase,
-        StatusProviderSnapshot, StatusRequest,
+        Observation, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest,
     };
 
     let request = RecorderRequest {
@@ -693,10 +661,6 @@ fn source_contracts_keep_modes_bases_partitions_and_partial_data_distinct() {
     };
     assert_eq!(request.mode, RecorderMode::ReuseCurrent);
     assert_eq!(request.timeline_limit.get(), 1_000);
-    let status_request = StatusRequest {
-        timeline_limit: TimelineLimit::new(1).unwrap(),
-    };
-    assert_eq!(status_request.timeline_limit.get(), 1);
     assert_eq!(
         PlanBasis::RecorderEpoch(RecorderEpochId::FIRST),
         PlanBasis::RecorderEpoch(RecorderEpochId::FIRST)
@@ -724,17 +688,6 @@ fn source_contracts_keep_modes_bases_partitions_and_partial_data_distinct() {
     assert!(unavailable.data.is_none());
     assert_eq!(unavailable.error.unwrap().scope(), "body");
 
-    let mut status = scenarios::status_snapshot();
-    let provider_partition = StatusProviderSnapshot {
-        observed_at_ms: status.observed_at_ms + 25,
-        providers: std::mem::take(&mut status.providers),
-        errors: std::mem::take(&mut status.errors),
-    };
-    assert_eq!(provider_partition.observed_at_ms, 1_700_000_000_025);
-    assert_eq!(provider_partition.providers.len(), 1);
-    assert!(provider_partition.errors.is_empty());
-
-    assert_ne!(StatusPhase::Providers, StatusPhase::LocalEpoch);
     assert!(matches!(
         PlanSnapshotResult::NotFound,
         PlanSnapshotResult::NotFound

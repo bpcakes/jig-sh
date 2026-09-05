@@ -137,8 +137,8 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
-- `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
-- `scripts/jig ui` opens the unified read-only terminal dashboard over the same state and configured status providers.
+- `scripts/jig status` collects local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
+- `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
@@ -245,26 +245,26 @@ Receipt retention is also local. `state archive --before <date>` compresses elig
 
 ## Terminal Dashboard
 
-`scripts/jig ui` is the canonical read-only dashboard for both local recorder state and configured `jig.status-provider/v1` reports. `scripts/jig status --tui` is a permanent compatibility spelling that enters the same application on Status; it is not a deprecated second implementation.
+`scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status.
 
 ```sh
 scripts/jig ui                         # start on Work
 scripts/jig ui --plan PLAN_ID          # start in plan detail
-scripts/jig status --tui               # start on Status and load providers eagerly
+scripts/jig status --tui               # start on Status
 scripts/jig --json ui                  # one recorder snapshot
 scripts/jig --json ui --plan PLAN_ID   # one plan snapshot
-scripts/jig status --json              # one provider/status snapshot
+scripts/jig status --json              # one local status snapshot
 ```
 
-The six tabs are Status, Packages, Blockers, Work, Timeline, and Health. Status summarizes repository, work, loop, and provider observations. Packages and Blockers expose bounded provider details. Work shows open and completed plans and their gates. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, gates, decisions, receipts, changed paths, and captured output.
+The four tabs are Status, Work, Timeline, and Health. Status summarizes local repository, work, loop, and collection observations. Work shows open and completed plans and their gates. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, gates, decisions, receipts, changed paths, and captured output.
 
-At the top level, use Tab or Shift-Tab, left/right, or `1` through `6` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens package detail on Packages and the selected item on Work, Timeline, or Health. `[`/`]` switches providers on status-domain tabs, `b` filters Packages, and `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` refreshes the active data domain and `R` refreshes both. Escape closes detail first and quits only from the top level. Detail views retain the movement keys; plan detail uses Tab between sections, `h`/`l` or left/right scroll horizontally, and Enter can open a selected receipt or nested detail.
+At the top level, use Tab or Shift-Tab, left/right, or `1` through `4` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Work, Timeline, or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys; plan detail uses Tab between sections, `h`/`l` or left/right scroll horizontally, and Enter can open a selected receipt or nested detail.
 
-Local recorder refresh defaults to 10 seconds and status-provider refresh to 30 seconds. Both are completion-relative, never overlap, and share one cancellable worker. `jig ui` collects local data first and waits to run providers until a status-domain tab is visited or `R` explicitly requests both domains; `jig status --tui` requests provider data immediately. Status collection runs providers and then publishes a fresh local recorder epoch, keeping the displayed cross-domain facts coherent. A failed provider or one damaged state stream remains a visible domain-local error while usable observations stay available. Neither entrypoint writes receipts, caches provider data, fetches remotes, or executes actions.
+Local collection defaults to a 10-second completion-relative schedule. Refreshes never overlap, run through one cancellable worker, and publish repository status and recorder state as one epoch. A damaged state stream remains a visible local error while usable observations stay available. Neither entrypoint writes receipts, fetches remotes, or executes actions.
 
-The full layout is comfortable at 108 by 24 cells or larger and supported from 72 by 20. Terminals from 40 by 12 use a compact layout; smaller terminals show a safe micro summary. Both stdin and stdout must be terminals. When redirected, the interactive command exits nonzero with guidance to use `jig ui --json` for recorder data or `jig status --json` for provider data, and terminal state is restored on cancellation or failure.
+The full layout is comfortable at 108 by 24 cells or larger and supported from 72 by 20. Terminals from 40 by 12 use a compact layout; smaller terminals show a safe micro summary. Both stdin and stdout must be terminals. When redirected, the interactive command exits nonzero with guidance to use `jig ui --json` for recorder data or `jig status --json` for local status data, and terminal state is restored on cancellation or failure.
 
-The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` retains its separate schema-1 aggregate described by the [status-provider protocol](status-provider.md#jig-runner-and-aggregate).
+The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 2.
 
 Version 0.3.0 removed the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in 0.4.0. A prior Jig release is required to read old bookmarked URLs. The cutover does not change generated launcher scope or contract version 7 because `ui` and `status` remain runtime-owned repository commands.
 

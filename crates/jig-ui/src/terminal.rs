@@ -17,18 +17,17 @@ mod tests;
 /// Initial top-level view selected by a CLI entrypoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InitialTab {
-    /// Provider-oriented status overview used by `jig status --tui`.
+    /// Local status overview used by `jig status --tui`.
     Status,
     /// Local work overview used by canonical `jig ui`.
     Work,
 }
 
-/// Additive terminal runtime configuration.
+/// Terminal runtime configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DashboardOptions {
     pub initial_tab: InitialTab,
-    pub local_refresh_interval: Duration,
-    pub status_refresh_interval: Duration,
+    pub refresh_interval: Duration,
     pub timeline_limit: TimelineLimit,
     pub initial_plan: Option<String>,
 }
@@ -38,23 +37,7 @@ impl DashboardOptions {
     pub const fn new(initial_tab: InitialTab, refresh_interval: Duration) -> Self {
         Self {
             initial_tab,
-            local_refresh_interval: refresh_interval,
-            status_refresh_interval: refresh_interval,
-            timeline_limit: TimelineLimit::DEFAULT,
-            initial_plan: None,
-        }
-    }
-
-    #[must_use]
-    pub const fn with_refresh_intervals(
-        initial_tab: InitialTab,
-        local_refresh_interval: Duration,
-        status_refresh_interval: Duration,
-    ) -> Self {
-        Self {
-            initial_tab,
-            local_refresh_interval,
-            status_refresh_interval,
+            refresh_interval,
             timeline_limit: TimelineLimit::DEFAULT,
             initial_plan: None,
         }
@@ -78,7 +61,7 @@ impl DashboardOptions {
     }
 }
 
-/// Run the additive unified terminal application.
+/// Run the unified terminal application.
 ///
 /// # Errors
 ///

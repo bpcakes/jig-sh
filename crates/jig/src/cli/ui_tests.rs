@@ -20,7 +20,6 @@ fn parses_ui_defaults_and_bounded_options() {
     let opts = ui_opts(&cli);
     assert!(!cli.json);
     assert_eq!(opts.effective_refresh_seconds(), 10);
-    assert_eq!(opts.effective_status_refresh_seconds(), 30);
     assert_eq!(opts.effective_timeline_limit(), 120);
     assert!(opts.timeline_limit.is_none());
     assert!(opts.plan.is_none());
@@ -32,8 +31,6 @@ fn parses_ui_defaults_and_bounded_options() {
             "ui",
             "--refresh-seconds",
             "3600",
-            "--status-refresh-seconds",
-            "1",
             "--timeline-limit",
             limit,
             "--plan",
@@ -41,7 +38,6 @@ fn parses_ui_defaults_and_bounded_options() {
         ]);
         let opts = ui_opts(&cli);
         assert_eq!(opts.refresh_seconds, Some(3_600));
-        assert_eq!(opts.status_refresh_seconds, Some(1));
         assert_eq!(
             opts.timeline_limit
                 .map(|value| value.to_string())
@@ -57,7 +53,6 @@ fn rejects_out_of_range_values_and_invalid_plan_ids() {
     for args in [
         &["jig", "ui", "--refresh-seconds", "0"][..],
         &["jig", "ui", "--refresh-seconds", "3601"][..],
-        &["jig", "ui", "--status-refresh-seconds", "0"][..],
         &["jig", "ui", "--timeline-limit", "0"][..],
         &["jig", "ui", "--timeline-limit", "1001"][..],
         &["jig", "ui", "--plan", "not/a/plan"][..],
@@ -79,7 +74,6 @@ fn json_placement_and_conflicts_are_explicit() {
     }
     for args in [
         &["jig", "ui", "--refresh-seconds", "10", "--json"][..],
-        &["jig", "--json", "ui", "--status-refresh-seconds", "30"][..],
         &[
             "jig",
             "ui",

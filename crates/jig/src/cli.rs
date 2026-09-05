@@ -167,14 +167,12 @@ Examples:
   jig explain --json";
 
 const STATUS_AFTER_HELP: &str = "\
-Runs configured jig.status-provider/v1 inspectors and combines their validated
-reports with local Git freshness, structured work and gate state, and loop
-leases and attempts. The command is read-only, does not fetch remotes, and
-records no receipt.
+Collects local Git, structured work and gate state, and loop leases and attempts.
+The command is read-only, does not fetch remotes, and records no receipt.
 
-Provider failures are included as partial status so an operator can inspect the
-remaining snapshot. Human-readable output is the default. Pass --json for the
-versioned aggregate or --tui for the interactive dashboard.
+Collection failures are included as partial status so an operator can inspect
+the remaining snapshot. Human-readable output is the default. Pass --json for
+the versioned aggregate or --tui for the interactive dashboard.
 
 Examples:
   jig status
@@ -196,10 +194,10 @@ Examples:
 
 const UI_AFTER_HELP: &str = "\
 Opens a read-only terminal dashboard over repository status and .agent/state:
-providers, packages, blockers, plans, gates, receipts, loops, and activity.
+plans, gates, receipts, loops, repository state, and activity.
 Interactive mode requires terminal stdin and stdout and records no receipts.
 
-Pass --json for one local recorder snapshot without running status providers.
+Pass --json for one local recorder snapshot.
 Combine --plan with --json for one plan-detail snapshot.
 
 Examples:
@@ -311,7 +309,7 @@ pub(crate) enum CommandKind {
         subcommand
     )]
     FileBudget(FileBudgetCommand),
-    /// Aggregate local repo, work, loop, and configured status-provider observations.
+    /// Aggregate local repository, work, and loop observations.
     #[command(
         name = root_commands::STATUS.name,
         display_order = root_commands::STATUS.display_order,
@@ -532,16 +530,9 @@ pub(crate) struct UiOpts {
         long,
         value_name = "SECONDS",
         value_parser = clap::value_parser!(u64).range(1..=3600),
-        help = "Local recorder refresh interval; defaults to 10 seconds"
+        help = "Read-only dashboard refresh interval; defaults to 10 seconds"
     )]
     pub(crate) refresh_seconds: Option<u64>,
-    #[arg(
-        long,
-        value_name = "SECONDS",
-        value_parser = clap::value_parser!(u64).range(1..=3600),
-        help = "Status-provider refresh interval; defaults to 30 seconds"
-    )]
-    pub(crate) status_refresh_seconds: Option<u64>,
     #[arg(
         long,
         value_name = "ROWS",
@@ -563,10 +554,6 @@ pub(crate) struct UiOpts {
 impl UiOpts {
     pub(crate) fn effective_refresh_seconds(&self) -> u64 {
         self.refresh_seconds.unwrap_or(10)
-    }
-
-    pub(crate) fn effective_status_refresh_seconds(&self) -> u64 {
-        self.status_refresh_seconds.unwrap_or(30)
     }
 
     pub(crate) fn effective_timeline_limit(&self) -> u64 {

@@ -141,18 +141,6 @@ argv = ["<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"")
 command_timeout_seconds = <<[ execution.command_timeout_seconds ]>>
 command_output_limit_bytes = <<[ execution.command_output_limit_bytes ]>>
 
-[% if status.providers | length == 0 %]
-[status]
-providers = []
-[% else %]
-[% for provider in status.providers %]
-[[status.providers]]
-id = "<<[ provider.id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
-argv = [[% for arg in provider.argv %]"<<[ arg | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
-timeout_seconds = <<[ provider.timeout_seconds ]>>
-[% endfor %]
-[% endif %]
-
 [% if _jig.contract_version >= 6 %]
 [[work.gates]]
 id = "verify"

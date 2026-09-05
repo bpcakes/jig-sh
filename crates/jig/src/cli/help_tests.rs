@@ -183,7 +183,7 @@ fn ui_help_describes_terminal_and_one_shot_modes_without_port() {
     let ui_help = rendered_help(&["ui"]);
     assert_help_contains(&ui_help, "terminal stdin and stdout");
     assert_help_contains(&ui_help, "--refresh-seconds");
-    assert_help_contains(&ui_help, "--status-refresh-seconds");
+    assert_help_omits(&ui_help, "--status-refresh-seconds");
     assert_help_contains(&ui_help, "--timeline-limit");
     assert_help_contains(&ui_help, "--plan");
     assert_help_contains(&ui_help, "Open this plan's detail view");

@@ -38,29 +38,24 @@ pub(crate) fn run(ctx: RepoContext, opts: UiOpts, json_output: bool) -> Result<(
 }
 
 fn work_dashboard_options(opts: UiOpts, timeline_limit: TimelineLimit) -> Result<DashboardOptions> {
-    Ok(DashboardOptions::with_refresh_intervals(
+    Ok(DashboardOptions::new(
         InitialTab::Work,
         Duration::from_secs(opts.effective_refresh_seconds()),
-        Duration::from_secs(opts.effective_status_refresh_seconds()),
     )
     .with_timeline_limit(timeline_limit.get())
     .context("the validated timeline limit was outside the terminal range")?
     .with_initial_plan(opts.plan))
 }
 
-pub(crate) fn run_status(ctx: RepoContext, status_refresh_interval: Duration) -> Result<()> {
-    let options = status_dashboard_options(status_refresh_interval);
+pub(crate) fn run_status(ctx: RepoContext, refresh_interval: Duration) -> Result<()> {
+    let options = status_dashboard_options(refresh_interval);
     supervised(|cancelled| {
         jig_ui::terminal::run_with_cancellation(RepoDashboardSource::new(ctx), options, cancelled)
     })
 }
 
-fn status_dashboard_options(status_refresh_interval: Duration) -> DashboardOptions {
-    DashboardOptions::with_refresh_intervals(
-        InitialTab::Status,
-        Duration::from_secs(10),
-        status_refresh_interval,
-    )
+fn status_dashboard_options(refresh_interval: Duration) -> DashboardOptions {
+    DashboardOptions::new(InitialTab::Status, refresh_interval)
 }
 
 fn finish_json_result(result: Result<()>, output_started: bool) -> Result<()> {

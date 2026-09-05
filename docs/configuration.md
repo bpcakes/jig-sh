@@ -140,7 +140,6 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 - `web_package_manager`: currently `bun`
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
-- `status`: read-only software-rewrite status providers executed by `scripts/jig status`
 - `execution`: supervision limits for long-running configured commands and workers
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
@@ -312,7 +311,7 @@ deleted. Current templates and binaries contain no legacy checker source.
 
 ## Accepted Key Summary
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_migration_layout`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `application_contracts_enabled`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `frontend_workspace_roots`, `repository`, `commands`, `vault`, `dev`, `work`, `loop`, `status`, `execution`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 and later renders omit and ignore it. `backend_language`, `go_database`, and the language-shaped command fields remain accepted for v5 migration but are omitted from v6 renders. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_migration_layout`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_docs_dir`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `application_contracts_enabled`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `frontend_workspace_roots`, `repository`, `commands`, `vault`, `dev`, `work`, `loop`, `execution`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 and later renders omit and ignore it. `backend_language`, `go_database`, and the language-shaped command fields remain accepted for v5 migration but are omitted from v6 renders. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
 
 Nested accepted keys are:
 
@@ -325,8 +324,6 @@ Nested accepted keys are:
 - `[vault]`: `scope`, `scope_id`, `allow_global`
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
-- `[status]`: `providers`
-- `[[status.providers]]`: `id`, `argv`, `timeout_seconds`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
 - `[work]`: `checks`, `gates`, `refinements`
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
@@ -335,30 +332,6 @@ Nested accepted keys are:
 - `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`
 - `[agent_tooling.codex]`: `marketplaces`
 - `[[agent_tooling.codex.marketplaces]]`: `id`, `source`, `plugins`
-
-## `status` Shape
-
-Generated repositories start with no providers:
-
-```toml
-[status]
-providers = []
-```
-
-Add a project-owned inspector as an argv array:
-
-```toml
-[[status.providers]]
-id = "factorish.hocr2.migration-readiness"
-argv = ["ruby", "scripts/verify_migration_readiness.rb", "--status-provider-v1"]
-timeout_seconds = 30
-```
-
-`id` is required, must be unique, and must exactly match the report's `provider.id`. `argv` must contain an executable, must not contain control characters, and is passed directly without shell parsing. `timeout_seconds` defaults to 30 and must be between 1 and 3,600. Jig accepts at most 32 providers. The provider must follow the read-only [`jig.status-provider/v1` process contract](status-provider.md#process-contract).
-
-`scripts/jig status` executes configured providers from the repository root with at most four provider processes active at once, preserves configured result order, and combines their validated reports with local Git, work/gate, and loop lease/attempt state. Cancellation stops queued providers before they start and cancels active owned trees. Add `--tui` for the interactive Overview, Packages, and Blockers views; `--refresh-seconds` changes its 30-second refresh interval. The command records no receipt, writes no provider cache, and never fetches remotes. Provider stdout and stderr are bounded, and each invocation runs in an owned process tree. Treat every configured argv as trusted repository executable code.
-
-This section is part of the renderer answers round trip: `jig update --recopy` preserves configured provider entries. The status aggregate is described under [Jig runner and aggregate](status-provider.md#jig-runner-and-aggregate).
 
 ## `loop` Shape
 

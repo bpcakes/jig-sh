@@ -8,24 +8,31 @@ use ratatui::{
 
 use super::super::model::{App, Tab};
 use super::{
-    ACCENT, GOOD, MUTED, WARN, age_label, panel, provider_label, recorder_repository_label,
-    repository_label, status_style,
+    ACCENT, GOOD, MUTED, WARN, age_label, panel, recorder_repository_label, repository_label,
+    status_style,
 };
 
 pub(super) fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let (repo, provider, outcome) = if app.tab.is_status_domain() {
-        match (&app.status.data, app.current_provider()) {
-            (Some(dashboard), provider) => (
-                repository_label(dashboard),
-                provider_label(provider, app),
-                dashboard.outcome.as_str(),
-            ),
-            (None, _) => (
-                "waiting for status snapshot".to_owned(),
-                "no provider yet".to_owned(),
-                "loading",
-            ),
-        }
+    let (repo, observation, outcome) = if app.tab == Tab::Status {
+        app.status.as_ref().map_or_else(
+            || {
+                (
+                    "waiting for local snapshot".to_owned(),
+                    "local status not loaded".to_owned(),
+                    "loading",
+                )
+            },
+            |status| {
+                (
+                    repository_label(status),
+                    format!(
+                        "local status · observed {}",
+                        age_label(status.observed_at_ms)
+                    ),
+                    status.outcome.as_str(),
+                )
+            },
+        )
     } else {
         app.recorder.data.as_ref().map_or_else(
             || {
@@ -52,7 +59,7 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             },
         )
     };
-    let domain = app.domain(app.tab);
+    let domain = app.local_domain();
     let (refresh, refresh_style) = if domain.refreshing {
         ("[refreshing]", Style::default().fg(WARN))
     } else if domain.error.is_some() && app.domain_has_data(app.tab) {
@@ -77,7 +84,7 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled(format!(" {refresh}"), refresh_style),
             Span::raw("  "),
             Span::styled(
-                app.runtime_notice.as_deref().unwrap_or(&provider),
+                app.runtime_notice.as_deref().unwrap_or(&observation),
                 Style::default().fg(MUTED),
             ),
         ]),

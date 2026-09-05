@@ -1,7 +1,5 @@
 //! Focused semantic fixtures shared by contract, model, and renderer tests.
 
-use serde_json::{Value, json};
-
 use super::*;
 
 pub const OBSERVED_AT_MS: u64 = 1_700_000_000_000;
@@ -199,9 +197,6 @@ pub fn plan_snapshot() -> PlanSnapshot {
 #[must_use]
 pub fn status_snapshot() -> StatusSnapshot {
     let recorder = recorder_snapshot();
-    let accepted_provider = AcceptedProviderReport::from_raw(provider_raw_report())
-        .expect("the shared provider scenario is valid");
-    let provider_summary = ProviderSummary::from_report(accepted_provider.decoded());
     StatusSnapshot {
         ok: true,
         command: STATUS_COMMAND.to_string(),
@@ -271,60 +266,15 @@ pub fn status_snapshot() -> StatusSnapshot {
             }],
         },
         loops: Some(status_loops()),
-        providers: vec![StatusProvider {
-            id: "example-provider".to_string(),
-            status: "complete".to_string(),
-            duration_ms: 25,
-            report: Some(accepted_provider),
-            summary: Some(provider_summary),
-            input_freshness: vec![InputFreshness {
-                name: "target".to_string(),
-                kind: "git".to_string(),
-                path: Some(".".to_string()),
-                expected_revision: Some("0123456789abcdef".to_string()),
-                observed_revision: Some("0123456789abcdef".to_string()),
-                dirty: Some(false),
-                status: "current".to_string(),
-                reason: None,
-            }],
-            error: None,
-        }],
         errors: Vec::new(),
     }
 }
 
 #[must_use]
-pub fn provider_raw_report() -> Value {
-    json!({
-        "protocol": "jig.status-provider/v1",
-        "provider": {
-            "id": "example-provider",
-            "adapter_version": "1.0.0",
-            "display_name": "Example Provider",
-            "extensions": { "example.identity": { "preserved": true } },
-            "future_identity_field": { "preserved": true }
-        },
-        "observed_at_ms": OBSERVED_AT_MS,
-        "outcome": "complete",
-        "work_packages": [{
-            "id": "package-example",
-            "title": "Example package",
-            "specification": { "state": "ready", "category": "ready" },
-            "implementation": { "state": "active", "category": "active" },
-            "verification": { "state": "pending", "category": "pending" },
-            "extensions": { "example.package": { "preserved": true } },
-            "future_package_field": { "preserved": true }
-        }],
-        "extensions": { "example.root": { "preserved": true } },
-        "future_root_field": { "preserved": true }
-    })
-}
-
-#[must_use]
 pub fn colliding_identities() -> (SelectableIdentity, SelectableIdentity) {
     (
-        SelectableIdentity::new("provider\u{1b}[31mA", "provider�A"),
-        SelectableIdentity::new("provider\u{202e}A", "provider�A"),
+        SelectableIdentity::new("raw\u{1b}[31mA", "raw�A"),
+        SelectableIdentity::new("raw\u{202e}A", "raw�A"),
     )
 }
 

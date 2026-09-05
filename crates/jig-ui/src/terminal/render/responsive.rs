@@ -1,9 +1,8 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
     text::Line,
-    widgets::{List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use super::super::model::{App, Tab};
@@ -53,9 +52,7 @@ pub(crate) const fn layout_tier(area: Rect) -> LayoutTier {
 }
 
 fn draw_micro(frame: &mut Frame, area: Rect, app: &App) {
-    let domain_name = if app.package_detail_is_open() {
-        "Package detail"
-    } else if app.detail_is_open() {
+    let domain_name = if app.detail_is_open() {
         "Detail"
     } else {
         app.tab
@@ -72,13 +69,11 @@ fn draw_micro(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(micro_summary(app)));
     }
     if area.height > 1 {
-        lines.push(Line::from(
-            if app.package_detail_is_open() || app.detail_is_open() {
-                "q quit | Esc back | resize"
-            } else {
-                "q quit | resize for details"
-            },
-        ));
+        lines.push(Line::from(if app.detail_is_open() {
+            "q quit | Esc back | resize"
+        } else {
+            "q quit | resize for details"
+        }));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
@@ -92,7 +87,7 @@ fn draw_compact(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .split(area);
     let state = domain_state(app, app.tab);
-    let header = app.domain(app.tab).error.map_or_else(
+    let header = app.local_domain().error.map_or_else(
         || format!("Jig [{}] {state}", app.tab.title()),
         |error| format!("Jig [{}] {state} - {error}", app.tab.title()),
     );
@@ -114,28 +109,10 @@ fn draw_compact(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_compact_content(frame: &mut Frame, area: Rect, app: &App) {
-    if matches!(app.tab, Tab::Status | Tab::Packages | Tab::Blockers) && app.status.data.is_none() {
+    if !app.domain_has_data(app.tab) {
         frame.render_widget(
-            Paragraph::new(
-                app.status
-                    .error
-                    .as_deref()
-                    .unwrap_or("Loading status data..."),
-            )
-            .wrap(Wrap { trim: true }),
-            area,
-        );
-        return;
-    }
-    if matches!(app.tab, Tab::Work | Tab::Timeline | Tab::Health) && app.recorder.data.is_none() {
-        frame.render_widget(
-            Paragraph::new(
-                app.recorder
-                    .error
-                    .as_deref()
-                    .unwrap_or("Loading local data..."),
-            )
-            .wrap(Wrap { trim: true }),
+            Paragraph::new(app.local_domain().error.unwrap_or("Loading local data..."))
+                .wrap(Wrap { trim: true }),
             area,
         );
         return;
@@ -144,33 +121,12 @@ fn draw_compact_content(frame: &mut Frame, area: Rect, app: &App) {
         super::local::draw_detail(frame, area, app);
         return;
     }
-    if app.package_detail_is_open() {
-        super::package_detail::draw(frame, area, app);
-        return;
-    }
     match app.tab {
-        Tab::Status => draw_compact_lines(frame, area, compact_status_lines(app)),
-        Tab::Packages => {
-            let items = app
-                .package_rows()
-                .into_iter()
-                .map(|package| ListItem::new(format!("{} {}", package.display_id, package.title)))
-                .collect::<Vec<_>>();
-            draw_compact_list(frame, area, items, app.package_index);
-        }
-        Tab::Blockers => {
-            let items = app
-                .current_provider()
-                .into_iter()
-                .flat_map(|provider| &provider.blockers)
-                .map(|item| {
-                    ListItem::new(format!(
-                        "{} [{}] {}",
-                        item.display_package_id, item.blocker.display_code, item.blocker.message
-                    ))
-                })
-                .collect::<Vec<_>>();
-            draw_compact_list(frame, area, items, app.blocker_index);
+        Tab::Status => {
+            frame.render_widget(
+                Paragraph::new(compact_status_lines(app)).wrap(Wrap { trim: true }),
+                area,
+            );
         }
         Tab::Work => super::local::draw_compact_work(frame, area, app),
         Tab::Timeline => super::local::draw_compact_timeline(frame, area, app),
@@ -178,62 +134,29 @@ fn draw_compact_content(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn draw_compact_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
-}
-
-fn draw_compact_list(
-    frame: &mut Frame,
-    area: Rect,
-    items: Vec<ListItem<'static>>,
-    selected: usize,
-) {
-    let selected = (!items.is_empty()).then_some(selected.min(items.len().saturating_sub(1)));
-    let mut state = ListState::default().with_selected(selected);
-    frame.render_stateful_widget(
-        List::new(items).highlight_symbol("▶ ").highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        area,
-        &mut state,
-    );
-}
-
 fn compact_status_lines(app: &App) -> Vec<Line<'static>> {
-    let Some(dashboard) = &app.status.data else {
+    let Some(status) = &app.status else {
         return vec![Line::from("No status data.")];
     };
-    let mut lines = vec![Line::from(format!(
-        "{} [{}]",
-        dashboard.repository.name, dashboard.outcome
-    ))];
-    if let Some(provider) = app.current_provider() {
-        lines.push(Line::from(format!(
-            "{}: {} packages, {} blockers",
-            provider
-                .display_name
-                .as_deref()
-                .unwrap_or(&provider.display_id),
-            provider.summary.work_packages,
-            provider.summary.blockers
-        )));
-    }
-    lines
+    vec![
+        Line::from(format!("{} [{}]", status.repository.name, status.outcome)),
+        Line::from(format!(
+            "{} open plans · {} gate errors",
+            status.work.open_plans, status.work.gate_errors
+        )),
+        Line::from(format!(
+            "{} loop attempts · {} exhausted",
+            status.loops.attempts, status.loops.exhausted_attempts
+        )),
+    ]
 }
 
 fn compact_footer(app: &App) -> String {
     if app.detail_is_open() {
         return super::local::detail_footer(app);
     }
-    if app.package_detail_is_open() {
-        return "q quit | Esc/Enter back | j/k scroll | r".to_string();
-    }
     match app.tab {
-        Tab::Packages => "q quit | Tab | j/k | Enter | b | [/]".to_string(),
-        Tab::Blockers => "q quit | Tab views | j/k | [/]".to_string(),
-        Tab::Status => "q quit | Tab views | r | [/]".to_string(),
+        Tab::Status => "q quit | Tab views | r".to_string(),
         Tab::Work => "q quit | Tab views | j/k | Enter | r".to_string(),
         Tab::Timeline => "q quit | Tab views | j/k | Enter | f/F | +/- rows | r".to_string(),
         Tab::Health => "q quit | Tab views | j/k | Enter | r".to_string(),
@@ -241,32 +164,16 @@ fn compact_footer(app: &App) -> String {
 }
 
 fn micro_summary(app: &App) -> String {
-    if let Some(error) = app.domain(app.tab).error {
+    if let Some(error) = app.local_domain().error {
         return format!("Error: {error}");
     }
     match app.tab {
-        Tab::Status => app.current_provider().map_or_else(
-            || "No provider selected".to_string(),
-            |provider| {
+        Tab::Status => app.status.as_ref().map_or_else(
+            || "No status data".to_string(),
+            |status| {
                 format!(
-                    "Selected: {}",
-                    provider
-                        .display_name
-                        .as_deref()
-                        .unwrap_or(&provider.display_id)
-                )
-            },
-        ),
-        Tab::Packages => app.selected_package().map_or_else(
-            || "No package selected".to_string(),
-            |package| format!("Selected: {} {}", package.display_id, package.title),
-        ),
-        Tab::Blockers => app.selected_blocker().map_or_else(
-            || "No blocker selected".to_string(),
-            |item| {
-                format!(
-                    "Selected: {} [{}] {}",
-                    item.display_package_id, item.blocker.display_code, item.blocker.message
+                    "{}: {} open plans",
+                    status.repository.name, status.work.open_plans
                 )
             },
         ),
@@ -286,7 +193,7 @@ fn micro_summary(app: &App) -> String {
 }
 
 fn domain_state(app: &App, tab: Tab) -> &'static str {
-    let domain = app.domain(tab);
+    let domain = app.local_domain();
     if domain.refreshing {
         "refreshing"
     } else if domain.error.is_some() && app.domain_has_data(tab) {

@@ -39,17 +39,7 @@ jig_version = "0.2.0-beta.1"
 
 [commands]
 contract_check_command = "true"
-
-[[status.providers]]
-id = "example.provider"
-argv = ["sh", "provider.sh"]
-timeout_seconds = 60
 "#,
-    )
-    .unwrap();
-    fs::write(
-        root.path().join("provider.sh"),
-        "#!/bin/sh\nprintf '%s' \"$$\" > provider-pid\ntouch provider-started\nwhile :; do sleep 1; done\n",
     )
     .unwrap();
     fs::create_dir_all(root.path().join(".agent")).unwrap();
@@ -112,7 +102,7 @@ fn assert_exact_root_fields(value: &Value, expected: &[&str]) {
 }
 
 #[test]
-fn recorder_json_exits_without_binding_or_running_providers() {
+fn recorder_json_emits_one_local_snapshot() {
     let root = fixture();
 
     let output = jig(root.path(), &["ui", "--json", "--timeline-limit", "1"]);
@@ -124,7 +114,6 @@ fn recorder_json_exits_without_binding_or_running_providers() {
     assert_eq!(value["snapshot_kind"], "recorder");
     assert_eq!(value["timeline_limit"], 1);
     assert_exact_root_fields(&value, RECORDER_ROOT_FIELDS);
-    assert!(!root.path().join("provider-started").exists());
 }
 
 #[test]
@@ -140,7 +129,6 @@ fn both_interactive_entrypoints_share_the_terminal_requirement() {
     assert!(error.contains("`Jig dashboard` requires terminal input and output"));
     assert!(error.contains("jig ui --json"));
     assert!(error.contains("jig status --json"));
-    assert!(!root.path().join("provider-started").exists());
 }
 
 #[test]
@@ -173,7 +161,6 @@ fn plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors() {
     assert_eq!(value["snapshot_kind"], "plan");
     assert_eq!(value["plan"]["plan_id"], plan_id);
     assert_exact_root_fields(&value, PLAN_ROOT_FIELDS);
-    assert!(!root.path().join("provider-started").exists());
 
     let missing = jig(root.path(), &["--json", "ui", "--plan", "plan_missing"]);
     assert!(!missing.status.success());
@@ -237,17 +224,15 @@ fn retired_port_is_a_usage_error_before_repository_or_terminal_setup() {
 }
 
 #[test]
-fn json_refresh_flags_fail_as_usage_before_repository_loading() {
-    for flag in ["--refresh-seconds", "--status-refresh-seconds"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_jig"))
-            .env_remove("JIG_REPO_ROOT")
-            .args(["--json", "ui", flag, "10"])
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2));
-        let error = parse_one_document(&String::from_utf8(output.stdout).unwrap());
-        assert_eq!(error["error"]["kind"], "usage");
-    }
+fn json_refresh_flag_fails_as_usage_before_repository_loading() {
+    let output = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .env_remove("JIG_REPO_ROOT")
+        .args(["--json", "ui", "--refresh-seconds", "10"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error = parse_one_document(&String::from_utf8(output.stdout).unwrap());
+    assert_eq!(error["error"]["kind"], "usage");
 
     let output = Command::new(env!("CARGO_BIN_EXE_jig"))
         .env_remove("JIG_REPO_ROOT")
@@ -270,6 +255,17 @@ fn json_refresh_flags_fail_as_usage_before_repository_loading() {
             .unwrap()
             .contains("--timeline-limit")
     );
+}
+
+#[test]
+fn removed_status_refresh_flag_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .env_remove("JIG_REPO_ROOT")
+        .args(["ui", "--status-refresh-seconds", "10"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
 }
 
 #[test]
@@ -343,7 +339,7 @@ fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
         &mut child,
         &mut master,
         &mut terminal_output,
-        b"Example plan detail",
+        plan_id.trim().as_bytes(),
     );
     master.write_all(b"q").unwrap();
     let status = pty_support::wait_for_child_while_draining(
@@ -367,7 +363,7 @@ fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
 }
 
 #[test]
-fn termination_signals_cancel_status_and_restore_the_terminal() {
+fn termination_signals_cancel_refresh_and_restore_the_terminal() {
     for signal in [libc::SIGINT, libc::SIGTERM] {
         assert_signal_cleanup(signal);
     }
@@ -376,11 +372,11 @@ fn termination_signals_cancel_status_and_restore_the_terminal() {
 fn assert_signal_cleanup(signal: libc::c_int) {
     let root = fixture();
     let (mut master, mut child) = dashboard_child(root.path(), &["status", "--tui"]);
-    wait_for_path(&mut child, &root.path().join("provider-started"));
+    let mut terminal_output = Vec::new();
+    wait_for_output(&mut child, &mut master, &mut terminal_output, b"Status");
 
     // SAFETY: `child.id()` is the live Jig process observed above.
     assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
-    let mut terminal_output = Vec::new();
     let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
@@ -389,16 +385,6 @@ fn assert_signal_cleanup(signal: libc::c_int) {
     )
     .expect("dashboard did not stop after its termination signal");
     assert_eq!(status.signal(), Some(signal));
-    let provider_pid: libc::pid_t = fs::read_to_string(root.path().join("provider-pid"))
-        .unwrap()
-        .parse()
-        .unwrap();
-    // SAFETY: signal zero performs a liveness check without delivering a signal.
-    assert_eq!(unsafe { libc::kill(provider_pid, 0) }, -1);
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
-    );
     assert!(
         terminal_output
             .windows(b"\x1b[?1049l".len())
@@ -450,17 +436,6 @@ fn wait_for_output(
         String::from_utf8_lossy(needle),
         String::from_utf8_lossy(output)
     );
-}
-
-fn wait_for_path(child: &mut pty_support::ChildGuard, path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() && Instant::now() < deadline {
-        if let Some(status) = child.try_wait().unwrap() {
-            panic!("dashboard exited with {status} before provider startup");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(path.exists(), "dashboard did not start its provider");
 }
 
 fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(fs::File, fs::File)> {

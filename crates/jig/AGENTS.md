@@ -14,7 +14,7 @@
 - `src/state.rs`: sessions, plans, receipts, and decisions stored under `.agent/state`.
 - `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
 - `src/ui/source.rs`: typed recorder, plan, and status source with retained local epochs.
-- `src/status.rs`: configured status-provider execution, validation, freshness, and aggregate snapshots.
+- `src/status.rs`: read-only local repository, work, and loop aggregate snapshots.
 - `src/runtime/vault/tui.rs`: fixed-scope, process-local credential adapter for the separately owned `jig-vault-tui` crate.
 - `src/bootstrap.rs`: init/adopt/update command surface.
 - `src/bootstrap/`: bootstrap support for native template rendering, git, staged renders, and template-source handling.

@@ -1,33 +1,11 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{process::Stdio, time::Duration};
 
-use jig_contract::status_provider::v1::Input;
 use jig_owned_process::format_exit_status;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use jig_owned_process::{ProcessOutputLimits, run_owned_process_tree_with_output_limits};
-use serde::Serialize;
-
-use super::sanitize_observer_environment;
-
-#[cfg(test)]
-thread_local! {
-    static GIT_OBSERVATION_COUNTS: std::cell::RefCell<BTreeMap<std::path::PathBuf, usize>> =
-        const { std::cell::RefCell::new(BTreeMap::new()) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_git_observation_counts() {
-    GIT_OBSERVATION_COUNTS.with(|counts| counts.borrow_mut().clear());
-}
-
-#[cfg(test)]
-pub(crate) fn git_observation_count(path: &Path) -> usize {
-    GIT_OBSERVATION_COUNTS.with(|counts| counts.borrow().get(path).copied().unwrap_or(0))
-}
-
 const GIT_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const GIT_STDERR_LIMIT: usize = 64 * 1024;
@@ -36,98 +14,6 @@ const GIT_STDERR_LIMIT: usize = 64 * 1024;
 pub(super) enum GitProbeError {
     Cancelled,
     Failed(String),
-}
-
-#[derive(Serialize)]
-pub(super) struct InputFreshness {
-    name: String,
-    kind: String,
-    path: Option<String>,
-    expected_revision: Option<String>,
-    pub(super) observed_revision: Option<String>,
-    dirty: Option<bool>,
-    pub(super) status: &'static str,
-    reason: Option<String>,
-}
-
-impl InputFreshness {
-    pub(super) fn into_dashboard(self) -> jig_ui::dashboard::InputFreshness {
-        jig_ui::dashboard::InputFreshness {
-            name: self.name,
-            kind: self.kind,
-            path: self.path,
-            expected_revision: self.expected_revision,
-            observed_revision: self.observed_revision,
-            dirty: self.dirty,
-            status: self.status.to_string(),
-            reason: self.reason,
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn input_freshness(
-    root: &Path,
-    input: &Input,
-    observations: &mut BTreeMap<String, GitCheckoutObservation>,
-) -> InputFreshness {
-    input_freshness_with_cancellation(root, input, observations, &|| false)
-        .expect("an always-false cancellation callback cannot cancel input freshness")
-}
-
-pub(super) fn input_freshness_with_cancellation(
-    root: &Path,
-    input: &Input,
-    observations: &mut BTreeMap<String, GitCheckoutObservation>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<InputFreshness, GitProbeError> {
-    if cancelled() {
-        return Err(GitProbeError::Cancelled);
-    }
-    if input.kind != "git" {
-        return Ok(InputFreshness {
-            name: input.name.clone(),
-            kind: input.kind.clone(),
-            path: input.path.clone(),
-            expected_revision: input.revision.clone(),
-            observed_revision: None,
-            dirty: None,
-            status: "not_applicable",
-            reason: Some("Jig compares revision freshness only for git inputs".into()),
-        });
-    }
-
-    let key = input.path.clone().unwrap_or_else(|| ".".into());
-    if !observations.contains_key(&key) {
-        let observation = observe_git_checkout_with_cancellation(&root.join(&key), cancelled)?;
-        observations.insert(key.clone(), observation);
-    }
-    let observation = observations
-        .get(&key)
-        .expect("the git observation was inserted above");
-    let status = if !observation.errors.is_empty() || observation.revision.is_none() {
-        "unavailable"
-    } else if input.revision.is_none() {
-        "unknown"
-    } else if input.revision.as_ref() != observation.revision.as_ref() {
-        "stale"
-    } else if observation.dirty == Some(true) {
-        "dirty"
-    } else if observation.dirty == Some(false) {
-        "current"
-    } else {
-        "unknown"
-    };
-    Ok(InputFreshness {
-        name: input.name.clone(),
-        kind: input.kind.clone(),
-        path: input.path.clone(),
-        expected_revision: input.revision.clone(),
-        observed_revision: observation.revision.clone(),
-        dirty: observation.dirty,
-        status,
-        reason: (!observation.errors.is_empty()).then(|| observation.errors.join("; ")),
-    })
 }
 
 #[derive(Clone)]
@@ -141,11 +27,6 @@ pub(super) fn observe_git_checkout_with_cancellation(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<GitCheckoutObservation, GitProbeError> {
-    #[cfg(test)]
-    GIT_OBSERVATION_COUNTS.with(|counts| {
-        let mut counts = counts.borrow_mut();
-        *counts.entry(path.to_path_buf()).or_default() += 1;
-    });
     let mut errors = Vec::new();
     let revision =
         match git_text_with_cancellation(path, &["rev-parse", "--verify", "HEAD"], cancelled) {
@@ -314,7 +195,8 @@ fn git_output_with_cancellation(
 }
 
 fn configure_git_environment(command: &mut Command) {
-    sanitize_observer_environment(command);
+    crate::shell::sanitize_bash_environment(command);
+    crate::bootstrap::scrub_git_repository_environment_except(command, &[]);
     // `git status` may otherwise take an optional lock and refresh stat data
     // in the index. Status collection is observational, so explicitly disable
     // all optional Git writes after inherited Git controls are removed.

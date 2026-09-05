@@ -116,26 +116,13 @@ impl LocalObservationEpoch {
         id: RecorderEpochId,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self, SourceError> {
-        Self::collect_with_repository(context, id, None, cancelled)
-    }
-
-    pub(super) fn collect_with_repository(
-        context: &RepoContext,
-        id: RecorderEpochId,
-        observed_repository: Option<(StatusRepositoryObservation, Vec<StatusCollectionError>)>,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<Self, SourceError> {
         ensure_active(cancelled)?;
         let observed_at_ms = crate::state::now_ms();
-        let (repository, status_repository_errors) = match observed_repository {
-            Some(repository) => repository,
-            None => {
-                crate::status::dashboard_repository_snapshot_with_cancellation(context, cancelled)
-                    .map_err(|error| {
+        let (repository, status_repository_errors) =
+            crate::status::dashboard_repository_snapshot_with_cancellation(context, cancelled)
+                .map_err(|error| {
                     collection_error_for(CollectionDomain::Repository, error, cancelled)
-                })?
-            }
-        };
+                })?;
 
         let sessions = collect_sessions(context, cancelled)?;
         let plans = collect_plans(context, cancelled)?;

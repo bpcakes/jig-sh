@@ -1,6 +1,5 @@
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::collections::BTreeMap;
 
-use jig_contract::status_provider::v1::{Category, DiagnosticLevel, Report};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 use serde_json::Value;
 
@@ -8,7 +7,7 @@ use super::{
     LoopCodexTask, LoopLease, LoopSchedule, LoopScheduleState, LoopStateError, RecorderEpochId,
 };
 
-pub const STATUS_SCHEMA_VERSION: u64 = 1;
+pub const STATUS_SCHEMA_VERSION: u64 = 2;
 pub const STATUS_COMMAND: &str = "status";
 pub const STATUS_ROOT_FIELDS: &[&str] = &[
     "ok",
@@ -19,74 +18,8 @@ pub const STATUS_ROOT_FIELDS: &[&str] = &[
     "repository",
     "work",
     "loops",
-    "providers",
     "errors",
 ];
-
-/// A validated external report paired with the exact accepted JSON value.
-///
-/// Serialization emits the raw document only. The decoded form exists solely
-/// for typed in-process consumption by the dashboard.
-#[derive(Clone, Debug)]
-pub struct AcceptedProviderReport {
-    raw: Value,
-    decoded: Report,
-}
-
-impl AcceptedProviderReport {
-    pub fn from_raw(raw: Value) -> Result<Self, ProviderReportError> {
-        let decoded = Report::deserialize(&raw)
-            .map_err(|error| ProviderReportError::Decode(error.to_string()))?;
-        decoded
-            .validate()
-            .map_err(|error| ProviderReportError::Validation(error.to_string()))?;
-        Ok(Self { raw, decoded })
-    }
-
-    #[must_use]
-    pub const fn raw(&self) -> &Value {
-        &self.raw
-    }
-
-    #[must_use]
-    pub const fn decoded(&self) -> &Report {
-        &self.decoded
-    }
-}
-
-impl Serialize for AcceptedProviderReport {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.raw.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for AcceptedProviderReport {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Value::deserialize(deserializer)?;
-        Self::from_raw(raw).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ProviderReportError {
-    Decode(String),
-    Validation(String),
-}
-
-impl fmt::Display for ProviderReportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Decode(message) => {
-                write!(formatter, "provider report could not be decoded: {message}")
-            }
-            Self::Validation(message) => {
-                write!(formatter, "provider report failed validation: {message}")
-            }
-        }
-    }
-}
-
-impl Error for ProviderReportError {}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,7 +38,6 @@ pub struct StatusSnapshot {
     pub repository: StatusRepositoryObservation,
     pub work: StatusWorkSnapshot,
     pub loops: Option<StatusLoopObservation>,
-    pub providers: Vec<StatusProvider>,
     pub errors: Vec<StatusCollectionError>,
 }
 
@@ -116,13 +48,6 @@ pub struct StatusLocalSnapshot {
     pub repository: StatusRepositoryObservation,
     pub work: StatusWorkSnapshot,
     pub loops: Option<StatusLoopObservation>,
-    pub errors: Vec<StatusCollectionError>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct StatusProviderSnapshot {
-    pub observed_at_ms: u64,
-    pub providers: Vec<StatusProvider>,
     pub errors: Vec<StatusCollectionError>,
 }
 
@@ -579,115 +504,6 @@ pub struct StatusExhaustedAttempt {
     pub next_eligible_ms: u64,
     pub exhausted: bool,
     pub last_status: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct StatusProvider {
-    pub id: String,
-    pub status: String,
-    pub duration_ms: u64,
-    pub report: Option<AcceptedProviderReport>,
-    pub summary: Option<ProviderSummary>,
-    pub input_freshness: Vec<InputFreshness>,
-    pub error: Option<ProviderFailure>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProviderSummary {
-    pub work_packages: u64,
-    pub work_packages_with_blockers: u64,
-    pub blockers: u64,
-    pub acceptance_checks: u64,
-    pub diagnostics: DiagnosticCounts,
-    pub specification: CategoryCounts,
-    pub implementation: CategoryCounts,
-    pub verification: CategoryCounts,
-    pub acceptance: CategoryCounts,
-}
-
-impl ProviderSummary {
-    #[must_use]
-    pub fn from_report(report: &Report) -> Self {
-        let mut summary = Self {
-            work_packages: u64::try_from(report.work_packages.len()).unwrap_or(u64::MAX),
-            ..Self::default()
-        };
-        for package in &report.work_packages {
-            summary.work_packages_with_blockers += u64::from(!package.blockers.is_empty());
-            summary.blockers += u64::try_from(package.blockers.len()).unwrap_or(u64::MAX);
-            summary.acceptance_checks +=
-                u64::try_from(package.acceptance_checks.len()).unwrap_or(u64::MAX);
-            summary.specification.add(package.specification.category);
-            summary.implementation.add(package.implementation.category);
-            summary.verification.add(package.verification.category);
-            for check in &package.acceptance_checks {
-                summary.acceptance.add(check.category);
-            }
-        }
-        for diagnostic in &report.diagnostics {
-            summary.diagnostics.total += 1;
-            match diagnostic.level {
-                DiagnosticLevel::Info => summary.diagnostics.info += 1,
-                DiagnosticLevel::Warning => summary.diagnostics.warning += 1,
-                DiagnosticLevel::Error => summary.diagnostics.error += 1,
-            }
-        }
-        summary
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DiagnosticCounts {
-    pub total: u64,
-    pub info: u64,
-    pub warning: u64,
-    pub error: u64,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CategoryCounts {
-    pub unknown: u64,
-    pub pending: u64,
-    pub ready: u64,
-    pub active: u64,
-    pub blocked: u64,
-    pub complete: u64,
-    pub failed: u64,
-}
-
-impl CategoryCounts {
-    const fn add(&mut self, category: Category) {
-        match category {
-            Category::Unknown => self.unknown += 1,
-            Category::Pending => self.pending += 1,
-            Category::Ready => self.ready += 1,
-            Category::Active => self.active += 1,
-            Category::Blocked => self.blocked += 1,
-            Category::Complete => self.complete += 1,
-            Category::Failed => self.failed += 1,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct InputFreshness {
-    pub name: String,
-    pub kind: String,
-    pub path: Option<String>,
-    pub expected_revision: Option<String>,
-    pub observed_revision: Option<String>,
-    pub dirty: Option<bool>,
-    pub status: String,
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProviderFailure {
-    pub code: String,
-    pub message: String,
-    pub exit_status: Option<i32>,
-    pub stderr: Option<String>,
-    pub stderr_truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

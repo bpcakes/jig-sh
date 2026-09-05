@@ -2,8 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use jig_ui::dashboard::{
     DashboardSource, PlanBasis, PlanSnapshotResult, RecorderEpochId, RecorderMode, RecorderRefresh,
-    RecorderRequest, SourceError, StatusOutcome, StatusPhase, StatusRefresh, StatusRequest,
-    StatusSnapshot,
+    RecorderRequest, SourceError,
 };
 
 use crate::context::RepoContext;
@@ -16,7 +15,7 @@ use epoch::MAX_AGGREGATION_KEYS;
 
 /// Repository-backed dashboard source. The retained epoch is replaced only
 /// after a complete publishable collection and the mutex is never held during
-/// repository, provider, state, loop, or gate work.
+/// repository, state, loop, or gate work.
 pub(crate) struct RepoDashboardSource {
     context: RepoContext,
     state: Mutex<SourceState>,
@@ -98,23 +97,6 @@ impl RepoDashboardSource {
         }
         Ok(epoch)
     }
-
-    fn collect_observed_and_retain(
-        &self,
-        context: &RepoContext,
-        repository: jig_ui::dashboard::StatusRepositoryObservation,
-        repository_errors: Vec<jig_ui::dashboard::StatusCollectionError>,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<Arc<LocalObservationEpoch>, SourceError> {
-        let id = self.allocate_epoch()?;
-        let epoch = Arc::new(LocalObservationEpoch::collect_with_repository(
-            context,
-            id,
-            Some((repository, repository_errors)),
-            cancelled,
-        )?);
-        self.retain(epoch)
-    }
 }
 
 impl DashboardSource for RepoDashboardSource {
@@ -136,61 +118,6 @@ impl DashboardSource for RepoDashboardSource {
         Ok(RecorderRefresh {
             recorder: epoch.recorder(request.timeline_limit)?,
             status_local: epoch.status_local(),
-        })
-    }
-
-    fn status(
-        &self,
-        request: StatusRequest,
-        phase_changed: &dyn Fn(StatusPhase),
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<StatusRefresh, SourceError> {
-        let current = crate::runtime::refreshed_repository_context(&self.context)
-            .map_err(|error| epoch::collection_error(error, cancelled))?;
-        phase_changed(StatusPhase::Providers);
-        let provider_collection =
-            crate::status::dashboard_provider_snapshot_with_cancellation(&current, cancelled)
-                .map_err(|error| epoch::collection_error(error, cancelled))?;
-        phase_changed(StatusPhase::LocalEpoch);
-        let local = self.collect_observed_and_retain(
-            &current,
-            provider_collection.repository,
-            provider_collection.repository_errors,
-            cancelled,
-        )?;
-        let providers = provider_collection.snapshot;
-        let status_local = local.status_local();
-        let partial = !providers.errors.is_empty()
-            || providers
-                .providers
-                .iter()
-                .any(|provider| provider.status != "complete")
-            || !status_local.errors.is_empty();
-        let status = StatusSnapshot {
-            ok: true,
-            command: jig_ui::dashboard::STATUS_COMMAND.to_string(),
-            schema_version: jig_ui::dashboard::STATUS_SCHEMA_VERSION,
-            observed_at_ms: crate::state::now_ms(),
-            outcome: if partial {
-                StatusOutcome::Partial
-            } else {
-                StatusOutcome::Complete
-            },
-            repository: status_local.repository,
-            work: status_local.work,
-            loops: status_local.loops,
-            providers: providers.providers,
-            errors: status_local
-                .errors
-                .into_iter()
-                .chain(providers.errors)
-                .collect(),
-        };
-        Ok(StatusRefresh {
-            status,
-            recorder: local.recorder(request.timeline_limit)?,
-            local_observed_at_ms: status_local.observed_at_ms,
-            provider_observed_at_ms: providers.observed_at_ms,
         })
     }
 

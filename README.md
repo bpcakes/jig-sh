@@ -133,7 +133,7 @@ Inspect the current evidence with `scripts/jig work status`, `scripts/jig work e
 
 `.agent/jig-contract.json` is the stable repository authority. Current contract v7 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, and target-local affected selection.
 
-Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, status providers, or secrets outside the generated command catalog.
+Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, local status, or secrets outside the generated command catalog.
 
 | Surface | Stable contract? | Records receipts? | Machine-local? |
 | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ scripts/jig check test
 scripts/jig check test --affected origin/main --explain
 ```
 
-In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
+In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
 
 ## Creating and adopting repositories
 
@@ -214,7 +214,7 @@ Contract v7 also provides the native `repo:file-budget` action backed by the rep
 
 ### Orchestration and terminal dashboard
 
-`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local recorder state and any configured `jig.status-provider/v1` inspectors. `jig status --tui` is a permanent compatibility entrypoint into the same dashboard, starting on Status instead of Work.
+`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local repository and recorder state. `jig status --tui` opens the same dashboard on Status instead of Work.
 
 ```sh
 scripts/jig loop status
@@ -223,14 +223,14 @@ scripts/jig ui                    # terminal dashboard, starting on Work
 scripts/jig status --tui          # same dashboard, starting on Status
 scripts/jig --json ui             # one recorder snapshot
 scripts/jig --json ui --plan PLAN_ID
-scripts/jig status --json         # provider/status snapshot
+scripts/jig status --json         # local status snapshot
 ```
 
-The six tabs are Status, Packages, Blockers, Work, Timeline, and Health. Provider failures remain visible as partial status instead of hiding available local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. See [Status-provider protocol](docs/status-provider.md) and [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
+The four tabs are Status, Work, Timeline, and Health. Collection failures remain visible as partial status instead of hiding usable local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. See [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
 
 ### State maintenance
 
-`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, loop, or package details where the active tab offers them. Local recorder refresh defaults to 10 seconds and provider refresh to 30 seconds; collection is serialized and navigation remains responsive. The canonical `jig ui` path loads provider data lazily when a status-domain tab is first visited or the user explicitly presses `R` to refresh both domains. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
+`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
 
 Version 0.3.0 removed the browser server and URL endpoints. The hidden `--port` parser now exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON instead; no browser, listener, cookie, or capability URL remains.
 
@@ -297,14 +297,13 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Configuration](docs/configuration.md): `.jig.toml`, presets, package managers, and runtime options
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
 - [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, receipts, runs, and state
-- [Status-provider protocol](docs/status-provider.md): open JSON observation contract
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
 - [`examples/`](examples/): visible `.jig.toml` answer files
 
 ## Repository layout
 
 - `crates/jig/`: publishable CLI, bootstrapper, and MCP runtime
-- `crates/jig-contract/`: shared DTOs and public status-provider contract
+- `crates/jig-contract/`: shared DTOs and identifiers
 - `crates/jig-{rust,go,typescript,sqlx}/`: repository model adapters
 - `crates/jig-file-budget/`: native file-budget policy and evaluation
 - `crates/jig-dev-proxy/`: local HTTP/HTTPS proxy and process supervision

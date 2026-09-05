@@ -27,31 +27,11 @@ Receipt changed paths
 Receipt diff and duration
 Dashboard JSON route
 Plan JSON route
-Browser auto-refresh
+Terminal auto-refresh
 Status overview structure
 Repository cleanliness and revision
 Upstream tracking
-Provider identity
-Provider status and duration
-Provider failure detail
-Provider progress categories
-Provider input freshness
-Provider diagnostics
 Aggregate collection errors
 Status local work and loop counts
-Status partition observation age
-Provider switching
-Package list and selection
-Blocked-only package filter
-Package compact preview
-Package facet detail
-Package dependencies
-Package acceptance checks
-Package blockers
-Package evidence
-Package extensions
-Blocker queue navigation
-Blocker detail
-Provider additive fields
-Status refresh lifecycle
+Single-domain status refresh lifecycle
 HTTP authentication

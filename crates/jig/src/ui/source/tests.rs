@@ -1,9 +1,8 @@
 use std::fs;
-use std::sync::Mutex;
 
 use jig_ui::dashboard::{
     DashboardSource, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest, SourceError,
-    StatusOutcome, StatusPhase, StatusRequest, TimelineLimit,
+    TimelineLimit,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -227,43 +226,6 @@ fn reuse_before_the_first_refresh_is_a_modeled_empty_state() {
 }
 
 #[test]
-fn status_announces_provider_then_local_and_returns_paired_epoch() {
-    let (_root, source) = source_fixture();
-    crate::status::git::reset_git_observation_counts();
-    let phases = Mutex::new(Vec::new());
-    let refresh = source
-        .status(
-            StatusRequest {
-                timeline_limit: TimelineLimit::new(25).unwrap(),
-            },
-            &|phase| phases.lock().unwrap().push(phase),
-            &|| false,
-        )
-        .unwrap();
-
-    assert_eq!(
-        *phases.lock().unwrap(),
-        vec![StatusPhase::Providers, StatusPhase::LocalEpoch]
-    );
-    assert_eq!(refresh.recorder.open_plans[0].plan_id, "plan_example");
-    assert_eq!(
-        refresh.local_observed_at_ms,
-        refresh.recorder.generated_at_ms
-    );
-    assert!(refresh.provider_observed_at_ms > 0);
-    assert!(refresh.provider_observed_at_ms <= refresh.status.observed_at_ms);
-    assert_eq!(
-        refresh.status.work.state.as_ref().unwrap().open_plans[0].plan_id,
-        "plan_example"
-    );
-    assert_eq!(
-        crate::status::git::git_observation_count(source.context.root()),
-        1,
-        "status must share the root Git observation between repository and provider freshness"
-    );
-}
-
-#[test]
 fn stale_missing_fresh_and_failed_refresh_retention_are_distinct() {
     let (root, source) = source_fixture();
     let first = source
@@ -441,7 +403,7 @@ fn local_epoch_traverses_each_state_stream_once_and_gates_do_not_rescan() {
 }
 
 #[test]
-fn typed_status_source_is_semantically_equal_to_legacy_status_for_supported_state() {
+fn recorder_status_projection_matches_local_status_command_data() {
     let (root, source) = source_fixture();
     for index in 0..12 {
         record_receipt(
@@ -506,17 +468,20 @@ fn typed_status_source_is_semantically_equal_to_legacy_status_for_supported_stat
     let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
     let typed = source
-        .status(
-            StatusRequest {
+        .recorder(
+            RecorderRequest {
+                mode: RecorderMode::Refresh,
                 timeline_limit: TimelineLimit::new(25).unwrap(),
             },
-            &|_| {},
             &|| false,
         )
         .unwrap();
-    let typed = serde_json::to_value(typed.status).unwrap();
+    let typed = serde_json::to_value(typed.status_local).unwrap();
 
-    assert_eq!(typed, legacy);
+    assert_eq!(typed["repository"], legacy["repository"]);
+    assert_eq!(typed["work"], legacy["work"]);
+    assert_eq!(typed["loops"], legacy["loops"]);
+    assert_eq!(typed["errors"], legacy["errors"]);
     assert_eq!(
         typed["work"]["state"]["recent_receipts"]
             .as_array()
@@ -538,7 +503,7 @@ fn typed_status_source_is_semantically_equal_to_legacy_status_for_supported_stat
 }
 
 #[test]
-fn typed_status_preserves_legacy_gate_then_loop_error_order() {
+fn recorder_status_projection_preserves_gate_then_loop_error_order() {
     let (root, source) = source_fixture();
     let plans_path = root.path().join(".agent/state/plans.jsonl");
     let mut plans = fs::read_to_string(&plans_path).unwrap();
@@ -562,17 +527,17 @@ fn typed_status_preserves_legacy_gate_then_loop_error_order() {
 
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
     let typed = source
-        .status(
-            StatusRequest {
+        .recorder(
+            RecorderRequest {
+                mode: RecorderMode::Refresh,
                 timeline_limit: TimelineLimit::new(25).unwrap(),
             },
-            &|_| {},
             &|| false,
         )
         .unwrap();
-    let typed = serde_json::to_value(typed.status).unwrap();
+    let typed = serde_json::to_value(typed.status_local).unwrap();
 
-    assert_eq!(typed, legacy);
+    assert_eq!(typed["errors"], legacy["errors"]);
     let relevant_scopes = typed["errors"]
         .as_array()
         .unwrap()
@@ -581,132 +546,4 @@ fn typed_status_preserves_legacy_gate_then_loop_error_order() {
         .filter(|scope| scope.starts_with("work.gates") || *scope == "loops")
         .collect::<Vec<_>>();
     assert_eq!(relevant_scopes, ["work.gates.plan_example", "loops"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn provider_raw_extensions_round_trip_and_provider_mutations_precede_local_epoch() {
-    let root = tempdir().unwrap();
-    TestRepoBuilder::new(root.path())
-        .config(
-            r#"
-[[status.providers]]
-id = "example.provider"
-argv = ["sh", "provider.sh"]
-timeout_seconds = 2
-"#,
-        )
-        .write();
-    let report = json!({
-        "protocol": "jig.status-provider/v1",
-        "provider": {
-            "id": "example.provider",
-            "adapter_version": "1.0.0",
-            "future_provider_field": {"kept": true}
-        },
-        "observed_at_ms": 1_785_142_200_000_u64,
-        "outcome": "complete",
-        "inputs": [],
-        "work_packages": [],
-        "diagnostics": [],
-        "future_report_field": ["kept", 7]
-    });
-    fs::write(
-        root.path().join("provider-report.json"),
-        serde_json::to_vec(&report).unwrap(),
-    )
-    .unwrap();
-    let appended = json!({
-        "id": "plan-event-provider",
-        "plan_id": "plan_from_provider",
-        "event": "open",
-        "timestamp_ms": 42,
-        "title": "Provider-observed plan",
-        "body_path": null,
-        "baseline": null
-    });
-    fs::write(
-        root.path().join("provider-plan.json"),
-        format!("{}\n", serde_json::to_string(&appended).unwrap()),
-    )
-    .unwrap();
-    fs::write(
-        root.path().join("provider.sh"),
-        "#!/bin/sh\ncat provider-report.json\ncat provider-plan.json >> .agent/state/plans.jsonl\n",
-    )
-    .unwrap();
-    fs::create_dir_all(root.path().join(".agent/state")).unwrap();
-    fs::write(root.path().join(".agent/state/plans.jsonl"), "").unwrap();
-    let source = RepoDashboardSource::new(RepoContext::load_from(root.path()).unwrap());
-    let phases = Mutex::new(Vec::new());
-    let refresh = source
-        .status(
-            StatusRequest {
-                timeline_limit: TimelineLimit::new(25).unwrap(),
-            },
-            &|phase| phases.lock().unwrap().push(phase),
-            &|| false,
-        )
-        .unwrap();
-
-    assert_eq!(
-        *phases.lock().unwrap(),
-        vec![StatusPhase::Providers, StatusPhase::LocalEpoch]
-    );
-    assert_eq!(
-        refresh.status.providers[0].report.as_ref().unwrap().raw(),
-        &report
-    );
-    assert!(
-        refresh
-            .status
-            .work
-            .state
-            .as_ref()
-            .unwrap()
-            .open_plans
-            .iter()
-            .any(|plan| plan.plan_id == "plan_from_provider")
-    );
-    assert!(
-        refresh
-            .recorder
-            .open_plans
-            .iter()
-            .any(|plan| plan.plan_id == "plan_from_provider")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn malformed_provider_is_typed_partial_data_not_a_local_epoch_failure() {
-    let root = tempdir().unwrap();
-    TestRepoBuilder::new(root.path())
-        .config(
-            r#"
-[[status.providers]]
-id = "example.provider"
-argv = ["printf", "not-json"]
-timeout_seconds = 2
-"#,
-        )
-        .write();
-    let source = RepoDashboardSource::new(RepoContext::load_from(root.path()).unwrap());
-    let refresh = source
-        .status(
-            StatusRequest {
-                timeline_limit: TimelineLimit::new(25).unwrap(),
-            },
-            &|_| {},
-            &|| false,
-        )
-        .unwrap();
-
-    assert_eq!(refresh.status.outcome, StatusOutcome::Partial);
-    assert_eq!(refresh.status.providers[0].status, "failed");
-    assert_eq!(
-        refresh.status.providers[0].error.as_ref().unwrap().code,
-        "invalid_json"
-    );
-    assert!(refresh.status.work.state.is_some());
 }

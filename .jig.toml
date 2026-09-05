@@ -590,9 +590,6 @@ component = "repo"
 action = "file-budget"
 component = "repo"
 
-[status]
-providers = []
-
 [vault]
 allow_global = false
 scope = "repo"

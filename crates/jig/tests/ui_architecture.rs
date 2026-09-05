@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use jig_ui::dashboard::{
     DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS,
-    SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS,
+    SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 
 fn repo_root() -> PathBuf {
@@ -94,6 +94,46 @@ fn production_tree_contains_no_http_surface() {
 }
 
 #[test]
+fn external_status_subsystem_is_absent() {
+    let root = repo_root();
+    for relative in [
+        "crates/jig-contract/src/status_provider.rs",
+        "crates/jig-contract/contracts/status-provider",
+        "crates/jig/src/context/status_config.rs",
+        "crates/jig/src/status/summary.rs",
+        "crates/jig-ui/src/terminal/model/package_detail.rs",
+        "crates/jig-ui/src/terminal/model/typed.rs",
+        "crates/jig-ui/src/terminal/model/wire.rs",
+        "crates/jig-ui/src/terminal/render/package_detail.rs",
+        "docs/status-provider.md",
+    ] {
+        assert!(
+            !root.join(relative).exists(),
+            "retired external-status artifact remains at {relative}"
+        );
+    }
+
+    let dashboard_source = read_rust_tree(&root.join("crates/jig-ui/src"));
+    let mut status_source = fs::read_to_string(root.join("crates/jig/src/status.rs")).unwrap();
+    status_source.push_str(&read_rust_tree(&root.join("crates/jig/src/status")));
+    for forbidden in [
+        "StatusRefresh",
+        "StatusRequest",
+        "StatusPhase",
+        "AcceptedProviderReport",
+        "ProviderSummary",
+        "PackageDetail",
+        "View::Packages",
+        "View::Blockers",
+    ] {
+        assert!(
+            !dashboard_source.contains(forbidden) && !status_source.contains(forbidden),
+            "retired external-status symbol remains: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn maintained_guides_describe_the_terminal_only_dashboard_contract() {
     let root = repo_root();
     let documents = read_maintained_dashboard_documents(&root);
@@ -107,7 +147,6 @@ fn read_maintained_dashboard_documents(root: &Path) -> Vec<(&'static str, String
     [
         "README.md",
         "docs/developer-ux.md",
-        "docs/status-provider.md",
         "docs/repo-intent.md",
         "docs/public-contract.md",
         "CHANGELOG.md",
@@ -147,7 +186,7 @@ fn assert_no_retired_dashboard_guidance(documents: &[(&str, String)]) {
 
 fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
     let readme = document(documents, "README.md");
-    assert!(readme.contains("Status, Packages, Blockers, Work, Timeline, and Health"));
+    assert!(readme.contains("Status, Work, Timeline, and Health"));
     assert!(readme.contains("docs/developer-ux.md#terminal-dashboard"));
 
     let developer_ux = document(documents, "docs/developer-ux.md");
@@ -155,12 +194,8 @@ fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
     assert!(developer_ux.contains("108 by 24"));
     assert!(developer_ux.contains("may stop parsing in 0.4.0"));
     assert!(developer_ux.contains("public-contract.md#dashboard-and-status-output"));
-    assert!(developer_ux.contains("status-provider.md#jig-runner-and-aggregate"));
-
-    let status_provider = document(documents, "docs/status-provider.md");
-    assert!(status_provider.contains("permanent compatibility entrypoint"));
-    assert!(status_provider.contains("DashboardSource"));
-    assert!(status_provider.contains("## Jig runner and aggregate"));
+    assert!(developer_ux.contains("one cancellable worker"));
+    assert!(developer_ux.contains("schema version 2"));
 
     let repo_intent = document(documents, "docs/repo-intent.md");
     assert!(repo_intent.contains("no replacement server or HTTP compatibility layer"));
@@ -191,7 +226,7 @@ fn assert_machine_dashboard_contract(public_contract: &str) {
             .join(", ");
         assert!(
             dashboard_contract.contains(&ordered_fields),
-            "dashboard contract omits or reorders a schema-1 root field set"
+            "dashboard contract omits or reorders a root field set"
         );
     }
     for scope in SNAPSHOT_ERROR_SCOPES {
@@ -218,12 +253,14 @@ fn assert_machine_dashboard_contract(public_contract: &str) {
     ));
     assert!(dashboard_contract.contains("retain `ok: true`"));
     assert!(dashboard_contract.contains("at 1048576 bytes"));
+    assert!(dashboard_contract.contains(&format!("schema version {STATUS_SCHEMA_VERSION}")));
 }
 
 fn assert_dashboard_release_notes(changelog: &str) {
     assert!(changelog.contains("Breaking: replace the loopback browser dashboard"));
     assert!(changelog.contains("1,048,576 bytes"));
     assert!(changelog.contains("stop publishing the internal `jig-status-tui` crate"));
+    assert!(changelog.contains("remove the external status-provider subsystem"));
 }
 
 fn collect_dependency_names(value: &toml::Value, names: &mut BTreeSet<String>) {

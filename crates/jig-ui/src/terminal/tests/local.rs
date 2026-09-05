@@ -1,9 +1,9 @@
 use crate::{
     dashboard::{
         BoundedRows, BoundedText, CollectionDomain, DecisionTimelineRow, LimitId, LoopStateError,
-        PlanSnapshotResult, PlanTimelineRow, ReceiptTimelineRow, RecorderEpochId, Remediation,
-        ScheduledOccurrence, SessionTimelineRow, SnapshotError, SnapshotErrorCode, StatusRefresh,
-        TimelineRow, scenarios,
+        PlanSnapshotResult, PlanTimelineRow, ReceiptTimelineRow, RecorderEpochId, RecorderRefresh,
+        RecorderSnapshot, Remediation, ScheduledOccurrence, SessionTimelineRow, SnapshotError,
+        SnapshotErrorCode, StatusLocalSnapshot, TimelineRow, scenarios,
     },
     terminal::model::{App, BaseDetail, PlanSection, Tab, TimelineFilter},
 };
@@ -16,6 +16,22 @@ fn app_with_local(tab: Tab) -> App {
     let mut app = App::new(tab);
     app.recorder.data = Some(scenarios::recorder_snapshot().into());
     app
+}
+
+fn accept_recorder(app: &mut App, recorder: RecorderSnapshot) {
+    let status = scenarios::status_snapshot();
+    let epoch_id = recorder.epoch_id;
+    app.accept_recorder_refresh(RecorderRefresh {
+        recorder,
+        status_local: StatusLocalSnapshot {
+            epoch_id,
+            observed_at_ms: status.observed_at_ms,
+            repository: status.repository,
+            work: status.work,
+            loops: status.loops,
+            errors: status.errors,
+        },
+    });
 }
 
 fn assert_contains_all(rendered: &str, expected: &[&str]) {
@@ -305,23 +321,13 @@ fn recorder_refresh_reconciles_selection_without_discarding_bounded_closed_detai
 
     let mut recorder = scenarios::recorder_snapshot();
     recorder.history.insert(0, recorder.history[0].clone());
-    app.accept_status_refresh(StatusRefresh {
-        status: scenarios::status_snapshot(),
-        recorder,
-        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
-        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
-    });
+    accept_recorder(&mut app, recorder);
     assert_eq!(app.selected_work().unwrap().plan_id, "plan_closed");
     assert!(app.take_plan_request().is_none());
 
     let mut recorder = scenarios::recorder_snapshot();
     recorder.history.clear();
-    app.accept_status_refresh(StatusRefresh {
-        status: scenarios::status_snapshot(),
-        recorder,
-        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
-        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
-    });
+    accept_recorder(&mut app, recorder);
     assert!(app.detail_is_open());
     assert_eq!(app.detail.plan().unwrap().raw_plan_id, "plan_closed");
 
@@ -374,11 +380,7 @@ fn multiline_text_and_session_labels_cross_the_terminal_boundary_safely() {
     app.cycle_detail_section(false);
     let rendered = render_text(&app, 120, 36);
     assert!(rendered.lines().any(|line| line.contains("first")));
-    assert!(
-        rendered
-            .lines()
-            .any(|line| line.contains("second    column"))
-    );
+    assert!(rendered.lines().any(|line| line.contains("second column")));
     assert!(rendered.lines().any(|line| line.contains("third�[31m")));
     assert!(!rendered.contains('\u{1b}'));
 }
@@ -409,12 +411,7 @@ fn detail_scroll_edges_clamp_and_open_leaf_survives_epoch_refresh() {
     assert!(app.detail.leaf.is_some());
     let mut recorder = scenarios::recorder_snapshot();
     recorder.epoch_id = RecorderEpochId::new(2).unwrap();
-    app.accept_status_refresh(StatusRefresh {
-        status: scenarios::status_snapshot(),
-        recorder,
-        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
-        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
-    });
+    accept_recorder(&mut app, recorder);
     assert!(app.detail.leaf.is_some());
     let (basis, requested) = app.take_plan_request().unwrap();
     assert_eq!(
@@ -463,12 +460,7 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
     loops.state_error_count = 1;
     loops.state_errors = vec![target.clone()];
     let mut app = App::new(Tab::Health);
-    app.accept_status_refresh(StatusRefresh {
-        status: scenarios::status_snapshot(),
-        recorder,
-        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
-        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
-    });
+    accept_recorder(&mut app, recorder);
     app.health_index = app
         .recorder
         .data
@@ -500,12 +492,7 @@ fn manual_occurrences_and_loop_error_selection_survive_unrelated_insertions() {
         target.clone(),
         target,
     ];
-    app.accept_status_refresh(StatusRefresh {
-        status: scenarios::status_snapshot(),
-        recorder,
-        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
-        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
-    });
+    accept_recorder(&mut app, recorder);
     assert_eq!(app.selected_health().unwrap().identity, identity);
     let error_ids = app
         .recorder
@@ -731,12 +718,7 @@ fn long_detail_lines_are_reachable_horizontally_and_item_details_become_stale() 
     assert!(app.open_selected_detail());
     let mut recorder = scenarios::recorder_snapshot();
     recorder.epoch_id = RecorderEpochId::new(2).unwrap();
-    app.accept_status_refresh(StatusRefresh {
-        status: scenarios::status_snapshot(),
-        recorder,
-        local_observed_at_ms: scenarios::OBSERVED_AT_MS,
-        provider_observed_at_ms: scenarios::OBSERVED_AT_MS,
-    });
+    accept_recorder(&mut app, recorder);
     assert!(render_text(&app, 120, 36).contains("stale"));
 }
 

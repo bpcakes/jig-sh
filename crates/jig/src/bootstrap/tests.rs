@@ -993,6 +993,5 @@ mod basic;
 mod committed;
 mod frontend_adoption;
 mod init_report;
-mod status_provider;
 mod template_mode;
 mod template_source;

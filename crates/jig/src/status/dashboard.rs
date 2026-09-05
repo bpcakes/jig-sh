@@ -1,24 +1,7 @@
-use std::collections::BTreeMap;
-
 use anyhow::Result;
-use jig_contract::status_provider::v1::Outcome;
-use jig_ui::dashboard::{
-    ProviderFailure as DashboardProviderFailure, ProviderSummary as DashboardProviderSummary,
-    StatusProvider, StatusProviderSnapshot,
-};
 
-use super::{
-    NoopExecutionObserver, ProviderFailure, ensure_collection_active,
-    input_freshness_with_cancellation, now_ms, propagate_git_cancellation, repository_snapshot,
-    run_providers_concurrently,
-};
+use super::repository_snapshot;
 use crate::context::RepoContext;
-
-pub(crate) struct DashboardProviderCollection {
-    pub(crate) snapshot: StatusProviderSnapshot,
-    pub(crate) repository: jig_ui::dashboard::StatusRepositoryObservation,
-    pub(crate) repository_errors: Vec<jig_ui::dashboard::StatusCollectionError>,
-}
 
 fn dashboard_repository(
     repository: super::RepositorySnapshot,
@@ -55,18 +38,6 @@ fn dashboard_repository_errors(
         .collect()
 }
 
-impl ProviderFailure {
-    fn into_dashboard(self) -> DashboardProviderFailure {
-        DashboardProviderFailure {
-            code: self.code.to_string(),
-            message: self.message,
-            exit_status: self.exit_status,
-            stderr: self.stderr,
-            stderr_truncated: self.stderr_truncated,
-        }
-    }
-}
-
 pub(crate) fn repository_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
@@ -74,77 +45,9 @@ pub(crate) fn repository_snapshot_with_cancellation(
     jig_ui::dashboard::StatusRepositoryObservation,
     Vec<jig_ui::dashboard::StatusCollectionError>,
 )> {
-    let (repository, _root_git, errors) = repository_snapshot(ctx, cancelled)?;
+    let (repository, errors) = repository_snapshot(ctx, cancelled)?;
     Ok((
         dashboard_repository(repository),
         dashboard_repository_errors(errors),
     ))
-}
-
-pub(crate) fn provider_snapshot_with_cancellation(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<DashboardProviderCollection> {
-    ensure_collection_active(cancelled)?;
-    let runs = run_providers_concurrently(ctx, cancelled, &mut NoopExecutionObserver)?;
-    ensure_collection_active(cancelled)?;
-    let (repository, root_git, repository_errors) = repository_snapshot(ctx, cancelled)?;
-    let mut git_inputs = BTreeMap::from([(".".to_string(), root_git)]);
-    let mut providers = Vec::with_capacity(runs.len());
-    for run in runs {
-        ensure_collection_active(cancelled)?;
-        let id = run.id;
-        let duration_ms = run.duration_ms;
-        let Some(report) = run.report else {
-            let error = run
-                .failure
-                .expect("a provider run without a report carries a failure")
-                .into_dashboard();
-            providers.push(StatusProvider {
-                id,
-                status: "failed".to_string(),
-                duration_ms,
-                report: None,
-                summary: None,
-                input_freshness: Vec::new(),
-                error: Some(error),
-            });
-            continue;
-        };
-        let status = match report.decoded().outcome {
-            Outcome::Complete => "complete",
-            Outcome::Partial => "partial",
-        };
-        let mut input_freshness = Vec::with_capacity(report.decoded().inputs.len());
-        for input in &report.decoded().inputs {
-            input_freshness.push(
-                propagate_git_cancellation(input_freshness_with_cancellation(
-                    ctx.root(),
-                    input,
-                    &mut git_inputs,
-                    cancelled,
-                ))?
-                .into_dashboard(),
-            );
-        }
-        providers.push(StatusProvider {
-            id,
-            status: status.to_string(),
-            duration_ms,
-            summary: Some(DashboardProviderSummary::from_report(report.decoded())),
-            report: Some(report),
-            input_freshness,
-            error: None,
-        });
-    }
-    ensure_collection_active(cancelled)?;
-    Ok(DashboardProviderCollection {
-        snapshot: StatusProviderSnapshot {
-            observed_at_ms: now_ms(),
-            providers,
-            errors: Vec::new(),
-        },
-        repository: dashboard_repository(repository),
-        repository_errors: dashboard_repository_errors(repository_errors),
-    })
 }
