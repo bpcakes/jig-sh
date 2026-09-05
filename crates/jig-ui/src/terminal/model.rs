@@ -9,6 +9,8 @@ use crate::dashboard::{
 };
 
 mod app;
+mod detail;
+mod local;
 mod package_detail;
 mod support;
 mod typed;
@@ -16,7 +18,9 @@ mod typed;
 mod wire;
 
 pub(crate) use app::*;
+pub(crate) use detail::*;
 pub(crate) use jig_tui::sanitize_text;
+pub(crate) use local::*;
 use package_detail::{AcceptanceCheckView, PackageDetailState};
 pub(crate) use package_detail::{DETAIL_SECTION_ITEM_LIMIT, EXTENSION_ROW_LIMIT};
 #[cfg(test)]

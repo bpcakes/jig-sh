@@ -8,8 +8,8 @@ use ratatui::{
 
 use super::super::model::{App, Tab};
 use super::{
-    ACCENT, GOOD, MUTED, WARN, panel, provider_label, recorder_repository_label, repository_label,
-    status_style,
+    ACCENT, GOOD, MUTED, WARN, age_label, panel, provider_label, recorder_repository_label,
+    repository_label, status_style,
 };
 
 pub(super) fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -38,7 +38,11 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             |recorder| {
                 (
                     recorder_repository_label(recorder),
-                    format!("local recorder epoch {}", recorder.epoch_id.get()),
+                    format!(
+                        "local recorder epoch {} · observed {}",
+                        recorder.epoch_id.get(),
+                        age_label(recorder.generated_at_ms)
+                    ),
                     if recorder.errors.is_empty() {
                         "current"
                     } else {

@@ -16,6 +16,11 @@ use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_terminal};
 
+mod scheduler;
+mod worker;
+use scheduler::{next_queued_refresh, next_request};
+use worker::{RefreshWorker, WorkerRequest, apply_refresh_result};
+
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOptions) -> Result<()> {
@@ -30,7 +35,10 @@ pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOpti
         InitialTab::Status => Tab::Status,
         InitialTab::Work => Tab::Work,
     });
-    let mut worker = Some(RefreshWorker::spawn(Arc::clone(&source), app.tab)?);
+    let mut worker = Some(RefreshWorker::spawn(
+        Arc::clone(&source),
+        WorkerRequest::Domain(app.tab),
+    )?);
     app.domain_mut(app.tab).set_refreshing(true);
     let mut next_refresh = Instant::now() + options.refresh_interval;
     let mut dirty = true;
@@ -43,21 +51,25 @@ pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOpti
             dirty = false;
         }
 
-        if let Some((tab, result)) = worker.as_mut().and_then(RefreshWorker::try_finish) {
+        if let Some((request, result)) = worker.as_mut().and_then(RefreshWorker::try_finish) {
             worker = None;
-            apply_refresh_result(&mut app, tab, result);
-            next_refresh = Instant::now() + options.refresh_interval;
+            let resets_refresh_timer = request.resets_refresh_timer();
+            apply_refresh_result(&mut app, request, result);
+            if resets_refresh_timer {
+                next_refresh = Instant::now() + options.refresh_interval;
+            }
             dirty = true;
         }
 
-        let requested_tab = worker.is_none().then(|| {
-            next_queued_refresh(&app)
-                .or_else(|| (Instant::now() >= next_refresh).then_some(app.tab))
-        });
-        if let Some(Some(requested_tab)) = requested_tab {
-            app.domain_mut(requested_tab).set_refresh_queued(false);
-            app.domain_mut(requested_tab).set_refreshing(true);
-            worker = Some(RefreshWorker::spawn(Arc::clone(&source), requested_tab)?);
+        let requested_work = worker
+            .is_none()
+            .then(|| next_request(&mut app, Instant::now() >= next_refresh));
+        if let Some(Some(requested_work)) = requested_work {
+            if let WorkerRequest::Domain(tab) = &requested_work {
+                app.domain_mut(*tab).set_refresh_queued(false);
+                app.domain_mut(*tab).set_refreshing(true);
+            }
+            worker = Some(RefreshWorker::spawn(Arc::clone(&source), requested_work)?);
             dirty = true;
         }
 
@@ -74,13 +86,16 @@ pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOpti
                     if !app.domain_has_data(app.tab)
                         && worker
                             .as_ref()
-                            .is_none_or(|active| !active.tab.same_domain(app.tab))
+                            .is_none_or(|active| !active.same_domain(app.tab))
                     {
                         if worker.is_some() {
                             app.domain_mut(app.tab).set_refresh_queued(true);
                         } else {
                             app.domain_mut(app.tab).set_refreshing(true);
-                            worker = Some(RefreshWorker::spawn(Arc::clone(&source), app.tab)?);
+                            worker = Some(RefreshWorker::spawn(
+                                Arc::clone(&source),
+                                WorkerRequest::Domain(app.tab),
+                            )?);
                         }
                     }
                     dirty = true;
@@ -90,7 +105,10 @@ pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOpti
                         app.domain_mut(app.tab).set_refresh_queued(true);
                     } else {
                         app.domain_mut(app.tab).set_refreshing(true);
-                        worker = Some(RefreshWorker::spawn(Arc::clone(&source), app.tab)?);
+                        worker = Some(RefreshWorker::spawn(
+                            Arc::clone(&source),
+                            WorkerRequest::Domain(app.tab),
+                        )?);
                     }
                     dirty = true;
                 }
@@ -102,8 +120,14 @@ pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOpti
                             .expect("refresh all always queues both dashboard domains");
                         app.domain_mut(requested_tab).set_refresh_queued(false);
                         app.domain_mut(requested_tab).set_refreshing(true);
-                        worker = Some(RefreshWorker::spawn(Arc::clone(&source), requested_tab)?);
+                        worker = Some(RefreshWorker::spawn(
+                            Arc::clone(&source),
+                            WorkerRequest::Domain(requested_tab),
+                        )?);
                     }
+                    dirty = true;
+                }
+                RuntimeAction::DetailRequested => {
                     dirty = true;
                 }
                 RuntimeAction::Quit => {
@@ -124,28 +148,6 @@ fn validate_refresh_interval(interval: Duration) -> Result<()> {
     Ok(())
 }
 
-fn apply_refresh_result(app: &mut App, tab: Tab, result: Result<RefreshResult, SourceError>) {
-    app.domain_mut(tab).set_refreshing(false);
-    match result {
-        Ok(RefreshResult::Status(refresh)) => app.accept_status_refresh(refresh),
-        Ok(RefreshResult::Recorder(refresh)) => app.accept_recorder_refresh(refresh),
-        Err(error) => app.accept_error(tab, error.to_string()),
-    }
-}
-
-fn next_queued_refresh(app: &App) -> Option<Tab> {
-    let active = app.tab;
-    if app.domain(active).refresh_queued {
-        return Some(active);
-    }
-    let other = if active.is_status_domain() {
-        Tab::Work
-    } else {
-        Tab::Status
-    };
-    app.domain(other).refresh_queued.then_some(other)
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeAction {
     Ignore,
@@ -153,6 +155,7 @@ enum RuntimeAction {
     TabChanged,
     Refresh,
     RefreshAll,
+    DetailRequested,
     Quit,
 }
 
@@ -169,6 +172,67 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
     {
         return RuntimeAction::Quit;
+    }
+    if app.detail_is_open() {
+        return match key.code {
+            KeyCode::Esc | KeyCode::Backspace => {
+                app.close_detail();
+                RuntimeAction::Redraw
+            }
+            KeyCode::Enter => {
+                app.open_detail_leaf_or_close();
+                RuntimeAction::Redraw
+            }
+            KeyCode::Tab => {
+                app.cycle_detail_section(false);
+                RuntimeAction::Redraw
+            }
+            KeyCode::BackTab => {
+                app.cycle_detail_section(true);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.move_detail_selection(-1);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.move_detail_selection(1);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                app.scroll_detail_horizontal(-4);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                app.scroll_detail_horizontal(4);
+                RuntimeAction::Redraw
+            }
+            KeyCode::PageUp => {
+                app.move_detail_selection(-8);
+                RuntimeAction::Redraw
+            }
+            KeyCode::PageDown => {
+                app.move_detail_selection(8);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Home => {
+                app.move_detail_to_edge(false);
+                RuntimeAction::Redraw
+            }
+            KeyCode::End => {
+                app.move_detail_to_edge(true);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Char('r') => {
+                if app.refresh_plan_detail() {
+                    RuntimeAction::DetailRequested
+                } else {
+                    RuntimeAction::Refresh
+                }
+            }
+            KeyCode::Char('R') => RuntimeAction::RefreshAll,
+            _ => RuntimeAction::Ignore,
+        };
     }
     if app.package_detail_is_open() {
         return match key.code {
@@ -214,6 +278,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         KeyCode::Enter => {
             if app.open_package_detail() {
                 RuntimeAction::Redraw
+            } else if app.open_selected_detail() {
+                RuntimeAction::DetailRequested
             } else {
                 RuntimeAction::Ignore
             }
@@ -294,61 +360,15 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             app.toggle_blocked_only();
             RuntimeAction::Redraw
         }
+        KeyCode::Char('f') if app.tab == Tab::Timeline => {
+            app.cycle_timeline_filter(false);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('F') if app.tab == Tab::Timeline => {
+            app.cycle_timeline_filter(true);
+            RuntimeAction::Redraw
+        }
         _ => RuntimeAction::Ignore,
-    }
-}
-
-enum RefreshResult {
-    Status(StatusRefresh),
-    Recorder(RecorderRefresh),
-}
-
-struct RefreshWorker {
-    tab: Tab,
-    worker: CooperativeWorker<Result<RefreshResult, SourceError>>,
-}
-
-impl RefreshWorker {
-    fn spawn(source: Arc<dyn DashboardSource>, tab: Tab) -> Result<Self> {
-        CooperativeWorker::spawn("jig-dashboard-refresh", move |cancelled| {
-            let is_cancelled = || cancelled.is_cancelled();
-            if matches!(tab, Tab::Status | Tab::Packages | Tab::Blockers) {
-                source
-                    .status(
-                        StatusRequest {
-                            timeline_limit: TimelineLimit::DEFAULT,
-                        },
-                        &|_| {},
-                        &is_cancelled,
-                    )
-                    .map(RefreshResult::Status)
-            } else {
-                source
-                    .recorder(
-                        RecorderRequest {
-                            mode: RecorderMode::Refresh,
-                            timeline_limit: TimelineLimit::DEFAULT,
-                        },
-                        &is_cancelled,
-                    )
-                    .map(RefreshResult::Recorder)
-            }
-        })
-        .map(|worker| Self { tab, worker })
-    }
-
-    fn try_finish(&mut self) -> Option<(Tab, Result<RefreshResult, SourceError>)> {
-        self.worker
-            .try_finish()
-            .map(|result| match result {
-                Ok(value) => value,
-                Err(message) => Err(SourceError::InternalContract { message }),
-            })
-            .map(|result| (self.tab, result))
-    }
-
-    fn cancel_and_join(&mut self) {
-        self.worker.cancel_and_join();
     }
 }
 
@@ -431,6 +451,48 @@ mod tests {
     }
 
     #[test]
+    fn local_keys_filter_open_and_navigate_plan_detail() {
+        let mut app = App::new(Tab::Timeline);
+        app.recorder.data = Some(crate::dashboard::scenarios::recorder_snapshot().into());
+        assert_eq!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE)
+            ),
+            RuntimeAction::Redraw
+        );
+        assert_eq!(
+            app.timeline_filter,
+            crate::terminal::model::TimelineFilter::Receipts
+        );
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            RuntimeAction::DetailRequested
+        );
+        let (basis, plan_id) = app.take_plan_request().unwrap();
+        app.accept_plan_result(
+            basis,
+            &plan_id,
+            crate::dashboard::PlanSnapshotResult::Found(Box::new(
+                crate::dashboard::scenarios::plan_snapshot(),
+            )),
+        );
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            RuntimeAction::Redraw
+        );
+        assert_eq!(
+            app.detail.section,
+            crate::terminal::model::PlanSection::Body
+        );
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            RuntimeAction::Redraw
+        );
+        assert!(!app.detail_is_open());
+    }
+
+    #[test]
     fn ignored_and_release_keys_do_not_request_a_redraw() {
         assert_eq!(
             handle_key(
@@ -509,7 +571,7 @@ mod tests {
         app.domain_mut(Tab::Status).set_refreshing(true);
         apply_refresh_result(
             &mut app,
-            Tab::Status,
+            WorkerRequest::Domain(Tab::Status),
             Err(SourceError::InternalContract {
                 message: "status collection failed".to_string(),
             }),

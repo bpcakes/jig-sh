@@ -111,7 +111,7 @@ fn every_layout_reports_stale_active_domain_and_uses_its_repository() {
     app.accept_status_snapshot(scenarios::status_snapshot());
     let mut recorder = scenarios::recorder_snapshot();
     recorder.repo.name = "local-repository".to_string();
-    app.recorder.data = Some(recorder);
+    app.recorder.data = Some(recorder.into());
     app.accept_error(Tab::Work, "local refresh failed".to_string());
     app.select_tab(Tab::Work);
 
@@ -141,7 +141,7 @@ fn schema_failures_are_domain_local_and_retain_last_good_recorder() {
     assert!(app.recorder.error.is_none());
 
     let previous = scenarios::recorder_snapshot();
-    app.recorder.data = Some(previous.clone());
+    app.recorder.data = Some(previous.clone().into());
     app.recorder.refresh_queued = true;
     let mut invalid_recorder = previous;
     invalid_recorder.schema_version += 1;

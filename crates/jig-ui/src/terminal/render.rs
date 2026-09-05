@@ -15,6 +15,7 @@ use super::model::{
     SourceView, Tab,
 };
 
+mod local;
 mod package_detail;
 mod responsive;
 mod shell;
@@ -66,6 +67,10 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
+    if app.detail_is_open() {
+        local::draw_detail(frame, area, app);
+        return;
+    }
     if app.package_detail_is_open() {
         package_detail::draw(frame, area, app);
         return;
@@ -75,32 +80,10 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         Tab::Status => draw_overview(frame, area, app),
         Tab::Packages => draw_packages(frame, area, app),
         Tab::Blockers => draw_blockers(frame, area, app),
-        Tab::Work | Tab::Timeline | Tab::Health => draw_pending_domain(frame, area, app),
+        Tab::Work => local::draw_work(frame, area, app),
+        Tab::Timeline => local::draw_timeline(frame, area, app),
+        Tab::Health => local::draw_health(frame, area, app),
     }
-}
-
-fn draw_pending_domain(frame: &mut Frame, area: Rect, app: &App) {
-    let title = app
-        .tab
-        .title()
-        .split_once(' ')
-        .map_or(app.tab.title(), |(_, title)| title);
-    let recorder = app
-        .recorder
-        .data
-        .as_ref()
-        .expect("active local domain was checked before rendering");
-    frame.render_widget(
-        Paragraph::new(format!(
-            "{title} presentation arrives in Task D. Local snapshot epoch {} is loaded with {} open plans and {} timeline rows.",
-            recorder.epoch_id.get(),
-            recorder.counts.open_plans,
-            recorder.timeline.len()
-        ))
-            .block(panel("Local dashboard"))
-            .wrap(Wrap { trim: true }),
-        area,
-    );
 }
 
 fn draw_overview(frame: &mut Frame, area: Rect, app: &App) {
@@ -621,14 +604,27 @@ fn facet_line(label: &str, facet: &FacetView) -> Line<'static> {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    if app.detail_is_open() {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(format!(" {}", local::detail_footer(app))),
+                Line::from("Read-only detail; displayed recovery argv is inert.")
+                    .style(Style::default().fg(MUTED)),
+            ]),
+            area,
+        );
+        return;
+    }
     if app.package_detail_is_open() {
         package_detail::draw_footer(frame, area, app);
         return;
     }
     let selection_help = match app.tab {
-        Tab::Status | Tab::Work | Tab::Timeline | Tab::Health => "",
+        Tab::Status => "",
         Tab::Packages => "  j/k move  Enter details  b blocked-only",
         Tab::Blockers => "  j/k move",
+        Tab::Work | Tab::Health => "  j/k move  Enter details",
+        Tab::Timeline => "  j/k move  Enter details  f/F filter",
     };
     let provider_help = if app.tab.is_status_domain() {
         "  [/] provider"
@@ -676,7 +672,7 @@ fn repository_label(dashboard: &super::model::Dashboard) -> String {
     format!("{} {branch}@{revision} {clean}", repo.name)
 }
 
-fn recorder_repository_label(recorder: &crate::dashboard::RecorderSnapshot) -> String {
+fn recorder_repository_label(recorder: &super::model::LocalDashboard) -> String {
     let branch = recorder
         .repo
         .branch
@@ -693,10 +689,8 @@ fn recorder_repository_label(recorder: &crate::dashboard::RecorderSnapshot) -> S
         .map(short_revision)
         .unwrap_or_else(|| "no-HEAD".to_owned());
     format!(
-        "{} {}@{}",
-        jig_tui::sanitize_text(&recorder.repo.name),
-        jig_tui::sanitize_text(branch),
-        jig_tui::sanitize_text(&revision)
+        "{} {}@{} default {}",
+        recorder.repo.name, branch, revision, recorder.repo.default_branch
     )
 }
 
@@ -732,7 +726,7 @@ fn duration_label(duration_ms: u64) -> String {
     }
 }
 
-fn age_label(observed_at_ms: u64) -> String {
+pub(super) fn age_label(observed_at_ms: u64) -> String {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))

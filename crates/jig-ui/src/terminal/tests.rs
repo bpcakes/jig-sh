@@ -7,6 +7,7 @@ use super::{
 };
 use crate::dashboard::{AcceptedProviderReport, scenarios};
 
+mod local;
 mod regressions;
 
 fn fixture() -> Value {
@@ -697,7 +698,7 @@ fn renderer_preserves_compact_content_and_micro_resize_guidance() {
 fn every_tab_renders_at_all_supported_nonzero_size_tiers() {
     let mut app = App::default();
     app.accept_status_snapshot(scenarios::status_snapshot());
-    app.recorder.data = Some(scenarios::recorder_snapshot());
+    app.recorder.data = Some(scenarios::recorder_snapshot().into());
 
     for tab in Tab::ALL {
         app.select_tab(tab);
@@ -715,7 +716,7 @@ fn every_tab_renders_at_all_supported_nonzero_size_tiers() {
 fn footer_only_advertises_bindings_valid_for_the_active_domain() {
     let mut app = App::default();
     app.accept_status_snapshot(scenarios::status_snapshot());
-    app.recorder.data = Some(scenarios::recorder_snapshot());
+    app.recorder.data = Some(scenarios::recorder_snapshot().into());
 
     let status = render_text(&app, 120, 36);
     assert!(status.contains("[/] provider"));
@@ -731,7 +732,7 @@ fn footer_only_advertises_bindings_valid_for_the_active_domain() {
 fn refresh_errors_retain_data_and_remain_domain_local() {
     let mut app = App::default();
     app.accept_status_snapshot(scenarios::status_snapshot());
-    app.recorder.data = Some(scenarios::recorder_snapshot());
+    app.recorder.data = Some(scenarios::recorder_snapshot().into());
 
     app.accept_error(Tab::Work, "local\u{1b}[31m failed".to_string());
     assert!(app.recorder.data.is_some());

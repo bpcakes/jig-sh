@@ -1656,6 +1656,7 @@ dependencies = [
  "serde_json",
  "subtle",
  "time",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

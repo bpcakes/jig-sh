@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use super::super::model::{App, Tab, sanitize_text};
+use super::super::model::{App, Tab};
 
 pub(crate) const MIN_WIDTH: u16 = 72;
 pub(crate) const MIN_HEIGHT: u16 = 20;
@@ -55,6 +55,8 @@ pub(crate) const fn layout_tier(area: Rect) -> LayoutTier {
 fn draw_micro(frame: &mut Frame, area: Rect, app: &App) {
     let domain_name = if app.package_detail_is_open() {
         "Package detail"
+    } else if app.detail_is_open() {
+        "Detail"
     } else {
         app.tab
             .title()
@@ -70,11 +72,13 @@ fn draw_micro(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(micro_summary(app)));
     }
     if area.height > 1 {
-        lines.push(Line::from(if app.package_detail_is_open() {
-            "q quit | Esc back | resize"
-        } else {
-            "q quit | resize for details"
-        }));
+        lines.push(Line::from(
+            if app.package_detail_is_open() || app.detail_is_open() {
+                "q quit | Esc back | resize"
+            } else {
+                "q quit | resize for details"
+            },
+        ));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
@@ -136,6 +140,10 @@ fn draw_compact_content(frame: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
+    if app.detail_is_open() {
+        super::local::draw_detail(frame, area, app);
+        return;
+    }
     if app.package_detail_is_open() {
         super::package_detail::draw(frame, area, app);
         return;
@@ -164,9 +172,9 @@ fn draw_compact_content(frame: &mut Frame, area: Rect, app: &App) {
                 .collect::<Vec<_>>();
             draw_compact_list(frame, area, items, app.blocker_index);
         }
-        Tab::Work | Tab::Timeline | Tab::Health => {
-            draw_compact_lines(frame, area, compact_recorder_lines(app));
-        }
+        Tab::Work => super::local::draw_compact_work(frame, area, app),
+        Tab::Timeline => super::local::draw_compact_timeline(frame, area, app),
+        Tab::Health => super::local::draw_compact_health(frame, area, app),
     }
 }
 
@@ -215,25 +223,10 @@ fn compact_status_lines(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn compact_recorder_lines(app: &App) -> Vec<Line<'static>> {
-    let Some(recorder) = &app.recorder.data else {
-        return vec![Line::from("No local data.")];
-    };
-    vec![
-        Line::from(format!(
-            "{} @ epoch {}",
-            sanitize_text(&recorder.repo.name),
-            recorder.epoch_id.get()
-        )),
-        Line::from(format!(
-            "{} open plans | {} timeline rows",
-            recorder.counts.open_plans,
-            recorder.timeline.len()
-        )),
-    ]
-}
-
 fn compact_footer(app: &App) -> String {
+    if app.detail_is_open() {
+        return super::local::detail_footer(app);
+    }
     if app.package_detail_is_open() {
         return "q quit | Esc/Enter back | j/k scroll | r".to_string();
     }
@@ -241,7 +234,9 @@ fn compact_footer(app: &App) -> String {
         Tab::Packages => "q quit | Tab | j/k | Enter | b | [/]".to_string(),
         Tab::Blockers => "q quit | Tab views | j/k | [/]".to_string(),
         Tab::Status => "q quit | Tab views | r | [/]".to_string(),
-        Tab::Work | Tab::Timeline | Tab::Health => "q quit | Tab views | r".to_string(),
+        Tab::Work => "q quit | Tab views | j/k | Enter | r".to_string(),
+        Tab::Timeline => "q quit | Tab views | j/k | Enter | f/F | r".to_string(),
+        Tab::Health => "q quit | Tab views | j/k | Enter | r".to_string(),
     }
 }
 
@@ -275,9 +270,17 @@ fn micro_summary(app: &App) -> String {
                 )
             },
         ),
-        Tab::Work | Tab::Timeline | Tab::Health => app.recorder.data.as_ref().map_or_else(
-            || "No local snapshot".to_string(),
-            |recorder| format!("Local snapshot epoch {}", recorder.epoch_id.get()),
+        Tab::Work => app.selected_work().map_or_else(
+            || "No plan selected".to_string(),
+            |plan| format!("Selected: {} {}", plan.display_plan_id, plan.title),
+        ),
+        Tab::Timeline => app.selected_timeline().map_or_else(
+            || format!("No {} timeline rows", app.timeline_filter.label()),
+            |row| format!("{}: {}", row.kind.label(), row.primary),
+        ),
+        Tab::Health => app.selected_health().map_or_else(
+            || "No health item selected".to_string(),
+            |row| format!("{}: {}", row.section, row.primary),
         ),
     }
 }
