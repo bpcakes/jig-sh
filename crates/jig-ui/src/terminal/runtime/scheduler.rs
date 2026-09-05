@@ -77,10 +77,15 @@ pub(super) struct Scheduler {
     status_interval: Duration,
     local_deadline: Option<Instant>,
     status_deadline: Option<Instant>,
+    timeline_limit: TimelineLimit,
 }
 
 impl Scheduler {
-    pub(super) fn new(local_interval: Duration, status_interval: Duration) -> Self {
+    pub(super) fn new(
+        local_interval: Duration,
+        status_interval: Duration,
+        timeline_limit: TimelineLimit,
+    ) -> Self {
         Self {
             pending_recorder: None,
             pending_status: None,
@@ -93,6 +98,7 @@ impl Scheduler {
             status_interval,
             local_deadline: None,
             status_deadline: None,
+            timeline_limit,
         }
     }
 
@@ -100,7 +106,7 @@ impl Scheduler {
         self.queue(
             WorkKind::Recorder(RecorderRequest {
                 mode,
-                timeline_limit: TimelineLimit::DEFAULT,
+                timeline_limit: self.timeline_limit,
             }),
             explicit,
         );
@@ -109,10 +115,41 @@ impl Scheduler {
     pub(super) fn queue_status(&mut self, explicit: bool) {
         self.queue(
             WorkKind::Status(StatusRequest {
-                timeline_limit: TimelineLimit::DEFAULT,
+                timeline_limit: self.timeline_limit,
             }),
             explicit,
         );
+    }
+
+    pub(super) const fn timeline_limit(&self) -> TimelineLimit {
+        self.timeline_limit
+    }
+
+    pub(super) fn set_timeline_limit(&mut self, timeline_limit: TimelineLimit) {
+        self.timeline_limit = timeline_limit;
+        for pending in [self.pending_recorder.as_mut(), self.pending_status.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            match &mut pending.kind {
+                WorkKind::Recorder(request) => request.timeline_limit = timeline_limit,
+                WorkKind::Status(request) => request.timeline_limit = timeline_limit,
+                WorkKind::Plan { .. } => unreachable!("primary slot contained detail work"),
+            }
+        }
+    }
+
+    pub(super) fn current_local_projection_pending(&self) -> bool {
+        self.pending_recorder.is_some() || self.pending_status.is_some()
+    }
+
+    pub(super) fn primary_active(&self) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            matches!(
+                active.request.kind,
+                WorkKind::Recorder(_) | WorkKind::Status(_)
+            )
+        })
     }
 
     pub(super) fn queue_detail(&mut self, basis: PlanBasis, plan_id: String) {
@@ -349,7 +386,12 @@ impl Scheduler {
         }
     }
 
-    fn queue_with_sequence(&mut self, kind: WorkKind, explicit: bool, sequence: u64) {
+    fn queue_with_sequence(&mut self, mut kind: WorkKind, explicit: bool, sequence: u64) {
+        match &mut kind {
+            WorkKind::Recorder(request) => request.timeline_limit = self.timeline_limit,
+            WorkKind::Status(request) => request.timeline_limit = self.timeline_limit,
+            WorkKind::Plan { .. } => {}
+        }
         let pending = self.pending_mut(kind.slot());
         match pending {
             Some(existing) => {

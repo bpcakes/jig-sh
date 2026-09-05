@@ -6,6 +6,8 @@
 
 use std::time::Duration;
 
+use crate::dashboard::{SourceError, TimelineLimit};
+
 mod model;
 mod render;
 mod runtime;
@@ -23,11 +25,13 @@ pub enum InitialTab {
 }
 
 /// Additive terminal runtime configuration.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DashboardOptions {
     pub initial_tab: InitialTab,
     pub local_refresh_interval: Duration,
     pub status_refresh_interval: Duration,
+    pub timeline_limit: TimelineLimit,
+    pub initial_plan: Option<String>,
 }
 
 impl DashboardOptions {
@@ -37,6 +41,8 @@ impl DashboardOptions {
             initial_tab,
             local_refresh_interval: refresh_interval,
             status_refresh_interval: refresh_interval,
+            timeline_limit: TimelineLimit::DEFAULT,
+            initial_plan: None,
         }
     }
 
@@ -50,7 +56,26 @@ impl DashboardOptions {
             initial_tab,
             local_refresh_interval,
             status_refresh_interval,
+            timeline_limit: TimelineLimit::DEFAULT,
+            initial_plan: None,
         }
+    }
+
+    /// Select the initially visible timeline window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `rows` is outside the dashboard's supported
+    /// one-through-one-thousand row range.
+    pub fn with_timeline_limit(mut self, rows: usize) -> Result<Self, SourceError> {
+        self.timeline_limit = TimelineLimit::new(rows)?;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn with_initial_plan(mut self, plan_id: Option<String>) -> Self {
+        self.initial_plan = plan_id;
+        self
     }
 }
 

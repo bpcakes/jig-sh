@@ -94,6 +94,7 @@ mod json_scan;
 mod jsonl;
 mod maintenance;
 mod plan_files;
+pub(crate) use plan_files::validate_plan_id;
 mod plans;
 mod privacy;
 mod receipts;

@@ -38,10 +38,13 @@ pub(crate) fn run_with_cancellation(
         "use `jig ui --json` for recorder data or `jig status --json` for provider data when redirecting",
     )?;
     let mut terminal = TerminalSession::enter("Jig dashboard")?;
-    let app = App::new(match options.initial_tab {
+    let mut app = App::new(match options.initial_tab {
         InitialTab::Status => Tab::Status,
         InitialTab::Work => Tab::Work,
     });
+    if let Some(plan_id) = options.initial_plan.clone() {
+        app.request_initial_plan(plan_id);
+    }
     event_loop::run(&mut terminal, source, app, options, externally_cancelled)
 }
 
@@ -61,6 +64,8 @@ enum RuntimeAction {
     RefreshDetail,
     RefreshAll,
     DetailRequested,
+    GrowTimeline,
+    ShrinkTimeline,
     Quit,
 }
 
@@ -273,6 +278,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             app.cycle_timeline_filter(true);
             RuntimeAction::Redraw
         }
+        KeyCode::Char('+') if app.tab == Tab::Timeline => RuntimeAction::GrowTimeline,
+        KeyCode::Char('-') if app.tab == Tab::Timeline => RuntimeAction::ShrinkTimeline,
         _ => RuntimeAction::Ignore,
     }
 }

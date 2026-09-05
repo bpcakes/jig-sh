@@ -4,7 +4,11 @@ fn scheduler() -> (Instant, Scheduler) {
     let now = Instant::now();
     (
         now,
-        Scheduler::new(Duration::from_secs(10), Duration::from_secs(30)),
+        Scheduler::new(
+            Duration::from_secs(10),
+            Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        ),
     )
 }
 

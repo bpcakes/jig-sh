@@ -4,7 +4,7 @@ use super::{
     App, DashboardOptions, DashboardSource, EVENT_POLL_INTERVAL, InitialTab, Result, RuntimeAction,
     Tab, TerminalSession, event, handle_event, render,
 };
-use crate::dashboard::{PlanBasis, PlanSnapshotResult, RecorderMode};
+use crate::dashboard::{PlanBasis, PlanSnapshotResult, RecorderMode, TimelineLimit};
 use anyhow::Context;
 
 use super::scheduler::{Scheduler, WorkKind};
@@ -21,6 +21,7 @@ pub(super) fn run(
     let mut scheduler = Scheduler::new(
         options.local_refresh_interval,
         options.status_refresh_interval,
+        options.timeline_limit,
     );
     queue_initial(&mut scheduler, options.initial_tab);
     let mut worker = None;
@@ -108,7 +109,16 @@ fn finish_worker(
     let status_request = matches!(&request.kind, WorkKind::Status(_));
     let detail_superseded =
         matches!(&request.kind, WorkKind::Plan { .. }) && scheduler.detail_pending();
-    let published_local = if detail_superseded {
+    let requested_timeline_limit = match &request.kind {
+        WorkKind::Recorder(request) => Some(request.timeline_limit),
+        WorkKind::Status(request) => Some(request.timeline_limit),
+        WorkKind::Plan { .. } => None,
+    };
+    let projection_is_outdated =
+        requested_timeline_limit.is_some_and(|requested| requested != scheduler.timeline_limit());
+    let published_local = if projection_is_outdated {
+        apply_outdated_projection(app, scheduler, &request, result)
+    } else if detail_superseded {
         false
     } else if let Some((basis, plan_id, stale_retries)) = stale_detail_retry(app, &request, &result)
     {
@@ -127,6 +137,32 @@ fn finish_worker(
         scheduler.status_published_local();
     }
     Ok(true)
+}
+
+fn apply_outdated_projection(
+    app: &mut App,
+    scheduler: &mut Scheduler,
+    request: &super::scheduler::ScheduledRequest,
+    result: std::result::Result<RefreshResult, crate::dashboard::SourceError>,
+) -> bool {
+    match (&request.kind, result) {
+        (WorkKind::Status(status_request), Ok(RefreshResult::Status(refresh)))
+            if refresh.recorder.timeline_limit == status_request.timeline_limit.get() =>
+        {
+            app.status.refreshing = false;
+            app.accept_status_snapshot(refresh.status);
+        }
+        (WorkKind::Recorder(recorder_request), Ok(RefreshResult::Recorder(refresh)))
+            if refresh.recorder.timeline_limit == recorder_request.timeline_limit.get() =>
+        {
+            app.recorder.refreshing = false;
+        }
+        (_, result) => return apply_refresh_result(app, request, result),
+    }
+    if !scheduler.current_local_projection_pending() {
+        scheduler.queue_recorder(RecorderMode::ReuseCurrent, true);
+    }
+    false
 }
 
 fn stale_detail_retry(
@@ -205,9 +241,47 @@ fn apply_action(app: &mut App, scheduler: &mut Scheduler, action: RuntimeAction)
         }
         RuntimeAction::DetailRequested => drain_plan_intent(app, scheduler),
         RuntimeAction::RefreshDetail => queue_detail_refresh(app, scheduler),
+        RuntimeAction::GrowTimeline => change_timeline_limit(app, scheduler, true),
+        RuntimeAction::ShrinkTimeline => change_timeline_limit(app, scheduler, false),
         RuntimeAction::Quit => unreachable!("quit is handled before action application"),
     }
     true
+}
+
+const TIMELINE_LIMIT_STEPS: [usize; 8] = [1, 10, 25, 50, 120, 250, 500, 1_000];
+
+fn change_timeline_limit(app: &mut App, scheduler: &mut Scheduler, grow: bool) {
+    let current = scheduler.timeline_limit().get();
+    let next = if grow {
+        TIMELINE_LIMIT_STEPS
+            .into_iter()
+            .find(|candidate| *candidate > current)
+    } else {
+        TIMELINE_LIMIT_STEPS
+            .into_iter()
+            .rev()
+            .find(|candidate| *candidate < current)
+    };
+    let Some(next) = next.and_then(|rows| TimelineLimit::new(rows).ok()) else {
+        return;
+    };
+    if !grow && app.recorder.data.is_none() {
+        return;
+    }
+
+    scheduler.set_timeline_limit(next);
+    if grow {
+        if !scheduler.current_local_projection_pending() {
+            let mode = if app.recorder.data.is_some() || scheduler.primary_active() {
+                RecorderMode::ReuseCurrent
+            } else {
+                RecorderMode::Refresh
+            };
+            scheduler.queue_recorder(mode, true);
+        }
+    } else {
+        app.shrink_timeline_limit(next.get());
+    }
 }
 
 fn queue_domain(scheduler: &mut Scheduler, tab: Tab) {
@@ -387,6 +461,7 @@ mod tests {
         let mut scheduler = Scheduler::new(
             std::time::Duration::from_secs(10),
             std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
         );
         scheduler.queue_detail(
             PlanBasis::RecorderEpoch(RecorderEpochId::FIRST),
@@ -417,6 +492,7 @@ mod tests {
         let mut scheduler = Scheduler::new(
             std::time::Duration::from_secs(10),
             std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
         );
         scheduler.queue_detail(PlanBasis::Fresh, "plan_example".to_string());
 
@@ -429,6 +505,266 @@ mod tests {
                 basis: PlanBasis::Fresh,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn rapid_timeline_growth_coalesces_at_the_latest_limit() {
+        let mut app = app_at_epoch(RecorderEpochId::FIRST);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        change_timeline_limit(&mut app, &mut scheduler, true);
+        change_timeline_limit(&mut app, &mut scheduler, true);
+        assert!(matches!(
+            scheduler.start_next().unwrap().kind,
+            WorkKind::Recorder(crate::dashboard::RecorderRequest {
+                mode: RecorderMode::ReuseCurrent,
+                timeline_limit,
+            }) if timeline_limit.get() == 500
+        ));
+    }
+
+    #[test]
+    fn timeline_limit_keys_are_scoped_to_the_timeline_tab() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = App::new(Tab::Timeline);
+        for (key, action) in [
+            ('+', RuntimeAction::GrowTimeline),
+            ('-', RuntimeAction::ShrinkTimeline),
+        ] {
+            assert_eq!(
+                super::super::handle_key(
+                    &mut app,
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                ),
+                action
+            );
+        }
+        app.select_tab(Tab::Work);
+        assert_eq!(
+            super::super::handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE),
+            ),
+            RuntimeAction::Ignore
+        );
+    }
+
+    #[test]
+    fn limit_changes_during_primary_work_do_not_restart_or_rescan() {
+        let mut app = app_at_epoch(RecorderEpochId::FIRST);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        scheduler.queue_status(true);
+        let status = scheduler.start_next().unwrap();
+        assert!(
+            scheduler
+                .accept_status_phase(status.generation, crate::dashboard::StatusPhase::Providers)
+        );
+
+        change_timeline_limit(&mut app, &mut scheduler, false);
+        assert_eq!(scheduler.timeline_limit().get(), 50);
+        assert!(!scheduler.recorder_pending());
+        assert!(!scheduler.should_preempt_status());
+
+        let mut empty = App::new(Tab::Timeline);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        scheduler.queue_recorder(RecorderMode::Refresh, true);
+        let active = scheduler.start_next().unwrap();
+        change_timeline_limit(&mut empty, &mut scheduler, true);
+        scheduler.complete(active.generation, false, std::time::Instant::now());
+        assert!(matches!(
+            scheduler.start_next().unwrap().kind,
+            WorkKind::Recorder(crate::dashboard::RecorderRequest {
+                mode: RecorderMode::ReuseCurrent,
+                timeline_limit,
+            }) if timeline_limit.get() == 250
+        ));
+    }
+
+    #[test]
+    fn initial_plan_waits_for_the_first_recorder_epoch() {
+        let mut app = App::new(Tab::Work);
+        app.request_initial_plan("plan_example".to_string());
+        assert!(app.take_plan_request().is_none());
+
+        app.accept_recorder_refresh(refresh_at_epoch(RecorderEpochId::FIRST));
+
+        assert_eq!(
+            app.take_plan_request(),
+            Some((
+                PlanBasis::RecorderEpoch(RecorderEpochId::FIRST),
+                "plan_example".to_string(),
+            ))
+        );
+
+        let mut failed = App::new(Tab::Work);
+        failed.request_initial_plan("plan_example".to_string());
+        failed.accept_error(Tab::Work, "recorder collection failed".to_string());
+        assert!(failed.detail.loading_plan.is_none());
+        assert_eq!(
+            failed.detail.error.as_deref(),
+            Some("recorder collection failed")
+        );
+        assert!(failed.detail_is_open());
+    }
+
+    #[test]
+    fn timeline_grows_by_reprojecting_and_shrinks_without_idle_source_work() {
+        let mut app = app_at_epoch(RecorderEpochId::FIRST);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+
+        change_timeline_limit(&mut app, &mut scheduler, true);
+        assert_eq!(scheduler.timeline_limit().get(), 250);
+        assert!(matches!(
+            scheduler.start_next().unwrap().kind,
+            WorkKind::Recorder(crate::dashboard::RecorderRequest {
+                mode: RecorderMode::ReuseCurrent,
+                timeline_limit,
+            }) if timeline_limit.get() == 250
+        ));
+
+        let mut app = app_at_epoch(RecorderEpochId::FIRST);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        change_timeline_limit(&mut app, &mut scheduler, false);
+        assert_eq!(scheduler.timeline_limit().get(), 50);
+        assert_eq!(app.recorder.data.as_ref().unwrap().timeline_limit, 50);
+        assert!(!scheduler.recorder_pending());
+        assert!(!scheduler.has_active());
+
+        let mut accounting = app_at_epoch(RecorderEpochId::FIRST);
+        let seed = accounting.recorder.data.as_ref().unwrap().timeline[0].clone();
+        for index in 1..3 {
+            let mut row = seed.clone();
+            row.identity = format!("timeline-{index}");
+            accounting
+                .recorder
+                .data
+                .as_mut()
+                .unwrap()
+                .timeline
+                .push(row);
+        }
+        let before = accounting.recorder.data.as_ref().unwrap().timeline.clone();
+        let omitted = accounting
+            .recorder
+            .data
+            .as_ref()
+            .unwrap()
+            .limits
+            .timeline
+            .omitted;
+        accounting.shrink_timeline_limit(1);
+        let recorder = accounting.recorder.data.as_ref().unwrap();
+        assert_eq!(recorder.timeline.len(), 1);
+        assert_eq!(recorder.timeline[0].identity, before[0].identity);
+        assert_eq!(recorder.limits.timeline.applied, 1);
+        assert_eq!(
+            recorder.limits.timeline.omitted,
+            omitted.map(|value| value + before.len() - 1)
+        );
+
+        let mut empty = App::new(Tab::Timeline);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        change_timeline_limit(&mut empty, &mut scheduler, true);
+        assert!(matches!(
+            scheduler.start_next().unwrap().kind,
+            WorkKind::Recorder(crate::dashboard::RecorderRequest {
+                mode: RecorderMode::Refresh,
+                timeline_limit,
+            }) if timeline_limit.get() == 250
+        ));
+    }
+
+    #[test]
+    fn recorder_at_an_old_limit_is_discarded_and_reprojected() {
+        let old_epoch = RecorderEpochId::FIRST;
+        let mut app = app_at_epoch(old_epoch);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        scheduler.queue_recorder(RecorderMode::Refresh, true);
+        let request = scheduler.start_next().unwrap();
+        scheduler.set_timeline_limit(TimelineLimit::new(250).unwrap());
+        let mut refresh = refresh_at_epoch(RecorderEpochId::new(2).unwrap());
+        refresh.recorder.timeline_limit = TimelineLimit::DEFAULT.get();
+
+        assert!(!apply_outdated_projection(
+            &mut app,
+            &mut scheduler,
+            &request,
+            Ok(RefreshResult::Recorder(refresh)),
+        ));
+        assert_eq!(app.recorder.data.as_ref().unwrap().epoch_id, old_epoch);
+        scheduler.complete(request.generation, false, std::time::Instant::now());
+        assert!(matches!(
+            scheduler.start_next().unwrap().kind,
+            WorkKind::Recorder(crate::dashboard::RecorderRequest {
+                mode: RecorderMode::ReuseCurrent,
+                timeline_limit,
+            }) if timeline_limit.get() == 250
+        ));
+    }
+
+    #[test]
+    fn status_at_an_old_limit_publishes_status_but_not_stale_timeline_rows() {
+        let old_epoch = RecorderEpochId::FIRST;
+        let mut app = app_at_epoch(old_epoch);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+        scheduler.queue_status(true);
+        let request = scheduler.start_next().unwrap();
+        scheduler.set_timeline_limit(TimelineLimit::new(250).unwrap());
+        let mut recorder = crate::dashboard::scenarios::recorder_snapshot();
+        recorder.epoch_id = RecorderEpochId::new(2).unwrap();
+        let status = crate::dashboard::scenarios::status_snapshot();
+
+        assert!(!apply_outdated_projection(
+            &mut app,
+            &mut scheduler,
+            &request,
+            Ok(RefreshResult::Status(crate::dashboard::StatusRefresh {
+                status,
+                recorder,
+            })),
+        ));
+        assert!(app.status.data.is_some());
+        assert_eq!(app.recorder.data.as_ref().unwrap().epoch_id, old_epoch);
+        scheduler.complete(request.generation, false, std::time::Instant::now());
+        assert!(matches!(
+            scheduler.start_next().unwrap().kind,
+            WorkKind::Recorder(crate::dashboard::RecorderRequest {
+                mode: RecorderMode::ReuseCurrent,
+                timeline_limit,
+            }) if timeline_limit.get() == 250
         ));
     }
 }

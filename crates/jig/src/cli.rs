@@ -195,18 +195,19 @@ Examples:
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
 
 const UI_AFTER_HELP: &str = "\
-Serves a read-only loopback dashboard over .agent/state: open plans with gate
-status, loop workflows, and a merged timeline of sessions, plans, receipts, and
-decisions. The page auto-refreshes; the printed namespaced snapshot path returns the same data as JSON
-after the browser establishes a session from the printed one-time URL.
+Opens a read-only terminal dashboard over repository status and .agent/state:
+providers, packages, blockers, plans, gates, receipts, loops, and activity.
+Interactive mode requires terminal stdin and stdout and records no receipts.
 
-The server binds 127.0.0.1 only, validates its exact Host and Origin, and records
-no receipts. Proxy aliases are intentionally rejected to prevent DNS rebinding.
+Pass --json for one local recorder snapshot without running status providers.
+Combine --plan with --json for one plan-detail snapshot.
 
 Examples:
   jig ui
-  jig ui --port 0        # pick any free port
-  jig ui --json          # print the URL as JSON, then serve";
+  jig ui --plan PLAN_ID
+  jig ui --timeline-limit 120
+  jig ui --json
+  jig ui --plan PLAN_ID --json";
 
 const VAULT_AFTER_HELP: &str = "\
 Jig Vault stores encrypted project fields outside the repository. References
@@ -317,7 +318,7 @@ pub(crate) enum CommandKind {
         after_help = STATUS_AFTER_HELP
     )]
     Status(StatusOpts),
-    /// Serve the local flight-recorder dashboard for plans, gates, receipts, and loops.
+    /// Open the unified terminal dashboard for status and local recorder state.
     #[command(
         name = root_commands::UI.name,
         display_order = root_commands::UI.display_order,
@@ -529,10 +530,54 @@ pub(crate) struct GenerateSqlxUncheckedQueriesTodoOpts {
 pub(crate) struct UiOpts {
     #[arg(
         long,
-        default_value_t = ui::DEFAULT_UI_PORT,
-        help = "Loopback port to serve on; 0 selects any free port"
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..=3600),
+        help = "Local recorder refresh interval; defaults to 10 seconds"
     )]
-    pub(crate) port: u16,
+    pub(crate) refresh_seconds: Option<u64>,
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..=3600),
+        help = "Status-provider refresh interval; defaults to 30 seconds"
+    )]
+    pub(crate) status_refresh_seconds: Option<u64>,
+    #[arg(
+        long,
+        value_name = "ROWS",
+        value_parser = clap::value_parser!(u64).range(1..=1000),
+        help = "Initial activity rows for the TUI or recorder JSON; defaults to 120 (not valid with plan JSON)"
+    )]
+    pub(crate) timeline_limit: Option<u64>,
+    #[arg(
+        long,
+        value_name = "PLAN_ID",
+        value_parser = parse_ui_plan_id,
+        help = "Open this plan's detail view; with --json emit one plan snapshot"
+    )]
+    pub(crate) plan: Option<String>,
+    #[arg(long = "port", hide = true)]
+    pub(crate) retired_port: Option<u16>,
+}
+
+impl UiOpts {
+    pub(crate) fn effective_refresh_seconds(&self) -> u64 {
+        self.refresh_seconds.unwrap_or(10)
+    }
+
+    pub(crate) fn effective_status_refresh_seconds(&self) -> u64 {
+        self.status_refresh_seconds.unwrap_or(30)
+    }
+
+    pub(crate) fn effective_timeline_limit(&self) -> u64 {
+        self.timeline_limit.unwrap_or(120)
+    }
+}
+
+fn parse_ui_plan_id(value: &str) -> Result<String, String> {
+    crate::state::validate_plan_id(value)
+        .map(|()| value.to_string())
+        .map_err(|error| error.to_string())
 }
 
 mod command_conversion;
@@ -554,6 +599,9 @@ pub(crate) fn format_info_summary_for_test(value: &serde_json::Value) -> String 
 }
 
 pub(crate) use run::{is_structured_json_failure, run, structured_error_exit_code};
+#[cfg(test)]
+pub(crate) use structured_error::is_json_output_already_emitted;
+pub(crate) use structured_error::json_command_error;
 pub(crate) use structured_error::json_output_already_emitted;
 
 #[cfg(test)]
@@ -566,6 +614,8 @@ mod preset_tests;
 mod status_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ui_tests;
 #[cfg(test)]
 #[path = "cli/tests/vault_lifecycle.rs"]
 mod vault_lifecycle_tests;

@@ -19,6 +19,12 @@ struct JsonReportedError(i32);
 struct JsonOutputAlreadyEmitted(anyhow::Error);
 
 #[derive(Debug)]
+pub(super) struct JsonCommandError {
+    pub(super) command: &'static str,
+    message: String,
+}
+
+#[derive(Debug)]
 struct FileBudgetExitStatus(i32);
 
 #[derive(Debug)]
@@ -80,6 +86,14 @@ impl std::fmt::Display for JsonOutputAlreadyEmitted {
 
 impl std::error::Error for JsonOutputAlreadyEmitted {}
 
+impl std::fmt::Display for JsonCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for JsonCommandError {}
+
 impl std::fmt::Display for FileBudgetExitStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -131,7 +145,15 @@ pub(crate) fn json_output_already_emitted(error: anyhow::Error) -> anyhow::Error
     JsonOutputAlreadyEmitted(error).into()
 }
 
-pub(super) fn is_json_output_already_emitted(error: &anyhow::Error) -> bool {
+pub(crate) fn json_command_error(command: &'static str, error: anyhow::Error) -> anyhow::Error {
+    JsonCommandError {
+        command,
+        message: format!("{error:#}"),
+    }
+    .into()
+}
+
+pub(crate) fn is_json_output_already_emitted(error: &anyhow::Error) -> bool {
     error.is::<JsonOutputAlreadyEmitted>()
 }
 

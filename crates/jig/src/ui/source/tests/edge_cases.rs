@@ -126,6 +126,58 @@ fn current_session_and_oversized_plan_failures_are_visible_without_losing_other_
 }
 
 #[test]
+fn oversized_status_record_has_only_the_documented_partial_delta() {
+    let (root, source) = source_fixture();
+    let path = root.path().join(".agent/state/plans.jsonl");
+    let mut records = fs::read_to_string(&path).unwrap();
+    records.push_str(&format!(
+        "{}\n",
+        json!({
+            "id": "oversized-plan-event",
+            "plan_id": "oversized-plan",
+            "event": "open",
+            "timestamp_ms": 99,
+            "title": "x".repeat(1024 * 1024),
+            "body_path": null,
+            "baseline": null
+        })
+    ));
+    fs::write(path, records).unwrap();
+    let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
+
+    let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
+    let refresh = source
+        .status(
+            StatusRequest {
+                timeline_limit: jig_ui::dashboard::TimelineLimit::new(25).unwrap(),
+            },
+            &|_| {},
+            &|| false,
+        )
+        .unwrap();
+    let typed = serde_json::to_value(refresh.status).unwrap();
+
+    assert_eq!(typed, legacy);
+    assert_eq!(typed["outcome"], "partial");
+    assert!(typed["work"]["state"].is_null());
+    assert_eq!(typed["work"]["gates"], json!([]));
+    let oversized_errors = typed["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|error| error["code"] == "work_state_unavailable")
+        .collect::<Vec<_>>();
+    assert_eq!(oversized_errors.len(), 1);
+    assert_eq!(oversized_errors[0]["scope"], "work.state");
+    assert!(
+        oversized_errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("exceeds the 1048576-byte dashboard read limit")
+    );
+}
+
+#[test]
 fn timeline_identity_survives_append_but_changes_with_replacement_bytes() {
     let (root, source) = source_fixture();
     let path = root.path().join(".agent/state/decisions.jsonl");

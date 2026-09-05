@@ -201,7 +201,9 @@ pub(super) fn draw_timeline(frame: &mut Frame, area: Rect, app: &App) {
     append_local_notices(&mut lines, app);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel("Timeline preview · f/F filter · Enter detail"))
+            .block(panel(
+                "Timeline preview · f/F filter · +/- rows · Enter detail",
+            ))
             .wrap(Wrap { trim: true }),
         chunks[1],
     );

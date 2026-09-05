@@ -84,7 +84,11 @@ fn phase_events_are_generation_tagged_and_preemption_joins_before_local_start() 
     let source: Arc<dyn DashboardSource> = Arc::new(ControlledSource {
         events: Arc::clone(&events),
     });
-    let mut scheduler = Scheduler::new(Duration::from_secs(10), Duration::from_secs(30));
+    let mut scheduler = Scheduler::new(
+        Duration::from_secs(10),
+        Duration::from_secs(30),
+        crate::dashboard::TimelineLimit::DEFAULT,
+    );
     scheduler.queue_status(true);
     let status = scheduler.start_next().unwrap();
     let mut worker = RefreshWorker::spawn(Arc::clone(&source), status.clone()).unwrap();

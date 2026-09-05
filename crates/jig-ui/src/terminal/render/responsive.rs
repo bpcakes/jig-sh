@@ -235,7 +235,7 @@ fn compact_footer(app: &App) -> String {
         Tab::Blockers => "q quit | Tab views | j/k | [/]".to_string(),
         Tab::Status => "q quit | Tab views | r | [/]".to_string(),
         Tab::Work => "q quit | Tab views | j/k | Enter | r".to_string(),
-        Tab::Timeline => "q quit | Tab views | j/k | Enter | f/F | r".to_string(),
+        Tab::Timeline => "q quit | Tab views | j/k | Enter | f/F | +/- rows | r".to_string(),
         Tab::Health => "q quit | Tab views | j/k | Enter | r".to_string(),
     }
 }

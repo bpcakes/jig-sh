@@ -82,6 +82,30 @@ impl App {
         }
     }
 
+    pub(crate) fn request_initial_plan(&mut self, plan_id: String) {
+        self.detail.request_plan(plan_id);
+    }
+
+    pub(crate) fn shrink_timeline_limit(&mut self, timeline_limit: usize) {
+        let Some(recorder) = &mut self.recorder.data else {
+            return;
+        };
+        if timeline_limit >= recorder.timeline_limit {
+            return;
+        }
+        let retained = recorder.timeline.len().min(timeline_limit);
+        let removed = recorder.timeline.len().saturating_sub(retained);
+        recorder.timeline.truncate(retained);
+        recorder.timeline_limit = timeline_limit;
+        recorder.limits.timeline.applied = timeline_limit;
+        recorder.limits.timeline.omitted = recorder
+            .limits
+            .timeline
+            .omitted
+            .map(|omitted| omitted.saturating_add(removed));
+        self.clamp_local_selections();
+    }
+
     #[cfg(test)]
     pub(crate) fn accept_snapshot(&mut self, value: Value) {
         let dashboard = match Dashboard::from_value(value) {
@@ -214,6 +238,13 @@ impl App {
 
     pub(crate) fn accept_error(&mut self, tab: Tab, error: String) {
         self.domain_mut(tab).set_error(Some(sanitize_text(&error)));
+        if tab == Tab::Work
+            && self.recorder.data.is_none()
+            && self.detail.loading_plan_basis.is_none()
+            && let Some(plan_id) = self.detail.loading_plan.clone()
+        {
+            self.accept_plan_error(&plan_id, error);
+        }
     }
 
     pub(crate) fn current_provider(&self) -> Option<&ProviderView> {
