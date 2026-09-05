@@ -437,6 +437,24 @@ mod tests {
     }
 
     #[test]
+    fn explicit_refresh_all_from_work_queues_recorder_and_status() {
+        let mut app = App::new(Tab::Work);
+        let mut scheduler = Scheduler::new(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
+            TimelineLimit::DEFAULT,
+        );
+
+        assert!(apply_action(
+            &mut app,
+            &mut scheduler,
+            RuntimeAction::RefreshAll
+        ));
+        assert!(scheduler.recorder_pending());
+        assert!(scheduler.status_pending());
+    }
+
+    #[test]
     fn stale_detail_does_not_retry_after_the_operator_targets_another_plan() {
         let current = RecorderEpochId::new(2).unwrap();
         let mut app = app_at_epoch(current);

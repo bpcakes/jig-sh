@@ -160,6 +160,59 @@ Make-backed tools return:
 
 Command-backed tools return the same common fields plus `command_key`, which identifies the `.jig.toml` command key that was executed.
 
+## Dashboard And Status Output
+
+The full-screen output from `scripts/jig ui` and `scripts/jig status --tui` is human-only and requires terminal stdin and stdout. `jig ui` starts the unified six-tab dashboard on Work; `jig status --tui` is a permanent status-first alias into the same implementation. Both are read-only and record no receipt. Redirected interactive use exits nonzero with guidance to select one of the JSON forms below.
+
+`scripts/jig --json ui` emits one local recorder document and does not run status providers. `scripts/jig --json ui --plan PLAN_ID` emits one plan document. Every listed root field is present:
+
+| Document | Root fields, in serialization order |
+| --- | --- |
+| Recorder | `ok`, `command`, `schema_version`, `snapshot_kind`, `generated_at_ms`, `epoch_id`, `repo`, `harness`, `current_session_id`, `counts`, `open_plans`, `history`, `failures`, `tool_stats`, `loops`, `timeline`, `timeline_show`, `timeline_limit`, `limits`, `errors` |
+| Plan | `ok`, `command`, `schema_version`, `snapshot_kind`, `generated_at_ms`, `basis_epoch`, `detail_observed_at_ms`, `gates_observed_at_ms`, `decisions_observed_at_ms`, `plan`, `body`, `gates`, `decisions`, `receipts`, `limits`, `errors` |
+| Status | `ok`, `command`, `schema_version`, `observed_at_ms`, `outcome`, `repository`, `work`, `loops`, `providers`, `errors` |
+
+For recorder and plan documents, `ok` is boolean and is `true` for a successfully emitted snapshot; `command` is the string `"ui"`; `schema_version` is the unsigned integer `1`; `snapshot_kind` is the string `"recorder"` or `"plan"`; timestamps and epoch identities are unsigned integers. Observation and `limits` fields are objects, collection fields and `errors` are arrays, and identity/status/filter fields are strings unless their DTO says otherwise. `current_session_id`, `loops`, `body`, and `gates` are object/string-or-null fields and remain present when null. Empty arrays remain present. The Status document instead uses command `"status"`, schema version 1, and `outcome` string `"complete"` or `"partial"`; its detailed provider aggregate is defined by the [status-provider protocol](status-provider.md#jig-runner-and-aggregate).
+
+Nested bounded rows serialize as `{"items": [...], "applied": N, "omitted": N|null}`. Bounded text serializes as `{"text": "...", "applied_chars": N, "omitted_chars": N|null}` and counts Unicode scalar values. Recorder and plan root arrays remain ordinary arrays; the root `limits` object maps each root collection name to `{"applied": N, "omitted": N|null}`.
+
+| Limit identifier | Ceiling |
+| --- | ---: |
+| `open_plans` | 1000 |
+| `history` | 10 |
+| `failures` | 10 |
+| `failure_stderr_chars` | 400 |
+| `tool_stats` | 256 |
+| `loop_workflows` | 1000 |
+| `loop_leases` | 1000 |
+| `loop_attempts` | 1000 |
+| `loop_scheduled_occurrences` | 1000 |
+| `loop_waiting_attempts` | 1000 |
+| `loop_exhausted_attempts` | 1000 |
+| `timeline` | 1000 |
+| `timeline_decision_rationale_chars` | 300 |
+| `gate_rows` | 256 |
+| `gate_changed_paths` | 100 |
+| `gate_matching_paths` | 100 |
+| `gate_findings` | 100 |
+| `plan_body_chars` | 20000 |
+| `plan_body_input_bytes` | 80004 |
+| `plan_decisions` | 100 |
+| `plan_receipts` | 50 |
+| `receipt_changed_paths` | 20 |
+| `receipt_stdout_chars` | 1000 |
+| `receipt_stderr_chars` | 1000 |
+
+`--timeline-limit 1..1000` controls recorder activity rows and defaults to 120, so the applied `timeline` limit can be below its ceiling. `--timeline-limit` is invalid with plan JSON, and either refresh option is invalid with all UI JSON modes. Argument conflicts use the standard usage envelope and exit status 2. An unknown plan is a command failure with exit status 1.
+
+Each partial collection error is `{"scope": string, "code": string, "subject_id": string|null, "message": string}`. Scopes are `repository`, `state.sessions`, `state.plans`, `state.decisions`, `state.receipts`, `loops`, `gates`, and `body`. Codes are `git_observation_failed`, `git_upstream_comparison_failed`, `git_upstream_output_invalid`, `stream_open_failed`, `stream_read_failed`, `record_too_large`, `record_decode_failed`, `loop_observation_failed`, `gate_observation_failed`, `body_not_found`, `body_unsafe_path`, `body_unsafe_type`, `body_read_failed`, `body_invalid_utf8`, and `unsupported_platform`.
+
+A nonempty `errors` array is partial observation, not command failure: recorder and plan documents retain `ok: true`, preserve usable data, and exit 0 after one complete JSON document is written. Status JSON likewise preserves usable data, exits 0 after successful collection, and changes `outcome` to `"partial"`. Failures before a snapshot can be constructed use the ordinary command-error envelope and a nonzero exit.
+
+Dashboard and status readers cap each logical record in `sessions.jsonl`, `plans.jsonl`, `decisions.jsonl`, and `receipts.jsonl` at 1048576 bytes. An oversized record is skipped without allocating proportionally and yields a `record_too_large` partial error. This 0.3.0 safety tightening does not change the append-only state format, but a schema-valid oversized legacy record that an older runtime attempted to allocate now makes UI recorder or status observation partial. Use `scripts/jig state diagnose` to identify the affected stream, stop Jig writers, and use the applicable compaction, archive, restore, or manual state-repair workflow before retrying.
+
+Version 0.3.0 ends support for the browser server, its bookmarked URLs, and its HTTP JSON endpoints. `jig ui --json` now emits the recorder document directly instead of a URL envelope. A hidden `--port` parser exists only to return a migration diagnostic with exit status 2 and may be removed in 0.4.0. This workflow cutover does not change generated launcher command scope or contract version 7; callers needing the old transport must use an older Jig release.
+
 ## Repository Catalog And Check Plans
 
 The runtime exposes one normalized repository catalog independently of the

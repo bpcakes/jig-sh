@@ -177,6 +177,7 @@ fn plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors() {
 
     let missing = jig(root.path(), &["--json", "ui", "--plan", "plan_missing"]);
     assert!(!missing.status.success());
+    assert_eq!(missing.status.code(), Some(1));
     let error = one_error_document(&missing);
     assert_eq!(error["ok"], false);
     assert_eq!(error["command"], "ui");

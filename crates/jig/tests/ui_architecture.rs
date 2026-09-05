@@ -2,6 +2,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use jig_ui::dashboard::{
+    DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS,
+    SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS,
+};
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -86,6 +91,139 @@ fn production_tree_contains_no_http_surface() {
             "retired dashboard server symbol remains: {forbidden}"
         );
     }
+}
+
+#[test]
+fn maintained_guides_describe_the_terminal_only_dashboard_contract() {
+    let root = repo_root();
+    let documents = read_maintained_dashboard_documents(&root);
+    assert_no_retired_dashboard_guidance(&documents);
+    assert_human_dashboard_guidance(&documents);
+    assert_machine_dashboard_contract(document(&documents, "docs/public-contract.md"));
+    assert_dashboard_release_notes(document(&documents, "CHANGELOG.md"));
+}
+
+fn read_maintained_dashboard_documents(root: &Path) -> Vec<(&'static str, String)> {
+    [
+        "README.md",
+        "docs/developer-ux.md",
+        "docs/status-provider.md",
+        "docs/repo-intent.md",
+        "docs/public-contract.md",
+        "CHANGELOG.md",
+        "agent-map.md",
+        "crates/jig/AGENTS.md",
+        "crates/jig-ui/AGENTS.md",
+        "crates/jig-tui/AGENTS.md",
+    ]
+    .into_iter()
+    .map(|path| (path, fs::read_to_string(root.join(path)).unwrap()))
+    .collect()
+}
+
+fn document<'a>(documents: &'a [(&str, String)], expected: &str) -> &'a str {
+    documents
+        .iter()
+        .find_map(|(path, document)| (*path == expected).then_some(document.as_str()))
+        .unwrap()
+}
+
+fn assert_no_retired_dashboard_guidance(documents: &[(&str, String)]) {
+    for (path, document) in documents {
+        for retired_claim in [
+            "scripts/jig ui --port",
+            "prints a one-time loopback sign-in URL",
+            "session cookie established by the printed one-time URL",
+            "crates/jig-status-tui",
+            "#flight-recorder-ui",
+        ] {
+            assert!(
+                !document.contains(retired_claim),
+                "{path} retains retired dashboard guidance: {retired_claim}"
+            );
+        }
+    }
+}
+
+fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
+    let readme = document(documents, "README.md");
+    assert!(readme.contains("Status, Packages, Blockers, Work, Timeline, and Health"));
+    assert!(readme.contains("docs/developer-ux.md#terminal-dashboard"));
+
+    let developer_ux = document(documents, "docs/developer-ux.md");
+    assert!(developer_ux.contains("## Terminal Dashboard"));
+    assert!(developer_ux.contains("108 by 24"));
+    assert!(developer_ux.contains("may stop parsing in 0.4.0"));
+    assert!(developer_ux.contains("public-contract.md#dashboard-and-status-output"));
+    assert!(developer_ux.contains("status-provider.md#jig-runner-and-aggregate"));
+
+    let status_provider = document(documents, "docs/status-provider.md");
+    assert!(status_provider.contains("permanent compatibility entrypoint"));
+    assert!(status_provider.contains("DashboardSource"));
+    assert!(status_provider.contains("## Jig runner and aggregate"));
+
+    let repo_intent = document(documents, "docs/repo-intent.md");
+    assert!(repo_intent.contains("no replacement server or HTTP compatibility layer"));
+}
+
+fn assert_machine_dashboard_contract(public_contract: &str) {
+    assert!(public_contract.contains("## Dashboard And Status Output"));
+    let dashboard_contract = public_contract
+        .split_once("## Dashboard And Status Output")
+        .unwrap()
+        .1
+        .split_once("\n## ")
+        .unwrap()
+        .0;
+    assert!(
+        dashboard_contract.contains("`snapshot_kind` is the string `\"recorder\"` or `\"plan\"`")
+    );
+    assert!(public_contract.contains("contract version 7"));
+    assert!(
+        dashboard_contract.contains(&format!("defaults to {DEFAULT_TIMELINE_ROWS}")),
+        "dashboard contract must match the default timeline size"
+    );
+    for fields in [RECORDER_ROOT_FIELDS, PLAN_ROOT_FIELDS, STATUS_ROOT_FIELDS] {
+        let ordered_fields = fields
+            .iter()
+            .map(|field| format!("`{field}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            dashboard_contract.contains(&ordered_fields),
+            "dashboard contract omits or reorders a schema-1 root field set"
+        );
+    }
+    for scope in SNAPSHOT_ERROR_SCOPES {
+        assert!(
+            dashboard_contract.contains(&format!("`{scope}`")),
+            "dashboard contract omits snapshot error scope {scope}"
+        );
+    }
+    for code in SNAPSHOT_ERROR_CODES {
+        assert!(
+            dashboard_contract.contains(&format!("`{code}`")),
+            "dashboard contract omits snapshot error code {code}"
+        );
+    }
+    for spec in LIMIT_SPECS {
+        assert!(
+            dashboard_contract.contains(&format!("| `{}` | {} |", spec.id.as_str(), spec.ceiling)),
+            "dashboard contract omits or misstates limit {}",
+            spec.id.as_str(),
+        );
+    }
+    assert!(dashboard_contract.contains(
+        r#"{"scope": string, "code": string, "subject_id": string|null, "message": string}"#
+    ));
+    assert!(dashboard_contract.contains("retain `ok: true`"));
+    assert!(dashboard_contract.contains("at 1048576 bytes"));
+}
+
+fn assert_dashboard_release_notes(changelog: &str) {
+    assert!(changelog.contains("Breaking: replace the loopback browser dashboard"));
+    assert!(changelog.contains("1,048,576 bytes"));
+    assert!(changelog.contains("stop publishing the internal `jig-status-tui` crate"));
 }
 
 fn collect_dependency_names(value: &toml::Value, names: &mut BTreeSet<String>) {

@@ -212,34 +212,28 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
-### Orchestration, status, and flight recorder
+### Orchestration and terminal dashboard
 
-`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig status` joins local Git and work state with any configured `jig.status-provider/v1` inspectors. `jig ui` serves a read-only loopback dashboard over plans, gates, receipts, decisions, and loops.
+`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local recorder state and any configured `jig.status-provider/v1` inspectors. `jig status --tui` is a permanent compatibility entrypoint into the same dashboard, starting on Status instead of Work.
 
 ```sh
 scripts/jig loop status
 scripts/jig status
-scripts/jig status --tui
-scripts/jig ui --port 0
+scripts/jig ui                    # terminal dashboard, starting on Work
+scripts/jig status --tui          # same dashboard, starting on Status
+scripts/jig --json ui             # one recorder snapshot
+scripts/jig --json ui --plan PLAN_ID
+scripts/jig status --json         # provider/status snapshot
 ```
 
-Provider failures remain visible as partial status instead of hiding available local state. The UI binds to `127.0.0.1`, validates loopback host and origin, and uses a one-time sign-in URL. See [Status-provider protocol](docs/status-provider.md) and [Flight Recorder UI](docs/developer-ux.md#flight-recorder-ui).
+The six tabs are Status, Packages, Blockers, Work, Timeline, and Health. Provider failures remain visible as partial status instead of hiding available local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. See [Status-provider protocol](docs/status-provider.md) and [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
 
 ### State maintenance
 
-`jig ui` serves a read-only loopback dashboard over `.agent/state/`: open plans with gate status and the next command to unblock them, recent failures with stderr, finished work with resolutions, per-tool check health, loop workflows with scheduled Codex-task run state and attempt budgets, and a filterable timeline of sessions, plans, receipts, and decisions. Plan ids link to detail pages with the plan body, gate evidence, decisions, and per-receipt output. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
+`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, loop, or package details where the active tab offers them. Local recorder refresh defaults to 10 seconds and provider refresh to 30 seconds; collection is serialized and navigation remains responsive. The canonical `jig ui` path loads provider data lazily when a status-domain tab is first visited or the user explicitly presses `R` to refresh both domains. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
 
-```sh
-scripts/jig ui               # prints a one-time loopback sign-in URL
-scripts/jig ui --port 0      # pick any free port
-```
+Version 0.3.0 removed the browser server and URL endpoints. The hidden `--port` parser now exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON instead; no browser, listener, cookie, or capability URL remains.
 
-The dashboard validates the exact loopback `Host` and `Origin` and requires a
-session cookie established by the printed one-time URL. Proxy aliases are not
-supported because accepting arbitrary hostnames would reopen DNS-rebinding
-access to receipt and plan contents.
-
-The printed unguessable namespace contains JSON snapshot and plan endpoints returning the same joined data. The server binds `127.0.0.1` only and records no receipts. See [Developer UX](docs/developer-ux.md#flight-recorder-ui).
 Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
 ### Vault
@@ -314,7 +308,8 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - `crates/jig-{rust,go,typescript,sqlx}/`: repository model adapters
 - `crates/jig-file-budget/`: native file-budget policy and evaluation
 - `crates/jig-dev-proxy/`: local HTTP/HTTPS proxy and process supervision
-- `crates/jig-{status-tui,ui,codex-tui,vault,vault-tui}/`: status, dashboard, Codex, and vault surfaces
+- `crates/jig-{ui,codex-tui,vault,vault-tui}/`: unified dashboard, Codex, and vault surfaces
+- `crates/jig-tui/`: terminal safety and runtime foundations shared by Jig TUIs
 - `templates/project/`: files rendered into downstream repositories
 - `examples/`: sample answer files
 - `scripts/validate-fixtures.sh`: rendered-repository validation

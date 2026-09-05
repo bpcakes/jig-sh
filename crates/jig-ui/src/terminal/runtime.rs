@@ -361,6 +361,15 @@ mod tests {
             ),
             RuntimeAction::Refresh
         );
+        for key in ['h', 'l'] {
+            assert_eq!(
+                handle_key(
+                    &mut app,
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)
+                ),
+                RuntimeAction::Ignore
+            );
+        }
         assert_eq!(
             handle_key(
                 &mut app,
