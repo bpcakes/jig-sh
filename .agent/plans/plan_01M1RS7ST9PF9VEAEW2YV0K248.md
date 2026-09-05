@@ -1,25 +1,31 @@
-# Validate unified terminal dashboard parity and release readiness
+# Superseded validation attempt for unified terminal dashboard parity
 
 This ExecPlan implements validation-only Task I (`jig-sh-l2x.10`) from `docs/plans/unified-terminal-dashboard.md`. Tasks A through H have implemented, reviewed, deleted, and documented the browser-to-terminal cutover. This task independently proves the delivered branch satisfies every parity, safety, compatibility, deletion, and release criterion without changing implementation, version metadata, tests, product documentation, or release files.
 
-Implementation baseline: `871b501c6443f5383c002f4eaf7f1d173934abf4` on branch `jig-sh-l2x`.
+Intended implementation baseline: `cccd917598a3e06424ca3b05def5d6c5971f7a16` on branch `jig-sh-l2x`, after the Task A oracle repair routed from this validation task. The immutable structured-plan event actually records pre-repair baseline `871b501c6443f5383c002f4eaf7f1d173934abf4`; this mismatch was found in comprehensive review round 1 and makes this attempt unsuitable for Task I closure.
 
 ## Progress
 
 - [x] Re-read repository and crate guidance, Task I, the explicit parity matrix, acceptance layers, validation commands, and recovery rules.
-- [x] Claim `jig-sh-l2x.10`, rebuild `target/debug/jig`, and open structured work at the exact Task H commit.
-- [ ] Run focused contract, parity-registry, golden, differential, source, cancellation, scheduler, renderer, PTY, and specialized-TUI tests.
-- [ ] Dogfood both interactive entrypoints in real PTYs and validate all three one-shot JSON commands with `jq`.
-- [ ] Run deletion, release-metadata, launcher/contract-epoch, documentation, and retired-option audits.
-- [ ] Run all required repository gates and inspect gate receipts against the current baseline.
-- [ ] Run up to two comprehensive Claude+Codex reviews of the validation-only working changes and address any evidence defects without weakening an oracle.
-- [ ] Close Task I and the epic, flush Beads, finish structured work, and commit only task-local planning and append-only evidence.
+- [x] Claim `jig-sh-l2x.10`, rebuild `target/debug/jig`, and continue structured work from the reviewed Task A repair commit.
+- [x] Run focused contract, parity-registry, golden, differential, source, cancellation, scheduler, renderer, PTY, and specialized-TUI tests.
+- [x] Dogfood both interactive entrypoints in real PTYs and validate all three one-shot JSON commands with `jq`.
+- [x] Run deletion, release-metadata, launcher/contract-epoch, documentation, and retired-option audits.
+- [x] Run all required repository gates and inspect gate receipts against the current baseline.
+- [x] Run comprehensive Claude+Codex review round 1; identify the immutable-baseline mismatch and incomplete failure/evidence accounting.
+- [x] Close this invalid-baseline attempt as superseded and continue Task I in a fresh structured plan at the repaired commit.
 
 ## Surprises & Discoveries
 
 - The repository has an eligible open plan—the Task I plan itself—so JSON plan-detail dogfooding does not require a temporary `ExampleProject` fixture.
 - The final validation matrix is intentionally redundant: narrow tests prove named behavior, while full gates prove integration. A broad workspace pass alone is not evidence for every parity row.
 - The parity registry's acceptance test proves only that 57 `behavioral_test` strings are nonempty and unique. Static resolution found that 56 do not name any test function, and an isolated A2 mutation replacing one with `this_test_does_not_exist` still passed `parity_registry_has_one_named_oracle_for_every_matrix_row`. This is a confirmed weak-oracle defect owned by Task A, so Task I pauses before release gates and routes the repair to the predecessor.
+- Task A's corrected baseline makes every one of the 57 parity rows resolve to a collected, source-backed Rust test. The focused acceptance matrix passes the 23-test dashboard contract target, 115 dashboard unit tests, shared terminal tests, all 9 CLI cutover tests, the JSON portability target, and both specialized TUI suites.
+- Under heavy host contention, direct and structured runs recorded several distinct terminal failures rather than only two: PR-manager worker state (`receipt_01M1S8RW3WXF73M1NSDBPGF6DP`), PR-manager retained-worktree cleanup (`receipt_01M1S9AYSQMN3Y1D5B933H62YY`), receipt-writer lock timing (`receipt_01M1SAB6ZSG15FNK2KANA1Z8T1`), an aggregate 1,799.99-second timeout (`receipt_01M1SC66XXYS6JH0YJD2EA2Z38`), scheduled-lease retained-worktree state (`receipt_01M1SCK6XHYHJZ31TPNNV6B238`), a five-second work-check timing bound (`receipt_01M1SEGCTC9P9J9D5XGDH8Q6Z0`), and schema-check sandbox cloning (`receipt_01M1SFE67ABABB3D6AAE3WG54F`). The raw-PTY substring and an earlier lease-cancellation assertion also failed outside receipt-producing runs.
+- All six named failing tests represented by test receipts passed unchanged in explicit single-threaded isolation after review: the two PR-manager tests in 9.45 and 15.36 seconds, receipt-writer lock in 0.49 seconds, scheduled-lease state in 4.75 seconds, work-check timeout behavior in 2.12 seconds, and schema-check cleanup in 2.40 seconds. Later configured runs also passed 3,171 core tests and 3,937 aggregate tests. These results establish load sensitivity, not permission to erase the failures; follow-up Beads own hermeticity work.
+- Direct dogfooding passed in real 120-by-30 PTYs for both entrypoints. Recorder, plan-detail, and status JSON passed exact `jq` schema checks; the hidden retired port exited with Clap status 2 and named both supported replacements.
+- Cargo metadata and tracked-file audits confirm product version 0.3.0, generated contract epoch 7, no obsolete status package or release entry, and no production listener, route, cookie, capability-token, HTML, CSS, or browser-dashboard surface.
+- The final full-workspace aggregate passed all 3,937 tests with 2 configured skips. A separate core shard first hit one load-induced sandbox-clone setup failure; that exact test passed unchanged in isolation, and the forced core gate then passed all 3,171 selected tests.
 
 ## Decision Log
 
@@ -29,10 +35,11 @@ Implementation baseline: `871b501c6443f5383c002f4eaf7f1d173934abf4` on branch `j
 - Exercise real PTY entrypoints by waiting for dashboard output and sending `q`; successful terminal restoration and exit status are required.
 - Permit configured Nextest retries only for already-known timing-sensitive tests under machine contention. A retry may establish a flaky pass but cannot excuse a terminal failure or a failure in cutover-owned tests.
 - Do not accept semantic-looking free-form oracle labels as row-by-row evidence. Reopen Task A and bind every parity row to a real collected test/source before rerunning Task I from the corrected commit.
+- Stop after Task I is verified, reviewed, committed, and pushed. Do not close the parent epic in this task; report epic closure as remaining work for the next turn.
 
 ## Outcomes & Retrospective
 
-Pending completion of the acceptance matrix and release gates.
+This attempt cannot certify Task I because its immutable structured baseline predates the Task A repair, even though its final assembled gate state is green: the final aggregate target passed 3,937 tests; later forced core evidence passed 3,171 after a failed multi-gate sweep; frontend passed 112; vault passed 443 plus 2; and process passed 209. Comprehensive review round 1 correctly rejected the hand-edited baseline claim and the incomplete failure/evidence narrative. A fresh structured plan at the exact repaired commit must rerun or reuse only baseline-compatible gates and durably record the focused, PTY, JSON, deletion, and failure-disposition evidence before Task I closes.
 
 ## Context and orientation
 
@@ -95,4 +102,4 @@ All validation commands are read-only except expected append-only Jig receipts a
 
 ## Interfaces and dependencies
 
-Task I depends on closed Task H and has no child successor. Successful completion permits closing epic `jig-sh-l2x`. It introduces no interface and changes no product artifact; its only committed artifacts are this ExecPlan, `.agent/state/*.jsonl` evidence, and `.beads/issues.jsonl` closure records.
+Task I depends on closed Task H and has no child successor. Successful completion permits closing epic `jig-sh-l2x`, but epic closure is deliberately deferred per the stop boundary for this task. Task I introduces no interface and changes no product artifact; its only committed artifacts are this ExecPlan, `.agent/state/*.jsonl` evidence, and `.beads/issues.jsonl` transition records.
