@@ -77,10 +77,6 @@ impl Tab {
     pub(crate) const fn is_status_domain(self) -> bool {
         matches!(self, Self::Status | Self::Packages | Self::Blockers)
     }
-
-    pub(crate) const fn same_domain(self, other: Self) -> bool {
-        self.is_status_domain() == other.is_status_domain()
-    }
 }
 
 #[derive(Clone, Debug)]

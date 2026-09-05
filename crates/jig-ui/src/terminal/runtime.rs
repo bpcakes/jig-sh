@@ -1,144 +1,48 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 use super::{
     DashboardOptions, InitialTab,
     model::{App, Tab},
     render,
 };
+use crate::dashboard::DashboardSource;
+#[cfg(test)]
 use crate::dashboard::{
-    DashboardSource, RecorderMode, RecorderRefresh, RecorderRequest, SourceError, StatusRefresh,
-    StatusRequest, TimelineLimit,
+    RecorderRefresh, RecorderRequest, SourceError, StatusRefresh, StatusRequest,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_terminal};
+use jig_tui::{TerminalSession, is_actionable_key, require_terminal};
 
+mod event_loop;
 mod scheduler;
 mod worker;
-use scheduler::{next_queued_refresh, next_request};
-use worker::{RefreshWorker, WorkerRequest, apply_refresh_result};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn run(source: impl DashboardSource + 'static, options: DashboardOptions) -> Result<()> {
-    validate_refresh_interval(options.refresh_interval)?;
+    run_with_cancellation(source, options, || false)
+}
+
+pub(crate) fn run_with_cancellation(
+    source: impl DashboardSource + 'static,
+    options: DashboardOptions,
+    externally_cancelled: impl Fn() -> bool,
+) -> Result<()> {
+    validate_refresh_interval(options.local_refresh_interval)?;
+    validate_refresh_interval(options.status_refresh_interval)?;
     require_terminal(
         "Jig dashboard",
         "use `jig ui --json` for recorder data or `jig status --json` for provider data when redirecting",
     )?;
-    let source: Arc<dyn DashboardSource> = Arc::new(source);
     let mut terminal = TerminalSession::enter("Jig dashboard")?;
-    let mut app = App::new(match options.initial_tab {
+    let app = App::new(match options.initial_tab {
         InitialTab::Status => Tab::Status,
         InitialTab::Work => Tab::Work,
     });
-    let mut worker = Some(RefreshWorker::spawn(
-        Arc::clone(&source),
-        WorkerRequest::Domain(app.tab),
-    )?);
-    app.domain_mut(app.tab).set_refreshing(true);
-    let mut next_refresh = Instant::now() + options.refresh_interval;
-    let mut dirty = true;
-
-    loop {
-        if dirty {
-            terminal
-                .draw(|frame| render::draw(frame, &app))
-                .context("failed to draw the status TUI")?;
-            dirty = false;
-        }
-
-        if let Some((request, result)) = worker.as_mut().and_then(RefreshWorker::try_finish) {
-            worker = None;
-            let resets_refresh_timer = request.resets_refresh_timer();
-            apply_refresh_result(&mut app, request, result);
-            if resets_refresh_timer {
-                next_refresh = Instant::now() + options.refresh_interval;
-            }
-            dirty = true;
-        }
-
-        let requested_work = worker
-            .is_none()
-            .then(|| next_request(&mut app, Instant::now() >= next_refresh));
-        if let Some(Some(requested_work)) = requested_work {
-            if let WorkerRequest::Domain(tab) = &requested_work {
-                app.domain_mut(*tab).set_refresh_queued(false);
-                app.domain_mut(*tab).set_refreshing(true);
-            }
-            worker = Some(RefreshWorker::spawn(Arc::clone(&source), requested_work)?);
-            dirty = true;
-        }
-
-        if event::poll(EVENT_POLL_INTERVAL).context("failed to poll terminal input")? {
-            match handle_event(
-                &mut app,
-                event::read().context("failed to read terminal input")?,
-            ) {
-                RuntimeAction::Ignore => {}
-                RuntimeAction::Redraw => {
-                    dirty = true;
-                }
-                RuntimeAction::TabChanged => {
-                    if !app.domain_has_data(app.tab)
-                        && worker
-                            .as_ref()
-                            .is_none_or(|active| !active.same_domain(app.tab))
-                    {
-                        if worker.is_some() {
-                            app.domain_mut(app.tab).set_refresh_queued(true);
-                        } else {
-                            app.domain_mut(app.tab).set_refreshing(true);
-                            worker = Some(RefreshWorker::spawn(
-                                Arc::clone(&source),
-                                WorkerRequest::Domain(app.tab),
-                            )?);
-                        }
-                    }
-                    dirty = true;
-                }
-                RuntimeAction::Refresh => {
-                    if worker.is_some() {
-                        app.domain_mut(app.tab).set_refresh_queued(true);
-                    } else {
-                        app.domain_mut(app.tab).set_refreshing(true);
-                        worker = Some(RefreshWorker::spawn(
-                            Arc::clone(&source),
-                            WorkerRequest::Domain(app.tab),
-                        )?);
-                    }
-                    dirty = true;
-                }
-                RuntimeAction::RefreshAll => {
-                    app.domain_mut(Tab::Work).set_refresh_queued(true);
-                    app.domain_mut(Tab::Status).set_refresh_queued(true);
-                    if worker.is_none() {
-                        let requested_tab = next_queued_refresh(&app)
-                            .expect("refresh all always queues both dashboard domains");
-                        app.domain_mut(requested_tab).set_refresh_queued(false);
-                        app.domain_mut(requested_tab).set_refreshing(true);
-                        worker = Some(RefreshWorker::spawn(
-                            Arc::clone(&source),
-                            WorkerRequest::Domain(requested_tab),
-                        )?);
-                    }
-                    dirty = true;
-                }
-                RuntimeAction::DetailRequested => {
-                    dirty = true;
-                }
-                RuntimeAction::Quit => {
-                    if let Some(mut active) = worker.take() {
-                        active.cancel_and_join();
-                    }
-                    return Ok(());
-                }
-            }
-        }
-    }
+    event_loop::run(&mut terminal, source, app, options, externally_cancelled)
 }
 
 fn validate_refresh_interval(interval: Duration) -> Result<()> {
@@ -154,6 +58,7 @@ enum RuntimeAction {
     Redraw,
     TabChanged,
     Refresh,
+    RefreshDetail,
     RefreshAll,
     DetailRequested,
     Quit,
@@ -224,8 +129,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 RuntimeAction::Redraw
             }
             KeyCode::Char('r') => {
-                if app.refresh_plan_detail() {
-                    RuntimeAction::DetailRequested
+                if app.detail.target_plan_id.is_some() {
+                    RuntimeAction::RefreshDetail
                 } else {
                     RuntimeAction::Refresh
                 }
@@ -374,9 +279,17 @@ fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
 
 #[cfg(test)]
 mod tests {
+    static PTY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static PTY_PROVIDER_STARTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
     use jig_tui::require_terminal_with_state;
 
     use super::*;
+    use super::{
+        scheduler::{ScheduledRequest, WorkKind},
+        worker::apply_refresh_result,
+    };
 
     #[test]
     fn terminal_requirement_explains_each_redirect_case() {
@@ -493,6 +406,21 @@ mod tests {
     }
 
     #[test]
+    fn refresh_retries_a_failed_plan_target() {
+        let mut app = App::default();
+        app.detail.request_plan("plan_example".to_string());
+        app.accept_plan_error("plan_example", "detail collection failed".to_string());
+
+        assert_eq!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)
+            ),
+            RuntimeAction::RefreshDetail
+        );
+    }
+
+    #[test]
     fn ignored_and_release_keys_do_not_request_a_redraw() {
         assert_eq!(
             handle_key(
@@ -555,23 +483,18 @@ mod tests {
     }
 
     #[test]
-    fn queued_refresh_prefers_the_visible_domain() {
-        let mut app = App::default();
-        app.domain_mut(Tab::Status).set_refresh_queued(true);
-        app.domain_mut(Tab::Work).set_refresh_queued(true);
-        assert_eq!(next_queued_refresh(&app), Some(Tab::Status));
-
-        app.select_tab(Tab::Work);
-        assert_eq!(next_queued_refresh(&app), Some(Tab::Work));
-    }
-
-    #[test]
     fn worker_errors_are_attributed_to_the_completed_domain() {
         let mut app = App::new(Tab::Work);
         app.domain_mut(Tab::Status).set_refreshing(true);
         apply_refresh_result(
             &mut app,
-            WorkerRequest::Domain(Tab::Status),
+            &ScheduledRequest {
+                generation: 1,
+                sequence: 1,
+                kind: WorkKind::Status(StatusRequest {
+                    timeline_limit: crate::dashboard::TimelineLimit::DEFAULT,
+                }),
+            },
             Err(SourceError::InternalContract {
                 message: "status collection failed".to_string(),
             }),
@@ -638,9 +561,17 @@ mod tests {
             &self,
             _request: StatusRequest,
             phase_changed: &dyn Fn(crate::dashboard::StatusPhase),
-            _cancelled: &dyn Fn() -> bool,
+            cancelled: &dyn Fn() -> bool,
         ) -> Result<StatusRefresh, SourceError> {
             phase_changed(crate::dashboard::StatusPhase::Providers);
+            if std::env::var_os("JIG_UI_PTY_BLOCK_PROVIDER").is_some() {
+                PTY_PROVIDER_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+                while !cancelled() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                eprintln!("JIG_UI_WORKER_CLEANED");
+                return Err(SourceError::Cancelled);
+            }
             phase_changed(crate::dashboard::StatusPhase::LocalEpoch);
             Ok(StatusRefresh {
                 status: crate::dashboard::scenarios::status_snapshot(),
@@ -664,16 +595,23 @@ mod tests {
         if std::env::var_os("JIG_UI_PTY_CHILD").is_none() {
             return;
         }
-        run(
-            PtySource,
-            DashboardOptions::new(InitialTab::Status, Duration::from_secs(3_600)),
-        )
-        .unwrap();
+        let options = DashboardOptions::new(InitialTab::Status, Duration::from_secs(3_600));
+        if std::env::var_os("JIG_UI_PTY_EXTERNAL_CANCEL").is_some() {
+            run_with_cancellation(PtySource, options, || {
+                PTY_PROVIDER_STARTED.load(std::sync::atomic::Ordering::SeqCst)
+            })
+            .unwrap();
+        } else {
+            run(PtySource, options).unwrap();
+        }
     }
 
-    #[test]
     #[cfg(unix)]
-    fn pty_entrypoint_enters_draws_and_restores_after_quit() {
+    fn pty_dashboard_output(
+        block_provider: bool,
+        external_cancel: bool,
+        quit_input: Option<&[u8]>,
+    ) -> String {
         use std::{
             fs::File,
             io::{Read, Write},
@@ -714,7 +652,8 @@ mod tests {
         let stdin = Stdio::from(terminal.try_clone().unwrap());
         let stdout = Stdio::from(terminal.try_clone().unwrap());
         let stderr = Stdio::from(terminal);
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args([
                 "--exact",
                 "terminal::runtime::tests::pty_child_runs_dashboard",
@@ -723,9 +662,18 @@ mod tests {
             .env("JIG_UI_PTY_CHILD", "1")
             .stdin(stdin)
             .stdout(stdout)
-            .stderr(stderr)
-            .spawn()
-            .unwrap();
+            .stderr(stderr);
+        if block_provider {
+            command.env("JIG_UI_PTY_BLOCK_PROVIDER", "1");
+        }
+        if external_cancel {
+            command.env("JIG_UI_PTY_EXTERNAL_CANCEL", "1");
+        }
+        let mut child = command.spawn().unwrap();
+        // `Command` retains its configured `Stdio` handles after spawning. Drop
+        // those parent-side slave descriptors so the controller observes EOF
+        // as soon as the child exits.
+        drop(command);
         let mut reader = controller.try_clone().unwrap();
         let output_reader = thread::spawn(move || {
             let mut output = Vec::new();
@@ -752,8 +700,8 @@ mod tests {
                 let _ = child.wait();
                 panic!("terminal dashboard did not exit after q");
             }
-            if Instant::now() >= next_quit {
-                match controller.write_all(b"q") {
+            if let Some(quit_input) = quit_input.filter(|_| Instant::now() >= next_quit) {
+                match controller.write_all(quit_input) {
                     Ok(()) => {}
                     Err(error)
                         if matches!(
@@ -768,7 +716,16 @@ mod tests {
         };
         assert!(status.success(), "PTY child failed with {status}");
         let output = output_reader.join().unwrap();
-        let output = String::from_utf8_lossy(&output);
+        String::from_utf8_lossy(&output).into_owned()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pty_entrypoint_enters_draws_and_restores_after_quit() {
+        let _guard = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let output = pty_dashboard_output(false, false, Some(b"q"));
         assert!(
             output.contains("\u{1b}[?1049h"),
             "dashboard did not enter the alternate screen"
@@ -781,5 +738,46 @@ mod tests {
             output.contains("Jig"),
             "dashboard did not render into the PTY"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ctrl_c_restores_the_terminal() {
+        let _guard = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let output = pty_dashboard_output(false, false, Some(b"\x03"));
+        assert!(output.contains("\u{1b}[?1049l"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn quit_joins_provider_worker_before_restoring_the_terminal() {
+        let _guard = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let output = pty_dashboard_output(true, false, Some(b"q"));
+        let cleaned = output
+            .find("JIG_UI_WORKER_CLEANED")
+            .expect("provider fixture did not observe cancellation");
+        let restored = output
+            .rfind("\u{1b}[?1049l")
+            .expect("alternate screen was not restored");
+        assert!(
+            cleaned < restored,
+            "worker cleanup happened after restoration"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn external_cancellation_joins_worker_before_terminal_restoration() {
+        let _guard = PTY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let output = pty_dashboard_output(true, true, None);
+        let cleaned = output.find("JIG_UI_WORKER_CLEANED").unwrap();
+        let restored = output.rfind("\u{1b}[?1049l").unwrap();
+        assert!(cleaned < restored);
     }
 }

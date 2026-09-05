@@ -42,6 +42,7 @@ pub(crate) struct App {
     pub(crate) blocked_only: bool,
     pub(crate) package_detail: PackageDetailState,
     pub(crate) detail: DetailState,
+    pub(crate) runtime_notice: Option<String>,
     pending_plan_request: Option<PendingPlanRequest>,
 }
 
@@ -67,6 +68,7 @@ impl Default for App {
             blocked_only: false,
             package_detail: PackageDetailState::default(),
             detail: DetailState::default(),
+            runtime_notice: None,
             pending_plan_request: None,
         }
     }
@@ -92,24 +94,26 @@ impl App {
         self.replace_dashboard(dashboard);
     }
 
-    pub(crate) fn accept_status_refresh(&mut self, refresh: StatusRefresh) {
+    pub(crate) fn accept_status_refresh(&mut self, refresh: StatusRefresh) -> bool {
         let StatusRefresh { status, recorder } = refresh;
-        if self.accept_recorder_snapshot(recorder) {
+        let published_local = self.accept_recorder_snapshot(recorder);
+        if published_local {
             self.recorder.refresh_queued = false;
         }
         self.accept_status_snapshot(status);
+        published_local
     }
 
-    pub(crate) fn accept_recorder_refresh(&mut self, refresh: RecorderRefresh) {
+    pub(crate) fn accept_recorder_refresh(&mut self, refresh: RecorderRefresh) -> bool {
         let RecorderRefresh {
             recorder,
             status_local,
         } = refresh;
-        if self.accept_recorder_snapshot(recorder)
-            && let Some(dashboard) = &mut self.status.data
-        {
+        let published_local = self.accept_recorder_snapshot(recorder);
+        if published_local && let Some(dashboard) = &mut self.status.data {
             dashboard.apply_local_snapshot(status_local);
         }
+        published_local
     }
 
     fn accept_recorder_snapshot(&mut self, snapshot: RecorderSnapshot) -> bool {
@@ -152,15 +156,16 @@ impl App {
         true
     }
 
-    pub(crate) fn accept_status_snapshot(&mut self, snapshot: StatusSnapshot) {
+    pub(crate) fn accept_status_snapshot(&mut self, snapshot: StatusSnapshot) -> bool {
         let dashboard = match Dashboard::from_snapshot(snapshot) {
             Ok(dashboard) => dashboard,
             Err(error) => {
                 self.accept_error(Tab::Status, error);
-                return;
+                return false;
             }
         };
         self.replace_dashboard(dashboard);
+        true
     }
 
     fn replace_dashboard(&mut self, dashboard: Dashboard) {
@@ -473,6 +478,7 @@ impl App {
     pub(crate) fn accept_plan_error(&mut self, plan_id: &str, error: String) {
         if self.detail.loading_plan.as_deref() == Some(plan_id) {
             self.detail.loading_plan = None;
+            self.detail.loading_plan_basis = None;
             self.detail.error = Some(sanitize_text(&error));
         }
     }
@@ -595,7 +601,11 @@ impl App {
         else {
             return false;
         };
-        self.detail.refresh_plan(plan_id.clone());
+        let Some(epoch) = self.recorder.data.as_ref().map(|local| local.epoch_id) else {
+            return false;
+        };
+        self.detail
+            .refresh_plan(plan_id.clone(), PlanBasis::RecorderEpoch(epoch));
         self.queue_plan_request(plan_id);
         true
     }
@@ -604,6 +614,7 @@ impl App {
         let Some(local) = &self.recorder.data else {
             return;
         };
+        self.detail.loading_plan_basis = Some(PlanBasis::RecorderEpoch(local.epoch_id));
         self.pending_plan_request = Some(PendingPlanRequest {
             basis: PlanBasis::RecorderEpoch(local.epoch_id),
             plan_id,
@@ -637,13 +648,21 @@ impl App {
     }
 
     fn reconcile_plan_detail(&mut self, dashboard: &LocalDashboard) {
-        let plan_id = self
-            .detail
-            .plan()
-            .filter(|plan| plan.is_open && plan.basis_epoch != dashboard.epoch_id.get())
-            .map(|plan| plan.raw_plan_id.clone());
+        let plan_id = if self.detail.loading_plan_basis == Some(PlanBasis::Fresh) {
+            None
+        } else {
+            self.detail.loading_plan.clone().or_else(|| {
+                self.detail
+                    .plan()
+                    .filter(|plan| plan.is_open && plan.basis_epoch != dashboard.epoch_id.get())
+                    .map(|plan| plan.raw_plan_id.clone())
+            })
+        };
         if let Some(plan_id) = plan_id {
-            self.detail.refresh_plan(plan_id.clone());
+            self.detail.refresh_plan(
+                plan_id.clone(),
+                PlanBasis::RecorderEpoch(dashboard.epoch_id),
+            );
             self.pending_plan_request = Some(PendingPlanRequest {
                 basis: PlanBasis::RecorderEpoch(dashboard.epoch_id),
                 plan_id,
@@ -725,13 +744,6 @@ impl DomainMut<'_> {
         match &mut self.state {
             DomainMutInner::Status(state) => state.refreshing = refreshing,
             DomainMutInner::Recorder(state) => state.refreshing = refreshing,
-        }
-    }
-
-    pub(crate) fn set_refresh_queued(&mut self, queued: bool) {
-        match &mut self.state {
-            DomainMutInner::Status(state) => state.refresh_queued = queued,
-            DomainMutInner::Recorder(state) => state.refresh_queued = queued,
         }
     }
 }

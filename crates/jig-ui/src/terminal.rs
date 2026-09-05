@@ -26,7 +26,8 @@ pub enum InitialTab {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DashboardOptions {
     pub initial_tab: InitialTab,
-    pub refresh_interval: Duration,
+    pub local_refresh_interval: Duration,
+    pub status_refresh_interval: Duration,
 }
 
 impl DashboardOptions {
@@ -34,7 +35,21 @@ impl DashboardOptions {
     pub const fn new(initial_tab: InitialTab, refresh_interval: Duration) -> Self {
         Self {
             initial_tab,
-            refresh_interval,
+            local_refresh_interval: refresh_interval,
+            status_refresh_interval: refresh_interval,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_refresh_intervals(
+        initial_tab: InitialTab,
+        local_refresh_interval: Duration,
+        status_refresh_interval: Duration,
+    ) -> Self {
+        Self {
+            initial_tab,
+            local_refresh_interval,
+            status_refresh_interval,
         }
     }
 }
@@ -50,4 +65,17 @@ pub fn run(
     options: DashboardOptions,
 ) -> anyhow::Result<()> {
     runtime::run(source, options)
+}
+
+/// Runs the dashboard with an adapter-owned cooperative cancellation signal.
+///
+/// This is used by CLI signal supervision so terminal restoration remains in
+/// the normal Rust drop path.
+#[doc(hidden)]
+pub fn run_with_cancellation(
+    source: impl crate::dashboard::DashboardSource + 'static,
+    options: DashboardOptions,
+    externally_cancelled: impl Fn() -> bool,
+) -> anyhow::Result<()> {
+    runtime::run_with_cancellation(source, options, externally_cancelled)
 }

@@ -76,7 +76,10 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(vec![
             Span::styled(format!(" {refresh}"), refresh_style),
             Span::raw("  "),
-            Span::styled(provider, Style::default().fg(MUTED)),
+            Span::styled(
+                app.runtime_notice.as_deref().unwrap_or(&provider),
+                Style::default().fg(MUTED),
+            ),
         ]),
     ];
     frame.render_widget(Paragraph::new(lines), area);

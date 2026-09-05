@@ -7,6 +7,13 @@ use super::{
     StatusSnapshot,
 };
 
+/// Supplies bounded dashboard observations to the serialized terminal worker.
+///
+/// Implementations must either poll `cancelled` around every potentially
+/// blocking operation or impose an independent finite bound on that operation.
+/// Once cancellation is observed, implementations should return promptly. The
+/// terminal joins the sole worker before restoring terminal state, so an
+/// unbounded implementation would prevent a clean quit.
 pub trait DashboardSource: Send + Sync {
     fn recorder(
         &self,

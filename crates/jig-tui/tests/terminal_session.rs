@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::Read,
     os::fd::{AsRawFd, FromRawFd},
     process::{Command, Stdio},
@@ -85,6 +85,71 @@ fn panic_unwind_clears_and_restores_the_terminal_session() {
         restored.c_lflag & (libc::ECHO | libc::ICANON),
         original.c_lflag & (libc::ECHO | libc::ICANON),
         "terminal flags were not restored during panic unwind"
+    );
+}
+
+#[test]
+fn startup_output_failure_restores_terminal_attributes() {
+    if std::env::var_os("JIG_TUI_STARTUP_FAILURE_CHILD").is_some() {
+        let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        // SAFETY: this isolated child saves and restores its own stdout around
+        // the setup call, and closes the saved duplicate exactly once.
+        let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        assert!(saved_stdout >= 0);
+        // SAFETY: both descriptors are live and owned by this child.
+        assert!(unsafe { libc::dup2(full.as_raw_fd(), libc::STDOUT_FILENO) } >= 0);
+        let result = TerminalSession::enter_with_bracketed_paste("startup failure test");
+        // SAFETY: restore stdout for the test harness, then close the duplicate.
+        assert!(unsafe { libc::dup2(saved_stdout, libc::STDOUT_FILENO) } >= 0);
+        // SAFETY: `saved_stdout` is no longer needed after the successful dup2.
+        unsafe { libc::close(saved_stdout) };
+        let error = result
+            .err()
+            .expect("failing stdout unexpectedly accepted terminal setup");
+        assert!(error.to_string().contains("failed to enter"));
+        return;
+    }
+
+    let (_master, slave) = pseudo_terminal(80, 24).unwrap();
+    let original = terminal_attributes(&slave);
+
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "startup_output_failure_restores_terminal_attributes",
+            "--nocapture",
+        ])
+        .env("JIG_TUI_STARTUP_FAILURE_CHILD", "1")
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "startup-failure child hung");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(
+        status.success(),
+        "startup-failure child failed: {status}: {stderr}"
+    );
+    let restored = terminal_attributes(&slave);
+    assert_eq!(
+        restored.c_lflag & (libc::ECHO | libc::ICANON),
+        original.c_lflag & (libc::ECHO | libc::ICANON),
+        "terminal flags were not restored after startup failure"
     );
 }
 

@@ -349,6 +349,7 @@ pub(crate) struct DetailState {
     pub(crate) decision_index: usize,
     pub(crate) receipt_index: usize,
     pub(crate) loading_plan: Option<String>,
+    pub(crate) loading_plan_basis: Option<crate::dashboard::PlanBasis>,
     pub(crate) target_plan_id: Option<String>,
     pub(crate) item_epoch: Option<RecorderEpochId>,
     pub(crate) item_generated_at_ms: Option<u64>,
@@ -442,14 +443,16 @@ impl DetailState {
 
     pub(crate) fn request_plan(&mut self, plan_id: String) {
         self.loading_plan = Some(plan_id.clone());
+        self.loading_plan_basis = None;
         self.target_plan_id = Some(plan_id);
         self.leaf = None;
         self.error = None;
         self.notice = None;
     }
 
-    pub(crate) fn refresh_plan(&mut self, plan_id: String) {
+    pub(crate) fn refresh_plan(&mut self, plan_id: String, basis: crate::dashboard::PlanBasis) {
         self.loading_plan = Some(plan_id.clone());
+        self.loading_plan_basis = Some(basis);
         self.target_plan_id = Some(plan_id);
         self.error = None;
         self.notice = None;
@@ -464,6 +467,7 @@ impl DetailState {
             return;
         }
         self.loading_plan = None;
+        self.loading_plan_basis = None;
         let leaf_was_open = self.leaf.is_some();
         let decision_id = self.plan().and_then(|plan| {
             plan.decisions
