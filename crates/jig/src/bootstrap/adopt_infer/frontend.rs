@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub(super) use jig_typescript::dev_script::script_looks_like_vite;
+use jig_typescript::workspace::glob_escapes_root;
 pub(super) use jig_typescript::workspace::segment_matches;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -524,11 +525,4 @@ fn unique_frontend_name(name: String, seen: &mut BTreeSet<String>) -> String {
         }
     }
     unreachable!()
-}
-
-fn glob_escapes_root(glob: &str) -> bool {
-    Path::new(glob).is_absolute()
-        || Path::new(glob)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
 }

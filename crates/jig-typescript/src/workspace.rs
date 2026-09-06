@@ -1,3 +1,19 @@
+use std::path::{Component, Path};
+
+/// Reject workspace patterns with an absolute path, parent component, or
+/// platform path prefix. Callers must strip a leading exclusion marker first.
+///
+/// This is a lexical check using host-platform path semantics. Callers still
+/// own glob grammar, traversal, and canonical/symlink containment checks.
+#[must_use]
+pub fn glob_escapes_root(glob: &str) -> bool {
+    let path = Path::new(glob);
+    path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+}
+
 /// Match a complete workspace directory-name segment using literal text and `*`.
 ///
 /// Each star matches zero or more characters. Prefix and suffix matches cannot
@@ -29,6 +45,31 @@ pub fn segment_matches(pattern: &str, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lexical_containment_rejects_parent_components_without_expanding_globs() {
+        for (pattern, expected) in [
+            ("apps/*", false),
+            ("./apps/**", false),
+            ("apps/.../*", false),
+            ("apps/..hidden/*", false),
+            ("", false),
+            (".", false),
+            ("..", true),
+            ("../apps/*", true),
+            ("apps/../web", true),
+            ("apps/*/../../web", true),
+        ] {
+            assert_eq!(glob_escapes_root(pattern), expected, "{pattern}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lexical_containment_rejects_absolute_unix_paths() {
+        assert!(glob_escapes_root("/apps/*"));
+        assert!(glob_escapes_root("//apps/**"));
+    }
 
     #[test]
     fn complete_segments_preserve_literal_order_and_nonoverlapping_edges() {

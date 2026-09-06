@@ -1,9 +1,9 @@
 use std::fs;
 use std::io::{ErrorKind, Read};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use jig_typescript::dev_script::script_looks_like_vite;
+use jig_typescript::{dev_script::script_looks_like_vite, workspace::glob_escapes_root};
 use serde_json::Value;
 
 use crate::file_ops;
@@ -313,13 +313,6 @@ fn canonicalize_excluded_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(canonical)
-}
-
-fn glob_escapes_root(glob: &str) -> bool {
-    Path::new(glob).is_absolute()
-        || Path::new(glob)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
 }
 
 fn expand_segments(
