@@ -348,16 +348,21 @@ timezone = "UTC"
     )
     .unwrap();
 
-    let runtime_dir = repo.path().join(".agent/runtime/loop");
-    fs::create_dir_all(&runtime_dir).unwrap();
-    let schedule_lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(runtime_dir.join("schedule.lock"))
-        .unwrap();
-    schedule_lock.lock_exclusive().unwrap();
+    let schedule_locks = [".agent/.cache/loop", ".agent/runtime/loop"]
+        .map(|relative| {
+            let directory = repo.path().join(relative);
+            fs::create_dir_all(&directory).unwrap();
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(directory.join("schedule.lock"))
+                .unwrap()
+        });
+    for lock in &schedule_locks {
+        lock.lock_exclusive().unwrap();
+    }
     let spawn_dispatch = || {
         Command::new(env!("CARGO_BIN_EXE_jig"))
             .current_dir(repo.path())
@@ -375,7 +380,9 @@ timezone = "UTC"
     std::thread::sleep(Duration::from_millis(250));
     assert!(first.try_wait().unwrap().is_none());
     assert!(second.try_wait().unwrap().is_none());
-    FileExt::unlock(&schedule_lock).unwrap();
+    for lock in &schedule_locks {
+        FileExt::unlock(lock).unwrap();
+    }
 
     let first = first.wait_with_output().unwrap();
     let second = second.wait_with_output().unwrap();
