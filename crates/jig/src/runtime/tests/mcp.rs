@@ -621,31 +621,56 @@ printf '{"summary":"clean","findings":[]}\n' > "$out"
     );
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let held = crate::state::acquire_repository_execution_lease(
-        &ctx,
-        &[jig_contract::ActionEffect::Worktree],
-    )
-    .unwrap();
     let root = temp.path().to_owned();
-    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
-    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let (reviewed_tx, reviewed_rx) = std::sync::mpsc::sync_channel(0);
+    let (continue_tx, continue_rx) = std::sync::mpsc::sync_channel(0);
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
+        struct FinalCheckBoundary {
+            reviewed: std::sync::mpsc::SyncSender<()>,
+            continue_after_lease: std::sync::mpsc::Receiver<()>,
+        }
+
+        impl crate::execution::ExecutionObserver for FinalCheckBoundary {
+            fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+                if matches!(
+                    event,
+                    crate::execution::ExecutionEvent::PhaseFinished {
+                        label: "review",
+                        ..
+                    }
+                ) {
+                    self.reviewed.send(()).unwrap();
+                    self.continue_after_lease.recv().unwrap();
+                }
+            }
+        }
+
+        impl crate::execution::ExecutionCancellation for FinalCheckBoundary {}
+
         let ctx = RepoContext::load_from(&root).unwrap();
-        ready_tx.send(()).unwrap();
-        start_rx.recv().unwrap();
-        let result = call_tool(
+        let mut observer = FinalCheckBoundary {
+            reviewed: reviewed_tx,
+            continue_after_lease: continue_rx,
+        };
+        let result = call_tool_with_observer(
             &ctx,
             tool::WORK_REFINE,
             json!({"plan_id": "plan_1", "max_iterations": 1}),
+            &mut observer,
         )
         .map_err(|error| error.to_string());
         let _ = result_tx.send(result);
     });
 
-    ready_rx.recv().unwrap();
-    start_tx.send(()).unwrap();
-    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    reviewed_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let held = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::Worktree],
+    )
+    .unwrap();
+    continue_tx.send(()).unwrap();
+    let timely = result_rx.recv_timeout(Duration::from_secs(15));
     drop(held);
     let result = match timely {
         Ok(result) => result,

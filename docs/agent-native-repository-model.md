@@ -249,7 +249,7 @@ selectors.
 
 `jig info` is the static discovery surface for workspace, component, action,
 target, profile, and configuration provenance. `jig status` is the dynamic
-surface for runs, work, gates, loops, and configured providers. The distinction
+surface for local runs, work, gates, loops, and repository state. The distinction
 prevents another overlapping inspection command.
 
 ## Agent and MCP experience

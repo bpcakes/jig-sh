@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 pub mod repository;
 pub mod run;
-pub mod status_provider;
 
 pub use repository::{
     ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,

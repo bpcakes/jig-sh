@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
+pub(super) use jig_typescript::dev_script::script_looks_like_vite;
+use jig_typescript::workspace::glob_escapes_root;
+pub(super) use jig_typescript::workspace::segment_matches;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_yaml_ng::Value as YamlValue;
@@ -400,24 +403,6 @@ fn non_empty_script<'a>(
         .filter(|value| !value.trim().is_empty())
 }
 
-pub(super) fn script_looks_like_vite(value: &str) -> bool {
-    let tokens = value
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
-        .map(|token| token.trim_matches(['"', '\'']))
-        .filter(|token| !token.is_empty())
-        .map(|token| token.rsplit('/').next().unwrap_or(token))
-        .collect::<Vec<_>>();
-    let Some(vite_index) = tokens
-        .iter()
-        .position(|token| *token == "vite" || token.starts_with("vite@"))
-    else {
-        return false;
-    };
-    !tokens[vite_index + 1..]
-        .iter()
-        .any(|token| matches!(*token, "build" | "preview" | "optimize"))
-}
-
 fn script_looks_like_astro(value: &str) -> bool {
     let tokens = value
         .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
@@ -540,40 +525,4 @@ fn unique_frontend_name(name: String, seen: &mut BTreeSet<String>) -> String {
         }
     }
     unreachable!()
-}
-
-pub(super) fn segment_matches(pattern: &str, name: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == name;
-    };
-    let mut remaining = name;
-    let mut parts = pattern.split('*').peekable();
-    if let Some(first) = parts.next()
-        && !first.is_empty()
-    {
-        let Some(stripped) = remaining.strip_prefix(first) else {
-            return false;
-        };
-        remaining = stripped;
-    }
-    while let Some(part) = parts.next() {
-        if part.is_empty() {
-            continue;
-        }
-        let Some(index) = remaining.find(part) else {
-            return false;
-        };
-        if parts.peek().is_none() && !pattern.ends_with('*') {
-            return remaining[index..].ends_with(part);
-        }
-        remaining = &remaining[index + part.len()..];
-    }
-    pattern.ends_with('*') || remaining.is_empty()
-}
-
-fn glob_escapes_root(glob: &str) -> bool {
-    Path::new(glob).is_absolute()
-        || Path::new(glob)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
 }

@@ -413,3 +413,39 @@ fn pnpm_workspace_inline_comments_are_ignored() {
 
     assert_eq!(globs, vec!["apps/*"]);
 }
+
+#[test]
+fn workspace_discovery_requires_nonoverlapping_glob_edges() {
+    let temp = tempdir().unwrap();
+    fs::write(
+        temp.path().join("package.json"),
+        r#"{"workspaces":["apps/ab*bc"]}"#,
+    )
+    .unwrap();
+    for name in ["abc", "abbc"] {
+        let dir = temp.path().join("apps").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("package.json"),
+            serde_json::json!({
+                "name": name, "scripts": {"dev": "vite"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let specs = discover(temp.path(), "example", "localhost", "npm").unwrap();
+    assert_eq!(
+        specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>(),
+        ["abbc"]
+    );
+}
+
+#[test]
+fn proxy_workspace_segments_keep_the_restricted_wildcard_grammar() {
+    assert!(segment_matches("pkg-**-ui", "pkg-a-b-ui"));
+    assert!(!segment_matches("pkg-*-*-ui", "pkg-a-b-ui"));
+}

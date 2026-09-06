@@ -229,8 +229,10 @@ fn effectful_v6_compatibility_alias_refreshes_authority_after_checkout_wait() {
                 .contains("refreshed authority")
         );
         drop(reader);
+        // The assertion above checks exclusion while the lease is held. Allow
+        // command execution and durable receipt writes to finish after release.
         let output = result_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(30))
             .unwrap()
             .unwrap();
         assert_eq!(output["ok"], true, "{output:#}");

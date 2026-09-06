@@ -15,7 +15,8 @@ use crate::context::RepoContext;
 use crate::git_receipts::{resolve_empty_tree_for_unborn_repository, resolve_git_commit};
 use crate::tool_defs::{args, tool};
 
-use super::jsonl::{append_jsonl, append_text, read_jsonl, read_jsonl_with_cancellation};
+use super::jsonl::{append_jsonl, read_dashboard_jsonl, read_jsonl};
+use super::plan_files::{append_plan_body, create_plan_body, plan_body_path, validate_plan_id};
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
 use super::records::{PlanBaseline, PlanEvent};
 use super::support::{AdvisoryLeaseFile, ensure_state_layout, new_id, now_ms, rel_path};
@@ -86,13 +87,8 @@ pub(crate) fn prepare_plan_open(
 }
 
 pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) -> Result<Value> {
-    ensure_state_layout(ctx)?;
     let plan_id = new_id("plan");
-    let plan_path = ctx.plan_body_path(&plan_id);
-    if let Some(parent) = plan_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&plan_path, request.body)?;
+    let plan_path = create_plan_body(ctx, &plan_id, &request.body)?;
 
     let event = PlanEvent::open_with_baseline(
         new_id("plan-event"),
@@ -160,11 +156,11 @@ fn plan_baseline_for_open(ctx: &RepoContext, requested: Option<&str>) -> Result<
 }
 
 pub(crate) fn plans_append(ctx: &RepoContext, request: PlanAppendRequest) -> Result<Value> {
-    ensure_state_layout(ctx)?;
+    validate_plan_id(&request.plan_id)?;
     ensure_plan_is_open(ctx, &request.plan_id)?;
     let body = plan_append_body(request.body, request.body_file)?;
-    let plan_path = ctx.plan_body_path(&request.plan_id);
-    append_text(&plan_path, format!("\n\n{body}").as_bytes())?;
+    let plan_path = plan_body_path(ctx, &request.plan_id)?;
+    append_plan_body(ctx, &request.plan_id, format!("\n\n{body}").as_bytes())?;
 
     let event = PlanEvent::append(
         new_id("plan-event"),
@@ -268,7 +264,8 @@ fn acquire_plan_finish_lease(ctx: &RepoContext, plan_id: &str) -> Result<PlanFin
 }
 
 fn open_plan_execution_lease(ctx: &RepoContext, plan_id: &str) -> Result<File> {
-    validate_plan_id_for_lease(plan_id)?;
+    validate_plan_id(plan_id)
+        .context("plan id cannot be used as a safe execution lease filename")?;
     ensure_state_layout(ctx)?;
     let lease_dir = ctx.root().join(PLAN_EXECUTION_LEASE_DIR);
     fs::create_dir_all(&lease_dir)
@@ -286,18 +283,6 @@ fn open_plan_execution_lease(ctx: &RepoContext, plan_id: &str) -> Result<File> {
                 path.display()
             )
         })
-}
-
-fn validate_plan_id_for_lease(plan_id: &str) -> Result<()> {
-    if plan_id.is_empty()
-        || plan_id.len() > 128
-        || !plan_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
-        bail!("plan id cannot be used as a safe execution lease filename");
-    }
-    Ok(())
 }
 
 pub(crate) fn ensure_plan_is_open(ctx: &RepoContext, plan_id: &str) -> Result<()> {
@@ -327,7 +312,6 @@ pub(crate) fn ensure_plan_exists_with_cancellation(
 }
 
 pub(crate) fn plan_status(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanStatus>> {
-    ensure_state_layout(ctx)?;
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     Ok(plan_status_from_events(&events, plan_id))
 }
@@ -338,9 +322,7 @@ pub(crate) fn plan_status_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<PlanStatus>> {
     ensure_plan_scan_active(cancelled)?;
-    ensure_state_layout(ctx)?;
-    let events =
-        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
     let mut opened = false;
     let mut closed = false;
     for event in &events {
@@ -366,7 +348,6 @@ pub(crate) fn plan_status_with_cancellation(
 }
 
 pub(crate) fn open_plan_summaries(ctx: &RepoContext) -> Result<Vec<Value>> {
-    ensure_state_layout(ctx)?;
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     Ok(open_plans(&events))
 }
@@ -374,7 +355,6 @@ pub(crate) fn open_plan_summaries(ctx: &RepoContext) -> Result<Vec<Value>> {
 pub(crate) fn plan_baseline(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanBaseline>> {
     #[cfg(test)]
     PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
-    ensure_state_layout(ctx)?;
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     unique_plan_baselines(&events, &BTreeSet::from([plan_id.to_string()]))?
         .remove(plan_id)
@@ -389,9 +369,7 @@ pub(crate) fn plan_baseline_with_cancellation(
     #[cfg(test)]
     PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
     ensure_plan_scan_active(cancelled)?;
-    ensure_state_layout(ctx)?;
-    let events =
-        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
     ensure_plan_scan_active(cancelled)?;
     unique_plan_baselines(&events, &BTreeSet::from([plan_id.to_string()]))?
         .remove(plan_id)
@@ -406,9 +384,7 @@ pub(crate) fn plan_baselines_with_cancellation(
     #[cfg(test)]
     PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
     ensure_plan_scan_active(cancelled)?;
-    ensure_state_layout(ctx)?;
-    let events =
-        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
     let baselines = unique_plan_baselines(&events, plan_ids)?;
     ensure_plan_scan_active(cancelled)?;
     Ok(baselines)
@@ -449,9 +425,7 @@ pub(crate) fn open_plan_summaries_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<Value>> {
     ensure_plan_scan_active(cancelled)?;
-    ensure_state_layout(ctx)?;
-    let events =
-        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
     let mut closed = HashSet::new();
     let mut opened = BTreeMap::<String, (&str, Option<&str>, Option<&PlanBaseline>)>::new();
     for event in &events {
@@ -501,12 +475,7 @@ pub(crate) fn seed_open_plan_for_test(
     title: &str,
     body: &str,
 ) -> Result<()> {
-    ensure_state_layout(ctx)?;
-    let plan_path = ctx.plan_body_path(plan_id);
-    if let Some(parent) = plan_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&plan_path, body)?;
+    let plan_path = create_plan_body(ctx, plan_id, body)?;
     let event = PlanEvent::open(
         new_id("plan-event"),
         plan_id.to_string(),

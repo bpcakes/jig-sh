@@ -1,8 +1,9 @@
 use std::fs;
 use std::io::{ErrorKind, Read};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use jig_typescript::{dev_script::script_looks_like_vite, workspace::glob_escapes_root};
 use serde_json::Value;
 
 use crate::file_ops;
@@ -314,13 +315,6 @@ fn canonicalize_excluded_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(canonical)
 }
 
-fn glob_escapes_root(glob: &str) -> bool {
-    Path::new(glob).is_absolute()
-        || Path::new(glob)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
-}
-
 fn expand_segments(
     canonical_root: Option<&Path>,
     base: &Path,
@@ -457,42 +451,12 @@ fn path_is_within_root(canonical_root: Option<&Path>, path: &Path) -> bool {
 }
 
 fn segment_matches(pattern: &str, name: &str) -> bool {
-    if pattern == "*" || pattern == "**" {
-        return true;
-    }
-    // Package workspace patterns support the common single-wildcard segment
-    // shape (`apps/*`, `pkg-*-shared`), not full shell glob semantics.
-    let Some(index) = pattern.find('*') else {
-        return pattern == name;
-    };
-    let (prefix, suffix) = pattern.split_at(index);
-    let suffix = suffix.trim_start_matches('*');
-    name.starts_with(prefix) && name.ends_with(suffix)
-}
-
-fn script_looks_like_vite(value: &str) -> bool {
-    let tokens: Vec<_> = value
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
-        .filter_map(normalized_script_token)
-        .collect();
-    let Some(vite_index) = tokens.iter().position(|token| is_vite_token(token)) else {
-        return false;
-    };
-    !tokens[vite_index + 1..]
-        .iter()
-        .any(|token| matches!(*token, "build" | "preview" | "optimize"))
-}
-
-fn normalized_script_token(token: &str) -> Option<&str> {
-    let token = token.trim_matches(['"', '\'']);
-    if token.is_empty() {
-        return None;
-    }
-    Some(token.rsplit('/').next().unwrap_or(token))
-}
-
-fn is_vite_token(token: &str) -> bool {
-    token == "vite" || token.starts_with("vite@")
+    // Keep proxy discovery's single wildcard-group grammar; adoption also
+    // accepts separated wildcard groups. Both use complete-segment matching.
+    let supported = pattern
+        .split_once('*')
+        .is_none_or(|(_, suffix)| !suffix.trim_start_matches('*').contains('*'));
+    supported && jig_typescript::workspace::segment_matches(pattern, name)
 }
 
 #[cfg(test)]

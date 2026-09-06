@@ -2,10 +2,12 @@ use std::io::Read;
 use std::process::{ChildStderr, ChildStdin, Command};
 use std::time::{Duration, Instant};
 
+use crate::{ChildPipe, NonblockingPipe};
+
 use super::{
     BoundedProcessOutput, OWNED_PROCESS_OUTPUT_LIMIT, OutputDrain, OwnedProcess,
     OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError, ProcessDeadline,
-    ProcessPipe, spawn_owned_process,
+    spawn_owned_process,
 };
 
 struct IgnoreProcessActivity;
@@ -44,7 +46,7 @@ impl std::error::Error for OwnedProcessTreeInteractionError {
 }
 
 pub struct ProcessInteractionStdout {
-    pipe: ProcessPipe,
+    pipe: NonblockingPipe,
     stderr: Option<OutputDrain>,
 }
 
@@ -53,12 +55,10 @@ impl ProcessInteractionStdout {
         stdout: std::process::ChildStdout,
         stderr: Option<ChildStderr>,
     ) -> std::io::Result<Self> {
-        let pipe = ProcessPipe::Stdout(stdout);
-        pipe.prepare()?;
+        let pipe = ChildPipe::Stdout(stdout)
+            .prepare("nonblocking process-pipe reads are unavailable on this platform")?;
         let stderr = stderr
-            .map(|stderr| {
-                OutputDrain::start(ProcessPipe::Stderr(stderr), OWNED_PROCESS_OUTPUT_LIMIT)
-            })
+            .map(|stderr| OutputDrain::start(ChildPipe::Stderr(stderr), OWNED_PROCESS_OUTPUT_LIMIT))
             .transpose()?;
         Ok(Self { pipe, stderr })
     }

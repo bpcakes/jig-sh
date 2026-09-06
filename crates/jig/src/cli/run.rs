@@ -27,7 +27,16 @@ pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
     let json_output = cli.json;
     let report_json_errors = should_report_json_command_errors(json_output, &cli.command);
-    let result = validate_launcher_repository_scope(&cli).and_then(|()| run_command(cli));
+    let name_ui_errors = json_output && matches!(cli.command, CommandKind::Ui(_));
+    let result = validate_launcher_repository_scope(&cli)
+        .map_err(|error| {
+            if name_ui_errors {
+                super::json_command_error("ui", error)
+            } else {
+                error
+            }
+        })
+        .and_then(|()| run_command(cli));
     if report_json_errors {
         return report_json_command_error(result);
     }
@@ -207,8 +216,14 @@ fn run_command(cli: Cli) -> Result<()> {
             mcp::serve(&ctx)
         }
         CommandKind::Ui(opts) => {
-            let ctx = RepoContext::load()?;
-            ui::serve(&ctx, opts, json_output)
+            let ctx = RepoContext::load().map_err(|error| {
+                if json_output {
+                    super::json_command_error("ui", error)
+                } else {
+                    error
+                }
+            })?;
+            ui::run(ctx, opts, json_output)
         }
         CommandKind::Doctor => {
             let output = doctor::run()?;
@@ -258,7 +273,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 return emit(json_output, HumanOutput::RunStatus, &output);
             }
             if opts.tui {
-                return status::tui::run(
+                return ui::run_status(
                     ctx,
                     std::time::Duration::from_secs(opts.effective_refresh_seconds()),
                 );
@@ -270,18 +285,7 @@ fn run_command(cli: Cli) -> Result<()> {
             #[cfg(all(unix, not(test)))]
             let cancellation = signal_session.cancellation();
             #[cfg(all(unix, not(test)))]
-            let mut observer =
-                crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
-                    cancellation.cancelled()
-                });
-            #[cfg(all(unix, not(test)))]
-            let outcome = status::snapshot_with_cancellation_and_observer(
-                &ctx,
-                &|| cancellation.cancelled(),
-                &mut observer,
-            );
-            #[cfg(all(unix, not(test)))]
-            let outcome = observer.finish_with(outcome);
+            let outcome = status::snapshot_with_cancellation(&ctx, &|| cancellation.cancelled());
             #[cfg(all(unix, not(test)))]
             let outcome = crate::codex::finish_signal_supervised(
                 outcome,
@@ -564,6 +568,15 @@ fn report_json_command_error(result: Result<()>) -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if is_structured_json_failure(&error) => Err(error),
         Err(error) if is_json_output_already_emitted(&error) => Err(error),
+        Err(error) if error.is::<super::structured_error::JsonCommandError>() => {
+            let named = error
+                .downcast_ref::<super::structured_error::JsonCommandError>()
+                .expect("checked named JSON command error");
+            let mut payload = json_error_payload("command_failed", &named.to_string(), 1);
+            payload["command"] = serde_json::json!(named.command);
+            print_json(&payload)?;
+            Err(json_reported_error(1))
+        }
         Err(error) => {
             print_json(&json_error_payload(
                 "command_failed",

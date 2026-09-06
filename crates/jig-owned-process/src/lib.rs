@@ -1,7 +1,9 @@
+mod pipe;
 mod process;
 
 pub mod unix;
 
+pub use pipe::{ChildPipe, NonblockingPipe};
 pub use process::interaction;
 pub use process::{
     BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError,

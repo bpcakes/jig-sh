@@ -451,6 +451,36 @@ fn declared_workspaces_limit_frontend_app_candidates() {
 }
 
 #[test]
+fn adoption_ignores_parent_components_in_positive_and_exclusion_globs() {
+    let temp = tempfile::tempdir().unwrap();
+    for directory in ["apps/web", "extra/web"] {
+        let directory = temp.path().join(directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("package.json"),
+            r#"{"scripts":{
+                "dev":"vite",
+                "lint":"eslint .",
+                "typecheck":"tsc --noEmit",
+                "build:bundle":"vite build",
+                "test:coverage":"vitest run --coverage"
+            }}"#,
+        )
+        .unwrap();
+    }
+    fs::write(
+        temp.path().join("package.json"),
+        r#"{"workspaces":["apps/*","apps/../extra/*","!apps/../apps/web"]}"#,
+    )
+    .unwrap();
+
+    let inference = infer_adopt_answers(temp.path());
+
+    assert_eq!(inference.frontend_apps.len(), 1);
+    assert_eq!(inference.frontend_apps[0].dir, "apps/web");
+}
+
+#[test]
 fn workspace_exclusion_globs_remove_frontend_candidates() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join("packages/web")).unwrap();
@@ -608,4 +638,36 @@ fn explicit_empty_workspaces_suppress_frontend_fallback_scan() {
     let inference = infer_adopt_answers(temp.path());
 
     assert!(inference.frontend_apps.is_empty());
+}
+
+#[test]
+fn frontend_discovery_requires_nonoverlapping_glob_edges() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("package.json"),
+        r#"{"workspaces":["apps/ab*bc"]}"#,
+    )
+    .unwrap();
+    for name in ["abc", "abbc"] {
+        let dir = temp.path().join("apps").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("package.json"),
+            serde_json::json!({
+                "scripts": {"dev": "vite", "lint": "eslint .", "typecheck": "tsc",
+                    "build:bundle": "vite build", "test:coverage": "vitest run --coverage"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let inferred = infer_frontend_apps_with_metadata(temp.path(), None, &mut Vec::new());
+    assert_eq!(
+        inferred
+            .apps
+            .iter()
+            .map(|app| app.dir.as_str())
+            .collect::<Vec<_>>(),
+        ["apps/abbc"]
+    );
 }

@@ -1,7 +1,8 @@
 use super::*;
 use crate::cancellation::ensure_status_collection_active;
 use crate::command::LoopStatusRequest;
-use crate::runtime::loops::occurrence::OccurrenceStore;
+use crate::runtime::loops::dashboard::{attempt_status, lease_status, workflow_status};
+use crate::runtime::loops::occurrence::{OccurrenceStore, ScheduleOccurrence};
 
 #[cfg(test)]
 pub(in crate::runtime::loops) fn status(
@@ -19,12 +20,35 @@ pub(in crate::runtime::loops) fn status_with_cancellation(
     status_at_with_cancellation(ctx, request, cancelled, now_ms())
 }
 
+pub(in crate::runtime::loops) fn typed_status_with_cancellation(
+    ctx: &RepoContext,
+    request: LoopStatusRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+    typed_status_at_with_cancellation(ctx, request, cancelled, now_ms())
+}
+
 pub(in crate::runtime::loops) fn status_at_with_cancellation(
     ctx: &RepoContext,
     request: LoopStatusRequest,
     cancelled: &dyn Fn() -> bool,
     checked_at_ms: u64,
 ) -> Result<Value> {
+    serde_json::to_value(typed_status_at_with_cancellation(
+        ctx,
+        request,
+        cancelled,
+        checked_at_ms,
+    )?)
+    .map_err(Into::into)
+}
+
+fn typed_status_at_with_cancellation(
+    ctx: &RepoContext,
+    request: LoopStatusRequest,
+    cancelled: &dyn Fn() -> bool,
+    checked_at_ms: u64,
+) -> Result<jig_ui::dashboard::StatusLoopObservation> {
     ensure_status_active(cancelled)?;
     let resolved_workflows = if let Some(workflow) = request.workflow.as_deref() {
         vec![resolve_workflow(
@@ -70,7 +94,7 @@ pub(in crate::runtime::loops) fn status_at_with_cancellation(
     let workflows = resolved_workflows
         .into_iter()
         .map(|workflow| {
-            let mut value = workflow.value();
+            let mut view = workflow_status(&workflow);
             if let Some(schedule) = workflow.schedule.as_ref() {
                 let latest = OccurrenceStore::latest_for_workflow(&occurrences, &workflow.id);
                 match schedule.window(
@@ -78,25 +102,29 @@ pub(in crate::runtime::loops) fn status_at_with_cancellation(
                     latest.as_ref().map(|record| record.scheduled_at_ms),
                 ) {
                     Ok(window) => {
-                        value["schedule_state"] = json!({
-                            "due_at_ms": window.due_at_ms,
-                            "next_at_ms": window.next_at_ms,
-                            "last_scheduled_at_ms": latest.as_ref().map(|record| record.scheduled_at_ms),
-                            "last_status": latest.as_ref().map(|record| record.status.as_str()),
+                        view.schedule_state = Some(jig_ui::dashboard::LoopScheduleState {
+                            due_at_ms: window.due_at_ms,
+                            next_at_ms: window.next_at_ms,
+                            last_scheduled_at_ms: latest
+                                .as_ref()
+                                .map(|record| record.scheduled_at_ms),
+                            last_status: latest
+                                .as_ref()
+                                .map(|record| record.status.as_str().to_string()),
                         });
                     }
                     Err(error) => {
                         let error = format!("Failed to evaluate workflow schedule: {error:#}");
-                        value["schedule_state_error"] = error.clone().into();
-                        schedule_state_errors.push(json!({
-                            "kind": "workflow_schedule",
-                            "workflow_id": workflow.id,
-                            "error": error,
-                        }));
+                        view.schedule_state_error = Some(error.clone());
+                        schedule_state_errors.push(jig_ui::dashboard::LoopStateError {
+                            kind: "workflow_schedule".to_string(),
+                            workflow_id: Some(workflow.id.clone()),
+                            error,
+                        });
                     }
                 }
             }
-            value
+            view
         })
         .collect::<Vec<_>>();
     let scheduled_needs_attention = occurrences
@@ -105,21 +133,35 @@ pub(in crate::runtime::loops) fn status_at_with_cancellation(
         .cloned()
         .collect::<Vec<_>>();
 
-    Ok(json!({
-        "ok": schedule_state_errors.is_empty(),
-        "command": "loop status",
-        "workflows": workflows,
-        "leases": leases,
-        "attempts": attempts,
-        "scheduled_occurrences": occurrences,
-        "waiting_attempts": attempt_sections.waiting,
-        "state_error_count": schedule_state_errors.len(),
-        "state_errors": schedule_state_errors,
-        "needs_attention": {
-            "exhausted_attempts": attempt_sections.needs_attention,
-            "scheduled_occurrences": scheduled_needs_attention,
+    Ok(jig_ui::dashboard::StatusLoopObservation {
+        ok: schedule_state_errors.is_empty(),
+        command: "loop status".to_string(),
+        workflows,
+        leases: leases.iter().map(lease_status).collect(),
+        attempts: attempts.iter().map(attempt_status).collect(),
+        scheduled_occurrences: occurrences
+            .iter()
+            .map(ScheduleOccurrence::status_view)
+            .collect(),
+        waiting_attempts: attempt_sections
+            .waiting
+            .iter()
+            .map(attempt_status)
+            .collect(),
+        state_error_count: u64::try_from(schedule_state_errors.len()).unwrap_or(u64::MAX),
+        state_errors: schedule_state_errors,
+        needs_attention: jig_ui::dashboard::StatusLoopAttention {
+            exhausted_attempts: attempt_sections
+                .needs_attention
+                .iter()
+                .map(attempt_status)
+                .collect(),
+            scheduled_occurrences: scheduled_needs_attention
+                .iter()
+                .map(ScheduleOccurrence::status_view)
+                .collect(),
         },
-    }))
+    })
 }
 
 fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {

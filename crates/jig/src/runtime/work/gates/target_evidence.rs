@@ -62,6 +62,33 @@ impl TargetEvidenceEvaluation {
             "requires_time_validity": receipt.requires_time_validity,
         })
     }
+
+    fn status_view(&self) -> jig_ui::dashboard::StatusEvidenceTarget {
+        let receipt = &self.receipt;
+        jig_ui::dashboard::StatusEvidenceTarget {
+            target: self.target.clone(),
+            status: self.outcome.as_str().to_string(),
+            receipt_id: receipt.receipt_id.clone(),
+            run_id: self.run_id.clone(),
+            exit_status: receipt.exit_status,
+            ended_at_ms: receipt.ended_at_ms,
+            config_digest: self.config_digest.clone(),
+            expected_config_digest: self.expected_config_digest.clone(),
+            input_digest: self.input_digest.clone(),
+            expected_input_digest: self.expected_input_digest.clone(),
+            freshness: receipt.freshness.as_str().to_string(),
+            freshness_reason: receipt.freshness_reason.clone(),
+            changed_paths: receipt.changed_paths.clone(),
+            changed_path_count: receipt.changed_path_count,
+            changed_paths_truncated: receipt.changed_paths_truncated,
+            changed_paths_digest: receipt.changed_paths_digest.clone(),
+            diff_summary: receipt.diff_summary.clone(),
+            receipt_worktree_fingerprint_error: receipt.receipt_worktree_fingerprint_error.clone(),
+            current_worktree_fingerprint_error: receipt.current_worktree_fingerprint_error.clone(),
+            valid_until_ms: receipt.valid_until_ms,
+            requires_time_validity: receipt.requires_time_validity,
+        }
+    }
 }
 
 impl EvidenceGateEvaluation {
@@ -200,6 +227,30 @@ impl EvidenceGateEvaluation {
             value["index_error"] = Value::String(error.clone());
         }
         value
+    }
+
+    pub(super) fn status_view(&self) -> jig_ui::dashboard::StatusEvidenceGate {
+        let (target, profile) = match &self.selector {
+            WorkEvidenceSelector::Target(target) => (Some(target.to_string()), None),
+            WorkEvidenceSelector::Profile(profile) => (None, Some(profile.to_string())),
+        };
+        jig_ui::dashboard::StatusEvidenceGate {
+            id: self.id.clone(),
+            required: self.required,
+            target,
+            profile,
+            conclusion: self.conclusion.to_string(),
+            status: self.outcome.as_str().to_string(),
+            run_id: self.run_id.clone(),
+            freshness: self.freshness.as_str().to_string(),
+            freshness_reason: evidence_freshness_reason(self.freshness).to_string(),
+            targets: self
+                .targets
+                .iter()
+                .map(TargetEvidenceEvaluation::status_view)
+                .collect(),
+            index_error: self.index_error.clone(),
+        }
     }
 
     pub(super) fn to_latest_evidence(&self) -> Option<Value> {

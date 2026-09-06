@@ -133,6 +133,17 @@ pub(in crate::cli) fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {
         CommandKind::Status(opts) if opts.command.is_some() && opts.tui => {
             "a status subject cannot be combined with `--tui`"
         }
+        CommandKind::Ui(opts) if opts.retired_port.is_some() => {
+            "the `jig ui` browser server and `--port` option were removed in 0.3.0; use `jig ui` for the terminal dashboard or `jig ui --json` for one-shot data (`--port` will stop parsing in 0.4.0)"
+        }
+        CommandKind::Ui(opts) if cli.json && opts.refresh_seconds.is_some() => {
+            "`--refresh-seconds` cannot be combined with `--json`"
+        }
+        CommandKind::Ui(opts)
+            if cli.json && opts.plan.is_some() && opts.timeline_limit.is_some() =>
+        {
+            "`--timeline-limit` cannot be combined with `--plan` in JSON mode"
+        }
         CommandKind::Work(WorkCommand::Start(opts)) if cli.json && opts.print_plan_id => {
             "`--print-plan-id` cannot be combined with `--json`"
         }

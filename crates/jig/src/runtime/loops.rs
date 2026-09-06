@@ -7,6 +7,7 @@ use crate::execution::ExecutionControl;
 
 mod authority;
 mod codex_task;
+mod dashboard;
 mod engine;
 mod git_path;
 mod github;
@@ -60,4 +61,12 @@ pub(super) fn status_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     engine::status_with_cancellation(ctx, request, cancelled)
+}
+
+pub(super) fn typed_status_with_cancellation(
+    ctx: &RepoContext,
+    request: LoopStatusRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+    engine::typed_status_with_cancellation(ctx, request, cancelled)
 }

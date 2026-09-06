@@ -19,7 +19,7 @@ use crate::backend::{
 };
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
-    RustMigrationLayout, StatusConfig, config_app_dirs_match, default_codex_marketplace_plugins,
+    RustMigrationLayout, config_app_dirs_match, default_codex_marketplace_plugins,
     validate_gate_path_pattern, validate_schema_docs_dir, validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
@@ -111,7 +111,6 @@ pub(super) struct RenderAnswers {
     frontend_workspace_roots: Vec<String>,
     generated_frontend_dev_apps: Vec<FrontendApp>,
     vault: vault::VaultAnswers,
-    status: StatusConfig,
     execution: ExecutionConfig,
     agent_tooling: AgentToolingAnswers,
 }

@@ -204,7 +204,7 @@ fn run_review_gate(
     let skill = gate.skill.as_str();
     let threshold = gate.threshold;
     let schema = review_output_schema();
-    let prompt = review_prompt(ctx, plan_id, gate);
+    let prompt = review_prompt(ctx, plan_id, gate)?;
     let schema_hash = hash_json(&schema)?;
     let prompt_hash = hash_text(&prompt);
     let started = now_ms();

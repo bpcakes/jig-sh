@@ -139,9 +139,6 @@ scope = "repo"
 scope_id = "scope_123"
 allow_global = false
 
-[status]
-providers = []
-
 [execution]
 command_timeout_seconds = 300
 command_output_limit_bytes = 1048576

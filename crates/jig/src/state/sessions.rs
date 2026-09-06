@@ -10,7 +10,9 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
-use super::jsonl::{append_jsonl, read_jsonl, read_jsonl_with_cancellation, scan_jsonl_raw};
+use super::jsonl::{
+    append_jsonl, read_dashboard_jsonl, read_jsonl, scan_dashboard_jsonl_raw, scan_jsonl_raw,
+};
 use super::plans::open_plans;
 use super::privacy::{redact_repository_root, repository_root_spellings};
 use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_state_tool};
@@ -21,7 +23,7 @@ use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
 
-fn public_source_path(ctx: &RepoContext) -> String {
+pub(crate) fn public_source_path(ctx: &RepoContext) -> String {
     redact_repository_root(ctx.source_path(), &repository_root_spellings(ctx.root()))
 }
 
@@ -118,15 +120,23 @@ pub(crate) fn current_session(ctx: &RepoContext) -> Result<Option<String>> {
 }
 
 pub(super) fn read_session_events(path: &Path) -> Result<Vec<SessionEvent>> {
-    read_session_events_with_cancellation(path, &|| false)
+    read_session_events_impl(path, &|| false, false)
 }
 
 pub(super) fn read_session_events_with_cancellation(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<SessionEvent>> {
+    read_session_events_impl(path, cancelled, true)
+}
+
+fn read_session_events_impl(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    bounded: bool,
+) -> Result<Vec<SessionEvent>> {
     let mut canonical = HashMap::<String, (SessionEventEnvelope, u64)>::new();
-    scan_jsonl_raw(path, cancelled, |record| {
+    let mut visit = |record: super::jsonl::RawJsonlRecord<'_>| {
         let envelope =
             serde_json::from_slice::<SessionEventEnvelope>(record.bytes).with_context(|| {
                 format!(
@@ -151,7 +161,12 @@ pub(super) fn read_session_events_with_cancellation(
             }
         }
         Ok(())
-    })?;
+    };
+    if bounded {
+        scan_dashboard_jsonl_raw(path, cancelled, &mut visit)?;
+    } else {
+        scan_jsonl_raw(path, cancelled, &mut visit)?;
+    }
 
     let mut canonical = canonical
         .into_values()
@@ -171,8 +186,8 @@ pub(super) fn read_session_events_with_cancellation(
 pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
     let sessions = read_session_events(&ctx.state_file("sessions.jsonl"))?;
     let plans = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
-    let receipts = summarize_receipts(&ctx.state_file("receipts.jsonl"), 5, &|| false)?;
-    let decisions = summarize_decisions(&ctx.state_file("decisions.jsonl"), 5, &|| false)?;
+    let receipts = summarize_receipts(&ctx.state_file("receipts.jsonl"), 5, &|| false, false)?;
+    let decisions = summarize_decisions(&ctx.state_file("decisions.jsonl"), 5, &|| false, false)?;
 
     let open_plans = open_plans(&plans);
 
@@ -218,30 +233,46 @@ pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
 }
 
 pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
-    state_summary_with_cancellation(ctx, &|| false)
+    state_summary_impl(ctx, &|| false, false)
 }
 
 pub(crate) fn state_summary_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
+    state_summary_impl(ctx, cancelled, true)
+}
+
+fn state_summary_impl(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+    bounded: bool,
+) -> Result<Value> {
     ensure_state_summary_active(cancelled)?;
-    let sessions =
-        read_session_events_with_cancellation(&ctx.state_file("sessions.jsonl"), cancelled)?;
+    let sessions = if bounded {
+        read_session_events_with_cancellation(&ctx.state_file("sessions.jsonl"), cancelled)?
+    } else {
+        read_session_events(&ctx.state_file("sessions.jsonl"))?
+    };
     ensure_state_summary_active(cancelled)?;
-    let plans =
-        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let plans = if bounded {
+        read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?
+    } else {
+        read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?
+    };
     ensure_state_summary_active(cancelled)?;
     let receipts = summarize_receipts(
         &ctx.state_file("receipts.jsonl"),
         STATE_SUMMARY_RECENT_LIMIT,
         cancelled,
+        bounded,
     )?;
     ensure_state_summary_active(cancelled)?;
     let decisions = summarize_decisions(
         &ctx.state_file("decisions.jsonl"),
         STATE_SUMMARY_RECENT_LIMIT,
         cancelled,
+        bounded,
     )?;
     ensure_state_summary_active(cancelled)?;
 
@@ -287,11 +318,12 @@ fn summarize_receipts(
     path: &Path,
     limit: usize,
     cancelled: &dyn Fn() -> bool,
+    bounded: bool,
 ) -> Result<ReceiptStreamSummary> {
     let mut count = 0usize;
     let mut failed = 0usize;
     let mut recent = VecDeque::with_capacity(limit);
-    scan_jsonl_raw(path, cancelled, |record| {
+    let mut visit = |record: super::jsonl::RawJsonlRecord<'_>| {
         let receipt = serde_json::from_slice::<ReceiptRecord>(record.bytes).with_context(|| {
             format!(
                 "Failed to parse receipt JSONL record {} in {}",
@@ -303,7 +335,12 @@ fn summarize_receipts(
         failed = failed.saturating_add(usize::from(receipt.exit_status != 0));
         push_recent(&mut recent, limit, receipt_summary(&receipt));
         Ok(())
-    })?;
+    };
+    if bounded {
+        scan_dashboard_jsonl_raw(path, cancelled, &mut visit)?;
+    } else {
+        scan_jsonl_raw(path, cancelled, &mut visit)?;
+    }
     Ok(ReceiptStreamSummary {
         count,
         failed,
@@ -320,10 +357,11 @@ fn summarize_decisions(
     path: &Path,
     limit: usize,
     cancelled: &dyn Fn() -> bool,
+    bounded: bool,
 ) -> Result<DecisionStreamSummary> {
     let mut count = 0usize;
     let mut recent = VecDeque::with_capacity(limit);
-    scan_jsonl_raw(path, cancelled, |record| {
+    let mut visit = |record: super::jsonl::RawJsonlRecord<'_>| {
         let decision =
             serde_json::from_slice::<DecisionRecord>(record.bytes).with_context(|| {
                 format!(
@@ -335,7 +373,12 @@ fn summarize_decisions(
         count = count.saturating_add(1);
         push_recent(&mut recent, limit, decision_summary(&decision));
         Ok(())
-    })?;
+    };
+    if bounded {
+        scan_dashboard_jsonl_raw(path, cancelled, &mut visit)?;
+    } else {
+        scan_jsonl_raw(path, cancelled, &mut visit)?;
+    }
     Ok(DecisionStreamSummary {
         count,
         recent: recent.into_iter().rev().collect(),

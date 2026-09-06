@@ -11,7 +11,6 @@ members = [
     "crates/jig-owned-process",
     "crates/jig-rust",
     "crates/jig-sqlx",
-    "crates/jig-status-tui",
     "crates/jig-tui",
     "crates/jig-typescript",
     "crates/jig-ui",
@@ -75,7 +74,6 @@ jig-go = { path = "crates/jig-go", version = "=0.3.0" }
 jig-owned-process = { path = "crates/jig-owned-process", version = "=0.3.0" }
 jig-rust = { path = "crates/jig-rust", version = "=0.3.0" }
 jig-sqlx = { path = "crates/jig-sqlx", version = "=0.3.0" }
-jig-status-tui = { path = "crates/jig-status-tui", version = "=0.3.0" }
 jig-tui = { path = "crates/jig-tui", version = "=0.3.0" }
 jig-typescript = { path = "crates/jig-typescript", version = "=0.3.0" }
 jig-ui = { path = "crates/jig-ui", version = "=0.3.0" }
@@ -98,6 +96,7 @@ serde_yaml_ng = "0.10.0"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 subtle = "2.6.1"
+syn = { version = "2.0.117", features = ["full"] }
 tempfile = "3.23.0"
 terminal_size = "0.4.3"
 time = "0.3.44"

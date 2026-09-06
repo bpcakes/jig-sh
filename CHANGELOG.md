@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. The hidden `--port` parser returns a migration error and may be removed in 0.4.0. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. Generated launcher scope, append-only state format, and contract version 7 are unchanged.
+- Breaking: remove the external status-provider subsystem, its configuration, protocol DTOs and schemas, process execution, and Packages and Blockers dashboard views. `[status]` and `[[status.providers]]` are now rejected as unknown configuration, `jig ui --status-refresh-seconds` is rejected as an unknown option, and `jig status --json` advances to schema version 2 with only local repository, work, loop, and collection-error fields. The terminal dashboard has one completion-relative local refresh domain.
+- Breaking: stop publishing the internal `jig-status-tui` crate after moving both terminal-dashboard entrypoints into `jig-ui`; previously published versions remain available but neither internal crate is a supported cross-version integration boundary.
+
 ## v0.3.0 - 2026-09-05
 
 ### Added
@@ -1199,3 +1207,4 @@
 - Improve work gate validation and receipt tracking
 - Settle Cargo workspace in fixtures and document gate evidence requirements
 - Add release script and normalize jig-sh package name
+

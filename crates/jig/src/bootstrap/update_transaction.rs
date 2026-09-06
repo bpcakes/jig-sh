@@ -766,14 +766,16 @@ fn charge_bytes(bytes: u64, total: &mut u64) -> Result<()> {
     Ok(())
 }
 
-fn maybe_fail(point: &str) -> Result<()> {
-    if cfg!(debug_assertions)
-        && std::env::var("JIG_TEST_UPDATE_TRANSACTION_FAIL_AT").as_deref() == Ok(point)
-    {
-        bail!("Injected repository update transaction failure at {point}");
+fn maybe_fail(_point: &str) -> Result<()> {
+    #[cfg(test)]
+    if fault_injection::matches(_point) {
+        bail!("Injected repository update transaction failure at {_point}");
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod fault_injection;
 
 #[cfg(test)]
 mod tests;

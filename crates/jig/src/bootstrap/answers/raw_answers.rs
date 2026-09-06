@@ -57,7 +57,6 @@ pub(super) struct RawAnswers {
     pub(super) frontend_workspace_roots: Option<Vec<String>>,
     pub(super) dev: Option<dev::RawDevAnswers>,
     pub(super) vault: Option<vault::VaultAnswers>,
-    pub(super) status: Option<StatusConfig>,
     pub(super) execution: Option<ExecutionConfig>,
     pub(super) agent_tooling: Option<AgentToolingAnswers>,
     #[serde(flatten)]
@@ -337,7 +336,6 @@ impl RawAnswers {
                 .get_or_insert_with(dev::RawDevAnswers::default)
                 .merge_settings(settings);
         }
-        merge_option(&mut self.status, opts.status.clone());
         merge_option(&mut self.execution, opts.execution.clone());
     }
 
@@ -418,7 +416,6 @@ impl RawAnswers {
             frontend_workspace_roots: self.frontend_workspace_roots.unwrap_or_default(),
             dev_apps,
             dev_settings,
-            status: self.status,
             execution: self.execution,
         }
     }
@@ -596,8 +593,6 @@ impl RawAnswers {
         } = dev::resolve(frontend_apps.as_slice(), self.dev)?;
         let vault = self.vault.unwrap_or_else(vault::default_answers);
         vault::validate_answers(&vault)?;
-        let status = self.status.unwrap_or_default();
-        status.validate()?;
         let execution = self.execution.unwrap_or_default();
         let legacy_dev_command = self.dev_command.filter(|value| !value.trim().is_empty());
 
@@ -747,7 +742,6 @@ impl RawAnswers {
             frontend_apps,
             frontend_workspace_roots,
             vault,
-            status,
             execution,
             agent_tooling: self.agent_tooling.unwrap_or_default(),
         })

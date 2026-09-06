@@ -89,27 +89,58 @@ fn manual_pr_manager_rejects_corrupt_branch_authority_before_claiming() {
 #[cfg(unix)]
 #[test]
 fn scheduled_lease_failure_preserves_worker_receipt_and_retained_worktree() {
+    use std::time::{Duration, Instant};
+
+    use fs4::fs_std::FileExt;
+
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    configure_scheduled_task(&temp, "nightly-review", "", true);
+    configure_scheduled_task(&temp, "nightly-review", "lease_ttl_seconds = 15", false);
     let codex_path = temp.path().join("codex-task-stub.sh");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
 cat >/dev/null
-rm -f "$JIG_TEST_LEASE_PATH"
-sleep 1
+touch "$JIG_TEST_WORKER_READY"
+sleep 60
 printf 'task complete\n'
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
     let lease_path = temp.path().join(".git/jig/loop/leases.json");
-    let _lease_path = EnvVarGuard::set("JIG_TEST_LEASE_PATH", lease_path.as_os_str());
+    let worker_ready = temp.path().join("worker-ready");
+    let _worker_ready = EnvVarGuard::set("JIG_TEST_WORKER_READY", worker_ready.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let output = dispatch_loop(&ctx);
+    let output = std::thread::scope(|scope| {
+        let injection = scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(45);
+            while !worker_ready.exists() {
+                assert!(Instant::now() < deadline, "worker did not start");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // Serialize deletion with renewal publication so an in-flight writer
+            // cannot recreate the ledger after the fault has been injected.
+            let lock = fs::File::open(lease_path.with_extension("lock")).unwrap();
+            loop {
+                match lock.try_lock_exclusive() {
+                    Ok(true) => break,
+                    Ok(false) => {
+                        assert!(Instant::now() < deadline, "lease writer did not unlock");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("lock lease ledger: {error}"),
+                }
+            }
+            fs::remove_file(&lease_path).unwrap();
+            FileExt::unlock(&lock).unwrap();
+        });
+        let output = dispatch_loop(&ctx);
+        injection.join().unwrap();
+        output
+    });
 
     let occurrence = &output["actions"][0]["occurrence"];
     assert_eq!(output["status"], "failed", "{output:#}");
@@ -252,14 +283,24 @@ schedule = "* * * * *""#,
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
+set -eu
 cat >/dev/null
 printf 'started\n' >> "$JIG_TEST_TASK_START_LOG"
+durable_schedule="$JIG_TEST_TASK_REPO/.git/jig/loop/schedule.json"
+baseline_schedule="$(mktemp "${TMPDIR:-/tmp}/jig-schedule.XXXXXX")"
+trap 'rm -f "$baseline_schedule"' EXIT
+cp "$durable_schedule" "$baseline_schedule"
 printf '%s\n' '{"schema_version":4,"occurrences":{}}' \
   > "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.json"
 printf '%s\n' 'not valid marker JSON' \
   > "$JIG_TEST_TASK_REPO/.agent/runtime/loop/schedule.initialized"
 rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/schedule.json"
-sleep 1
+attempt=0
+while cmp -s "$durable_schedule" "$baseline_schedule"; do
+  attempt=$((attempt + 1))
+  test "$attempt" -lt 100
+  sleep 0.05
+done
 touch "$JIG_TEST_TASK_COMPLETION_MARKER"
 printf 'task complete\n'
 "#,

@@ -173,7 +173,7 @@ mod build_identity_tests {
             ("TARGET".into(), "x86_64-unknown-linux-gnu".into()),
             ("HOST".into(), "x86_64-unknown-linux-gnu".into()),
             ("PROFILE".into(), "debug".into()),
-            ("CARGO_PKG_VERSION".into(), "0.2.0".into()),
+            ("CARGO_PKG_VERSION".into(), "0.3.0".into()),
             (
                 "JIG_BUILD_OFFICIAL_TEMPLATE_PIN".into(),
                 "unreleased".into(),
@@ -257,7 +257,7 @@ mod build_identity_tests {
             ("TARGET", "aarch64-apple-darwin"),
             ("CARGO_FEATURE_DEV_PROXY", "1"),
             ("PROFILE", "release"),
-            ("CARGO_PKG_VERSION", "0.3.0"),
+            ("CARGO_PKG_VERSION", "0.3.1"),
             ("JIG_EMBEDDED_TEMPLATE_SNAPSHOT", "1"),
             ("JIG_BUILD_OFFICIAL_TEMPLATE_PIN", "released"),
         ] {

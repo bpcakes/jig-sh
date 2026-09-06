@@ -135,7 +135,7 @@ fn mcp_agent_doctor_refreshes_marketplace_requirements_after_server_start() {
 }
 
 #[test]
-fn mcp_and_ui_work_gates_refresh_manifest_authority_after_server_start() {
+fn mcp_and_dashboard_work_gates_refresh_manifest_authority_after_startup() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(
         temp.path(),
@@ -160,7 +160,12 @@ target = "api:test"
     .unwrap();
 
     let gates = call_tool(&ctx, tool::WORK_GATES, json!({"plan_id": "plan_1"})).unwrap();
-    let ui_gates = super::super::work_gates_snapshot(&ctx, Some("plan_1".into())).unwrap();
+    let dashboard_gates = super::super::open_plan_gate_snapshots_with_cancellation(
+        &ctx,
+        &["plan_1".into()],
+        &|| false,
+    )
+    .unwrap();
     let finish_error = call_tool(
         &ctx,
         tool::WORK_FINISH,
@@ -175,7 +180,11 @@ target = "api:test"
 
     assert_eq!(gates["overall"], "blocked", "{gates:#}");
     assert_eq!(gates["gates"][0]["status"], "stale", "{gates:#}");
-    assert_eq!(ui_gates["gates"][0]["status"], "stale", "{ui_gates:#}");
+    assert_eq!(
+        dashboard_gates["plan_1"]["gates"][0]["status"],
+        "stale",
+        "{dashboard_gates:#?}"
+    );
     assert!(
         finish_error.contains("Stale: [api-tests]"),
         "{finish_error}"

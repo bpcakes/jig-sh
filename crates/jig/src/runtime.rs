@@ -135,12 +135,6 @@ fn dispatch_state(
     }
 }
 
-/// Read-only gate status for `jig ui`; reuses the `work gates` evaluation.
-pub(crate) fn work_gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Result<Value> {
-    let current = refreshed_repository_context(ctx)?;
-    work::gates_snapshot(&current, plan_id)
-}
-
 pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],
@@ -153,6 +147,20 @@ pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     let current = refreshed_repository_context(ctx)?;
     crate::cancellation::ensure_status_collection_active(cancelled)?;
     work::open_plan_gate_snapshots_with_cancellation(&current, plan_ids, cancelled)
+}
+
+pub(crate) use work::{DashboardGateReport, dashboard_gate_receipt_indexes};
+
+pub(crate) fn dashboard_open_plan_reports_with_cancellation(
+    ctx: &RepoContext,
+    baselines: &std::collections::BTreeMap<String, Option<crate::state::PlanBaseline>>,
+    indexes: std::collections::BTreeMap<String, crate::state::WorkGateReceiptIndex>,
+    plan_state: &'static str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<std::collections::BTreeMap<String, DashboardGateReport>> {
+    work::dashboard_open_plan_reports_with_cancellation(
+        ctx, baselines, indexes, plan_state, cancelled,
+    )
 }
 
 pub(crate) fn refreshed_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
@@ -168,16 +176,22 @@ pub(crate) fn refreshed_repository_context(ctx: &RepoContext) -> Result<RepoCont
     Ok(current)
 }
 
-/// Read-only loop workflow status for `jig ui`; reuses `loop status`.
-pub(crate) fn loop_status_snapshot(ctx: &RepoContext) -> Result<Value> {
-    loop_status_snapshot_with_cancellation(ctx, &|| false)
-}
-
 pub(crate) fn loop_status_snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     loops::status_with_cancellation(
+        ctx,
+        crate::command::LoopStatusRequest { workflow: None },
+        cancelled,
+    )
+}
+
+pub(crate) fn typed_loop_status_snapshot_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<jig_ui::dashboard::StatusLoopObservation> {
+    loops::typed_status_with_cancellation(
         ctx,
         crate::command::LoopStatusRequest { workflow: None },
         cancelled,

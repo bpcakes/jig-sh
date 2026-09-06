@@ -1,0 +1,37 @@
+Repository, harness, and default-branch identity
+Current branch or detached revision
+Session, plan, and decision counts
+Open plans
+Gate table
+Gate remediation command
+Gate collection error
+Recent failures
+Failure stderr
+Closed work history
+Tool statistics
+Loop workflows
+Loop leases
+Exhausted attempts
+Loop clear-attempt command
+Mixed timeline
+Plan-linked timeline navigation
+Timeline kind filter
+Timeline limit
+Plan body
+Plan body error
+Plan baseline
+Plan decisions
+Plan receipts
+Receipt stdout/stderr
+Receipt changed paths
+Receipt diff and duration
+Dashboard JSON route
+Plan JSON route
+Terminal auto-refresh
+Status overview structure
+Repository cleanliness and revision
+Upstream tracking
+Aggregate collection errors
+Status local work and loop counts
+Single-domain status refresh lifecycle
+HTTP authentication

@@ -179,6 +179,20 @@ fn status_help_includes_text_json_and_tui_modes() {
 }
 
 #[test]
+fn ui_help_describes_terminal_and_one_shot_modes_without_port() {
+    let ui_help = rendered_help(&["ui"]);
+    assert_help_contains(&ui_help, "terminal stdin and stdout");
+    assert_help_contains(&ui_help, "--refresh-seconds");
+    assert_help_omits(&ui_help, "--status-refresh-seconds");
+    assert_help_contains(&ui_help, "--timeline-limit");
+    assert_help_contains(&ui_help, "--plan");
+    assert_help_contains(&ui_help, "Open this plan's detail view");
+    assert_help_contains(&ui_help, "jig ui --json");
+    assert_help_omits(&ui_help, "--port");
+    assert_help_omits(&ui_help, "loopback");
+}
+
+#[test]
 fn presets_help_includes_harness_only_automation_example() {
     let presets_help = rendered_help(&["presets"]);
 

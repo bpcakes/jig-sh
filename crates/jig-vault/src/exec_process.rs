@@ -6,11 +6,11 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use jig_owned_process::{ChildPipe, NonblockingPipe};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::exec::{VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV};
 use crate::exec_output::StreamingRedactor;
-use crate::process_pipe::ProcessPipe;
 use crate::{EnvVarName, ExecOutcome};
 
 const EXEC_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -146,11 +146,11 @@ fn run_exec_process_with_writers(
     })?;
 
     let mut stdout_pump = StreamPump::new(
-        ProcessPipe::Stdout(stdout_pipe),
+        ChildPipe::Stdout(stdout_pipe),
         redactor.independent_stream(),
     )
     .map_err(|error| cleanup_spawned_child(&mut child, error))?;
-    let mut stderr_pump = StreamPump::new(ProcessPipe::Stderr(stderr_pipe), redactor)
+    let mut stderr_pump = StreamPump::new(ChildPipe::Stderr(stderr_pipe), redactor)
         .map_err(|error| cleanup_spawned_child(&mut child, error))?;
 
     let status = loop {
@@ -238,14 +238,14 @@ fn portable_outcome(status: ExitStatus) -> ExecOutcome {
 }
 
 struct StreamPump {
-    reader: Option<ProcessPipe>,
+    reader: Option<NonblockingPipe>,
     redactor: Option<StreamingRedactor>,
     failure: Option<ExecProcessFailure>,
 }
 
 impl StreamPump {
-    fn new(reader: ProcessPipe, redactor: StreamingRedactor) -> Result<Self, ExecProcessFailure> {
-        reader
+    fn new(reader: ChildPipe, redactor: StreamingRedactor) -> Result<Self, ExecProcessFailure> {
+        let reader = reader
             .prepare("transparent vault process pipes are unsupported on this platform")
             .map_err(|error| sanitized_failure("pipe", error))?;
         Ok(Self {

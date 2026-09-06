@@ -348,34 +348,66 @@ timezone = "UTC"
     )
     .unwrap();
 
-    let runtime_dir = repo.path().join(".agent/runtime/loop");
-    fs::create_dir_all(&runtime_dir).unwrap();
-    let schedule_lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(runtime_dir.join("schedule.lock"))
-        .unwrap();
-    schedule_lock.lock_exclusive().unwrap();
-    let spawn_dispatch = || {
-        Command::new(env!("CARGO_BIN_EXE_jig"))
+    let schedule_locks = [".agent/.cache/loop", ".agent/runtime/loop"]
+        .map(|relative| {
+            let directory = repo.path().join(relative);
+            fs::create_dir_all(&directory).unwrap();
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(directory.join("schedule.lock"))
+                .unwrap()
+        });
+    for lock in &schedule_locks {
+        lock.lock_exclusive().unwrap();
+    }
+    let ready = [
+        repo.path().join("first-dispatch-ready"),
+        repo.path().join("second-dispatch-ready"),
+    ];
+    let spawn_dispatch = |ready: &Path| {
+        Command::new("sh")
             .current_dir(repo.path())
             .env_remove("JIG_REPO_ROOT")
             .env_remove("JIG_INVOKE_CWD")
             .env("NO_COLOR", "1")
+            .args([
+                "-c",
+                r#"ready=$1
+shift
+: > "$ready"
+IFS= read -r _
+exec "$@""#,
+                "dispatch-barrier",
+            ])
+            .arg(ready)
+            .arg(env!("CARGO_BIN_EXE_jig"))
             .args(["loop", "dispatch", "--json"])
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
     };
-    let mut first = spawn_dispatch();
-    let mut second = spawn_dispatch();
+    let mut first = spawn_dispatch(&ready[0]);
+    let mut second = spawn_dispatch(&ready[1]);
+    let ready_deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.iter().all(|path| path.is_file()) {
+        assert!(
+            Instant::now() < ready_deadline,
+            "dispatch children did not reach their shared start barrier"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for child in [&mut first, &mut second] {
+        child.stdin.take().unwrap().write_all(b"\n").unwrap();
+    }
     std::thread::sleep(Duration::from_millis(250));
-    assert!(first.try_wait().unwrap().is_none());
-    assert!(second.try_wait().unwrap().is_none());
-    FileExt::unlock(&schedule_lock).unwrap();
+    for lock in &schedule_locks {
+        FileExt::unlock(lock).unwrap();
+    }
 
     let first = first.wait_with_output().unwrap();
     let second = second.wait_with_output().unwrap();

@@ -41,7 +41,6 @@ pub(crate) use runtime::{
 pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cron};
 pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migration_backend};
-pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkCheckGate, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
@@ -159,8 +158,6 @@ struct RepoConfig {
     work: WorkConfig,
     #[serde(default, rename = "loop")]
     loop_config: LoopConfig,
-    #[serde(default)]
-    status: StatusConfig,
     #[serde(default)]
     execution: execution_config::ExecutionConfig,
     #[serde(default)]
@@ -759,10 +756,6 @@ impl RepoContext {
         self.state_dir().join(name)
     }
 
-    pub(crate) fn plan_body_path(&self, plan_id: &str) -> PathBuf {
-        self.root.join(".agent/plans").join(format!("{plan_id}.md"))
-    }
-
     pub(crate) fn current_session_path(&self) -> PathBuf {
         self.current_session_path.clone()
     }
@@ -855,7 +848,6 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         dev: _,
         work,
         loop_config: _,
-        status: _,
         execution,
         agent_tooling: _,
     } = config;
@@ -923,7 +915,6 @@ mod loop_config;
 mod migration;
 mod optional;
 mod runtime;
-mod status_config;
 #[cfg(test)]
 mod tests;
 mod vault_config;

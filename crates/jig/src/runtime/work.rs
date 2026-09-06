@@ -109,11 +109,6 @@ pub(super) fn dispatch_with_observer(
     }
 }
 
-/// Read-only gate status used by `jig ui`; same evaluation as `work gates`.
-pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Result<Value> {
-    gates::gates(ctx, WorkGatesRequest { plan_id })
-}
-
 pub(super) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],
@@ -121,6 +116,11 @@ pub(super) fn open_plan_gate_snapshots_with_cancellation(
 ) -> Result<std::collections::BTreeMap<String, Value>> {
     gates::open_plan_snapshots_with_cancellation(ctx, plan_ids, cancelled)
 }
+
+pub(crate) use gates::{
+    DashboardGateReport, dashboard_gate_receipt_indexes,
+    dashboard_open_plan_reports_with_cancellation,
+};
 
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     // Resolve and validate all caller-controlled plan input before starting a

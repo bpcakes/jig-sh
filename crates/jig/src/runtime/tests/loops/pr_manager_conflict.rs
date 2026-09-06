@@ -82,7 +82,9 @@ exit 2
             workflow: Some("pr-manager".into()),
             lease_ttl_seconds: None,
             max_attempts: Some(2),
-            backoff_seconds: Some(1),
+            // Keep the waiting-state fixture in backoff through post-push Git
+            // inspection; this test does not exercise backoff expiration.
+            backoff_seconds: Some(60),
         })),
     )
     .unwrap();

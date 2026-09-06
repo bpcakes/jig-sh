@@ -1,10 +1,15 @@
+use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::context::{RepoContext, WorkRefinementConfig, WorkReviewGate};
 
-pub(super) fn review_prompt(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> String {
-    let plan_path = ctx.plan_body_path(plan_id);
-    format!(
+pub(super) fn review_prompt(
+    ctx: &RepoContext,
+    plan_id: &str,
+    gate: &WorkReviewGate,
+) -> Result<String> {
+    let plan_path = crate::state::plan_body_path(ctx, plan_id)?;
+    Ok(format!(
         "Apply the Codex review skill `{skill}` as a structured Jig work review gate.\n\
          Review scope: {scope}.\n\
          Work plan id: {plan_id}.\n\
@@ -17,7 +22,7 @@ pub(super) fn review_prompt(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewG
         plan_path = plan_path.display(),
         gate_id = gate.id,
         threshold = gate.threshold,
-    )
+    ))
 }
 
 pub(super) fn refine_prompt(

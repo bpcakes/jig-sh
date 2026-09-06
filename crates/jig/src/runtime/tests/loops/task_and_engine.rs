@@ -503,26 +503,36 @@ lease_ttl_seconds = 1
     git_ok(temp.path(), ["add", "."]);
     git_ok(temp.path(), ["commit", "-m", "fixture"]);
     let codex_path = bin.path().join("codex-task-stub.sh");
-    let completion_marker = bin.path().join("worker-completed");
+    let worker_started = bin.path().join("worker-started");
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
+set -eu
 cat >/dev/null
-rm -f "$JIG_TEST_LEASE_PATH"
-sleep 1
-touch "$JIG_TEST_TASK_COMPLETION_MARKER"
-printf 'task complete\n'
+: > "$JIG_TEST_TASK_WORKER_STARTED"
+while :; do sleep 1; done
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
-    let lease_path = temp.path().join(".git/jig/loop/leases.json");
-    let _lease_path = EnvVarGuard::set("JIG_TEST_LEASE_PATH", lease_path.as_os_str());
-    let _completion = EnvVarGuard::set(
-        "JIG_TEST_TASK_COMPLETION_MARKER",
-        completion_marker.as_os_str(),
+    let _worker_started = EnvVarGuard::set(
+        "JIG_TEST_TASK_WORKER_STARTED",
+        worker_started.as_os_str(),
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let repo_root = temp.path().to_path_buf();
+    let revoker = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !worker_started.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker did not reach the workflow-lease test boundary"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let ctx = RepoContext::load_from(&repo_root).unwrap();
+        crate::runtime::loops::revoke_lease_for_test(&ctx, "checkout:repo").unwrap();
+    });
 
     let error = crate::runtime::dispatch(
         &ctx,
@@ -535,14 +545,11 @@ printf 'task complete\n'
     )
     .unwrap_err()
     .to_string();
+    revoker.join().unwrap();
 
     assert!(
         error.contains("Loop workflow lease renewal or release failed"),
         "{error}"
-    );
-    assert!(
-        !completion_marker.exists(),
-        "worker should be terminated as soon as lease renewal fails"
     );
 }
 

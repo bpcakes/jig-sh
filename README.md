@@ -133,7 +133,7 @@ Inspect the current evidence with `scripts/jig work status`, `scripts/jig work e
 
 `.agent/jig-contract.json` is the stable repository authority. Current contract v7 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, and target-local affected selection.
 
-Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, status providers, or secrets outside the generated command catalog.
+Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, local status, or secrets outside the generated command catalog.
 
 | Surface | Stable contract? | Records receipts? | Machine-local? |
 | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ scripts/jig check test
 scripts/jig check test --affected origin/main --explain
 ```
 
-In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
+In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
 
 ## Creating and adopting repositories
 
@@ -212,34 +212,28 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
-### Orchestration, status, and flight recorder
+### Orchestration and terminal dashboard
 
-`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig status` joins local Git and work state with any configured `jig.status-provider/v1` inspectors. `jig ui` serves a read-only loopback dashboard over plans, gates, receipts, decisions, and loops.
+`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local repository and recorder state. `jig status --tui` opens the same dashboard on Status instead of Work.
 
 ```sh
 scripts/jig loop status
 scripts/jig status
-scripts/jig status --tui
-scripts/jig ui --port 0
+scripts/jig ui                    # terminal dashboard, starting on Work
+scripts/jig status --tui          # same dashboard, starting on Status
+scripts/jig --json ui             # one recorder snapshot
+scripts/jig --json ui --plan PLAN_ID
+scripts/jig status --json         # local status snapshot
 ```
 
-Provider failures remain visible as partial status instead of hiding available local state. The UI binds to `127.0.0.1`, validates loopback host and origin, and uses a one-time sign-in URL. See [Status-provider protocol](docs/status-provider.md) and [Flight Recorder UI](docs/developer-ux.md#flight-recorder-ui).
+The four tabs are Status, Work, Timeline, and Health. Collection failures remain visible as partial status instead of hiding usable local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. See [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
 
 ### State maintenance
 
-`jig ui` serves a read-only loopback dashboard over `.agent/state/`: open plans with gate status and the next command to unblock them, recent failures with stderr, finished work with resolutions, per-tool check health, loop workflows with scheduled Codex-task run state and attempt budgets, and a filterable timeline of sessions, plans, receipts, and decisions. Plan ids link to detail pages with the plan body, gate evidence, decisions, and per-receipt output. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
+`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
 
-```sh
-scripts/jig ui               # prints a one-time loopback sign-in URL
-scripts/jig ui --port 0      # pick any free port
-```
+Version 0.3.0 removed the browser server and URL endpoints. The hidden `--port` parser now exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON instead; no browser, listener, cookie, or capability URL remains.
 
-The dashboard validates the exact loopback `Host` and `Origin` and requires a
-session cookie established by the printed one-time URL. Proxy aliases are not
-supported because accepting arbitrary hostnames would reopen DNS-rebinding
-access to receipt and plan contents.
-
-The printed unguessable namespace contains JSON snapshot and plan endpoints returning the same joined data. The server binds `127.0.0.1` only and records no receipts. See [Developer UX](docs/developer-ux.md#flight-recorder-ui).
 Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
 ### Vault
@@ -303,18 +297,18 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Configuration](docs/configuration.md): `.jig.toml`, presets, package managers, and runtime options
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
 - [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, receipts, runs, and state
-- [Status-provider protocol](docs/status-provider.md): open JSON observation contract
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
 - [`examples/`](examples/): visible `.jig.toml` answer files
 
 ## Repository layout
 
 - `crates/jig/`: publishable CLI, bootstrapper, and MCP runtime
-- `crates/jig-contract/`: shared DTOs and public status-provider contract
+- `crates/jig-contract/`: shared DTOs and identifiers
 - `crates/jig-{rust,go,typescript,sqlx}/`: repository model adapters
 - `crates/jig-file-budget/`: native file-budget policy and evaluation
 - `crates/jig-dev-proxy/`: local HTTP/HTTPS proxy and process supervision
-- `crates/jig-{status-tui,ui,codex-tui,vault,vault-tui}/`: status, dashboard, Codex, and vault surfaces
+- `crates/jig-{ui,codex-tui,vault,vault-tui}/`: unified dashboard, Codex, and vault surfaces
+- `crates/jig-tui/`: terminal safety and runtime foundations shared by Jig TUIs
 - `templates/project/`: files rendered into downstream repositories
 - `examples/`: sample answer files
 - `scripts/validate-fixtures.sh`: rendered-repository validation

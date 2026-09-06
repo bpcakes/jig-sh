@@ -7,6 +7,7 @@
 ## Key entrypoints
 
 - `src/lib.rs`: public facade used by other Jig crates.
+- `src/pipe.rs`: child stdout/stderr preparation and nonblocking reads shared by generic and secret-aware runners.
 - `src/process.rs`: bounded output, cancellation, timeout, and platform process-tree supervision.
 - `src/process/interaction.rs`: cooperative stdin/stdout interaction with an owned child process.
 
@@ -18,6 +19,7 @@
 
 ## Invariants
 
+- Pipe adapters retain no captured bytes and expose reads only after nonblocking preparation succeeds; callers own buffering, zeroization, and process cleanup.
 - Establish a verifiable process-tree identity before starting child work and retain the direct-child identity until descendant cleanup is confirmed.
 - Keep one absolute cleanup deadline across normal, error, and drop paths; fail closed when cleanup or bounded output completion cannot be proved.
 - Never signal a recycled numeric PID or process group after identity loss or reap.

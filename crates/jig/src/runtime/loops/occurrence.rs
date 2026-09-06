@@ -80,6 +80,24 @@ impl ScheduleOccurrence {
             OccurrenceStatus::Succeeded | OccurrenceStatus::Failed | OccurrenceStatus::Acknowledged
         )
     }
+
+    pub(super) fn status_view(&self) -> jig_ui::dashboard::StatusScheduledOccurrence {
+        jig_ui::dashboard::StatusScheduledOccurrence {
+            occurrence_id: self.occurrence_id.clone(),
+            workflow_id: self.workflow_id.clone(),
+            scheduled_at_ms: self.scheduled_at_ms,
+            owner: self.owner.clone(),
+            claim_expires_at_ms: self.claim_expires_at_ms,
+            started_at_ms: self.started_at_ms,
+            uses_shared_checkout: self.uses_shared_checkout,
+            finished_at_ms: self.finished_at_ms,
+            acknowledged_at_ms: self.acknowledged_at_ms,
+            status: self.status.as_str().to_string(),
+            worker_receipt_id: self.worker_receipt_id.clone(),
+            worktree: self.worktree.clone(),
+            error: self.error.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

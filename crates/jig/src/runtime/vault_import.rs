@@ -1,13 +1,12 @@
 //! One-time 1Password dotenv import helpers.
 
-use std::io::{ErrorKind, Read};
-#[cfg(unix)]
-use std::os::fd::AsFd;
+use std::io::ErrorKind;
 use std::path::Path;
-use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_owned_process::{ChildPipe, NonblockingPipe};
 use jig_vault::{
     FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes,
     VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV,
@@ -236,7 +235,7 @@ fn resolve_onepassword_value(
             bail!("1Password CLI stderr capture for variable '{variable}' was unavailable");
         }
     };
-    let mut stdout_pump = match CapturePump::new(OpPipe::Stdout(stdout), MAX_SECRET_VALUE_LEN) {
+    let mut stdout_pump = match CapturePump::new(ChildPipe::Stdout(stdout), MAX_SECRET_VALUE_LEN) {
         Ok(pump) => pump,
         Err(error) => {
             drop(stderr);
@@ -248,7 +247,7 @@ fn resolve_onepassword_value(
             );
         }
     };
-    let mut stderr_pump = match CapturePump::new(OpPipe::Stderr(stderr), MAX_OP_STDERR_LEN) {
+    let mut stderr_pump = match CapturePump::new(ChildPipe::Stderr(stderr), MAX_OP_STDERR_LEN) {
         Ok(pump) => pump,
         Err(error) => {
             stdout_pump.abandon();
@@ -329,48 +328,8 @@ fn resolve_onepassword_value(
     Ok(stdout_pump.bytes)
 }
 
-enum OpPipe {
-    Stdout(ChildStdout),
-    Stderr(ChildStderr),
-}
-
-impl OpPipe {
-    #[cfg(unix)]
-    fn prepare(&self) -> std::io::Result<()> {
-        let descriptor = match self {
-            Self::Stdout(reader) => reader.as_fd(),
-            Self::Stderr(reader) => reader.as_fd(),
-        };
-        jig_owned_process::unix::set_nonblocking(descriptor)
-    }
-
-    #[cfg(not(unix))]
-    fn prepare(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            ErrorKind::Unsupported,
-            "bounded 1Password pipe capture is unsupported on this platform",
-        ))
-    }
-
-    #[cfg(unix)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Stdout(reader) => reader.read(buffer),
-            Self::Stderr(reader) => reader.read(buffer),
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn read_available(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::new(
-            ErrorKind::Unsupported,
-            "bounded 1Password pipe capture is unsupported on this platform",
-        ))
-    }
-}
-
 struct CapturePump {
-    reader: Option<OpPipe>,
+    reader: Option<NonblockingPipe>,
     bytes: SecretBytes,
     cap: usize,
     overflowed: bool,
@@ -378,8 +337,9 @@ struct CapturePump {
 }
 
 impl CapturePump {
-    fn new(reader: OpPipe, cap: usize) -> std::io::Result<Self> {
-        reader.prepare()?;
+    fn new(reader: ChildPipe, cap: usize) -> std::io::Result<Self> {
+        let reader =
+            reader.prepare("bounded 1Password pipe capture is unsupported on this platform")?;
         Ok(Self {
             reader: Some(reader),
             bytes: SecretBytes::with_capacity(cap),

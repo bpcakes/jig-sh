@@ -180,7 +180,16 @@ pub(crate) struct WorkReviewReceiptEvidence {
     pub(crate) findings_truncated: Option<bool>,
     pub(crate) actionable_findings_truncated: Option<bool>,
     pub(crate) threshold: Option<String>,
+    pub(crate) findings: Vec<WorkReviewFinding>,
     parse: WorkReviewEvidenceParse,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorkReviewFinding {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) path: Option<String>,
+    pub(crate) line: Option<u64>,
 }
 
 pub(crate) const WORK_CHECK_EVIDENCE_SCHEMA: &str = "jig.work_check/v2";
@@ -665,32 +674,12 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
 ) -> Result<BTreeMap<String, WorkGateReceiptIndex>> {
     ensure_receipt_scan_active(cancelled)?;
 
-    let mut indexes = plan_ids
-        .iter()
-        .map(|plan_id| {
-            (
-                plan_id.clone(),
-                WorkGateReceiptIndex {
-                    checks: check_tools
-                        .iter()
-                        .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
-                        .collect(),
-                    check_gates: BTreeMap::new(),
-                    reviews: BTreeMap::new(),
-                    evidence: evidence_targets
-                        .iter()
-                        .map(|(gate_id, targets)| {
-                            (gate_id.clone(), IndexedTargetReceipts::new(targets.clone()))
-                        })
-                        .collect(),
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut indexes =
+        WorkGateReceiptIndexes::new(plan_ids, check_tools, review_gate_ids, evidence_targets);
     if plan_ids.is_empty()
         || (check_tools.is_empty() && review_gate_ids.is_empty() && evidence_targets.is_empty())
     {
-        return Ok(indexes);
+        return Ok(indexes.into_indexes());
     }
     ensure_state_layout(ctx)?;
 
@@ -701,100 +690,15 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
     scan_jsonl_raw(&path, cancelled, |record| {
         ensure_receipt_scan_active(cancelled)?;
         let receipt = parse_raw_receipt(record, &path)?;
-        let Some(plan_id) = receipt.plan_id.as_deref() else {
-            return Ok(());
-        };
-        let Some(index) = indexes.get_mut(plan_id) else {
-            return Ok(());
-        };
-
-        let direct_tool_name = index
-            .checks
-            .contains_key(&receipt.tool_name)
-            .then_some(receipt.tool_name.as_str());
-        if let Some(tool_name) = direct_tool_name {
-            let receipts = index
-                .checks
-                .get_mut(tool_name)
-                .expect("configured check tool should be indexed");
-            receipts.direct = Some(tool_receipt_status(&receipt));
-            // A batch can only provide freshness for the latest direct
-            // receipt when it appears physically after that receipt.
-            receipts.exact_work_check = None;
-            receipts.legacy_work_check = None;
-        }
-
-        if receipt.tool_name == tool::WORK_CHECK {
-            let batch_status = tool_receipt_status(&receipt);
-            for gate_id in receipt_arg_strings(&receipt, "gates") {
-                index.check_gates.remove(gate_id);
-            }
-            if let Some(evidence) = receipt
-                .evidence
-                .as_ref()
-                .and_then(|evidence| {
-                    serde_json::from_value::<WorkCheckBatchEvidence>(evidence.clone()).ok()
-                })
-                .filter(|evidence| evidence.schema == WORK_CHECK_EVIDENCE_SCHEMA)
-            {
-                for gate in evidence.into_hydrated_gates() {
-                    index.check_gates.insert(
-                        gate.gate_id.clone(),
-                        WorkCheckGateReceiptStatus {
-                            batch: batch_status.clone(),
-                            evidence: gate,
-                        },
-                    );
-                }
-            }
-            if receipt.exit_status != 0 {
-                return Ok(());
-            }
-            let has_receipt_ids = receipt_args_has_receipt_ids(&receipt);
-            for tool_name in receipt_arg_strings(&receipt, "tools") {
-                // If jig.work_check itself is configured as a check gate, the
-                // receipt that becomes the direct anchor is not its own batch.
-                if direct_tool_name == Some(tool_name) {
-                    continue;
-                }
-                let Some(receipts) = index.checks.get_mut(tool_name) else {
-                    continue;
-                };
-                let Some(direct) = receipts.direct.as_ref() else {
-                    continue;
-                };
-                if receipt_args_include_receipt_id(&receipt, &direct.receipt_id) {
-                    receipts.exact_work_check = Some(batch_status.clone());
-                } else if !has_receipt_ids {
-                    receipts.legacy_work_check = Some(batch_status.clone());
-                }
-            }
-        }
-
-        if receipt.tool_name == tool::WORK_REVIEW
-            && let Some(gate_id) = receipt
-                .args
-                .get("gate_id")
-                .and_then(Value::as_str)
-                .filter(|gate_id| review_gate_ids.contains(*gate_id))
-        {
-            index
-                .reviews
-                .insert(gate_id.to_string(), work_review_receipt_status(&receipt));
-        }
-
-        if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
-            let status = target_receipt_status(&receipt, run_id, target);
-            for receipts in index.evidence.values_mut() {
-                receipts.observe(&status);
-            }
-        }
+        indexes.observe(&receipt);
         Ok(())
     })?;
     ensure_receipt_scan_active(cancelled)?;
-    Ok(indexes)
+    Ok(indexes.into_indexes())
 }
 
 include!("receipts/tail.rs");
+mod dashboard;
+pub(crate) use dashboard::WorkGateReceiptIndexes;
 #[cfg(test)]
 mod tests;

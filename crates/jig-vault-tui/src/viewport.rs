@@ -87,17 +87,7 @@ impl ViewportSize {
 /// narrows the linear cell index to `u16` while producing terminal diffs.
 /// Keep rendering and input capability checks on the same non-wrapping area.
 pub(crate) const fn ratatui_viewport(area: Rect) -> (Rect, ViewportSize) {
-    let render_area = match u16::MAX.checked_div(area.width) {
-        None => area,
-        Some(safe_height) => {
-            let height = if area.height < safe_height {
-                area.height
-            } else {
-                safe_height
-            };
-            Rect::new(area.x, area.y, area.width, height)
-        }
-    };
+    let render_area = jig_tui::ratatui_render_area(area);
     (
         render_area,
         ViewportSize::new(render_area.width, render_area.height),

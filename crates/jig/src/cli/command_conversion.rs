@@ -5,8 +5,8 @@ use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckComparisonOpts, CheckExactTreeProvenance, CheckMigrationImmutabilityOpts, CheckOpts,
-    CheckTargetOpts, DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
+    CheckComparisonOpts, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
+    CliExactTreeProvenance, DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
     GenerateSqlxUncheckedQueriesTodoOpts, LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts,
     LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
     ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,

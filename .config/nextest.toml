@@ -13,7 +13,10 @@ slow-timeout = { period = "60s" }
 # Local checks optimize for the first actionable failure. CI intentionally uses
 # the comprehensive default profile above.
 fail-fast = true
-test-threads = "num-cpus"
+# Match the proven CI ceiling for process-heavy fixtures. Scaling to every host
+# CPU can overload process-tree supervision and turn successful Git and shell
+# commands into cleanup failures.
+test-threads = 4
 
 [test-groups]
 frontend-node = { max-threads = 2 }
@@ -39,9 +42,9 @@ test-group = 'frontend-node-local'
 
 [[profile.local.overrides]]
 # These checks intentionally enforce short transport and process-cleanup
-# deadlines. Run them without CPU/process-tree contention from the 64-way
-# local profile so the deadlines measure Jig rather than host saturation.
-filter = 'package(jig-sh) & (test(mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions) | test(mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport))'
+# deadlines. Run them without other local-profile CPU/process-tree contention
+# so the deadlines measure Jig rather than host saturation.
+filter = 'package(jig-sh) & (binary(runtime_signal_policy) | test(mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions) | test(mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport))'
 test-group = 'process-signals'
 threads-required = "num-test-threads"
 
@@ -54,7 +57,7 @@ test-group = 'frontend-node'
 [[profile.default.overrides]]
 # These tests launch process trees and env-port helpers from a shared local
 # range; serialize them so one test cannot claim another test's probed port.
-filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
+filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_lifecycle) | binary(dev_sigint) | binary(runtime_signal_policy))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 test-group = 'process-signals'
 
 [[profile.default.overrides]]

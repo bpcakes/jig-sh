@@ -61,7 +61,7 @@ fn set_external_provenance(comparison: &mut CheckComparisonOpts, value: &str) ->
         bail!("--comparison-provenance cannot be used more than once");
     }
     comparison.comparison_provenance = Some(
-        CheckExactTreeProvenance::from_str(value, false).map_err(|error| anyhow::anyhow!(error))?,
+        CliExactTreeProvenance::from_str(value, false).map_err(|error| anyhow::anyhow!(error))?,
     );
     Ok(())
 }

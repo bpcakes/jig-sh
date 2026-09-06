@@ -72,10 +72,6 @@ fn recursive_legacy_session_summaries_stay_readable_and_append_shallow_history()
         "legacy-session"
     );
     assert!(summary["recent_sessions"][0]["summary"].is_null());
-    let streams = state_streams(&ctx, 10).unwrap();
-    assert_eq!(streams.session_events.len(), 1);
-    assert_eq!(streams.session_events[0].event, "start");
-    assert_eq!(streams.session_events[0].session_id, "legacy-session");
     assert_eq!(fs::read(&sessions_path).unwrap(), original);
 
     let started = session_start(&ctx).unwrap();
@@ -278,7 +274,7 @@ fn plans_append_serializes_concurrent_writers() {
         });
     });
 
-    let body = fs::read_to_string(ctx.plan_body_path(&plan_id)).unwrap();
+    let body = fs::read_to_string(plan_body_path(&ctx, &plan_id).unwrap()).unwrap();
     assert!(body.contains("Initial body"));
     assert!(body.contains("First append"));
     assert!(body.contains("Second append"));
@@ -499,7 +495,7 @@ fn plans_append_requires_progress_text_without_mutating_plan() {
     )
     .unwrap();
     let plan_id = plan["plan_id"].as_str().unwrap();
-    let plan_path = ctx.plan_body_path(plan_id);
+    let plan_path = plan_body_path(&ctx, plan_id).unwrap();
     let body_before = fs::read_to_string(&plan_path).unwrap();
     let state_before = state_summary(&ctx).unwrap();
     let empty_body_file = temp.path().join("empty-progress.md");

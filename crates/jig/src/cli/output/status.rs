@@ -114,54 +114,6 @@ pub(super) fn format_summary(value: &serde_json::Value) -> String {
         "Loops: {leases} lease(s), {attempts} attempt(s), {exhausted} exhausted"
     ));
 
-    let providers = value["providers"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    if providers.is_empty() {
-        lines.push("Providers: none configured".into());
-    } else {
-        lines.push("Providers:".into());
-        for provider in providers {
-            let id = value_str(provider, "id").unwrap_or("<unknown>");
-            let status = value_str(provider, "status").unwrap_or("unknown");
-            let duration = value_u64(provider, "duration_ms").unwrap_or(0);
-            if let Some(summary) = provider.get("summary").filter(|value| !value.is_null()) {
-                let packages = value_u64(summary, "work_packages").unwrap_or(0);
-                let blockers = value_u64(summary, "blockers").unwrap_or(0);
-                let diagnostics = value_u64(&summary["diagnostics"], "total").unwrap_or(0);
-                lines.push(format!(
-                    "  - {id}: {status}; {packages} package(s), {blockers} blocker(s), {diagnostics} diagnostic(s), {duration} ms"
-                ));
-            } else {
-                let error = provider["error"]["message"]
-                    .as_str()
-                    .map(|message| concise_preview(message, 240))
-                    .unwrap_or_else(|| "provider failed without a diagnostic".into());
-                lines.push(format!("  - {id}: {status}; {duration} ms"));
-                lines.push(format!("    {error}"));
-            }
-            let inputs = provider["input_freshness"]
-                .as_array()
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            if !inputs.is_empty() {
-                let inputs = inputs
-                    .iter()
-                    .map(|input| {
-                        format!(
-                            "{}={}",
-                            value_str(input, "name").unwrap_or("<unknown>"),
-                            value_str(input, "status").unwrap_or("unknown")
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                lines.push(format!("    Inputs: {inputs}"));
-            }
-        }
-    }
-
     let errors = value["errors"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     if !errors.is_empty() {
         lines.push("Collection errors:".into());
@@ -184,7 +136,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn surfaces_provider_and_freshness_state() {
+    fn surfaces_local_repository_work_loop_and_collection_state() {
         let summary = format_summary(&json!({
             "outcome": "partial",
             "repository": {
@@ -209,31 +161,10 @@ mod tests {
                 "attempts": [{}, {}],
                 "needs_attention": { "exhausted_attempts": [{}] }
             },
-            "providers": [{
-                "id": "example.rewrite",
-                "status": "complete",
-                "duration_ms": 42,
-                "summary": {
-                    "work_packages": 130,
-                    "blockers": 4,
-                    "diagnostics": { "total": 1 }
-                },
-                "input_freshness": [
-                    { "name": "target", "status": "dirty" },
-                    { "name": "legacy", "status": "current" }
-                ],
-                "error": null
-            }, {
-                "id": "example.failed",
-                "status": "failed",
-                "duration_ms": 1000,
-                "summary": null,
-                "input_freshness": [],
-                "error": {
-                    "message": "provider timed out"
-                }
-            }],
-            "errors": []
+            "errors": [{
+                "scope": "loops",
+                "message": "one malformed attempt was omitted"
+            }]
         }));
 
         assert!(summary.contains("Collection: partial"));
@@ -241,9 +172,7 @@ mod tests {
         assert!(summary.contains("origin/main (ahead 2, behind 1; local ref)"));
         assert!(summary.contains("3 open plan(s), session session_1"));
         assert!(summary.contains("1 lease(s), 2 attempt(s), 1 exhausted"));
-        assert!(summary.contains("130 package(s), 4 blocker(s), 1 diagnostic(s), 42 ms"));
-        assert!(summary.contains("Inputs: target=dirty, legacy=current"));
-        assert!(summary.contains("example.failed: failed; 1000 ms"));
-        assert!(summary.contains("provider timed out"));
+        assert!(summary.contains("Collection errors:"));
+        assert!(summary.contains("loops: one malformed attempt was omitted"));
     }
 }

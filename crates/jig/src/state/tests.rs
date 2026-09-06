@@ -9,8 +9,9 @@ use tempfile::tempdir;
 
 use super::jsonl::{
     jsonl_end_offset, read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
-    read_receipt_window_with_bytes, receipts_for_plan_with_lock, scan_jsonl_raw_from,
-    state_lock_path, with_jsonl_write_lock, write_jsonl_locked,
+    read_receipt_window_with_bytes, read_receipts_reverse_with_cancellation,
+    receipts_for_plan_with_lock, scan_jsonl_raw_from, state_lock_path, with_jsonl_write_lock,
+    write_jsonl_locked,
 };
 use super::records::SessionEvent;
 use super::*;
@@ -146,6 +147,113 @@ fn receipt_window_reads_a_bounded_tail_independent_of_old_history() {
 }
 
 #[test]
+fn receipt_window_accepts_a_record_at_the_exact_dashboard_limit() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("receipts.jsonl");
+    let receipt = receipt_record("receipt_exact", tool::TEST, 0, DiffStat::default());
+    let mut record = serde_json::to_vec(&receipt).unwrap();
+    assert!(record.len() < super::jsonl::DASHBOARD_JSONL_RECORD_BYTES);
+    record.resize(super::jsonl::DASHBOARD_JSONL_RECORD_BYTES, b' ');
+    record.push(b'\n');
+    fs::write(&path, record).unwrap();
+
+    let receipts = read_receipts_reverse_with_cancellation(&path, 1, |_| true, &|| false)
+        .unwrap()
+        .0;
+
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].id, "receipt_exact");
+}
+
+#[test]
+fn legacy_receipt_window_preserves_records_above_the_dashboard_limit() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("receipts.jsonl");
+    let mut receipt = receipt_record("receipt_legacy_large", tool::TEST, 0, DiffStat::default());
+    receipt.stdout_preview = "x".repeat(super::jsonl::DASHBOARD_JSONL_RECORD_BYTES + 1);
+    append_jsonl(&path, &receipt).unwrap();
+
+    let receipts = super::jsonl::read_receipt_window(&path, 1).unwrap();
+
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].id, "receipt_legacy_large");
+}
+
+#[test]
+fn bounded_reverse_receipt_scan_matches_naive_reverse_across_chunk_boundaries() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("receipts.jsonl");
+    let target_lengths = [
+        257,
+        16 * 1024 - 1,
+        16 * 1024,
+        16 * 1024 + 1,
+        2 * 16 * 1024 - 1,
+        3 * 16 * 1024 + 7,
+        5 * 16 * 1024 + 3,
+    ];
+    let mut bytes = b" \n\t\n".to_vec();
+    for (index, target_len) in target_lengths.into_iter().enumerate() {
+        let mut receipt = receipt_record(
+            &format!("receipt_{index}"),
+            if index % 2 == 0 {
+                tool::TEST
+            } else {
+                tool::CLIPPY
+            },
+            0,
+            DiffStat::default(),
+        );
+        receipt.stdout_preview = "x".repeat(target_len);
+        let record = serde_json::to_vec(&receipt).unwrap();
+        bytes.extend_from_slice(&record);
+        bytes.extend_from_slice(b"  \n");
+        if index % 2 == 0 {
+            bytes.extend_from_slice(b"\n");
+        }
+    }
+    fs::write(&path, &bytes).unwrap();
+
+    let mut expected = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|record| !record.iter().all(u8::is_ascii_whitespace))
+        .map(|record| serde_json::from_slice::<ReceiptRecord>(record).unwrap())
+        .collect::<Vec<_>>();
+    expected.reverse();
+
+    let all = read_receipts_reverse_with_cancellation(&path, usize::MAX, |_| true, &|| false)
+        .unwrap()
+        .0;
+    let tests_only = read_receipts_reverse_with_cancellation(
+        &path,
+        usize::MAX,
+        |receipt| receipt.tool_name == tool::TEST,
+        &|| false,
+    )
+    .unwrap()
+    .0;
+
+    assert_eq!(
+        all.iter().map(|receipt| &receipt.id).collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|receipt| &receipt.id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        tests_only
+            .iter()
+            .map(|receipt| &receipt.id)
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .filter(|receipt| receipt.tool_name == tool::TEST)
+            .map(|receipt| &receipt.id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn receipt_window_rejects_an_unterminated_final_record() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -219,6 +327,27 @@ fn receipt_plan_query_uses_stable_snapshot_when_advisory_locks_are_unsupported()
 
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].plan_id.as_deref(), Some("plan_fallback"));
+}
+
+#[test]
+fn receipt_fallback_ignores_an_unterminated_final_record() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("receipts.jsonl");
+    let first = receipt_record("receipt_complete", tool::TEST, 0, DiffStat::default());
+    let second = receipt_record("receipt_partial", tool::TEST, 0, DiffStat::default());
+    let mut bytes = serde_json::to_vec(&first).unwrap();
+    bytes.push(b'\n');
+    let partial = serde_json::to_vec(&second).unwrap();
+    bytes.extend_from_slice(&partial[..partial.len() / 2]);
+    fs::write(&path, bytes).unwrap();
+
+    let receipts = receipts_for_plan_with_lock(&path, "plan_1", 50, |_| {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    })
+    .unwrap();
+
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].id, "receipt_complete");
 }
 
 #[test]
@@ -561,6 +690,51 @@ fn cancellable_jsonl_read_stops_while_data_file_lock_is_held() {
     );
     FileExt::unlock(&lock).unwrap();
     reader.join().unwrap();
+}
+
+#[test]
+fn cancellable_jsonl_read_stops_while_cache_lock_is_held() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    fs::write(&path, b"{\"id\":1}\n").unwrap();
+    let cache_path = state_lock_path(&path);
+    fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(cache_path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let reader_cancelled = Arc::clone(&cancelled);
+    let (read_tx, read_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        read_tx
+            .send(read_jsonl_with_cancellation::<Value>(&path, &|| {
+                reader_cancelled.load(Ordering::SeqCst)
+            }))
+            .unwrap();
+    });
+
+    assert!(read_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    cancelled.store(true, Ordering::SeqCst);
+    let result = read_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    FileExt::unlock(&lock).unwrap();
+    reader.join().unwrap();
+
+    assert!(crate::cancellation::is_status_collection_cancellation(
+        &result.unwrap_err()
+    ));
 }
 
 #[test]

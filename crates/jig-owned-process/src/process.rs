@@ -1,5 +1,4 @@
-use std::io::Read;
-use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output};
+use std::process::{Child, Command, ExitStatus, Output};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -349,48 +348,6 @@ fn finalize_owned_process_output(
         stdout,
         stderr,
     })
-}
-
-enum ProcessPipe {
-    Stdout(ChildStdout),
-    Stderr(ChildStderr),
-}
-
-impl ProcessPipe {
-    #[cfg(unix)]
-    fn prepare(&self) -> std::io::Result<()> {
-        use std::os::fd::AsFd;
-
-        let descriptor = match self {
-            Self::Stdout(reader) => reader.as_fd(),
-            Self::Stderr(reader) => reader.as_fd(),
-        };
-        crate::unix::set_nonblocking(descriptor)
-    }
-
-    #[cfg(not(unix))]
-    fn prepare(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "nonblocking process-pipe reads are unavailable on this platform",
-        ))
-    }
-
-    #[cfg(unix)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Stdout(reader) => reader.read(buffer),
-            Self::Stderr(reader) => reader.read(buffer),
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn read_available(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "nonblocking process-pipe reads are unavailable on this platform",
-        ))
-    }
 }
 
 #[cfg(unix)]

@@ -137,8 +137,8 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
-- `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
-- `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
+- `scripts/jig status` collects local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
+- `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
@@ -243,45 +243,30 @@ Jig provides an offline repair path for its own repository state. `scripts/jig s
 
 Receipt retention is also local. `state archive --before <date>` compresses eligible old records into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks the active stream. `state restore --backup <path>` can restore that exact receipt preimage. `state export receipts --before <date> --output <file.jsonl.gz>` makes a non-mutating copy at a caller-selected destination. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
 
-## Rewrite Status
+## Terminal Dashboard
 
-Repositories with a project-specific software-rewrite inspector can configure its exact argv in `.jig.toml` and use one read-only command for the operational picture:
-
-```sh
-scripts/jig status
-scripts/jig status --json
-scripts/jig status --tui
-```
-
-The human view calls out repo cleanliness and local tracking state, open plans, loop leases/attempts, provider failures, package and blocker totals, and whether each reported Git input is current, dirty, or stale. The versioned JSON retains each validated `jig.status-provider/v1` document and adds Jig-owned work, gate, and runtime facts beside it.
-
-A failed provider does not erase the rest of the picture: it appears as a failed provider result and makes aggregate `outcome` partial. The command is read-only, records no receipt, stores no cache, and performs no remote fetch. See [Status-provider protocol](status-provider.md#jig-runner-and-aggregate) for configuration and exact semantics.
-
-The TUI consumes that aggregate through three views: Overview for progress, repo and legacy/target freshness, diagnostics, and Jig state; Packages for selectable native facet and acceptance details; and Blockers for a flattened operator queue. Press Enter on a selected package to open its scrollable detail view, including bounded standard package fields and generic rendering of namespaced provider extensions; oversized fields and collections are marked when the terminal view truncates or omits them. Escape or Enter returns to the list. Press `r` to refresh, Tab or `1`/`2`/`3` to change views, `j`/`k` or arrows to move or scroll, `[`/`]` to switch providers, `b` to filter packages, and `q` to quit. Collection happens in one cancellable background worker, so a slow provider does not block navigation or quit. `--refresh-seconds` changes the 30-second default.
-
-This status TUI and the browser flight recorder below are separate consumers with separate snapshot models. Provider caching, launchability policy, and a Codex implementation launcher remain outside this slice.
-
-## Flight Recorder UI
-
-`scripts/jig ui` turns the append-only record under `.agent/state/` into a browsable page instead of raw JSONL:
+`scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status.
 
 ```sh
-scripts/jig ui               # prints a one-time loopback sign-in URL
-scripts/jig ui --port 0      # pick any free port
+scripts/jig ui                         # start on Work
+scripts/jig ui --plan PLAN_ID          # start in plan detail
+scripts/jig status --tui               # start on Status
+scripts/jig --json ui                  # one recorder snapshot
+scripts/jig --json ui --plan PLAN_ID   # one plan snapshot
+scripts/jig status --json              # one local status snapshot
 ```
 
-One page answers the daily questions:
+The four tabs are Status, Work, Timeline, and Health. Status summarizes local repository, work, loop, and collection observations. Work shows open and completed plans and their gates. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, gates, decisions, receipts, changed paths, and captured output.
 
-- **Open plans and gates.** Each open plan shows its gate table — status, freshness, last run, diff summary — plus the exact command to produce missing evidence.
-- **Recent failures.** The latest failed receipts with expandable stderr, so "why is this red" never requires `jq`.
-- **Recently finished work.** Closed plans with resolutions and how long they took.
-- **Check health.** Per-tool aggregates over recent receipts: runs, failures, last status, average duration.
-- **Loops.** Configured loop workflows, cron/timezone schedules, next and latest runs, live leases, retained task worktrees, and attempt or scheduled occurrences that need a human.
-- **Timeline.** Sessions, plan events, receipts, and decisions merged newest-first, filterable with `?show=receipts|failures|plans|sessions|decisions` and `?limit=N`. Failed receipts include a stderr preview inline.
+At the top level, use Tab or Shift-Tab, left/right, or `1` through `4` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Work, Timeline, or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys; plan detail uses Tab between sections, `h`/`l` or left/right scroll horizontally, and Enter can open a selected receipt or nested detail.
 
-Every plan id links to a detail page under the server's per-run namespace, covering open and closed plans alike: the plan body, gate evidence as recorded, linked decisions, and the plan's receipts with expandable stdout/stderr and changed paths.
+Local collection defaults to a 10-second completion-relative schedule. Refreshes never overlap, run through one cancellable worker, and publish repository status and recorder state as one epoch. A damaged state stream remains a visible local error while usable observations stay available. Neither entrypoint writes receipts, fetches remotes, or executes actions.
 
-The server is read-only, binds `127.0.0.1` only, records no receipts, and re-reads state on every request, so the page is always current (it also auto-refreshes). It accepts only the exact bound `Host` and same-origin `Origin`; the printed one-time URL establishes an `HttpOnly`, `SameSite=Strict` session cookie scoped to an unguessable per-run path before redirecting to the clean dashboard URL. Snapshot and plan JSON routes live below that same namespace after the session is established, preventing the browser from sending the cookie to ordinary paths on unrelated loopback ports. Proxy aliases are intentionally unsupported because arbitrary accepted hostnames would weaken the DNS-rebinding defense.
+The full layout is comfortable at 108 by 24 cells or larger and supported from 72 by 20. Terminals from 40 by 12 use a compact layout; smaller terminals show a safe micro summary. Both stdin and stdout must be terminals. When redirected, the interactive command exits nonzero with guidance to use `jig ui --json` for recorder data or `jig status --json` for local status data, and terminal state is restored on cancellation or failure.
+
+The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 2.
+
+Version 0.3.0 removed the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in 0.4.0. A prior Jig release is required to read old bookmarked URLs. The cutover does not change generated launcher scope or contract version 7 because `ui` and `status` remain runtime-owned repository commands.
 
 ## Dev Proxy
 

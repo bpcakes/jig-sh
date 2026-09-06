@@ -10,6 +10,27 @@ use ulid::Ulid;
 
 use crate::context::RepoContext;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_NOW_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct TestNowGuard(Option<u64>);
+
+#[cfg(test)]
+impl Drop for TestNowGuard {
+    fn drop(&mut self) {
+        TEST_NOW_MS.set(self.0);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_now_ms(value: u64) -> TestNowGuard {
+    let previous = TEST_NOW_MS.replace(Some(value));
+    TestNowGuard(previous)
+}
+
 pub(super) struct AdvisoryLeaseFile(File);
 
 impl AdvisoryLeaseFile {
@@ -33,6 +54,10 @@ impl Drop for AdvisoryLeaseFile {
 }
 
 pub(crate) fn now_ms() -> u64 {
+    #[cfg(test)]
+    if let Some(value) = TEST_NOW_MS.get() {
+        return value;
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

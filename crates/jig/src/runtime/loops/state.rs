@@ -44,10 +44,10 @@ pub(super) const LOOP_RUNTIME_DIR: &str = ".agent/runtime/loop";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct LeaseRecord {
-    key: String,
+    pub(super) key: String,
     pub(super) owner: String,
-    acquired_at_ms: u64,
-    expires_at_ms: u64,
+    pub(super) acquired_at_ms: u64,
+    pub(super) expires_at_ms: u64,
 }
 
 impl LeaseRecord {
@@ -348,19 +348,19 @@ impl LeaseFile {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct AttemptRecord {
-    key: String,
-    workflow_id: String,
-    item_key: String,
+    pub(super) key: String,
+    pub(super) workflow_id: String,
+    pub(super) item_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) item_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) observed_item_version: Option<String>,
-    attempts: u32,
-    max_attempts: u32,
-    last_attempt_ms: u64,
+    pub(super) attempts: u32,
+    pub(super) max_attempts: u32,
+    pub(super) last_attempt_ms: u64,
     pub(super) next_eligible_ms: u64,
     pub(super) exhausted: bool,
-    last_status: String,
+    pub(super) last_status: String,
 }
 
 impl AttemptRecord {

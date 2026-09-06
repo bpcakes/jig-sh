@@ -45,8 +45,6 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
 The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 7`, with explicit components, actions, profiles, adapter provenance, component-scoped command runners, compatibility `jig.*` aliases, typed native configuration, and target-local matching for non-empty action inputs. Contract v6 remains readable with component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
 
-The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. The `jig` runtime configures and safely executes providers and exposes a versioned aggregate through `jig status`; `crates/jig-status-tui` presents that aggregate without importing runtime internals. The Codex-home launcher is a separate CLI-owned feature and presentation crate rather than launch policy inferred from status observations. Provider caching and general implementation launchability policy remain later milestones.
-
 Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
 
 The root `AGENTS.md` is block-managed during adoption and update. Existing repo-specific content outside the Jig managed block is preserved.
@@ -81,7 +79,7 @@ A shorter product phrasing is:
 
 `templates/project/` is the source for generated repository assets. It renders `.jig.toml`, `AGENTS.md`, `.agent/jig-contract.json`, scripts, workflows, and agent support files.
 
-`.jig.toml` is both public configuration and the renderer answer file. It records repo settings such as `repo_name`, `default_branch`, crate roots, SQLx settings, web app settings, status-provider argv, and template source metadata. `.agent/jig-contract.json` carries the contract epoch that compatible runtimes validate before executing the harness; generated repositories do not pin a Jig product release.
+`.jig.toml` is both public configuration and the renderer answer file. It records repo settings such as `repo_name`, `default_branch`, crate roots, SQLx settings, web app settings, and template source metadata. `.agent/jig-contract.json` carries the contract epoch that compatible runtimes validate before executing the harness; generated repositories do not pin a Jig product release.
 
 The template source metadata is a trust boundary. In generated or adopted repos, `scripts/install-jig.sh` may install from the exact `_commit` recorded in `.jig.toml` when that value is a hex git revision, so changing `_src_path` or `_commit` is equivalent to changing the source used to install the repo-local Jig runtime.
 
@@ -100,17 +98,17 @@ human-authored waiver.
 
 `crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. Repository execution resolves a checked-in target to its configured command or closed native runner, records target-attributed receipts, and returns structured results. Legacy contracts still resolve their manifest tool to a command key and retain the previous response shape.
 
-`crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It also owns the Rust source of truth for the open status-provider protocol but does not execute providers, load repositories, or aggregate their observations.
+`crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It does not load repositories or own runtime aggregation policy.
 
-`crates/jig/src/status.rs` owns the separate runtime boundary: configured provider execution, v1 validation, local Git input freshness, and aggregation with structured work, gate, lease, and attempt state. It preserves accepted provider JSON as emitted and keeps execution/configuration dependencies out of `jig-contract`.
+`crates/jig/src/status.rs` owns read-only aggregation of local Git, structured work, gate, lease, and attempt state.
 
-`crates/jig-status-tui` implements the interactive terminal consumer used by `scripts/jig status --tui`. Like the web UI crate, it depends on a read-only snapshot-provider trait rather than `RepoContext`, provider commands, state storage, or runtime policy. The small adapter in `crates/jig/src/status/tui.rs` supplies cancellable aggregate snapshots. The TUI does not cache status or launch agents.
+`crates/jig-ui` owns the unified interactive terminal application used by both `scripts/jig ui` and `scripts/jig status --tui`. Its typed `DashboardSource` boundary carries local recorder and plan-detail snapshots without exposing `RepoContext`, state storage, or runtime policy. The CLI adapter in `crates/jig/src/ui.rs` and `crates/jig/src/ui/source/` owns repository collection and status aggregation. The TUI is read-only: it does not write receipts, fetch remotes, run actions, or launch agents.
 
 `crates/jig-tui` owns terminal-safe display text plus the raw-mode, alternate-screen, cursor-restoration, actionable-key, and cooperative-worker foundations shared by terminal interfaces. `crates/jig-codex-tui` builds the searchable Codex-home picker on that base behind an `InspectionSource` trait. The adapter in `crates/jig/src/cli/codex_run.rs` supplies exact discovered paths and streams normalized account and usage updates from the runtime's bounded app-server inspection pool; the presentation crate does not read authentication files or launch Codex itself.
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
 
-`crates/jig-ui` implements the loopback HTTP server, routes, timeline query model, and server-rendered dashboard used by `scripts/jig ui`. It depends only on a read-only snapshot-provider contract. `crates/jig/src/ui/snapshot.rs` remains responsible for joining repository state, work-gate evaluation, and loop status, so UI presentation does not depend on Jig runtime internals or read `.agent/state` directly.
+The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` and `jig ui --plan PLAN_ID --json` use bounded recorder schema 1 without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
@@ -170,7 +168,7 @@ It is not a global agent memory system. The state is repo-local and runtime-owne
 
 It is not trying to centralize business ownership. Crate-level guidance and application-specific commands stay project-owned.
 
-It is not currently a general polyglot generated harness. The generated defaults assume Cargo workspaces, Rust formatting/clippy/tests, optional SQLx, and Bun for configured web apps. The status-provider observation boundary is deliberately language-neutral, but it does not by itself make the generated execution harness polyglot.
+It is not currently a general polyglot generated harness. The generated defaults assume Cargo workspaces, Rust formatting/clippy/tests, optional SQLx, and Bun for configured web apps.
 
 ## How Agents Should Approach This Repo
 
