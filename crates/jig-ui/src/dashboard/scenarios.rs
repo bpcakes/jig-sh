@@ -447,7 +447,7 @@ fn status_loops() -> StatusLoopObservation {
                 .exhausted_attempts
                 .items()
                 .iter()
-                .map(|attempt| StatusExhaustedAttempt {
+                .map(|attempt| StatusLoopAttempt {
                     key: attempt.key.clone(),
                     workflow_id: attempt.workflow_id.clone(),
                     item_key: attempt.item_key.clone(),

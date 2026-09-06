@@ -427,7 +427,7 @@ pub struct StatusLoopObservation {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusLoopAttention {
-    pub exhausted_attempts: Vec<StatusExhaustedAttempt>,
+    pub exhausted_attempts: Vec<StatusLoopAttempt>,
     pub scheduled_occurrences: Vec<StatusScheduledOccurrence>,
 }
 
@@ -489,22 +489,10 @@ pub struct StatusScheduledOccurrence {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StatusExhaustedAttempt {
-    pub key: String,
-    pub workflow_id: String,
-    pub item_key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub item_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observed_item_version: Option<String>,
-    pub attempts: u32,
-    pub max_attempts: u32,
-    pub last_attempt_ms: u64,
-    pub next_eligible_ms: u64,
-    pub exhausted: bool,
-    pub last_status: String,
-}
+/// Compatibility name for an attempt selected into the exhausted collection.
+/// Selection belongs to the status producer; the observation has the same
+/// fields and wire format as every other status attempt.
+pub type StatusExhaustedAttempt = StatusLoopAttempt;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusCollectionError {

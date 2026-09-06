@@ -1,9 +1,7 @@
 use super::*;
 use crate::cancellation::ensure_status_collection_active;
 use crate::command::LoopStatusRequest;
-use crate::runtime::loops::dashboard::{
-    attempt_status, exhausted_attempt_status, lease_status, workflow_status,
-};
+use crate::runtime::loops::dashboard::{attempt_status, lease_status, workflow_status};
 use crate::runtime::loops::occurrence::{OccurrenceStore, ScheduleOccurrence};
 
 #[cfg(test)]
@@ -156,7 +154,7 @@ fn typed_status_at_with_cancellation(
             exhausted_attempts: attempt_sections
                 .needs_attention
                 .iter()
-                .map(exhausted_attempt_status)
+                .map(attempt_status)
                 .collect(),
             scheduled_occurrences: scheduled_needs_attention
                 .iter()

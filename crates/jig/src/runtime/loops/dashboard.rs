@@ -26,25 +26,6 @@ pub(super) fn attempt_status(attempt: &AttemptRecord) -> jig_ui::dashboard::Stat
     }
 }
 
-pub(super) fn exhausted_attempt_status(
-    attempt: &AttemptRecord,
-) -> jig_ui::dashboard::StatusExhaustedAttempt {
-    let view = attempt_status(attempt);
-    jig_ui::dashboard::StatusExhaustedAttempt {
-        key: view.key,
-        workflow_id: view.workflow_id,
-        item_key: view.item_key,
-        item_version: view.item_version,
-        observed_item_version: view.observed_item_version,
-        attempts: view.attempts,
-        max_attempts: view.max_attempts,
-        last_attempt_ms: view.last_attempt_ms,
-        next_eligible_ms: view.next_eligible_ms,
-        exhausted: view.exhausted,
-        last_status: view.last_status,
-    }
-}
-
 pub(super) fn workflow_status(
     workflow: &ResolvedWorkflow,
 ) -> jig_ui::dashboard::StatusLoopWorkflow {
