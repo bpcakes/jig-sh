@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
+pub(super) use jig_typescript::workspace::segment_matches;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_yaml_ng::Value as YamlValue;
@@ -540,35 +541,6 @@ fn unique_frontend_name(name: String, seen: &mut BTreeSet<String>) -> String {
         }
     }
     unreachable!()
-}
-
-pub(super) fn segment_matches(pattern: &str, name: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == name;
-    };
-    let mut remaining = name;
-    let mut parts = pattern.split('*').peekable();
-    if let Some(first) = parts.next()
-        && !first.is_empty()
-    {
-        let Some(stripped) = remaining.strip_prefix(first) else {
-            return false;
-        };
-        remaining = stripped;
-    }
-    while let Some(part) = parts.next() {
-        if part.is_empty() {
-            continue;
-        }
-        let Some(index) = remaining.find(part) else {
-            return false;
-        };
-        if parts.peek().is_none() && !pattern.ends_with('*') {
-            return remaining[index..].ends_with(part);
-        }
-        remaining = &remaining[index + part.len()..];
-    }
-    pattern.ends_with('*') || remaining.is_empty()
 }
 
 fn glob_escapes_root(glob: &str) -> bool {

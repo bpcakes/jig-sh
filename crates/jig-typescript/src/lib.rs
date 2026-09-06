@@ -3,6 +3,8 @@ use jig_contract::{
     FeatureDescriptor, RepositoryAdapterDescriptor, tool,
 };
 
+pub mod workspace;
+
 const LINT_COMMAND: &str = "typescript_lint_command";
 const TYPECHECK_COMMAND: &str = "typescript_typecheck_command";
 const BUILD_COMMAND: &str = "typescript_build_command";

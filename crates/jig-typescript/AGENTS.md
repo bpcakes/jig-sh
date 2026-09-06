@@ -7,11 +7,13 @@
 ## Key entrypoints
 
 - `src/lib.rs`: TypeScript command keys, required tool mapping, and availability messages.
+- `src/workspace.rs`: pure workspace directory-segment matching shared by adoption and proxy discovery.
 
 ## Edit here for X
 
 - Add a TypeScript check exposed through Jig: `src/lib.rs`.
 - Change frontend app gate requirements: `src/lib.rs`.
+- Change workspace-segment matching: `src/workspace.rs`; callers own supported grammar and filesystem traversal.
 
 ## Invariants
 

@@ -457,17 +457,12 @@ fn path_is_within_root(canonical_root: Option<&Path>, path: &Path) -> bool {
 }
 
 fn segment_matches(pattern: &str, name: &str) -> bool {
-    if pattern == "*" || pattern == "**" {
-        return true;
-    }
-    // Package workspace patterns support the common single-wildcard segment
-    // shape (`apps/*`, `pkg-*-shared`), not full shell glob semantics.
-    let Some(index) = pattern.find('*') else {
-        return pattern == name;
-    };
-    let (prefix, suffix) = pattern.split_at(index);
-    let suffix = suffix.trim_start_matches('*');
-    name.starts_with(prefix) && name.ends_with(suffix)
+    // Keep proxy discovery's single wildcard-group grammar; adoption also
+    // accepts separated wildcard groups. Both use complete-segment matching.
+    let supported = pattern
+        .split_once('*')
+        .is_none_or(|(_, suffix)| !suffix.trim_start_matches('*').contains('*'));
+    supported && jig_typescript::workspace::segment_matches(pattern, name)
 }
 
 fn script_looks_like_vite(value: &str) -> bool {

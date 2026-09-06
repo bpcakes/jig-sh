@@ -609,3 +609,35 @@ fn explicit_empty_workspaces_suppress_frontend_fallback_scan() {
 
     assert!(inference.frontend_apps.is_empty());
 }
+
+#[test]
+fn frontend_discovery_requires_nonoverlapping_glob_edges() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("package.json"),
+        r#"{"workspaces":["apps/ab*bc"]}"#,
+    )
+    .unwrap();
+    for name in ["abc", "abbc"] {
+        let dir = temp.path().join("apps").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("package.json"),
+            serde_json::json!({
+                "scripts": {"dev": "vite", "lint": "eslint .", "typecheck": "tsc",
+                    "build:bundle": "vite build", "test:coverage": "vitest run --coverage"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let inferred = infer_frontend_apps_with_metadata(temp.path(), None, &mut Vec::new());
+    assert_eq!(
+        inferred
+            .apps
+            .iter()
+            .map(|app| app.dir.as_str())
+            .collect::<Vec<_>>(),
+        ["apps/abbc"]
+    );
+}

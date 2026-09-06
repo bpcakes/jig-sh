@@ -29,6 +29,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 jig-core.workspace = true
 jig-owned-process.workspace = true
+jig-typescript.workspace = true
 libc.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
