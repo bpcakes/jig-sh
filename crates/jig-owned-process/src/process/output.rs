@@ -1,13 +1,15 @@
 use std::{process::Child, time::Duration};
 
+use crate::{ChildPipe, NonblockingPipe};
+
 use super::{
     ACTIVE_OUTPUT_POLL_INTERVAL, BoundedProcessOutput, MAX_OUTPUT_READS_PER_POLL,
     MAX_OUTPUT_READS_PER_POLL_AFTER_TRUNCATION, OwnedProcessObserver, OwnedProcessOutputStream,
-    ProcessOutputLimits, ProcessPipe, TRUNCATED_OUTPUT_POLL_INTERVAL,
+    ProcessOutputLimits, TRUNCATED_OUTPUT_POLL_INTERVAL,
 };
 
 pub(super) struct OutputDrain {
-    reader: Option<ProcessPipe>,
+    reader: Option<NonblockingPipe>,
     bytes: Vec<u8>,
     limit: usize,
     truncated: bool,
@@ -21,8 +23,9 @@ pub(super) struct OutputPoll {
 }
 
 impl OutputDrain {
-    pub(super) fn start(reader: ProcessPipe, limit: usize) -> std::io::Result<Self> {
-        reader.prepare()?;
+    pub(super) fn start(reader: ChildPipe, limit: usize) -> std::io::Result<Self> {
+        let reader =
+            reader.prepare("nonblocking process-pipe reads are unavailable on this platform")?;
         Ok(Self {
             reader: Some(reader),
             bytes: Vec::new(),
@@ -106,12 +109,12 @@ impl OwnedProcessOutputDrains {
         let stdout = child
             .stdout
             .take()
-            .map(|reader| OutputDrain::start(ProcessPipe::Stdout(reader), limits.stdout))
+            .map(|reader| OutputDrain::start(ChildPipe::Stdout(reader), limits.stdout))
             .transpose()?;
         let stderr = child
             .stderr
             .take()
-            .map(|reader| OutputDrain::start(ProcessPipe::Stderr(reader), limits.stderr))
+            .map(|reader| OutputDrain::start(ChildPipe::Stderr(reader), limits.stderr))
             .transpose()?;
         Ok(Self { stdout, stderr })
     }

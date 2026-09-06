@@ -4,10 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result as AnyResult, anyhow, bail};
+use jig_owned_process::{ChildPipe, NonblockingPipe};
 use zeroize::Zeroizing;
 
 use crate::SecretBytes;
-use crate::process_pipe::ProcessPipe;
 
 use super::{
     ACTIVE_OUTPUT_POLL_INTERVAL, MAX_CAPTURED_STREAM_BYTES, MAX_STREAM_BYTES_PER_POLL,
@@ -16,14 +16,14 @@ use super::{
 
 struct CappedOutputDrain {
     label: &'static str,
-    reader: Option<ProcessPipe>,
+    reader: Option<NonblockingPipe>,
     output: SecretBytes,
     complete: bool,
 }
 
 impl CappedOutputDrain {
-    fn start(label: &'static str, reader: ProcessPipe) -> AnyResult<Self> {
-        reader
+    fn start(label: &'static str, reader: ChildPipe) -> AnyResult<Self> {
+        let reader = reader
             .prepare("nonblocking brokered process-pipe reads are unavailable on this platform")
             .with_context(|| format!("failed to prepare brokered command {label} capture"))?;
         Ok(Self {
@@ -121,8 +121,8 @@ impl CappedOutputDrains {
             .take()
             .ok_or_else(|| anyhow!("brokered command stderr pipe was not captured"))?;
         Ok(Self {
-            stdout: CappedOutputDrain::start("stdout", ProcessPipe::Stdout(stdout))?,
-            stderr: CappedOutputDrain::start("stderr", ProcessPipe::Stderr(stderr))?,
+            stdout: CappedOutputDrain::start("stdout", ChildPipe::Stdout(stdout))?,
+            stderr: CappedOutputDrain::start("stderr", ChildPipe::Stderr(stderr))?,
         })
     }
 
