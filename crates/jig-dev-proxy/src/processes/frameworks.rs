@@ -1,6 +1,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+pub(super) use jig_typescript::dev_script::{
+    is_vite_token, script_looks_like_vite as shell_command_looks_like_vite,
+};
 
 use crate::host::{validate_hostname, validate_tld};
 use crate::types::{AppKind, AppRunSpec, CommandSpec, ProxySettings};
@@ -163,31 +166,6 @@ pub(super) fn command_looks_like_vite(argv: &[String]) -> bool {
         }),
         _ => false,
     }
-}
-
-pub(super) fn shell_command_looks_like_vite(command: &str) -> bool {
-    let tokens: Vec<_> = command
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
-        .filter_map(normalized_shell_token)
-        .collect();
-    let Some(vite_index) = tokens.iter().position(|token| is_vite_token(token)) else {
-        return false;
-    };
-    !tokens[vite_index + 1..]
-        .iter()
-        .any(|token| matches!(*token, "build" | "preview" | "optimize"))
-}
-
-pub(super) fn normalized_shell_token(token: &str) -> Option<&str> {
-    let token = token.trim_matches(['"', '\'']);
-    if token.is_empty() {
-        return None;
-    }
-    Some(token.rsplit('/').next().unwrap_or(token))
-}
-
-pub(super) fn is_vite_token(token: &str) -> bool {
-    token == "vite" || token.starts_with("vite@")
 }
 
 pub(super) fn package_manager_run_separator_index(argv: &[String]) -> Option<usize> {

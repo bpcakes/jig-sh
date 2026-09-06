@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
+pub(super) use jig_typescript::dev_script::script_looks_like_vite;
 pub(super) use jig_typescript::workspace::segment_matches;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -399,24 +400,6 @@ fn non_empty_script<'a>(
         .get(name)
         .and_then(JsonValue::as_str)
         .filter(|value| !value.trim().is_empty())
-}
-
-pub(super) fn script_looks_like_vite(value: &str) -> bool {
-    let tokens = value
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
-        .map(|token| token.trim_matches(['"', '\'']))
-        .filter(|token| !token.is_empty())
-        .map(|token| token.rsplit('/').next().unwrap_or(token))
-        .collect::<Vec<_>>();
-    let Some(vite_index) = tokens
-        .iter()
-        .position(|token| *token == "vite" || token.starts_with("vite@"))
-    else {
-        return false;
-    };
-    !tokens[vite_index + 1..]
-        .iter()
-        .any(|token| matches!(*token, "build" | "preview" | "optimize"))
 }
 
 fn script_looks_like_astro(value: &str) -> bool {

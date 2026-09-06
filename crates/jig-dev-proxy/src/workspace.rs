@@ -3,6 +3,7 @@ use std::io::{ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
+use jig_typescript::dev_script::script_looks_like_vite;
 use serde_json::Value;
 
 use crate::file_ops;
@@ -463,31 +464,6 @@ fn segment_matches(pattern: &str, name: &str) -> bool {
         .split_once('*')
         .is_none_or(|(_, suffix)| !suffix.trim_start_matches('*').contains('*'));
     supported && jig_typescript::workspace::segment_matches(pattern, name)
-}
-
-fn script_looks_like_vite(value: &str) -> bool {
-    let tokens: Vec<_> = value
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
-        .filter_map(normalized_script_token)
-        .collect();
-    let Some(vite_index) = tokens.iter().position(|token| is_vite_token(token)) else {
-        return false;
-    };
-    !tokens[vite_index + 1..]
-        .iter()
-        .any(|token| matches!(*token, "build" | "preview" | "optimize"))
-}
-
-fn normalized_script_token(token: &str) -> Option<&str> {
-    let token = token.trim_matches(['"', '\'']);
-    if token.is_empty() {
-        return None;
-    }
-    Some(token.rsplit('/').next().unwrap_or(token))
-}
-
-fn is_vite_token(token: &str) -> bool {
-    token == "vite" || token.starts_with("vite@")
 }
 
 #[cfg(test)]

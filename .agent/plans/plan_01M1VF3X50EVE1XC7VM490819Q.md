@@ -7,3 +7,5 @@ DU002 complete: check and file-budget now share CLI provenance and comparison re
 DU003 complete: adoption and proxy discovery share complete-segment matching in jig-typescript, preserving their wildcard grammars and traversal policies. Fixed overlapping proxy glob edges. All 108 focused tests, no-default-features CLI check, and harness fmt/clippy/contract/file-budget checks passed. Remaining: DU004-DU006.
 
 DU004 complete: shared collision validation now lives beside jig-core prefix normalization, with caller-supplied collection labels preserving diagnostics. Bootstrap and configuration retain their distinct name selection. All 88 focused tests and harness fmt/clippy/contract/file-budget checks passed. Remaining: DU005-DU006.
+
+DU005 complete: one pure Vite script recognizer in jig-typescript now serves adoption, workspace discovery, and proxy launch checks. Framework flags and caller roles remain unchanged. All 266 focused tests, no-default-features CLI build, and harness fmt/clippy/contract/file-budget checks passed. Remaining: DU006 and final configured gates.
