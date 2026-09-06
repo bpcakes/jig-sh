@@ -69,81 +69,38 @@ fn read_receipts_reverse_with_lock(
     predicate: impl Fn(&ReceiptRecord) -> bool,
     cancelled: &dyn Fn() -> bool,
     max_record_bytes: Option<usize>,
-    mut lock_data: impl FnMut(&File) -> io::Result<bool>,
+    lock_data: impl FnMut(&File) -> io::Result<bool>,
 ) -> Result<(Vec<ReceiptRecord>, u64)> {
-    ensure_state_read_active(cancelled)?;
-    loop {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
-            Err(error) => {
-                return Err(error).with_context(|| format!("Failed to open {}", path.display()));
-            }
-        };
-        ensure_state_read_active(cancelled)?;
-        loop {
-            ensure_state_read_active(cancelled)?;
-            match lock_data(&file) {
-                Ok(true) => break,
-                Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                    let snapshot = stable_unlocked_raw_snapshot(path, cancelled)?;
-                    return scan_jsonl_reverse(
-                        &snapshot,
-                        path,
-                        limit,
-                        &predicate,
-                        cancelled,
-                        max_record_bytes,
-                        true,
-                    );
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("Failed to shared-lock {}", path.display()));
-                }
-            }
-        }
-        let cache_lock = match lock_existing_cache_with_cancellation(path, cancelled) {
-            Ok(lock) => lock,
-            Err(error) => {
-                let _ = FileExt::unlock(&file);
-                return Err(error);
-            }
-        };
-        let is_current = opened_file_is_current(&file, path)?;
-        let result = is_current.then(|| {
-            scan_jsonl_reverse(
-                &file,
+    with_jsonl_read(
+        path,
+        cancelled,
+        lock_data,
+        ReadLockLabels::RECEIPT,
+        |access| match access {
+            JsonlReadAccess::Missing => Ok((Vec::new(), 0)),
+            JsonlReadAccess::Locked(file) => scan_jsonl_reverse(
+                file,
                 path,
                 limit,
                 &predicate,
                 cancelled,
                 max_record_bytes,
                 false,
-            )
-        });
-        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
-        let data_unlock = FileExt::unlock(&file);
-        match (result, cache_unlock, data_unlock) {
-            (Some(Ok(value)), Ok(()), Ok(())) => return Ok(value),
-            (Some(Err(error)), _, _) => return Err(error),
-            (Some(Ok(_)), Err(error), _) => {
-                return Err(error).context("Failed to unlock receipt cache lock");
+            ),
+            JsonlReadAccess::UnsupportedLock => {
+                let snapshot = stable_unlocked_raw_snapshot(path, cancelled)?;
+                scan_jsonl_reverse(
+                    &snapshot,
+                    path,
+                    limit,
+                    &predicate,
+                    cancelled,
+                    max_record_bytes,
+                    true,
+                )
             }
-            (Some(Ok(_)), Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock receipt state file");
-            }
-            (None, Ok(()), Ok(())) => continue,
-            (None, Err(error), _) => {
-                return Err(error).context("Failed to unlock stale receipt cache lock");
-            }
-            (None, Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock stale receipt state file");
-            }
-        }
-    }
+        },
+    )
 }
 
 const REVERSE_READ_CHUNK: usize = 16 * 1024;

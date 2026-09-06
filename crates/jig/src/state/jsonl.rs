@@ -436,65 +436,21 @@ pub(super) fn read_jsonl_with_cancellation<T: DeserializeOwned>(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<T>> {
-    ensure_state_read_active(cancelled)?;
-    loop {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+    with_jsonl_read(
+        path,
+        cancelled,
+        FileExt::try_lock_shared,
+        ReadLockLabels::STATE,
+        |access| match access {
+            JsonlReadAccess::Missing => Ok(Vec::new()),
+            JsonlReadAccess::Locked(file) => {
+                parse_jsonl_file_with_cancellation(file, path, false, cancelled)
             }
-        };
-        ensure_state_read_active(cancelled)?;
-        loop {
-            match FileExt::try_lock_shared(&file) {
-                Ok(true) => break,
-                Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                    return read_stable_unlocked_snapshot_with_cancellation(path, cancelled);
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("Failed to shared-lock {}", path.display()));
-                }
+            JsonlReadAccess::UnsupportedLock => {
+                read_stable_unlocked_snapshot_with_cancellation(path, cancelled)
             }
-            ensure_state_read_active(cancelled)?;
-        }
-
-        // Match the writer's data-file-then-cache-lock acquisition order. The
-        // cache lock is deliberately opportunistic: reads never create state,
-        // but wait cancellably when an existing writer owns it.
-        let cache_lock = match lock_existing_cache_with_cancellation(path, cancelled) {
-            Ok(lock) => lock,
-            Err(error) => {
-                let _ = FileExt::unlock(&file);
-                return Err(error);
-            }
-        };
-        let is_current = opened_file_is_current(&file, path)?;
-        let result =
-            is_current.then(|| parse_jsonl_file_with_cancellation(&file, path, false, cancelled));
-        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
-        let data_unlock = FileExt::unlock(&file);
-        match (result, cache_unlock, data_unlock) {
-            (Some(Ok(items)), Ok(()), Ok(())) => return Ok(items),
-            (Some(Err(error)), _, _) => return Err(error),
-            (Some(Ok(_)), Err(error), _) => {
-                return Err(error).context("Failed to unlock state cache file");
-            }
-            (Some(Ok(_)), Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock state data file");
-            }
-            (None, Ok(()), Ok(())) => continue,
-            (None, Err(error), _) => {
-                return Err(error).context("Failed to unlock stale state cache file");
-            }
-            (None, Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock stale state data file");
-            }
-        }
-    }
+        },
+    )
 }
 
 pub(super) fn opened_file_is_current(file: &File, path: &Path) -> Result<bool> {
@@ -611,75 +567,31 @@ fn scan_jsonl_raw_with_limit_and_lock(
     cancelled: &dyn Fn() -> bool,
     max_record_bytes: Option<usize>,
     mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
-    mut lock_data: impl FnMut(&File) -> io::Result<bool>,
+    lock_data: impl FnMut(&File) -> io::Result<bool>,
 ) -> Result<JsonlScanStats> {
-    ensure_state_read_active(cancelled)?;
-    loop {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(JsonlScanStats::default());
+    with_jsonl_read(
+        path,
+        cancelled,
+        lock_data,
+        ReadLockLabels::STATE,
+        |access| match access {
+            JsonlReadAccess::Missing => Ok(JsonlScanStats::default()),
+            JsonlReadAccess::Locked(file) => {
+                scan_jsonl_file_with_limit(file, path, cancelled, max_record_bytes, &mut visitor)
             }
-            Err(error) => {
-                return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+            JsonlReadAccess::UnsupportedLock => {
+                let snapshot = stable_unlocked_raw_snapshot(path, cancelled)?;
+                scan_jsonl_reader_with_limit_allow_unterminated(
+                    BufReader::with_capacity(JSONL_READ_CHUNK, snapshot),
+                    path,
+                    cancelled,
+                    max_record_bytes,
+                    true,
+                    &mut visitor,
+                )
             }
-        };
-        ensure_state_read_active(cancelled)?;
-        loop {
-            match lock_data(&file) {
-                Ok(true) => break,
-                Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                    let snapshot = stable_unlocked_raw_snapshot(path, cancelled)?;
-                    return scan_jsonl_reader_with_limit_allow_unterminated(
-                        BufReader::with_capacity(JSONL_READ_CHUNK, snapshot),
-                        path,
-                        cancelled,
-                        max_record_bytes,
-                        true,
-                        &mut visitor,
-                    );
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("Failed to shared-lock {}", path.display()));
-                }
-            }
-            ensure_state_read_active(cancelled)?;
-        }
-
-        let cache_lock = match lock_existing_cache_with_cancellation(path, cancelled) {
-            Ok(lock) => lock,
-            Err(error) => {
-                let _ = FileExt::unlock(&file);
-                return Err(error);
-            }
-        };
-        let is_current = opened_file_is_current(&file, path)?;
-        let result = is_current.then(|| {
-            scan_jsonl_file_with_limit(&file, path, cancelled, max_record_bytes, &mut visitor)
-        });
-        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
-        let data_unlock = FileExt::unlock(&file);
-        match (result, cache_unlock, data_unlock) {
-            (Some(Ok(stats)), Ok(()), Ok(())) => return Ok(stats),
-            (Some(Err(error)), _, _) => return Err(error),
-            (Some(Ok(_)), Err(error), _) => {
-                return Err(error).context("Failed to unlock state cache file");
-            }
-            (Some(Ok(_)), Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock state data file");
-            }
-            (None, Ok(()), Ok(())) => continue,
-            (None, Err(error), _) => {
-                return Err(error).context("Failed to unlock stale state cache file");
-            }
-            (None, Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock stale state data file");
-            }
-        }
-    }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -772,6 +684,9 @@ pub(super) fn scan_jsonl_raw_locked(
     };
     scan_jsonl_file(&file, path, cancelled, &mut visitor)
 }
+
+mod read_access;
+use read_access::{JsonlReadAccess, ReadLockLabels, with_jsonl_read};
 
 mod reverse;
 pub(super) use reverse::read_receipts_reverse;

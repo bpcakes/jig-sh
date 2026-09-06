@@ -17,57 +17,21 @@ pub(in crate::state) fn read_jsonl_with_io<T: DeserializeOwned>(
     mut lock_data: impl FnMut(&File) -> io::Result<()>,
     mut read_snapshot: impl FnMut(&Path) -> Result<Vec<u8>>,
 ) -> Result<Vec<T>> {
-    loop {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+    with_jsonl_read(
+        path,
+        &|| false,
+        |file| lock_data(file).map(|()| true),
+        ReadLockLabels::STATE,
+        |access| match access {
+            JsonlReadAccess::Missing => Ok(Vec::new()),
+            JsonlReadAccess::Locked(file) => {
+                parse_jsonl_file_with_cancellation(file, path, false, &|| false)
             }
-        };
-
-        loop {
-            match lock_data(&file) {
-                Ok(()) => break,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                    return read_stable_unlocked_snapshot(path, &mut read_snapshot);
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("Failed to shared-lock {}", path.display()));
-                }
+            JsonlReadAccess::UnsupportedLock => {
+                read_stable_unlocked_snapshot(path, &mut read_snapshot)
             }
-        }
-
-        // Match the writer's data-file-then-cache-lock acquisition order. The
-        // cache lock is deliberately opportunistic: reads never create state.
-        let cache_lock = File::open(state_lock_path(path))
-            .ok()
-            .and_then(|lock| FileExt::lock_shared(&lock).ok().map(|()| lock));
-        let is_current = opened_file_is_current(&file, path)?;
-        let result =
-            is_current.then(|| parse_jsonl_file_with_cancellation(&file, path, false, &|| false));
-        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
-        let data_unlock = FileExt::unlock(&file);
-        match (result, cache_unlock, data_unlock) {
-            (Some(Ok(items)), Ok(()), Ok(())) => return Ok(items),
-            (Some(Err(error)), _, _) => return Err(error),
-            (Some(Ok(_)), Err(error), _) => {
-                return Err(error).context("Failed to unlock state cache file");
-            }
-            (Some(Ok(_)), Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock state data file");
-            }
-            (None, Ok(()), Ok(())) => continue,
-            (None, Err(error), _) => {
-                return Err(error).context("Failed to unlock stale state cache file");
-            }
-            (None, Ok(()), Err(error)) => {
-                return Err(error).context("Failed to unlock stale state data file");
-            }
-        }
-    }
+        },
+    )
 }
 
 const UNLOCKED_SNAPSHOT_SAMPLES: usize = 3;
