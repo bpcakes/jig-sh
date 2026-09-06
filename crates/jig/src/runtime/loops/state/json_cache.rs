@@ -21,11 +21,15 @@ use super::*;
 #[cfg(test)]
 #[path = "json_cache/limit_tests.rs"]
 mod limit_tests;
+#[cfg(test)]
+#[path = "json_cache/lock_creation_tests.rs"]
+mod lock_creation_tests;
 
 const CACHE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 include!("json_cache/temp_names.rs");
 include!("json_cache/durable.rs");
+include!("json_cache/lock_file.rs");
 
 #[cfg(test)]
 pub(super) fn with_json_cache_lock<T, S>(
@@ -250,7 +254,7 @@ impl StateDirectory {
         cancelled: &dyn Fn() -> bool,
         action: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
-        let lock = open_regular_file(&self.directory, lock_name, true, true, false, lock_path)?;
+        let lock = open_or_create_lock_file(&self.directory, lock_name, lock_path)?;
         loop {
             if cancelled() {
                 bail!(
@@ -530,55 +534,6 @@ fn open_directory(parent: &Dir, name: &OsStr, path: &Path, create: bool) -> Resu
             )
         }),
     }
-}
-
-fn open_optional_regular_file(directory: &Dir, name: &OsStr, path: &Path) -> Result<Option<File>> {
-    match open_regular_file(directory, name, false, false, false, path) {
-        Ok(file) => Ok(Some(file)),
-        Err(error)
-            if error
-                .downcast_ref::<io::Error>()
-                .is_some_and(|error| error.kind() == io::ErrorKind::NotFound) =>
-        {
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn open_regular_file(
-    directory: &Dir,
-    name: &OsStr,
-    writable: bool,
-    create: bool,
-    create_new: bool,
-    path: &Path,
-) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options
-        .read(!create_new)
-        .write(writable)
-        .create(create)
-        .create_new(create_new)
-        .follow(FollowSymlinks::No);
-    #[cfg(unix)]
-    {
-        use cap_std::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = directory
-        .open_with(name, &options)
-        .map(cap_std::fs::File::into_std)
-        .with_context(|| {
-            format!(
-                "Failed to open loop cache file {} without following links",
-                path.display()
-            )
-        })?;
-    if !file.metadata()?.is_file() {
-        bail!("Loop cache path is not a regular file: {}", path.display());
-    }
-    Ok(file)
 }
 
 #[cfg(test)]
