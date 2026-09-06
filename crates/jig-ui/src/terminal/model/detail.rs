@@ -158,14 +158,15 @@ fn gate_document(gates: &GateSetView) -> DetailDocument {
         gates.limit.label("gates")
     )];
     for gate in &gates.gates {
+        let summary = &gate.summary;
         lines.extend([
             format!(
                 "{} [{}] {} · required {}",
-                gate.id, gate.status, gate.subject, gate.required
+                summary.id, summary.status, summary.subject, gate.required
             ),
             format!(
                 "  Freshness: {} · ended {} · diff {}",
-                gate.freshness, gate.ended_at, gate.diff_summary
+                summary.freshness, summary.ended_at, gate.diff_summary
             ),
             format!("  {}", gate.changed_limit.label("changed paths")),
             format!("  {}", gate.matching_limit.label("matching paths")),

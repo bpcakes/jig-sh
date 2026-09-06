@@ -1,6 +1,6 @@
 use crate::dashboard::{GateFinding, GateObservation, GatesObservation, Remediation};
 
-use super::{LimitView, format_timestamp, sanitize_rows, sanitize_text};
+use super::{GateSummaryView, LimitView, sanitize_rows, sanitize_text};
 
 #[derive(Clone, Debug)]
 pub(crate) struct GateSetView {
@@ -27,12 +27,8 @@ impl From<GatesObservation> for GateSetView {
 
 #[derive(Clone, Debug)]
 pub(crate) struct GateView {
-    pub(crate) id: String,
+    pub(crate) summary: GateSummaryView,
     pub(crate) required: bool,
-    pub(crate) subject: String,
-    pub(crate) status: String,
-    pub(crate) freshness: String,
-    pub(crate) ended_at: String,
     pub(crate) diff_summary: String,
     pub(crate) changed_paths: Vec<String>,
     pub(crate) changed_limit: LimitView,
@@ -46,21 +42,8 @@ pub(crate) struct GateView {
 impl From<GateObservation> for GateView {
     fn from(gate: GateObservation) -> Self {
         Self {
-            id: sanitize_text(&gate.id),
+            summary: GateSummaryView::from(&gate),
             required: gate.required,
-            subject: gate
-                .tool
-                .or(gate.skill)
-                .as_deref()
-                .map(sanitize_text)
-                .unwrap_or_else(|| "—".to_string()),
-            status: sanitize_text(&gate.status),
-            freshness: gate
-                .freshness
-                .as_deref()
-                .map(sanitize_text)
-                .unwrap_or_else(|| "—".to_string()),
-            ended_at: format_timestamp(gate.ended_at_ms),
             diff_summary: gate
                 .diff_summary
                 .as_deref()
