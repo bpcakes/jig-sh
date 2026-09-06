@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::Read,
     os::fd::{AsRawFd, FromRawFd},
     process::{Command, Stdio},
@@ -91,13 +91,13 @@ fn panic_unwind_clears_and_restores_the_terminal_session() {
 #[test]
 fn startup_output_failure_restores_terminal_attributes() {
     if std::env::var_os("JIG_TUI_STARTUP_FAILURE_CHILD").is_some() {
-        let full = OpenOptions::new().write(true).open("/dev/full").unwrap();
+        let failing_output = failing_output_file();
         // SAFETY: this isolated child saves and restores its own stdout around
         // the setup call, and closes the saved duplicate exactly once.
         let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
         assert!(saved_stdout >= 0);
         // SAFETY: both descriptors are live and owned by this child.
-        assert!(unsafe { libc::dup2(full.as_raw_fd(), libc::STDOUT_FILENO) } >= 0);
+        assert!(unsafe { libc::dup2(failing_output.as_raw_fd(), libc::STDOUT_FILENO) } >= 0);
         let result = TerminalSession::enter_with_bracketed_paste("startup failure test");
         // SAFETY: restore stdout for the test harness, then close the duplicate.
         assert!(unsafe { libc::dup2(saved_stdout, libc::STDOUT_FILENO) } >= 0);
@@ -151,6 +151,19 @@ fn startup_output_failure_restores_terminal_attributes() {
         original.c_lflag & (libc::ECHO | libc::ICANON),
         "terminal flags were not restored after startup failure"
     );
+}
+
+fn failing_output_file() -> File {
+    let mut descriptors = [-1; 2];
+    // SAFETY: `descriptors` provides storage for both descriptors returned by
+    // pipe. Each successful descriptor is then closed or wrapped exactly once.
+    assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+    // SAFETY: the pipe's read end is owned here and no longer needed. Writing
+    // through the retained write end then fails with `EPIPE` on Unix. Unlike
+    // `EBADF`, Rust's standard-output implementation does not mask this error.
+    assert_eq!(unsafe { libc::close(descriptors[0]) }, 0);
+    // SAFETY: the pipe's write end is a newly owned descriptor.
+    unsafe { File::from_raw_fd(descriptors[1]) }
 }
 
 fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use tempfile::{TempDir, tempdir};
 
 use super::*;
-use crate::test_env::{EnvVarGuard, lock_env};
+use crate::test_env::lock_env;
 
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
@@ -189,25 +189,26 @@ fn injected_uncommitted_failures_restore_every_transaction_owned_path() {
         fs::write(root.path().join("b.txt"), b"before-b").unwrap();
         let staged = staged(&[("a.txt", b"after-a"), ("b.txt", b"after-b")], &[]);
         let lock = RepositoryUpdateLock::acquire(root.path()).unwrap();
-        let _failure = EnvVarGuard::set("JIG_TEST_UPDATE_TRANSACTION_FAIL_AT", point);
-        let prepared =
-            RepositoryUpdateTransaction::prepare(&lock, root.path(), &staged, false, None);
-        let error = match prepared {
-            Err(error) => error,
-            Ok(mut transaction) => {
-                let mut failure = None;
-                for relative in [Path::new("a.txt"), Path::new("b.txt")] {
-                    if let Err(error) = transaction.apply_path(relative) {
-                        failure = Some(error);
-                        break;
+        let error = fault_injection::with_failure(point, || {
+            let prepared =
+                RepositoryUpdateTransaction::prepare(&lock, root.path(), &staged, false, None);
+            match prepared {
+                Err(error) => error,
+                Ok(mut transaction) => {
+                    let mut failure = None;
+                    for relative in [Path::new("a.txt"), Path::new("b.txt")] {
+                        if let Err(error) = transaction.apply_path(relative) {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                    match failure {
+                        Some(error) => transaction.finish_failed(error),
+                        None => transaction.commit().unwrap_err(),
                     }
                 }
-                match failure {
-                    Some(error) => transaction.finish_failed(error),
-                    None => transaction.commit().unwrap_err(),
-                }
             }
-        };
+        });
         assert!(error.to_string().contains(point), "{point}: {error:#}");
         assert_eq!(fs::read(root.path().join("a.txt")).unwrap(), b"before-a");
         assert_eq!(fs::read(root.path().join("b.txt")).unwrap(), b"before-b");
@@ -225,14 +226,26 @@ fn failure_after_committed_preserves_publication_and_next_recovery_only_cleans_u
     let mut transaction =
         RepositoryUpdateTransaction::prepare(&lock, root.path(), &staged, false, None).unwrap();
     transaction.apply_path(Path::new("owned.txt")).unwrap();
-    let _failure = EnvVarGuard::set("JIG_TEST_UPDATE_TRANSACTION_FAIL_AT", "after_committed");
-    let error = transaction.commit().unwrap_err().to_string();
+    let error = fault_injection::with_failure("after_committed", || {
+        transaction.commit().unwrap_err().to_string()
+    });
     assert!(error.contains("after_committed"), "{error}");
     assert_eq!(fs::read(root.path().join("owned.txt")).unwrap(), b"after");
     assert!(lock.journal_root.exists());
     lock.recover().unwrap();
     assert_eq!(fs::read(root.path().join("owned.txt")).unwrap(), b"after");
     assert!(!lock.journal_root.exists());
+}
+
+#[test]
+fn injected_failures_are_scoped_to_the_current_thread() {
+    fault_injection::with_failure("after_prepare", || {
+        assert!(maybe_fail("after_prepare").is_err());
+        std::thread::spawn(|| assert!(maybe_fail("after_prepare").is_ok()))
+            .join()
+            .unwrap();
+    });
+    assert!(maybe_fail("after_prepare").is_ok());
 }
 
 #[test]
