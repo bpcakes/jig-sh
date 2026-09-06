@@ -367,7 +367,9 @@ exit 2
             workflow: Some("pr-manager".into()),
             lease_ttl_seconds: None,
             max_attempts: Some(2),
-            backoff_seconds: Some(1),
+            // Cleanup and receipt inspection may outlast a one-second backoff.
+            // This fixture asserts the waiting state, not backoff expiration.
+            backoff_seconds: Some(60),
         })),
     )
     .unwrap();
