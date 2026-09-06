@@ -2,10 +2,10 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use clap::{ArgGroup, Args, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Subcommand};
 use jig_contract::{
-    ComparisonRequestV1, ExactTreeProvenanceV1, MissingComparisonV1, NativeFileBudgetConfigV1,
-    RunConclusion, StrictInventoryReasonV1,
+    ComparisonRequestV1, MissingComparisonV1, NativeFileBudgetConfigV1, RunConclusion,
+    StrictInventoryReasonV1,
 };
 
 use crate::context::RepoContext;
@@ -14,6 +14,7 @@ use crate::repository::{
 };
 use crate::runtime::{FileBudgetEvaluationMode, run_direct_file_budget};
 
+use super::comparison::{CliExactTreeProvenance, comparison_request};
 use super::output::print_json;
 use super::structured_error::{json_error_payload, json_reported_error};
 
@@ -55,41 +56,16 @@ pub(crate) struct FileBudgetComparisonOpts {
     strict_inventory: bool,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum CliExactTreeProvenance {
-    #[value(name = "explicit")]
-    Explicit,
-    #[value(name = "push_before")]
-    PushBefore,
-}
-
 impl FileBudgetComparisonOpts {
-    fn request(&self) -> Option<ComparisonRequestV1> {
-        if let Some(requested_ref) = &self.base {
-            return Some(ComparisonRequestV1::MergeBaseRef {
-                requested_ref: requested_ref.clone(),
-            });
-        }
-        if let Some(requested_oid) = &self.exact_tree {
-            let provenance = match self
-                .provenance
-                .expect("Clap requires provenance with exact-tree")
-            {
-                CliExactTreeProvenance::Explicit => ExactTreeProvenanceV1::Explicit,
-                CliExactTreeProvenance::PushBefore => ExactTreeProvenanceV1::PushBefore,
-            };
-            return Some(ComparisonRequestV1::ExactTree {
-                requested_oid: requested_oid.clone(),
-                provenance,
-            });
-        }
-        if self.staged {
-            return Some(ComparisonRequestV1::IndexAgainstHead);
-        }
-        self.strict_inventory
-            .then_some(ComparisonRequestV1::StrictInventory {
-                reason: StrictInventoryReasonV1::ExplicitCheck,
-            })
+    pub(super) fn request(&self) -> Result<Option<ComparisonRequestV1>> {
+        comparison_request(
+            self.base.as_deref(),
+            self.exact_tree.as_deref(),
+            self.provenance,
+            self.staged,
+            self.strict_inventory,
+            "",
+        )
     }
 }
 
@@ -169,7 +145,7 @@ pub(super) fn run_file_budget_command(command: FileBudgetCommand, json_output: b
     let (operation, request, configuration, mode, informational) = match &command {
         FileBudgetCommand::Check(options) => (
             "check",
-            options.comparison.request(),
+            options.comparison.request()?,
             direct_configuration(&options.limits, json_output)?,
             FileBudgetEvaluationMode::Check,
             false,
@@ -187,7 +163,7 @@ pub(super) fn run_file_budget_command(command: FileBudgetCommand, json_output: b
         ),
         FileBudgetCommand::Explain(options) => (
             "explain",
-            options.comparison.request(),
+            options.comparison.request()?,
             direct_configuration(&options.limits, json_output)?,
             FileBudgetEvaluationMode::Explain {
                 path: &options.path,
@@ -297,6 +273,7 @@ fn direct_exit_status(
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use jig_contract::ExactTreeProvenanceV1;
 
     use super::*;
     use crate::cli::{Cli, CommandKind};
@@ -329,7 +306,8 @@ mod tests {
         assert_eq!(
             check_options(&["jig", "file-budget", "check", "--base", "origin/main"])
                 .comparison
-                .request(),
+                .request()
+                .unwrap(),
             Some(ComparisonRequestV1::MergeBaseRef {
                 requested_ref: "origin/main".into(),
             })
@@ -345,7 +323,8 @@ mod tests {
                 "push_before",
             ])
             .comparison
-            .request(),
+            .request()
+            .unwrap(),
             Some(ComparisonRequestV1::ExactTree {
                 requested_oid: "0000000000000000000000000000000000000000".into(),
                 provenance: ExactTreeProvenanceV1::PushBefore,
@@ -354,13 +333,15 @@ mod tests {
         assert_eq!(
             check_options(&["jig", "file-budget", "check", "--staged"])
                 .comparison
-                .request(),
+                .request()
+                .unwrap(),
             Some(ComparisonRequestV1::IndexAgainstHead)
         );
         assert_eq!(
             check_options(&["jig", "file-budget", "check", "--strict-inventory"])
                 .comparison
-                .request(),
+                .request()
+                .unwrap(),
             Some(ComparisonRequestV1::StrictInventory {
                 reason: StrictInventoryReasonV1::ExplicitCheck,
             })
@@ -368,7 +349,8 @@ mod tests {
         assert_eq!(
             check_options(&["jig", "file-budget", "check"])
                 .comparison
-                .request(),
+                .request()
+                .unwrap(),
             None
         );
     }

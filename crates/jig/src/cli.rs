@@ -14,6 +14,7 @@ mod bootstrap_run;
 mod check;
 mod codex;
 mod codex_run;
+mod comparison;
 mod file_budget;
 mod init_wizard;
 mod loops;
@@ -29,10 +30,11 @@ mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{
-    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckExactTreeProvenance,
-    CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
+    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts,
+    CheckOpts, CheckTargetOpts,
 };
 pub(crate) use codex::CodexCommand;
+pub(crate) use comparison::CliExactTreeProvenance;
 pub(crate) use file_budget::FileBudgetCommand;
 pub(crate) use loops::{
     LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,

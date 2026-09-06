@@ -1,9 +1,10 @@
-use anyhow::{Result, bail};
-use clap::{ArgGroup, Args, Subcommand, ValueEnum};
-use jig_contract::{ComparisonRequestV1, ExactTreeProvenanceV1, StrictInventoryReasonV1};
+use anyhow::Result;
+use clap::{ArgGroup, Args, Subcommand};
+use jig_contract::ComparisonRequestV1;
 
 use crate::tool_defs;
 
+use super::comparison::{CliExactTreeProvenance, comparison_request};
 use super::{AgentMapOpts, ToolOpts};
 
 pub(super) const CHECK_AFTER_HELP: &str = "\
@@ -126,7 +127,7 @@ pub(crate) struct CheckComparisonOpts {
         requires = "comparison_exact_tree",
         help = "State the authority carried by --comparison-exact-tree"
     )]
-    pub(crate) comparison_provenance: Option<CheckExactTreeProvenance>,
+    pub(crate) comparison_provenance: Option<CliExactTreeProvenance>,
     #[arg(
         long = "comparison-staged",
         global = true,
@@ -141,54 +142,16 @@ pub(crate) struct CheckComparisonOpts {
     pub(crate) comparison_strict_inventory: bool,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub(crate) enum CheckExactTreeProvenance {
-    #[value(name = "explicit")]
-    Explicit,
-    #[value(name = "push_before")]
-    PushBefore,
-}
-
 impl CheckComparisonOpts {
     pub(crate) fn request(&self) -> Result<Option<ComparisonRequestV1>> {
-        let selector_count = usize::from(self.comparison_base.is_some())
-            + usize::from(self.comparison_exact_tree.is_some())
-            + usize::from(self.comparison_staged)
-            + usize::from(self.comparison_strict_inventory);
-        if selector_count > 1 {
-            bail!(
-                "--comparison-base, --comparison-exact-tree, --comparison-staged, and --comparison-strict-inventory are mutually exclusive"
-            );
-        }
-        if self.comparison_exact_tree.is_some() != self.comparison_provenance.is_some() {
-            bail!("--comparison-exact-tree and --comparison-provenance must be supplied together");
-        }
-        if let Some(requested_ref) = &self.comparison_base {
-            return Ok(Some(ComparisonRequestV1::MergeBaseRef {
-                requested_ref: requested_ref.clone(),
-            }));
-        }
-        if let Some(requested_oid) = &self.comparison_exact_tree {
-            let provenance = match self
-                .comparison_provenance
-                .expect("comparison provenance was validated above")
-            {
-                CheckExactTreeProvenance::Explicit => ExactTreeProvenanceV1::Explicit,
-                CheckExactTreeProvenance::PushBefore => ExactTreeProvenanceV1::PushBefore,
-            };
-            return Ok(Some(ComparisonRequestV1::ExactTree {
-                requested_oid: requested_oid.clone(),
-                provenance,
-            }));
-        }
-        if self.comparison_staged {
-            return Ok(Some(ComparisonRequestV1::IndexAgainstHead));
-        }
-        Ok(self
-            .comparison_strict_inventory
-            .then_some(ComparisonRequestV1::StrictInventory {
-                reason: StrictInventoryReasonV1::ExplicitCheck,
-            }))
+        comparison_request(
+            self.comparison_base.as_deref(),
+            self.comparison_exact_tree.as_deref(),
+            self.comparison_provenance,
+            self.comparison_staged,
+            self.comparison_strict_inventory,
+            "comparison-",
+        )
     }
 }
 
