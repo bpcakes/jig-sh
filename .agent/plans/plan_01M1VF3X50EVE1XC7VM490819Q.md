@@ -5,3 +5,5 @@ DU-001 completed: removed the tracked but unwired answers/tail.rs and gates/reso
 DU002 complete: check and file-budget now share CLI provenance and comparison request construction while retaining their flag names. Focused unit tests passed (17), file-budget JSON integration passed (1), and harness fmt, clippy, contract, and file-budget checks passed. Remaining: DU003-DU006.
 
 DU003 complete: adoption and proxy discovery share complete-segment matching in jig-typescript, preserving their wildcard grammars and traversal policies. Fixed overlapping proxy glob edges. All 108 focused tests, no-default-features CLI check, and harness fmt/clippy/contract/file-budget checks passed. Remaining: DU004-DU006.
+
+DU004 complete: shared collision validation now lives beside jig-core prefix normalization, with caller-supplied collection labels preserving diagnostics. Bootstrap and configuration retain their distinct name selection. All 88 focused tests and harness fmt/clippy/contract/file-budget checks passed. Remaining: DU005-DU006.

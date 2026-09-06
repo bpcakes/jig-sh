@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -86,13 +86,15 @@ pub(super) fn resolve(
         })
         .cloned()
         .collect();
-    validate_dev_app_env_prefixes(
+    jig_core::validate_dev_app_env_prefixes(
         dev_apps.iter().map(|app| app.name.as_str()).chain(
             generated_frontend_dev_apps
                 .iter()
                 .map(|app| app.name.as_str()),
         ),
-    )?;
+        "dev apps",
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(ResolvedDevApps {
         settings,
         dev_apps,
@@ -191,19 +193,6 @@ fn validate_matching_frontend_dev_app_dirs(
                     frontend_app.dir
                 );
             }
-        }
-    }
-    Ok(())
-}
-
-fn validate_dev_app_env_prefixes<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
-    let mut prefixes = BTreeMap::new();
-    for name in names {
-        let prefix = jig_core::dev_app_env_prefix(name);
-        if let Some(previous) = prefixes.insert(prefix.clone(), name) {
-            bail!(
-                "dev apps '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
-            );
         }
     }
     Ok(())

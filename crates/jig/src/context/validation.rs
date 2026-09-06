@@ -437,15 +437,17 @@ pub(super) fn validate_dev_config(config: &RepoConfig) -> Result<()> {
         }
     }
     if config.dev.apps.is_empty() {
-        validate_dev_app_env_prefixes(
+        jig_core::validate_dev_app_env_prefixes(
             config.frontend_apps.iter().map(|app| app.name.as_str()),
-            "[[frontend_apps]]",
-        )?;
+            "[[frontend_apps]] entries",
+        )
+        .map_err(anyhow::Error::msg)?;
     } else {
-        validate_dev_app_env_prefixes(
+        jig_core::validate_dev_app_env_prefixes(
             config.dev.apps.iter().map(|app| app.name.as_str()),
-            "[[dev.apps]]",
-        )?;
+            "[[dev.apps]] entries",
+        )
+        .map_err(anyhow::Error::msg)?;
     }
     if !config.frontend_apps.is_empty() && !config.dev.apps.is_empty() {
         for frontend_app in &config.frontend_apps {
@@ -495,22 +497,6 @@ pub(crate) fn config_app_dirs_match(left: &str, right: &str) -> bool {
 
 pub(super) fn is_supported_frontend_kind(kind: &str) -> bool {
     matches!(kind, "vite" | "env-port")
-}
-
-pub(super) fn validate_dev_app_env_prefixes<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-    section: &str,
-) -> Result<()> {
-    let mut prefixes = BTreeMap::new();
-    for name in names {
-        let prefix = jig_core::dev_app_env_prefix(name);
-        if let Some(previous) = prefixes.insert(prefix.clone(), name) {
-            bail!(
-                "{section} entries '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
-            );
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

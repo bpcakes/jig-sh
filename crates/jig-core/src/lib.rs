@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use jig_contract::{
     ActionEffect, ActionIntent, AdapterActionDescriptor, AdapterRunnerDescriptor, FeatureContext,
     FeatureDescriptor, NativeToolDescriptor, NativeToolKind, RepositoryAdapterDescriptor, tool,
@@ -89,6 +91,24 @@ pub fn dev_app_env_prefix(name: &str) -> String {
         }
     }
     prefix
+}
+
+/// Reject names that would publish the same derived dev environment variables.
+/// The caller supplies the collection label used in collision diagnostics.
+pub fn validate_dev_app_env_prefixes<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    entries_label: &str,
+) -> Result<(), String> {
+    let mut prefixes = BTreeMap::new();
+    for name in names {
+        let prefix = dev_app_env_prefix(name);
+        if let Some(previous) = prefixes.insert(prefix.clone(), name) {
+            return Err(format!(
+                "{entries_label} '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -204,5 +224,30 @@ mod tests {
         assert_eq!(dev_app_env_prefix("api"), "JIG_DEV_API");
         assert_eq!(dev_app_env_prefix("web-app"), "JIG_DEV_WEB_APP");
         assert_eq!(dev_app_env_prefix("web_app"), "JIG_DEV_WEB_APP");
+    }
+
+    #[test]
+    fn dev_app_env_prefixes_reject_collisions_in_input_order() {
+        assert!(validate_dev_app_env_prefixes([], "dev apps").is_ok());
+        assert!(validate_dev_app_env_prefixes(["api", "web-app"], "dev apps").is_ok());
+        for names in [["web-app", "web_app"], ["WEB", "web"], ["web", "web"]] {
+            let prefix = match names[0] {
+                "web-app" => "JIG_DEV_WEB_APP",
+                _ => "JIG_DEV_WEB",
+            };
+            for label in [
+                "dev apps",
+                "[[dev.apps]] entries",
+                "[[frontend_apps]] entries",
+            ] {
+                assert_eq!(
+                    validate_dev_app_env_prefixes(names, label).unwrap_err(),
+                    format!(
+                        "{label} '{}' and '{}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique",
+                        names[0], names[1]
+                    )
+                );
+            }
+        }
     }
 }
