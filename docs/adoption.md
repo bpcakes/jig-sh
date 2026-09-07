@@ -3,7 +3,7 @@
 ## Recommended Rollout
 
 1. Start with an existing repository that already has a stable Cargo workspace and CI.
-2. Preview the harness render with `jig adopt . --rust-migration-dir migrations`. For tooling-only repos, pass `--sqlx-enabled false` instead of the migration flag. To enable `jig loop` without scripts, workflows, or agent context files, preview with `jig adopt . --minimal` and apply with `jig adopt . --minimal --write`; that stores `harness_footprint = "minimal"` so later `jig update` keeps the same thin footprint until you re-adopt without `--minimal`. When re-adoption changes the footprint and no `--answers-file` is supplied, Jig seeds known answers from the existing `.jig.toml` before applying explicit CLI overrides. Minimal contract checks still validate the contract epoch, commands, tools, and work gates; only the intentionally omitted `.mcp.json`, `scripts/jig`, and `scripts/install-jig.sh` presence checks are skipped. Release builds of `jig adopt` default internally to the official `jig-sh` template tag for that release. Unreleased or dirty local builds use templates embedded in the binary when `--template` is omitted; pass `--template /path/to/jig-sh --template-mode committed` to render from a checkout or `--vcs-ref` for remote template code.
+2. Preview the harness render with `jig adopt . --rust-migration-dir migrations`. For tooling-only repos, pass `--sqlx-enabled false` instead of the migration flag. To enable `jig loop` without scripts, workflows, or agent context files, preview with `jig adopt . --minimal` and apply with `jig adopt . --minimal --write`; that stores `harness_footprint = "minimal"` so later `jig update` keeps the same thin footprint until you re-adopt without `--minimal`. When re-adopting without `--answers-file`, Jig seeds known answers from the existing `.jig.toml` before applying explicit CLI overrides. Minimal contract checks still validate the contract epoch, commands, tools, and work gates; only the intentionally omitted `.mcp.json`, `scripts/jig`, and `scripts/install-jig.sh` presence checks are skipped. Release builds of `jig adopt` default internally to the official `jig-sh` template tag for that release. Unreleased or dirty local builds use templates embedded in the binary when `--template` is omitted; pass `--template /path/to/jig-sh --template-mode committed` to render from a checkout or `--vcs-ref` for remote template code.
 3. For local dogfooding, commit or stash template checkout changes before rendering. If you need to test in-progress template edits, make a temporary local commit and update from that committed source.
    When testing generated launchers with `JIG_DEV_BIN`, rebuild the dev binary after changing Jig and unset the variable if its repository/profile compatibility probe no longer passes; generated launchers treat an explicit incompatible binary as a hard error instead of falling back to the cache.
 4. Confirm the preview has the intended profile and template source, then run `jig adopt . --write` with the same answer overrides. Interactive writes ask for confirmation unless `--defaults` or `--no-input` is supplied. Add `--json` to `jig adopt` when you need the full detection report for automation or debugging. Release defaults point at the official portable URL, while unreleased local defaults record `embedded:jig-sh`; generated launchers reuse a contract/profile-compatible binary from managed caches. Reusing an otherwise compatible `jig` found on `PATH` requires the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` opt-in, and the installer reports the selected absolute path on stderr. Remote runtime installs normally require the recorded immutable `_commit`; `JIG_INSTALL_ALLOW_UNPINNED_REMOTE=1` is a warned recovery override for older or damaged source metadata. When embedded provenance has no immutable commit and no compatible binary is available, `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` explicitly permits a warned default-branch install from `template_source_url` or the official source. Override `template_source_url` only when adopting from a local checkout, fork, or private template. Jig leaves any root `Makefile` project-owned and routes generated checks through `scripts/jig`. Review the remaining paths, commands, and `[dev]` proxy defaults such as `tld`, `lan`, and `workspace_discovery` before committing. Command-backed `*_command` values run through non-login `bash -c`, so put any required toolchain setup in the command string or in project-owned scripts. Jig rejects unknown `.jig.toml` keys; after upgrading an existing repo, remove or rename any unknown keys reported by `scripts/jig` before rerunning commands. Write mode records `.agent/.cache/adopt/adopt-last.json` with the applied report and backups for overwritten managed files, and also writes a deprecated compatibility copy to `.agent/state/adopt-last.json` for older automation during the cutover. The receipt includes `canonical_receipt_path` and `legacy_receipt_deprecated` fields so legacy readers can migrate.
@@ -15,6 +15,65 @@
 10. Commit the generated files and then switch CI to use the new workflows.
 
 Before publishing a generated repo contract or wiring long-lived MCP clients to it, review [Public Contract](./public-contract.md) for the stable CLI, MCP, and manifest guarantees.
+
+### Review component ownership
+
+The preview lists each component candidate's relative root, proposed ID, evidence,
+confidence and disposition: `included`, `excluded`, or `review_required`. Root
+Cargo projects/workspaces, supported declared workspace members, root Go modules
+and recognized frontend apps provide ownership evidence. Fixture/example/test
+paths and raw nested manifests remain visible but unselected. Unsupported
+workspace patterns are reported conservatively rather than guessed.
+
+Select exact roots from that preview, and repeat the same flags when writing:
+
+```sh
+jig adopt . --exclude-component crates/optional --include-component tools/helper
+jig adopt . --exclude-component crates/optional --include-component tools/helper --write
+```
+
+These example roots must exist in the candidate list. Flags may be repeated;
+`./crates/optional/` normalizes to `crates/optional`. Selections reject globs,
+absolute or escaping paths, symlink traversal, unknown roots and conflicting
+include/exclude requests. A root with several manifest kinds selects all its
+candidates. Explicit answer inputs also declare ownership; an exclusion that
+contradicts one fails before writing. Explicit `rust_crate_roots` answers may
+name future directories; their candidates identify that the root does not yet
+exist. Exact-root selection flags still require an existing candidate directory.
+
+Accepted candidates become records in `[repository.components]`; excluded and
+review-required candidates do not. Jig always retains its repository policy
+component. Aggregate root commands and recognized frontend commands remain on
+their selected owners. Additional members can have no inferred actions; author
+those actions explicitly when needed. Excluding a component does not change
+Cargo/npm dependency graphs or prevent an aggregate workspace command from
+building it. These flags do not introduce runtime path ignores.
+
+Readoption and `jig update --recopy` preserve existing authored components,
+actions and dependencies without adopting newly discovered manifests. To change
+an existing authored model, edit `.jig.toml`; initial-adoption selection flags are
+rejected there so the preview cannot promise a change that preservation discards.
+Explicit footprint or SQLx capability changes refresh generated harness actions
+while retaining authored component identities. Command overrides such as
+`--rust-test-command` follow the existing action’s legacy alias to its authored
+command key. An override with no command action owner, or one targeting a native
+action, is rejected before writing; edit the authored model for those changes.
+Legacy answer metadata such as `frontend_apps` or its coverage threshold does
+not replace authored actions or commands. Keep the owning component, actions,
+command entries and profile/dependency references consistent when editing those
+answers; both readoption and recopy preserve the authored graph. To retire a
+frontend, remove its `frontend_apps` entry and its component/actions and graph
+references together. A missing app manifest reports these required edits.
+
+When JavaScript workspace membership changes, readoption warns you to review
+`frontend_workspace_roots` and the owning `[repository.actions].inputs` together.
+Edit those saved input authorities to cover new shared libraries; readoption and
+recopy preserve them. Current contracts use the authored verification profile,
+so legacy generated work-gate paths are not a replacement for action inputs. Root Rust components retain `.` as their
+source authority (including SQLx TODO scanning); this does not classify unrelated
+top-level guides as Rust crate guides.
+The JSON `detection_report.component_candidates` and human review describe the
+same component decisions.
 
 For later template updates:
 

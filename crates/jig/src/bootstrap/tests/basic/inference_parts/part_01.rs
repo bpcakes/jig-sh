@@ -7,6 +7,7 @@ fn adopt_schema_dump_command_opts_into_schema_dumps() {
     fs::create_dir_all(&repo).unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -40,6 +41,7 @@ fn adopt_defaults_with_schema_dump_enabled_still_requires_sqlx_migration_answer(
     fs::create_dir_all(&repo).unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -71,6 +73,7 @@ fn adopt_no_input_without_defaults_uses_inferred_no_sqlx_profile() {
     fs::create_dir_all(&repo).unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,

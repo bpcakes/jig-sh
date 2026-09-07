@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 #[cfg(unix)]
 use std::process::Command;
 
+mod adoption_components;
 mod adoption_modes;
 mod adoption_ownership;
 mod adoption_receipts;
@@ -112,6 +113,7 @@ fn add_managed_manifest_path(repo: &Path, relative: &str) {
 
 fn footprint_adopt_opts(repo: &Path, template: &Path, minimal: bool, force: bool) -> AdoptOpts {
     AdoptOpts {
+        components: Default::default(),
         path: repo.to_path_buf(),
         template: Some(template.display().to_string()),
         template_mode: None,
@@ -124,6 +126,7 @@ fn footprint_adopt_opts(repo: &Path, template: &Path, minimal: bool, force: bool
         no_vault: true,
         answers: AnswerOpts {
             repo_name: Some("demo".into()),
+            backend_language: Some(BackendLanguage::Rust),
             sqlx_enabled: Some(false),
             ..AnswerOpts::default()
         },

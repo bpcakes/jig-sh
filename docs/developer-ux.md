@@ -32,6 +32,14 @@ Those commands are boring on purpose. They are meant to be copyable by humans, a
 
 ## Adopting Existing Repos
 
+Adoption presents component candidates before writing. Review each relative root,
+proposed ID, evidence, confidence and disposition. Use `--include-component ROOT`
+or `--exclude-component ROOT` for exact roots, repeating the flags with `--write`.
+Incidental manifests remain `review_required` until selected. Accepted candidates
+become authored components; updates and readoption preserve existing ownership.
+See [adoption](./adoption.md#review-component-ownership) for selection conflicts
+and the limits of inferred actions.
+
 Adoption is optimized for low surprise:
 
 - Repo-specific guidance remains outside the managed block in `AGENTS.md`.

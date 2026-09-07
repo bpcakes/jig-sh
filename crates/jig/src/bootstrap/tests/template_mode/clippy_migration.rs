@@ -207,6 +207,7 @@ fn readoption_with_missing_managed_manifest_migrates_generated_clippy_command() 
     fs::remove_file(repo.join(managed_paths::MANIFEST_PATH)).unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),

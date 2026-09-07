@@ -11,6 +11,7 @@ fn adopt_previews_by_default_without_writing_files() {
     fs::write(repo.join("bun.lock"), "").unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -62,6 +63,7 @@ fn adopt_preview_reports_conflicts_without_overwriting() {
     fs::create_dir_all(&repo).unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -78,6 +80,7 @@ fn adopt_preview_reports_conflicts_without_overwriting() {
     fs::write(repo.join(".agent/PLANS.md"), "repo-owned plan notes\n").unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -122,6 +125,7 @@ fn adopt_preserves_repo_gitattributes_while_adding_jig_block() {
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -158,6 +162,7 @@ fn adopt_write_records_backup_receipt_for_overwritten_managed_files() {
     fs::create_dir_all(&repo).unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -174,6 +179,7 @@ fn adopt_write_records_backup_receipt_for_overwritten_managed_files() {
     fs::write(repo.join(".agent/PLANS.md"), "repo-owned plan notes\n").unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,

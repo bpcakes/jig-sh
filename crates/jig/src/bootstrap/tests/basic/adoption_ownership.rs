@@ -12,6 +12,7 @@ fn adopt_defaults_to_tooling_only_when_sqlx_answers_are_omitted() {
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -87,6 +88,7 @@ fn adopt_resolves_relative_answers_file_from_the_launcher_invocation_directory()
     let _cwd = CurrentDirGuard::set(&other);
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: PathBuf::from("repo"),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -119,6 +121,7 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
     fs::write(repo.join("README.md"), "project\n").unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,

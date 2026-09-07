@@ -78,6 +78,7 @@ sqlx = { workspace = true }
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -150,6 +151,7 @@ edition = "2024"
     fs::write(repo.join("crates/fixtures/src/lib.rs"), "").unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -214,6 +216,7 @@ fn adopt_reports_sources_for_multiple_migration_dirs() {
     fs::write(repo.join("migrations/0001_root.sql"), "select 1;\n").unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -224,7 +227,10 @@ fn adopt_reports_sources_for_multiple_migration_dirs() {
         defaults: false,
         no_input: true,
         no_vault: true,
-        answers: AnswerOpts::default(),
+        answers: AnswerOpts {
+            backend_language: Some(crate::backend::BackendLanguage::Rust),
+            ..AnswerOpts::default()
+        },
     })
     .unwrap();
 
@@ -323,6 +329,7 @@ test-locked:
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -401,6 +408,7 @@ test-locked:
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,

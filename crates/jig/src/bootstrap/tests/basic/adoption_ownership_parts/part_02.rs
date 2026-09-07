@@ -199,7 +199,7 @@ fn full_with_web_retires_web_paths_when_switching_to_minimal() {
 }
 
 #[test]
-fn full_with_web_retires_web_paths_when_readopted_without_web() {
+fn full_readoption_preserves_authored_web_ownership_when_manifests_disappear() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -213,20 +213,12 @@ fn full_with_web_retires_web_paths_when_readopted_without_web() {
     fs::remove_file(repo.join("package.json")).unwrap();
     fs::remove_file(repo.join("package-lock.json")).unwrap();
 
-    let output = run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
-
-    assert!(
-        WEB_HARNESS_PATHS
-            .iter()
-            .all(|path| !repo.join(path).exists())
-    );
-    assert!(WEB_HARNESS_PATHS.iter().all(|path| {
-        output["render_report"]["files_removed"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|removed| removed == *path)
-    }));
+    let before = fs::read(repo.join(".jig.toml")).unwrap();
+    let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap_err();
+    assert!(error.to_string().contains("missing package.json"), "{error:#}");
+    assert!(error.to_string().contains("[repository.components]") && error.to_string().contains("[repository.actions]"), "{error:#}");
+    assert_eq!(fs::read(repo.join(".jig.toml")).unwrap(), before);
+    assert!(WEB_HARNESS_PATHS.iter().all(|path| repo.join(path).is_file()));
 }
 
 #[test]

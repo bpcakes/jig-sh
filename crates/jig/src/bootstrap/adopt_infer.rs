@@ -7,6 +7,12 @@ use super::answers::AnswerInputShape;
 use super::{AnswerOpts, FrontendApp};
 
 mod commands;
+pub(super) mod components;
+mod discovery;
+mod selection;
+pub(in crate::bootstrap) use components::ComponentCandidates;
+pub use components::ComponentSelectionOpts;
+pub(super) use discovery::infer_adopt_answers;
 mod frontend;
 mod github;
 mod metadata;
@@ -54,6 +60,8 @@ use self::scan::MAX_SCAN_FILE_BYTES;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct AdoptInference {
+    scan: Option<RepoScan>,
+    sqlx_signals: Vec<String>,
     repo_name: Option<String>,
     default_branch: Option<String>,
     rust_crate_roots: Vec<String>,
@@ -76,6 +84,7 @@ pub(super) struct AdoptInference {
     ci_github_runner: Option<String>,
     ci_shape: GithubCiShapeInference,
     repo_topology: RepoTopology,
+    components: ComponentCandidates,
     signals: Vec<String>,
     warnings: Vec<String>,
     metadata: BTreeMap<String, InferenceMetadata>,
@@ -83,93 +92,6 @@ pub(super) struct AdoptInference {
 
 pub(super) struct AdoptionReview {
     pub(super) items: Vec<String>,
-}
-
-pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
-    let mut warnings = Vec::new();
-    let scan = RepoScan::collect(root, &mut warnings);
-    let repo_name = infer_repo_name_with_metadata(root);
-    let default_branch = infer_default_branch_with_metadata(root, &mut warnings);
-    let mut rust_crate_roots = infer_rust_crate_roots_with_metadata(root, &mut warnings);
-    if rust_crate_roots.roots.is_empty() && !root.join("Cargo.toml").is_file() {
-        rust_crate_roots = infer_rust_crate_roots_from_scan(root, &scan, &mut warnings);
-    }
-    let repo_topology = infer_repo_topology(root, &scan, &rust_crate_roots.roots, &mut warnings);
-    let mut package_manager_warnings = Vec::new();
-    let package_manager =
-        infer_package_manager_with_metadata(root, &scan, &mut package_manager_warnings);
-    let scanned_rust_packages =
-        rust_crate_roots.source_kind == RustCrateRootSourceKind::ScannedPackages;
-    let nested_manifest_paths =
-        scanned_rust_packages.then_some(rust_crate_roots.scanned_manifest_paths.as_slice());
-    let commands = infer_commands(root, &scan, nested_manifest_paths, &mut warnings);
-    if !rust_crate_roots.roots.is_empty() && commands.rust_clippy_command.is_none() {
-        warnings.push(crate::bootstrap::clippy_policy::ALL_FEATURES_ADOPTION_WARNING.to_owned());
-    }
-    if scanned_rust_packages && commands.rust_test_locked_command.is_none() {
-        warnings.push(
-            "nested Rust manifest scan did not infer rust_test_locked_command; add a project-owned locked command once lockfiles are committed"
-                .into(),
-        );
-    }
-    let frontend_apps =
-        infer_frontend_apps_with_metadata(root, repo_name.value.as_deref(), &mut warnings);
-    if !frontend_apps.apps.is_empty() {
-        warnings.extend(package_manager_warnings);
-    }
-    let github_ci = infer_ci_github_runner_with_metadata(root, &scan, &mut warnings);
-    let mut inference = AdoptInference {
-        repo_name: repo_name.value.clone(),
-        default_branch: default_branch.value.clone(),
-        rust_crate_roots: rust_crate_roots.roots.clone(),
-        rust_crate_root_source_kind: rust_crate_roots.source_kind,
-        rust_fmt_check_command: commands
-            .rust_fmt_check_command
-            .as_ref()
-            .map(CommandCandidate::command),
-        rust_clippy_command: commands
-            .rust_clippy_command
-            .as_ref()
-            .map(CommandCandidate::command),
-        rust_test_command: commands
-            .rust_test_command
-            .as_ref()
-            .map(CommandCandidate::command),
-        rust_test_locked_command: commands
-            .rust_test_locked_command
-            .as_ref()
-            .map(CommandCandidate::command),
-        command_profile: commands.clone(),
-        web_package_manager: package_manager.value.clone(),
-        application_contracts_enabled: Some(infer_application_contracts_enabled(
-            root,
-            &scan,
-            !frontend_apps.apps.is_empty(),
-            &mut warnings,
-        )),
-        frontend_apps: frontend_apps.apps.clone(),
-        frontend_workspace_roots: frontend_apps.workspace_roots.clone(),
-        frontend_profiles: frontend_apps.profiles.clone(),
-        ci_github_runner: github_ci.runner.clone(),
-        ci_shape: github_ci.shape.clone(),
-        repo_topology,
-        warnings,
-        ..AdoptInference::default()
-    };
-    record_repository_metadata(
-        &mut inference,
-        &repo_name,
-        &default_branch,
-        &rust_crate_roots,
-        &commands,
-    );
-    record_frontend_and_ci_metadata(&mut inference, &package_manager, &frontend_apps, &github_ci);
-
-    let sqlx = infer_sqlx(root, &scan, &mut inference.warnings);
-    apply_sqlx_inference(&mut inference, &sqlx);
-    record_inference_signals(&mut inference, &github_ci);
-
-    inference
 }
 
 fn record_repository_metadata(
@@ -324,6 +246,10 @@ fn record_frontend_and_ci_metadata(
 fn apply_sqlx_inference(inference: &mut AdoptInference, sqlx: &SqlxInference) {
     inference.sqlx_enabled = Some(sqlx.enabled.value);
     inference.rust_migration_dirs = sqlx.migration_dirs.value.clone();
+    inference
+        .signals
+        .retain(|signal| !inference.sqlx_signals.contains(signal));
+    inference.sqlx_signals.clone_from(&sqlx.signals);
     inference.signals.extend(sqlx.signals.clone());
     inference.record_metadata(
         "sqlx_enabled",
@@ -488,6 +414,13 @@ impl AdoptInference {
         answers: &mut AnswerOpts,
         answer_shape: &AnswerInputShape,
     ) {
+        // Fresh observations do not replace stored component, command or input authority.
+        if self.components.preserved {
+            return;
+        }
+        answers
+            .frontend_workspace_roots
+            .clone_from(&self.frontend_workspace_roots);
         fill_string(
             &mut answers.repo_name,
             self.repo_name.as_deref(),
@@ -517,12 +450,6 @@ impl AdoptInference {
             &self.frontend_apps,
             answer_shape,
         );
-        // Workspace ownership is generated adoption policy, not a project
-        // command override. Refresh it from the current declarations so added
-        // members and exclusions cannot leave stale gate authorities behind.
-        answers
-            .frontend_workspace_roots
-            .clone_from(&self.frontend_workspace_roots);
         if !answers.frontend_apps.is_empty() || answer_shape.contains_key("web_package_manager") {
             fill_string(
                 &mut answers.web_package_manager,
@@ -628,6 +555,12 @@ impl AdoptInference {
         answer_shape: &AnswerInputShape,
     ) -> AdoptionReview {
         let mut items = Vec::new();
+        items.extend(
+            self.components
+                .candidates
+                .iter()
+                .map(|candidate| candidate.review_line()),
+        );
         items.push(format!("stack: {}", self.detected_stack_label()));
         if self.frontend_apps.is_empty() {
             items.push("frontend: no apps configured; web package-manager lockfiles are ignored until a frontend app is supplied".into());
@@ -714,6 +647,7 @@ impl AdoptInference {
             "ci_github_runner": self.ci_github_runner,
             "ci_shape": self.ci_shape.report(),
             "repo_topology": self.repo_topology.report(),
+            "component_candidates": self.components.report(),
             "command_profile": self.command_profile.report(),
             "signals": self.signals,
             "warnings": self.warnings,

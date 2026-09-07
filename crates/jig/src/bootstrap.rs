@@ -67,6 +67,7 @@ use template_source::{
 };
 
 mod adopt_infer;
+pub use adopt_infer::ComponentSelectionOpts;
 mod adoption_file_budget;
 mod answers;
 #[cfg(test)]

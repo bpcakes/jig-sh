@@ -523,6 +523,7 @@ fn adopt_minimal_preview_keeps_write_flag_in_next_steps() {
     fs::create_dir_all(&repo).unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -660,6 +661,7 @@ fn adopt_preserves_existing_vault_scope_id() {
     fs::create_dir_all(&repo).unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -676,6 +678,7 @@ fn adopt_preserves_existing_vault_scope_id() {
     let first_scope = rendered_vault_scope_id(&repo);
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -721,6 +724,7 @@ frontend_apps = []
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -773,6 +777,7 @@ scope = "repo"
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,

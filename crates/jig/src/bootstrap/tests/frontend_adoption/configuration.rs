@@ -679,6 +679,7 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -691,6 +692,7 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
         no_vault: true,
         answers: AnswerOpts {
             repo_name: Some("demo".into()),
+            backend_language: Some(BackendLanguage::Rust),
             sqlx_enabled: Some(false),
             web_package_manager: Some("npm".into()),
             frontend_apps: vec![FrontendApp {

@@ -113,6 +113,41 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
             ("model".into(), toml::Value::String("gpt-5".into())),
         ]))]),
     );
+    // Explicitly remove frontend ownership from the authored model. Deleting
+    // manifests alone must no longer cause readoption to discard components.
+    config["frontend_apps"] = toml::Value::Array(Vec::new());
+    let components = config["repository"]["components"].as_array_mut().unwrap();
+    let frontend_ids = components
+        .iter()
+        .filter(|component| {
+            component["adapters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|adapter| adapter.as_str() == Some("typescript"))
+        })
+        .map(|component| component["id"].as_str().unwrap().to_owned())
+        .collect::<BTreeSet<_>>();
+    components.retain(|component| !frontend_ids.contains(component["id"].as_str().unwrap()));
+    config["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|action| {
+            !frontend_ids.contains(action["target"]["component"].as_str().unwrap())
+                && !action["target"]["action"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("typescript-")
+        });
+    for profile in config["repository"]["profiles"].as_array_mut().unwrap() {
+        profile["targets"].as_array_mut().unwrap().retain(|target| {
+            !frontend_ids.contains(target["component"].as_str().unwrap())
+                && !target["action"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("typescript-")
+        });
+    }
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
     crate::context::RepoContext::load_from(&repo).unwrap();
     fs::remove_file(repo.join("apps/web/package.json")).unwrap();

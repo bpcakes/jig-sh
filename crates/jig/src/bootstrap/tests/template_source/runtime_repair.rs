@@ -9,6 +9,7 @@ fn full_update_recovers_missing_and_malformed_contract_manifests() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -95,6 +96,7 @@ fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
     git(template.path(), ["commit", "-m", "pre-v4 template fixture"]).unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -108,6 +110,7 @@ fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
         answers: AnswerOpts {
             repo_name: Some("demo".into()),
             jig_version: Some("0.2.0-beta.1".into()),
+            backend_language: Some(crate::backend::BackendLanguage::Rust),
             sqlx_enabled: Some(false),
             ..AnswerOpts::default()
         },
@@ -171,6 +174,7 @@ fn adopt_rejects_current_contract_template_with_legacy_launcher_protocol() {
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -206,6 +210,7 @@ fn full_update_upgrades_legacy_contract_and_launcher_together() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -278,6 +283,7 @@ fn embedded_full_update_replaces_current_contract_repair_seed() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -356,6 +362,7 @@ fn embedded_adopt_replaces_current_contract_repair_seed() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo,
             template: None,
             template_mode: None,

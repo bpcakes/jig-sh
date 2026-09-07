@@ -21,6 +21,7 @@ fn adopt_keeps_project_owned_build_and_lint_configuration() {
     }
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),

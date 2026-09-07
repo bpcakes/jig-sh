@@ -9,6 +9,7 @@ fn launcher_only_update_repairs_only_owned_runtime_scripts() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -143,6 +144,7 @@ fn launcher_only_update_preserves_every_file_when_force_is_required() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -194,6 +196,7 @@ fn launcher_only_update_explains_minimal_footprint_mismatch() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -259,6 +262,7 @@ fn launcher_only_update_rejects_missing_source_before_mutating_scripts() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -316,6 +320,7 @@ fn launcher_only_update_rolls_back_scripts_when_runtime_seeding_fails() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -382,6 +387,7 @@ fn launcher_only_update_without_manifest_accepts_only_recognizable_legacy_script
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,
@@ -594,6 +600,7 @@ printf '%s\n' "$BIN_PATH"
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,

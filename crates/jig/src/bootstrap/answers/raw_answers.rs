@@ -379,6 +379,7 @@ impl RawAnswers {
             },
         );
         AnswerOpts {
+            adoption_components: None,
             answers_file,
             repo_name: self.repo_name.filter(|value| !value.is_empty()),
             go_module: self.go_module.filter(|value| !value.is_empty()),

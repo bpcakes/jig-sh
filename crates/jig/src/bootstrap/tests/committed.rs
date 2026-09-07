@@ -48,6 +48,7 @@ fn update_allows_embedded_source_to_switch_to_committed_checkout() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,

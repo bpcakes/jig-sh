@@ -893,26 +893,8 @@ fn with_test_build_template_pin_policy<T>(
     run()
 }
 
-fn adopt_repo_for_test(repo: &Path, template: &Path, template_mode: TemplateMode) {
-    run_adopt(AdoptOpts {
-        path: repo.to_path_buf(),
-        template: Some(template.display().to_string()),
-        template_mode: Some(template_mode),
-        vcs_ref: None,
-        force: false,
-        write: true,
-        minimal: false,
-        defaults: true,
-        no_input: true,
-        no_vault: true,
-        answers: AnswerOpts {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(false),
-            ..AnswerOpts::default()
-        },
-    })
-    .unwrap();
-}
+mod adoption_fixture;
+use adoption_fixture::adopt_repo_for_test;
 
 fn commit_template_root_guide(template: &Path, contents: &str, message: &str) -> String {
     fs::write(

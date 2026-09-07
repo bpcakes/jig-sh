@@ -13,7 +13,7 @@ pub(super) const MAX_SCAN_FILE_BYTES: u64 = 512 * 1024;
 pub(super) const MAX_SCAN_DEPTH: usize = 5;
 pub(super) const MAX_SCAN_WARNINGS: usize = 20;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct RepoScan {
     files: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
@@ -31,6 +31,40 @@ impl RepoScan {
         scan.files.sort();
         scan.dirs.sort();
         scan
+    }
+
+    pub(super) fn for_selected_components(
+        &self,
+        root: &Path,
+        candidates: &super::ComponentCandidates,
+    ) -> Self {
+        let selected = |path: &PathBuf| {
+            let relative = path.strip_prefix(root).unwrap_or(path);
+            // A nested manifest owns its own subtree even when its parent workspace is selected.
+            candidates
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.root != "." && relative.starts_with(&candidate.root))
+                .max_by_key(|candidate| candidate.root.len())
+                .is_none_or(|candidate| {
+                    candidate.disposition == super::components::Disposition::Included
+                })
+        };
+        Self {
+            files: self
+                .files
+                .iter()
+                .filter(|path| selected(path))
+                .cloned()
+                .collect(),
+            dirs: self
+                .dirs
+                .iter()
+                .filter(|path| selected(path))
+                .cloned()
+                .collect(),
+            depth_limit_warning_emitted: self.depth_limit_warning_emitted,
+        }
     }
 
     pub(in crate::bootstrap) fn files(&self) -> &[PathBuf] {
@@ -63,6 +97,7 @@ impl RepoScan {
         }
 
         let mut scan = Self::new();
+        let mut safe_parents = std::collections::BTreeMap::new();
         for raw_path in output.stdout.split(|byte| *byte == b'\0') {
             if raw_path.is_empty() {
                 continue;
@@ -75,6 +110,14 @@ impl RepoScan {
                 continue;
             }
 
+            if let Some(parent) = relative_path.parent()
+                && !parent.as_os_str().is_empty()
+                && !*safe_parents.entry(parent.to_path_buf()).or_insert_with(|| {
+                    crate::repository_path::validate_repository_directory_path(root, parent).is_ok()
+                })
+            {
+                continue;
+            }
             let path = root.join(relative_path);
             if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file()) {
                 scan.files.push(path.clone());

@@ -18,6 +18,8 @@ pub(crate) struct DevSettingsAnswers {
 
 #[derive(Args, Clone, Debug, Default)]
 pub struct AnswerOpts {
+    #[arg(skip)]
+    pub(crate) adoption_components: Option<super::adopt_infer::ComponentCandidates>,
     #[arg(
         long,
         help_heading = "Automation",

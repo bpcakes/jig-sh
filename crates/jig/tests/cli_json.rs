@@ -694,3 +694,6 @@ mod support;
 use info_commands_edge_cases::*;
 
 include!("cli_json_parts/loop_commands.rs");
+
+#[path = "cli_json/adoption_components.rs"]
+mod adoption_components;

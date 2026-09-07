@@ -33,6 +33,7 @@ allow_global = "false"
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -75,6 +76,7 @@ scope = 123
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -119,6 +121,7 @@ unexpected = true
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,

@@ -123,6 +123,8 @@ Examples:
   jig adopt . --minimal --write
   jig adopt . --write --template /path/to/jig-sh --template-mode committed")]
 pub struct AdoptOpts {
+    #[command(flatten)]
+    pub components: ComponentSelectionOpts,
     #[arg(default_value = ".", help = "Existing repository directory to adopt")]
     pub path: PathBuf,
     #[arg(
@@ -552,7 +554,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         &invocation_cwd,
     ))?;
     progress.step("infer answers", "scan existing repository");
-    let inference = adopt_infer::infer_adopt_answers(&destination);
+    let mut inference = adopt_infer::infer_adopt_answers(&destination);
     let prior_answers = recognized_prior_answers(&destination);
     let requested_harness_footprint = if opts.minimal {
         HarnessFootprint::Minimal
@@ -563,9 +565,6 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         prior.harness_footprint() == HarnessFootprint::Minimal
             && requested_harness_footprint == HarnessFootprint::Full
     });
-    let changes_harness_footprint = prior_answers
-        .as_ref()
-        .is_some_and(|prior| prior.harness_footprint() != requested_harness_footprint);
     let establishes_manifest = prior_managed_paths.is_none() && prior_answers.is_some();
     if prior_managed_paths.is_none()
         && prior_answers.as_ref().is_some_and(|prior| {
@@ -581,12 +580,14 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     let mut answers = opts.answers.clone();
     answers.harness_footprint = Some(requested_harness_footprint);
     let answer_input = progress.log_blocked_on_err(
-        if (changes_harness_footprint || establishes_manifest) && answers.answers_file.is_none() {
+        if prior_answers.is_some() && answers.answers_file.is_none() {
             AnswerInput::from_file(&destination.join(ANSWERS_FILE))
         } else {
             AnswerInput::from_opts_at(&answers, &invocation_cwd)
         },
     )?;
+    let mut answer_input = answer_input;
+    answer_input.prepare_adoption(&mut inference, &destination, &answers, &opts.components)?;
     let answer_shape = answer_input.shape().clone();
     progress.info("detected", inference.summary());
     progress.info("detected stack", inference.detected_stack_label());
@@ -600,6 +601,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         progress.info("warning", warning);
     }
     inference.apply_to_answers(&mut answers, &answer_shape);
+    inference.apply_component_decisions(&mut answers);
     let review = inference.adoption_review(&answers, &opts.answers, &answer_shape);
     for item in &review.items {
         progress.info("review", item);

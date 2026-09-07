@@ -21,6 +21,7 @@ fn adopt_rejects_frontend_app_missing_required_ci_scripts() {
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -76,6 +77,7 @@ fn adopt_requires_a_lockfile_and_accepts_an_app_local_npm_shrinkwrap() {
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -109,6 +111,7 @@ fn adopt_requires_a_lockfile_and_accepts_an_app_local_npm_shrinkwrap() {
 
     fs::write(repo.join("apps/web/npm-shrinkwrap.json"), "{}").unwrap();
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),

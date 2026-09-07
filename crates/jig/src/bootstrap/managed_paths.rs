@@ -242,7 +242,7 @@ pub(super) fn should_omit_unmanaged_rendered_path(
     answers: &RenderAnswers,
 ) -> bool {
     if (relative == Path::new(super::staged_render::FILE_BUDGET_POLICY_PATH)
-        && answers.is_minimal_footprint())
+        && (answers.is_minimal_footprint() || !answers.file_budget_ci_enabled()))
         || relative == Path::new("Makefile")
         || (answers.frontend_apps().is_empty() && is_web_managed_path(relative))
         || (!answers.rust_ci_workflow_enabled()

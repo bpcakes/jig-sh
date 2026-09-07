@@ -14,6 +14,7 @@ fn adopt_local_git_template_defaults_to_committed_mode() {
     write_test_crate_guide(&repo);
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -55,6 +56,7 @@ fn adopt_local_git_template_rejects_dirty_committed_source() {
     write_test_crate_guide(&repo);
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,
@@ -226,6 +228,7 @@ fn update_recopy_seeds_then_preserves_authored_file_budget_policy() {
     write_test_crate_guide(&repo);
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -238,6 +241,7 @@ fn update_recopy_seeds_then_preserves_authored_file_budget_policy() {
         no_vault: true,
         answers: AnswerOpts {
             repo_name: Some("ExampleProject".into()),
+            backend_language: Some(BackendLanguage::Rust),
             sqlx_enabled: Some(false),
             ..AnswerOpts::default()
         },
@@ -292,6 +296,7 @@ fn update_recopy_preserves_authored_file_budget_action_alias_and_profile_removal
         let repo = temp.path().join(format!("repo-{choice}"));
         write_test_crate_guide(&repo);
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: Some(template.path().display().to_string()),
             template_mode: Some(TemplateMode::Committed),
@@ -304,6 +309,7 @@ fn update_recopy_preserves_authored_file_budget_action_alias_and_profile_removal
             no_vault: true,
             answers: AnswerOpts {
                 repo_name: Some(format!("Example{choice}")),
+                backend_language: Some(BackendLanguage::Rust),
                 sqlx_enabled: Some(false),
                 ..AnswerOpts::default()
             },

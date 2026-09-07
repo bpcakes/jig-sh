@@ -99,6 +99,7 @@ fn init_and_adopt_resolve_relative_bootstrap_paths_from_invocation_cwd() {
 
     fs::create_dir_all(invocation.join("existing-repo")).unwrap();
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: PathBuf::from("existing-repo"),
         template: Some("template".into()),
         template_mode: None,
@@ -420,6 +421,7 @@ fn adopt_with_real_template_runs_destination_tasks() {
     write_test_crate_guide(&repo);
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -472,6 +474,7 @@ fn adopt_appends_jig_block_to_existing_root_agents() {
     .unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -526,6 +529,7 @@ fn adopt_refuses_to_replace_symlinked_root_agents_without_force() {
     create_symlink(Path::new("AGENTS.shared.md"), &repo.join("AGENTS.md")).unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -559,6 +563,7 @@ fn adopt_refuses_to_replace_symlinked_root_agents_without_force() {
     );
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -606,6 +611,7 @@ fn adopt_rejects_malformed_existing_root_agents_jig_block() {
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -638,6 +644,7 @@ fn adopt_with_real_template_keeps_sqlx_files_when_enabled() {
     fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -695,6 +702,7 @@ fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() 
     fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),
@@ -737,6 +745,7 @@ fn adopt_with_sqlx_and_schema_dumps_disabled_hides_schema_dump_target() {
     fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
         template_mode: Some(TemplateMode::Committed),

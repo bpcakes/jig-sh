@@ -151,7 +151,11 @@ fn backend_guides(ctx: &RepoContext) -> Result<BTreeMap<PathBuf, BTreeSet<GuideL
             add_guide_if_present(&component_root, GuideLanguage::Rust, &mut guides);
         }
     }
-    for root in ctx.rust_crate_roots() {
+    for root in ctx
+        .rust_crate_roots()
+        .iter()
+        .filter(|root| root.as_str() != ".")
+    {
         add_fallback_rust_guides(&ctx.root().join(root), &mut guides)?;
     }
     Ok(guides)
@@ -637,7 +641,7 @@ rust_crate_roots = []
 _commit = "abc123"
 repo_name = "ExampleProject"
 default_branch = "main"
-rust_crate_roots = ["crates", "services"]
+rust_crate_roots = [".", "crates", "services"]
 
 [commands]
 api_test_command = "go test ./..."
@@ -728,6 +732,13 @@ targets = [
         fs::write(
             temp.path().join("crates/shared/AGENTS.md"),
             required_sections.replace("ENTRYPOINT", "- `src/lib.rs`"),
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp.path().join("docs")).unwrap();
+        fs::write(
+            temp.path().join("docs/AGENTS.md"),
+            "Documentation editing guidance.\n",
         )
         .unwrap();
 

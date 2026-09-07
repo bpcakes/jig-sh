@@ -36,6 +36,18 @@ An invalid or stale `JIG_REPO_ROOT` remains a blocker for workflows that use str
 
 Bootstrap command JSON is also runtime-owned. `scripts/jig init --json`, `scripts/jig adopt --json`, and `scripts/jig update --json` include a `render_report` object that summarizes created, modified, unchanged, conflict, backup, managed-block, authored-seed, and todo items for human review. When `jig init --json` runs a project scaffold, its sibling `scaffold` object reports the scaffold preset, sanitized `repo_name`, nullable `repo_name_sanitized_from`, `db`, `frontends[].{name,dir,kind,role}`, `frontend_notices` for bare custom names that are not preset shorthands, and `files_created` / `files_modified` / `files_unchanged` separately from template-managed file counts in `render_report`. Generated shadcn React frontends carry a same-contract-epoch `ui` provenance object describing the system, CLI version, preset, primitive base, style, and Tailwind major. `scripts/jig adopt` previews by default with `render_mode = "preview"` and only applies managed files with `render_mode = "copy"` when `--write` is supplied. Its runtime-owned `adoption_profile.file_budget` reports bounded policy classification, debt, legacy markers, waiver drafts, and whether human authorization is required; write mode fails before mutation while such a draft remains incomplete. Full-update JSON includes `legacy_file_budget_migration`, whose status, recognized generation, reason, and optional exact rerun command describe whether a known Bash checker was retained, retired, absent, or preserved as authored state. `scripts/jig init`, `scripts/jig adopt`, and `scripts/jig update` print human summaries by default; pass `--json` for the full structured reports. Automation should treat those reports as runtime diagnostics governed by the contract epoch, not as tool entries in `.agent/jig-contract.json`.
 
+Adoption's `detection_report.component_candidates` is a deterministic list of
+`root`, `proposed_id`, `ecosystem`, `evidence`, `confidence`, `disposition`, and
+`reason` records. Disposition is `included`, `excluded`, or `review_required`.
+The human review uses these same decisions. Initial adoption writes accepted
+candidates into the existing authored component contract; this adds no contract
+epoch. Repeated `--include-component ROOT` / `--exclude-component ROOT` options
+select exact normalized repository roots, not globs or runtime ignores. Invalid,
+unknown, escaping or conflicting selections fail before managed-file writes.
+Existing complete authored models remain authoritative during readoption and
+update; selection flags on those models fail with guidance to edit `.jig.toml`.
+
+
 Agent-guide check JSON keeps `missing_guides` as an empty compatibility field in this contract version and includes `missing_guides_note` to explain that placeholder backend-level `AGENTS.md` files are no longer required. Existing Rust crate and Go package guide files are validated when present. Consumers should stop treating `missing_guides` as the guide-coverage gate; use `missing_sections` and `missing_entry_ref` for existing-guide quality issues.
 
 Dev proxy and vault JSON are also runtime-owned. Proxy status may include machine-local health fields such as `pid`, `pid_alive`, `pid_observation`, `health_pid`, `handshake_ok`, `pid_matches_proxy`, `running`, listener addresses, and route URLs; `pid_alive` means positively observed alive while `pid_observation` preserves an `alive`, `absent`, or `uncertain` result. Status and listing commands may perform a loopback HTTP health probe to populate those fields. Strict cross-machine automation should rely on the stable generated command contract instead of treating those runtime diagnostics as a contract schema.

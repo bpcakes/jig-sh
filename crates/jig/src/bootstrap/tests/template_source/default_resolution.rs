@@ -54,6 +54,7 @@ exit 0
     let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &git_path);
 
     run_adopt(AdoptOpts {
+        components: Default::default(),
         path: repo.clone(),
         template: None,
         template_mode: None,
@@ -149,6 +150,7 @@ fn run_adopt_uses_embedded_template_for_unreleased_build_policy() {
 
     with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
         run_adopt(AdoptOpts {
+            components: Default::default(),
             path: repo.clone(),
             template: None,
             template_mode: None,

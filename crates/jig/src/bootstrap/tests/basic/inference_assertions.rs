@@ -121,7 +121,7 @@ pub(super) fn assert_inferred_config(repo: &Path) -> String {
         "default_branch = \"main\"",
         "ci_github_runner = \"ubuntu-24.04\"",
         "sqlx_enabled = true",
-        "rust_crate_roots = [\"crates\"]",
+        "rust_crate_roots = [\".\", \"crates/api\"]",
         "rust_migration_dir = \"migrations\"",
         "rust_sqlx_metadata_dir = \".sqlx\"",
         "schema_dump_enabled = false",

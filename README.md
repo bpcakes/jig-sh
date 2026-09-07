@@ -209,7 +209,16 @@ For an existing repository, preview before writing:
 cd /path/to/repository
 jig adopt .
 jig adopt . --write
+# Apply the same component selections in preview and write mode:
+jig adopt . --exclude-component fixtures/sample --include-component tools/helper
 ```
+
+Adoption lists component candidates with evidence, confidence, and `included`,
+`excluded`, or `review_required` status. Raw incidental manifests stay unselected.
+Use repeated `--include-component ROOT` and `--exclude-component ROOT` flags for
+exact roots shown in the preview; repeat the selections with `--write`. Accepted
+candidates become authored components. Later updates preserve that model. See
+[adoption](docs/adoption.md) for workspace and command-inference limits.
 
 Adoption preserves existing root files such as `AGENTS.md` and `Makefile`; it changes only Jig's marked or explicitly managed sections. Override inferred settings with flags or an answers file. See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md).
 

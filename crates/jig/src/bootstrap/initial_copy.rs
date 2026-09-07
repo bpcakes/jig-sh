@@ -81,7 +81,7 @@ pub(super) fn render_and_copy_bootstrap_template(
     mut request: BootstrapCopyRequest<'_>,
 ) -> Result<BootstrapCopyResult> {
     request.progress.step("resolve answers", ANSWERS_DETAIL);
-    let preferred_rendered_commands = request
+    let mut preferred_rendered_commands = request
         .answer_input
         .as_ref()
         .map(|input| input.preferred_rendered_command_keys(request.answers))
@@ -102,6 +102,7 @@ pub(super) fn render_and_copy_bootstrap_template(
             ),
         })?;
     let (mut answers, mut notes) = answer_resolution.into_parts();
+    preferred_rendered_commands.extend(answers.adoption_command_keys(request.answers)?);
     if request.scaffolded_frontend_contracts {
         answers.enable_scaffolded_frontend_contracts();
     }
@@ -295,8 +296,9 @@ fn validate_frontend_app_scripts(destination: &Path, answers: &RenderAnswers) ->
         let package_path = app_dir.join("package.json");
         if !package_path.is_file() {
             bail!(
-                "Configured frontend app '{}' in {} is missing package.json. Add the app package.json, or remove the entry from frontend_apps until web CI checks are ready.",
+                "Configured frontend app '{}' in {} is missing package.json. Restore package.json, or remove this frontend_apps entry and the [repository.components] record with root '{}', its [repository.actions], and references in dependencies/profiles in .jig.toml before readoption.",
                 app.name,
+                app.dir,
                 app.dir
             );
         }
