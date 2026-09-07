@@ -245,6 +245,8 @@ Receipt retention is also local. `state archive --before <date>` compresses elig
 
 ## Terminal Dashboard
 
+This section describes the unreleased dashboard cutover after 0.3.0. The published 0.3.0 release still has separate browser and status dashboards with external status providers; see its [developer guide](https://github.com/bpcakes/jig-sh/blob/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs/developer-ux.md) for release-specific commands.
+
 `scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status.
 
 ```sh
@@ -266,7 +268,7 @@ The full layout is comfortable at 108 by 24 cells or larger and supported from 7
 
 The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 2.
 
-Version 0.3.0 removed the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in 0.4.0. A prior Jig release is required to read old bookmarked URLs. The cutover does not change generated launcher scope or contract version 7 because `ui` and `status` remain runtime-owned repository commands.
+The unreleased cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. In current `master`, the old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in 0.4.0. Callers needing the browser transport can continue using the published 0.3.0 release. The cutover does not change generated launcher scope or contract version 7 because `ui` and `status` remain runtime-owned repository commands.
 
 ## Dev Proxy
 

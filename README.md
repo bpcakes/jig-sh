@@ -51,6 +51,8 @@ Linux and macOS are supported hosts. See [Platform Support](docs/platform-suppor
 
 Jig is pre-1.0. The current source renders contract v7; contracts v2 through v6 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
 
+This README and the linked guides describe current `master`. The published `0.3.0` release (September 5, 2026) still includes the browser dashboard and external status providers. The unified terminal dashboard, provider removal, and new dashboard/status JSON formats described below are **unreleased changes after 0.3.0**. See the [Unreleased changelog](CHANGELOG.md#unreleased) for those changes or the [0.3.0 documentation](https://github.com/bpcakes/jig-sh/tree/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs) for the published release.
+
 ## Install
 
 Install the bootstrap CLI from crates.io:
@@ -232,7 +234,7 @@ The four tabs are Status, Work, Timeline, and Health. Collection failures remain
 
 `jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
 
-Version 0.3.0 removed the browser server and URL endpoints. The hidden `--port` parser now exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON instead; no browser, listener, cookie, or capability URL remains.
+The unreleased dashboard cutover after 0.3.0 removes the browser server and URL endpoints. In current `master`, the hidden `--port` parser exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON with this source version. The published 0.3.0 release retains the browser transport.
 
 Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 

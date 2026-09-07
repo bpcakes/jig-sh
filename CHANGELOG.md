@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+These changes postdate the published v0.3.0 release of September 5, 2026. They are available in current `master` and are not part of the crates.io 0.3.0 package.
+
 ### Changed
 
 - Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. The hidden `--port` parser returns a migration error and may be removed in 0.4.0. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. Generated launcher scope, append-only state format, and contract version 7 are unchanged.

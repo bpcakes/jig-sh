@@ -160,6 +160,8 @@ Command-backed tools return the same common fields plus `command_key`, which ide
 
 ## Dashboard And Status Output
 
+This section describes unreleased changes after 0.3.0. The published 0.3.0 release retains the browser dashboard and external status providers; the direct recorder/plan JSON documents and local-only status schema version 2 below belong to current `master`. See the [0.3.0 public contract](https://github.com/bpcakes/jig-sh/blob/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs/public-contract.md) for the released interfaces. When upgrading to this source version, also remove the retired status-provider configuration described in [Configuration](configuration.md#accepted-key-summary).
+
 The full-screen output from `scripts/jig ui` and `scripts/jig status --tui` is human-only and requires terminal stdin and stdout. `jig ui` starts the unified four-tab dashboard on Work; `jig status --tui` starts the same implementation on Status. Both are read-only and record no receipt. Redirected interactive use exits nonzero with guidance to select one of the JSON forms below.
 
 `scripts/jig --json ui` emits one local recorder document. `scripts/jig --json ui --plan PLAN_ID` emits one plan document. Every listed root field is present:
@@ -207,9 +209,9 @@ Each partial collection error is `{"scope": string, "code": string, "subject_id"
 
 A nonempty `errors` array is partial observation, not command failure: recorder and plan documents retain `ok: true`, preserve usable data, and exit 0 after one complete JSON document is written. Status JSON likewise preserves usable data, exits 0 after successful collection, and changes `outcome` to `"partial"`. Failures before a snapshot can be constructed use the ordinary command-error envelope and a nonzero exit.
 
-Dashboard and status readers cap each logical record in `sessions.jsonl`, `plans.jsonl`, `decisions.jsonl`, and `receipts.jsonl` at 1048576 bytes. An oversized record is skipped without allocating proportionally and yields a `record_too_large` partial error. This 0.3.0 safety tightening does not change the append-only state format, but a schema-valid oversized legacy record that an older runtime attempted to allocate now makes UI recorder or status observation partial. Use `scripts/jig state diagnose` to identify the affected stream, stop Jig writers, and use the applicable compaction, archive, restore, or manual state-repair workflow before retrying.
+Dashboard and status readers cap each logical record in `sessions.jsonl`, `plans.jsonl`, `decisions.jsonl`, and `receipts.jsonl` at 1048576 bytes. An oversized record is skipped without allocating proportionally and yields a `record_too_large` partial error. This unreleased safety tightening after 0.3.0 does not change the append-only state format, but a schema-valid oversized legacy record that an older runtime attempted to allocate now makes UI recorder or status observation partial. Use `scripts/jig state diagnose` to identify the affected stream, stop Jig writers, and use the applicable compaction, archive, restore, or manual state-repair workflow before retrying.
 
-Version 0.3.0 ends support for the browser server, its bookmarked URLs, and its HTTP JSON endpoints. `jig ui --json` now emits the recorder document directly instead of a URL envelope. A hidden `--port` parser exists only to return a migration diagnostic with exit status 2 and may be removed in 0.4.0. This workflow cutover does not change generated launcher command scope or contract version 7; callers needing the old transport must use an older Jig release.
+The unreleased cutover ends support for the browser server, its bookmarked URLs, and its HTTP JSON endpoints. In current `master`, `jig ui --json` emits the recorder document directly instead of a URL envelope. A hidden `--port` parser exists only to return a migration diagnostic with exit status 2 and may be removed in 0.4.0. This workflow cutover does not change generated launcher command scope or contract version 7; callers needing the browser transport can continue using the published 0.3.0 release.
 
 ## Repository Catalog And Check Plans
 
