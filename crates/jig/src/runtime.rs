@@ -18,6 +18,8 @@ mod loops;
 mod mcp_repository;
 mod migration;
 mod prompt;
+mod repository_run;
+mod run_cancellation;
 mod run_execution;
 mod sqlx;
 mod tool_execution;
@@ -88,6 +90,7 @@ pub(crate) fn dispatch_with_observer(
             )
         }
         RuntimeCommand::Check(command) => dispatch_check_with_observer(ctx, command, observer),
+        RuntimeCommand::Run(request) => repository_run::dispatch(ctx, request, observer),
         RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request, observer),
         RuntimeCommand::Sqlx(command) => sqlx::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(

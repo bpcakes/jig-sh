@@ -616,33 +616,32 @@ pub(super) fn jsonl_end_offset(path: &Path) -> Result<u64> {
     }
 }
 
-pub(super) fn scan_jsonl_raw_from(
+/// Scan a journal tail without waiting for a writer. Contention leaves the
+/// caller's cursor untouched so a supervisor can check signals and deadlines
+/// before trying again.
+pub(super) fn try_scan_jsonl_raw_from(
     path: &Path,
     offset: u64,
     cancelled: &dyn Fn() -> bool,
     mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
-) -> Result<(u64, JsonlScanStats)> {
+) -> Result<Option<(u64, JsonlScanStats)>> {
     ensure_state_read_active(cancelled)?;
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok((0, JsonlScanStats::default()));
+            return Ok(Some((0, JsonlScanStats::default())));
         }
         Err(error) => {
             return Err(error).with_context(|| format!("Failed to open {}", path.display()));
         }
     };
-    loop {
-        match FileExt::try_lock_shared(&file) {
-            Ok(true) => break,
-            Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
-            }
+    match FileExt::try_lock_shared(&file) {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to shared-lock {}", path.display()));
         }
-        ensure_state_read_active(cancelled)?;
     }
     ensure_state_read_active(cancelled)?;
     let file_len = file.metadata()?.len();
@@ -663,7 +662,7 @@ pub(super) fn scan_jsonl_raw_from(
             path.display()
         );
     }
-    Ok((start + stats.file_bytes, stats))
+    Ok(Some((start + stats.file_bytes, stats)))
 }
 
 pub(super) fn scan_jsonl_raw_locked(

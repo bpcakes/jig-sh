@@ -24,13 +24,13 @@ Contract v4 introduced structured runtime identity through `runtime_version`, an
 
 `scripts/jig status --json` returns a runtime-owned local aggregate with `schema_version: 2`. Its top-level sections are `repository`, `work`, `loops`, and `errors`. Top-level `ok: true` means inspection completed, while `outcome` is `complete` or `partial`. Dirty repositories and blocked gates are observed facts rather than collection errors. The aggregate schema version is independent of generated `contract_version`.
 
-`scripts/jig info --commands --json` returns the runtime-owned command-availability inventory with `command: "info commands"` and `schema_version: 3`. Its `commands` array follows the visible root-command order and each entry contains `name`, `category`, `status`, `reason_code`, `reason`, and `next_step`. Schema version 3 adds the backend-neutral `migration` command family; schema version 2 grouped migration authoring under `sqlx`, and schema version 1 described the legacy flattened roots. The stable status values are `ready`, `not_configured`, `needs_setup`, and `unavailable`; reason codes are stable within a schema version, while human-facing reason and remediation text may improve without a schema-version change. Status describes whether the root command's primary workflow can dispatch, not whether every argument combination or command-specific preflight will succeed. Setup, status, stop, and diagnostic subcommands or flags can therefore remain usable when the root entry is not ready. Ready entries have null `reason_code`, `reason`, and `next_step` fields.
+`scripts/jig info --commands --json` returns the runtime-owned command-availability inventory with `command: "info commands"` and `schema_version: 4`. Its `commands` array follows the visible root-command order and each entry contains `name`, `category`, `status`, `reason_code`, `reason`, and `next_step`. Schema version 4 adds foreground `run` availability and upgrade guidance; schema version 3 added the backend-neutral `migration` command family; schema version 2 grouped migration authoring under `sqlx`, and schema version 1 described the legacy flattened roots. The stable status values are `ready`, `not_configured`, `needs_setup`, and `unavailable`; reason codes are stable within a schema version, while human-facing reason and remediation text may improve without a schema-version change. Status describes whether the root command's primary workflow can dispatch, not whether every argument combination or command-specific preflight will succeed. Setup, status, stop, and diagnostic subcommands or flags can therefore remain usable when the root entry is not ready. Ready entries have null `reason_code`, `reason`, and `next_step` fields.
 
-`repo.context_status` is stable within command-inventory schema version 3: `valid` means strict repository lookup succeeded, `absent` means no repository was found, `invalid` means strict lookup failed without recovering a current repository, and `recovered` means the explicit context was invalid but tolerant lookup found a valid current repository. This field classifies repository lookup only; consumers must use `commands[]` as the authoritative command-availability result because different invalid-context cases can leave different context-tolerant commands usable. Producing the observational inventory is successful even when `repo.context_status` is `invalid`, so callers must inspect `repo.context_status` and `commands[]` rather than treating exit status alone as repository health.
+`repo.context_status` is stable within command-inventory schema version 4: `valid` means strict repository lookup succeeded, `absent` means no repository was found, `invalid` means strict lookup failed without recovering a current repository, and `recovered` means the explicit context was invalid but tolerant lookup found a valid current repository. This field classifies repository lookup only; consumers must use `commands[]` as the authoritative command-availability result because different invalid-context cases can leave different context-tolerant commands usable. Producing the observational inventory is successful even when `repo.context_status` is `invalid`, so callers must inspect `repo.context_status` and `commands[]` rather than treating exit status alone as repository health.
 
 The built-in `noop-status` workflow keeps `loop` ready without configured custom workflows. In a valid adopted repository, the proxy family is ready when either the current binary includes dev-proxy support or an executable full-footprint `scripts/jig` plus `scripts/install-jig.sh` launcher chain can route `dev` and `proxy` through its feature-enabled profile. It remains ready without configured dev apps because its primary ad-hoc run, alias, certificate, service, and diagnostic workflows do not require dev-app configuration; `jig doctor` separately reports whether dev-proxy integration is configured for the repository. Before adoption, the primary `proxy run` workflow remains `needs_setup`, while contextless status, cleanup, certificate, and service diagnostics may still work. The inventory reports other commands that can run without a repository and marks repository-dependent primary workflows `needs_setup` with `reason_code: "repo_context_unavailable"`. When a repository is discovered but its configuration or generated contract is invalid, commands whose dispatch consults optional repository context are also marked `needs_setup`, even if they can run when no repository exists. In valid context, `repo.context_error` is null; in fallback states, `repo.name` and `repo.root` are null and `repo.context_error` contains the load diagnostic. The inventory is read-only. Vault and Codex readiness are machine-local observations: when Codex marketplaces are configured, collection reads the local Codex configuration and may spend up to five seconds probing the configured Codex binary.
 
-The schema-version 3 `reason_code` values are `agent_readiness_unknown`, `bootstrap_tool_invalid`, `bootstrap_tool_missing`, `codex_marketplace_support_unavailable`, `codex_marketplace_unregistered`, `dev_apps_not_configured`, `dev_proxy_feature_not_built`, `migration_add_tool_invalid`, `migration_add_tool_missing`, `migration_backend_not_configured`, `migration_directory_not_configured`, `repo_context_unavailable`, `sqlx_disabled`, `vault_not_initialized`, and `vault_status_unavailable`. Schema version 2 omitted `migration_backend_not_configured`; schema version 1 additionally used `schema_dump_tool_invalid`, `schema_dump_tool_missing`, and `schema_dumps_disabled` for the former root-level schema entry. The stable category values are `get_started`, `develop`, `structured_work`, `project_data`, `local_services`, and `agent_automation`.
+The schema-version 4 `reason_code` values are `agent_readiness_unknown`, `bootstrap_tool_invalid`, `bootstrap_tool_missing`, `codex_marketplace_support_unavailable`, `codex_marketplace_unregistered`, `dev_apps_not_configured`, `dev_proxy_feature_not_built`, `migration_add_tool_invalid`, `migration_add_tool_missing`, `migration_backend_not_configured`, `migration_directory_not_configured`, `repo_context_unavailable`, `repository_contract_upgrade_required`, `sqlx_disabled`, `vault_not_initialized`, and `vault_status_unavailable`. Schema version 3 omitted `repository_contract_upgrade_required`; schema version 2 also omitted `migration_backend_not_configured`; schema version 1 additionally used `schema_dump_tool_invalid`, `schema_dump_tool_missing`, and `schema_dumps_disabled` for the former root-level schema entry. The stable category values are `get_started`, `develop`, `structured_work`, `project_data`, `local_services`, and `agent_automation`.
 
 An invalid or stale `JIG_REPO_ROOT` remains a blocker for workflows that use strict repository lookup, including the primary `proxy run` workflow. Workflows using tolerant optional-context lookup instead ignore the invalid override, quietly try the current directory, and fall back to no repository when appropriate. When that lookup recovers a valid current repository, the inventory uses it for `dev` and vault readiness even though `repo.name` and `repo.root` remain null because the explicit override is invalid.
 
@@ -540,3 +540,38 @@ Generated repos should not rely on:
 - physical ordering of fields in JSON objects
 - SQLx or schema-dump tools unless present in the manifest
 - versioned state-file schemas under `.agent/state/*.jsonl`
+
+## Foreground repository actions
+
+With no selectors or `--profile`, `jig run` executes the repository’s default check
+profile. Use `jig run --explain` to inspect that selection first.
+
+`jig run [SELECTOR ...]` exposes the repository action planner and durable execution
+engine used by MCP. It accepts `--profile`, `--affected BASE`, `--explain`,
+`--plan-id`, `--no-receipt`, `--fail-fast`, global `--json`, and the native
+`--comparison-*` options supported by `jig check`. Existing command and native
+actions work in their supported contract epoch; sources older than v6 receive
+migration guidance. General declared action arguments remain a separate feature.
+
+Inspect an effectful action first with `jig run api:generate --explain`. Execute it
+with `jig run api:generate --approve-effect worktree`. Repeat `--approve-effect`
+for `external` when the plan also requires it. The set of approvals must exactly
+match the plan's worktree/external effects, including dependencies; neither missing
+nor extra approvals are accepted. Explain does not create run leases, runs, or
+receipts and requires no effect approval. It computes selection and prepared inputs
+without checking whether `--plan-id` is open; execution checks plan openness and
+approvals. An explain result is therefore not an execution authorization.
+
+Foreground JSON includes `ok`, `command`, `executed`, and the immutable `plan`.
+Explain uses `command: "run plan"`; execution uses `command: "run"`.
+Executed results also include `run`, `results`, `failed_targets`, and
+`source_observations`. The canonical run result records every target's conclusion,
+including targets skipped by fail-fast or cancelled before starting. Failure and
+cancellation produce unsuccessful command status. Human output summarizes these
+results. Unix signals use the existing cooperative CLI supervisor and owned child
+cleanup; durable MCP cancellation requests are also observed. The CLI waits
+cooperatively for conflicting repository execution, while MCP execution retains
+nonblocking acquisition so its transport can continue accepting cancellation.
+
+Command inventory schema version 4 adds `run` and the reason code
+`repository_contract_upgrade_required` for pre-v6 repositories.

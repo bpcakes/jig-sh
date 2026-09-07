@@ -93,6 +93,7 @@ pub(crate) const INFO: RootCommand =
 pub(crate) const DEV: RootCommand = command(cli_command::DEV, RootCommandCategory::Develop, 100);
 pub(crate) const CHECK: RootCommand =
     command(cli_command::CHECK, RootCommandCategory::Develop, 110);
+pub(crate) const RUN: RootCommand = command(cli_command::RUN, RootCommandCategory::Develop, 112);
 pub(crate) const FILE_BUDGET: RootCommand =
     command(cli_command::FILE_BUDGET, RootCommandCategory::Develop, 115);
 pub(crate) const STATUS: RootCommand =
@@ -156,6 +157,7 @@ pub(crate) const ALL: &[RootCommand] = &[
     INFO,
     DEV,
     CHECK,
+    RUN,
     FILE_BUDGET,
     STATUS,
     UI,

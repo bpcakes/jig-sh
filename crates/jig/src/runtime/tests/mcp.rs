@@ -692,3 +692,5 @@ printf '{"summary":"clean","findings":[]}\n' > "$out"
 include!("mcp/part_02.rs");
 
 mod repository_execution;
+
+mod foreground_run;

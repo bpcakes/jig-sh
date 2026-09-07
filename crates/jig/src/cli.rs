@@ -21,6 +21,7 @@ mod loops;
 mod migration;
 mod prompt;
 mod proxy;
+mod repository_run;
 mod setup_run;
 mod sqlx;
 mod state;
@@ -98,7 +99,7 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test";
 
@@ -304,6 +305,9 @@ pub(crate) enum CommandKind {
         after_help = check::CHECK_AFTER_HELP
     )]
     Check(CheckOpts),
+    /// Run declared repository actions in the foreground
+    #[command(name = root_commands::RUN.name, display_order = root_commands::RUN.display_order)]
+    Run(repository_run::RepositoryRunOpts),
     /// Run built-in file-budget diagnostics without creating a run or receipt.
     #[command(
         name = root_commands::FILE_BUDGET.name,

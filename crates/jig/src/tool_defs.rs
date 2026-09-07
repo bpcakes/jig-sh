@@ -56,6 +56,7 @@ pub(crate) mod cli_command {
     // Top-level `jig bootstrap` and nested `jig agent bootstrap` intentionally
     // share the same parser label in different Clap command scopes.
     pub(crate) const BOOTSTRAP: &str = "bootstrap";
+    pub(crate) const RUN: &str = "run";
     pub(crate) const CHECK: &str = "check";
     pub(crate) const CHECK_AGENT_MAP: &str = "agent-map";
     pub(crate) const CHECK_AGENT_GUIDES: &str = "agent-guides";

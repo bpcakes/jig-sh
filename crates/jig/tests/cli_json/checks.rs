@@ -334,3 +334,75 @@ fn mcp_parse_errors_keep_stdout_reserved_for_protocol_frames() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--bogus'"));
 }
+
+#[test]
+fn foreground_run_json_failure_and_human_explain_use_run_output() {
+    let repo = tempdir().unwrap();
+    write_v6_failing_test_repo(repo.path());
+    let preview = jig()
+        .current_dir(repo.path())
+        .args(["run", "api:test", "--explain"])
+        .output()
+        .unwrap();
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("Run plan:"));
+    assert!(!repo.path().join(".agent/state/runs.jsonl").exists());
+    let explained = jig()
+        .current_dir(repo.path())
+        .args(["run", "api:test", "--explain", "--json"])
+        .output()
+        .unwrap();
+    assert!(explained.status.success());
+    let explained: Value = serde_json::from_slice(&explained.stdout).unwrap();
+    assert_eq!(explained["command"], "run plan");
+    assert_eq!(explained["executed"], false);
+
+    let result = jig()
+        .current_dir(repo.path())
+        .args(["run", "api:test", "--json", "--no-receipt"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(output["command"], "run");
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["run"]["conclusion"], "failure");
+    assert_eq!(output["run"]["targets"][0]["exit_code"], 7);
+    assert!(output["run"]["targets"][0]["receipt_id"].is_null());
+    assert!(!repo.path().join(".agent/state/receipts.jsonl").exists());
+}
+
+#[test]
+fn foreground_run_inventory_is_ready_on_v6_and_v7() {
+    for version in [6, 7] {
+        let temp = tempdir().unwrap();
+        write_v6_failing_test_repo(temp.path());
+        let path = temp.path().join(".agent/jig-contract.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest["contract_version"] = json!(version);
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let output = jig()
+            .current_dir(temp.path())
+            .args(["info", "--commands", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run = value["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "run")
+            .unwrap();
+        assert_eq!(run["status"], "ready");
+        assert!(run["reason_code"].is_null());
+    }
+}

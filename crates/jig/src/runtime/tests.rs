@@ -289,6 +289,7 @@ fn dispatch(ctx: &RepoContext, command: CommandKind) -> Result<Value> {
 fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
         CommandKind::Bootstrap(opts) => RuntimeCommand::Bootstrap(opts.into()),
+        CommandKind::Run(opts) => RuntimeCommand::Run(opts.try_into().unwrap()),
         CommandKind::Check(command) => RuntimeCommand::Check(command.try_into().unwrap()),
         CommandKind::Migration(MigrationCommand::Add(opts)) => {
             RuntimeCommand::MigrationAdd(opts.into())

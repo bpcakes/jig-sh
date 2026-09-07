@@ -67,6 +67,26 @@ pub(super) fn execute_check_run(
     execute_started_check_run(ctx, catalog, run, request, &|| Ok(cancelled()))
 }
 
+pub(super) fn execute_foreground_action_run(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    plan: RunPlan,
+    request: ExecuteCheckRunRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<CheckRunExecution> {
+    let repository_execution =
+        acquire_observed_repository_execution_lease(ctx, &plan.effects, observer)?;
+    execute_freshly_planned_check_run_with_lease(
+        ctx,
+        catalog,
+        plan,
+        request,
+        observer,
+        repository_execution,
+        true,
+    )
+}
+
 /// Executes a plan produced by this process immediately before this call.
 ///
 /// External plans must enter through `start_check_run`, which re-derives the
@@ -90,6 +110,7 @@ pub(super) fn execute_freshly_planned_check_run(
         request,
         observer,
         repository_execution,
+        false,
     )
 }
 
@@ -109,6 +130,7 @@ pub(super) fn execute_freshly_planned_check_run_without_lease_wait(
         request,
         observer,
         repository_execution,
+        false,
     )
 }
 
@@ -119,6 +141,7 @@ fn execute_freshly_planned_check_run_with_lease(
     request: ExecuteCheckRunRequest,
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
+    observe_durable_cancellation: bool,
 ) -> Result<CheckRunExecution> {
     validate_prepared_work_plan_identity(&plan, request.work_plan_id.as_deref())?;
     crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
@@ -129,13 +152,37 @@ fn execute_freshly_planned_check_run_with_lease(
         crate::repository::validate_run_plan_source(ctx, &plan)?;
         crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     }
-    let (run, _lease) = crate::state::start_run_with_execution_lease(
-        ctx,
-        plan,
-        request.work_plan_id.clone(),
-        repository_execution,
-    )?;
-    let mut control = ObservedRunControl { observer };
+    if observe_durable_cancellation && observer.cancelled() {
+        bail!("Execution was cancelled before the run started");
+    }
+    let (run, _lease, cursor) = if observe_durable_cancellation {
+        let (run, lease, cursor) = crate::state::start_run_with_event_cursor_and_execution_lease(
+            ctx,
+            plan,
+            request.work_plan_id.clone(),
+            repository_execution,
+        )?;
+        (run, lease, Some(cursor))
+    } else {
+        let (run, lease) = crate::state::start_run_with_execution_lease(
+            ctx,
+            plan,
+            request.work_plan_id.clone(),
+            repository_execution,
+        )?;
+        (run, lease, None)
+    };
+    let cancellation = cursor.map(|cursor| {
+        super::run_cancellation::RunCancellationProbe::new(
+            ctx.clone(),
+            run.result.run_id.clone(),
+            cursor,
+        )
+    });
+    let mut control = ObservedRunControl {
+        observer,
+        durable_cancellation: cancellation.as_ref(),
+    };
     execute_started_check_run_with_control(ctx, catalog, run, request, &mut control)
 }
 
@@ -676,6 +723,7 @@ trait RepositoryRunControl: ExecutionObserver {
 
 struct ObservedRunControl<'a> {
     observer: &'a mut dyn ExecutionControl,
+    durable_cancellation: Option<&'a super::run_cancellation::RunCancellationProbe>,
 }
 
 impl ExecutionObserver for ObservedRunControl<'_> {
@@ -690,7 +738,12 @@ impl ExecutionObserver for ObservedRunControl<'_> {
 
 impl RepositoryRunControl for ObservedRunControl<'_> {
     fn cancelled(&self) -> Result<bool> {
-        Ok(self.observer.cancelled())
+        if self.observer.cancelled() {
+            return Ok(true);
+        }
+        self.durable_cancellation.map_or(Ok(false), |probe| {
+            probe.is_cancelled_with(&|| self.observer.cancelled())
+        })
     }
 }
 

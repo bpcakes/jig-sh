@@ -139,7 +139,7 @@ Contract v6 and later expose four bounded MCP repository operations: inspect, pl
 
 | Surface | Stable contract? | Records receipts? | Machine-local? |
 | --- | --- | --- | --- |
-| `check` | yes | yes | no |
+| `check` / `run` | yes | yes | no |
 | `work` / `loop` | runtime-owned | yes | no |
 | `state` / `prompt` | runtime-owned | no | partly |
 | `status` / `ui` | runtime-owned | no | partly |
@@ -154,6 +154,22 @@ scripts/jig check clippy
 scripts/jig check test
 scripts/jig check test --affected origin/main --explain
 ```
+
+Run other declared repository actions through the same planner and execution engine:
+
+```sh
+scripts/jig run api:generate --explain
+scripts/jig run api:generate --approve-effect worktree
+scripts/jig run --profile verify --json
+```
+
+With no selectors or `--profile`, `jig run` executes the repository’s default check
+profile. Use `jig run --explain` to inspect that selection first.
+
+`run` requires contract v6 or later. Approve each planned `worktree` or `external`
+effect explicitly; approvals must match the plan. `--explain` creates no run or
+receipts. Selection, `--plan-id`, `--no-receipt`, `--fail-fast`, and native
+`--comparison-*` options use the shared repository execution behavior.
 
 In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
 

@@ -66,6 +66,7 @@ pub(super) enum HumanOutput {
     WorkReceipts,
     WorkStatus,
     Check,
+    RepositoryRun,
     ToolExecution,
     AgentMapGenerate,
     MigrationAdd,
@@ -126,6 +127,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::WorkReceipts => format_work_receipts_summary(value),
         HumanOutput::WorkStatus => format_work_status_summary(value),
         HumanOutput::Check => format_check_output(value),
+        HumanOutput::RepositoryRun => format_repository_execution_summary(value, "Run", "run"),
         HumanOutput::ToolExecution => format_tool_execution_summary(value),
         HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
         HumanOutput::MigrationAdd => format_migration_add_summary(value),
@@ -157,12 +159,20 @@ fn format_check_output(value: &serde_json::Value) -> String {
 }
 
 fn format_check_summary(value: &serde_json::Value) -> String {
+    format_repository_execution_summary(value, "Check", "check")
+}
+
+fn format_repository_execution_summary(
+    value: &serde_json::Value,
+    title: &str,
+    command: &str,
+) -> String {
     let plan = &value["plan"];
     let targets = plan["targets"].as_array().map_or(0, Vec::len);
     let plan_id = plan["id"].as_str().unwrap_or("<unknown>");
     if !value["executed"].as_bool().unwrap_or(false) {
         let mut lines = vec![
-            format!("Check plan: {plan_id}"),
+            format!("{title} plan: {plan_id}"),
             format!("  Targets: {targets}"),
         ];
         append_planned_targets(&mut lines, plan);
@@ -174,7 +184,7 @@ fn format_check_summary(value: &serde_json::Value) -> String {
     let ok = value["ok"].as_bool().unwrap_or(false);
     let results = value["results"].as_array().map_or(0, Vec::len);
     let mut lines = vec![
-        format!("Jig check: {}", if ok { "passed" } else { "failed" }),
+        format!("Jig {command}: {}", if ok { "passed" } else { "failed" }),
         format!("  Plan: {plan_id}"),
         format!("  Targets: {results}/{targets} executed"),
     ];

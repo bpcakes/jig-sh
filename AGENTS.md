@@ -145,6 +145,8 @@ bv --robot-triage --format toon
 
 Before claiming, verify current state with `br show <id> --json` or `br ready --json`. `recommendations` can include graph-important blocked or assigned work; only `quick_ref.top_picks` and non-empty `claim_command` fields represent claimable work.
 
+Check the triage output's `source_path` when older Beads exports coexist. If it selects a stale snapshot, use the current export reported by `br info`: `bv --db "$(br info --json | jq -r .jsonl_path)" --robot-triage`. Verify candidates against `br ready` afterward; a historical export can rank already-closed tasks.
+
 #### Other bv Commands
 
 | Command | Returns |

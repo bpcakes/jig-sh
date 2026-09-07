@@ -31,6 +31,7 @@ define_reason_codes! {
     MigrationBackendNotConfigured => "migration_backend_not_configured",
     MigrationDirectoryNotConfigured => "migration_directory_not_configured",
     RepoContextUnavailable => "repo_context_unavailable",
+    RepositoryContractUpgradeRequired => "repository_contract_upgrade_required",
     SqlxDisabled => "sqlx_disabled",
     VaultNotInitialized => "vault_not_initialized",
     VaultStatusUnavailable => "vault_status_unavailable",

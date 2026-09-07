@@ -172,6 +172,24 @@ scripts/jig info target repo:test
 scripts/jig info profiles
 ```
 
+Use `scripts/jig run` for declared actions such as generation and other operations:
+
+```sh
+scripts/jig run api:generate --explain
+scripts/jig run api:generate --approve-effect worktree
+scripts/jig run --profile verify --affected origin/main --json
+```
+
+With no selectors or `--profile`, `jig run` executes the repository’s default check
+profile. Use `jig run --explain` to inspect that selection first.
+
+The foreground command shares MCP planning, execution, receipts and cancellation.
+Approve every planned `worktree` and `external` effect explicitly with repeated
+`--approve-effect` flags. `--explain` prints the plan without execution or run
+state. `--plan-id`, `--no-receipt`, `--fail-fast`, and `--comparison-*` have the
+same repository execution meaning as on `check`. This requires contract v6 or
+later; general declared action arguments remain follow-up work.
+
 Bare `scripts/jig check` resolves the default verification profile. For a
 legacy contract that profile comes from configured work checks, falling back to
 its read-only check tools while omitting the duplicate locked-test action. An

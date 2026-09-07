@@ -152,6 +152,7 @@ impl CommandKind {
                 (tool_defs::cli_command::CHECK, CapabilityOnly)
             }
             Self::Check(_) => (tool_defs::cli_command::CHECK, Repository),
+            Self::Run(_) => (tool_defs::cli_command::RUN, Repository),
             Self::FileBudget(_) => (tool_defs::cli_command::FILE_BUDGET, Repository),
             Self::Status(_) => (tool_defs::cli_command::STATUS, Repository),
             Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
@@ -357,6 +358,12 @@ fn run_command(cli: Cli) -> Result<()> {
                 HumanOutput::Check,
             )
         }
+        CommandKind::Run(opts) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Run(opts.try_into()?),
+            true,
+            json_output,
+            HumanOutput::RepositoryRun,
+        ),
         CommandKind::FileBudget(command) => {
             super::file_budget::run_file_budget_command(command, json_output)
         }
@@ -670,7 +677,7 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
         CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
-        CommandKind::Check(_) => true,
+        CommandKind::Check(_) | CommandKind::Run(_) => true,
         _ => false,
     }
 }

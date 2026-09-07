@@ -12,6 +12,7 @@ mod loops;
 mod migration;
 mod prompt;
 mod proxy;
+mod repository_run;
 mod sqlx;
 mod state;
 mod vault;
@@ -39,6 +40,7 @@ pub(crate) use proxy::{
     ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
     ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
 };
+pub(crate) use repository_run::RepositoryRunRequest;
 pub(crate) use sqlx::SqlxCommand;
 pub(crate) use state::{
     StateArchiveRequest, StateCommand, StateCompactSessionsRequest, StateDiagnoseRequest,
@@ -66,6 +68,7 @@ pub(crate) use work::{
 pub(crate) enum RuntimeCommand {
     Bootstrap(ToolRequest),
     Check(CheckCommand),
+    Run(RepositoryRunRequest),
     MigrationAdd(MigrationAddRequest),
     Sqlx(SqlxCommand),
     AgentMap(AgentMapCommand),
@@ -95,9 +98,11 @@ impl RuntimeCommand {
         use RuntimeSignalPolicy::{Cooperative, Native};
 
         match self {
-            Self::Bootstrap(_) | Self::MigrationAdd(_) | Self::Sqlx(_) | Self::Agent(_) => {
-                Cooperative
-            }
+            Self::Run(_)
+            | Self::Bootstrap(_)
+            | Self::MigrationAdd(_)
+            | Self::Sqlx(_)
+            | Self::Agent(_) => Cooperative,
             Self::Check(command) => match command {
                 CheckCommand::Repository(_)
                 | CheckCommand::Fmt(_)

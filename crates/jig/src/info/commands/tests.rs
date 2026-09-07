@@ -35,7 +35,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
     );
 
     assert_eq!(output["command"], "info commands");
-    assert_eq!(output["schema_version"], 3);
+    assert_eq!(output["schema_version"], 4);
     assert_eq!(output["repo"]["context_status"], "valid");
     let commands = output["commands"].as_array().unwrap();
     let names = commands
@@ -43,10 +43,22 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
         .map(|command| command["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(names, discoverable_command_names());
-    assert!(commands.iter().all(|command| command["status"] == "ready"));
     assert!(
         commands
             .iter()
+            .filter(|command| command["name"] != "run")
+            .all(|command| command["status"] == "ready")
+    );
+    assert_command_status(
+        &output,
+        "run",
+        "not_configured",
+        "repository_contract_upgrade_required",
+    );
+    assert!(
+        commands
+            .iter()
+            .filter(|command| command["name"] != "run")
             .all(|command| command["reason_code"].is_null())
     );
 
@@ -73,7 +85,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
 }
 
 #[test]
-fn schema_v3_reason_codes_are_stable() {
+fn schema_v4_reason_codes_are_stable() {
     let reason_codes = reason::ALL
         .iter()
         .copied()
@@ -94,6 +106,7 @@ fn schema_v3_reason_codes_are_stable() {
             "migration_backend_not_configured",
             "migration_directory_not_configured",
             "repo_context_unavailable",
+            "repository_contract_upgrade_required",
             "sqlx_disabled",
             "vault_not_initialized",
             "vault_status_unavailable",

@@ -3,10 +3,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_contract::{ActionEffect, RunStatus};
+use jig_contract::RunStatus;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -18,12 +17,14 @@ use crate::tool_defs::{
     RunInspection,
 };
 
+use super::repository_run::validate_effect_approval;
+use super::run_cancellation::RunCancellationProbe;
+
 use super::run_execution::{
     ExecuteCheckRunRequest, execute_started_check_run, start_check_run_with_event_cursor,
 };
 
 const REPOSITORY_MCP_SCHEMA_VERSION: u32 = 1;
-const DURABLE_CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct LiveRunKey {
@@ -50,88 +51,6 @@ impl Drop for LiveRunGuard {
         let registry = &*LIVE_RUNS;
         live_runs().remove(&self.key);
         registry.completed.notify_all();
-    }
-}
-
-struct RunCancellationProbe {
-    ctx: RepoContext,
-    run_id: String,
-    signalled: Arc<AtomicBool>,
-    last_durable_check: Mutex<Option<Instant>>,
-    event_cursor: Mutex<crate::state::RunEventCursor>,
-    poll_failure: Mutex<Option<String>>,
-}
-
-impl RunCancellationProbe {
-    fn new(ctx: RepoContext, run_id: String, event_cursor: crate::state::RunEventCursor) -> Self {
-        Self {
-            ctx,
-            run_id,
-            signalled: Arc::new(AtomicBool::new(false)),
-            last_durable_check: Mutex::new(None),
-            event_cursor: Mutex::new(event_cursor),
-            poll_failure: Mutex::new(None),
-        }
-    }
-
-    fn signal(&self) {
-        self.signalled.store(true, Ordering::Release);
-    }
-
-    fn is_cancelled(&self) -> Result<bool> {
-        if let Some(message) = self
-            .poll_failure
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-        {
-            bail!(message);
-        }
-        if self.signalled.load(Ordering::Acquire) {
-            return Ok(true);
-        }
-
-        let now = Instant::now();
-        let mut last_check = self
-            .last_durable_check
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if last_check
-            .is_some_and(|last| now.duration_since(last) < DURABLE_CANCELLATION_POLL_INTERVAL)
-        {
-            return Ok(false);
-        }
-        *last_check = Some(now);
-        drop(last_check);
-
-        let mut cursor = self
-            .event_cursor
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let requested =
-            crate::state::run_cancel_requested_since(&self.ctx, &self.run_id, &mut cursor, &|| {
-                self.signalled.load(Ordering::Acquire)
-            });
-        match requested {
-            Ok(true) => {
-                self.signal();
-                Ok(true)
-            }
-            Ok(false) => Ok(false),
-            Err(_) if self.signalled.load(Ordering::Acquire) => Ok(true),
-            Err(error) => {
-                let message = format!(
-                    "failed to inspect durable cancellation state for run '{}': {error:#}",
-                    self.run_id
-                );
-                *self
-                    .poll_failure
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.clone());
-                self.signal();
-                bail!(message)
-            }
-        }
     }
 }
 
@@ -218,7 +137,11 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
 fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     let current = super::refreshed_repository_context(ctx)?;
     let catalog = RepositoryCatalog::from_context(&current)?;
-    validate_effect_approval(&args.plan.effects, &args.approved_effects)?;
+    validate_effect_approval(
+        "jig.execute_run",
+        &args.plan.effects,
+        &args.approved_effects,
+    )?;
     if let Some(plan_id) = args.work_plan_id.as_deref() {
         crate::state::ensure_plan_is_open(&current, plan_id)?;
     }
@@ -291,25 +214,6 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
         status: run.result.status,
         run: run.result,
     })
-}
-
-fn validate_effect_approval(planned: &[ActionEffect], approved: &[ActionEffect]) -> Result<()> {
-    let requires_approval = planned
-        .iter()
-        .copied()
-        .filter(|effect| matches!(effect, ActionEffect::Worktree | ActionEffect::External))
-        .collect::<std::collections::BTreeSet<_>>();
-    let approved = approved
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    if approved != requires_approval {
-        bail!(
-            "jig.execute_run requires approved_effects {:?} for this exact plan",
-            requires_approval
-        );
-    }
-    Ok(())
 }
 
 fn cancel(ctx: &RepoContext, args: CancelRunArgs) -> Result<Value> {
@@ -420,6 +324,7 @@ pub(super) fn is_live_run_registered(ctx: &RepoContext, run_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::time::Duration;
 
     use tempfile::tempdir;
 

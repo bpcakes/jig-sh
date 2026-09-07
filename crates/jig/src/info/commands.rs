@@ -10,7 +10,7 @@ mod reason;
 use reason::ReasonCode;
 
 pub(super) const COMMAND: &str = "info commands";
-const SCHEMA_VERSION: u64 = 3;
+const SCHEMA_VERSION: u64 = 4;
 const REPO_CONTEXT_NEXT_STEP: &str = "Run `jig doctor`; for an unadopted repository, preview with `jig adopt .` and apply with `jig adopt . --write`.";
 pub(super) const INVALID_OVERRIDE_NEXT_STEP: &str =
     "Unset `JIG_REPO_ROOT` or point it to a valid adopted Jig repository, then rerun the command.";
@@ -157,6 +157,16 @@ pub(super) fn info_with_capabilities(
     commands.push(dev_command(ctx));
     commands.extend([
         ready_command(root_commands::CHECK),
+        if ctx.contract_version() >= 6 {
+            ready_command(root_commands::RUN)
+        } else {
+            not_configured_command(
+                root_commands::RUN,
+                ReasonCode::RepositoryContractUpgradeRequired,
+                "Repository actions require contract version 6 or later.",
+                Some("Run `jig update` to migrate the repository."),
+            )
+        },
         ready_command(root_commands::FILE_BUDGET),
         ready_command(root_commands::STATUS),
         ready_command(root_commands::UI),
@@ -243,6 +253,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         info_without_context_command(repo_context_next_step),
         dev,
         repo_context_command_with_next_step(root_commands::CHECK, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::RUN, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::FILE_BUDGET, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::STATUS, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),

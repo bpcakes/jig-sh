@@ -19,9 +19,9 @@ use ulid::Ulid;
 use crate::context::RepoContext;
 
 use super::jsonl::{
-    JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, append_jsonl, append_jsonl_with_end_offset,
+    JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, append_jsonl,
     lock_existing_cache_with_cancellation, opened_file_is_current, rewrite_jsonl_raw_locked,
-    scan_jsonl_raw, scan_jsonl_raw_from, scan_jsonl_raw_locked, with_jsonl_write_lock,
+    scan_jsonl_raw, scan_jsonl_raw_locked, with_jsonl_write_lock,
 };
 use super::records::RunEventRecord;
 use super::support::{AdvisoryLeaseFile, ensure_state_layout, new_id, now_ms};
@@ -59,9 +59,6 @@ pub(crate) struct DurableRun {
     pub(crate) cancel_requested: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RunEventCursor(u64);
-
 pub(crate) struct RunLease {
     // The path is deliberately stable for the repository lifetime. Removing
     // an advisory-lock file after unlock permits another process to open and
@@ -75,25 +72,6 @@ pub(crate) struct RunLease {
 struct RunEventIdentity {
     run_id: String,
     event: String,
-}
-
-pub(crate) fn run_cancel_requested_since(
-    ctx: &RepoContext,
-    run_id: &str,
-    cursor: &mut RunEventCursor,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<bool> {
-    let path = ctx.state_file(RUNS_FILE);
-    let mut requested = false;
-    let (offset, _) = scan_jsonl_raw_from(&path, cursor.0, cancelled, |raw| {
-        let event = parse_run_event_identity(raw, &path)?;
-        if event.run_id == run_id && event.event == EVENT_CANCEL_REQUESTED {
-            requested = true;
-        }
-        Ok(())
-    })?;
-    cursor.0 = offset;
-    Ok(requested)
 }
 
 #[cfg(test)]
@@ -700,10 +678,6 @@ fn append_event(ctx: &RepoContext, event: RunEventRecord) -> Result<()> {
     append_jsonl(&ctx.state_file(RUNS_FILE), &event)
 }
 
-fn append_event_with_cursor(ctx: &RepoContext, event: RunEventRecord) -> Result<RunEventCursor> {
-    append_jsonl_with_end_offset(&ctx.state_file(RUNS_FILE), &event).map(RunEventCursor)
-}
-
 fn parse_run_event(raw: RawJsonlRecord<'_>, path: &std::path::Path) -> Result<RunEventRecord> {
     #[cfg(test)]
     FULL_RUN_EVENT_PARSE_COUNT.with(|counter| counter.set(counter.get() + 1));
@@ -860,3 +834,7 @@ pub(super) use archive::{ensure_run_stream_replaceable, validate_run_stream};
 
 #[cfg(test)]
 mod tests;
+
+mod cancellation;
+use cancellation::append_event_with_cursor;
+pub(crate) use cancellation::{RunEventCursor, run_cancel_requested_since};

@@ -195,6 +195,9 @@ targets = [{ component = "repo", action = "file-budget" }]
 
 #[path = "cli_json/checks.rs"]
 mod checks;
+#[cfg(unix)]
+#[path = "cli_json/foreground_cancellation.rs"]
+mod foreground_cancellation;
 
 #[test]
 fn prompt_get_honors_json_mode() {
@@ -255,7 +258,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
     assert!(structured.stderr.is_empty());
     let structured: Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(structured["command"], "info commands");
-    assert_eq!(structured["schema_version"], 3);
+    assert_eq!(structured["schema_version"], 4);
     assert_eq!(structured["repo"]["context_status"], "valid");
     let command_names = structured["commands"]
         .as_array()
@@ -276,6 +279,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "info",
             "dev",
             "check",
+            "run",
             "file-budget",
             "status",
             "ui",

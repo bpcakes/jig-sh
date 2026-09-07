@@ -10,7 +10,7 @@ use tempfile::tempdir;
 use super::jsonl::{
     jsonl_end_offset, read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
     read_receipt_window_with_bytes, read_receipts_reverse_with_cancellation,
-    receipts_for_plan_with_lock, scan_jsonl_raw_from, state_lock_path, with_jsonl_write_lock,
+    receipts_for_plan_with_lock, state_lock_path, try_scan_jsonl_raw_from, with_jsonl_write_lock,
     write_jsonl_locked,
 };
 use super::records::SessionEvent;
@@ -52,10 +52,11 @@ fn jsonl_cursor_scans_only_records_appended_after_the_cursor() {
     append_jsonl(&path, &json!({"id": "new"})).unwrap();
 
     let mut records = Vec::new();
-    let (next, stats) = scan_jsonl_raw_from(&path, cursor, &|| false, |record| {
+    let (next, stats) = try_scan_jsonl_raw_from(&path, cursor, &|| false, |record| {
         records.push(serde_json::from_slice::<Value>(record.bytes)?);
         Ok(())
     })
+    .unwrap()
     .unwrap();
 
     assert_eq!(records, [json!({"id": "new"})]);
@@ -64,7 +65,7 @@ fn jsonl_cursor_scans_only_records_appended_after_the_cursor() {
 }
 
 #[test]
-fn jsonl_cursor_lock_wait_is_cancellable() {
+fn jsonl_cursor_poll_does_not_wait_for_a_writer_or_advance_on_contention() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("events.jsonl");
     fs::write(&path, "{\"id\":1}\n").unwrap();
@@ -74,22 +75,21 @@ fn jsonl_cursor_lock_wait_is_cancellable() {
         .open(&path)
         .unwrap();
     locked.lock_exclusive().unwrap();
-    let polls = std::cell::Cell::new(0usize);
-
-    let error = scan_jsonl_raw_from(
-        &path,
-        0,
-        &|| {
-            polls.set(polls.get() + 1);
-            polls.get() > 2
-        },
-        |_| Ok(()),
-    )
-    .unwrap_err()
-    .to_string();
-
+    let mut visited = false;
+    let result = try_scan_jsonl_raw_from(&path, 0, &|| false, |_| {
+        visited = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(result.is_none());
+    assert!(!visited);
+    let error = try_scan_jsonl_raw_from(&path, 0, &|| true, |_| Ok(())).unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
     FileExt::unlock(&locked).unwrap();
-    assert!(error.contains("cancelled"));
+    let (_, stats) = try_scan_jsonl_raw_from(&path, 0, &|| false, |_| Ok(()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stats.records, 1);
 }
 
 #[test]
