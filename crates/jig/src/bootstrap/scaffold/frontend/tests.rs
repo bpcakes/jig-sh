@@ -5,6 +5,7 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
+use super::super::database_setup::DATABASE_CONFIG_GUARD;
 use super::super::embedded_templates::EMBEDDED_SCAFFOLD_TEMPLATE_FILES;
 use super::super::templates::ScaffoldTemplateFile;
 use super::super::{ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldPreset};
@@ -20,7 +21,7 @@ use super::templates::{
     YARN_WORKSPACE_TEMPLATE, admin_template_files,
 };
 use super::workspace::{
-    DATABASE_CONFIG_GUARD, e2e_workflow_paths, e2e_workflow_paths_for_backend,
+    e2e_workflow_paths, e2e_workflow_paths_for_backend,
     frontend_workspace_relative_paths_for_backend, render_frontend_workspace_files_for_backend,
 };
 
@@ -175,7 +176,13 @@ fn frontend_workspace_declared_paths_match_rendered_outputs_for_all_shapes() {
             vec![astro.clone()],
             vec![spa.clone(), astro.clone()],
         ] {
-            for preset in [ScaffoldPreset::RustReact, ScaffoldPreset::GoReact] {
+            for (preset, db) in [
+                (ScaffoldPreset::RustReact, ScaffoldDb::None),
+                (ScaffoldPreset::RustReact, ScaffoldDb::Sqlite),
+                (ScaffoldPreset::RustReact, ScaffoldDb::Postgres),
+                (ScaffoldPreset::GoReact, ScaffoldDb::None),
+                (ScaffoldPreset::GoReact, ScaffoldDb::Postgres),
+            ] {
                 let declared = frontend_workspace_relative_paths_for_backend(
                     preset,
                     package_manager,
@@ -186,7 +193,7 @@ fn frontend_workspace_declared_paths_match_rendered_outputs_for_all_shapes() {
                         preset,
                         root: ".",
                         database: FrontendDatabaseContext {
-                            db: ScaffoldDb::None,
+                            db,
                             migration_dir: "migrations",
                             sqlx_metadata_dir: ".sqlx",
                         },
@@ -204,8 +211,11 @@ fn frontend_workspace_declared_paths_match_rendered_outputs_for_all_shapes() {
 
                 assert_eq!(
                     declared, rendered,
-                    "{preset:?}: {package_manager}: {frontends:?}"
+                    "{preset:?}: {db:?}: {package_manager}: {frontends:?}"
                 );
+                if frontends.is_empty() {
+                    assert!(rendered.is_empty(), "{preset:?}: {db:?}: {rendered:?}");
+                }
             }
         }
     }

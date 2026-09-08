@@ -70,7 +70,7 @@ fn run_setup_with_progress(
 
     next_phase("doctor before");
     let doctor_before = run_doctor()?;
-    next_phase("bootstrap");
+    next_phase("dependency bootstrap");
     let bootstrap = dispatch(RuntimeCommand::Bootstrap(ToolRequest::default()))?;
 
     next_phase("agent readiness");

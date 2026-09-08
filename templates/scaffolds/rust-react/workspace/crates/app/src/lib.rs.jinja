@@ -183,7 +183,11 @@ impl AppState {
             .ok_or_else(|| anyhow::anyhow!("DATABASE_URL is required to bootstrap the database"))?;
         let created = db::Db::create_if_missing(database_url)
             .await
+[% if sqlx_driver == "postgres" %]
+            .context("Failed to create the database with the configured role; use a pre-created database or a role already authorized to create it")?;
+[% else %]
             .context("Failed to create the database")?;
+[% endif %]
         let db = db::Db::connect(database_url)
             .await
             .context("Failed to connect to the database")?;

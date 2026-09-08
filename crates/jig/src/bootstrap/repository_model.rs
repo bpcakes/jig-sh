@@ -23,10 +23,7 @@ pub(super) use file_budget::generated_file_budget_action;
 #[cfg(test)]
 pub(in crate::bootstrap) use rust_file_loc::generated_legacy_rust_file_loc_action;
 use rust_file_loc::refresh_managed_rust_file_loc_command;
-pub(super) use rust_file_loc::{
-    RUST_FILE_LOC_COMMAND_KEY, action_uses_managed_rust_file_loc_checker,
-    is_generated_rust_file_loc_command,
-};
+pub(super) use rust_file_loc::{RUST_FILE_LOC_COMMAND_KEY, is_generated_rust_file_loc_command};
 
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";

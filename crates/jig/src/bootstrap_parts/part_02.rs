@@ -41,13 +41,14 @@ fn initial_next_steps(
         }
         return steps;
     }
+    steps.push("scripts/jig setup".into());
     if database_config_required {
         steps.push(
-            "Export DATABASE_URL, or copy .env.example to .env and configure it before bootstrap."
+            "Export DATABASE_URL, or copy the backend .env.example to .env and configure it before database setup."
                 .into(),
         );
+        steps.push("bash scripts/setup-database.sh".into());
     }
-    steps.push("scripts/jig setup".into());
     steps.push("scripts/jig check test".into());
     if result.dev_apps_configured {
         steps.push("scripts/jig dev".into());

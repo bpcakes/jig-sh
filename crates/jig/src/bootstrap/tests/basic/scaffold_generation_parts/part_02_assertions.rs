@@ -11,7 +11,9 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
         .iter()
         .position(|step| step.as_str() == Some("scripts/jig setup"))
         .unwrap();
-    assert!(database_config < setup);
+    let database_setup = next_steps.iter().position(|step| step.as_str() == Some("bash scripts/setup-database.sh")).unwrap();
+    assert!(setup < database_config);
+    assert!(database_config < database_setup);
     let context = crate::context::RepoContext::load_from(destination).unwrap();
     let agent_map_check = crate::policy::run_check(
         &context,
@@ -134,7 +136,7 @@ fn assert_workspace_and_contract_tooling(destination: &Path) {
     );
     assert_eq!(
         workspace_package_json["scripts"]["bootstrap"],
-        "bash scripts/check-webapps.sh bootstrap"
+        "bash scripts/jig bootstrap"
     );
     assert_eq!(
         workspace_package_json["scripts"]["test:postgres"],

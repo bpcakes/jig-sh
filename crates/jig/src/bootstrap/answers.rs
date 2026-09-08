@@ -7,8 +7,7 @@ use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
 use super::repository_model::{
-    AuthoredRepositoryModel, RepositoryProjectionHint, action_uses_managed_rust_file_loc_checker,
-    frontend_component_id,
+    AuthoredRepositoryModel, RepositoryProjectionHint, frontend_component_id,
 };
 use super::{
     AnswerOpts, DevApp, DevSettingsAnswers, FrontendApp, GENERATED_NODE_VERSION, ScaffoldOpts,
@@ -640,8 +639,7 @@ fn loaded_repository_model_is_custom(
 
     let mut generated_raw = raw.clone();
     generated_raw.repository = None;
-    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None, None)
-    else {
+    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None) else {
         return true;
     };
     let Ok(generated) =
@@ -663,11 +661,8 @@ fn resolve_render_answers(
         .flatten()
         .filter(AuthoredRepositoryModel::is_complete)
         .filter(|_| authored_repository_commands.is_some());
-    let mut answers = raw.resolve_with_authored_repository(
-        default_repo_name,
-        authored_repository,
-        authored_repository_commands.as_ref(),
-    )?;
+    let mut answers =
+        raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
     if let Some(authored_repository_commands) = authored_repository_commands
         && answers.authored_repository.is_some()
     {

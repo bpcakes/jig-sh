@@ -491,9 +491,6 @@ fn assert_rendered_jig_answers(destination: &Path) {
             "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files",
             "web_package_manager = \"bun\"",
             "if [ -f Cargo.toml ]; then cargo fetch;",
-            "cargo run -p my-app-api -- --bootstrap-database",
-            "export it or copy .env.example to .env before bootstrap",
-            "${DATABASE_URL:-}",
             "name = \"web\"",
             "dir = \"landing\"",
             "kind = \"env-port\"",
@@ -503,12 +500,11 @@ fn assert_rendered_jig_answers(destination: &Path) {
             "role = \"admin\"",
         ],
     );
-    let web_bootstrap = answers.find("scripts/check-webapps.sh bootstrap").unwrap();
-    let database_guard = answers.find("Missing DATABASE_URL").unwrap();
-    let database_bootstrap = answers
-        .find("cargo run -p my-app-api -- --bootstrap-database")
-        .unwrap();
-    assert!(web_bootstrap < database_guard);
-    assert!(database_guard < database_bootstrap);
+    let config: toml::Value = toml::from_str(&answers).unwrap();
+    let bootstrap = config["commands"]["repo_bootstrap_command"].as_str().unwrap();
+    assert!(bootstrap.contains("scripts/check-webapps.sh bootstrap"));
+    assert_contains_none(bootstrap, &["DATABASE_URL", "--bootstrap-database"]);
+    let database_setup = fs::read_to_string(destination.join("scripts/setup-database.sh")).unwrap();
+    assert_contains_all(&database_setup, &["Missing DATABASE_URL", "before database setup", "cargo run -p my-app-api -- --bootstrap-database"]);
     assert_contains_none(&answers, &["(cd web && bun install)"]);
 }

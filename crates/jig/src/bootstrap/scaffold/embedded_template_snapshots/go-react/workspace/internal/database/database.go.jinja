@@ -48,7 +48,7 @@ func Bootstrap(ctx context.Context, databaseURL string) error {
 		)
 		var postgresError *pgconn.PgError
 		if err != nil && (!errors.As(err, &postgresError) || postgresError.Code != "42P04") {
-			return fmt.Errorf("create PostgreSQL database %q: %w", targetDatabase, err)
+			return fmt.Errorf("create PostgreSQL database %q with the configured role (use a pre-created database or a role already authorized to create it): %w", targetDatabase, err)
 		}
 	}
 

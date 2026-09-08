@@ -4,6 +4,10 @@
 pub(super) const EMBEDDED_SCAFFOLD_TEMPLATE_FILES_FROM_SNAPSHOT: bool = true;
 pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFile] = &[
     EmbeddedScaffoldTemplateFile {
+        relative_path: "database/setup.sh.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/database/setup.sh.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "go-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja")),
     },

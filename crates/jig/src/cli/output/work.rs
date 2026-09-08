@@ -4,6 +4,9 @@ use anyhow::{Result, anyhow};
 
 use super::{concise_preview, status, value_bool, value_i64, value_str};
 
+mod check_targets;
+use check_targets::{TargetSummary, append_target_summary, target_summaries};
+
 pub(super) fn format_work_start_plan_id(value: &serde_json::Value) -> Result<String> {
     let plan = value
         .get("plan")
@@ -29,7 +32,8 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let status = work_check_summary_status(checks, gate_evidence);
+    let targets = target_summaries(value);
+    let status = work_check_summary_status(value, checks, gate_evidence, &targets);
     let skipped_checks = checks
         .iter()
         .filter(|check| {
@@ -38,7 +42,7 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
         })
         .count();
     let status_label = if matches!(status, WorkCheckSummaryStatus::Passed) {
-        match (skipped_checks, checks.len()) {
+        match (skipped_checks, checks.len() + targets.len()) {
             (0, _) => status.label(),
             (skipped, total) if skipped == total => "passed (all skipped)",
             _ => "passed (some skipped)",
@@ -104,8 +108,9 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             "  - {tool}: exit {exit_status_label}, receipt {receipt}{output_note}"
         ));
     }
+    append_target_summary(&mut lines, value, &targets);
 
-    if skipped_checks > 0 && skipped_checks == checks.len() {
+    if skipped_checks > 0 && skipped_checks == checks.len() && targets.is_empty() {
         lines.push(
             "Note: all configured Cargo checks skipped because no root Cargo.toml exists; set explicit commands if this repo has Rust code outside a root workspace.".into(),
         );
@@ -181,10 +186,18 @@ impl WorkCheckSummaryStatus {
 }
 
 fn work_check_summary_status(
+    value: &serde_json::Value,
     checks: &[serde_json::Value],
     gate_evidence: &[serde_json::Value],
+    targets: &[TargetSummary<'_>],
 ) -> WorkCheckSummaryStatus {
-    if checks.is_empty() && gate_evidence.is_empty() {
+    let run = value.get("run").filter(|run| run.is_object());
+    if checks.is_empty()
+        && gate_evidence.is_empty()
+        && targets.is_empty()
+        && run.is_none()
+        && value_bool(value, "ok") != Some(false)
+    {
         return WorkCheckSummaryStatus::NoChecksConfigured;
     }
 
@@ -207,8 +220,34 @@ fn work_check_summary_status(
         .iter()
         .any(|gate| value_str(gate, "status") == Some("unknown"));
 
+    for conclusion in targets
+        .iter()
+        .map(|target| target.conclusion)
+        .chain(run.map(|run| value_str(run, "conclusion").unwrap_or("unknown")))
+    {
+        match conclusion {
+            "success" | "skipped" => {}
+            "failure" | "cancelled" | "timed_out" | "blocked" => {
+                return WorkCheckSummaryStatus::Failed;
+            }
+            _ => saw_unknown = true,
+        }
+    }
+    if value["failed_targets"]
+        .as_array()
+        .is_some_and(|targets| !targets.is_empty())
+    {
+        return WorkCheckSummaryStatus::Failed;
+    }
+    saw_unknown |= run.is_some_and(|run| {
+        value_str(run, "status").is_some_and(|status| status != "completed")
+            || value_str(run, "conclusion") == Some("skipped")
+    });
+
     if saw_unknown {
         WorkCheckSummaryStatus::Unknown
+    } else if value_bool(value, "ok") == Some(false) {
+        WorkCheckSummaryStatus::Failed
     } else {
         WorkCheckSummaryStatus::Passed
     }
@@ -328,7 +367,10 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         for gate in latest {
             let tool = value_str(gate, "tool")
                 .or_else(|| value_str(gate, "skill"))
-                .unwrap_or("<unknown>");
+                .map(str::to_owned)
+                .or_else(|| value_str(gate, "profile").map(|profile| format!("profile {profile}")))
+                .or_else(|| value_str(gate, "target").map(str::to_owned))
+                .unwrap_or_else(|| "<unknown>".into());
             let gate_id = value_str(gate, "gate_id").unwrap_or("<unknown>");
             let receipt = value_str(gate, "freshness_receipt_id")
                 .or_else(|| value_str(gate, "receipt_id"))

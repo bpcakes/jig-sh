@@ -4,29 +4,39 @@ Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAP
 
 ## Quickstart
 
-Prerequisites: [% if backend_language == "go" %]Go 1.26 or newer[% else %]Rust 1.94 or newer[% endif %], Node <<[ node_version ]>> or newer, and <<[ package_manager ]>> (`<<[ package_manager_spec ]>>`).[% if db == "postgres" %] PostgreSQL setup and integration tests also require Docker.[% endif %]
+Prerequisites: [% if backend_language == "go" %]Go 1.26 or newer[% else %]Rust 1.94 or newer[% endif %], Node <<[ node_version ]>> or newer, and <<[ package_manager ]>> (`<<[ package_manager_spec ]>>`).[% if db == "postgres" %] Disposable PostgreSQL integration tests also require Docker.[% endif %]
 
 ```sh
-scripts/jig doctor
 <<[ web_run_command ]>> bootstrap
+scripts/jig setup
 ```
 
-The second command enters Jig's dependency bootstrap, installs every frontend workspace dependency, and deterministically creates the selected root lockfile. A fresh init intentionally has no lockfile, so do not start with `<<[ web_install_command ]>>`; frozen installation is only valid after bootstrap has created the first lock. Commit the generated [% if package_manager == "npm" %]`package-lock.json`[% elif package_manager == "pnpm" %]`pnpm-lock.yaml`[% elif package_manager == "yarn" %]`yarn.lock`[% else %]`bun.lock`[% endif %]. Bootstrap does not require a database.
+`<<[ web_run_command ]>> bootstrap` runs `scripts/jig bootstrap`: it fetches backend dependencies and installs every frontend workspace dependency[% if backend_language == "go" %], then prepares sqlc and API client code from the local schemas[% endif %]. A fresh init intentionally has no lockfile, so do not start with `<<[ web_install_command ]>>`; frozen installation is only valid after bootstrap has created the first lock. Commit the generated [% if package_manager == "npm" %]`package-lock.json`[% elif package_manager == "pnpm" %]`pnpm-lock.yaml`[% elif package_manager == "yarn" %]`yarn.lock`[% else %]`bun.lock`[% endif %]. Bootstrap does not require a database or application/provider credentials and does not initialize a database. Private dependency registries may still require their own authentication.
+
+`scripts/jig setup` runs that same bootstrap, configures agent tooling, and verifies the harness with doctor. [% if db != "none" %]It leaves application database initialization to the explicit command below.[% endif %]
 
 [% if db != "none" %]
-Configure the application database before the remaining setup:
+Configure the application database, then initialize it explicitly:
 
 ```sh
-cp .env.example .env
+[% if backend_language == "go" and go_backend_root != "." %]cp <<[ go_backend_root ]>>/.env.example <<[ go_backend_root ]>>/.env
+[% else %]cp .env.example .env
+[% endif %]```
+
+Edit `DATABASE_URL` in that `.env` file (or export it), then run:
+
+```sh
+<<[ web_run_command ]>> database:setup
 ```
 
-Edit `DATABASE_URL` if the example does not match your local database, then run:
+This runs `bash scripts/setup-database.sh`, which creates the database if missing and applies migrations. [% if db == "postgres" %]The role in `DATABASE_URL` must already exist. Use an existing database that the role can access and migrate, or a role already authorized to create the database. Setup never creates roles or grants permissions.[% else %]The SQLite file and its parent directory are created if missing.[% endif %] Run the same command on fresh checkouts before starting the application.
 
 [% endif %]
 ```sh
-scripts/jig setup
 scripts/jig dev
 ```
+
+Bootstrap commands, package scripts, and the database setup script are project-owned after init. Update and recopy preserve authored commands. For an older scaffold that initialized its database inside bootstrap, move that invocation to an explicit database setup script when adopting this workflow.
 
 If a web check reports missing or stale dependencies, run `scripts/check-webapps.sh bootstrap` from this directory.
 

@@ -13,23 +13,13 @@ use super::super::{ScaffoldDb, ScaffoldFrontendKind, ScaffoldPreset, optional_ca
 use super::app::{FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold};
 use super::templates::frontend_workspace_template_files_for_backend;
 
-pub(in crate::bootstrap::scaffold) const DATABASE_CONFIG_GUARD: &str = r#"if [ -z "${DATABASE_URL:-}" ] && ! awk '/^[[:space:]]*(#|$)/ { next } /^[[:space:]]*(export[[:space:]]+)?DATABASE_URL[[:space:]]*=/ { value = $0; sub(/^[^=]*=[[:space:]]*/, "", value); sub(/^#.*$/, "", value); sub(/[[:space:]]+#.*$/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); single_quote = sprintf("%c", 39); if (value != "" && value != "\"\"" && value != single_quote single_quote) found = 1 } END { exit found ? 0 : 1 }' .env 2>/dev/null; then printf '%s\n' 'Missing DATABASE_URL; export it or copy .env.example to .env before bootstrap.' >&2; exit 1; fi"#;
-
 pub(in crate::bootstrap::scaffold) fn scaffold_bootstrap_command(
-    package_name: &str,
-    db: ScaffoldDb,
     frontends: &[FrontendScaffold],
 ) -> String {
     let mut commands = Vec::new();
     commands.push(optional_cargo_command("cargo fetch", "bootstrap"));
     if !frontends.is_empty() {
         commands.push("scripts/check-webapps.sh bootstrap".into());
-    }
-    if db != ScaffoldDb::None {
-        commands.push(DATABASE_CONFIG_GUARD.into());
-        commands.push(format!(
-            "cargo run -p {package_name}-api -- --bootstrap-database"
-        ));
     }
     commands.join(" && ")
 }

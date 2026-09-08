@@ -3,7 +3,8 @@
   "private": true,
   "packageManager": "<<[ package_manager_spec ]>>",
   "scripts": {
-    "bootstrap": "bash scripts/check-webapps.sh bootstrap",
+    "bootstrap": "bash scripts/jig bootstrap",[% if db != "none" %]
+    "database:setup": "bash scripts/setup-database.sh",[% endif %]
     "contract:generate": "node scripts/contracts.mjs generate",
     "contract:check": "node scripts/contracts.mjs check",
     "contract:client-check": "node scripts/contracts.mjs client-check",

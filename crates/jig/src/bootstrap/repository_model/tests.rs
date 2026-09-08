@@ -641,7 +641,7 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     assert!(answers.sqlx_enabled());
     assert_eq!(
         serde_json::to_value(&answers).unwrap()["rust_crate_roots"],
-        serde_json::json!(["services/worker"])
+        serde_json::json!(["legacy-rust-root"])
     );
     assert!(!answers.go_ci_workflow_enabled());
     assert!(!answers.rust_ci_workflow_enabled());

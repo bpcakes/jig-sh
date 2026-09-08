@@ -507,7 +507,12 @@ fn probe_sqlx_cli_version(
         cancellation,
     )?;
     let mut tokens = stdout.split_ascii_whitespace();
-    if tokens.next() != Some("sqlx-cli") {
+    let product = tokens.next();
+    // The Cargo entrypoint can report its own product name. Retain sqlx-cli
+    // for installations that use the common name for both entrypoints.
+    if product != Some("sqlx-cli")
+        && !(style == SqlxProbeStyle::CargoSubcommand && product == Some("sqlx-cli-sqlx"))
+    {
         return Err("sqlx --version returned an invalid product name".into());
     }
     let version = tokens

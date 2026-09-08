@@ -492,7 +492,7 @@ fn scaffold_bootstrap_command_records_shared_web_dependency_state() {
 }
 
 #[test]
-fn scaffold_bootstraps_frontend_before_validating_and_migrating_database() {
+fn scaffold_separates_dependency_bootstrap_from_database_setup() {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -514,23 +514,19 @@ fn scaffold_bootstraps_frontend_before_validating_and_migrating_database() {
     plan.apply_answer_defaults(&mut answers);
 
     let command = answers.bootstrap_command.unwrap();
-    let env_check = command
-        .find("if [ -z \"${DATABASE_URL:-}\" ] && ! awk")
-        .unwrap();
-    assert!(command.contains("export it or copy .env.example to .env"));
-    assert!(command.contains("export[[:space:]]+)?DATABASE_URL"));
+    assert_text_contains_none(&command, &["DATABASE_URL", "--bootstrap-database"]);
     let cargo_fetch = command.find("cargo fetch").unwrap();
-    let database_bootstrap = command
-        .find("cargo run -p demo-api -- --bootstrap-database")
-        .unwrap();
     let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
     assert!(cargo_fetch < frontend_bootstrap);
-    assert!(frontend_bootstrap < env_check);
+    plan.write(temp.path(), false).unwrap();
+    let setup = fs::read_to_string(temp.path().join("scripts/setup-database.sh")).unwrap();
+    let env_check = setup.find("if [ -z \"${DATABASE_URL:-}\" ] && ! awk").unwrap();
+    let database_bootstrap = setup.find("cargo run -p demo-api -- --bootstrap-database").unwrap();
     assert!(env_check < database_bootstrap);
 }
 
 #[test]
-fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
+fn go_scaffold_separates_codegen_from_database_setup() {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -559,17 +555,18 @@ fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
     let command = answers.bootstrap_command.unwrap();
     let module_tidy = command.find("go mod tidy").unwrap();
     let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
-    let database_guard = command.find("Missing DATABASE_URL").unwrap();
+    assert_text_contains_none(&command, &["DATABASE_URL", "--bootstrap-database"]);
     let sqlc_generate = command.find("go tool sqlc generate").unwrap();
-    let database_bootstrap = command
-        .find("go run ./cmd/api --bootstrap-database")
-        .unwrap();
     let contract_generate = command.find("node scripts/contracts.mjs generate").unwrap();
     assert!(module_tidy < frontend_bootstrap);
-    assert!(frontend_bootstrap < database_guard);
-    assert!(database_guard < sqlc_generate);
-    assert!(sqlc_generate < database_bootstrap);
-    assert!(database_bootstrap < contract_generate);
+    assert!(frontend_bootstrap < sqlc_generate);
+    assert!(sqlc_generate < contract_generate);
+    plan.write(temp.path(), false).unwrap();
+    let setup = fs::read_to_string(temp.path().join("scripts/setup-database.sh")).unwrap();
+    let database_guard = setup.find("Missing DATABASE_URL").unwrap();
+    let sqlc_generate = setup.find("go tool sqlc generate").unwrap();
+    let database_bootstrap = setup.find("go run ./cmd/api --bootstrap-database").unwrap();
+    assert!(database_guard < sqlc_generate && sqlc_generate < database_bootstrap);
 }
 
 #[test]

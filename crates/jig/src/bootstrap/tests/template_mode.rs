@@ -4,6 +4,7 @@ use jig_contract::{ActionRunner, ComparisonRequestV1, StrictInventoryReasonV1};
 use sha2::{Digest, Sha256};
 
 mod clippy_migration;
+mod guide_roots;
 
 #[test]
 fn adopt_local_git_template_defaults_to_committed_mode() {

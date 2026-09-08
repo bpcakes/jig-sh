@@ -682,21 +682,6 @@ fn work_check_summary_does_not_count_failed_prefix_output_as_skipped() {
 }
 
 #[test]
-fn work_check_summary_reports_empty_checks() {
-    let summary = format_work_check_summary(&json!({
-        "ok": true,
-        "plan_id": "plan_1",
-        "receipt_id": "receipt_batch",
-        "checks": []
-    }));
-
-    assert!(summary.contains("Work check: no checks configured"));
-    assert!(summary.contains("Checks: 0"));
-    assert!(summary.contains("configure work checks"));
-    assert!(summary.contains("--tool <tool>"));
-}
-
-#[test]
 fn work_check_summary_reports_classified_nonexecutions_as_success() {
     let summary = format_work_check_summary(&json!({
         "ok": true,
@@ -1158,3 +1143,6 @@ fn work_receipts_summary_lists_multiple_receipts() {
 }
 
 include!("output_tests_parts/part_01.rs");
+
+#[path = "output_tests/evidence.rs"]
+mod evidence;

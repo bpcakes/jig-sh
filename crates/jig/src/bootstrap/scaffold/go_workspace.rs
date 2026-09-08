@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::json;
 
-use super::frontend::DATABASE_CONFIG_GUARD;
 use super::names::bounded_postgres_identifier;
 use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
@@ -139,10 +138,7 @@ impl InitScaffoldPlan {
             commands.push("scripts/check-webapps.sh bootstrap".into());
         }
         if backend.database.is_postgres() {
-            commands.push(in_component(DATABASE_CONFIG_GUARD));
-            commands.push(in_component(
-                "go tool sqlc generate && go run ./cmd/api --bootstrap-database",
-            ));
+            commands.push(in_component("go tool sqlc generate"));
         }
         if !self.frontends().is_empty() {
             commands.push("node scripts/contracts.mjs generate".into());

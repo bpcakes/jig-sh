@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+cd <<[ backend_root ]>>
+
+<<[ database_config_guard ]>>
+<<[ database_setup_command ]>>

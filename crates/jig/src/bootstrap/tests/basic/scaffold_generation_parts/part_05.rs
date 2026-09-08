@@ -25,12 +25,12 @@ fn assert_nested_go_defaults(plan: &scaffold::InitScaffoldPlan) {
     );
     assert_eq!(defaults.dev_apps[0].dir.as_deref(), Some("services/api"));
     let bootstrap = defaults.bootstrap_command.unwrap();
+    assert_contains_none(&bootstrap, &["DATABASE_URL", "--bootstrap-database"]);
     assert_contains_all(
         &bootstrap,
         &[
             "(cd services/api && go mod tidy)",
-            "(cd services/api && if [ -z",
-            "(cd services/api && go tool sqlc generate && go run ./cmd/api --bootstrap-database)",
+            "(cd services/api && go tool sqlc generate)",
         ],
     );
 }

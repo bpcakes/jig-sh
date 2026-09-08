@@ -51,3 +51,5 @@ include!("tests_parts/part_09.rs");
 
 mod root;
 mod runtime;
+#[cfg(unix)]
+mod sqlx_versions;

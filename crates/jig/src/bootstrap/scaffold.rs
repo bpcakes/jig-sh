@@ -29,6 +29,7 @@ use project::{
 pub(super) use write::ScaffoldFile;
 use write::ScaffoldReport;
 
+mod database_setup;
 mod embedded_templates;
 mod frontend;
 mod go_workspace;
@@ -150,11 +151,9 @@ impl InitScaffoldPlan {
         }
         if answers.bootstrap_command.is_none() {
             answers.bootstrap_command = Some(match &self.project {
-                ScaffoldProjectPlan::RustReact(project) => scaffold_bootstrap_command(
-                    &self.package_name,
-                    project.backend.database,
-                    &project.react.frontends,
-                ),
+                ScaffoldProjectPlan::RustReact(project) => {
+                    scaffold_bootstrap_command(&project.react.frontends)
+                }
                 ScaffoldProjectPlan::GoReact(project) => {
                     self.go_scaffold_bootstrap_command(&project.backend)
                 }
@@ -353,6 +352,12 @@ impl InitScaffoldPlan {
                 sqlx_metadata_dir: backend.sqlx_metadata_dir,
             },
         };
+        if backend.database != ScaffoldDb::None {
+            files.push(database_setup::render(
+                frontend_backend,
+                &self.package_name,
+            )?);
+        }
         files.extend(render_frontend_workspace_files_for_backend(
             frontend_backend,
             &react.package_manager,
@@ -640,6 +645,9 @@ impl InitScaffoldPlan {
             &react.package_manager,
             &react.frontends,
         ));
+        if self.database() != ScaffoldDb::None {
+            paths.push(PathBuf::from("scripts/setup-database.sh"));
+        }
         paths.extend(
             react
                 .frontends
