@@ -8,7 +8,7 @@ Consumer: the ExampleProject maintainer completing a release after tracker bookk
 - [x] Integrate pending retry implementation in an isolated checkout and resolve current CLI reporting conflicts.
 - [x] Add explicit typed tracker metadata classification; preserve conservative default freshness.
 - [x] Validate metadata/source/configuration/documentation boundaries, latest failures, dependency ordering and archive retention in 287 focused cases; repair the imported native retry fixture to open a real plan with a captured baseline.
-- [ ] Rebuild the runtime, run required harness checks, inspect evidence and finish only with current passing gates.
+- [x] Rebuild the runtime, run required harness checks, inspect evidence and finish only with current passing gates.
 
 ## Surprises & Discoveries
 
@@ -32,4 +32,6 @@ The initial direct Cargo test invocation exceeded the process-heavy suite's docu
 
 ## Outcomes & Retrospective
 
-Implementation is under validation; no upstream release, independent review or completed gate result is claimed yet.
+Full configured local workspace Nextest, formatting, strict Clippy, contract and baseline-bound file-budget checks passed on source 45449a67ba897fd924b92d6f24a7138c5dd159d2. A subsequent work check executed zero targets and reused all five original receipt/run identities; work evidence and gates reported fresh passing results.
+
+PR CI exposed existing portability defects outside receipt selection: database-bootstrap fixtures probed host Bun before installing their own fake manager, and three argv tests compared macOS symlinked temporary paths lexically against the physical working directory. The fixtures now own the initialization probe and compare canonical directory identity while preserving literal argv/environment assertions. The Bun double proves bootstrap orchestration only. Five initial portability cases and the complete nine-case argv runner/schema group passed locally. The subsequent local workspace run passed all 3938 selected cases, but its receipt correctly failed freshness because the last macOS fixture correction was made while that run was executing. The fresh full-profile check on a25543211c6e524a7481777a31c29b4026f3a47b passed all five required targets, including all 3938 selected workspace tests (two configured skips). Revalidation then executed zero targets and retained all five original receipt/run IDs; evidence and gates were fresh and passed. All 16 Rust CI jobs passed in https://github.com/bpcakes/jig-sh/actions/runs/34376387757, including both macOS test configurations; repository policy and agent-guide workflows also passed. The work plan and both associated tracker items are closed; no independent review or upstream release is claimed.
