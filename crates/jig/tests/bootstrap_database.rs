@@ -70,10 +70,17 @@ esac
     let mut paths = vec![bin.clone()];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
     let search_path = std::env::join_paths(paths).unwrap();
+    // Init probes the selected manager before rendering; the fixture owns that
+    // probe as well as the later install, even on hosts without Bun.
+    executable(
+        &bin.join("bun"),
+        "#!/bin/sh\nset -eu\n[ \"$*\" = --version ]\nprintf '1.3.14\\n'\n",
+    );
 
     let repo = temp.path().join(db).join("ExampleProject");
     let report = succeeded(
         jig()
+            .env("PATH", &search_path)
             .args(["--json", "init"])
             .arg(&repo)
             .args([
@@ -184,10 +191,14 @@ esac
     fs::write(repo.join(".env"), format!("DATABASE_URL={url}\n")).unwrap();
     succeeded(run(database_script, None, false));
 
-    assert_authored_commands_survive_updates(&repo, &package);
+    assert_authored_commands_survive_updates(&repo, &package, &search_path);
 }
 
-fn assert_authored_commands_survive_updates(repo: &Path, package: &Value) {
+fn assert_authored_commands_survive_updates(
+    repo: &Path,
+    package: &Value,
+    search_path: &std::ffi::OsStr,
+) {
     let config_path = repo.join(".jig.toml");
     let mut config: toml::Value =
         toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
@@ -206,6 +217,7 @@ fn assert_authored_commands_survive_updates(repo: &Path, package: &Value) {
     for recopy in [false, true] {
         let mut update = jig();
         update
+            .env("PATH", search_path)
             .current_dir(repo)
             .args(["--json", "update", "--force", "--no-input"]);
         if recopy {

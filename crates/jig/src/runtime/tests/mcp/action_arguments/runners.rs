@@ -96,7 +96,7 @@ fn argv_literal_program_positions_and_alias_preserve_bytes() {
         json!([
             ["literal * ; $HOME", literal, "", "tail"],
             "literal $(touch environment-injected)",
-            temp.path().to_str().unwrap()
+            temp.path().canonicalize().unwrap().to_str().unwrap()
         ])
     );
     let alias = execute_alias(&ctx, tool::TEST, json!({"message": literal})).unwrap();
