@@ -794,12 +794,27 @@ the earlier of this deadline and the caller's deadline. Enumeration, hashing,
 and subprocess cleanup must all be bounded. A stricter existing collector limit
 may fail earlier; it must be reported. Do not truncate enumeration to fit.
 Use an iterative graph traversal, and stop promptly on cancellation.
-Read-only status, gates, and evidence inspections impose an earlier two-second
+Read-only status, gates, and evidence inspections default to an earlier two-second
 deadline on the entire new freshness collection/comparison phase, including
-dependency proof resolution. On expiry return `unknown` with `collection_limit`;
-do not extend the wait to the 30-second execution/preparation ceiling. Existing
-unrelated command work retains its own limits. The rollout measurements below
-must demonstrate successful collection within the interactive deadline.
+dependency proof resolution. At epoch `E`, their CLI surfaces accept
+`--freshness-timeout-ms`, and corresponding MCP inspection requests accept
+`freshness_timeout_ms`, with an integer range of 1 through 30,000 and a default
+of 2,000. Invalid values are request errors. Report the effective deadline with
+`collection_limit` diagnostics; suggest rerunning the inspection with 30,000 ms
+when the default expires. Changing this request-only budget does not change
+repository configuration or receipt identity and does not narrow the proof.
+
+`work check` uses the 30-second ceiling both to record evidence and for any
+post-execution freshness evaluation. `work finish` also evaluates required gates
+under that ceiling; it does not inherit the two-second inspection default.
+In every path an earlier caller deadline still wins. On expiry return `unknown`
+with `collection_limit` and never silently retry with a different policy or
+compare partial results. Existing unrelated command work retains its own limits.
+If exhaustive source collection remains impractical even within 30 seconds,
+authors can explicitly restore `inputs_policy = "whole_repository"` on affected
+actions, prepare new plans, and rerun checks. This changes repository authority
+and invalidates existing evidence; it is not an automatic or free fallback.
+The rollout measurements below must exercise each command's budget and remedy.
 
 Bracket collection with source and configuration observations and revalidate
 file identity/type/size/metadata around reads. Any observed race, disappearing
@@ -881,8 +896,11 @@ Malformed nonblank records still follow the existing journal error policy.
 
 Absence of `target_freshness` deserializes without rewriting history. Such a
 receipt remains inspectable; it is `unknown` with `legacy_metadata` under the new
-policy and cannot acquire scoped authority from current files. Legacy epochs
-continue using their existing whole-repository comparison rules. At epoch `E`,
+policy and cannot acquire scoped authority from current files. Repositories still
+on a pre-`E` epoch continue using their existing whole-repository comparison rules.
+In an epoch-`E` repository, every receipt without `target_freshness` is `unknown`
+with `legacy_metadata`, including pre-`E` receipts whose legacy digests match.
+At epoch `E`,
 the default whole-repository policy also writes new explicit metadata: this is
 the conservative fallback for actions, not a fabricated upgrade of old receipts.
 Newer unsupported schemas/domains never fall back to matching legacy fields.
@@ -924,6 +942,12 @@ or originals yield `unknown` with `dependency_proof_missing`; inconsistent,
 failed, or cyclic proof yields `unknown` with `dependency_proof_invalid`.
 Never truncate proof into a complete object or infer success from a digest;
 unrecordable proof produces bounded incomplete metadata and unusable evidence.
+Each unique original receipt consumes a graph-node budget entry, including
+different receipts for the same target. Archive/compaction must protect the
+union of required originals and newer blocking evidence; if existing scan or
+size limits cannot safely represent that set, abort with bounded diagnostics
+that identify the pinned-record count and size contribution. Never drop proof
+or newer blockers merely to meet a compaction target.
 
 Time validity also propagates through dependency execution/reuse proof. Preserve
 the receipt's own `valid_until_ms` and native evidence time fields unchanged.
@@ -946,8 +970,8 @@ Add the effective fields to their evaluated JSON summaries without replacing
 the original receipt fields. Work-check summaries combine effective target and
 batch boundaries using the earliest applicable deadline. Archive uses effective
 expiry for time-current protection and separately retains newer blocking
-originals needed to prevent exposing an older pass. Legacy epochs retain their
-existing time rules; an old consumer must reject epoch `E` rather than silently
+originals needed to prevent exposing an older pass. Repositories still on pre-`E`
+epochs retain their existing time rules; an old consumer must reject epoch `E` rather than silently
 ignore inherited validity. `.4.3` must exercise each listed consumer.
 
 For each required gate target, select its latest original receipt within the
@@ -1031,6 +1055,7 @@ receipts:
 | Replace a relevant file/ancestor with a symlink; leave a relevant submodule uninitialized; omit observable runner authority | Unknown with a bounded reason; never fresh |
 | Exceed collection limits, cancel, race source reads, fail Git enumeration, or require ignored/unobservable inputs | Unknown, without a digest of partial results |
 | Read an old receipt or a newer unsupported identity schema | Readable legacy metadata is unknown; unsupported identity is unsupported; rerun with a compatible runtime |
+| Read a pre-`E` receipt without new metadata in an epoch-`E` repository, even with matching legacy digests | Unknown with `legacy_metadata`; only a repository still on a pre-`E` epoch may use legacy comparison rules |
 | Retry one independent failed target successfully under the same plan with unchanged authority | Profile passes from original mixed-run receipts; newer failures/unknowns and cross-plan retries still block |
 | A dependency not explicitly required by the gate has a newer failed receipt with unchanged authority | Its dependent's original successful execution/reuse proof remains eligible; if that proof is absent the dependent is unknown |
 | The same dependency is also a required gate target | Its latest missing/failed/unknown receipt blocks the gate, independently of its dependent's receipt |
@@ -1040,6 +1065,8 @@ receipts:
 | New identity metadata uses a recognized older epoch/schema/domain | Stale with `authority_version_changed`; rerun `work check`. A legacy receipt without this metadata remains unknown |
 | New identity metadata uses an unreadable epoch/schema/domain, or mixed unknown/stale targets are present | Unsupported authority is explicit; otherwise existing missing/stale/unknown precedence is preserved; `freshness_reasons` carries machine-readable codes |
 | A resolved gate contains a failed target and an unreadable-authority target | Gate outcome is failed; aggregate freshness is unsupported; reasons retain both targets |
+| Complete recording under 30 seconds, but exceed the two-second default on a later inspection | Inspection reports unknown with the effective deadline and the explicit 30,000 ms retry; work-check post-evaluation and work finish use the 30-second ceiling with unchanged authority |
+| Exceed the absolute 30-second ceiling, or explicitly revert an action to whole-repository inputs policy | Collection remains unknown; a configuration revert requires new plans and rerun evidence, never reuse across the authority change |
 | Reach a recorded validity boundary or lose a required boundary | Stale at equality, unknown when required metadata is missing |
 | An implicit dependency's original execution/reuse evidence expires | The dependent is stale at the inherited earliest boundary; reuse cannot extend it |
 | A dependency expires before the dependent's own native validity deadline | All listed validity consumers use the inherited effective deadline; original receipt/native deadlines remain unchanged |
@@ -1060,7 +1087,16 @@ observed, and committed/index/worktree costs. Run at least 20 independent proces
 invocations per case and report first-run, median, and p95 values for both the
 new phase and full status/gates/evidence commands against the same baseline.
 
-The rollout requirement is complete proof in every supported benchmark case,
+Run that matrix both on CI and on a documented constrained profile with one
+logical CPU and backing storage limited to 20 MiB/s, reporting cold and warm
+filesystem-cache conditions. Add cases approaching the entry and content-read
+ceilings. For these larger cases, specify in advance whether complete proof fits
+within all limits or a bounded unknown is expected; verify default inspection,
+explicit 30,000 ms inspection, recording, and finish behavior. Numeric collection
+ceilings are safety limits, not a promise of interactive performance at that size.
+
+For the roughly 4,000-file matrix on both qualification profiles, the rollout
+requirement is complete proof in every supported case,
 p95 below one second for the new freshness phase, and p95 full-command latency
 no more than two seconds above the existing whole-repository baseline on the
 same host and fixture. No case may hit the two-second phase deadline. Expected
@@ -1071,11 +1107,18 @@ active; improve collection and repeat the measurements before activation. Do not
 silently fall back mid-evaluation or ship an epoch that turns routine inspections
 into deadline failures. `.4.3` repeats the full-command measurements after
 integration, including required legacy/global checks and journal evaluation.
+Report how many opt-in targets actually retain scoped authority across their
+entire dependency closure and demonstrate a non-leaf check staying fresh after
+an unrelated source edit. Defaulted dependencies remain globally sensitive;
+enabling the epoch alone is not evidence of rerun savings before those inputs
+are audited.
 `.4.3` must add CLI/runtime
 receipt, gate, retry, time, archive, and global-safety regressions, building on
 qh4's selection tests without restoring complete-run grouping. Include an actual
 gate fixture for the read-only example, alongside the existing effectful-dependency
-rejection regression, and pin both freshness and outcome precedence. Both delivery
+rejection regression, and pin both freshness and outcome precedence. Test the
+per-command deadlines and explicit inspection override, plus legacy receipts
+inside epoch-`E` repositories. Both delivery
 tasks must build the development binary, run applicable `scripts/jig work check`
 gates through `JIG_DEV_BIN`, and finish backend changes with `scripts/jig check test`.
 This design task is validated by source alignment, acceptance review, and the
