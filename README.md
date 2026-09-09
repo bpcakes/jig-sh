@@ -245,6 +245,7 @@ Contract v7 also provides the native `repo:file-budget` action backed by the rep
 
 ```sh
 scripts/jig loop status
+scripts/jig loop dispatch         # call every minute from an external scheduler
 scripts/jig status
 scripts/jig ui                    # terminal dashboard, starting on Work
 scripts/jig status --tui          # same dashboard, starting on Status
@@ -253,11 +254,11 @@ scripts/jig --json ui --plan PLAN_ID
 scripts/jig status --json         # local status snapshot
 ```
 
-The four tabs are Status, Work, Timeline, and Health. Collection failures remain visible as partial status instead of hiding usable local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. See [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
+The four tabs are Status, Work, Timeline, and Health. Collection failures remain visible as partial status instead of hiding usable local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. A `codex_task` workflow runs a checked-in prompt on a cron schedule; choose its checkout based on whether results should remain isolated or update the main repository, then invoke `loop dispatch` from cron, launchd, systemd, or persistent CI. See [Scheduled Codex Tasks](docs/codex-task-operations.md), [Loop configuration](docs/configuration.md#loop-shape), and [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
 
 ### State maintenance
 
-`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive. See [Loop configuration](docs/configuration.md#loop-shape) for running durable prompts through `jig loop dispatch` from an external scheduler.
+`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive.
 
 The unreleased dashboard cutover after 0.3.0 removes the browser server and URL endpoints. In current `master`, the hidden `--port` parser exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON with this source version. The published 0.3.0 release retains the browser transport.
 
