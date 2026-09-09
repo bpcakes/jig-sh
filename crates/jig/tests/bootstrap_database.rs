@@ -216,10 +216,12 @@ fn assert_authored_commands_survive_updates(
     .unwrap();
     for recopy in [false, true] {
         let mut update = jig();
-        update
-            .env("PATH", search_path)
-            .current_dir(repo)
-            .args(["--json", "update", "--force", "--no-input"]);
+        update.env("PATH", search_path).current_dir(repo).args([
+            "--json",
+            "update",
+            "--force",
+            "--no-input",
+        ]);
         if recopy {
             update.arg("--recopy");
         }
