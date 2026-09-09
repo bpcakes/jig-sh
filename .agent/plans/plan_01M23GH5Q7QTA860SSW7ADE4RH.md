@@ -1,0 +1,5 @@
+Address the six final-branch design findings: dependency artifact inputs, decodable older authority, explicit effective expiry and consumers, separate legacy and scoped identity paths, consistent unknown states, and additive machine-readable reasons. Revalidate the final design with configured gates and repeat full-branch comprehensive review. Prior runtime results remain recorded for their exact source snapshot.
+
+Clarified all six actionable findings from the first full-branch review. Claude and Codex completed on the same verified branch snapshot; only Claude reported these findings. The TOML example and whitespace checks pass. Stopped the initial validation invocation before the expensive suite so the design can be committed first and new receipts can bind the final committed source projection. Its partial/cancelled evidence is retained unchanged. Runtime, tests, and schema files remain unchanged.
+
+Timing clarification: the cancelled invocation had reached the core-test stage, which ran for 20.5 seconds; it was stopped early in that suite, not before the suite started.
