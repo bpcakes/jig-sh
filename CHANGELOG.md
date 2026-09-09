@@ -4,9 +4,25 @@
 
 These changes postdate the published v0.3.0 release of September 5, 2026. They are available in current `master` and are not part of the crates.io 0.3.0 package.
 
+### Added
+
+- Add contract v8 declarations for bounded named string action arguments, bound by
+  repeatable `jig run --arg TARGET:NAME=VALUE` or MCP target-keyed arguments.
+  Validate before execution and hash canonical bindings into plans; preserve v7
+  file-budget configuration and v6/v7 native migration-name compatibility.
+
+### Fixed
+
+- Keep MCP sessions usable after malformed JSON or duplicate-key requests, with
+  parse-error responses in both supported framings. Include the manifest path
+  when the launcher compatibility probe rejects malformed or duplicate-key JSON.
+- Preserve custom command-backed migration aliases across v8 update and recopy,
+  including their existing `NAME` environment interface. Keep the new 200-byte
+  native migration-name bound scoped to v8; v6/v7 retain their previous validation.
+
 ### Changed
 
-- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. The hidden `--port` parser returns a migration error and may be removed in 0.4.0. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. Generated launcher scope, append-only state format, and contract version 7 are unchanged.
+- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. The hidden `--port` parser returns a migration error and may be removed in 0.4.0. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. This dashboard change leaves generated launcher scope and the append-only state format unchanged and does not itself require a new contract epoch.
 - Breaking: remove the external status-provider subsystem, its configuration, protocol DTOs and schemas, process execution, and Packages and Blockers dashboard views. `[status]` and `[[status.providers]]` are now rejected as unknown configuration, `jig ui --status-refresh-seconds` is rejected as an unknown option, and `jig status --json` advances to schema version 2 with only local repository, work, loop, and collection-error fields. The terminal dashboard has one completion-relative local refresh domain.
 - Breaking: stop publishing the internal `jig-status-tui` crate after moving both terminal-dashboard entrypoints into `jig-ui`; previously published versions remain available but neither internal crate is a supported cross-version integration boundary.
 
@@ -1209,4 +1225,3 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 - Improve work gate validation and receipt tracking
 - Settle Cargo workspace in fixtures and document gate evidence requirements
 - Add release script and normalize jig-sh package name
-

@@ -43,7 +43,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 - agent tooling doctor/bootstrap commands for Codex-side Jig skills
 - receipt metadata collection, including git changed paths and diff stats
 
-The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 7`, with explicit components, actions, profiles, adapter provenance, component-scoped command runners, compatibility `jig.*` aliases, typed native configuration, and target-local matching for non-empty action inputs. Contract v6 remains readable with component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
+The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 8`, with explicit components, actions, profiles, adapter provenance, component-scoped command runners, compatibility `jig.*` aliases, typed native configuration, declared bounded string arguments, and target-local matching for non-empty action inputs. Contract v6 remains readable with component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
 
 Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
 

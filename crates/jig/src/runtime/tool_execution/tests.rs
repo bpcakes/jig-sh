@@ -320,6 +320,41 @@ legacy_aliases = ["jig.compat_check"]"#,
 }
 
 #[test]
+fn action_arguments_preserve_legacy_command_migration_alias() {
+    let temp = tempdir().unwrap();
+    write_v6_alias_repo(
+        temp.path(),
+        r#"[commands]
+alias_command = "printf '%s' \"$NAME\"""#,
+        r#"[[repository.actions]]
+target = { component = "repo", action = "check" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "command", command = "alias_command" }
+legacy_aliases = ["jig.migration_add"]"#,
+        serde_json::json!({
+            "target": {"component": "repo", "action": "check"},
+            "intent": "generate", "effects": ["worktree", "process"],
+            "runner": {"kind": "command", "command": "alias_command"},
+            "legacy_aliases": ["jig.migration_add"]
+        }),
+        vec![
+            serde_json::json!({"name": "jig.migration_add", "kind": "command", "command": "alias_command", "description": "Legacy migration alias"}),
+        ],
+    );
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let result = execute_manifest_tool_result_without_worktree_fingerprint(
+        &ctx,
+        tool::MIGRATION_ADD,
+        serde_json::json!({"name": "Create Examples"}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result["result"]["exit_status"], 0);
+    assert_eq!(result["result"]["stdout"], "Create Examples");
+}
+
+#[test]
 fn v6_native_alias_dispatches_the_action_operation() {
     let temp = tempdir().unwrap();
     write_v6_alias_repo(

@@ -14,6 +14,7 @@ mod dev_proxy;
 mod doctor;
 mod execution;
 mod frontend_metadata;
+mod strict_json;
 #[cfg(not(feature = "dev-proxy"))]
 mod dev_proxy {
     // Keep the CLI surface parseable in `--no-default-features` binaries while

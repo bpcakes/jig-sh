@@ -49,7 +49,7 @@ Linux and macOS are supported hosts. See [Platform Support](docs/platform-suppor
 
 ## Project status
 
-Jig is pre-1.0. The current source renders contract v7; contracts v2 through v6 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
+Jig is pre-1.0. The current source renders contract v8; contracts v2 through v7 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
 
 This README and the linked guides describe current `master`. The published `0.3.0` release (September 5, 2026) still includes the browser dashboard and external status providers. The unified terminal dashboard, provider removal, and new dashboard/status JSON formats described below are **unreleased changes after 0.3.0**. See the [Unreleased changelog](CHANGELOG.md#unreleased) for those changes or the [0.3.0 documentation](https://github.com/bpcakes/jig-sh/tree/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs) for the published release.
 
@@ -133,7 +133,7 @@ Inspect the current evidence with `scripts/jig work status`, `scripts/jig work e
 
 ## Command contract
 
-`.agent/jig-contract.json` is the stable repository authority. Current contract v7 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, and target-local affected selection.
+`.agent/jig-contract.json` is the stable repository authority. Current contract v8 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, and declared bounded string arguments.
 
 Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, local status, or secrets outside the generated command catalog.
 

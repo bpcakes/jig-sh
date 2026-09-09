@@ -100,6 +100,24 @@ fn format_repository_info(value: &serde_json::Value) -> String {
             target["intent"].as_str().unwrap_or("?"),
             string_list(target["effects"].as_array()).join(", ")
         ));
+        if let Some(arguments) = target["arguments"].as_object() {
+            for (name, spec) in arguments {
+                lines.push(format!(
+                    "  Argument: {name} · string · {} · max {} bytes · empty {}",
+                    if spec["required"].as_bool() == Some(true) {
+                        "required"
+                    } else {
+                        "optional"
+                    },
+                    spec["max_bytes"],
+                    if spec["allow_empty"].as_bool() == Some(true) {
+                        "allowed"
+                    } else {
+                        "forbidden"
+                    },
+                ));
+            }
+        }
     }
     if let Some(targets) = value["targets"].as_array() {
         lines.push(format!("  Targets: {}", targets.len()));

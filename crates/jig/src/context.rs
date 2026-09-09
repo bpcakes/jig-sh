@@ -26,13 +26,13 @@ pub(crate) use defaults::{
     DEFAULT_CODEX_MARKETPLACE_SOURCE, SUPPORTED_WEB_PACKAGE_MANAGERS,
 };
 pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
+use runtime::non_empty_legacy_jig_version;
 pub(crate) use runtime::{
     CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX,
     MIN_SUPPORTED_CONTRACT_VERSION, RepoConfigProbe, RuntimeCacheProfile,
     is_supported_contract_version, runtime_cache_base, runtime_profile_cache_name,
     runtime_profile_cache_path,
 };
-use runtime::{ContractVersionProbe, non_empty_legacy_jig_version};
 #[cfg(test)]
 pub(crate) use runtime::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
@@ -362,8 +362,9 @@ impl RepoContext {
         let manifest_path = root.join(".agent/jig-contract.json");
         let manifest_text = fs::read_to_string(&manifest_path)
             .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-        let manifest_authority: serde_json::Value = serde_json::from_str(&manifest_text)
-            .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+        let manifest_authority: serde_json::Value =
+            crate::strict_json::from_slice(manifest_text.as_bytes())
+                .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
         let manifest: ContractManifest = serde_json::from_value(manifest_authority.clone())
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
         let config = loaded_config.config;
@@ -416,15 +417,6 @@ impl RepoContext {
             bail!("Unsupported jig contract version: {contract_version}");
         }
         Ok(contract_version)
-    }
-
-    pub(crate) fn declared_contract_version_from_root(root: &Path) -> Result<u32> {
-        let manifest_path = root.join(".agent/jig-contract.json");
-        let manifest_text = fs::read_to_string(&manifest_path)
-            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-        let probe: ContractVersionProbe = serde_json::from_str(&manifest_text)
-            .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
-        Ok(probe.contract_version)
     }
 
     pub(crate) fn validate_config_file(root: &Path) -> Result<RepoConfigProbe> {
@@ -902,7 +894,7 @@ pub(crate) use repository_root::{find_repo_root_from, find_repo_root_from_or_env
 
 // Keep launcher protocol constants in this module shell: repository tooling
 // reads their declarations directly without compiling the Rust include tree.
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 7;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 8;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";

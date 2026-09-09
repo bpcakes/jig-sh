@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 mod clippy_migration;
 mod guide_roots;
+mod migration_arguments;
 
 #[test]
 fn adopt_local_git_template_defaults_to_committed_mode() {

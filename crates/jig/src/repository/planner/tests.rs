@@ -544,9 +544,7 @@ fn action_plans_bind_required_native_arguments_into_the_digest() {
 
     let arguments = BTreeMap::from([(
         target,
-        ActionArguments {
-            name: Some("create_examples".into()),
-        },
+        ActionArguments::from([("name".into(), "create_examples".into())]),
     )]);
     let plan = plan_run_with_source_and_paths(
         &catalog,
@@ -560,7 +558,7 @@ fn action_plans_bind_required_native_arguments_into_the_digest() {
     .unwrap();
 
     assert_eq!(
-        plan.targets[0].arguments.name.as_deref(),
+        plan.targets[0].arguments.get("name").map(String::as_str),
         Some("create_examples")
     );
     assert!(plan.id.starts_with("run-plan_sha256:"));
@@ -628,6 +626,30 @@ fn prepared_file_budget_target(plan: &RunPlan) -> &PlannedTarget {
 
 fn reidentify(plan: &mut RunPlan) {
     plan.id = super::plan_digest(plan).unwrap();
+}
+
+#[test]
+fn v8_preserves_v7_prepared_file_budget_authority() {
+    let (temp, ctx, catalog) = v7_file_budget_repository();
+    let previous = super::plan_run(&ctx, &catalog, PlanRunRequest::default()).unwrap();
+    let path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["contract_version"] = serde_json::json!(8);
+    fs::write(path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = RepositoryCatalog::from_context(&ctx).unwrap();
+    let current = super::plan_run(&ctx, &catalog, PlanRunRequest::default()).unwrap();
+    assert_eq!(
+        prepared_file_budget_target(&previous).runner,
+        prepared_file_budget_target(&current).runner
+    );
+    assert_eq!(
+        prepared_file_budget_target(&previous).prepared_native_input,
+        prepared_file_budget_target(&current).prepared_native_input
+    );
+    super::validate_run_plan(&ctx, &catalog, &current).unwrap();
+    assert!(super::validate_run_plan(&ctx, &catalog, &previous).is_err());
 }
 
 #[test]

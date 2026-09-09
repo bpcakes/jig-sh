@@ -3,6 +3,7 @@ use crate::command::{RepositoryRunRequest, RuntimeCommand, ToolRequest};
 
 fn request(selectors: &[&str]) -> RepositoryRunRequest {
     RepositoryRunRequest {
+        arguments: Default::default(),
         selectors: selectors.iter().map(|s| (*s).to_owned()).collect(),
         profile: None,
         affected_base: None,

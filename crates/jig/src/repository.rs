@@ -1,3 +1,4 @@
+pub(crate) mod arguments;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -272,6 +273,7 @@ impl RepositoryCatalog {
         for action in action_specs {
             let mut action = action.clone();
             normalize_native_configuration(contract_version, &mut action)?;
+            arguments::normalize_declarations(contract_version, &mut action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(
                     "target '{}' references unknown component '{}'",

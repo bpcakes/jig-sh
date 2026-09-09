@@ -4,7 +4,8 @@ use std::sync::Mutex;
 #[cfg(not(test))]
 use std::sync::OnceLock;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::fs;
 
 use super::{CURRENT_CONTRACT_VERSION, RepoContext, find_repo_root_from_or_env};
 
@@ -95,6 +96,16 @@ pub(super) fn non_empty_legacy_jig_version<'a>(
 }
 
 impl RepoContext {
+    pub(crate) fn declared_contract_version_from_root(root: &Path) -> Result<u32> {
+        let manifest_path = root.join(".agent/jig-contract.json");
+        let manifest_text = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        let probe: ContractVersionProbe = crate::strict_json::from_slice(manifest_text.as_bytes())
+            .and_then(serde_json::from_value)
+            .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+        Ok(probe.contract_version)
+    }
+
     pub(crate) fn load() -> Result<Self> {
         if let Some(ctx) = Self::prevalidated_launcher_context() {
             return Ok(ctx);

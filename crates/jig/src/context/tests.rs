@@ -4,6 +4,29 @@ use serde_json::json;
 use tempfile::tempdir;
 
 #[test]
+fn contract_version_probe_keeps_manifest_path_and_parse_cause() {
+    let temp = tempdir().unwrap();
+    fs::create_dir(temp.path().join(".agent")).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    for (body, cause) in [
+        (
+            r#"{"contract_version":8,"contract_version":7}"#,
+            "duplicate JSON object key",
+        ),
+        (r#"{"contract_version":8"#, "EOF while parsing an object"),
+        (r#"{"contract_version":"invalid"}"#, "invalid type"),
+    ] {
+        fs::write(&manifest_path, body).unwrap();
+        let error = RepoContext::declared_contract_version_from_root(temp.path()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("Failed to parse {}", manifest_path.display())
+        );
+        assert!(format!("{error:#}").contains(cause), "{error:#}");
+    }
+}
+
+#[test]
 fn contract_digest_uses_canonical_execution_authority() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();

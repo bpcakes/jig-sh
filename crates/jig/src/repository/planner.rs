@@ -428,22 +428,9 @@ fn bind_action_arguments<'a>(
         let action = catalog
             .action(target)
             .expect("selected targets must exist in the repository catalog");
-        let requires_name = matches!(
-            &action.runner,
-            ActionRunner::Native { operation, .. }
-                if jig_features::native_tool_requires_name(operation)
-        );
-        let supplied = arguments.get(target).and_then(|args| args.name.as_deref());
-        if requires_name {
-            let name = supplied.ok_or_else(|| {
-                anyhow::anyhow!("target '{target}' requires string argument 'name'")
-            })?;
-            if name.trim().is_empty() || name.starts_with('-') {
-                bail!("target '{target}' has invalid argument 'name'");
-            }
-        } else if supplied.is_some() {
-            bail!("target '{target}' does not accept argument 'name'");
-        }
+        let supplied = arguments.remove(target).unwrap_or_default();
+        let normalized = super::arguments::bind(catalog.contract_version(), action, supplied)?;
+        arguments.insert(target.clone(), normalized);
     }
     arguments.retain(|_, value| !value.is_empty());
     Ok(arguments)
@@ -606,6 +593,12 @@ fn conservative_action_input_digest(
         hasher.update([0]);
         hasher.update((runner.len() as u64).to_be_bytes());
         hasher.update(runner);
+    }
+    if contract_version >= super::arguments::ARGUMENT_CONTRACT_VERSION {
+        let declarations = serde_json::to_vec(&action.arguments)?;
+        hasher.update([0]);
+        hasher.update((declarations.len() as u64).to_be_bytes());
+        hasher.update(declarations);
     }
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }

@@ -224,6 +224,10 @@ fn v6_missing_owner_reports_ownership_instead_of_a_sqlx_layout_error() {
             "operation = \"jig.contract_check\"",
         )
         .replace(
+            "arguments = { name = { type = \"string\", required = true, max_bytes = 200 } }\n",
+            "",
+        )
+        .replace(
             "migration_dir = \"database/migrations\"",
             "migration_dir = \"database/migrations\"\nrust_migration_layout = \"versioned_artifacts\"",
         );
@@ -232,6 +236,10 @@ fn v6_missing_owner_reports_ownership_instead_of_a_sqlx_layout_error() {
     let mut contract: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
     contract["actions"][0]["runner"]["operation"] = json!("jig.contract_check");
+    contract["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("arguments");
     fs::write(
         contract_path,
         serde_json::to_string_pretty(&contract).unwrap(),

@@ -37,7 +37,7 @@ pub(super) fn dispatch(
             comparison: request.comparison,
             work_plan_id: work_plan_id.clone(),
         },
-        Default::default(),
+        request.arguments,
     )?;
     if request.explain {
         return Ok(json!({"ok": true, "command": "run plan", "executed": false, "plan": plan}));

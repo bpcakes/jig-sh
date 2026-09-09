@@ -53,7 +53,7 @@ impl RepositoryTool {
                 "Inspect the repository catalog or the durable state of one repository run, reconciling a nonterminal run whose worker lease has disappeared."
             }
             Self::PlanRun => {
-                "Resolve selectors or a profile, including closed action arguments, into an immutable, explainable repository run plan."
+                "Resolve selectors or a profile, including declared string action arguments, into an immutable, explainable repository run plan."
             }
             Self::ExecuteRun => {
                 "Validate an exact run plan and its explicit worktree/external effect approvals, start it in the background, and return its durable run handle immediately."
@@ -321,10 +321,15 @@ mod tests {
         });
         let schema = RepositoryTool::PlanRun.descriptor()["inputSchema"].clone();
 
-        assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&value));
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&value));
+        assert!(validator.is_valid(&json!({"selectors": ["api:generate"], "arguments": {"api:generate": {"message": "example", "optional": ""}}})));
+        assert!(!validator.is_valid(&json!({"arguments": {"api:generate": {"message": 3}}})));
         let parsed = serde_json::from_value::<PlanRunArgs>(value).unwrap();
         assert_eq!(
-            parsed.arguments["api:migration-add"].name.as_deref(),
+            parsed.arguments["api:migration-add"]
+                .get("name")
+                .map(String::as_str),
             Some("create_examples")
         );
     }

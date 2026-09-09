@@ -33,6 +33,62 @@ fn live_template_source() -> PreparedTemplateSource {
 }
 
 #[test]
+fn action_arguments_render_only_in_v8_and_preserve_file_budget_configuration() {
+    let destination = tempfile::tempdir().unwrap();
+    let answers = AnswerResolution::from_opts(
+        &AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            schema_dump_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+        destination.path(),
+        false,
+    )
+    .unwrap()
+    .into_parts()
+    .0;
+    let template = live_template_source();
+    let v7 = render_context(&template, &answers, Some(7)).unwrap();
+    let v8 = render_context(&template, &answers, Some(8)).unwrap();
+    let action = |context: &JsonValue, operation: &str| {
+        context["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["runner"]["operation"] == operation)
+            .unwrap()
+            .clone()
+    };
+    let migration = action(&v8, jig_contract::tool::MIGRATION_ADD);
+    assert_eq!(
+        migration["arguments"]["name"],
+        json!({"type":"string", "required":true, "allow_empty":false, "max_bytes":200})
+    );
+    assert!(
+        action(&v7, jig_contract::tool::MIGRATION_ADD)
+            .get("arguments")
+            .is_none()
+    );
+    let source: toml::Value = toml::from_str(v8["repository_toml"].as_str().unwrap()).unwrap();
+    let authored = source["repository"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["target"]["action"].as_str() == Some("migration-add"))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&authored["arguments"]).unwrap(),
+        migration["arguments"]
+    );
+    assert_eq!(
+        action(&v7, jig_contract::tool::FILE_BUDGET),
+        action(&v8, jig_contract::tool::FILE_BUDGET)
+    );
+}
+
+#[test]
 fn neutral_rust_workspace_guidance_survives_authored_recopy() {
     let template = live_template_source();
     let initial = tempfile::tempdir().unwrap();

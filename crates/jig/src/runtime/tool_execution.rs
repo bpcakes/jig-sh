@@ -463,6 +463,7 @@ fn execute_v6_action_alias(
     loop {
         let action = resolve_action_alias(&current, tool_name)?;
         validate_action_admission(&current, tool_name, &action)?;
+        bind_alias_arguments(&current, tool_name, &action, args.clone())?;
         // Contract-v6 actions are the authority for both dispatch and checkout
         // effects. The authority can change while this blocks, so this lease is
         // only admission to a second resolution below, not permission to run
@@ -487,11 +488,12 @@ fn execute_v6_action_alias(
             continue;
         }
 
+        let normalized = bind_alias_arguments(&refreshed, tool_name, &action, args)?;
         return execute_action_alias(
             &refreshed,
             &tool,
             action,
-            args,
+            normalized,
             plan_id,
             options,
             position,
@@ -499,6 +501,27 @@ fn execute_v6_action_alias(
             repository_execution,
         );
     }
+}
+
+fn bind_alias_arguments(
+    ctx: &RepoContext,
+    tool_name: &str,
+    action: &ActionSpec,
+    args: Value,
+) -> Result<Value> {
+    // The compatibility alias owns the NAME environment contract independently
+    // of the repository epoch. Updates preserve authored command runners; their
+    // alias inputs remain separate from generic action argument declarations.
+    if tool_name == jig_contract::tool::MIGRATION_ADD
+        && matches!(action.runner, ActionRunner::Command { .. })
+    {
+        return Ok(args);
+    }
+    Ok(json!(crate::repository::arguments::bind(
+        ctx.contract_version(),
+        action,
+        serde_json::from_value(args)?
+    )?))
 }
 
 fn resolve_action_alias(ctx: &RepoContext, tool_name: &str) -> Result<ActionSpec> {

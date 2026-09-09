@@ -432,6 +432,32 @@ pub enum ResultParser {
     JsonLines,
 }
 
+/// A bounded literal string accepted by one action. No defaults or interpolation.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActionArgumentSpec {
+    String {
+        #[serde(default)]
+        required: bool,
+        #[serde(default)]
+        allow_empty: bool,
+        #[schemars(range(min = 1, max = 4096))]
+        max_bytes: u32,
+    },
+}
+
+impl ActionArgumentSpec {
+    /// Native migration authoring's declaration, shared by generated and legacy catalogs.
+    #[must_use]
+    pub const fn migration_name() -> Self {
+        Self::String {
+            required: true,
+            allow_empty: false,
+            max_bytes: 200,
+        }
+    }
+}
+
 /// One typed capability offered by a component.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -442,6 +468,8 @@ pub struct ActionSpec {
     pub intent: ActionIntent,
     pub effects: Vec<ActionEffect>,
     pub runner: ActionRunner,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arguments: BTreeMap<String, ActionArgumentSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -465,6 +493,7 @@ impl ActionSpec {
             intent,
             effects: Vec::new(),
             runner,
+            arguments: BTreeMap::new(),
             inputs: Vec::new(),
             depends_on: Vec::new(),
             timeout_seconds: None,

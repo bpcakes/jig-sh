@@ -8,20 +8,9 @@ use crate::{
     TargetId,
 };
 
-/// Closed arguments accepted by repository action runners.
-#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ActionArguments {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-impl ActionArguments {
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.name.is_none()
-    }
-}
+/// Named literal strings, ordered canonically before plan hashing.
+/// The historical `{ "name": "..." }` migration representation remains readable.
+pub type ActionArguments = std::collections::BTreeMap<String, String>;
 
 /// The exact Git and worktree state against which a plan was resolved.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]

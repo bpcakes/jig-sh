@@ -88,7 +88,7 @@ Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are re
 
 - `contract_version`: version of the generated tool manifest and command surface
 
-Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Version `7` adds typed native file-budget configuration and durable prepared native inputs, and makes non-empty action inputs target-local for affected selection. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection, and version 6 retains its original repository behavior. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
+Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Version `7` adds typed native file-budget configuration and durable prepared native inputs, and makes non-empty action inputs target-local for affected selection. Version `8` adds declared bounded string action arguments; it preserves v7 file-budget configuration and preparation. Runtimes supporting only v7 reject v8 manifests and launchers before execution. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection, and version 6 retains its original repository behavior. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
 
 Breaking `contract_version` changes include:
 
@@ -223,7 +223,7 @@ A nonempty `errors` array is partial observation, not command failure: recorder 
 
 Dashboard and status readers cap each logical record in `sessions.jsonl`, `plans.jsonl`, `decisions.jsonl`, and `receipts.jsonl` at 1048576 bytes. An oversized record is skipped without allocating proportionally and yields a `record_too_large` partial error. This unreleased safety tightening after 0.3.0 does not change the append-only state format, but a schema-valid oversized legacy record that an older runtime attempted to allocate now makes UI recorder or status observation partial. Use `scripts/jig state diagnose` to identify the affected stream, stop Jig writers, and use the applicable compaction, archive, restore, or manual state-repair workflow before retrying.
 
-The unreleased cutover ends support for the browser server, its bookmarked URLs, and its HTTP JSON endpoints. In current `master`, `jig ui --json` emits the recorder document directly instead of a URL envelope. A hidden `--port` parser exists only to return a migration diagnostic with exit status 2 and may be removed in 0.4.0. This workflow cutover does not change generated launcher command scope or contract version 7; callers needing the browser transport can continue using the published 0.3.0 release.
+The unreleased cutover ends support for the browser server, its bookmarked URLs, and its HTTP JSON endpoints. In current `master`, `jig ui --json` emits the recorder document directly instead of a URL envelope. A hidden `--port` parser exists only to return a migration diagnostic with exit status 2 and may be removed in 0.4.0. This workflow cutover does not change generated launcher command scope and remains compatible with contract version 7; callers needing the browser transport can continue using the published 0.3.0 release.
 
 ## Repository Catalog And Check Plans
 
@@ -563,7 +563,41 @@ engine used by MCP. It accepts `--profile`, `--affected BASE`, `--explain`,
 `--plan-id`, `--no-receipt`, `--fail-fast`, global `--json`, and the native
 `--comparison-*` options supported by `jig check`. Existing command and native
 actions work in their supported contract epoch; sources older than v6 receive
-migration guidance. General declared action arguments remain a separate feature.
+migration guidance. Contract v8 adds repeatable `--arg TARGET:NAME=VALUE` bindings,
+for example `jig run api:migration-add --arg api:migration-add:name=create_examples
+--approve-effect worktree`. The canonical target must be selected, either directly
+or in the resolved dependency closure. Bindings never select targets themselves.
+MCP `jig.plan_run` accepts the same values as
+`"arguments": {"api:migration-add": {"name": "create_examples"}}`.
+
+Arguments use only named strings declared by the action. Unknown, missing required,
+duplicate, forbidden-empty, oversized, NUL-containing, and unselected-target
+arguments fail before execution. Keys are sorted and empty target maps omitted
+before hashing; string bytes, whitespace, Unicode, and embedded `=` are preserved.
+An omitted optional value differs from an explicitly supplied empty string. Values
+are included in immutable plans and durable run records, so these are ordinary
+non-secret inputs. MCP rejects duplicate JSON keys before parsing a request.
+
+Versions 6 and 7 retain their existing native migration `name` input contract:
+the name must not be blank or start with `-`, and has no declared byte limit.
+The native writer retains its existing filename slug conversion and filesystem
+limits. Version 8 writes a bounded `name` declaration to both source and resolved
+native migration actions. V8 names are required, nonempty, at most 200 UTF-8 bytes,
+cannot start with `-`, and must contain an ASCII alphanumeric character.
+For native migrations, `jig migration add NAME` uses the same epoch-specific
+validation as target execution;
+MCP v6+ callers use `jig.plan_run` and `jig.execute_run`. Historical
+plans remain deserializable (including `arguments: {"name": "..."}`); execution
+still requires revalidation against current source and configuration. A changed
+epoch or declaration requires a fresh plan, without rewriting historical records.
+
+Command runners record validated arguments but do not pass them to the shell or
+environment. Command-backed migration aliases retain their existing `NAME`
+environment compatibility path, including after update or recopy to v8; this
+alias interface is independent of generic action declarations and their bounds.
+Literal argv positions and explicit-shell runners belong to the next
+runner epoch. Native operations consume only their fixed declared inputs; declarations
+cannot extend or weaken their input contracts.
 
 Inspect an effectful action first with `jig run api:generate --explain`. Execute it
 with `jig run api:generate --approve-effect worktree`. Repeat `--approve-effect`
