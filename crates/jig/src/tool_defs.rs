@@ -279,7 +279,7 @@ impl MemoryTool {
                 "Append nonblank progress to a structured work plan using exactly one of body or body_file."
             }
             Self::Check => {
-                "Classify and run required applicable work gates by default, or force selected gate ids or legacy tool names."
+                "Validate required work gates, reuse current target passes and execute repairs with dependencies. Explicit gate ids or tool names select legacy checks; use native check selectors to force target execution."
             }
             Self::Gates => "Report configured work gate status for a plan.",
             Self::Evidence => {

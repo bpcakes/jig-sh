@@ -1,11 +1,15 @@
 use super::*;
 
 fn run_repository_target(ctx: &RepoContext, selector: &str) -> Value {
+    run_repository_target_for_plan(ctx, selector, "plan_1")
+}
+
+fn run_repository_target_for_plan(ctx: &RepoContext, selector: &str, plan_id: &str) -> Value {
     dispatch(
         ctx,
         CommandKind::Check(crate::cli::CheckOpts {
             tool: crate::cli::ToolOpts {
-                plan_id: Some("plan_1".into()),
+                plan_id: Some(plan_id.into()),
                 no_receipt: false,
             },
             profile: None,
@@ -196,7 +200,7 @@ target = "api:test"
 }
 
 #[test]
-fn profile_evidence_gate_requires_all_targets_from_one_run() {
+fn profile_evidence_gate_preserves_provenance_across_runs() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(
         temp.path(),
@@ -214,8 +218,9 @@ profile = "verify"
     run_repository_target(&ctx, "web:test");
     let split_runs = work_gates(&ctx);
 
-    assert_eq!(split_runs["overall"], "blocked");
-    assert_eq!(split_runs["gates"][0]["status"], "missing");
+    assert_eq!(split_runs["overall"], "passed");
+    assert_eq!(split_runs["gates"][0]["status"], "passed");
+    assert!(split_runs["gates"][0]["run_id"].is_null());
     assert_eq!(
         split_runs["gates"][0]["targets"].as_array().unwrap().len(),
         2
@@ -231,19 +236,17 @@ profile = "verify"
     )
     .unwrap();
     assert_eq!(checked["ok"], true, "{checked:#}");
-    assert_eq!(checked["run"]["targets"].as_array().unwrap().len(), 2);
+    assert!(checked["run"].is_null());
+    assert!(checked["target_validation_receipt_id"].is_string());
 
     let complete = work_gates(&ctx);
     assert_eq!(complete["overall"], "passed", "{complete:#}");
     assert_eq!(complete["gates"][0]["status"], "passed");
-    let run_id = complete["gates"][0]["run_id"].as_str().unwrap();
-    assert!(
-        complete["gates"][0]["targets"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|target| target["run_id"].as_str() == Some(run_id))
+    assert_eq!(
+        complete["gates"][0]["targets"],
+        split_runs["gates"][0]["targets"]
     );
+    assert!(complete["gates"][0]["run_id"].is_null());
 
     let evidence = dispatch(
         &ctx,
@@ -757,3 +760,5 @@ legacy_aliases = ["jig.broken_check"]
     assert!(receipts.contains(r#""tool_name":"jig.work_check""#));
     assert!(receipts.contains(r#""target":{"component":"api","action":"test"}"#));
 }
+
+mod retries;

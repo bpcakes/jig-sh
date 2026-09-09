@@ -14,8 +14,10 @@ Examples:
   plan_id=\"$(jig work start --title \"Fix signup\" --body-file .agent/notes/signup-plan.md --print-plan-id)\"";
 
 pub(super) const WORK_CHECK_AFTER_HELP: &str = "\
-Run configured target/profile evidence and legacy check gates for a plan.
-Use --tool to select one legacy execution tool instead.
+Validate configured target/profile evidence and legacy check gates for a plan.
+Reuse current target passes; execute missing, failed or stale checks and their dependencies.
+Use jig check COMPONENT:ACTION --plan-id ID to force a native target execution.
+Use --tool to select a legacy execution tool; its receipt does not satisfy a native target gate.
 Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:

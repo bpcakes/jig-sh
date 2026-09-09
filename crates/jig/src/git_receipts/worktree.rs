@@ -7,22 +7,23 @@ pub(super) fn repo_worktree_fingerprint_inner(
     collection.ensure_active()?;
     #[cfg(test)]
     WORKTREE_FINGERPRINT_COLLECTION_COUNT.set(WORKTREE_FINGERPRINT_COLLECTION_COUNT.get() + 1);
+    let paths = metadata::worktree_source_pathspecs(root)?;
+    let mut status_args = vec![
+        "-c",
+        "core.fileMode=true",
+        "-c",
+        "diff.ignoreSubmodules=none",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+        "--",
+    ];
+    status_args.extend(paths.iter().map(String::as_str));
     let status = git_worktree_proof_stdout(
         root,
-        &[
-            "-c",
-            "core.fileMode=true",
-            "-c",
-            "diff.ignoreSubmodules=none",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
+        &status_args,
         "git status --porcelain",
         worktree_status_output_limit(),
         collection,
@@ -30,7 +31,7 @@ pub(super) fn repo_worktree_fingerprint_inner(
     collection.ensure_active()?;
     let order_file = NamedTempFile::new().context("Failed to create worktree diff order file")?;
     let mut unstaged_args = canonical_binary_diff_args(order_file.path(), false, None);
-    unstaged_args.extend([OsString::from("."), OsString::from(":(exclude).agent/**")]);
+    unstaged_args.extend(paths.iter().map(OsString::from));
     let unstaged = git_worktree_proof_stdout_os(
         root,
         &unstaged_args,
@@ -40,7 +41,7 @@ pub(super) fn repo_worktree_fingerprint_inner(
     )?;
     collection.ensure_active()?;
     let mut staged_args = canonical_binary_diff_args(order_file.path(), true, None);
-    staged_args.extend([OsString::from("."), OsString::from(":(exclude).agent/**")]);
+    staged_args.extend(paths.iter().map(OsString::from));
     let staged = git_worktree_proof_stdout_os(
         root,
         &staged_args,

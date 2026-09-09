@@ -374,6 +374,7 @@ fn target_receipt_status(
         config_digest: receipt.config_digest.clone(),
         input_digest: receipt.input_digest.clone(),
         exit_status: tool.exit_status,
+        started_at_ms: receipt.started_at_ms,
         ended_at_ms: tool.ended_at_ms,
         changed_paths: tool.changed_paths,
         changed_path_count: tool.changed_path_count,

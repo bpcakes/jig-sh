@@ -29,6 +29,9 @@ mod comparison_scope;
 #[path = "tests_parts/comparison_scope_regressions.rs"]
 mod comparison_scope_regressions;
 
+#[path = "tests_parts/receipt_metadata.rs"]
+mod receipt_metadata;
+
 #[test]
 fn repository_source_identity_ignores_agent_only_commits() {
     let temp = tempdir().unwrap();

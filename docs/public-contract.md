@@ -512,7 +512,9 @@ Structured work commands use the `jig.work_*` CLI and MCP namespace, but state-o
 
 ## Work Gates
 
-`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. A target gate matches only that exact target. A profile gate requires every current profile target from one run; receipts from separate runs are not combined. `scripts/jig work check --plan-id ...` resolves all evidence gates to exact targets, executes their union in one run, and links every target receipt to the work plan. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
+`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. Target and profile gates require their selected targets and execution dependencies. Each target uses its latest original receipt in the same work plan, ordered by completion time then receipt ID. A newer failure or unverifiable result supersedes an older pass. Current configuration, input, worktree and time-validity checks still apply. A profile may combine current receipts from separate runs; its aggregate `run_id` is null in that case, while every target retains its actual `run_id` and `receipt_id`. Archive protection retains the latest target outcomes, including failures and expired results, so removing history cannot reveal an older pass.
+
+`scripts/jig work check --plan-id ...` executes missing, failed, stale or unknown targets, their normal execution dependencies, and required dependents invalidated by those executions. It reuses fresh independent passes. Final validation reassesses all required targets and records `jig.work_check_targets/v1` evidence referencing their original receipts with `executed`, `not_started`, or `reused` disposition derived from the actual selected receipt and target-run result. The result exposes `target_evidence` and `target_validation_receipt_id`; when all targets are reused, `plan` and `run` are null and `results` is empty. Use `scripts/jig check COMPONENT:ACTION --plan-id ...` to force native target execution. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
 
 Contract 5 and later check gates may declare strict `paths`, `paths_ignore`, and `reuse` policy. Work-plan open records an immutable commit or empty-tree baseline. Scoped checks compare that baseline with the current staged, unstaged, untracked, and committed inputs; their evidence records applicability, gate signature, scope fingerprint, and bounded changed-path metadata. A non-applicable gate closes with explicit evidence rather than a synthetic pass. Reuse is opt-in and accepts only a direct successful execution with the exact current gate and input identity; failed, cancelled, malformed, mutating, or transitively reused batches supersede older proof instead of revealing it. `work check --gate ID` forces a named check to execute while retaining its applicability facts.
 
@@ -523,6 +525,26 @@ Contract 5 and later check gates may declare strict `paths`, `paths_ignore`, and
 Fresh legacy check evidence means the committed non-`.agent/` source tree and non-`.agent/` worktree projection did not change while `work check` ran and still match the current source. Fresh target evidence additionally requires the receipt's contract digest and target input digest to match the currently resolved catalog and target. Target input digests conservatively cover the same complete source/worktree identity plus declared input patterns, so an unrelated local change can invalidate evidence; they are not cache keys. Append-only `.agent/` state and evidence-only commits are outside that identity. Missing target metadata produces `unknown`; a known mismatch produces `stale`. Generated outputs should therefore be committed, ignored, or settled before required gates are used as finish evidence. If a check creates expected files, review those files and rerun `work check` to record fresh evidence.
 
 After upgrading an in-flight repo from a Jig version that recorded receipts without `worktree_fingerprint` or target digests, rerun `scripts/jig work check --plan-id ...` before `scripts/jig work finish --plan-id ...`. Older receipts deserialize, but their gate freshness is `unknown`.
+
+A repository that uses the root `.beads/` directory only for issue tracking can
+explicitly classify it as receipt metadata:
+
+```toml
+[work]
+receipt_metadata = ["beads"]
+```
+
+This is an ownership declaration that no gated application, test, build or
+policy command consumes that tracker store. Leave it unset if a check validates
+tracker content. The conservative default includes `.beads/`; opting in excludes
+only that root store from dirty, staged and committed freshness projections.
+Changing this configuration invalidates previous evidence. Arbitrary paths and
+globs are rejected. Source, packaged documentation, runner and configuration
+changes still invalidate receipts, as do nested fixture directories named
+`.beads`. Changed-path previews still report tracker changes for inspection.
+This option is separate from `repository.affected_ignore`, which only affects
+target selection and never authorizes freshness exclusions. It does not turn
+target input digests into per-target cache keys.
 
 Unknown non-`check` gate kinds are parsed and reported as unsupported. Required unsupported gates block finish.
 
