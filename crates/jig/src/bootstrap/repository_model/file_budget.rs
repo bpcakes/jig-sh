@@ -91,7 +91,11 @@ pub(super) fn matches_legacy_projection(
         expected_actions.push(legacy);
     }
     expected_actions.sort_by(|left, right| left.target.cmp(&right.target));
-    if expected_actions != authored.actions {
+    let mut authored_actions = authored.actions.clone();
+    for action in expected_actions.iter_mut().chain(&mut authored_actions) {
+        super::runners::make_shell_explicit(&mut action.runner);
+    }
+    if expected_actions != authored_actions {
         return false;
     }
 

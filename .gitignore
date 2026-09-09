@@ -65,3 +65,4 @@ build/
 tmp/
 temp/
 # END JIG MANAGED BLOCK
+/scripts/tests/__pycache__/

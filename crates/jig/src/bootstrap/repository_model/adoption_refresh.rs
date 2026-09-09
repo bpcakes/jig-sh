@@ -41,7 +41,9 @@ pub(in crate::bootstrap) fn refresh(
     for action in &prior.actions {
         if generated_action(action, prior) {
             managed.insert(action.target.clone());
-            if let ActionRunner::Command { command, .. } = &action.runner {
+            if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
+                &action.runner
+            {
                 commands.remove(command);
             }
         }
@@ -73,7 +75,8 @@ pub(in crate::bootstrap) fn refresh(
             retained_owners.insert(action.target, owners);
             continue;
         }
-        if let ActionRunner::Command { command, .. } = &action.runner
+        if let ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } =
+            &action.runner
             && let Some(value) = generated_commands.get(command)
         {
             commands
@@ -157,11 +160,12 @@ fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> boo
         return false;
     }
     match &action.runner {
+        ActionRunner::Argv { .. } => false,
         ActionRunner::Native { operation, .. } => matches!(
             operation.as_str(),
             tool::CONTRACT_CHECK | tool::FILE_BUDGET | tool::SCHEMA_CHECK | tool::MIGRATION_ADD
         ),
-        ActionRunner::Command { command, .. } => {
+        ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
             let actual_component = action.target.component.as_str();
             let component = if command.starts_with("api_")
                 && model

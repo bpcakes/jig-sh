@@ -1,5 +1,7 @@
 use super::*;
 
+mod argv;
+
 #[test]
 fn migration_add_rejects_when_sqlx_is_disabled() {
     let temp = tempdir().unwrap();
@@ -68,29 +70,44 @@ fn schema_check_reports_stale_schema_dump() {
 }
 
 #[test]
-fn v6_schema_check_reuses_the_owning_dump_actions_complete_runner() {
-    let temp = tempdir().unwrap();
-    write_v6_schema_policy_repo(
-        temp.path(),
-        "printf 'stable\\n' > docs/schema/tables.sql",
-        "mkdir -p ../docs/schema && printf '%s\\n' \"$SCHEMA_VALUE\" > ../docs/schema/tables.sql",
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
+fn command_and_shell_schema_checks_reuse_the_owning_dump_runner() {
+    for version in [6, 8] {
+        let temp = tempdir().unwrap();
+        write_v6_schema_policy_repo(
+            temp.path(),
+            "printf 'stable\\n' > docs/schema/tables.sql",
+            "mkdir -p ../docs/schema && printf '%s\\n' \"$SCHEMA_VALUE\" > ../docs/schema/tables.sql",
+        );
+        if version == 8 {
+            let path = temp.path().join(".agent/jig-contract.json");
+            let mut manifest: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            manifest["contract_version"] = json!(8);
+            manifest["actions"][1]["runner"]["kind"] = json!("shell");
+            fs::write(path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+            let path = temp.path().join(".jig.toml");
+            let mut source: toml::Value =
+                toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            source["repository"]["actions"] = toml::Value::try_from(&manifest["actions"]).unwrap();
+            fs::write(path, toml::to_string(&source).unwrap()).unwrap();
+        }
+        fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+        fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+        init_git(temp.path());
+        git(temp.path(), &["add", "."]);
+        git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let output = schema_check(&ctx).unwrap();
+        let output = schema_check(&ctx).unwrap();
 
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("Schema dump is stale"));
-    assert!(output.stderr.contains("+changed"), "{}", output.stderr);
-    assert_eq!(
-        fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
-        "stable\n"
-    );
+        assert_eq!(output.exit_status, 1);
+        assert!(output.stderr.contains("Schema dump is stale"));
+        assert!(output.stderr.contains("+changed"), "{}", output.stderr);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
+            "stable\n"
+        );
+    }
 }
 
 #[test]

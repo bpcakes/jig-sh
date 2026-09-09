@@ -174,13 +174,18 @@ read-only check. Long-running services use `jig dev`. Other declared actions
 use an action-specific command or the MCP `jig.plan_run` and `jig.execute_run`
 tools, which expose and require approval for their effects before execution.
 
-A runner is an implementation detail of an action. Initial runner kinds are a
-configured argv command and a Jig-native operation. Command runners declare
-argv, working directory, explicit environment additions, and timeout; they do
-not require an agent to supply arbitrary shell text. A delegated runner may
-later pass an already resolved selection to an existing monorepo engine. When a
-repository already owns a correct graph or cache, Jig delegates instead of
-building a second one.
+A runner is the checked-in implementation of an action. Contract v8 supports
+literal `argv`, explicit compatibility `shell`, and Jig-owned `native` runners.
+Argv launches a literal program directly; each ordered argument is a literal
+string or a reference to one declared bounded string. Missing optional values
+omit their positions; empty supplied values remain empty arguments. No binding
+can select the program, working directory, environment, or shell text. Shell
+references a checked-in `[commands]` key and accepts no generic arguments.
+Contracts 6–7 retain the historical implicit `command` runner. V8 render/update
+converts those choices to explicit shell and preserves authored argv/shell choices.
+All runners remain under Jig's effect, approval, lease, source, cancellation and
+result authority. A delegated runner may later pass an already resolved selection
+to an existing monorepo engine.
 
 Execution verifies the complete repository source before and after each
 started target so a read-only target cannot silently mutate inputs used by a

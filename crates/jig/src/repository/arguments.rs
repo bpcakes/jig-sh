@@ -3,12 +3,13 @@ use std::collections::BTreeMap;
 use anyhow::{Result, bail, ensure};
 use jig_contract::{ActionArgumentSpec, ActionArguments, ActionRunner, ActionSpec, TargetId};
 
-pub(crate) const ARGUMENT_CONTRACT_VERSION: u32 = 8;
+use super::ACTION_EXECUTION_CONTRACT_VERSION;
+
 const MAX_ARGUMENTS: usize = 32;
 const MAX_STRING_BYTES: u32 = 4096;
 
 pub(crate) fn normalize_declarations(version: u32, action: &mut ActionSpec) -> Result<()> {
-    if version < ARGUMENT_CONTRACT_VERSION {
+    if version < ACTION_EXECUTION_CONTRACT_VERSION {
         ensure!(
             action.arguments.is_empty(),
             "target '{}' argument declarations require contract version 8 or later",
@@ -73,7 +74,7 @@ pub(crate) fn bind(
 ) -> Result<ActionArguments> {
     // Legacy native inputs predate bounded declarations. Preserve that input
     // contract without inventing a finite bound for an unbounded legacy name.
-    if version < ARGUMENT_CONTRACT_VERSION && migration_action(action) {
+    if version < ACTION_EXECUTION_CONTRACT_VERSION && migration_action(action) {
         for name in supplied.keys() {
             ensure!(
                 name == "name",
@@ -170,7 +171,12 @@ mod tests {
         ActionSpec::new(
             "api:generate".parse().unwrap(),
             jig_contract::ActionIntent::Generate,
-            ActionRunner::command("generate_command"),
+            ActionRunner::Argv {
+                program: "example-generate".into(),
+                args: vec![],
+                working_directory: None,
+                environment: BTreeMap::new(),
+            },
         )
     }
 

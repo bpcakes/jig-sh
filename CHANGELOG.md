@@ -6,13 +6,22 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 
 ### Added
 
-- Add contract v8 declarations for bounded named string action arguments, bound by
-  repeatable `jig run --arg TARGET:NAME=VALUE` or MCP target-keyed arguments.
-  Validate before execution and hash canonical bindings into plans; preserve v7
+- Add one contract v8 epoch for bounded named string arguments and literal argv
+  execution, with explicit `shell` runners for checked-in Bash commands. Bind
+  repeatable `jig run --arg TARGET:NAME=VALUE` or MCP target-keyed arguments only
+  to whole argv positions; never parse or expand their values. Reject implicit
+  shell fallback for executable text without an interpreter header. Validate
+  before execution and hash canonical bindings into plans; preserve released v7
   file-budget configuration and v6/v7 native migration-name compatibility.
 
 ### Fixed
 
+- Keep machine-local Beads paths out of exports through the repository sync
+  helper and CI guard. Continue Linux argv PATH searches past unavailable
+  filesystem entries while preserving direct-executable errors.
+- Include argv programs in Doctor readiness checks, restore schema-dump and
+  execution runner diagnostics, and preserve macOS PATH error traversal.
+- Fix `jig check --plan-id` when checks include native file-budget actions.
 - Keep MCP sessions usable after malformed JSON or duplicate-key requests, with
   parse-error responses in both supported framings. Include the manifest path
   when the launcher compatibility probe rejects malformed or duplicate-key JSON.

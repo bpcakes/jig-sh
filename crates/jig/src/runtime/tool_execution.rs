@@ -433,8 +433,9 @@ fn execute_manifest_tool_with_options(
             execute_command_tool(
                 &current,
                 CommandToolInvocation {
+                    argv: None,
                     tool_name: &tool.name,
-                    command_key,
+                    command_key: Some(command_key),
                     command_text: command,
                     working_directory: None,
                     environment: None,
@@ -513,7 +514,10 @@ fn bind_alias_arguments(
     // of the repository epoch. Updates preserve authored command runners; their
     // alias inputs remain separate from generic action argument declarations.
     if tool_name == jig_contract::tool::MIGRATION_ADD
-        && matches!(action.runner, ActionRunner::Command { .. })
+        && matches!(
+            action.runner,
+            ActionRunner::Command { .. } | ActionRunner::Shell { .. }
+        )
     {
         return Ok(args);
     }
@@ -542,7 +546,9 @@ fn validate_action_admission(
 ) -> Result<()> {
     let admission_name = match &action.runner {
         ActionRunner::Native { operation, .. } => operation.as_str(),
-        ActionRunner::Command { .. } => tool_name,
+        ActionRunner::Command { .. } | ActionRunner::Shell { .. } | ActionRunner::Argv { .. } => {
+            tool_name
+        }
     };
     if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
         bail!(error);
@@ -563,6 +569,31 @@ fn execute_action_alias(
     repository_execution: crate::state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
     let outcome = match action.runner {
+        ActionRunner::Argv {
+            program,
+            args: positions,
+            working_directory,
+            environment,
+        } => execute_command_tool(
+            ctx,
+            CommandToolInvocation {
+                tool_name: &tool.name,
+                command_key: None,
+                command_text: "",
+                argv: Some((&program, &positions)),
+                working_directory: working_directory.as_deref(),
+                environment: Some(&environment),
+                timeout: action
+                    .timeout_seconds
+                    .map(Duration::from_secs)
+                    .unwrap_or_else(|| ctx.command_timeout().duration()),
+            },
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+        ),
         ActionRunner::Native { operation, .. } => execute_native_tool(
             ctx,
             NativeToolInvocation {
@@ -581,13 +612,19 @@ fn execute_action_alias(
             command,
             working_directory,
             environment,
+        }
+        | ActionRunner::Shell {
+            command,
+            working_directory,
+            environment,
         } => {
             let command_text = ctx.command_for_key(&command)?;
             execute_command_tool(
                 ctx,
                 CommandToolInvocation {
+                    argv: None,
                     tool_name: &tool.name,
-                    command_key: &command,
+                    command_key: Some(&command),
                     command_text,
                     working_directory: working_directory.as_deref(),
                     environment: Some(&environment),

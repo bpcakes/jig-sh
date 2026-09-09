@@ -20,7 +20,10 @@ pub(in crate::bootstrap) fn action_uses_managed_rust_file_loc_checker(
     commands: &BTreeMap<String, String>,
 ) -> bool {
     if !is_rust_file_loc_action(action)
-        || action.runner != ActionRunner::command(RUST_FILE_LOC_COMMAND_KEY)
+        || !matches!(&action.runner,
+            ActionRunner::Command { command, working_directory: None, environment }
+            | ActionRunner::Shell { command, working_directory: None, environment }
+            if command == RUST_FILE_LOC_COMMAND_KEY && environment.is_empty())
     {
         return false;
     }

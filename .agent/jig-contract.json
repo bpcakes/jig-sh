@@ -1,27 +1,17 @@
 {
-  "contract_version": 7,
+  "contract_version": 8,
   "tool_namespace": "jig",
 
   "required_commands": [
-  "api_clippy_command",
-  "api_fmt_command",
-  "api_test_command",
-  "api_test_locked_command",
-  "repo_bootstrap_command",
-  "rust_core_test_command",
-  "rust_frontend_test_command",
-  "rust_process_test_command",
-  "rust_vault_test_command"
+  "api_test_locked_command"
 ],
   "tools": [
   {
-    "command": "repo_bootstrap_command",
     "description": "Prepare repository dependencies and local tooling.",
     "kind": "command",
     "name": "jig.bootstrap"
   },
   {
-    "command": "api_clippy_command",
     "description": "Run Rust Clippy with repository policy.",
     "kind": "command",
     "name": "jig.clippy"
@@ -39,49 +29,41 @@
     "name": "jig.file_budget"
   },
   {
-    "command": "api_fmt_command",
     "description": "Check Rust formatting.",
     "kind": "command",
     "name": "jig.fmt_check"
   },
   {
-    "command": "rust_core_test_command",
-    "description": "Run the source repository\u0027s fast core Rust test partition.",
+    "description": "Run the source repository's fast core Rust test partition.",
     "kind": "command",
     "name": "jig.source_core_test"
   },
   {
-    "command": "api_fmt_command",
     "description": "Check Rust formatting.",
     "kind": "command",
     "name": "jig.source_fmt_check"
   },
   {
-    "command": "rust_frontend_test_command",
-    "description": "Run the source repository\u0027s generated-frontend Rust test partition.",
+    "description": "Run the source repository's generated-frontend Rust test partition.",
     "kind": "command",
     "name": "jig.source_frontend_test"
   },
   {
-    "command": "rust_process_test_command",
-    "description": "Run the source repository\u0027s process and signal Rust test partition.",
+    "description": "Run the source repository's process and signal Rust test partition.",
     "kind": "command",
     "name": "jig.source_process_test"
   },
   {
-    "command": "api_test_command",
     "description": "Run Rust tests.",
     "kind": "command",
     "name": "jig.source_test"
   },
   {
-    "command": "rust_vault_test_command",
-    "description": "Run the source repository\u0027s vault Rust test partition.",
+    "description": "Run the source repository's vault Rust test partition.",
     "kind": "command",
     "name": "jig.source_vault_test"
   },
   {
-    "command": "api_test_command",
     "description": "Run Rust tests.",
     "kind": "command",
     "name": "jig.test"
@@ -188,8 +170,20 @@
       "target": "inherited"
     },
     "runner": {
-      "command": "api_clippy_command",
-      "kind": "command"
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--",
+        "-D",
+        "warnings",
+        "-D",
+        "clippy::mod_module_files"
+      ],
+      "kind": "argv",
+      "program": "cargo"
     },
     "target": {
       "action": "clippy",
@@ -237,8 +231,9 @@
       "target": "inherited"
     },
     "runner": {
-      "command": "api_fmt_command",
-      "kind": "command"
+      "args": [],
+      "kind": "argv",
+      "program": "scripts/check-rust-format.sh"
     },
     "target": {
       "action": "fmt",
@@ -305,8 +300,19 @@
       "target": "inherited"
     },
     "runner": {
-      "command": "api_test_command",
-      "kind": "command"
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "-P",
+        "local",
+        "--status-level",
+        "fail",
+        "--final-status-level",
+        "fail"
+      ],
+      "kind": "argv",
+      "program": "cargo"
     },
     "target": {
       "action": "test",
@@ -354,7 +360,7 @@
     },
     "runner": {
       "command": "api_test_locked_command",
-      "kind": "command"
+      "kind": "shell"
     },
     "target": {
       "action": "test-locked",
@@ -381,8 +387,11 @@
       "target": "inherited"
     },
     "runner": {
-      "command": "repo_bootstrap_command",
-      "kind": "command"
+      "args": [
+        "fetch"
+      ],
+      "kind": "argv",
+      "program": "cargo"
     },
     "target": {
       "action": "bootstrap",
@@ -456,7 +465,7 @@
     }
   },
   {
-    "description": "Run the source repository\u0027s fast core Rust test partition.",
+    "description": "Run the source repository's fast core Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -488,8 +497,11 @@
       "target": "declared"
     },
     "runner": {
-      "command": "rust_core_test_command",
-      "kind": "command"
+      "args": [
+        "core"
+      ],
+      "kind": "argv",
+      "program": "scripts/test-rust-partition.sh"
     },
     "target": {
       "action": "source-core-test",
@@ -497,7 +509,7 @@
     }
   },
   {
-    "description": "Run the source repository\u0027s generated-frontend Rust test partition.",
+    "description": "Run the source repository's generated-frontend Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -529,8 +541,11 @@
       "target": "declared"
     },
     "runner": {
-      "command": "rust_frontend_test_command",
-      "kind": "command"
+      "args": [
+        "frontend"
+      ],
+      "kind": "argv",
+      "program": "scripts/test-rust-partition.sh"
     },
     "target": {
       "action": "source-frontend-test",
@@ -538,7 +553,7 @@
     }
   },
   {
-    "description": "Run the source repository\u0027s process and signal Rust test partition.",
+    "description": "Run the source repository's process and signal Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -582,8 +597,11 @@
       "target": "declared"
     },
     "runner": {
-      "command": "rust_process_test_command",
-      "kind": "command"
+      "args": [
+        "process"
+      ],
+      "kind": "argv",
+      "program": "scripts/test-rust-partition.sh"
     },
     "target": {
       "action": "source-process-test",
@@ -591,7 +609,7 @@
     }
   },
   {
-    "description": "Run the source repository\u0027s vault Rust test partition.",
+    "description": "Run the source repository's vault Rust test partition.",
     "effects": [
       "read_only",
       "process"
@@ -629,8 +647,11 @@
       "target": "declared"
     },
     "runner": {
-      "command": "rust_vault_test_command",
-      "kind": "command"
+      "args": [
+        "vault"
+      ],
+      "kind": "argv",
+      "program": "scripts/test-rust-partition.sh"
     },
     "target": {
       "action": "source-vault-test",

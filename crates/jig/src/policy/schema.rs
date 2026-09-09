@@ -466,7 +466,13 @@ fn run_schema_drift_check(
         sandbox_root,
         runner.working_directory,
     )?;
-    let mut dump = Command::new("bash");
+    let mut dump = if let Some((program, args)) = runner.argv {
+        crate::repository::runners::argv_command(program, args, &Default::default())
+    } else {
+        let mut command = Command::new("bash");
+        command.arg("-c").arg(runner.command_text.as_ref());
+        command
+    };
     dump.current_dir(working_directory)
         .envs(
             runner
@@ -474,9 +480,10 @@ fn run_schema_drift_check(
                 .into_iter()
                 .flat_map(|values| values.iter()),
         )
-        .env("JIG_REPO_ROOT", sandbox_root)
-        .arg("-c")
-        .arg(runner.command_text);
+        .env("JIG_REPO_ROOT", sandbox_root);
+    if runner.argv.is_some() {
+        crate::repository::runners::prepare_literal_exec(&mut dump)?;
+    }
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());

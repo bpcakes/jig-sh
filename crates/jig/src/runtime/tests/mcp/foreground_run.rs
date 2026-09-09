@@ -262,8 +262,8 @@ fn foreground_run_affected_explain_and_execution_match_mcp() {
 }
 
 #[test]
-fn foreground_run_preserves_work_plan_and_receipt_identity() {
-    for native in [false, true] {
+fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
+    for (native, check) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = tempdir().unwrap();
         write_non_rust_file_budget_fixture_repo(temp.path());
         if native {
@@ -318,7 +318,22 @@ fn foreground_run_preserves_work_plan_and_receipt_identity() {
             });
         }
         args.tool = ToolRequest::new(Some(id.clone()), true);
-        let output = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args)).unwrap();
+        let command = if check {
+            RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+                crate::command::RepositoryCheckRequest {
+                    selectors: args.selectors,
+                    profile: args.profile,
+                    affected_base: args.affected_base,
+                    comparison: args.comparison,
+                    explain: args.explain,
+                    fail_fast: args.fail_fast,
+                    tool: args.tool,
+                },
+            ))
+        } else {
+            RuntimeCommand::Run(args)
+        };
+        let output = crate::runtime::dispatch(&ctx, command).unwrap();
         assert_eq!(output["ok"], true, "{output:#}");
         if native {
             assert_eq!(

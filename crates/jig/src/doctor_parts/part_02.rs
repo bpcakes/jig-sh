@@ -454,6 +454,54 @@ fn required_tools_check_with_environment_and_process_control(
         }));
     }
 
+    for action in ctx.action_specs() {
+        let jig_contract::ActionRunner::Argv {
+            program,
+            working_directory,
+            environment: runner_environment,
+            ..
+        } = &action.runner
+        else {
+            continue;
+        };
+        executable_reference_count += 1;
+        let (present, detail) = match crate::repository_path::resolve_repository_working_directory(
+            ctx.root(),
+            working_directory.as_deref(),
+        ) {
+            Ok(cwd) => {
+                let search_path = runner_environment
+                    .get("PATH")
+                    .map(OsStr::new)
+                    .or(environment.search_path.as_deref())
+                    .unwrap_or_else(|| {
+                        OsStr::new(crate::repository::runners::DEFAULT_ARGV_SEARCH_PATH)
+                    });
+                let resolved = resolve_program(&cwd, program, Some(search_path));
+                program_presence(
+                    &cwd,
+                    program,
+                    resolved.as_ref().map(|resolved| resolved.path.as_path()),
+                )
+            }
+            Err(error) => (
+                false,
+                format!("invalid runner working directory: {error:#}"),
+            ),
+        };
+        if !present {
+            missing.push(format!("{}: {program}: {detail}", action.target));
+        }
+        tools.push(json!({
+            "target": action.target.to_string(),
+            "runner": "argv",
+            "command_key": null,
+            "command": null,
+            "programs": [{"program": program, "present": present, "detail": detail}],
+            "present": present,
+        }));
+    }
+
     let ok = missing.is_empty() && incompatible.is_empty();
     let status = match (missing.is_empty(), incompatible.is_empty()) {
         (true, true) if indeterminate.is_empty() => "present",

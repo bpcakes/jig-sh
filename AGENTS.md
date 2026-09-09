@@ -178,7 +178,7 @@ br create --title="..." --type=task --priority=2 --json
 br update <id> --status=in_progress --json
 br close <id> --reason="Completed" --json
 br close <id1> <id2> --reason="Completed" --json
-br sync --flush-only                  # Export DB to JSONL after Beads mutations
+python3 scripts/beads-sync.py          # Clear machine-local paths, then export DB to JSONL
 ```
 
 ### Workflow Pattern
@@ -187,7 +187,7 @@ br sync --flush-only                  # Export DB to JSONL after Beads mutations
 2. **Claim**: Use `br update <id> --status=in_progress --json`
 3. **Work**: Implement the task
 4. **Complete**: Use `br close <id> --reason="Completed" --json`
-5. **Sync**: Run `br sync --flush-only` after Beads mutations so the JSONL export is current
+5. **Sync**: Run `python3 scripts/beads-sync.py` after Beads mutations so the JSONL export is current and contains no machine-local `source_repo_path` values. Repo configuration disables automatic export; do not bypass the helper with a direct flush. `python3 scripts/beads-sync.py --check` is the read-only CI guard.
 
 ### Key Concepts
 

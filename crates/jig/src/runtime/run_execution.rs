@@ -589,6 +589,11 @@ fn run_target_capture(
             command,
             working_directory,
             environment,
+        }
+        | ActionRunner::Shell {
+            command,
+            working_directory,
+            environment,
         } => run_command_target(
             ctx,
             planned,
@@ -597,6 +602,23 @@ fn run_target_capture(
             environment,
             &mut control,
         ),
+        ActionRunner::Argv {
+            program,
+            args,
+            working_directory,
+            environment,
+        } => {
+            let command =
+                crate::repository::runners::argv_command(program, args, &planned.arguments);
+            target::run_process_target(
+                ctx,
+                planned,
+                command,
+                working_directory.as_deref(),
+                environment,
+                &mut control,
+            )
+        }
         ActionRunner::Native { operation, .. } if operation == jig_contract::tool::FILE_BUDGET => {
             match control.remaining() {
                 Err(stop) => stopped_before_start(planned, stop),

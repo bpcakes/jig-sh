@@ -16,6 +16,7 @@ use super::source_inputs::FRONTEND_SHARED_INPUTS;
 mod adoption;
 pub(super) mod adoption_refresh;
 mod file_budget;
+mod runners;
 mod rust_file_loc;
 
 use file_budget::add_file_budget_action;
@@ -116,15 +117,6 @@ impl AuthoredRepositoryModel {
             .any(|component| component.adapters.iter().any(|adapter| adapter == expected))
     }
 
-    pub(super) fn command_references_resolve(&self, commands: &BTreeMap<String, String>) -> bool {
-        self.actions.iter().all(|action| match &action.runner {
-            ActionRunner::Command { command, .. } => commands
-                .get(command)
-                .is_some_and(|value| !value.trim().is_empty()),
-            ActionRunner::Native { .. } => true,
-        })
-    }
-
     pub(super) fn scaffold_go_component_roots(&self) -> Vec<String> {
         self.components
             .iter()
@@ -180,7 +172,7 @@ impl RepositoryRenderModel {
         let mut tools = BTreeMap::new();
         for action in &authored.actions {
             let (kind, command_key) = match &action.runner {
-                ActionRunner::Command { command, .. } => {
+                ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
                     let value = authored_commands.get(command.as_str()).ok_or_else(|| {
                         anyhow::anyhow!(
                             "authored target '{}' references missing command '{}'",
@@ -199,6 +191,7 @@ impl RepositoryRenderModel {
                     (kind::COMMAND, Some(command.as_str()))
                 }
                 ActionRunner::Native { .. } => (kind::NATIVE, None),
+                ActionRunner::Argv { .. } => (kind::COMMAND, None),
             };
             for alias in &action.legacy_aliases {
                 let mut tool = ManifestTool::new(
@@ -370,7 +363,9 @@ impl RepositoryRenderModel {
                 {
                     return false;
                 }
-                let ActionRunner::Command { command, .. } = &candidate.runner else {
+                let (ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. }) =
+                    &candidate.runner
+                else {
                     return false;
                 };
                 self.commands

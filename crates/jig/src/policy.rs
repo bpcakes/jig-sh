@@ -222,7 +222,9 @@ fn validate_actions_and_evidence_gates(ctx: &RepoContext, errors: &mut Vec<Strin
     }
     for action in ctx.action_specs() {
         match &action.runner {
-            jig_contract::ActionRunner::Command { command, .. } => {
+            jig_contract::ActionRunner::Argv { .. } => {}
+            jig_contract::ActionRunner::Command { command, .. }
+            | jig_contract::ActionRunner::Shell { command, .. } => {
                 if !ctx
                     .required_commands()
                     .iter()
@@ -287,7 +289,9 @@ fn validate_tool_definition(
     }
     let native_operation = alias_action.and_then(|action| match &action.runner {
         jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
-        jig_contract::ActionRunner::Command { .. } => None,
+        jig_contract::ActionRunner::Command { .. }
+        | jig_contract::ActionRunner::Shell { .. }
+        | jig_contract::ActionRunner::Argv { .. } => None,
     });
     let admission_name = native_operation.unwrap_or(&tool.name);
     if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
@@ -308,7 +312,11 @@ fn validate_native_tool(
 ) {
     if matches!(
         alias_action.map(|action| &action.runner),
-        Some(jig_contract::ActionRunner::Command { .. })
+        Some(
+            jig_contract::ActionRunner::Command { .. }
+                | jig_contract::ActionRunner::Shell { .. }
+                | jig_contract::ActionRunner::Argv { .. }
+        )
     ) {
         errors.push(format!(
             "Native tool {} aliases a command-backed action.",
@@ -345,6 +353,18 @@ fn validate_command_tool(
         ));
         return;
     }
+    if matches!(
+        alias_action.map(|action| &action.runner),
+        Some(jig_contract::ActionRunner::Argv { .. })
+    ) {
+        if tool.command.is_some() {
+            errors.push(format!(
+                "Argv alias {} must not project a shell command key.",
+                tool.name
+            ));
+        }
+        return;
+    }
     let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty()) else {
         errors.push(format!(
             "Command-backed tool {} is missing command.",
@@ -352,8 +372,10 @@ fn validate_command_tool(
         ));
         return;
     };
-    if let Some(jig_contract::ActionRunner::Command { command, .. }) =
-        alias_action.map(|action| &action.runner)
+    if let Some(
+        jig_contract::ActionRunner::Command { command, .. }
+        | jig_contract::ActionRunner::Shell { command, .. },
+    ) = alias_action.map(|action| &action.runner)
         && command != command_key
     {
         errors.push(format!(
@@ -399,7 +421,9 @@ fn validate_work_tools(
             .and_then(|catalog| catalog.action_for_alias(&name))
             .and_then(|action| match &action.runner {
                 jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
-                jig_contract::ActionRunner::Command { .. } => None,
+                jig_contract::ActionRunner::Command { .. }
+                | jig_contract::ActionRunner::Shell { .. }
+                | jig_contract::ActionRunner::Argv { .. } => None,
             });
         if tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation) {
             errors.push(format!(

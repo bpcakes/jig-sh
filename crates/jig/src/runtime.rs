@@ -423,6 +423,7 @@ fn dispatch_repository_check_with_catalog(
             "explicit check comparison authority requires repository contract version 7 or later"
         );
     }
+    let (work_plan_id, _) = request.tool.clone().into_parts();
     let plan = crate::repository::plan_run(
         ctx,
         catalog,
@@ -431,7 +432,7 @@ fn dispatch_repository_check_with_catalog(
             profile: request.profile,
             affected_base: request.affected_base,
             comparison: request.comparison,
-            work_plan_id: None,
+            work_plan_id,
         },
     )?;
     if request.explain {

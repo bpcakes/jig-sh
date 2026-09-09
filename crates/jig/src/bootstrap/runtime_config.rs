@@ -222,7 +222,12 @@ fn existing_repository_command_keys(existing: &toml::Table) -> BTreeSet<String> 
         .filter_map(toml::Value::as_table)
         .filter_map(|action| action.get("runner"))
         .filter_map(toml::Value::as_table)
-        .filter(|runner| runner.get("kind").and_then(toml::Value::as_str) == Some("command"))
+        .filter(|runner| {
+            matches!(
+                runner.get("kind").and_then(toml::Value::as_str),
+                Some("command" | "shell")
+            )
+        })
         .filter_map(|runner| runner.get("command"))
         .filter_map(toml::Value::as_str)
         .map(str::to_owned)

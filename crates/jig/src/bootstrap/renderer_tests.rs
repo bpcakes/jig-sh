@@ -254,3 +254,74 @@ fn legacy_go_postgres_render_preserves_a_custom_sqlc_command() {
         Some(custom_command)
     );
 }
+
+#[test]
+fn argv_epoch_renders_explicit_shell_and_preserves_authored_runner_choice() {
+    let template = live_template_source();
+    let answers = rust_render_answers(RepositoryProjectionHint::RustWorkspace);
+    let old = render_context(&template, &answers, Some(7)).unwrap();
+    let current = render_context(&template, &answers, Some(8)).unwrap();
+    for action in current["repository"]["actions"].as_array().unwrap() {
+        assert_ne!(action["runner"]["kind"], "command");
+    }
+    assert!(
+        old["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["runner"]["kind"] == "command")
+    );
+    assert!(
+        current["repository"]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["runner"]["kind"] == "shell")
+    );
+    let initial = tempfile::tempdir().unwrap();
+    let selected = BTreeSet::from([
+        PathBuf::from(".jig.toml"),
+        PathBuf::from(".agent/jig-contract.json"),
+    ]);
+    render_template_files(
+        &template,
+        &answers,
+        initial.path(),
+        Some(&selected),
+        Some(8),
+    )
+    .unwrap();
+    let path = initial.path().join(".jig.toml");
+    let mut source: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let actions = source["repository"]["actions"].as_array_mut().unwrap();
+    let action = actions
+        .iter_mut()
+        .find(|a| a["runner"]["kind"].as_str() == Some("shell"))
+        .unwrap();
+    action["runner"] = toml::Value::try_from(
+        json!({"kind":"argv", "program":"literal program", "args":["literal *", ""]}),
+    )
+    .unwrap();
+    let expected = source["repository"]["actions"].clone();
+    fs::write(&path, toml::to_string(&source).unwrap()).unwrap();
+    let authored = RenderAnswers::from_answers_file(&path).unwrap();
+    assert!(render_context(&template, &authored, Some(7)).is_err());
+    let recopy = tempfile::tempdir().unwrap();
+    render_template_files(
+        &template,
+        &authored,
+        recopy.path(),
+        Some(&selected),
+        Some(8),
+    )
+    .unwrap();
+    let copied: toml::Value =
+        toml::from_str(&fs::read_to_string(recopy.path().join(".jig.toml")).unwrap()).unwrap();
+    assert_eq!(copied["repository"]["actions"], expected);
+    let manifest: JsonValue = serde_json::from_str(
+        &fs::read_to_string(recopy.path().join(".agent/jig-contract.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["contract_version"], 8);
+    assert_eq!(manifest["actions"], serde_json::to_value(expected).unwrap());
+}

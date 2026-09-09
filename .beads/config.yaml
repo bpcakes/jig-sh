@@ -1,4 +1,7 @@
 # Beads Project Configuration
 issue_prefix: jig-sh
+# Export through scripts/beads-sync.py after clearing machine-local metadata.
+sync:
+  auto_flush: false
 # default_priority: 2
 # default_type: task

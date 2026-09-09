@@ -305,14 +305,14 @@ fn ui_json_repository_failures_keep_the_command_identity() {
 }
 
 #[test]
-fn product_cutover_does_not_change_the_generated_contract_epoch() {
+fn product_version_is_independent_of_the_runner_contract_epoch() {
     assert_eq!(env!("CARGO_PKG_VERSION"), "0.3.0");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let contract: Value =
         serde_json::from_slice(&fs::read(root.join(".agent/jig-contract.json")).unwrap()).unwrap();
-    assert_eq!(contract["contract_version"], 7);
+    assert_eq!(contract["contract_version"], 8);
     let launcher = fs::read_to_string(root.join("scripts/jig")).unwrap();
-    assert!(launcher.contains("CONTRACT_VERSION=\"7\""));
+    assert!(launcher.contains("CONTRACT_VERSION=\"8\""));
 }
 
 #[test]

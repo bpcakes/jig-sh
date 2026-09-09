@@ -1,4 +1,5 @@
 pub(crate) mod arguments;
+pub(crate) mod runners;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -26,6 +27,7 @@ pub(crate) use native_input::{prepare_file_budget_input_v1, read_policy_bytes};
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
 pub(crate) const FILE_BUDGET_CONTRACT_VERSION: u32 = 7;
+pub(crate) const ACTION_EXECUTION_CONTRACT_VERSION: u32 = 8;
 pub(crate) const FILE_BUDGET_MAX_CANDIDATES_HARD_CAP_V1: u64 = 250_000;
 pub(crate) const FILE_BUDGET_MAX_TOTAL_BYTES_HARD_CAP_V1: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -274,6 +276,7 @@ impl RepositoryCatalog {
             let mut action = action.clone();
             normalize_native_configuration(contract_version, &mut action)?;
             arguments::normalize_declarations(contract_version, &mut action)?;
+            runners::validate(contract_version, &action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(
                     "target '{}' references unknown component '{}'",
@@ -549,6 +552,14 @@ fn normalize_native_configuration(contract_version: u32, action: &mut ActionSpec
 fn validate_action_working_directories(root: &Path, actions: &[ActionSpec]) -> Result<()> {
     for action in actions {
         if let ActionRunner::Command {
+            working_directory: Some(working_directory),
+            ..
+        }
+        | ActionRunner::Shell {
+            working_directory: Some(working_directory),
+            ..
+        }
+        | ActionRunner::Argv {
             working_directory: Some(working_directory),
             ..
         } = &action.runner

@@ -594,7 +594,7 @@ fn conservative_action_input_digest(
         hasher.update((runner.len() as u64).to_be_bytes());
         hasher.update(runner);
     }
-    if contract_version >= super::arguments::ARGUMENT_CONTRACT_VERSION {
+    if contract_version >= super::ACTION_EXECUTION_CONTRACT_VERSION {
         let declarations = serde_json::to_vec(&action.arguments)?;
         hasher.update([0]);
         hasher.update((declarations.len() as u64).to_be_bytes());

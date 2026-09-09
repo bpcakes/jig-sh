@@ -133,7 +133,7 @@ Inspect the current evidence with `scripts/jig work status`, `scripts/jig work e
 
 ## Command contract
 
-`.agent/jig-contract.json` is the stable repository authority. Current contract v8 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, and declared bounded string arguments.
+`.agent/jig-contract.json` is the stable repository authority. Current contract v8 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, declared bounded string arguments, literal argv runners, and explicit shell execution.
 
 Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, local status, or secrets outside the generated command catalog.
 

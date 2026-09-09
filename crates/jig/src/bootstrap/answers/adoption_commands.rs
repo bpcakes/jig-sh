@@ -67,7 +67,9 @@ pub(super) fn overrides(
                 "--{flag} requires exactly one authored command action for {alias}; edit [repository.actions] and [commands] in .jig.toml"
             );
         };
-        let ActionRunner::Command { command, .. } = &owner.runner else {
+        let (ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. }) =
+            &owner.runner
+        else {
             bail!(
                 "--{flag} cannot override the native action for {alias}; edit [repository.actions] in .jig.toml"
             );

@@ -49,6 +49,7 @@ include!("tests_parts/part_07.rs");
 include!("tests_parts/part_08.rs");
 include!("tests_parts/part_09.rs");
 
+mod argv;
 mod root;
 mod runtime;
 #[cfg(unix)]

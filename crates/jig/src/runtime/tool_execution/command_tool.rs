@@ -9,7 +9,8 @@ use super::*;
 
 pub(super) struct CommandToolInvocation<'a> {
     pub(super) tool_name: &'a str,
-    pub(super) command_key: &'a str,
+    pub(super) command_key: Option<&'a str>,
+    pub(super) argv: Option<(&'a str, &'a [jig_contract::ArgvValue])>,
     pub(super) command_text: &'a str,
     pub(super) working_directory: Option<&'a str>,
     pub(super) environment: Option<&'a BTreeMap<String, String>>,
@@ -60,7 +61,7 @@ pub(super) fn execute_command_tool(
             let response = tool_response_value(ToolExecutionResponse {
                 ok: true,
                 tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
+                command_key: invocation.command_key,
                 args,
                 result: ToolProcessResult {
                     exit_status: 1,
@@ -88,7 +89,7 @@ pub(super) fn execute_command_tool(
                 ReceiptInput {
                     tool_name: invocation.tool_name,
                     args: args.clone(),
-                    invoked_command_key: Some(invocation.command_key.to_string()),
+                    invoked_command_key: invocation.command_key.map(str::to_owned),
                     plan_id,
                     started_at_ms: started,
                     ended_at_ms: ended,
@@ -112,7 +113,7 @@ pub(super) fn execute_command_tool(
             let response = tool_response_value(ToolExecutionResponse {
                 ok: true,
                 tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
+                command_key: invocation.command_key,
                 args,
                 result: ToolProcessResult {
                     exit_status: 1,
@@ -177,7 +178,7 @@ pub(super) fn execute_command_tool(
         ReceiptInput {
             tool_name: invocation.tool_name,
             args: args.clone(),
-            invoked_command_key: Some(invocation.command_key.to_string()),
+            invoked_command_key: invocation.command_key.map(str::to_owned),
             plan_id,
             started_at_ms: started,
             ended_at_ms: ended,
@@ -195,7 +196,7 @@ pub(super) fn execute_command_tool(
 
     let tool_failure = tool_failure_message(
         invocation.tool_name,
-        Some(invocation.command_key),
+        invocation.command_key,
         exit_status,
         &stdout,
         &stderr,
@@ -206,7 +207,7 @@ pub(super) fn execute_command_tool(
     tool_response_value(ToolExecutionResponse {
         ok: true,
         tool: invocation.tool_name,
-        command_key: Some(invocation.command_key),
+        command_key: invocation.command_key,
         args,
         result: ToolProcessResult {
             exit_status,
@@ -253,7 +254,7 @@ fn finish_configured_command_error(
         ReceiptInput {
             tool_name: invocation.tool_name,
             args: args.clone(),
-            invoked_command_key: Some(invocation.command_key.to_string()),
+            invoked_command_key: invocation.command_key.map(str::to_owned),
             plan_id,
             started_at_ms: started,
             ended_at_ms: ended,
@@ -270,7 +271,7 @@ fn finish_configured_command_error(
     );
     let tool_failure = tool_failure_message(
         invocation.tool_name,
-        Some(invocation.command_key),
+        invocation.command_key,
         1,
         &stdout,
         &stderr,
@@ -280,7 +281,7 @@ fn finish_configured_command_error(
     tool_response_value(ToolExecutionResponse {
         ok: true,
         tool: invocation.tool_name,
-        command_key: Some(invocation.command_key),
+        command_key: invocation.command_key,
         args,
         result: ToolProcessResult {
             exit_status: 1,
@@ -317,11 +318,19 @@ fn run_configured_command(
     if let Some(environment) = invocation.environment {
         validate_runner_environment(environment)?;
     }
-    let mut command = Command::new("bash");
+    let mut command = if let Some((program, positions)) = invocation.argv {
+        crate::repository::runners::argv_command(
+            program,
+            positions,
+            &serde_json::from_value(args.clone())?,
+        )
+    } else {
+        let mut command = Command::new("bash");
+        command.arg("-c").arg(invocation.command_text);
+        command
+    };
     command
         .current_dir(working_directory)
-        .arg("-c")
-        .arg(invocation.command_text)
         .envs(
             invocation
                 .environment
@@ -332,7 +341,7 @@ fn run_configured_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if invocation.tool_name == tool::MIGRATION_ADD {
+    if invocation.argv.is_none() && invocation.tool_name == tool::MIGRATION_ADD {
         let name = args
             .get(args::NAME)
             .and_then(Value::as_str)
@@ -340,6 +349,9 @@ fn run_configured_command(
         command.env("NAME", name);
     }
 
+    if invocation.argv.is_some() {
+        crate::repository::runners::prepare_literal_exec(&mut command)?;
+    }
     let phase = ExecutionPhase::start(observer, invocation.tool_name, position);
     let label = format!("Configured command for {}", invocation.tool_name);
     let result = match run_supervised_execution_command(

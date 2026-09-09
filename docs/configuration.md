@@ -144,11 +144,11 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
-Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the bounded prefix captured before termination remains in the receipt for diagnosis. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while receipt evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contracts 6 through 8 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions remain configured commands even when their launcher selector also begins with `scripts/jig check`.
+Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the bounded prefix captured before termination remains in the receipt for diagnosis. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while receipt evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contracts 6 through 7 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions use their declared process runner even when their launcher selector also begins with `scripts/jig check`.
 
 Full-harness templates seed `.jig/file-budget.toml` once and declare the language-neutral native `repo:file-budget` action. The repository-owned policy defines governed paths, exact physical-line and byte budgets, exclusions, and bounded expiring waivers; Jig supplies deterministic Git comparison, evaluation, findings, and evidence. Use `scripts/jig check repo:file-budget` for the authored action or `scripts/jig file-budget check|audit|explain|validate` for direct diagnostics. A repository may replace or remove the action, its `jig.file_budget` compatibility alias, or its verification-profile membership without changing the contract schema.
 
-## Contract-v7 Repository Model
+## Contract-v8 Repository Model
 
 `[repository]` is the reviewed source of workspace identity. Its generated records are repeated as `components`, `actions`, `profiles`, and `default_check_profile` in `.agent/jig-contract.json`; runtime loading rejects a mismatch.
 
@@ -157,7 +157,40 @@ Full-harness templates seed `.jig/file-budget.toml` once and declare the languag
 - `[[repository.actions]]` declares a structured `{ component, action }` target, intent, effects, runner, repository-relative forward-slash input globs, target dependencies, optional `timeout_seconds`, result parser, compatibility aliases, and provenance. Action timeouts use the same valid 1–86,400 second range as `[execution].command_timeout_seconds`; omission inherits that repository default, while an action value is the more-specific override. Overrides are accepted for supervised command runners and the cooperatively supervised native schema runner. Other bounded in-process native operations reject an override because Jig cannot safely preempt them midway through a mutation; they check the deadline before entry, and a returned completion is authoritative because effects may already be durable. Inputs may intentionally name paths outside the component root to declare repository-global inputs, but may not be anchored under the unobserved `.agent/` tree. Affected selection unions action inputs at component scope: a matching path retains every selected candidate target on that component rather than pruning sibling actions independently.
 - `[[repository.profiles]]` declares a stable id and exact structured targets. `repository.default_check_profile` selects the profile used by bare `jig check`.
 
-Contract v8 actions may declare up to 32 named string arguments. Argument names
+Contract v8 actions choose one of three runner kinds. `argv` starts `program`
+directly and passes each `args` entry as one operating-system argument. A string
+entry is literal; `{ argument = "message" }` binds that whole position to a
+named string declared by the action. An omitted optional value omits its
+position; an explicitly empty value passes an empty argument. Values are never
+split, expanded, or parsed again. Executable text without an interpreter header
+fails with an execution-format error instead of falling back to a shell. The
+program, working directory and environment
+are checked-in literals and cannot contain argument references.
+
+```toml
+[repository.actions.runner]
+kind = "argv"
+program = "scripts/example-check"
+args = ["--message", { argument = "message" }, "literal * $HOME"]
+```
+
+`kind = "shell"` explicitly selects compatible non-login `bash -c` execution
+and references a key in `[commands]` with `command = "example_command"`.
+Shell runners accept no generic argument declarations or interpolation. Existing
+migration aliases retain their separate `NAME` environment compatibility contract.
+Both process runners support the same optional `working_directory` and
+`environment` fields and use Jig's existing effect approvals, repository leases,
+timeouts, cancellation, output bounds and result parsing. Native operations keep
+`kind = "native"`.
+
+V8 introduces argument declarations and explicit process runners together. It
+rejects the implicit `command` runner. Versions 6–7 retain their original command
+behavior, and v7 native file budgets remain supported. Older runtimes reject v8
+manifests before execution. Rendering v8 upgrades legacy command runners to
+explicit shell and preserves
+already-authored argv and shell choices on recopy.
+
+Contract v8 and later actions may declare up to 32 named string arguments. Argument names
 use `[a-z][a-z0-9_-]*` and at most 64 bytes. Each declaration requires
 `type = "string"` and `max_bytes` in 1–4096; `required` and `allow_empty` default to
 false. Bounds count UTF-8 bytes. No defaults, secret types, JSON values, variadics,
@@ -182,9 +215,7 @@ with `jig run api:generate --arg api:generate:message=example --explain`, or the
 MCP target-keyed `arguments` object. Strings retain their exact bytes. V8 native
 migration authoring requires exactly `name = { type = "string", required = true,
 allow_empty = false, max_bytes = 200 }`; other current native operations accept no
-general arguments. Existing command runners retain arguments in plans without
-injecting them into shell text or environment. Declaration-bearing sources require
-contract v8; v6/v7 retain their legacy native migration-name validation without a
+general arguments. Declaration-bearing sources require contract v8 or later; v6/v7 retain their legacy native migration-name validation without a
 declared byte limit. Command-backed `jig migration add NAME` aliases retain their
 existing `NAME` environment interface across update and recopy, independently of
 generic argument declarations.

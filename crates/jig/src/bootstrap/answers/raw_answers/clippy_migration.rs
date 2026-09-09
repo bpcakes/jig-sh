@@ -77,22 +77,24 @@ fn effective_clippy_command_keys(
     raw: &RawAnswers,
     commands: Option<&BTreeMap<String, String>>,
 ) -> BTreeSet<String> {
-    let mut keys = raw
-        .repository
-        .iter()
-        .flat_map(|repository| &repository.actions)
-        .filter(|action| {
-            action.target.action.as_str() == "clippy"
-                || action
-                    .legacy_aliases
-                    .iter()
-                    .any(|alias| alias == jig_contract::tool::CLIPPY)
-        })
-        .filter_map(|action| match &action.runner {
-            jig_contract::ActionRunner::Command { command, .. } => Some(command.clone()),
-            jig_contract::ActionRunner::Native { .. } => None,
-        })
-        .collect::<BTreeSet<_>>();
+    let mut keys =
+        raw.repository
+            .iter()
+            .flat_map(|repository| &repository.actions)
+            .filter(|action| {
+                action.target.action.as_str() == "clippy"
+                    || action
+                        .legacy_aliases
+                        .iter()
+                        .any(|alias| alias == jig_contract::tool::CLIPPY)
+            })
+            .filter_map(|action| match &action.runner {
+                jig_contract::ActionRunner::Command { command, .. }
+                | jig_contract::ActionRunner::Shell { command, .. } => Some(command.clone()),
+                jig_contract::ActionRunner::Native { .. }
+                | jig_contract::ActionRunner::Argv { .. } => None,
+            })
+            .collect::<BTreeSet<_>>();
     if keys.is_empty()
         && commands.is_some_and(|commands| commands.contains_key("api_clippy_command"))
     {

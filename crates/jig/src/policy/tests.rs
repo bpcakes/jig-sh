@@ -88,7 +88,7 @@ fn write_v6_schema_policy_repo(root: &Path, legacy_command: &str, action_command
     fs::create_dir_all(root.join("api")).unwrap();
     fs::write(root.join("api/.keep"), "").unwrap();
     TestRepoBuilder::new(root)
-        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .contract_version(6)
         .config(format!(
             r#"
 schema_dump_enabled = true

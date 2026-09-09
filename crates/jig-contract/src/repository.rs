@@ -323,11 +323,37 @@ pub enum ActionRunner {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         environment: BTreeMap<String, String>,
     },
+    /// Explicit compatibility shell, referencing checked-in Bash text.
+    Shell {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        working_directory: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        environment: BTreeMap<String, String>,
+    },
+    /// A literal executable and ordered argument positions; no shell parsing.
+    Argv {
+        program: String,
+        #[serde(default)]
+        args: Vec<ArgvValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        working_directory: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        environment: BTreeMap<String, String>,
+    },
     Native {
         operation: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         configuration: Option<NativeActionConfigurationV1>,
     },
+}
+
+/// One literal argv position, or a reference to a declared bounded string.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum ArgvValue {
+    Literal(String),
+    Argument { argument: String },
 }
 
 impl ActionRunner {

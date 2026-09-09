@@ -19,7 +19,7 @@ adapters = ["rust"]
 target = { component = "repo", action = "bootstrap" }
 intent = "check"
 effects = ["read_only", "process"]
-runner = { kind = "command", command = "bootstrap_command" }
+runner = { kind = "shell", command = "bootstrap_command" }
 inputs = ["**"]
 legacy_aliases = ["jig.bootstrap"]
 
@@ -65,7 +65,7 @@ marketplaces = []
             "target": {"component": "repo", "action": "bootstrap"},
             "intent": "check",
             "effects": ["read_only", "process"],
-            "runner": {"kind": "command", "command": "bootstrap_command"},
+            "runner": {"kind": "shell", "command": "bootstrap_command"},
             "inputs": ["**"],
             "legacy_aliases": ["jig.bootstrap"]
         },

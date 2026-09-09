@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use anyhow::{Result, bail};
 use jig_contract::{ActionRunner, TargetId, tool};
@@ -12,8 +12,9 @@ const SCHEMA_DUMP_ACTION: &str = "schema-dump";
 /// The command-backed action whose behavior the native schema freshness check
 /// must reproduce inside its disposable repository snapshot.
 pub(super) struct SchemaDumpRunner<'a> {
+    pub(super) argv: Option<(&'a str, &'a [jig_contract::ArgvValue])>,
     pub(super) command_key: &'a str,
-    pub(super) command_text: &'a str,
+    pub(super) command_text: Cow<'a, str>,
     pub(super) working_directory: Option<&'a str>,
     pub(super) environment: Option<&'a BTreeMap<String, String>>,
 }
@@ -24,8 +25,9 @@ pub(super) fn resolve<'a>(
 ) -> Result<SchemaDumpRunner<'a>> {
     if ctx.contract_version() < 6 {
         return Ok(SchemaDumpRunner {
+            argv: None,
             command_key: LEGACY_SCHEMA_DUMP_COMMAND,
-            command_text: ctx.command_for_key(LEGACY_SCHEMA_DUMP_COMMAND)?,
+            command_text: ctx.command_for_key(LEGACY_SCHEMA_DUMP_COMMAND)?.into(),
             working_directory: None,
             environment: None,
         });
@@ -47,11 +49,36 @@ pub(super) fn resolve<'a>(
                 SCHEMA_DUMP_ACTION
             )
         })?;
-    let ActionRunner::Command {
-        command,
+    if let ActionRunner::Argv {
+        program,
+        args,
         working_directory,
         environment,
     } = &schema_dump.runner
+    {
+        anyhow::ensure!(
+            schema_dump.arguments.is_empty(),
+            "schema-dump argv must not require invocation arguments"
+        );
+        validate_runner_environment(environment)?;
+        return Ok(SchemaDumpRunner {
+            argv: Some((program, args)),
+            command_key: program,
+            command_text: format!("scripts/jig run {}", schema_dump.target).into(),
+            working_directory: working_directory.as_deref(),
+            environment: Some(environment),
+        });
+    }
+    let (ActionRunner::Command {
+        command,
+        working_directory,
+        environment,
+    }
+    | ActionRunner::Shell {
+        command,
+        working_directory,
+        environment,
+    }) = &schema_dump.runner
     else {
         bail!(
             "owning schema-dump target '{}' must use a command runner",
@@ -61,8 +88,9 @@ pub(super) fn resolve<'a>(
     validate_runner_environment(environment)?;
 
     Ok(SchemaDumpRunner {
+        argv: None,
         command_key: command,
-        command_text: ctx.command_for_key(command)?,
+        command_text: ctx.command_for_key(command)?.into(),
         working_directory: working_directory.as_deref(),
         environment: Some(environment),
     })

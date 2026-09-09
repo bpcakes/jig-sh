@@ -170,7 +170,7 @@ pub(super) fn render_context(
     );
     if contract_version >= 6 {
         let mut repository = repository.expect("contract v6 always resolves a repository model");
-        if contract_version >= crate::repository::arguments::ARGUMENT_CONTRACT_VERSION {
+        if contract_version >= crate::repository::ACTION_EXECUTION_CONTRACT_VERSION {
             for action in &mut repository.actions {
                 if matches!(&action.runner, jig_contract::ActionRunner::Native { operation, .. } if operation == jig_contract::tool::MIGRATION_ADD)
                     && action.arguments.is_empty()
@@ -183,6 +183,7 @@ pub(super) fn render_context(
                 crate::repository::arguments::normalize_declarations(contract_version, action)?;
             }
         }
+        repository.prepare_runner_epoch(contract_version)?;
         let repository_toml = repository.authored_toml()?;
         let repository_commands_toml = repository.commands_toml()?;
         let file_budget_policy_toml = repository.file_budget_policy_toml()?.unwrap_or_default();

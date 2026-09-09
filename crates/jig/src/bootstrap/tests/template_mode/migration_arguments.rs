@@ -62,6 +62,19 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest["contract_version"] = serde_json::json!(version);
+        // This fixture deliberately recreates a pre-v8 source. Fresh rendering
+        // now uses explicit shell runners, which those old epochs reject.
+        for action in source["repository"]["actions"].as_array_mut().unwrap() {
+            if action["runner"]["kind"].as_str() == Some("shell") {
+                action["runner"]["kind"] = TomlValue::String("command".into());
+            }
+        }
+        for action in manifest["actions"].as_array_mut().unwrap() {
+            if action["runner"]["kind"] == "shell" {
+                action["runner"]["kind"] = serde_json::json!("command");
+            }
+        }
+        write_answers_toml(&source_path, &source).unwrap();
         manifest["actions"]
             .as_array_mut()
             .unwrap()
@@ -105,13 +118,15 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
         })
         .unwrap();
         assert_migration_alias(&repo, 8, &name);
+        let mut expected_runner = action["runner"].clone();
+        expected_runner["kind"] = serde_json::json!("shell");
 
         let updated = RepoContext::load_from(&repo).unwrap();
         let catalog = crate::repository::RepositoryCatalog::from_context(&updated).unwrap();
         let preserved = catalog.action_for_alias("jig.migration_add").unwrap();
         assert_eq!(
             serde_json::to_value(preserved).unwrap()["runner"],
-            action["runner"]
+            expected_runner
         );
         assert!(preserved.arguments.is_empty());
         let source = read_answers_toml(&source_path).unwrap();
@@ -123,7 +138,7 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
             .unwrap();
         assert_eq!(
             serde_json::to_value(&authored["runner"]).unwrap(),
-            action["runner"]
+            expected_runner
         );
         assert_eq!(
             source["commands"]["example_migration_command"].as_str(),

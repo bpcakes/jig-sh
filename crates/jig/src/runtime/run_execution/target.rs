@@ -141,6 +141,27 @@ pub(super) fn run_command_target(
             .with_command_key(command_key);
         }
     };
+    let mut command = Command::new("bash");
+    command.arg("-c").arg(command_text);
+    run_process_target(
+        ctx,
+        planned,
+        command,
+        working_directory,
+        environment,
+        control,
+    )
+    .with_command_key(command_key)
+}
+
+pub(super) fn run_process_target(
+    ctx: &RepoContext,
+    planned: &PlannedTarget,
+    mut command: Command,
+    working_directory: Option<&str>,
+    environment: &BTreeMap<String, String>,
+    control: &mut TargetExecutionControl<'_>,
+) -> TargetCapture {
     let working_directory =
         match resolve_repository_working_directory(ctx.root(), working_directory) {
             Ok(path) => path,
@@ -148,38 +169,38 @@ pub(super) fn run_command_target(
                 return TargetCapture::blocked(format!(
                     "target '{}' has an invalid working directory: {error:#}",
                     planned.target
-                ))
-                .with_command_key(command_key);
+                ));
             }
         };
     if let Err(error) = validate_runner_environment(environment) {
         return TargetCapture::blocked(format!(
             "target '{}' has an invalid runner environment: {error:#}",
             planned.target
-        ))
-        .with_command_key(command_key);
+        ));
     }
-
-    // Runner commands and their environment are checked-in execution
-    // authority, equivalent in trust to a repository shell script. Preserve
-    // the caller's ordinary environment and allow reviewed overrides such as
-    // PATH; Jig-owned native probes use narrower scrubbed environments.
-    let mut command = Command::new("bash");
-    command
-        .current_dir(working_directory)
-        .arg("-c")
-        .arg(command_text)
-        .envs(environment);
+    command.current_dir(working_directory).envs(environment);
+    if matches!(planned.runner, ActionRunner::Argv { .. })
+        && let Err(error) = crate::repository::runners::prepare_literal_exec(&mut command)
+    {
+        return TargetCapture::blocked(format!(
+            "target '{}' literal process could not be prepared: {error}",
+            planned.target
+        ));
+    }
     let timeout = match control.remaining() {
         Ok(timeout) => timeout,
         Err(conclusion) => {
-            return stopped_before_start(planned, conclusion).with_command_key(command_key);
+            return stopped_before_start(planned, conclusion);
         }
     };
-    let label = format!(
-        "Command runner '{command_key}' for target '{}'",
-        planned.target
-    );
+    let runner = match &planned.runner {
+        ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
+            format!("Command runner '{command}'")
+        }
+        ActionRunner::Argv { program, .. } => format!("Argv runner '{program}'"),
+        ActionRunner::Native { .. } => "Native runner".into(),
+    };
+    let label = format!("{runner} for target '{}'", planned.target);
     match run_supervised_execution_command(
         &mut command,
         timeout,
@@ -192,51 +213,39 @@ pub(super) fn run_command_target(
             String::from_utf8_lossy(&output.stdout).into_owned(),
             String::from_utf8_lossy(&output.stderr).into_owned(),
             planned.result_parser,
-        )
-        .with_command_key(command_key),
+        ),
         Err(SupervisedExecutionError::TimedOut) => TargetCapture::stopped_after_start(
             RunConclusion::TimedOut,
             format!(
                 "target '{}' exceeded its {timeout:?} timeout",
                 planned.target
             ),
-        )
-        .with_command_key(command_key),
+        ),
         Err(SupervisedExecutionError::CancelledBeforeStart) => TargetCapture::not_started(
             RunConclusion::Cancelled,
             format!("target '{}' was cancelled", planned.target),
-        )
-        .with_command_key(command_key),
+        ),
         Err(SupervisedExecutionError::Cancelled) => TargetCapture::stopped_after_start(
             RunConclusion::Cancelled,
             format!("target '{}' was cancelled", planned.target),
-        )
-        .with_command_key(command_key),
+        ),
         Err(SupervisedExecutionError::OutputLimitExceeded {
             stream,
             stdout,
             stderr,
         }) => TargetCapture::failed_with_output(
             format!(
-                "command runner '{command_key}' for target '{}' exceeded the {} byte {stream} capture limit",
-                planned.target,
+                "{label} exceeded the {} byte {stream} capture limit",
                 ctx.command_output_limit().bytes()
             ),
             "execution_policy",
             stdout,
             stderr,
-        )
-        .with_command_key(command_key),
+        ),
         Err(SupervisedExecutionError::Failed {
             error,
             process_started,
-        }) => {
-            TargetCapture::blocked(format!(
-                "command runner '{command_key}' for target '{}' failed: {error:#}",
-                planned.target
-            ))
-            .with_maybe_executed(process_started)
-            .with_command_key(command_key)
-        }
+        }) => TargetCapture::blocked(format!("{label} failed: {error:#}"))
+            .with_maybe_executed(process_started),
     }
 }

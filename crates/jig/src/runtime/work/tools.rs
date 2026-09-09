@@ -121,7 +121,9 @@ pub(super) fn validate_check_tool(ctx: &RepoContext, name: &str, label: &str) ->
                     jig_contract::ActionRunner::Native { operation, .. } => {
                         Some(operation.as_str())
                     }
-                    jig_contract::ActionRunner::Command { .. } => None,
+                    jig_contract::ActionRunner::Command { .. }
+                    | jig_contract::ActionRunner::Shell { .. }
+                    | jig_contract::ActionRunner::Argv { .. } => None,
                 });
         tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation)
     } else {

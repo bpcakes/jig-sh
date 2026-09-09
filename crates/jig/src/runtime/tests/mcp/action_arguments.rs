@@ -39,19 +39,26 @@ fn update_action(
             toml::Value::try_from(vec![tool::MIGRATION_ADD]).unwrap(),
         );
     }
+    if version >= 8 {
+        for source in actions {
+            if source["runner"]["kind"].as_str() == Some("command") {
+                source["runner"]["kind"] = toml::Value::String("shell".into());
+            }
+            if source["target"]["action"].as_str() == Some("generate") {
+                source["runner"] = toml::Value::try_from(json!({
+                    "kind": "argv", "program": "python3",
+                    "args": ["-c", "import json, pathlib, sys; pathlib.Path('generated.txt').write_text('generated'); pathlib.Path('arguments.json').write_text(json.dumps(sys.argv[1:]))",
+                        {"argument": "message"}, {"argument": "optional"}]
+                })).unwrap();
+            }
+        }
+    }
     fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
     let path = root.join(".agent/jig-contract.json");
     let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     manifest["contract_version"] = json!(version);
-    let resolved = manifest["actions"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|a| a["target"]["action"] == action)
-        .unwrap();
-    resolved["arguments"] = declarations;
+    manifest["actions"] = serde_json::to_value(&config["repository"]["actions"]).unwrap();
     if alias {
-        resolved["legacy_aliases"] = json!([tool::MIGRATION_ADD]);
         manifest["tools"].as_array_mut().unwrap().push(json!({
             "name": tool::MIGRATION_ADD, "kind": "native", "description": "Create migration"
         }));
@@ -135,6 +142,10 @@ fn action_arguments_cli_mcp_canonical_identity_and_literal_execution() {
         fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
         "generated"
     );
+    let captured: Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("arguments.json")).unwrap())
+            .unwrap();
+    assert_eq!(captured, json!([literal, ""]));
     assert!(!temp.path().join("injected").exists());
 }
 
@@ -268,3 +279,5 @@ fn action_arguments_native_migration_and_compatibility_alias_agree() {
         );
     }
 }
+
+mod runners;

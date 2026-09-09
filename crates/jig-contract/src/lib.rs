@@ -4,7 +4,7 @@ pub mod repository;
 pub mod run;
 
 pub use repository::{
-    ActionArgumentSpec, ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec,
+    ActionArgumentSpec, ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ArgvValue,
     ComponentId, ComponentSpec, FieldProvenance, MissingComparisonV1, NativeActionConfigurationV1,
     NativeFileBudgetConfigV1, ProfileId, ProfileSpec, ResultParser, TargetId,
 };

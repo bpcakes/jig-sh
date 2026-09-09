@@ -636,7 +636,16 @@ fn v8_preserves_v7_prepared_file_budget_authority() {
     let mut manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     manifest["contract_version"] = serde_json::json!(8);
+    for action in manifest["actions"].as_array_mut().unwrap() {
+        if action["runner"]["kind"] == "command" {
+            action["runner"]["kind"] = serde_json::json!("shell");
+        }
+    }
     fs::write(path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    let path = temp.path().join(".jig.toml");
+    let mut source: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    source["repository"]["actions"] = toml::Value::try_from(&manifest["actions"]).unwrap();
+    fs::write(path, toml::to_string(&source).unwrap()).unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let catalog = RepositoryCatalog::from_context(&ctx).unwrap();
     let current = super::plan_run(&ctx, &catalog, PlanRunRequest::default()).unwrap();
