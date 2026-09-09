@@ -526,6 +526,418 @@ After upgrading an in-flight repo from a Jig version that recorded receipts with
 
 Unknown non-`check` gate kinds are parsed and reported as unsupported. Required unsupported gates block finish.
 
+## Target Freshness Policy v1 (Design)
+
+This section specifies the pending design for
+`jig-sh-generic-monorepo-zac.4.1`; it does not describe shipped behavior.
+The current Work Gates rules above still apply. The issue has no child tasks.
+Fingerprint implementation belongs to `jig-sh-generic-monorepo-zac.4.2`, and
+receipt/gate integration belongs to `jig-sh-generic-monorepo-zac.4.3` after
+`jig-sh-qh4` establishes target receipt selection. This design changes no Rust
+types, generated schemas, contract numbers, or existing journal records.
+
+### Version and completeness declaration
+
+The implementation must allocate a new contract epoch, called `E` here, after
+the existing action-execution contract. Although v8 is currently unreleased,
+this separately delivered change must not reinterpret its persisted plans or
+existing source declarations; `.4.2` owns the distinct epoch allocation.
+Explicitly reject an authored `inputs_policy` in pre-`E` source or manifest
+actions, including an explicitly written default value. Omission preserves
+their existing behavior. Validation must check field presence before defaulting
+the shared action type, rather than silently ignoring the new field.
+
+Allocate the actual number in `.4.2` against the then-current contract registry.
+That task may implement and exercise `E` in development fixtures; activate it in
+generated/source repositories only when `.4.3` also supplies receipt/gate
+integration. Until then keep the source repository and normal rendering on the
+existing epoch and conservative gates. This coordinated activation updates
+source configuration, resolved manifests, renderer, loader, launcher capability
+checks, and migration documentation together. Do not advertise an operational
+epoch whose required gates cannot yet produce usable receipts. Independently
+version the new target identity format with `schema_version: 1`; its digest domains
+must differ from existing `jig-target-input-v1` and `jig-target-input-v2`.
+
+At epoch `E`, add one optional `ActionSpec.inputs_policy` enum with values
+`whole_repository` and `exhaustive`. Omission defaults to `whole_repository`.
+Authored `.jig.toml` and resolved manifest actions must agree on the defaulted
+value, with ordinary field provenance recorded under `inputs_policy`.
+Existing and inferred adapter actions retain the default until their complete
+source dependencies have been audited. Unknown policy values are configuration
+errors before execution; they never silently select a narrower policy.
+
+`ActionSpec.inputs` remains the only authored path set. There is no
+`freshness_inputs` field or parallel freshness include/exclude list. With
+`inputs_policy = "exhaustive"`, the author asserts that these inputs cover all
+repository files that can affect this action's result, including scripts,
+fixtures, discovery rules, manifests, lockfiles, toolchain configuration, and
+repository-owned environment files, in addition to dependencies described
+below. A non-empty `inputs` alone is not that assertion. Reject an exhaustive
+action with omitted or empty `inputs` as a configuration error, including when
+it is used as a dependency. Policy v1 reserves empty inputs for the existing
+whole-repository fallback; runner/configuration and dependency authority still
+apply. This also preserves the inputless affected-selection fallback without
+giving an accidentally omitted path set source-independent freshness.
+
+For example, this is a **future epoch `E`** action declaration:
+
+```toml
+[[repository.actions]]
+target = { component = "web", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+inputs_policy = "exhaustive"
+inputs = ["apps/web/**", "scripts/test-web.sh", "package.json", "package-lock.json"]
+depends_on = [{ component = "shared", action = "generate" }]
+runner = { kind = "argv", program = "scripts/test-web.sh", args = [] }
+```
+
+Patterns use the existing case-sensitive, repository-relative input glob
+semantics, with literal separators and no backslash escaping. They are not
+relative to the component root or runner working directory. Existing validation
+of absolute paths, escapes, and `.agent/**` declarations remains. An exact
+directory name does not imply recursive content: authors use `dir/**`.
+Affected selection keeps its epoch-specific rules; `affected_ignore`, component
+root fallback, and affected-reason previews never remove freshness inputs.
+Completeness is a reviewed author assertion, not a claim that Jig can infer
+everything an arbitrary program reads. Actions depending on unobservable local
+or external state cannot assert indefinite freshness through this flag.
+
+### Source and dependency authority
+
+Collect an action's direct source identity from the complete set of paths
+matching its patterns, including tracked content, staged and unstaged changes,
+deletions, and observable untracked additions. Encode repository-relative path
+bytes, entry type, executable mode, and content identity; distinguish committed,
+index, and current projections so staging and type replacement cannot disappear.
+This does not require reading three copies of unchanged content. A tagged Git
+object ID (including its object-format algorithm) can prove committed/index
+content; reuse it for the current entry only after proving content equivalence.
+Index stat data alone is insufficient when racy or inconsistent; hash uncertain
+and modified/untracked content under the collection bounds. A stable encoding
+must yield the same identity whether content was reused or freshly inspected.
+Sort and deduplicate matches, include the normalized patterns themselves, and
+represent an absent literal or empty glob result explicitly. A complete empty
+match is evidence; an unreadable directory or failed enumeration is not.
+Renames change the old and new path entries. Commit IDs, timestamps, absolute
+checkout paths, and directory traversal order are not scoped content identity.
+A commit changing only unrelated source must preserve a scoped identity when
+all of its own projections remain equal.
+
+The source observation boundary remains the repository's existing non-`.agent/`
+projection, including its observable ignored dotenv policy. Presence-only
+dotenv observations used for affected selection never prove scoped content:
+a relevant observable dotenv file must have its bytes hashed, and unavailable
+content is `unknown`. Generated ignored trees are not silently treated as
+observed inputs. An exhaustive declaration requiring an otherwise ignored file
+or directory is unsupported until the author makes it observable. Check literal
+paths and glob prefixes with bounded ignore queries; prune ignored subtrees
+whose paths cannot intersect any input pattern. If a pattern intersects a
+wholly ignored directory, report `unknown` at that boundary without descending
+through its generated contents. For patterns without a narrower prefix, inspect
+the directory boundary and report uncertainty rather than silently skipping it.
+Do not enumerate an unrelated `target/` or `node_modules/` tree to find that it
+does not match. Charge all candidates actually visited to the shared budget.
+Ignored-entry checks may be conservative, but never hash a known incomplete set.
+This does not authorize persisting dotenv values, file contents, or process
+environment in receipts or diagnostics. Only digests and bounded metadata may
+be recorded. The generated manifest under `.agent/` remains configuration
+authority even though `.agent/` is excluded from source collection.
+
+For a target `T`, expand the full transitive `ActionSpec.depends_on` graph before
+computing its identity, even if affected selection originally selected only
+`T`. Each direct dependency contributes its structured target ID and complete
+identity, recursively, in sorted target order. A shared dependency is observed
+once per evaluation. Cycles, unresolved targets, ambiguous runner authority, or
+an unknown dependency identity prevent a fresh result for every dependent.
+Component `depends_on` and `propagate_affected_to_dependents` guide selection;
+they are not substitutes for execution dependencies. An action reading another
+component's source must cover it in `inputs` or through an explicit action
+dependency. A dependency with `inputs_policy = "whole_repository"` (including
+the default) contributes the whole repository source token, making its dependents
+conservatively sensitive to unrelated source changes as well. An empty exhaustive
+declaration is rejected before constructing this graph, as specified above.
+
+For `whole_repository`, retain the existing complete source/worktree projection
+and its failure behavior. Do not narrow it using patterns or component roots.
+Selecting this default is distinct from recovering from a failed exhaustive
+collection: collection errors remain `unknown`, with no automatic policy switch.
+
+Do not follow symbolic links through or outside the checkout to manufacture a
+scoped proof. Policy v1 reports `unknown` for a relevant symlink or symlinked
+ancestor, including a tracked regular file replaced by a worktree symlink.
+For relevant submodules, include the gitlink identity and observe the initialized
+checkout recursively under the same budget and confinement rules, including
+dirty and untracked content. An uninitialized, escaping, or unsupported
+submodule is `unknown`; a gitlink alone does not prove local contents. Relevance
+includes submodule or link ancestors of a declared path, even when the ancestor
+does not itself match the glob. Implementations may initially report relevant
+submodules as unsupported, but must not report them fresh from partial evidence.
+
+### Runner, configuration, and digest domains
+
+Every target identity must include the existing canonical repository execution
+authority digest. Preserve its coverage of the resolved manifest (including
+unknown forward-compatible fields), command text, work policy, execution
+limits, and effective adapter configuration. This first policy deliberately
+retains repository-wide configuration invalidation: even another action's
+configuration edit can stale a scoped target. Narrowing configuration authority
+requires a separate versioned design; unrelated *source* edits are the scoped
+optimization specified here.
+
+Additionally bind each action's fully defaulted target, intent, effects, input
+policy/patterns, dependency IDs, argument declarations and bound invocation
+values, result parser, effective timeout/output limits, and resolved runner.
+Runner resolution binds shell/legacy command key **and command text**, argv
+program plus ordered literal/bound arguments, effective working directory and
+declared environment, or native operation plus typed configuration and prepared
+native authority. Omitted request values use the same defaults as execution;
+different invocations cannot share identity by sharing argument declarations.
+Prepared authority includes pinned comparison objects and required work-plan
+identity, rather than merely a symbolic ref. Gate evaluation resolves its expected
+invocation using the same declared defaults as a fresh gate execution. A receipt
+for different explicit argument values is `stale` when both invocations are known;
+if the applicable invocation or prepared authority cannot be reconstructed, the
+result is `unknown`.
+
+A repository-local runner executable must be a regular observable file covered
+by `inputs` for an exhaustive action; missing coverage is `unknown`. Helpers
+and files loaded by that script also belong in the same `inputs`. In whole
+repository mode those files remain covered by the repository projection.
+Native runner behavior binds a runtime-provided implementation revision that
+must change when result semantics change within a contract epoch. Capture the
+resolved invocation and repository/native runner authority at planning, verify
+it immediately before launch, and revalidate after supervised process cleanup.
+The recorded authority must describe the invocation actually executed. A detected
+change or unverifiable collection makes the execution's evidence unusable; later
+evaluation against a different known authority is `stale`.
+
+Version 1 deliberately limits runner authority to the configured invocation,
+repository-owned runner source, and native implementation revision above.
+Contents of arbitrary PATH tools, installed toolchains, inherited ambient
+environment, and live services are outside this repository-source freshness
+proof, for both policies, just as they are outside current whole-repository
+evidence. Naming `cargo` or `pnpm` is not proof of its installed bytes, but does
+not by itself make evidence unknown. Repository-owned toolchain pins, lockfiles,
+configuration, and result-relevant dotenv files must be exhaustive inputs.
+The flag must not be presented as hermetic or external-state attestation.
+Retain existing explicit time-validity and native authority requirements; missing
+required authority remains unknown, and a time limit cannot establish it.
+Detecting arbitrary external changes requires a separate runner-attestation
+contract. This design adds no new attestation field, ambient environment dump,
+arbitrary inspection probe, cache, remote store, or remote execution facility.
+
+Use SHA-256 with the following distinct NUL-terminated domain labels. Frame
+each field with its byte length, encode integers in fixed-width big-endian
+form, and distinguish absent values from empty values. Use stable enum tags
+and structured target fields; sort set/map entries, preserve argv order, and
+canonicalize default values before encoding. The implementation must publish
+encoding test vectors with its types. Version 1 defines these payloads:
+
+| Domain | Ordered payload |
+| --- | --- |
+| `jig-target-source-v1\0` | Contract epoch, identity schema, input policy, normalized patterns, complete source entries (or the whole-repository token for the default policy) |
+| `jig-target-authority-v1\0` | Contract epoch, identity schema, canonical repository authority digest, fully resolved action/invocation/runner authority described above |
+| `jig-target-dependencies-v1\0` | Sorted direct dependency target IDs and their complete identity digests; empty list for a leaf |
+| `jig-target-identity-v1\0` | Contract epoch, identity schema, structured target ID, source digest, authority digest, dependency digest |
+
+These are opaque equality tokens within the supported epoch and schema, not
+artifact cache keys. Compare epoch, schema, and domain before digest values:
+a mismatch is `unsupported_authority`, not an ordinary source mismatch, unless
+a later version explicitly defines a compatible comparison. Error markers and
+truncated previews must never be hashed as though they were complete source or
+dependency inputs.
+
+### Collection bounds and evaluation states
+
+Use one cancellable collection deadline and shared accounting for the entire
+requested target closure, including nested submodules and runner authority.
+Policy v1 ceilings are 30 seconds, 250,000 discovered entries, 512 MiB of file
+content read, 16 MiB per Git enumeration output, 10,000 targets, 100,000 dependency
+edges, 128 directory levels, and 32 submodule levels. Charge entries before
+filtering, bytes while streaming, and repeated reads when they occur; enforce
+the earlier of this deadline and the caller's deadline. Enumeration, hashing,
+and subprocess cleanup must all be bounded. A stricter existing collector limit
+may fail earlier; it must be reported. Do not truncate enumeration to fit.
+Use an iterative graph traversal, and stop promptly on cancellation.
+
+Bracket collection with source and configuration observations and revalidate
+file identity/type/size/metadata around reads. Any observed race, disappearing
+path, permission error, Git failure, unsupported path encoding, exhausted limit,
+or incomplete cleanup yields `unknown` with a specific collection reason.
+Sharing a successfully observed file within one evaluation is allowed; persistent
+caching and performance shortcuts require separate evidence. Status/gate reads
+return these failures in-band and block finish. If collection prevents safe
+planning, execution fails before acceptance; a post-execution collection failure
+must be recorded as unusable evidence, never a successful reusable proof.
+
+The proposed runtime `TargetFreshness` result separates identity validity from
+the receipt's pass/fail conclusion. It contains `status`, bounded `reasons`,
+and recorded/current identity components when known:
+
+| Status | Meaning |
+| --- | --- |
+| `fresh` | Supported complete authority matches, required time boundary is current, and execution safety was proved; the action can still have a failed conclusion |
+| `stale` | A comparable direct-source, dependency, runner/configuration, or invocation identity changed, or `now_ms >= valid_until_ms` |
+| `missing` | No original receipt exists for the target in the required work plan |
+| `unknown` | Legacy/missing metadata, collection failure, unresolved authority, mutation-safety uncertainty, or a required but absent time boundary prevents proof |
+| `unsupported` | The target, contract epoch, policy, identity schema, digest domain, or runner version cannot be interpreted by this reader |
+
+Return stable reason codes for `direct_input_changed`, `dependency_changed`,
+`runner_changed`, `configuration_changed`, `invocation_changed`, `time_expired`,
+`time_boundary_missing`, `legacy_metadata`, `collection_failed`,
+`collection_limit`, `source_raced`, `execution_mutated`, and
+`unsupported_authority` and `unsupported_reference`. Preserve at most 100
+reason/path previews and 4,000 bytes of diagnostic text, with total counts and
+explicit truncation flags.
+Detailed reason attribution requires recorded comparable components; never
+infer a particular changed file from a digest alone. Within epoch `E`, aggregate
+freshness precedence is `unsupported`, `missing`, `stale`, `unknown`, then `fresh`,
+preserving the existing relative order of missing/stale/unknown. The additional
+target-level unsupported state deliberately shares the gate vocabulary; consumers
+distinguish an unresolved reference (`unsupported_reference`) from unreadable
+receipt authority (`unsupported_authority`) through reasons. Migration notes
+and gate JSON tests must cover that additive state and its precedence. Legacy
+epochs keep their existing vocabulary and ordering. Freshness aggregation does
+not replace the separate conclusion/outcome rule: a failed receipt still fails.
+Retain known reasons even when an earlier state wins. Only a fresh successful
+original receipt can satisfy a target; all other states block a required gate.
+
+### Receipts, retries, and execution safety
+
+At integration time, add an optional `target_freshness` object to target receipts
+and their typed read models. A version-1 complete object records the contract
+epoch, identity schema, input policy, source/authority/dependency/complete
+digests, sufficient bounded component identity metadata for the reasons above,
+and the outcome of the unchanged global execution-safety checks. Failed
+collection records an explicit incomplete state and reason, with no complete
+identity digest. Keep original `receipt_id`, `run_id`, structured `target`,
+work-plan identity, existing configuration/input/worktree digests, conclusion,
+and time fields intact. Readers must retain unknown-version metadata sufficiently
+to report `unsupported` without rejecting an otherwise readable old journal.
+Malformed nonblank records still follow the existing journal error policy.
+
+Absence of `target_freshness` deserializes without rewriting history. Such a
+receipt remains inspectable; it is `unknown` with `legacy_metadata` under the new
+policy and cannot acquire scoped authority from current files. Legacy epochs
+continue using their existing whole-repository comparison rules. At epoch `E`,
+the default whole-repository policy also writes new explicit metadata: this is
+the conservative fallback for actions, not a fabricated upgrade of old receipts.
+Newer unsupported schemas/domains never fall back to matching legacy fields.
+Rerun affected checks after migration to obtain original new-format evidence.
+An older runtime must reject epoch `E` before execution or gate satisfaction;
+append-only readers may still inspect historical fields. Do not backfill,
+rewrite, or migrate receipt IDs as part of the cutover.
+
+Receipt **selection** belongs to `jig-sh-qh4`, independently of this freshness
+policy. The following constraints are the integration requirements for `.4.3`,
+not a separate ordering algorithm: reuse qh4's implemented selection and keep
+its public documentation aligned at integration. Resolve the gate's current
+required targets. Compute their dependency closure for identity comparison;
+that does not add implicit required gate receipts. A selected successful target
+must retain its original run's proof that its required execution dependencies
+completed successfully under the recorded authority. That proof may reference
+original dependency receipts reused from earlier valid runs, preserving their
+IDs and validity at dependent execution; it does not require a common run ID.
+Missing dependency execution/reuse proof makes that target unknown. Standalone
+newer dependency receipts are not selected unless those dependencies are
+themselves required gate targets: their
+failure alone does not erase an unchanged dependent's original successful run.
+Dependency source/runner changes still invalidate the dependent's identity.
+
+Time validity also propagates through dependency execution/reuse proof: record
+the earliest required `valid_until_ms` across the action and its transitive
+dependency evidence on the dependent receipt. A missing required dependency
+boundary makes the dependent unknown. That boundary must be current when the
+dependent executes and when its evidence is evaluated; equality is expired.
+Reusing a dependency receipt never refreshes or extends its boundary. Thus an
+implicit dependency's expiry can stale the dependent even though the dependency
+is not separately selected as a required gate target.
+
+For each required gate target, select its latest original receipt within the
+exact same work plan, using qh4's deterministic receipt ordering. Select before
+testing validity or success: a newer failure, unknown/stale/expired receipt, or
+unusable authority must block instead of exposing an older pass. Cross-plan
+receipts are ineligible.
+Uncertain journal ordering, conflicting duplicate IDs, or exhausted receipt
+index bounds also block. Evaluate each selected receipt against current authority
+and time separately; a profile passes when all required targets pass. Never
+require one complete run, invent a shared run ID, copy a pass into a retry receipt,
+or make a reuse chain the source of proof. Report the original receipt/run IDs
+per target. A summary shared run ID is absent when the selected runs differ.
+
+For example, independent `api:lint` and `web:test` targets run in `R1` under work
+plan `P`: lint passes, test fails. An unchanged-input targeted retry of test in
+`R2` succeeds. The profile may use lint's original `R1` receipt and test's original
+`R2` receipt under `P`, if both identities and time boundaries remain valid.
+A later test failure in `R3` blocks the profile. Retrying under another plan does
+not repair `P`. A dependency's source or runner change invalidates the dependent
+receipt even when that dependency's own repair succeeds; the dependent needs
+fresh execution too. Archive must retain the selected originals, applicable
+dependency execution/reuse evidence, and newer blocking evidence needed to
+preserve selection; archiving cannot reveal an older pass or manufacture a common run.
+
+Whole-repository execution safety is unchanged. Submitted plans still bind and
+revalidate the complete repository source and execution authority; any source
+change stales a pre-existing plan, even outside an exhaustive target's inputs.
+Read-only execution still compares the whole repository before and after the
+run: mutation outside scoped inputs fails and cannot produce reusable evidence.
+Scoped equality never overrides failed or unknown cleanup, supervision, global
+mutation detection, effect approval, or native prepared-input validation.
+At later gate evaluation only, the new scoped identity replaces equality with
+the *current* global worktree token for exhaustive actions. The original global
+before/after safety proof remains required. Non-exhaustive actions continue to
+compare the complete source token as well.
+
+### Acceptance examples and delivery checks
+
+Use isolated generic fixtures. In the following cases, both `web:test` and its
+transitive `shared:generate` dependency have audited exhaustive inputs, known
+repository/native runner authority, and otherwise valid successful original
+receipts:
+
+| Change or condition | Expected result |
+| --- | --- |
+| Edit or commit `docs/guide.md`, outside both input sets and all runner/configuration authority | Target receipts stay fresh; any already prepared execution plan is stale |
+| Edit, add, delete, rename, stage, or change executable mode on `apps/web/src/page.ts` | `web:test` is stale with direct-input evidence |
+| Edit a fixture read by `shared:generate`, including through a further action dependency | `shared:generate` and `web:test` are stale; traversal is transitive |
+| Change `scripts/test-web.sh`, its bound argv, command text, working directory, declared environment, native configuration, or native implementation revision | Runner/source, invocation, or configuration authority is stale as applicable |
+| Remove the exhaustive declaration or omit it on a dependency, then record a new receipt and edit an unrelated source file | Whole-repository fallback invalidates that receipt and its dependents |
+| Set `exhaustive` with omitted or empty inputs, either on a root target or a dependency | Configuration error before execution; no source-independent identity is produced |
+| Write `inputs_policy` in a pre-`E` source or manifest, even with the default value | Explicit configuration error; old declarations omitting it retain their semantics |
+| Add an input matching a formerly empty glob | Direct source identity changes; an empty prior match cannot hide it |
+| An unrelated ignored build tree contains more than 250,000 entries | Prune that tree when it cannot match inputs; its descendants do not exhaust collection |
+| A relevant observable ignored dotenv file changes content without changing its name | Source identity changes; a presence-only observation cannot prove freshness |
+| Replace a relevant file/ancestor with a symlink; leave a relevant submodule uninitialized; omit observable runner authority | Unknown/unsupported with a bounded reason; never fresh |
+| Exceed collection limits, cancel, race source reads, fail Git enumeration, or require ignored/unobservable inputs | Unknown, without a digest of partial results |
+| Read an old receipt or a newer unsupported identity schema | Readable legacy metadata is unknown; unsupported identity is unsupported; rerun with a compatible runtime |
+| Retry one independent failed target successfully under the same plan with unchanged authority | Profile passes from original mixed-run receipts; newer failures/unknowns and cross-plan retries still block |
+| A dependency not explicitly required by the gate has a newer failed receipt with unchanged authority | Its dependent's original successful execution/reuse proof remains eligible; if that proof is absent the dependent is unknown |
+| The same dependency is also a required gate target | Its latest missing/failed/unknown receipt blocks the gate, independently of its dependent's receipt |
+| Repository/native runner authority changes between preparation, launch, and completion | Execution evidence is unusable even if the target's other inputs match |
+| Only `.4.2` is delivered, before receipt/gate integration | Existing epoch and conservative gates remain active; epoch `E` is limited to development fixtures |
+| Receipt epoch/schema/domain differs from the current evaluator, or mixed unknown/stale targets are present | Unsupported authority is explicit; otherwise existing missing/stale/unknown precedence is preserved |
+| Reach a recorded validity boundary or lose a required boundary | Stale at equality, unknown when required metadata is missing |
+| An implicit dependency's original execution/reuse evidence expires | The dependent is stale at the inherited earliest boundary; reuse cannot extend it |
+| A read-only runner writes `docs/guide.md` outside its inputs | Execution fails the unchanged global mutation check; target-local equality cannot rescue it |
+
+`.4.2` must add focused contract/collector/planner tests for these source and
+authority cases, deterministic encoding vectors, old-epoch compatibility, and
+bounded failure paths. Before activating the new collector on ordinary read-only
+paths or adding optimizations, measure a reproducible roughly 4,000-file generic
+fixture against existing whole-repository evaluation: record fixture shape,
+exact commands, elapsed time, files and bytes observed, and repeated evaluation
+behavior. Include a large unrelated ignored tree and account separately for
+committed/index/worktree observations. Resolve unacceptable interactive costs
+or bounded failures before rollout; the measurement is a delivery precondition.
+`.4.3` must add CLI/runtime
+receipt, gate, retry, time, archive, and global-safety regressions, building on
+qh4's selection tests without restoring complete-run grouping. Both delivery
+tasks must build the development binary, run applicable `scripts/jig work check`
+gates through `JIG_DEV_BIN`, and finish backend changes with `scripts/jig check test`.
+This design task is validated by source alignment, acceptance review, and the
+repository's applicable work gates; it does not implement those future tests.
+
 ## Rollout Rules
 
 Use this sequence for public contract changes:
