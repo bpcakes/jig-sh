@@ -88,6 +88,10 @@ pub struct PlannedTarget {
     pub selection_reasons_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prepared_native_input: Option<PreparedNativeInputV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_identity: Option<crate::freshness::TargetIdentityV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_identity_error: Option<crate::freshness::FreshnessReason>,
 }
 
 impl PlannedTarget {
@@ -114,6 +118,8 @@ impl PlannedTarget {
             selection_reasons_truncated: false,
             selection_reasons_digest: None,
             prepared_native_input: None,
+            target_identity: None,
+            target_identity_error: None,
         }
     }
 }

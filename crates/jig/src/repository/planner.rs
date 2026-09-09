@@ -42,10 +42,20 @@ enum PlanningPolicy {
     DeclaredActions,
 }
 
+#[cfg(test)]
 pub(crate) fn plan_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     request: PlanRunRequest,
+) -> Result<RunPlan> {
+    plan_run_with_cancellation(ctx, catalog, request, &|| false)
+}
+
+pub(crate) fn plan_run_with_cancellation(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    request: PlanRunRequest,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<RunPlan> {
     plan_run_with_policy(
         ctx,
@@ -53,14 +63,26 @@ pub(crate) fn plan_run(
         request,
         BTreeMap::new(),
         PlanningPolicy::ChecksOnly,
+        Some(cancelled),
     )
 }
 
+#[cfg(test)]
 pub(crate) fn plan_action_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     request: PlanRunRequest,
     arguments: BTreeMap<TargetId, ActionArguments>,
+) -> Result<RunPlan> {
+    plan_action_run_with_cancellation(ctx, catalog, request, arguments, &|| false)
+}
+
+pub(crate) fn plan_action_run_with_cancellation(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    request: PlanRunRequest,
+    arguments: BTreeMap<TargetId, ActionArguments>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<RunPlan> {
     plan_run_with_policy(
         ctx,
@@ -68,6 +90,7 @@ pub(crate) fn plan_action_run(
         request,
         arguments,
         PlanningPolicy::DeclaredActions,
+        Some(cancelled),
     )
 }
 
@@ -77,6 +100,7 @@ fn plan_run_with_policy(
     mut request: PlanRunRequest,
     arguments: BTreeMap<TargetId, ActionArguments>,
     policy: PlanningPolicy,
+    freshness_cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<RunPlan> {
     normalize_affected_base(&mut request.affected_base)?;
     if request.affected_base.is_some() && catalog.contract_version() < 6 {
@@ -130,6 +154,16 @@ fn plan_run_with_policy(
         }
         plan.id = plan_digest(&plan)?;
     }
+    if let Some(cancelled) = freshness_cancelled {
+        let mut budget = super::freshness::CollectionBudget::new(
+            super::freshness::CollectionLimits::with_timeout(std::time::Duration::from_millis(
+                super::freshness::RECORDING_TIMEOUT_MS,
+            )),
+            cancelled,
+        );
+        super::freshness::prepare_plan_identities(ctx, catalog, &mut plan, &mut budget)?;
+    }
+    plan.id = plan_digest(&plan)?;
     Ok(plan)
 }
 
@@ -178,7 +212,7 @@ pub(crate) fn validate_run_plan(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     plan: &RunPlan,
-) -> Result<()> {
+) -> Result<RunPlan> {
     if plan.schema_version != RunPlan::SCHEMA_VERSION {
         bail!(
             "run plan '{}' uses unsupported schema version {}",
@@ -232,8 +266,11 @@ pub(crate) fn validate_run_plan(
         },
         arguments,
         policy,
+        None,
     )?;
-    if expected != *plan {
+    let mut execution_authority = plan.clone();
+    clear_freshness_metadata(&mut execution_authority);
+    if expected != execution_authority {
         bail!(
             "run plan '{}' is stale or was modified after planning; inspect a fresh plan before execution",
             plan.id
@@ -243,7 +280,17 @@ pub(crate) fn validate_run_plan(
     // change that races that work cannot escape through the `.agent/**`
     // exclusion in the source fingerprint.
     validate_current_repository_authority(ctx, catalog.config_digest())?;
-    Ok(())
+    // Optional proof supplied by a client never gains trust through execution
+    // authority validation. Return the re-resolved plan with that proof absent;
+    // the execution worker can collect it under its live cancellation control.
+    Ok(expected)
+}
+
+fn clear_freshness_metadata(plan: &mut RunPlan) {
+    for target in &mut plan.targets {
+        target.target_identity = None;
+        target.target_identity_error = None;
+    }
 }
 
 #[cfg(test)]
@@ -686,6 +733,13 @@ struct PlanDigestInput<'a> {
 }
 
 fn plan_digest(plan: &RunPlan) -> Result<String> {
+    // Timing-dependent observation availability is not execution authority.
+    // Global source/config and every executable target field remain included.
+    let mut targets = plan.targets.clone();
+    for target in &mut targets {
+        target.target_identity = None;
+        target.target_identity_error = None;
+    }
     let input = PlanDigestInput {
         schema_version: plan.schema_version,
         config_digest: &plan.config_digest,
@@ -693,7 +747,7 @@ fn plan_digest(plan: &RunPlan) -> Result<String> {
         selectors: &plan.selectors,
         profile: &plan.profile,
         affected_base: &plan.affected_base,
-        targets: &plan.targets,
+        targets: &targets,
         execution_layers: &plan.execution_layers,
         effects: &plan.effects,
     };

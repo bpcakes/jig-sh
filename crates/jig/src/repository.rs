@@ -1,4 +1,5 @@
 pub(crate) mod arguments;
+pub(crate) mod freshness;
 pub(crate) mod runners;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -18,9 +19,12 @@ pub(crate) use inspect::{
     CatalogInspection, InspectRequest, inspect_repository, inspect_repository_data,
 };
 pub(crate) use planner::{
-    PlanRunRequest, plan_action_run, plan_run, target_input_digest,
-    validate_current_repository_authority, validate_run_plan, validate_run_plan_source,
+    PlanRunRequest, plan_action_run_with_cancellation, plan_run_with_cancellation,
+    target_input_digest, validate_current_repository_authority, validate_run_plan,
+    validate_run_plan_source,
 };
+#[cfg(test)]
+pub(crate) use planner::{plan_action_run, plan_run};
 
 mod native_input;
 pub(crate) use native_input::{prepare_file_budget_input_v1, read_policy_bytes};
@@ -288,6 +292,7 @@ impl RepositoryCatalog {
             let mut action = action.clone();
             normalize_native_configuration(contract_version, &mut action)?;
             arguments::normalize_declarations(contract_version, &mut action)?;
+            freshness::validate_inputs_policy(contract_version, &action)?;
             runners::validate(contract_version, &action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(

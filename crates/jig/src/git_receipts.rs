@@ -46,6 +46,7 @@ pub(crate) use comparison::*;
 pub(crate) use content::*;
 pub(crate) use exact_path::*;
 use process::*;
+pub(crate) use process::{FreshnessGitObservationFailure, read_freshness_git_batch};
 use scope::*;
 use worktree::*;
 

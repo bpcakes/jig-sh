@@ -1,0 +1,182 @@
+# Target freshness collector measurements
+
+Epoch 9 is staged. The loader, renderer, and source repository remain on epoch
+8 until receipt integration and the qualification required by
+[Target Freshness Policy v1](public-contract.md#target-freshness-policy-v1-design)
+are complete. These first measurements establish the requested implementation
+baseline; they do not qualify the epoch for activation.
+
+The fixture has 4,000 generated 512-byte source files, a 100-file narrow input
+tree, broad inputs covering all 4,000 files, four targets sharing a transitive
+dependency chain, and 10,000 unrelated ignored files. Fixture preparation is
+outside measurement. Each sample launches a separate process and performs a
+complete collection; no identity cache is populated or reused. The five cases
+are clean, one narrow file edited, 3,900 broad files edited, one staged edit,
+and one observable untracked addition. The context and filesystem page cache
+are ordinary host conditions; the first sample is reported separately and is
+not a claim of a cold filesystem cache.
+
+Initial measurements used the Cargo debug test profile on Linux, with 20
+separate process invocations per case. All 200 collections returned complete
+identities. Times below are the shared identity phase in milliseconds, excluding
+process startup and existing repository context loading.
+
+| Case | Initial p95 | Batched p95 |
+| --- | ---: | ---: |
+| Clean | 3422.604 | 1241.490 |
+| Narrow dirty | 3488.121 | 1256.319 |
+| Wide dirty | 3299.281 | 1171.906 |
+| Staged | 3423.696 | 1287.738 |
+| Untracked | 3354.590 | 1305.726 |
+
+[All initial sample counters](benchmarks/target-freshness-initial.jsonl) include
+elapsed time, committed/index parsing, worktree collection, discovered entries,
+content bytes, graph size, and the enforced deadline. Batched samples also
+separate shared Git execution time (`git_us`) from parsing. Initial committed
+and index timings include their individual Git subprocesses; compare total
+elapsed time across implementations, not those phase counters. The combined
+Git response has a 16 MiB cap; this deliberately bounds the complete batch,
+including intent-to-add and ignore queries, rather than allocating that amount
+for each constituent command.
+
+The initial implementation launched each Git observation in a separately owned
+process tree. Measurements showed repeated process-tree supervision dominated
+the tiny-fixture cost. The batched implementation retains that supervision and
+its cleanup proof, grouping fixed read-only queries in one sanitized Bash
+process per observation. It captures Git projections before and after bounded
+file reads and rejects incomplete, malformed, failed, or changing observations.
+The first 20 clean samples were recorded before this optimization; the remaining
+initial cases used the same copied, unchanged executable.
+
+Git enumeration prunes independent top-level trees using the normalized input
+prefixes. It deliberately retains the first path component and its full subtree
+so committed/index symlink or submodule ancestors remain observable; it never
+narrows a deep declaration past those ancestors. Pattern matching still chooses
+only the declared inputs for hashing. Entry accounting charges every record
+visited in each projection, including repeated before/after validation, rather
+than treating the limit as a unique-path count. Shared patterns compile once.
+The second Git observation must match the entire previously validated protocol
+byte for byte; it charges the original visited-record count without rebuilding
+identical maps. Files retain an open-file metadata check before and after
+streaming, followed by a complete path/directory signature pass. One buffer is
+shared across file reads, and the final pass retains at most one parent handle.
+Nonrecursive globs stop descent at their maximum possible path depth.
+Normalized declarations share one complete match set, using path indices rather
+than duplicating strings across patterns. Each retained match membership and
+projection visit counts against the entry budget. This bounds shared-set memory
+as well as the existing time bound; near-ceiling overlap can return unknown.
+Unsupported path bytes are retained only for relevance matching; affected
+inputs become unknown and diagnostics expose only a printable ancestor.
+Nested plain repositories are unknown without recursive authority.
+
+Optional identity snapshots and collection errors do not enter execution-plan
+hashing or equality. Submitted-plan validation re-resolves all existing global
+source/configuration and executable authority without a second scoped scan,
+and returns a plan with client-supplied freshness metadata discarded. Receipt
+integration must prepare that proof inside the live, cancellable execution
+worker. The original plan validation and mutation-safety boundaries remain
+whole-repository checks.
+
+An exhaustive argv action covers every repository-local PATH candidate that
+execution can reach, including declared absence, because an executable-looking
+file can fail `execve` and allow search to continue. These candidate paths enter
+runner identity. Shell command text is bound directly; scripts and helpers read
+by either shell or argv commands remain part of the author's exhaustive input
+assertion. Git failure messages retain an exit status, diagnostic category, and
+local next step without persisting arbitrary stderr paths or values.
+
+Release measurements of the first reviewed implementation completed 100/100
+samples on the host (case p95 678–709 ms) and 100/100 in a one-CPU container
+with a 20 MiB/s block-device read cap (warm p95 379–388 ms). Cold measurements
+flushed regular fixture files before every sample with `fsync` and
+`POSIX_FADV_DONTNEED`, including Git objects and metadata; directory metadata
+remained warm. All 100 cold samples completed, but case p95 was 1,016–1,141 ms,
+which **fails qualification**. Cgroup I/O counters showed approximately 16.8 MB
+of physical reads per sample charged to the capped device. These were local
+containers, not CI. Final receipt integration must remeasure the reviewed
+collector after its per-file allocation and parent-capability improvements.
+The next local cold run also completed 100/100: clean 988.674 ms, narrow dirty
+1,007.708 ms, wide dirty 996.845 ms, staged 1,062.855 ms, and untracked 996.236 ms
+p95. It still fails the all-cases threshold. The next frozen revision, with raw-protocol reuse and redundant-parent-lookup
+removal, completed 100/100: clean 1,012.732 ms, narrow dirty 962.319 ms, wide
+dirty 959.500 ms, staged 977.811 ms, and untracked 973.856 ms p95. This still
+fails qualification because the clean case exceeds the limit.
+[All 700 release samples](benchmarks/target-freshness-release.jsonl) preserve
+the observations, including the failed cold runs and enforced cgroup limits.
+
+The batched debug result fits the two-second inspection deadline but exceeds
+the one-second p95 qualification threshold. Release-build measurements, actual
+CI measurements, one-CPU/20-MiB/s storage measurements, cold/warm conditions,
+near-ceiling outcomes, and full-command comparisons remain required before
+activation in receipt integration. No debug timing result substitutes for those
+checks.
+
+To reproduce a measurement, build the library test executable and pass its
+printed path to the driver:
+
+```sh
+cargo test -p jig-sh --lib --no-run
+python3 scripts/benchmark-target-freshness.py \
+  --test-binary target/debug/deps/jig-EXAMPLE_HASH \
+  --samples 20 --timeout-ms 2000 --output /tmp/example-freshness.json
+```
+
+Use the actual executable printed by Cargo. Add `--require-qualified` to fail
+when any sample is incomplete or a case's p95 is at least 1,000 ms. Use
+`--fixture` only with the generic temporary checkout created and printed by a
+previous driver run. The driver restores that fixture between cases. For release
+measurements build with `--release` and pass the release test executable.
+
+## Encoding vectors
+
+Identity encoding starts with the UTF-8 domain and a NUL byte. Every following
+field has an unsigned 64-bit big-endian byte length followed by its exact bytes.
+Epoch and schema are unsigned 32-bit big-endian fields. Numeric counts are
+unsigned 64-bit big-endian fields. A target contributes component and action as
+separate UTF-8 fields; an optional value contributes a one-byte presence field
+and, when present, the value field. Digests have a `sha256:` prefix.
+
+Two vectors were calculated independently with Python's `struct.pack` and
+`hashlib.sha256` and are asserted by the Rust tests:
+
+| Domain | Epoch/schema | Remaining fields | Digest |
+| --- | --- | --- | --- |
+| `jig-target-source-v1` | 9 / 1 | text `exhaustive`, count 1, text `apps/web/**`, count 0, count 0 | `sha256:f69025da6d1624321cbe4635e1a2e247e03f7ded42e4bbbd88d19cb72e91f089` |
+| `jig-target-identity-v1` | 9 / 1 | target `web:test`, text `source`, text `authority`, text `dependency` | `sha256:1015e16914c1f65117d6da50fe7101e86728939559164cda8021c6378985416c` |
+
+The second vector uses illustrative component tokens to pin framing; it is not
+a complete executable target proof. Source and dependency ordering, absent
+matches, and defaulted invocation behavior have separate fixture tests.
+
+## Final fingerprint review decisions
+
+Claude and Codex completed three independent review rounds of `.4.2`, with
+matching before/after working-tree scope checks and no exclusions. The final
+round used `e18ab21980c178baa2a5bf7a7f576ffb04c9c5d70153e91f3a1dc952b202d6dc`.
+Final fixes retain and revalidate ignored working-directory components, forward
+MCP planning cancellation, share complete pattern matches, and remove the
+unreleased timeout flag from the deadline message. These last fixes will be
+covered by the later full-branch review; no fourth per-task review was run.
+
+A successful Git command that emits warnings remains unknown. Configuration
+access warnings can mean ignore/source authority was incomplete even when
+stdout has valid framing. Safe diagnostic categories and a regression make
+this intentional availability tradeoff explicit. Git diagnostics do not persist
+untrusted stderr values. Shell helpers retain the explicit author assertion
+agreed in the policy; parsing shell text cannot discover an exhaustive input
+set. PATH observation must match actual execution, so it cannot substitute a
+fixed fallback while execution uses ambient PATH.
+
+A plan's empty preview with `source_preview_truncated=true` means its displayed
+preview is incomplete relative to `source_entry_count`, whether omitted for
+plan size or shortened by the collector. Optional proof is discarded on
+submitted-plan acceptance; receipt integration collects its own full bounded
+preview. Neither preview shape nor omission affects identity equality.
+
+The final `.4.2` code, including shared match sets and cwd revalidation, was
+also measured with 40 independent cold invocations per case while repository
+test suites ran on the host. All 200 completed within the two-second deadline.
+Case p95 was 1,196.984 ms clean, 1,286.206 ms narrow dirty, 947.084 ms wide
+dirty, 1,175.618 ms staged, and 973.915 ms untracked. This contended run fails
+the p95 requirement and is preserved in the release sample file; it is not a CI
+qualification. Median times were 927–937 ms. Normal epoch 8 remains active.

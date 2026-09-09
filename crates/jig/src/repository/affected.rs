@@ -376,7 +376,7 @@ fn validate_component_root(component: &ComponentSpec) -> Result<()> {
     Ok(())
 }
 
-fn compile_input(target: &TargetId, input: &str) -> Result<GlobMatcher> {
+pub(super) fn compile_input(target: &TargetId, input: &str) -> Result<GlobMatcher> {
     if let Err(error) = validate_observable_source_declaration("action input", input) {
         bail!("target '{target}' has invalid input pattern {input:?}: {error}")
     }

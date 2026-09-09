@@ -1,6 +1,8 @@
 use super::super::gates::check_target_snapshot;
 use super::*;
-use crate::repository::{PlanRunRequest, plan_run, validate_current_repository_authority};
+use crate::repository::{
+    PlanRunRequest, plan_run_with_cancellation, validate_current_repository_authority,
+};
 
 pub(super) fn check(
     ctx: &RepoContext,
@@ -48,7 +50,7 @@ pub(super) fn check(
     let mut run_ok = true;
     let mut error = String::new();
     if !scheduled.is_empty() {
-        let plan = plan_run(
+        let plan = plan_run_with_cancellation(
             ctx,
             &catalog,
             PlanRunRequest {
@@ -58,6 +60,7 @@ pub(super) fn check(
                 comparison: None,
                 work_plan_id: Some(plan_id.to_owned()),
             },
+            &|| observer.cancelled(),
         )?;
         let evidence = execution.execute_evidence(
             ctx,

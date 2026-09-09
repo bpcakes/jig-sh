@@ -569,3 +569,22 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
     assert!(execution.run.result.targets[0].started_at_ms.is_none());
     assert!(!temp.path().join("generated.txt").exists());
 }
+
+#[test]
+fn mcp_plan_receives_cancellation_after_outer_dispatch() {
+    struct CancelInPlan(std::sync::atomic::AtomicUsize);
+    impl crate::execution::ExecutionObserver for CancelInPlan {}
+    impl crate::execution::ExecutionCancellation for CancelInPlan {
+        fn cancelled(&self) -> bool {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0
+        }
+    }
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelInPlan(std::sync::atomic::AtomicUsize::new(0));
+    let error = call_tool_with_observer(&ctx, "jig.plan_run", json!({"selectors":["api:test"]}), &mut observer).unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error:#}");
+    assert!(observer.0.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+}

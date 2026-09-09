@@ -352,6 +352,7 @@ pub(crate) struct RepoContext {
     config: RepoConfig,
     manifest: ContractManifest,
     contract_digest: String,
+    configuration_content_digests: [String; 2],
 }
 
 impl RepoContext {
@@ -369,6 +370,10 @@ impl RepoContext {
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
         let config = loaded_config.config;
         let contract_digest = contract_source_digest(&config, &manifest_authority)?;
+        let configuration_content_digests = [
+            loaded_config.content_digest,
+            format!("sha256:{:x}", Sha256::digest(manifest_text.as_bytes())),
+        ];
 
         if !is_supported_contract_version(manifest.contract_version) {
             bail!(
@@ -408,6 +413,7 @@ impl RepoContext {
             config,
             manifest,
             contract_digest,
+            configuration_content_digests,
         })
     }
 
@@ -465,6 +471,10 @@ impl RepoContext {
 
     pub(crate) fn contract_digest(&self) -> &str {
         &self.contract_digest
+    }
+
+    pub(crate) fn configuration_content_digests(&self) -> &[String; 2] {
+        &self.configuration_content_digests
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -753,27 +763,6 @@ impl RepoContext {
     }
 }
 
-struct LoadedConfig {
-    config: RepoConfig,
-}
-
-fn load_config_snapshot(config_path: &Path) -> Result<LoadedConfig> {
-    let config_text = fs::read_to_string(config_path)
-        .with_context(|| format!("Failed to read {}", config_path.display()))?;
-    let config: RepoConfig = toml::from_str(&config_text).with_context(|| {
-        format!(
-            "Failed to parse {}. Jig rejects unknown .jig.toml keys during upgrades; remove typos or experimental keys and retry.",
-            config_path.display()
-        )
-    })?;
-    validate_config(&config)?;
-    Ok(LoadedConfig { config })
-}
-
-fn load_config(config_path: &Path) -> Result<RepoConfig> {
-    Ok(load_config_snapshot(config_path)?.config)
-}
-
 #[derive(Serialize)]
 struct RepositoryExecutionAuthority<'a> {
     schema_version: u32,
@@ -899,8 +888,10 @@ pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
 
+mod config_snapshot;
 #[cfg(test)]
 mod contract_tests;
+use config_snapshot::{load_config, load_config_snapshot};
 mod defaults;
 mod execution_config;
 mod loop_config;

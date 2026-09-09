@@ -225,7 +225,7 @@ pub(super) fn start_check_run(
     validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
     let repository_execution =
         crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
-    crate::repository::validate_run_plan(ctx, catalog, &plan)?;
+    let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
     crate::state::start_run_with_execution_lease(ctx, plan, work_plan_id, repository_execution)
 }
 
@@ -242,7 +242,7 @@ pub(super) fn start_check_run_with_event_cursor(
     validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
     let repository_execution =
         crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
-    crate::repository::validate_run_plan(ctx, catalog, &plan)?;
+    let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
     crate::state::start_run_with_event_cursor_and_execution_lease(
         ctx,
         plan,

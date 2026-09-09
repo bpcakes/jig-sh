@@ -484,6 +484,15 @@ impl ActionArgumentSpec {
     }
 }
 
+/// Completeness asserted by an action's author for its canonical input paths.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionInputsPolicy {
+    #[default]
+    WholeRepository,
+    Exhaustive,
+}
+
 /// One typed capability offered by a component.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -498,6 +507,10 @@ pub struct ActionSpec {
     pub arguments: BTreeMap<String, ActionArgumentSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
+    /// Presence is retained so even an explicit default can be rejected before
+    /// the freshness epoch. Omission means `whole_repository`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs_policy: Option<ActionInputsPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<TargetId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -521,6 +534,7 @@ impl ActionSpec {
             runner,
             arguments: BTreeMap::new(),
             inputs: Vec::new(),
+            inputs_policy: None,
             depends_on: Vec::new(),
             timeout_seconds: None,
             result_parser: ResultParser::default(),

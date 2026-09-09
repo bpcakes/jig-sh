@@ -424,7 +424,7 @@ fn dispatch_repository_check_with_catalog(
         );
     }
     let (work_plan_id, _) = request.tool.clone().into_parts();
-    let plan = crate::repository::plan_run(
+    let plan = crate::repository::plan_run_with_cancellation(
         ctx,
         catalog,
         crate::repository::PlanRunRequest {
@@ -434,6 +434,7 @@ fn dispatch_repository_check_with_catalog(
             comparison: request.comparison,
             work_plan_id,
         },
+        &|| observer.cancelled(),
     )?;
     if request.explain {
         return Ok(json!({
@@ -543,7 +544,7 @@ pub(crate) fn call_tool_with_observer(
     }
     if ctx.contract_version() >= 6 {
         if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
-            return mcp_repository::call(ctx, tool, args);
+            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled());
         }
     } else if memory_tool.is_none() {
         let current = refreshed_repository_context(ctx)?;
