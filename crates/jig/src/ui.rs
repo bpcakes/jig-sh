@@ -120,7 +120,7 @@ fn supervised<T>(operation: impl FnOnce(&dyn Fn() -> bool) -> Result<T>) -> Resu
         })?;
         let cancellation = signal_session.cancellation();
         let outcome = operation(&|| cancellation.cancelled());
-        crate::codex::finish_signal_supervised(
+        crate::signal_supervision::finish(
             outcome,
             signal_session.finish(),
             "Dashboard signal supervision could not retire safely",

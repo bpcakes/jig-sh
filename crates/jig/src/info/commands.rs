@@ -184,6 +184,7 @@ pub(super) fn info_with_capabilities(
     commands.push(agent_command(agent, &jig));
     commands.extend([
         ready_command(root_commands::CODEX),
+        ready_command(root_commands::CLAUDE),
         ready_command(root_commands::AGENT_MAP),
         ready_command(root_commands::STATE),
     ]);
@@ -266,6 +267,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         prompt,
         repo_context_command_with_next_step(root_commands::AGENT, repo_context_next_step),
         ready_command(root_commands::CODEX),
+        ready_command(root_commands::CLAUDE),
         repo_context_command_with_next_step(root_commands::AGENT_MAP, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::STATE, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::MCP, repo_context_next_step),

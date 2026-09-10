@@ -1,0 +1,1 @@
+Allow native-default launch and picker selection without an existing directory; document generated-launcher refresh; warn when human dry-run display changes values. Add regression tests, run configured work gates, and finish with the full backend test check.

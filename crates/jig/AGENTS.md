@@ -22,6 +22,11 @@
 ## Edit here for X
 
 - Change CLI flags or subcommands: `src/cli.rs`.
+- Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
+- Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
+- Change shared operation signal supervision: `src/signal_supervision.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
+- Change transparent agent execution: `src/agent_launch.rs`; providers prepare their own commands and environment overrides.
+- Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change make-tool behavior or receipt recording around command execution: `src/runtime.rs`.
 - Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
 - Change session, plan, receipt, or decision persistence: `src/state.rs`.

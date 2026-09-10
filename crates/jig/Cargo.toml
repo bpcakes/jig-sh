@@ -63,6 +63,7 @@ jig-vault-tui.workspace = true
 libc.workspace = true
 minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
 rpassword.workspace = true
+reqwest.workspace = true
 # Rustyline 18 requires unicode-width 0.2.2, which cannot resolve alongside
 # Ratatui 0.29's exact 0.2.0 requirement. Keep Rustyline 17 while Ratatui 0.29
 # remains the workspace constraint.
@@ -76,9 +77,14 @@ sha2.workspace = true
 tempfile.workspace = true
 time.workspace = true
 toml.workspace = true
+tokio.workspace = true
 ulid.workspace = true
 wait-timeout.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true

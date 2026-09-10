@@ -1,5 +1,4 @@
 use std::{
-    path::PathBuf,
     sync::{
         Arc,
         mpsc::{self, Receiver},
@@ -12,7 +11,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_terminal};
 
 use crate::{
-    Home, HomeUpdate, InspectionSource,
+    HomeUpdate, InspectionSource,
     model::{App, ExitState, Focus},
     render,
 };
@@ -22,18 +21,20 @@ const ACTIVE_REDRAW_INTERVAL: Duration = Duration::from_millis(100);
 const IDLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn run(
-    homes: Vec<Home>,
-    source: impl InspectionSource + 'static,
+    mut app: App,
+    source: Option<Box<dyn InspectionSource>>,
+    command: &str,
     cancelled: impl Fn() -> bool + Send + Sync + 'static,
-) -> Result<Option<PathBuf>> {
-    require_terminal(
-        "jig codex launch",
-        "pass a home explicitly for non-interactive use",
-    )?;
-    let mut terminal = TerminalSession::enter("Codex home picker")?;
-    let mut app = App::new(homes, source.discovery_warnings());
+) -> Result<Option<usize>> {
+    require_terminal(command, "pass a home explicitly for non-interactive use")?;
+    let mut terminal = TerminalSession::enter(app.title())?;
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
-    let mut worker = InspectionWorker::spawn(Arc::new(source), Arc::clone(&external_cancellation))?;
+    let mut worker = match source {
+        Some(source) => {
+            InspectionWorker::spawn(Arc::from(source), Arc::clone(&external_cancellation))?
+        }
+        None => InspectionWorker::idle(),
+    };
     let mut dirty = true;
     let mut next_redraw = Instant::now() + ACTIVE_REDRAW_INTERVAL;
 
@@ -57,7 +58,7 @@ pub(crate) fn run(
             |app| {
                 terminal
                     .draw(|frame| render::draw(frame, app))
-                    .context("failed to draw the Codex home picker")?;
+                    .context("failed to draw the home picker")?;
                 Ok(())
             },
         )?;
@@ -72,8 +73,8 @@ pub(crate) fn run(
             );
         }
 
-        if event::poll(EVENT_POLL_INTERVAL).context("failed to poll Codex picker input")? {
-            match event::read().context("failed to read Codex picker input")? {
+        if event::poll(EVENT_POLL_INTERVAL).context("failed to poll home picker input")? {
+            match event::read().context("failed to read home picker input")? {
                 Event::Key(key) if is_actionable_key(key) => match handle_key(&mut app, key) {
                     Action::Ignore => {}
                     Action::Redraw => dirty = true,
@@ -87,7 +88,7 @@ pub(crate) fn run(
                         );
                     }
                     Action::Select => {
-                        let selected = app.selected_path();
+                        let selected = app.selected.filter(|index| *index < app.rows.len());
                         if selected.is_some() {
                             return finish_run(
                                 &mut terminal,
@@ -111,12 +112,12 @@ fn finish_run(
     app: &mut App,
     worker: &mut InspectionWorker,
     exit_state: ExitState,
-    selected: Option<PathBuf>,
-) -> Result<Option<PathBuf>> {
+    selected: Option<usize>,
+) -> Result<Option<usize>> {
     app.begin_exit(exit_state);
     let draw_result = terminal
         .draw(|frame| render::draw(frame, app))
-        .context("failed to draw the Codex home picker exit state");
+        .context("failed to draw the home picker exit state");
     worker.cancel_and_join();
     draw_result?;
     Ok(selected)
@@ -293,6 +294,14 @@ struct InspectionWorker {
 }
 
 impl InspectionWorker {
+    fn idle() -> Self {
+        let (_, updates) = mpsc::channel();
+        Self {
+            updates,
+            worker: None,
+        }
+    }
+
     fn spawn(
         source: Arc<dyn InspectionSource>,
         external_cancellation: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -344,7 +353,9 @@ impl Drop for InspectionWorker {
 
 #[cfg(test)]
 mod tests {
+    use crate::Home;
     use serde_json::json;
+    use std::path::PathBuf;
 
     use super::*;
 

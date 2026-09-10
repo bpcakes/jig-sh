@@ -1,10 +1,12 @@
 mod agent_guides;
+mod agent_launch;
 mod backend;
 mod bootstrap;
 #[cfg(test)]
 #[path = "../build_identity.rs"]
 mod build_identity;
 mod cancellation;
+mod claude;
 mod cli;
 mod codex;
 mod command;
@@ -52,6 +54,7 @@ mod dev_proxy {
     }
 }
 mod git_receipts;
+mod home_paths;
 mod info;
 mod mcp;
 mod policy;
@@ -65,6 +68,7 @@ mod runtime_artifacts;
 mod runtime_cache_lock;
 mod serde_helpers;
 mod shell;
+mod signal_supervision;
 mod source_projection;
 mod state;
 mod status;

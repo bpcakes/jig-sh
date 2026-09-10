@@ -1,22 +1,21 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
-#[cfg(unix)]
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-#[cfg(unix)]
-use anyhow::anyhow;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value as JsonValue, json};
 
+use crate::home_paths::{
+    expand_tilde_path, has_tilde_prefix, home_name, home_name_matches, is_bare_home_name, same_path,
+};
+
 use self::home::{
     canonical_or, conventional_home, current_codex_home, discover_homes, discover_homes_from,
-    expand_tilde_path, has_tilde_prefix, home_name, home_name_matches, is_bare_home_name,
-    same_path, user_home,
+    user_home,
 };
 use self::inspection::{inspect_home, inspection_failure};
 pub(crate) use self::resume::{
@@ -139,17 +138,6 @@ enum ResumeHomeSelection<'a> {
     },
 }
 
-#[derive(Debug)]
-pub(crate) struct CodexChildExitStatus(pub(crate) i32);
-
-impl std::fmt::Display for CodexChildExitStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "Codex exited with status {}", self.0)
-    }
-}
-
-impl std::error::Error for CodexChildExitStatus {}
-
 pub(crate) fn homes_report(include_usage: bool) -> Result<JsonValue> {
     homes_report_with_paths(include_usage).map(|(report, _)| report)
 }
@@ -165,43 +153,13 @@ pub(crate) fn homes_report_with_progress<F>(
 where
     F: FnMut(usize, usize, Option<(usize, &JsonValue)>) -> Result<()>,
 {
-    #[cfg(all(unix, not(test)))]
-    {
-        let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
-            anyhow!(
-                "Codex home inspection was not started because the process-wide signal session is unavailable"
-            )
-        })?;
-        let result = homes_report_with_progress_and_cancellation(include_usage, progress, &|| {
-            signal_session.cancelled()
-        });
-        finish_signal_supervised(
-            result,
-            signal_session.finish(),
-            "Codex home inspection supervision could not retire safely",
-        )
-    }
-    #[cfg(any(not(unix), test))]
-    {
-        homes_report_with_progress_and_cancellation(include_usage, progress, &|| false)
-    }
-}
-
-#[cfg(unix)]
-pub(crate) fn finish_signal_supervised<T>(
-    outcome: Result<T>,
-    retirement: io::Result<()>,
-    retirement_message: &'static str,
-) -> Result<T> {
-    match retirement {
-        Ok(()) => outcome,
-        Err(_) => match outcome {
-            Ok(_) => Err(anyhow!(retirement_message)),
-            Err(error) => Err(error.context(format!(
-                "{retirement_message}; the supervised operation also failed"
-            ))),
+    crate::signal_supervision::supervise(
+        "Codex home inspection was not started because the process-wide signal session is unavailable",
+        "Codex home inspection supervision could not retire safely",
+        |cancelled| {
+            homes_report_with_progress_and_cancellation(include_usage, progress, &cancelled)
         },
-    }
+    )
 }
 
 fn homes_report_with_progress_and_cancellation<F>(
@@ -634,35 +592,13 @@ pub(crate) fn launch(home: &Path, args: &[OsString]) -> Result<()> {
     let mut command = Command::new(&codex_bin);
     command.args(args).env(CODEX_HOME_ENV, home);
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        let error = command.exec();
-        Err(error).with_context(|| {
-            format!(
-                "Failed to launch {} with CODEX_HOME={}",
-                codex_bin.to_string_lossy(),
-                home.display()
-            )
-        })
-    }
-
-    #[cfg(not(unix))]
-    {
-        let status = command.status().with_context(|| {
-            format!(
-                "Failed to launch {} with CODEX_HOME={}",
-                codex_bin.to_string_lossy(),
-                home.display()
-            )
-        })?;
-        if !status.success() {
-            let exit_status = status.code().unwrap_or(1).clamp(1, 255);
-            return Err(CodexChildExitStatus(exit_status).into());
-        }
-        Ok(())
-    }
+    crate::agent_launch::launch(&mut command, "Codex", || {
+        format!(
+            "Failed to launch {} with CODEX_HOME={}",
+            codex_bin.to_string_lossy(),
+            home.display()
+        )
+    })
 }
 
 pub(crate) fn configured_codex_home() -> Option<PathBuf> {

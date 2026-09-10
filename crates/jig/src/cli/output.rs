@@ -28,7 +28,9 @@ use self::work::{
 };
 
 mod agent;
+mod claude;
 mod codex;
+mod command_display;
 mod dev;
 mod doctor;
 mod info;
@@ -36,6 +38,7 @@ mod loops;
 mod prompt;
 mod state;
 mod status;
+mod usage;
 mod vault;
 mod work;
 
@@ -49,6 +52,8 @@ pub(super) enum HumanOutput {
     VaultGeneric,
     AgentDoctor,
     AgentBootstrap,
+    ClaudeHomes,
+    ClaudeLaunch,
     CodexHomes,
     CodexLaunch,
     CodexResume,
@@ -110,6 +115,8 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::VaultGeneric => format_vault_generic_summary(value),
         HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
         HumanOutput::AgentBootstrap => format_agent_bootstrap_summary(value),
+        HumanOutput::ClaudeHomes => claude::homes_summary(value),
+        HumanOutput::ClaudeLaunch => claude::launch_summary(value),
         HumanOutput::CodexHomes => format_codex_homes_summary(value),
         HumanOutput::CodexLaunch => format_codex_launch_summary(value),
         HumanOutput::CodexResume => format_codex_resume_summary(value),
