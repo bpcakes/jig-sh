@@ -20,7 +20,7 @@ plans and read-only mutation detection continue to cover the entire repository.
 - [x] Integrate validity, diagnostics, retry reuse, archive, and inspection budgets.
 - [x] Qualify full command performance, then activate the epoch and source schema.
 - [x] Review `.4.3`; fix/review at most twice, validate, close, and commit.
-- [ ] Review the full branch; fix/review at most twice and audit all acceptance.
+- [x] Review the full branch; fix/review at most twice and audit all acceptance.
 
 ## Surprises & Discoveries
 
@@ -78,8 +78,12 @@ Use comprehensive-review defaults, identical pinned scopes, and no exclusions.
 ## Outcomes & Retrospective
 
 Both implementation tasks are complete and validated. Epoch 9 is active after
-hosted performance qualification. The requested full-branch review remains
-outstanding; this work plan stays open until that review and final gates finish.
+hosted performance qualification. Two full-branch review rounds are complete, with the archive finding fixed
+and no actionable findings in the final Codex pass. Claude timed out without
+a report in both branch rounds; no merged two-reviewer coverage is claimed.
+Final backend verification and all configured gates passed. Receipt reuse
+preserved every original receipt and run ID. The work plan and its session are
+closed successfully.
 
 ## Context and plan of work
 
@@ -382,3 +386,73 @@ and the development binary build passed. Initial new-test attempts exposed an
 unstable test-counter API and the wrong target fixture JSON shape; both were
 corrected before the successful run. Final configured gates and backend testing
 will follow the remaining branch review.
+
+
+Full-branch review round 2 examined clean `3f7ec964` against `9d4bd0f2` with no
+exclusions. Both parent fingerprints were complete and identical, as were
+Codex's before/after captures. Codex returned no actionable findings after
+static review of production changes, surrounding code, tests, documentation,
+and qualification scripts; it did not independently reproduce measurements.
+Claude again exited 124 at its provider deadline without a report. This is an
+explicit single-reviewer result, not merged Claude/Codex coverage. No additional
+finding requires the optional third branch round. Final backend verification
+and configured gates remain pending.
+
+The single diagnostic rerun of `34470517168`'s constrained-cold job passed on
+the unchanged `a2632c96` binary, including all five collection-limit cases.
+Independent sample-level audit of the resulting four matrices and both limit
+suites passed: 2,400 inspections, maximum phase p95 792.580 ms, maximum single
+phase 792.700 ms, maximum full-command p95 increase 789.573 ms. The failed first
+attempt remains committed. Retry artifact `10150709808` was checksum-verified;
+its command report SHA-256 is
+`f4983979f2488860b0cbcbd8fff4335fcd15a0fb4d4587ce4f4eceb359761a95`.
+All standard CI passed at `a2632c96`; fresh CI for the archive correction at
+`3f7ec964` is running as qualification `34474308420` and Rust `34474308351`.
+
+
+[Hosted qualification `34474308420`](https://github.com/bpcakes/jig-sh/actions/runs/34474308420)
+passed on `3f7ec964` without a retry. All four matrices, 2,400 inspections, and
+both five-case limit suites passed an independent sample-level audit after
+artifact checksum verification. Maximum phase p95 was 793.857 ms, maximum
+individual phase 794.960 ms, and maximum full-command p95 increase 789.904 ms.
+All reports used immutable runtime SHA-256
+`6994ca028900812cec51655ba331bf7375947a0c5ffb19bc2d22c036d0499b8b`.
+The complete reports are retained in that workflow's four measurement artifacts
+(`10151257781`, `10151414536`, `10151217003`, `10151571433`). Their uncompressed
+report checksums are:
+
+- `commands-ci-warm.json`: `6537ad5502cef78453ffa384b05981b13683316ba0e99939373c4888d09bd0c3`.
+- `commands-ci-cold.json`: `600017973b3782f8adee4269a26ce35f5cb37d7c5190e2b48d4e3aa0335e851f`.
+- `limits-ci.json`: `aec1ab6d7f422c5592c5ddeea61f73398ab928957d5b00be904d22ee1ce32b0a`.
+- `commands-constrained-warm.json`: `1998c1f8e10052fb53531554da57a9031c87f3359242158390de71483767c75c`.
+- `commands-constrained-cold.json`: `4272acb787edcfbd09fa4fb578d9f8169de64baaa0e3712de29cb3048c7936b7`.
+- `limits-constrained.json`: `3a97dddfef50ffcddd8b398e4b717cc6a49004a7563911c5edb309e6f5eb8e7f`.
+
+
+All sixteen Rust CI jobs passed on `3f7ec964`, including Linux/macOS locked
+suites, both no-default-features suites, Clippy variants, generated fixture
+validation, launcher parity, and the declared MSRV check. Agent-map and
+repository-policy workflows also passed. Both owned Beads tasks were confirmed
+closed in the authoritative tracker; unrelated tracker edits remain untouched.
+
+
+Final normal-runtime backend verification passed all 4,070 workspace tests
+(three skipped, two slow), Clippy, formatting, contract validation, and file
+budgets. Nextest run `df9270f8-f6dc-45f4-9963-349af3b16763` completed with exit 0.
+The follow-up configured work check passed with zero executions, reusing all
+five original receipts from `run_01M25M2SZ7AKWXVQZR81R2XPSC`. Its validation
+receipt is `receipt_01M25N7W0YKF1XHBCBNYPB7BVJ`. Gate and evidence inspection
+with the documented 30-second debug override reported passed/fresh with no
+missing, failed, stale, unknown, or unsupported required gates. Receipt listing
+and work status were inspected. Source fingerprint remained
+`sha256:fd57f26ad0fa9aa36e39094e3fce9cabe00c18202d027b20f2c709dcc18c945e`.
+All source changes, qualification, requested review rounds, and local acceptance
+checks are complete, with the explicit Claude branch-review timeout limitation
+retained above.
+
+
+Work finish passed its final authority and validity checks and closed
+`plan_01M23PHMRC7BWQ3G8CPP4AWH9T` with outcome `success`. Closing receipts are
+`receipt_01M25NBP9WKTFCM2GRV1T6PGM1` (plan) and
+`receipt_01M25NBPABMFW363AWYG4EWFB1` (session). Final changes after `3f7ec964`
+contain only work-plan documentation and append-only state records.
