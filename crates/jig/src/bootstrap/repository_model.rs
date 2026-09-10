@@ -194,7 +194,7 @@ impl RepositoryRenderModel {
     ) -> bool {
         let current = self.affected_ignore == authored.affected_ignore
             && self.components == authored.components
-            && self.actions == authored.actions
+            && freshness::matches_generated_actions(&self.actions, &authored.actions)
             && self.profiles == authored.profiles
             && self.default_check_profile == authored.default_check_profile
             && self

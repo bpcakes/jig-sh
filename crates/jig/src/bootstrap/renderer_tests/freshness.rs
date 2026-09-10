@@ -13,7 +13,8 @@ fn freshness_epoch_defaults_conservatively_and_preserves_authored_assertions() {
             .iter()
             .all(|action| action.get("inputs_policy").is_none())
     );
-    let current = render_context(&template, &answers, Some(9)).unwrap();
+    let current = render_context(&template, &answers, None).unwrap();
+    assert_eq!(current["_jig"]["contract_version"], 9);
     let actions = current["repository"]["actions"].as_array().unwrap();
     assert!(!actions.is_empty());
     assert!(
@@ -101,7 +102,7 @@ fn epoch_nine_loader_normalizes_omitted_policy_without_losing_other_authority() 
         .unwrap()
         .remove("inputs_policy");
     fs::write(&path, toml::to_string(&source).unwrap()).unwrap();
-    let context = RepoContext::load_freshness_fixture(destination.path().to_path_buf()).unwrap();
+    let context = RepoContext::load_from_root(destination.path().to_path_buf()).unwrap();
     assert_eq!(context.contract_version(), 9);
     source["repository"]["actions"].as_array_mut().unwrap()[0]
         .as_table_mut()
@@ -111,5 +112,5 @@ fn epoch_nine_loader_normalizes_omitted_policy_without_losing_other_authority() 
             toml::Value::String("exhaustive".into()),
         );
     fs::write(&path, toml::to_string(&source).unwrap()).unwrap();
-    assert!(RepoContext::load_freshness_fixture(destination.path().to_path_buf()).is_err());
+    assert!(RepoContext::load_from_root(destination.path().to_path_buf()).is_err());
 }

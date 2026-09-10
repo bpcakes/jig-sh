@@ -18,7 +18,7 @@ plans and read-only mutation detection continue to cover the entire repository.
 - [x] Claim `.4.3` after fingerprint commit `6d0859ea`.
 - [x] Implement additive receipt metadata and dependency proof.
 - [x] Integrate validity, diagnostics, retry reuse, archive, and inspection budgets.
-- [ ] Qualify full command performance, then activate the epoch and source schema.
+- [x] Qualify full command performance, then activate the epoch and source schema.
 - [ ] Review `.4.3`; fix/review at most twice, validate, close, and commit.
 - [ ] Review the full branch; fix/review at most twice and audit all acceptance.
 
@@ -253,3 +253,62 @@ and warnings denied. Benchmark script syntax, Beads export privacy, diff checks,
 and byte-for-byte append-only receipt/run journal checks passed. The candidate
 is ready for hosted CI qualification; epoch 8 remains the normal runtime/source
 contract until those measurements pass.
+
+Hosted CI run `34461112394` passed all four warm/cold matrices (2,400 inspections)
+and both five-case limit suites at candidate `0de59e8826ec11a5142bb4bed5bba5faca020c17`.
+The raw artifact checksums and one shared binary digest were verified; sample
+counts, phase p95/deadlines and full-command p95 deltas were independently checked.
+Maximum phase p95 was 822.039 ms; maximum full-command p95 increase was 845.743 ms.
+All six complete reports are retained in the benchmark journal. Normal epoch 9
+is now activated across the runtime, renderer, loader, manifest and launcher;
+the temporary feature and test-loader bypass are removed. Existing fixtures use
+the ordinary loader, and the default-render test explicitly asserts epoch 9.
+Final configured gates, backend tests, task closure and full-branch reviews remain.
+
+The ordinary macOS CI jobs found two fixture portability failures: `/bin/true`
+was unavailable, and file creation rejected the invalid UTF-8 filename. The cwd
+race fixture now uses `/bin/sh -c 'exit 0'`; the path test retains backslash and
+newline cases on macOS and invalid-byte coverage on other Unix hosts. Both tests
+pass locally; final CI will verify macOS. The first local compile of that fixture
+edit used strings instead of `ArgvValue::Literal`; correcting the test values
+resolved it without a runtime change.
+
+The activated normal build passed all 105 focused tests, including freshness,
+contract compatibility, default epoch-9 rendering and launcher/manifest epoch
+assertions. Launcher template parity and formatting also passed. The final
+configured gate run and standalone backend test now use the rebuilt epoch-9
+runtime through `JIG_DEV_BIN`.
+
+The first activated gate run passed Clippy, formatting, contract and file budgets,
+then stopped on two legacy migration fixtures after 1,243 of 4,029 tests ran
+(1,241 passed, two failed, three skipped). Those fixtures downgraded fresh output
+to epochs 6/7 without removing epoch-9 policy fields. Their reconstruction now
+removes only the newer policy and its provenance from both source and manifest,
+and the post-update assertion expects the current epoch. The runtime continues
+to reject malformed old contracts; update and recopy still exercise the actual
+legacy command alias before and after migration.
+
+The second activated gate run passed the four non-test gates, then stopped on
+the legacy file-budget retirement scenario (1,243 passed, one failed, three
+skipped; 2,785 not run). This exposed a real activation defect: generated
+projections compared pre-render actions directly with epoch-9 actions, treating
+inferred policy fields as authored changes and suppressing the native migration.
+Current and legacy projection matching now normalize the explicit-shell and
+freshness defaults on both sides, retaining any declared policy or provenance
+as distinct authored authority. A new answer-file round-trip regression checks
+generated defaults plus declared whole-repository and exhaustive policies; the
+existing end-to-end retirement scenario remains the migration oracle. The first
+test compile used the wrong policy type import; it was corrected to the public
+`ActionInputsPolicy` before rerunning the group.
+
+Master advanced to `9d4bd0f2` while validation ran. A read-only merge preview was
+clean, and the journal merge retained the shared byte prefix and every parent
+record with its original multiplicity. Integration with that base and final
+validation remain pending; no fourth per-task review is added beyond the agreed
+three-pass cap. The final activation fixes will be included in full-branch review.
+
+All 29 template-update and file-budget model regression tests passed after the
+projection fix, including actual checker retirement and both legacy command
+update/recopy flows. Activation is committed as a candidate for integration;
+task closure still requires final gates and backend verification on the combined
+branch.

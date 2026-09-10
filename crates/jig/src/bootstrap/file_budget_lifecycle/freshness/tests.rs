@@ -63,7 +63,7 @@ fn lifecycle_freshness_keeps_global_native_proof_and_rejects_unusable_metadata()
     git(root, &["config", "user.email", "test@example.invalid"]);
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "Example lifecycle fixture"]);
-    let ctx = RepoContext::load_freshness_fixture(root.to_path_buf()).unwrap();
+    let ctx = RepoContext::load_from_root(root.to_path_buf()).unwrap();
     let opts = crate::cli::CheckOpts {
         tool: crate::cli::ToolOpts {
             plan_id: None,

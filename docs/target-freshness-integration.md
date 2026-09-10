@@ -1,9 +1,17 @@
 # Target freshness receipt integration
 
-Epoch 9 integration is implemented for development fixtures. Normal source and
-rendering remain on epoch 8 until the command qualification and reviews pass.
-The [public policy](public-contract.md#target-freshness-policy-v1-design) defines
-the compatibility and activation requirements.
+Epoch 9 activates scoped target receipts and gate evaluation. Normal source,
+rendering, loading and launcher capabilities use the same epoch; the development
+feature and special test-loader bypass have been removed. The
+[public policy](public-contract.md#target-freshness-policy-v1-design) defines
+the compatibility rules, and the [measurements](target-freshness-benchmark.md)
+record hosted CI and constrained qualification.
+
+Use an epoch-9-compatible runtime to update a repository, then rerun `work check`
+to record new evidence. Earlier receipts remain readable but cannot satisfy
+epoch 9 gates without their missing original proof. Actions default to
+`whole_repository`; opt into `exhaustive` only after auditing the entire input
+and dependency closure. Existing epoch 2–8 repositories keep their prior rules.
 
 ## Recording and inspection
 

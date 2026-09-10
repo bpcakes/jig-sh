@@ -52,7 +52,7 @@ jobs:
         with:
           shared-key: freshness-qualification
       - name: Build candidate runtime
-        run: cargo build --locked --release -p jig-sh --bin jig --features target-freshness-dev
+        run: cargo build --locked --release -p jig-sh --bin jig
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: freshness-runtime

@@ -14,7 +14,7 @@ That final strict validation is a deliberate fail-closed launcher boundary and r
 
 Runtime seeding selects Bash and its helper-command path as one platform policy. Linux and macOS accept only root-owned, non-writable Bash and helper directories, preventing repository-local and unrelated ambient directories from entering the seeding path.
 
-Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v8 is the current compatibility epoch. Contract v6 remains supported with its original component-aggregate affected selection, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` namespace remain CLI-only.
+Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v9 is the current compatibility epoch. Contract v6 remains supported with its original component-aggregate affected selection, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` namespace remain CLI-only.
 
 CLI commands print human-readable output by default. Long-running human-mode commands collect bounded child-output previews, phase changes, and periodic heartbeats while supervised work runs, then make a deadline-bounded best-effort write of that progress to stderr after supervised execution returns and before any restored terminating signal is redelivered. A stalled presentation sink may therefore lose the remaining preview, but it cannot indefinitely delay command completion or signal retirement. Because delivery is deferred, heartbeat wording is historical (for example, a phase “reached 25s”) rather than a claim that it is still running when rendered. The deferred boundary keeps transport backpressure from suspending timeout, cancellation, or cleanup and preserves already-collected progress during ordinary interruption. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, `scripts/jig work status --json`, or `scripts/jig work evidence --json`); JSON mode disables that human progress output. Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document, and `scripts/jig mcp` always reserves stdout for MCP framing. `scripts/jig prompt get` prints the bare rendered body without `--json` and the standard `prompt get` command envelope with it. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. `scripts/jig work start --print-plan-id` remains a shell-capture override that prints only the new plan id. Human text, TUI presentation, and `--print-plan-id` output are for terminal use and are not stable machine-readable contract output; automation should pass `--json` or use MCP tools.
 
@@ -88,7 +88,7 @@ Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are re
 
 - `contract_version`: version of the generated tool manifest and command surface
 
-Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Version `7` adds typed native file-budget configuration and durable prepared native inputs, and makes non-empty action inputs target-local for affected selection. Version `8` is the single unreleased epoch after v0.3.0: it adds declared bounded string action arguments together with literal argv and explicit compatibility-shell runners, preserving v7 file-budget configuration and preparation. Generic bounded strings bind only whole argv positions; shell runners accept no generic interpolation. V8 sources reject the implicit command runner, while versions 6–7 retain their original behavior. Runtimes supporting only older epochs reject newer manifests and launchers before execution. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection, and version 6 retains its original repository behavior. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
+Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Version `7` adds typed native file-budget configuration and durable prepared native inputs, and makes non-empty action inputs target-local for affected selection. Version `8` adds declared bounded string action arguments together with literal argv and explicit compatibility-shell runners, preserving v7 file-budget configuration and preparation. Generic bounded strings bind only whole argv positions; shell runners accept no generic interpolation. V8 sources reject the implicit command runner, while versions 6–7 retain their original behavior. Version `9` adds explicit exhaustive-input policy and versioned target freshness, including original dependency execution proof and inherited validity. Omitted policies remain whole-repository. Epochs 8 and 9 are separate unreleased changes after v0.3.0; earlier repositories retain their recorded epoch semantics. Runtimes supporting only older epochs reject newer manifests and launchers before execution. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection, and version 6 retains its original repository behavior. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
 
 Breaking `contract_version` changes include:
 
@@ -512,7 +512,7 @@ Structured work commands use the `jig.work_*` CLI and MCP namespace, but state-o
 
 ## Work Gates
 
-`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. Target and profile gates require their selected targets and execution dependencies. Each target uses its latest original receipt in the same work plan, ordered by completion time then receipt ID. A newer failure or unverifiable result supersedes an older pass. Current configuration, input, worktree and time-validity checks still apply. A profile may combine current receipts from separate runs; its aggregate `run_id` is null in that case, while every target retains its actual `run_id` and `receipt_id`. Archive protection retains the latest target outcomes, including failures and expired results, so removing history cannot reveal an older pass.
+`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. Each explicitly required target uses its latest original receipt in the same work plan, ordered by completion time then receipt ID. A newer failure or unverifiable result supersedes an older pass. Epochs 6–8 also select the latest receipts for execution dependencies. Epoch 9 validates implicit dependencies through the selected target's original execution proof; a dependency that is explicitly required still uses its own latest receipt. Current authority and time-validity checks follow the recorded contract epoch. A profile may combine current receipts from separate runs; its aggregate `run_id` is null in that case, while every target retains its actual `run_id` and `receipt_id`. Archive protection retains the latest target outcomes, including failures and expired results, so removing history cannot reveal an older pass.
 
 `scripts/jig work check --plan-id ...` executes missing, failed, stale or unknown targets, their normal execution dependencies, and required dependents invalidated by those executions. It reuses fresh independent passes. Final validation reassesses all required targets and records `jig.work_check_targets/v1` evidence referencing their original receipts with `executed`, `not_started`, or `reused` disposition derived from the actual selected receipt and target-run result. The result exposes `target_evidence` and `target_validation_receipt_id`; when all targets are reused, `plan` and `run` are null and `results` is empty. Use `scripts/jig check COMPONENT:ACTION --plan-id ...` to force native target execution. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
 
@@ -522,7 +522,7 @@ Contract 5 and later check gates may declare strict `paths`, `paths_ignore`, and
 
 `scripts/jig work finish --plan-id ...` fails when any required gate is missing, failed, stale, unknown, or unsupported. Older `work.checks` entries are still accepted for compatibility and backfill missing required check gates during migration. If the same tool is declared in `work.gates`, that explicit gate entry is authoritative.
 
-Fresh legacy check evidence means the committed non-`.agent/` source tree and non-`.agent/` worktree projection did not change while `work check` ran and still match the current source. Fresh target evidence additionally requires the receipt's contract digest and target input digest to match the currently resolved catalog and target. Target input digests conservatively cover the same complete source/worktree identity plus declared input patterns, so an unrelated local change can invalidate evidence; they are not cache keys. Append-only `.agent/` state and evidence-only commits are outside that identity. Missing target metadata produces `unknown`; a known mismatch produces `stale`. Generated outputs should therefore be committed, ignored, or settled before required gates are used as finish evidence. If a check creates expected files, review those files and rerun `work check` to record fresh evidence.
+Fresh legacy check evidence means the committed non-`.agent/` source tree and non-`.agent/` worktree projection did not change while `work check` ran and still match the current source. At epochs 6–8, fresh target evidence additionally requires the receipt's contract digest and target input digest to match the currently resolved catalog and target. Target input digests conservatively cover the same complete source/worktree identity plus declared input patterns, so an unrelated local change can invalidate evidence; they are not cache keys. Append-only `.agent/` state and evidence-only commits are outside that identity. Missing target metadata produces `unknown`; a known mismatch produces `stale`. Generated outputs should therefore be committed, ignored, or settled before required gates are used as finish evidence. If a check creates expected files, review those files and rerun `work check` to record fresh evidence. Epoch 9 target evidence uses the separate identity and original execution proof described in [Target Freshness Policy v1](#target-freshness-policy-v1-design); explicitly exhaustive targets can retain freshness after unrelated source edits. Legacy digest fields and global execution/adoption safety retain their existing meaning.
 
 After upgrading an in-flight repo from a Jig version that recorded receipts without `worktree_fingerprint` or target digests, rerun `scripts/jig work check --plan-id ...` before `scripts/jig work finish --plan-id ...`. Older receipts deserialize, but their gate freshness is `unknown`.
 
@@ -550,42 +550,30 @@ Unknown non-`check` gate kinds are parsed and reported as unsupported. Required 
 
 ## Target Freshness Policy v1 (Design)
 
-This section specifies the pending design for
-`jig-sh-generic-monorepo-zac.4.1`; it does not describe shipped behavior.
-The current Work Gates rules above still apply. The issue has no child tasks.
-Fingerprint implementation belongs to `jig-sh-generic-monorepo-zac.4.2`, and
-receipt/gate integration belongs to `jig-sh-generic-monorepo-zac.4.3` after
-`jig-sh-qh4` establishes target receipt selection. This design changes no Rust
-types, generated schemas, contract numbers, or existing journal records.
-
-The implementation reserves epoch 9. Fingerprints and receipt integration are
-available in development fixtures; normal source and rendering remain on epoch
-8 while qualification runs. See [receipt integration](target-freshness-integration.md)
-and the [retained measurements](target-freshness-benchmark.md) for implementation
-status. The `target-freshness-dev` build feature admits epoch 9 for CLI and CI
-qualification without changing the default generated epoch.
+This policy is implemented by contract epoch 9. In the specification below,
+`E` means `9`. The original design anchor is retained for existing links.
+Fingerprint task `jig-sh-generic-monorepo-zac.4.2` and receipt/gate integration
+task `.4.3` implement the policy on top of `jig-sh-qh4` target receipt selection.
+See [receipt integration](target-freshness-integration.md) and the
+[retained qualification measurements](target-freshness-benchmark.md).
+Normal rendering and the source repository now use epoch 9; no development
+feature or special test loader is required.
 
 ### Version and completeness declaration
 
-The implementation must allocate a new contract epoch, called `E` here, after
-the existing action-execution contract. Although v8 is currently unreleased,
-this separately delivered change must not reinterpret its persisted plans or
-existing source declarations; `.4.2` owns the distinct epoch allocation.
-Explicitly reject an authored `inputs_policy` in pre-`E` source or manifest
-actions, including an explicitly written default value. Omission preserves
-their existing behavior. Validation must check field presence before defaulting
-the shared action type, rather than silently ignoring the new field.
+Epoch 9 follows the action-execution contract at epoch 8. It does not reinterpret
+epoch 8 persisted plans or source declarations. Authored `inputs_policy` is
+rejected in pre-9 source and manifest actions, including an explicitly written
+default value; omission preserves their existing behavior. Validation checks
+field presence before defaulting the shared action type.
 
-Allocate the actual number in `.4.2` against the then-current contract registry.
-That task may implement and exercise `E` in development fixtures; activate it in
-generated/source repositories only when `.4.3` also supplies receipt/gate
-integration. Until then keep the source repository and normal rendering on the
-existing epoch and conservative gates. This coordinated activation updates
-source configuration, resolved manifests, renderer, loader, launcher capability
-checks, and migration documentation together. Do not advertise an operational
-epoch whose required gates cannot yet produce usable receipts. Independently
-version the new target identity format with `schema_version: 1`; its digest domains
-must differ from existing `jig-target-input-v1` and `jig-target-input-v2`.
+Source configuration, resolved manifests, renderer, loader and launcher
+capabilities use epoch 9 together. Existing repositories retain their recorded
+epoch until updated with a compatible runtime. Rerun `work check` after upgrading:
+receipts without new metadata remain readable but are unknown at epoch 9.
+No historical receipt or identifier is rewritten. The target identity format
+has independent `schema_version: 1` and distinct digest domains from the existing
+`jig-target-input-v1` and `jig-target-input-v2`.
 
 At epoch `E`, add one optional `ActionSpec.inputs_policy` enum with values
 `whole_repository` and `exhaustive`. Omission defaults to `whole_repository`.
@@ -608,7 +596,7 @@ whole-repository fallback; runner/configuration and dependency authority still
 apply. This also preserves the inputless affected-selection fallback without
 giving an accidentally omitted path set source-independent freshness.
 
-For example, this is a **future epoch `E`** action declaration:
+For example, this is an **epoch 9** action declaration:
 
 ```toml
 [[repository.actions]]
@@ -1170,8 +1158,8 @@ per-command deadlines and explicit inspection override, plus legacy receipts
 inside epoch-`E` repositories. Both delivery
 tasks must build the development binary, run applicable `scripts/jig work check`
 gates through `JIG_DEV_BIN`, and finish backend changes with `scripts/jig check test`.
-This design task is validated by source alignment, acceptance review, and the
-repository's applicable work gates; it does not implement those future tests.
+The integration notes and retained measurements record the implementation,
+review, and qualification evidence for these delivery requirements.
 
 ## Rollout Rules
 

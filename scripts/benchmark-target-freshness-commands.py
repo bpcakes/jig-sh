@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Qualify real CLI inspections using fresh processes and original live receipts.
 
-Build jig with --release --features target-freshness-dev before epoch 9 activation.
+Build the current jig runtime with --release before running qualification.
 This driver owns temporary generic repositories, never an existing checkout.
 Run warm and cold separately; cold evicts file data, not directory metadata.
 """

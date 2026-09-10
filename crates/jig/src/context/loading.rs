@@ -2,26 +2,10 @@ use super::*;
 
 impl RepoContext {
     pub(crate) fn reload_execution_authority(&self) -> Result<Self> {
-        Self::load_from_root_with_development_epoch(
-            self.root().to_path_buf(),
-            cfg!(test)
-                && self.contract_version()
-                    == jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION,
-        )
+        Self::load_from_root(self.root().to_path_buf())
     }
+
     pub(crate) fn load_from_root(root: PathBuf) -> Result<Self> {
-        Self::load_from_root_with_development_epoch(root, false)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn load_freshness_fixture(root: PathBuf) -> Result<Self> {
-        Self::load_from_root_with_development_epoch(root, true)
-    }
-
-    fn load_from_root_with_development_epoch(
-        root: PathBuf,
-        development_fixture: bool,
-    ) -> Result<Self> {
         let config_path = root.join(".jig.toml");
         let loaded_config = load_config_snapshot(&config_path)?;
 
@@ -40,11 +24,7 @@ impl RepoContext {
             format!("sha256:{:x}", Sha256::digest(manifest_text.as_bytes())),
         ];
 
-        if !is_supported_contract_version(manifest.contract_version)
-            && !(development_fixture
-                && manifest.contract_version
-                    == jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
-        {
+        if !is_supported_contract_version(manifest.contract_version) {
             bail!(
                 "Unsupported jig contract version: {}",
                 manifest.contract_version

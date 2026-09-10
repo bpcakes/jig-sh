@@ -49,7 +49,7 @@ expires=2099-12-31
     .unwrap();
     run_git(ctx.root(), &["add", "."]);
     run_git(ctx.root(), &["commit", "-qm", "Example native authority"]);
-    let ctx = RepoContext::load_freshness_fixture(ctx.root().to_path_buf()).unwrap();
+    let ctx = RepoContext::load_from_root(ctx.root().to_path_buf()).unwrap();
     let plan = crate::state::plans_open(
         &ctx,
         crate::state::PlanOpenRequest {
@@ -133,7 +133,7 @@ fn completed_native_failure_has_complete_freshness_and_blocks_dependents() {
         ctx.root(),
         &["commit", "-qm", "Example native failure authority"],
     );
-    let ctx = RepoContext::load_freshness_fixture(ctx.root().to_path_buf()).unwrap();
+    let ctx = RepoContext::load_from_root(ctx.root().to_path_buf()).unwrap();
     let plan = crate::state::plans_open(
         &ctx,
         crate::state::PlanOpenRequest {

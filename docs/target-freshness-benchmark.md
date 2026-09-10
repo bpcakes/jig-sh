@@ -1,10 +1,10 @@
 # Target freshness collector measurements
 
-Epoch 9 is staged. The loader, renderer, and source repository remain on epoch
-8 until receipt integration and the qualification required by
+Epoch 9 is active after receipt integration and the required hosted CI and
+constrained qualification. The final qualification results below establish the
 [Target Freshness Policy v1](public-contract.md#target-freshness-policy-v1-design)
-are complete. These first measurements establish the requested implementation
-baseline; they do not qualify the epoch for activation.
+rollout criteria. Earlier measurements, including failed experiments, are retained
+to document the implementation baseline and the changes that made it qualify.
 
 The fixture has 4,000 generated 512-byte source files, a 100-file narrow input
 tree, broad inputs covering all 4,000 files, four targets sharing a transitive
@@ -73,7 +73,7 @@ Optional identity snapshots and collection errors do not enter execution-plan
 hashing or equality. Submitted-plan validation re-resolves all existing global
 source/configuration and executable authority without a second scoped scan,
 and returns a plan with client-supplied freshness metadata discarded. Receipt
-integration must prepare that proof inside the live, cancellable execution
+integration prepares that proof inside the live, cancellable execution
 worker. The original plan validation and mutation-safety boundaries remain
 whole-repository checks.
 
@@ -93,8 +93,8 @@ flushed regular fixture files before every sample with `fsync` and
 remained warm. All 100 cold samples completed, but case p95 was 1,016–1,141 ms,
 which **fails qualification**. Cgroup I/O counters showed approximately 16.8 MB
 of physical reads per sample charged to the capped device. These were local
-containers, not CI. Final receipt integration must remeasure the reviewed
-collector after its per-file allocation and parent-capability improvements.
+containers, not CI. The next measurements rechecked the reviewed collector after
+its per-file allocation and parent-capability improvements.
 The next local cold run also completed 100/100: clean 988.674 ms, narrow dirty
 1,007.708 ms, wide dirty 996.845 ms, staged 1,062.855 ms, and untracked 996.236 ms
 p95. It still fails the all-cases threshold. The next frozen revision, with raw-protocol reuse and redundant-parent-lookup
@@ -104,12 +104,11 @@ fails qualification because the clean case exceeds the limit.
 [All 700 release samples](benchmarks/target-freshness-release.jsonl) preserve
 the observations, including the failed cold runs and enforced cgroup limits.
 
-The batched debug result fits the two-second inspection deadline but exceeds
-the one-second p95 qualification threshold. Release-build measurements, actual
-CI measurements, one-CPU/20-MiB/s storage measurements, cold/warm conditions,
-near-ceiling outcomes, and full-command comparisons remain required before
-activation in receipt integration. No debug timing result substitutes for those
-checks.
+The batched debug result fit the two-second inspection deadline but exceeded
+the one-second p95 qualification threshold. Release builds, actual CI,
+one-CPU/20-MiB/s storage, cold/warm conditions, near-ceiling outcomes and
+full-command comparisons were therefore required before activation. The final
+qualification below records those checks.
 
 To reproduce a measurement, build the library test executable and pass its
 printed path to the driver:
@@ -179,7 +178,7 @@ test suites ran on the host. All 200 completed within the two-second deadline.
 Case p95 was 1,196.984 ms clean, 1,286.206 ms narrow dirty, 947.084 ms wide
 dirty, 1,175.618 ms staged, and 973.915 ms untracked. This contended run fails
 the p95 requirement and is preserved in the release sample file; it is not a CI
-qualification. Median times were 927–937 ms. Normal epoch 8 remains active.
+qualification. Median times were 927–937 ms. Normal epoch 8 remained active at this stage.
 
 ## Receipt integration measurements
 
@@ -211,7 +210,7 @@ freshness, but four command/case p95s exceeded one second. A subsequent
 240-invocation clean/narrow probe also completed, with phase p95s of
 1,006–1,020 ms. Both failed results are retained. The probe overlapped host
 compilation and focused tests. Counters separate matching, identity encoding,
-original proof lookup, and path revalidation; the next candidate removes
+original proof lookup, and path revalidation; the subsequent candidate removed
 duplicate glob evaluations within each filesystem entry's observation.
 
 The full-command driver creates two independent generic repositories with the
@@ -224,7 +223,7 @@ opt in and retain exhaustive authority through both shared dependency levels.
 It also checks non-leaf freshness after an unrelated edit and successful finish.
 
 ```sh
-cargo build --release -p jig-sh --bin jig --features target-freshness-dev
+cargo build --release -p jig-sh --bin jig
 python3 scripts/benchmark-target-freshness-commands.py \
   --binary target/release/jig --cache warm --profile local \
   --output /tmp/example-command-warm.json
@@ -255,7 +254,7 @@ The constrained cold wrapper includes these cases after the command matrix.
 `.github/workflows/target-freshness-qualification.yml` runs real hosted CI and
 constrained profiles with both cache conditions and retains failed artifacts.
 The CI profile refuses to identify an ordinary local run as GitHub Actions.
-Normal epoch 8 remains active until the complete qualification and review pass.
+Normal epoch 8 remained active until the complete qualification and task review passed.
 
 The subsequent full cold CLI matrix with shared match checks completed every
 inspection but retained eight phase-p95 failures. Instrumentation showed the
@@ -276,5 +275,34 @@ binary SHA-256 `a9186d9663c22a7470da0c173a2c4173e9145cd1aacc16d42cf7fa89ef00dd4b
 The five constrained limit cases also passed, including 480 MiB recording and
 explicit inspection, and refusal for bytes/entries over the ceiling and required
 ignored/symlink inputs. [Raw local qualification reports](benchmarks/target-freshness-integration-qualified-local.jsonl)
-include every sample and limit outcome. These local results do not substitute
-for the pending actual hosted-CI warm/cold matrix.
+include every sample and limit outcome. These local results are separate from the
+actual hosted-CI warm/cold matrix reported below.
+
+## Hosted CI qualification
+
+[Qualification run 34461112394](https://github.com/bpcakes/jig-sh/actions/runs/34461112394)
+passed on 2026-09-10 at commit `0de59e8826ec11a5142bb4bed5bba5faca020c17`.
+The four jobs used the same release runtime, SHA-256
+`74a53d88a0d34f09076e529fbc1ee7bb2bfbde4600e94df6eec3fcee1186c3fe`.
+Each row covers 600 independent inspections: five source cases, three commands,
+two epochs and 20 samples per combination.
+
+| Profile | Cache | Phase p95 range (ms) | Maximum phase (ms) | Largest full-command p95 increase over epoch 8 (ms) |
+| --- | --- | ---: | ---: | ---: |
+| Hosted CI | Warm | 147.923–157.026 | 159.316 | 170.319 |
+| Hosted CI | Cold | 161.697–342.367 | 343.864 | 568.630 |
+| One CPU, 20 MiB/s | Warm | 174.326–188.590 | 198.770 | 191.602 |
+| One CPU, 20 MiB/s | Cold | 186.793–822.039 | 822.832 | 845.743 |
+
+Every inspection passed with its original receipts. All four exhaustive targets
+retained scoped authority through their full dependency closure; non-leaf
+freshness survived the unrelated edit and finish succeeded in every matrix.
+Constrained cold samples also verified physical reads through the throttled
+device. Hosted CI and constrained storage each passed all five limit cases,
+including 480 MiB recording, explicit inspection and finish, and bounded refusal
+for oversized source, entry overflow, ignored inputs and symlinks.
+[All six complete CI reports](benchmarks/target-freshness-integration-qualified-ci.jsonl)
+retain the samples, counters, outcomes and exact runtime identity. Downloaded
+artifact checksums were verified before inspecting the reports, and the phase
+and full-command p95 values were recalculated from the samples. These results
+satisfy the performance prerequisite for epoch 9 activation.

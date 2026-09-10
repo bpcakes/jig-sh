@@ -44,6 +44,35 @@ fn reload_managed_model(model: &RepositoryRenderModel) -> RepositoryRenderModel 
 }
 
 #[test]
+fn generated_freshness_defaults_remain_managed_but_declared_policies_are_preserved() {
+    use jig_contract::ActionInputsPolicy;
+
+    let generated =
+        RepositoryRenderModel::from_answers(&answers("rust_crate_roots = [\"crates\"]\n")).unwrap();
+    let mut rendered = generated.clone();
+    rendered.prepare_runner_epoch(9).unwrap();
+    rendered.prepare_freshness_epoch(9).unwrap();
+    assert_eq!(reload_managed_model(&rendered).actions, generated.actions);
+
+    for policy in [
+        ActionInputsPolicy::WholeRepository,
+        ActionInputsPolicy::Exhaustive,
+    ] {
+        let mut authored = rendered.clone();
+        let action = authored
+            .actions
+            .iter_mut()
+            .find(|action| action.target.to_string() == "api:clippy")
+            .unwrap();
+        action.inputs_policy = Some(policy);
+        action
+            .provenance
+            .insert("inputs_policy".into(), FieldProvenance::Declared);
+        assert_eq!(reload_managed_model(&authored).actions, authored.actions);
+    }
+}
+
+#[test]
 fn same_target_authored_file_budget_runner_survives_model_round_trip() {
     let initial = answers("rust_crate_roots = [\"crates\"]\n");
     let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();

@@ -418,6 +418,8 @@ fn unsupported_paths_outside_inputs_do_not_poison_an_independent_target() {
     fs::create_dir(fixture.root().join("apps/legacy")).unwrap();
     for name in [
         b"odd\\name.txt".as_slice(),
+        // macOS CI rejects this non-UTF-8 fixture name at file creation.
+        #[cfg(not(target_os = "macos"))]
         b"odd\xff.txt",
         b"odd\nname.txt",
     ] {
@@ -555,8 +557,11 @@ fn ignored_working_directory_is_revalidated_after_runner_collection() {
     fs::create_dir_all(fixture.root().join("scratch/other")).unwrap();
     fs::write(fixture.root().join(".gitignore"), "scratch/\n").unwrap();
     fixture.actions[0].runner = ActionRunner::Argv {
-        program: "/bin/true".into(),
-        args: Vec::new(),
+        program: "/bin/sh".into(),
+        args: vec![
+            jig_contract::ArgvValue::Literal("-c".into()),
+            jig_contract::ArgvValue::Literal("exit 0".into()),
+        ],
         working_directory: Some("scratch/cwd".into()),
         environment: BTreeMap::new(),
     };

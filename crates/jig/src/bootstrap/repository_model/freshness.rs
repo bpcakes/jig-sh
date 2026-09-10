@@ -9,6 +9,28 @@ impl RepositoryRenderModel {
     }
 }
 
+/// Compare generated projections across explicit-shell and freshness cutovers.
+/// An authored policy or provenance remains distinct from a generated default.
+pub(super) fn matches_generated_actions(expected: &[ActionSpec], authored: &[ActionSpec]) -> bool {
+    expected.len() == authored.len()
+        && expected.iter().zip(authored).all(|(expected, authored)| {
+            let mut expected = expected.clone();
+            let mut authored = authored.clone();
+            for action in [&mut expected, &mut authored] {
+                super::runners::make_shell_explicit(&mut action.runner);
+                if prepare_action_inputs_policy(
+                    action,
+                    jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION,
+                )
+                .is_err()
+                {
+                    return false;
+                }
+            }
+            expected == authored
+        })
+}
+
 /// Default generated and inherited actions conservatively. An explicit authored
 /// assertion keeps its value and provenance through adoption and recopy.
 pub(in crate::bootstrap) fn prepare_action_inputs_policy(

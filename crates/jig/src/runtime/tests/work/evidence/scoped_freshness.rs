@@ -50,7 +50,7 @@ fn fixture(root: &Path, dependency: bool, profile: bool) -> RepoContext {
     fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
     fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     init_git_repo(root);
-    RepoContext::load_freshness_fixture(root.to_path_buf()).unwrap()
+    RepoContext::load_from_root(root.to_path_buf()).unwrap()
 }
 
 fn original_records(ctx: &RepoContext) -> BTreeMap<TargetId, Value> {
@@ -269,7 +269,7 @@ fn parallel_live_receipts_and_ignored_output_preserve_complete_authority() {
         toml::Value::String("mkdir -p target; printf 'example output' > target/example".into());
     fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
     fs::write(ctx.root().join(".gitignore"), "target/\n").unwrap();
-    let ctx = RepoContext::load_freshness_fixture(ctx.root().to_path_buf()).unwrap();
+    let ctx = RepoContext::load_from_root(ctx.root().to_path_buf()).unwrap();
     let result = run_repository_target(&ctx, "test");
     assert_eq!(result["ok"], true, "{result:#}");
     assert!(ctx.root().join("target/example").is_file());
@@ -288,7 +288,7 @@ fn mutation_outside_exhaustive_inputs_records_incomplete_global_proof() {
     config["commands"]["web_test_command"] =
         toml::Value::String("printf 'mutated' > unrelated.md".into());
     fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
-    let ctx = RepoContext::load_freshness_fixture(ctx.root().to_path_buf()).unwrap();
+    let ctx = RepoContext::load_from_root(ctx.root().to_path_buf()).unwrap();
     let result = run_repository_target(&ctx, "web:test");
     assert_eq!(result["ok"], false, "{result:#}");
     let receipts = fs::read_to_string(ctx.root().join(".agent/state/receipts.jsonl")).unwrap();
