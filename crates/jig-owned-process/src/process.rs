@@ -792,9 +792,9 @@ fn signal_owned_process_group_with<T>(
         }
         #[cfg(target_os = "macos")]
         Err(error) if error.raw_os_error() == Some(libc::EPERM) => {
-            // The child may have exited between the pre-signal observation
-            // and SIGKILL. Darwin can return EPERM for its zombie-only group,
-            // so classify that error using a fresh non-consuming observation.
+            // Darwin can return EPERM while the child is exiting, before
+            // waitid exposes its terminal status. Recheck that the child is
+            // still ours and let the bounded confirmation loop retry.
             resolve_macos_process_group_signal_eperm(error, observe(state))
         }
         Err(error) => Err(error),
@@ -833,13 +833,13 @@ fn resolve_macos_process_group_signal_eperm(
     leader_observation: std::io::Result<OwnedProcessObservation>,
 ) -> std::io::Result<ProcessGroupSignalResult> {
     match leader_observation {
-        Ok(OwnedProcessObservation::Exited) => {
-            // Darwin can report EPERM for a group containing only its zombie
-            // leader, but EPERM is not absence. The confirmation loop must
-            // still take a fresh atomic sole-leader snapshot before success.
+        Ok(OwnedProcessObservation::Exited | OwnedProcessObservation::Running) => {
+            // EPERM is not absence, and a running observation can precede
+            // waitid's terminal status during exit. Keep the pinned identity
+            // and retry within the original deadline. Confirmation still
+            // requires a fresh terminal observation and sole-leader snapshot.
             Ok(ProcessGroupSignalResult::Inconclusive)
         }
-        Ok(OwnedProcessObservation::Running) => Err(signal_error),
         Err(observation_error) => Err(std::io::Error::new(
             observation_error.kind(),
             format!(
