@@ -1,0 +1,1 @@
+Warn when the native Claude configuration home is not a directory, with human and JSON regression coverage. Clear the four reviewed Beads source paths through the issue database, document path-safe issue creation, record the privacy decision, verify repeat export, run configured gates, and finish with the backend test check.

@@ -12,10 +12,13 @@ use crate::{
 mod agent;
 mod bootstrap_run;
 mod check;
+mod claude;
+mod claude_run;
 mod codex;
 mod codex_run;
 mod comparison;
 mod file_budget;
+mod home_picker;
 mod init_wizard;
 mod loops;
 mod migration;
@@ -34,6 +37,7 @@ pub(crate) use check::{
     CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckComparisonOpts, CheckMigrationImmutabilityOpts,
     CheckOpts, CheckTargetOpts,
 };
+pub(crate) use claude::ClaudeCommand;
 pub(crate) use codex::CodexCommand;
 pub(crate) use comparison::CliExactTreeProvenance;
 pub(crate) use file_budget::FileBudgetCommand;
@@ -97,7 +101,7 @@ struct Cli {
 #[cfg(test)]
 const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
-const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
+const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,claude,codex,doctor,init,presets,update";
 #[cfg(test)]
 const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
@@ -410,6 +414,9 @@ pub(crate) enum CommandKind {
         after_help = codex::CODEX_AFTER_HELP
     )]
     Codex(CodexCommand),
+    /// Inspect Claude configuration homes or launch Claude Code with a selected home.
+    #[command(name = root_commands::CLAUDE.name, display_order = root_commands::CLAUDE.display_order, subcommand, after_help = claude::AFTER_HELP)]
+    Claude(ClaudeCommand),
     /// Generate the repository agent guide map.
     #[command(
         name = root_commands::AGENT_MAP.name,

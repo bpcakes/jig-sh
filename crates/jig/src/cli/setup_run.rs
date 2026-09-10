@@ -37,7 +37,7 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     );
     let outcome = observer.finish_with(outcome);
     #[cfg(all(unix, not(test)))]
-    let outcome = crate::codex::finish_signal_supervised(
+    let outcome = crate::signal_supervision::finish(
         outcome,
         signal_session.finish(),
         "Setup signal supervision could not retire safely",

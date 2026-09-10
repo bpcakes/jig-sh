@@ -8,6 +8,11 @@ use ratatui::{
 
 use crate::model::{App, ExitState, Focus, Inspection, Projection, unix_timestamp_now};
 
+mod configuration;
+
+#[cfg(test)]
+mod tests;
+
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
 const GOOD: Color = Color::Green;
@@ -31,10 +36,10 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
         app.set_detail_scroll_limit(0);
         frame.render_widget(
             Paragraph::new(format!(
-                "Terminal too small: {}x{}.\nCodex Home Picker needs at least {MIN_WIDTH}x{MIN_HEIGHT}.\nResize, or press q to cancel.",
-                area.width, area.height
+                "Terminal too small: {}x{}.\n{} needs at least {MIN_WIDTH}x{MIN_HEIGHT}.\nResize, or press q to cancel.",
+                area.width, area.height, app.title()
             ))
-            .block(panel("Codex Home Picker"))
+            .block(panel(app.title()))
             .wrap(Wrap { trim: true }),
             area,
         );
@@ -83,13 +88,33 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let (status, status_style) = if let Some(exit_state) = app.exit_state {
         match exit_state {
             ExitState::Launching => (
-                "Launching selected Codex home…".to_owned(),
+                if app.configuration_title.is_some() {
+                    "Launching selected home…".to_owned()
+                } else {
+                    "Launching selected Codex home…".to_owned()
+                },
                 Style::default().fg(ACCENT),
             ),
             ExitState::Cancelling => (
-                "Cancelling and cleaning up inspections…".to_owned(),
+                if app.configuration_title.is_some() {
+                    "Cancelling…".to_owned()
+                } else {
+                    "Cancelling and cleaning up inspections…".to_owned()
+                },
                 Style::default().fg(WARN),
             ),
+        }
+    } else if app.static_configuration {
+        if discovery_warning_count == 0 {
+            (
+                format!("{} configurations", app.rows.len()),
+                Style::default().fg(GOOD),
+            )
+        } else {
+            (
+                format!("⚠ {discovery_warning_count} discovery warnings"),
+                Style::default().fg(WARN),
+            )
         }
     } else if working {
         let discovery_status = match discovery_warning_count {
@@ -134,7 +159,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                " Codex Home Picker ",
+                format!(" {} ", app.title()),
                 Style::default().fg(Color::Black).bg(ACCENT).bold(),
             ),
             Span::raw("  "),
@@ -153,6 +178,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
                 .wrap(Wrap { trim: true }),
             area,
         );
+        return;
+    }
+    if app.static_configuration {
+        configuration::draw_list(frame, area, app, &visible);
         return;
     }
     if area.width < 60 {
@@ -180,13 +209,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
                 Cell::from(stale_snapshot_label(projection.label(), projection_stale))
                     .style(stale_projection_style(projection, projection_stale)),
             ])
-            .style(match row.inspection() {
-                Inspection::Ready(details) if details.inspection_error.is_some() => {
-                    Style::default().fg(BAD)
-                }
-                Inspection::Loading => Style::default().fg(MUTED),
-                Inspection::Ready(_) | Inspection::Unavailable => Style::default(),
-            })
+            .style(inspection_row_style(row.inspection()))
         })
         .collect::<Vec<_>>();
     let widths = [
@@ -201,22 +224,8 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
             Row::new(["", "Home", "Account", "Remaining now", "Projection"])
                 .style(Style::default().fg(ACCENT).bold()),
         )
-        .block(panel(homes_panel_title(best, false)))
-        .row_highlight_style(
-            Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("›");
-    let mut state = TableState::default()
-        .with_offset(app.list_offset_for_viewport(area.height))
-        .with_selected(
-            app.selected
-                .and_then(|selected| visible.iter().position(|index| *index == selected)),
-        );
-    frame.render_stateful_widget(table, area, &mut state);
-    app.set_list_offset(state.offset());
+        .block(panel(homes_panel_title(best, false)));
+    draw_home_table(frame, area, app, &visible, table);
 }
 
 fn draw_projection_list(
@@ -247,13 +256,7 @@ fn draw_projection_list(
                 .style(stale_projection_style(projection, projection_stale)),
             ])
             .height(STACKED_ROW_HEIGHT)
-            .style(match row.inspection() {
-                Inspection::Ready(details) if details.inspection_error.is_some() => {
-                    Style::default().fg(BAD)
-                }
-                Inspection::Loading => Style::default().fg(MUTED),
-                Inspection::Ready(_) | Inspection::Unavailable => Style::default(),
-            })
+            .style(inspection_row_style(row.inspection()))
         })
         .collect::<Vec<_>>();
     let table = Table::new(
@@ -269,22 +272,8 @@ fn draw_projection_list(
         Row::new(["", "Home / Account", "Remaining now", "Projection"])
             .style(Style::default().fg(ACCENT).bold()),
     )
-    .block(panel(homes_panel_title(best, false)))
-    .row_highlight_style(
-        Style::default()
-            .bg(Color::Blue)
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol("›");
-    let mut state = TableState::default()
-        .with_offset(app.list_offset_for_viewport(area.height))
-        .with_selected(
-            app.selected
-                .and_then(|selected| visible.iter().position(|index| *index == selected)),
-        );
-    frame.render_stateful_widget(table, area, &mut state);
-    app.set_list_offset(state.offset());
+    .block(panel(homes_panel_title(best, false)));
+    draw_home_table(frame, area, app, visible, table);
 }
 
 fn draw_compact_list(
@@ -313,20 +302,19 @@ fn draw_compact_list(
                 .style(stale_projection_style(projection, projection_stale)),
             ])
             .height(STACKED_ROW_HEIGHT)
-            .style(match row.inspection() {
-                Inspection::Ready(details) if details.inspection_error.is_some() => {
-                    Style::default().fg(BAD)
-                }
-                Inspection::Loading => Style::default().fg(MUTED),
-                Inspection::Ready(_) | Inspection::Unavailable => Style::default(),
-            })
+            .style(inspection_row_style(row.inspection()))
         })
         .collect::<Vec<_>>();
     let table = Table::new(rows, [Constraint::Length(2), Constraint::Percentage(100)])
         .header(
             Row::new(["", "Home · Account / Projection"]).style(Style::default().fg(ACCENT).bold()),
         )
-        .block(panel(homes_panel_title(best, true)))
+        .block(panel(homes_panel_title(best, true)));
+    draw_home_table(frame, area, app, visible, table);
+}
+
+fn draw_home_table(frame: &mut Frame, area: Rect, app: &App, visible: &[usize], table: Table<'_>) {
+    let table = table
         .row_highlight_style(
             Style::default()
                 .bg(Color::Blue)
@@ -342,6 +330,16 @@ fn draw_compact_list(
         );
     frame.render_stateful_widget(table, area, &mut state);
     app.set_list_offset(state.offset());
+}
+
+fn inspection_row_style(inspection: &Inspection) -> Style {
+    match inspection {
+        Inspection::Ready(details) if details.inspection_error.is_some() => {
+            Style::default().fg(BAD)
+        }
+        Inspection::Loading => Style::default().fg(MUTED),
+        Inspection::Ready(_) | Inspection::Unavailable => Style::default(),
+    }
 }
 
 fn draw_details(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
@@ -386,79 +384,85 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
     {
         lines.push(key_value("Recommendation", recommendation.label));
     }
-    match row.inspection() {
-        Inspection::Loading => {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Loading account and usage… You can launch now.",
-                Style::default().fg(WARN),
-            )));
-        }
-        Inspection::Unavailable => {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Inspection stopped before this home completed.",
-                Style::default().fg(BAD),
-            )));
-        }
-        Inspection::Ready(details) => {
-            lines.extend([
-                Line::from(""),
-                key_value("Account", details.account_label()),
-                key_value("Type", &details.account_type),
-                key_value("Plan", &details.plan),
-                key_value("Status", &details.status),
-            ]);
-            if let Some(sample_age) = details.usage_sample_age_label_at(now) {
-                lines.push(key_value(
-                    "Usage sample",
-                    &format!("{sample_age} · reopen to refresh"),
-                ));
-            }
-            for bucket in &details.buckets {
+    if let Some(details) = &row.configuration_details {
+        lines.push(Line::from(""));
+        lines.extend(details.iter().map(|(label, value)| key_value(label, value)));
+    }
+    if !app.static_configuration {
+        match row.inspection() {
+            Inspection::Loading => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    format!("{} usage", bucket.label()),
-                    Style::default().fg(ACCENT).bold(),
+                    "Loading account and usage… You can launch now.",
+                    Style::default().fg(WARN),
                 )));
-                if bucket.plan != "-" {
-                    lines.push(key_value("Plan", &bucket.plan));
+            }
+            Inspection::Unavailable => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Inspection stopped before this home completed.",
+                    Style::default().fg(BAD),
+                )));
+            }
+            Inspection::Ready(details) => {
+                lines.extend([
+                    Line::from(""),
+                    key_value("Account", details.account_label()),
+                    key_value("Type", &details.account_type),
+                    key_value("Plan", &details.plan),
+                    key_value("Status", &details.status),
+                ]);
+                if let Some(sample_age) = details.usage_sample_age_label_at(now) {
+                    lines.push(key_value(
+                        "Usage sample",
+                        &format!("{sample_age} · reopen to refresh"),
+                    ));
                 }
-                if bucket.reached != "-" {
-                    lines.push(key_value("Reached", &bucket.reached));
-                }
-                for (index, window) in bucket.windows.iter().enumerate() {
-                    let role = bucket.window_role(index);
-                    let assessment =
-                        details.window_usage_snapshot_assessment_at(bucket, index, now);
-                    let projection = assessment.projection();
+                for bucket in &details.buckets {
+                    lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
-                        indented_snapshot_label(
-                            "  ",
-                            format!(
-                                "{role}: {} · {}",
-                                window.usage_detail(),
-                                window.reset_label_at(now)
+                        format!("{} usage", bucket.label()),
+                        Style::default().fg(ACCENT).bold(),
+                    )));
+                    if bucket.plan != "-" {
+                        lines.push(key_value("Plan", &bucket.plan));
+                    }
+                    if bucket.reached != "-" {
+                        lines.push(key_value("Reached", &bucket.reached));
+                    }
+                    for (index, window) in bucket.windows.iter().enumerate() {
+                        let role = bucket.window_role(index);
+                        let assessment =
+                            details.window_usage_snapshot_assessment_at(bucket, index, now);
+                        let projection = assessment.projection();
+                        lines.push(Line::from(Span::styled(
+                            indented_snapshot_label(
+                                "  ",
+                                format!(
+                                    "{role}: {} · {}",
+                                    window.usage_detail(),
+                                    window.reset_label_at(now)
+                                ),
+                                assessment.quota_is_stale(),
                             ),
-                            assessment.quota_is_stale(),
-                        ),
-                        stale_usage_style(assessment.quota_is_stale()),
-                    )));
-                    lines.push(Line::from(Span::styled(
-                        indented_snapshot_label(
-                            "    ",
-                            format!("At current pace: {}", projection.outcome_label()),
-                            assessment.projection_is_stale(),
-                        ),
-                        stale_projection_style(projection, assessment.projection_is_stale()),
-                    )));
+                            stale_usage_style(assessment.quota_is_stale()),
+                        )));
+                        lines.push(Line::from(Span::styled(
+                            indented_snapshot_label(
+                                "    ",
+                                format!("At current pace: {}", projection.outcome_label()),
+                                assessment.projection_is_stale(),
+                            ),
+                            stale_projection_style(projection, assessment.projection_is_stale()),
+                        )));
+                    }
                 }
-            }
-            if let Some(error) = &details.inspection_error {
-                lines.push(error_line("Inspection", error));
-            }
-            if let Some(error) = &details.usage_error {
-                lines.push(error_line("Usage", error));
+                if let Some(error) = &details.inspection_error {
+                    lines.push(error_line("Inspection", error));
+                }
+                if let Some(error) = &details.usage_error {
+                    lines.push(error_line("Usage", error));
+                }
             }
         }
     }
@@ -472,7 +476,9 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let controls = if app.exit_state.is_some() {
+    let controls = if app.exit_state.is_some() && app.static_configuration {
+        "Restoring the terminal."
+    } else if app.exit_state.is_some() {
         "Please wait while background inspection is stopped safely."
     } else if app.searching {
         "Type to filter  Backspace edit  Ctrl-U clear  Enter launch  Esc finish search"
@@ -529,7 +535,7 @@ fn panel(title: &str) -> Block<'_> {
     Block::default().title(title).borders(Borders::ALL)
 }
 
-fn key_value(label: &'static str, value: &str) -> Line<'static> {
+fn key_value(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{label}: "), Style::default().fg(MUTED)),
         Span::raw(value.to_owned()),

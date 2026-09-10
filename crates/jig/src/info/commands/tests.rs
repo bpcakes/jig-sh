@@ -310,7 +310,9 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
         .map(|command| command["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(names, discoverable_command_names());
-    for name in ["init", "presets", "adopt", "doctor", "prompt", "codex"] {
+    for name in [
+        "init", "presets", "adopt", "doctor", "prompt", "codex", "claude",
+    ] {
         assert_eq!(command_by_name(&output, name)["status"], "ready", "{name}");
     }
     for name in [

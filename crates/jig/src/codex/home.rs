@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::home_paths::{canonical_key, home_name, prefixed_home};
+
 use super::{DiscoveredHomes, DiscoveryIssue, DiscoveryIssueKind, configured_codex_home};
 
 pub(super) fn discover_homes() -> Result<DiscoveredHomes> {
@@ -161,24 +163,6 @@ pub(super) fn user_home() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow!("Could not determine the user home directory"))
 }
 
-pub(super) fn expand_tilde_path(input: &Path, user_home: &Path) -> Option<PathBuf> {
-    let mut components = input.components();
-    if components.next() == Some(std::path::Component::Normal(OsStr::new("~"))) {
-        return Some(user_home.join(components.as_path()));
-    }
-    None
-}
-
-pub(super) fn has_tilde_prefix(input: &Path) -> bool {
-    input.components().next() == Some(std::path::Component::Normal(OsStr::new("~")))
-}
-
-pub(super) fn is_bare_home_name(input: &Path) -> bool {
-    let mut components = input.components();
-    matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-}
-
 pub(super) fn absolute_path(path: PathBuf) -> Result<PathBuf> {
     absolute_path_with_current_dir(path, || {
         env::current_dir().context("Failed to resolve the current directory")
@@ -201,36 +185,9 @@ pub(super) fn canonical_or(path: PathBuf) -> Result<PathBuf> {
         .with_context(|| format!("Failed to resolve Codex home {}", path.display()))
 }
 
-pub(super) fn canonical_key(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-pub(super) fn same_path(left: &Path, right: &Path) -> bool {
-    canonical_key(left) == canonical_key(right)
-}
-
-pub(super) fn home_name(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy();
-    name.strip_prefix('.').unwrap_or(&name).to_string()
-}
-
-pub(super) fn home_name_matches(path: &Path, requested: &OsStr) -> bool {
-    let name = path.file_name().unwrap_or(path.as_os_str());
-    let encoded = name.as_encoded_bytes();
-    encoded.strip_prefix(b".").unwrap_or(encoded) == requested.as_encoded_bytes()
-}
-
 pub(super) fn conventional_home(user_home: &Path, requested: &OsStr) -> PathBuf {
     if requested == "codex" || requested == "default" {
         return user_home.join(".codex");
     }
-    let mut name = OsString::from(".");
-    if !requested.as_encoded_bytes().starts_with(b"codex-") {
-        name.push("codex-");
-    }
-    name.push(requested);
-    user_home.join(name)
+    prefixed_home(user_home, requested, "codex-")
 }

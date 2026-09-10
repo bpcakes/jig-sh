@@ -1,5 +1,4 @@
-use std::fmt;
-
+use crate::usage::WindowRole;
 use jig_tui::format_percent;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -9,27 +8,6 @@ pub(super) enum WindowProjection {
     Remaining { percent: f64 },
     ExhaustsEarly { seconds: u64, score: f64 },
     Exhausted,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowRole {
-    FiveHour,
-    Weekly,
-    DurationMinutes(u64),
-    Window,
-}
-
-impl fmt::Display for WindowRole {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::FiveHour => "5h",
-            Self::Weekly => "weekly",
-            Self::DurationMinutes(minutes) => {
-                return formatter.write_str(&super::format_duration(Some(*minutes)));
-            }
-            Self::Window => "window",
-        })
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -375,24 +375,6 @@ fn logged_in_semantically_empty_usage_payload_is_a_partial_report() {
     }
 }
 
-#[cfg(unix)]
-#[test]
-fn signal_retirement_failure_retains_the_operation_error() {
-    let error = finish_signal_supervised::<()>(
-        Err(anyhow::anyhow!("picker drawing failed")),
-        Err(std::io::Error::other("handler restoration failed")),
-        "Codex home picker signal supervision could not retire safely",
-    )
-    .unwrap_err();
-    let rendered = format!("{error:#}");
-
-    assert!(
-        rendered.contains("signal supervision could not retire safely"),
-        "{rendered}"
-    );
-    assert!(rendered.contains("picker drawing failed"), "{rendered}");
-}
-
 fn assembled_home_report(
     home: PathBuf,
     current: &Path,
