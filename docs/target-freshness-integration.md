@@ -40,6 +40,9 @@ continue to block older passing receipts.
 
 Inspection builds one bounded location index of the active receipt journal,
 validates original dependencies iteratively, and then observes current source.
+The index retains conflicts as ambiguous receipt IDs. Selected and dependency originals
+with an ambiguous ID are unusable; conflicts in unrelated historical receipts
+do not poison another target's proof. All historical records remain unchanged.
 The collector's final source and configuration checks follow receipt lookup;
 whole-policy dependencies also recheck the existing global source token, then
 the journal identity is checked again before returning results. Current default

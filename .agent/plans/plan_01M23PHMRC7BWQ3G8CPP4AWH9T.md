@@ -19,7 +19,7 @@ plans and read-only mutation detection continue to cover the entire repository.
 - [x] Implement additive receipt metadata and dependency proof.
 - [x] Integrate validity, diagnostics, retry reuse, archive, and inspection budgets.
 - [x] Qualify full command performance, then activate the epoch and source schema.
-- [ ] Review `.4.3`; fix/review at most twice, validate, close, and commit.
+- [x] Review `.4.3`; fix/review at most twice, validate, close, and commit.
 - [ ] Review the full branch; fix/review at most twice and audit all acceptance.
 
 ## Surprises & Discoveries
@@ -77,8 +77,9 @@ Use comprehensive-review defaults, identical pinned scopes, and no exclusions.
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. Scoped freshness and epoch activation remain
-unproven until tests, measurements, integration, and review are complete.
+Both implementation tasks are complete and validated. Epoch 9 is active after
+hosted performance qualification. The requested full-branch review remains
+outstanding; this work plan stays open until that review and final gates finish.
 
 ## Context and plan of work
 
@@ -312,3 +313,41 @@ projection fix, including actual checker retirement and both legacy command
 update/recopy flows. Activation is committed as a candidate for integration;
 task closure still requires final gates and backend verification on the combined
 branch.
+
+The combined branch passed all 4,063 workspace tests (three skipped), plus Clippy,
+formatting, contract and file-budget checks. Work check's final evidence phase
+still failed: six pre-existing non-target receipt IDs have conflicting preview
+envelopes, and the new index rejected the entire journal at the first conflict.
+Those records are unrelated to this plan and remain untouched. The index now
+retains an ambiguous marker per ID and rejects lookup of that ID, so neither a
+selected receipt nor a transitive dependency can use conflicting authority.
+Independent originals can still be evaluated. A regression includes unrelated
+historical conflicts, selected/dependency conflicts, and a later repetition that
+must not repair the ambiguity. This clarifies the required-original scope of the
+design without deleting or rewriting history.
+
+Normal epoch-9 CI qualification also passed at `1df7c64c`: all four matrices and
+both limit suites, 2,400 inspections, maximum phase p95 815.557 ms and maximum
+full-command p95 increase 827.744 ms. All six complete reports were appended to
+the benchmark journal after artifact checksum verification and independent
+sample-level audit. Standard Linux and macOS locked test suites passed. One
+unchanged SQLx doctor test failed to start its temporary executable in Linux's
+no-default-features job; the same no-default-features test passed locally on the
+unchanged CI head. A single rerun of that failed CI job was requested after the
+workflow completed; its original failure remains recorded.
+
+All 11 original-proof and conflict regressions passed after the per-ID change.
+The final standalone backend check will attach its receipt to this same work
+plan. The subsequent configured work check can then reuse that original test
+receipt while refreshing the remaining gates, exercising targeted composition
+without repeating a passing unchanged test run.
+
+The final normal-runtime backend check passed all 4,064 workspace tests (three
+skipped), plus Clippy, formatting, contract and file-budget checks. Its follow-up
+configured work check passed with zero checks executed, reusing all five original
+receipts and their run IDs. Gate and evidence inspection with the documented
+30-second override reported passed/fresh; receipts and work status were inspected.
+The Linux no-default-features retry passed, leaving all standard CI checks green
+at `1df7c64c`; normal hosted qualification was already green there. `.4.3` is
+closed after its three per-task reviews. The final per-ID conflict correction
+and task evidence are committed for the requested full-branch review.

@@ -19,6 +19,7 @@ struct OriginalLocation {
     offset: u64,
     length: usize,
     digest: [u8; 32],
+    conflicting: bool,
 }
 
 /// A bounded location index, not a copy of the receipt journal. Proof traversal
@@ -134,9 +135,10 @@ impl OriginalReceiptIndex {
                     offset,
                     length: record.len(),
                     digest: Sha256::digest(&record).into(),
+                    conflicting: false,
                 };
-                if let Some(previous) = locations.get(&envelope.id) {
-                    if previous.digest != location.digest {
+                if let Some(previous) = locations.get_mut(&envelope.id) {
+                    if !previous.conflicting && previous.digest != location.digest {
                         // Whitespace/key ordering is not a conflicting original.
                         let position = reader
                             .stream_position()
@@ -150,9 +152,9 @@ impl OriginalReceiptIndex {
                         let current: serde_json::Value = serde_json::from_slice(&record)
                             .map_err(|_| failed("original receipt is invalid"))?;
                         if original != current {
-                            return Err(failed(
-                                "receipt journal contains conflicting duplicate IDs",
-                            ));
+                            // Ambiguity is permanent for this ID, but unrelated
+                            // history cannot invalidate another original.
+                            previous.conflicting = true;
                         }
                     }
                 } else {
@@ -192,6 +194,11 @@ impl OriginalReceiptIndex {
         let Some(location) = self.locations.get(id) else {
             return Ok(None);
         };
+        if location.conflicting {
+            return Err(failed(
+                "required original receipt has conflicting duplicate IDs",
+            ));
+        }
         let bytes = read_at(
             self.file.as_mut().expect("indexed file exists"),
             location,

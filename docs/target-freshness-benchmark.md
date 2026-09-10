@@ -301,8 +301,30 @@ Constrained cold samples also verified physical reads through the throttled
 device. Hosted CI and constrained storage each passed all five limit cases,
 including 480 MiB recording, explicit inspection and finish, and bounded refusal
 for oversized source, entry overflow, ignored inputs and symlinks.
-[All six complete CI reports](benchmarks/target-freshness-integration-qualified-ci.jsonl)
+[Complete CI reports](benchmarks/target-freshness-integration-qualified-ci.jsonl)
 retain the samples, counters, outcomes and exact runtime identity. Downloaded
 artifact checksums were verified before inspecting the reports, and the phase
 and full-command p95 values were recalculated from the samples. These results
 satisfy the performance prerequisite for epoch 9 activation.
+
+## Normal runtime qualification
+
+[Qualification run 34465725155](https://github.com/bpcakes/jig-sh/actions/runs/34465725155)
+passed after activation and integration with master, at commit
+`1df7c64cc396c5e0fb0ae30807e6daf26c8b2a93`. It used the normal release build,
+without a development feature, with SHA-256
+`a97011c1a387f1d2a9c4e79ab9c75cac4f9839edc7636d9ff858ba7cde606693`.
+
+| Profile | Cache | Phase p95 range (ms) | Maximum phase (ms) | Largest full-command p95 increase over epoch 8 (ms) |
+| --- | --- | ---: | ---: | ---: |
+| Hosted CI | Warm | 155.177–176.874 | 180.452 | 175.391 |
+| Hosted CI | Cold | 164.605–335.133 | 337.488 | 447.253 |
+| One CPU, 20 MiB/s | Warm | 176.747–206.067 | 227.968 | 196.625 |
+| One CPU, 20 MiB/s | Cold | 187.343–815.557 | 816.664 | 827.744 |
+
+All 2,400 inspections and both five-case limit suites passed. The independent
+audit verified sample counts, original-receipt reuse, non-leaf authority, finish,
+physical cold reads, resource refusal and recalculated latency thresholds.
+The four downloaded artifact digests matched GitHub's checksums. Six additional
+complete reports are appended to the CI journal alongside the six activation
+candidate reports; no earlier measurement was replaced.

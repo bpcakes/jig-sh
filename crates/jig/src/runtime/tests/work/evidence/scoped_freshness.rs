@@ -122,6 +122,48 @@ fn append(ctx: &RepoContext, records: impl IntoIterator<Item = Value>) {
 }
 
 #[test]
+fn historical_conflicts_do_not_poison_unrelated_gates_but_required_conflicts_block() {
+    for dependency in [false, true] {
+        let temp = tempdir().unwrap();
+        let ctx = fixture(temp.path(), dependency, false);
+        let originals = original_records(&ctx);
+        let historical = json!({
+            "id": "receipt_example_historical", "tool_name": "jig.example", "args": {},
+            "started_at_ms": 1, "ended_at_ms": 2, "exit_status": 0,
+            "stdout_preview": "Example first preview", "stderr_preview": "", "changed_paths": [],
+            "diff_stat": {"files": 0, "insertions": 0, "deletions": 0},
+        });
+        let mut different = historical.clone();
+        different["stdout_preview"] = json!("Example second preview");
+        append(&ctx, [historical, different]);
+        append(&ctx, originals.values().cloned());
+        let usable = work_gates(&ctx);
+        assert_eq!(usable["gates"][0]["status"], "passed", "{usable:#}");
+        assert_eq!(
+            usable["gates"][0]["targets"][0]["receipt_id"],
+            originals[&"web:test".parse().unwrap()]["id"]
+        );
+
+        let target = if dependency { "api:test" } else { "web:test" };
+        let original = originals[&target.parse().unwrap()].clone();
+        let mut conflicting = original.clone();
+        conflicting["exit_status"] = json!(1);
+        // A later repetition of the first envelope cannot repair an ambiguous ID.
+        append(&ctx, [conflicting, original]);
+        let blocked = work_gates(&ctx);
+        assert_eq!(blocked["gates"][0]["status"], "unknown", "{blocked:#}");
+        assert!(
+            blocked["gates"][0]["freshness_reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason["code"] == "collection_failed"),
+            "{blocked:#}"
+        );
+    }
+}
+
+#[test]
 fn epoch_nine_gate_compares_scoped_inputs_and_keeps_only_explicit_required_receipts() {
     let temp = tempdir().unwrap();
     let ctx = fixture(temp.path(), true, false);

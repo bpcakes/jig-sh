@@ -817,6 +817,9 @@ Original receipt lookup applies an additional 16 MiB per-record ceiling while
 indexing the active journal. Journal reads, including repeated original lookups,
 share the phase's byte and entry budgets with source collection. A malformed,
 conflicting, missing, changed, or oversized required original cannot supply proof.
+Conflicting envelopes make their receipt ID permanently ambiguous for that
+snapshot. Reject every selected or transitive dependency original using that ID;
+unrelated historical IDs do not invalidate otherwise unambiguous originals.
 Read-only status, gates, and evidence inspections default to an earlier two-second
 deadline on the entire new freshness collection/comparison phase, including
 dependency proof resolution. At epoch `E`, their CLI surfaces accept
@@ -1018,8 +1021,8 @@ exact same work plan, using qh4's deterministic receipt ordering. Select before
 testing validity or success: a newer failure, unknown/stale/expired receipt, or
 unusable authority must block instead of exposing an older pass. Cross-plan
 receipts are ineligible.
-Uncertain journal ordering, conflicting duplicate IDs, or exhausted receipt
-index bounds also block. Evaluate each selected receipt against current authority
+Uncertain journal ordering, conflicting IDs required by selected or dependency
+originals, or exhausted receipt index bounds also block. Evaluate each selected receipt against current authority
 and time separately; a profile passes when all required targets pass. Never
 require one complete run, invent a shared run ID, copy a pass into a retry receipt,
 or make a reuse chain the source of proof. Report the original receipt/run IDs

@@ -328,7 +328,8 @@ fn location_index_detects_conflicts_replacement_and_shared_limits() {
     let mut conflicting = original.clone();
     conflicting["exit_status"] = json!(1);
     std::fs::write(&path, format!("{original}\n{conflicting}\n")).unwrap();
-    assert!(OriginalReceiptIndex::open(&path, &mut budget).is_err());
+    let mut index = OriginalReceiptIndex::open(&path, &mut budget).unwrap();
+    assert!(index.get("receipt_original", &mut budget).is_err());
     let mut limits = CollectionLimits::with_timeout(Duration::from_secs(2));
     limits.bytes = 10;
     let mut small = CollectionBudget::new(limits, &|| false);
