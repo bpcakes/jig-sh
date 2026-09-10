@@ -1,0 +1,1 @@
+Investigate the PR macOS output-limit failure. Preserve fail-closed group cleanup while refreshing child observation after EPERM, prove the exit race deterministically, run focused stress and full checks, then confirm PR CI is green.

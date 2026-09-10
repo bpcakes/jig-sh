@@ -778,13 +778,27 @@ fn pinned_process_group_for_retry(
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn observe_owned_process_before_group_signal_with<T>(
+fn signal_owned_process_group_with<T>(
     state: &mut T,
     mut observe: impl FnMut(&mut T) -> std::io::Result<OwnedProcessObservation>,
-    signal: impl FnOnce(&mut T, OwnedProcessObservation) -> std::io::Result<ProcessGroupSignalResult>,
+    signal: impl FnOnce(&mut T) -> std::io::Result<()>,
 ) -> std::io::Result<ProcessGroupSignalResult> {
-    let observation = observe(state)?;
-    signal(state, observation)
+    observe(state)?;
+    match signal(state) {
+        Ok(()) => Ok(ProcessGroupSignalResult::Delivered),
+        // ESRCH is not proof of absence; platform confirmation must still run.
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {
+            Ok(ProcessGroupSignalResult::Inconclusive)
+        }
+        #[cfg(target_os = "macos")]
+        Err(error) if error.raw_os_error() == Some(libc::EPERM) => {
+            // The child may have exited between the pre-signal observation
+            // and SIGKILL. Darwin can return EPERM for its zombie-only group,
+            // so classify that error using a fresh non-consuming observation.
+            resolve_macos_process_group_signal_eperm(error, observe(state))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -795,40 +809,22 @@ fn signal_pinned_process_group(
 ) -> std::io::Result<ProcessGroupSignalResult> {
     ensure_owned_process_cleanup_budget(deadline, "before process-group SIGKILL")?;
     pinned_process_group_for_retry(process, expected_process_group)?;
-    observe_owned_process_before_group_signal_with(
-        process,
-        observe_owned_process,
-        |process, leader_observation| {
-            // The exact WNOWAIT observation above must precede every numeric
-            // group signal. If another waiter consumed the status, ECHILD has
-            // already cleared the cached identity and this closure is never
-            // entered.
-            ensure_owned_process_cleanup_budget(deadline, "after pre-signal leader observation")?;
-            let process_group = pinned_process_group_for_retry(process, expected_process_group)?;
-            // SAFETY: the positive group identifier was revalidated after a
-            // fresh non-consuming observation of our direct child. Its
-            // unconsumed wait status pins this exact process-group generation.
-            if unsafe { libc::kill(-process_group.id.as_raw(), libc::SIGKILL) } == 0 {
-                return Ok(ProcessGroupSignalResult::Delivered);
-            }
-
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                // ESRCH only says that this pinned generation had no signalable
-                // member at this instant. A concurrently starting descendant
-                // may still become visible, so only the following platform
-                // proof may finish cleanup.
-                return Ok(ProcessGroupSignalResult::Inconclusive);
-            }
-            #[cfg(target_os = "macos")]
-            if error.raw_os_error() == Some(libc::EPERM) {
-                return resolve_macos_process_group_signal_eperm(error, Ok(leader_observation));
-            }
-            #[cfg(not(target_os = "macos"))]
-            let _ = leader_observation;
-            Err(error)
-        },
-    )
+    signal_owned_process_group_with(process, observe_owned_process, |process| {
+        // The exact WNOWAIT observation above must precede every numeric
+        // group signal. If another waiter consumed the status, ECHILD has
+        // already cleared the cached identity and this closure is never
+        // entered.
+        ensure_owned_process_cleanup_budget(deadline, "after pre-signal leader observation")?;
+        let process_group = pinned_process_group_for_retry(process, expected_process_group)?;
+        // SAFETY: the positive group identifier was revalidated after a
+        // fresh non-consuming observation of our direct child. Its
+        // unconsumed wait status pins this exact process-group generation.
+        if unsafe { libc::kill(-process_group.id.as_raw(), libc::SIGKILL) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    })
 }
 
 #[cfg(target_os = "macos")]
