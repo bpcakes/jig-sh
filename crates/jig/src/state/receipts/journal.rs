@@ -265,15 +265,24 @@ fn open_regular_file(
         .read(true)
         .write(writable)
         .append(writable)
-        .create(create)
+        .create_new(create)
         .follow(FollowSymlinks::No);
     #[cfg(unix)]
     {
         use cap_std::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = directory
-        .open_with(name, &options)
+    // Concurrent O_CREAT opens can return ENOENT on macOS. Elect one creator
+    // with O_EXCL, then open the existing entry without creating or following
+    // links. Journal identity is still checked after acquiring both locks.
+    let opened = match directory.open_with(name, &options) {
+        Err(error) if create && error.kind() == io::ErrorKind::AlreadyExists => {
+            options.create_new(false);
+            directory.open_with(name, &options)
+        }
+        result => result,
+    };
+    let file = opened
         .map(cap_std::fs::File::into_std)
         .with_context(|| format!("Failed to open {description} without following links"))?;
     if !file.metadata()?.is_file() {
@@ -300,6 +309,47 @@ mod tests {
 
     use super::*;
     use crate::test_env::TestRepoBuilder;
+
+    #[test]
+    fn concurrent_first_receipt_creation_preserves_one_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Dir::open_ambient_dir(temp.path(), ambient_authority()).unwrap();
+        for iteration in 0..100 {
+            let name = format!("journal-{iteration}");
+            let barrier = std::sync::Barrier::new(2);
+            let files = std::thread::scope(|scope| {
+                let tasks = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            open_regular_file(&root, &name, true, true, "test journal")
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                tasks
+                    .into_iter()
+                    .map(|task| {
+                        task.join()
+                            .unwrap()
+                            .unwrap_or_else(|error| panic!("iteration {iteration}: {error:#}"))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(
+                repository_file_identity(&files[0]).unwrap(),
+                repository_file_identity(&files[1]).unwrap()
+            );
+            for mut file in &files {
+                file.write_all(b"receipt\n").unwrap();
+            }
+            let mut reopened = open_regular_file(&root, &name, true, true, "test journal").unwrap();
+            reopened.write_all(b"later\n").unwrap();
+            assert_eq!(
+                root.read_to_string(&name).unwrap(),
+                "receipt\nreceipt\nlater\n"
+            );
+        }
+    }
 
     #[test]
     fn receipt_lock_wait_honors_its_operation_deadline() {

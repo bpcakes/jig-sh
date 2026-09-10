@@ -6,7 +6,7 @@ This crate owns the shared interactive home picker used by Codex and Claude. Cod
 
 ## Key entrypoints
 
-- `src/lib.rs`: same-release boundary supplied by `jig-sh`; configuration selection returns the original entry index so modes sharing a path remain distinct.
+- `src/lib.rs`: provider selection accepts an explicit primary subscription bucket and optional inspection source; legacy Codex/configuration entrypoints remain compatibility wrappers. This is a same-release boundary supplied by `jig-sh`; configuration selection returns the original entry index so modes sharing a path remain distinct.
 - `src/model.rs`: home rows and additive inspection decoding; `src/model/app.rs` owns filtering and selection, and `src/model/configuration.rs` prepares static or inspected configuration entries.
 - `src/render.rs`: Ratatui layout and visual states.
 - `src/runtime.rs`: event loop and background inspection ownership.

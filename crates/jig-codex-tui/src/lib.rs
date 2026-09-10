@@ -132,3 +132,35 @@ pub fn select_with_cancellation(
     runtime::run(app, Some(Box::new(source)), "jig codex launch", cancelled)
         .map(|selected| selected.map(|index| paths[index].clone()))
 }
+
+/// Opens a provider's picker using explicit subscription semantics.
+///
+/// `subscription_bucket` identifies the primary subscription bucket in normalized
+/// inspection reports. `None` disables subscription recommendations; unknown
+/// buckets can still display generic usage. Selection preserves original indices.
+///
+/// # Errors
+/// Returns an error when terminal setup, rendering, input, or cleanup fails.
+pub fn select_provider_with_cancellation(
+    title: &str,
+    command: &str,
+    homes: Vec<ConfigurationHome>,
+    warnings: Vec<String>,
+    source: Option<impl InspectionSource + 'static>,
+    subscription_bucket: Option<&str>,
+    cancelled: impl Fn() -> bool + Send + Sync + 'static,
+) -> anyhow::Result<Option<usize>> {
+    let app = model::App::provider(
+        title,
+        homes,
+        warnings,
+        source.is_some(),
+        subscription_bucket,
+    );
+    runtime::run(
+        app,
+        source.map(|source| Box::new(source) as Box<dyn InspectionSource>),
+        command,
+        cancelled,
+    )
+}

@@ -4,6 +4,22 @@ use super::App;
 use crate::ConfigurationHome;
 
 impl App {
+    pub(crate) fn provider(
+        title: &str,
+        homes: Vec<ConfigurationHome>,
+        warnings: Vec<String>,
+        inspected: bool,
+        subscription_bucket: Option<&str>,
+    ) -> Self {
+        let mut app = if inspected {
+            Self::inspected_configuration(title, homes, warnings)
+        } else {
+            Self::configuration(title, homes, warnings)
+        };
+        app.subscription_buckets = subscription_bucket.into_iter().map(str::to_owned).collect();
+        app
+    }
+
     pub(crate) fn configuration(
         title: &str,
         homes: Vec<ConfigurationHome>,

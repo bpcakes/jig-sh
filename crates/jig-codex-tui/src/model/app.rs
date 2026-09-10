@@ -7,6 +7,7 @@ use crate::{Home, HomeUpdate};
 
 #[derive(Clone, Debug)]
 pub(crate) struct App {
+    pub(crate) subscription_buckets: Vec<String>,
     pub(crate) configuration_title: Option<String>,
     pub(crate) static_configuration: bool,
     pub(crate) rows: Vec<HomeRow>,
@@ -34,6 +35,7 @@ impl App {
             .position(|home| home.current)
             .or((!homes.is_empty()).then_some(0));
         Self {
+            subscription_buckets: vec!["codex".into(), "claude".into()],
             configuration_title: None,
             static_configuration: false,
             rows: homes.into_iter().map(HomeRow::new).collect(),
@@ -115,6 +117,7 @@ impl App {
         row.set_inspection(Inspection::Ready(Details::from_value(
             update.details,
             observed_at,
+            &self.subscription_buckets,
         )));
         self.reconcile_selection();
     }

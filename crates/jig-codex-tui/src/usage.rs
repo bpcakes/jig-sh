@@ -38,7 +38,8 @@ impl fmt::Display for WindowRole {
     }
 }
 
-/// Whether a normalized bucket uses the subscription duration labels.
+/// Legacy Codex/Claude classification retained for same-release API compatibility.
+/// New provider integrations pass subscription identity explicitly to the picker.
 pub fn is_subscription_bucket(id: &str) -> bool {
     matches!(id, "codex" | "claude")
 }

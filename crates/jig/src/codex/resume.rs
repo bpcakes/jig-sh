@@ -26,10 +26,6 @@ pub(crate) fn normalize_session_id(input: &str) -> Result<String> {
     Ok(input.to_ascii_lowercase())
 }
 
-pub(crate) fn resolve_resume_home(thread_id: &str) -> Result<PathBuf> {
-    resolve_resume_home_with_progress(thread_id, |_, _| {})
-}
-
 pub(crate) fn resolve_resume_home_with_progress<F>(thread_id: &str, progress: F) -> Result<PathBuf>
 where
     F: FnMut(usize, usize),

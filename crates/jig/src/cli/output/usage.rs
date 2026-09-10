@@ -1,11 +1,12 @@
-use jig_codex_tui::usage::{
-    WindowRole, format_duration, is_subscription_bucket, remaining_percent, valid_used_percent,
-};
+use jig_codex_tui::usage::{WindowRole, format_duration, remaining_percent, valid_used_percent};
 use jig_tui::{format_countdown, format_percent, sanitize_text};
 
 use super::value_str;
 
-pub(super) fn format_limits(value: &serde_json::Value) -> String {
+pub(super) fn format_limits(
+    value: &serde_json::Value,
+    subscription_bucket: Option<&str>,
+) -> String {
     let Some(buckets) = value.as_array() else {
         return "usage unavailable".into();
     };
@@ -15,7 +16,8 @@ pub(super) fn format_limits(value: &serde_json::Value) -> String {
     buckets
         .iter()
         .map(|bucket| {
-            let is_subscription = value_str(bucket, "id").is_some_and(is_subscription_bucket);
+            let is_subscription =
+                subscription_bucket.is_some_and(|id| value_str(bucket, "id") == Some(id));
             let label = sanitize_text(
                 value_str(bucket, "name")
                     .or_else(|| value_str(bucket, "id"))
