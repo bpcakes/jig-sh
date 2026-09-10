@@ -14,6 +14,7 @@ use super::{EvaluatedReceipt, GateCollection, GateFreshness, GateOutcome, GateRe
 struct TargetEvidenceEvaluation {
     target: TargetId,
     run_id: Option<String>,
+    started_at_ms: Option<u64>,
     outcome: GateOutcome,
     receipt: EvaluatedReceipt,
     config_digest: Option<String>,
@@ -31,7 +32,6 @@ pub(super) struct EvidenceGateEvaluation {
     run_id: Option<String>,
     outcome: GateOutcome,
     freshness: GateFreshness,
-    index_error: Option<String>,
     targets: Vec<TargetEvidenceEvaluation>,
 }
 
@@ -44,6 +44,7 @@ impl TargetEvidenceEvaluation {
             "receipt_id": receipt.receipt_id,
             "run_id": self.run_id,
             "exit_status": receipt.exit_status,
+            "started_at_ms": self.started_at_ms,
             "ended_at_ms": receipt.ended_at_ms,
             "config_digest": self.config_digest,
             "expected_config_digest": self.expected_config_digest,
@@ -100,13 +101,7 @@ impl EvidenceGateEvaluation {
         collection: GateCollection<'_>,
     ) -> Result<Self> {
         let required_targets = resolve_evidence_targets(catalog, &gate.selector)?;
-        let index_error = receipt_index
-            .target_receipt_error(&gate.id)
-            .map(str::to_owned);
-        let group = index_error
-            .is_none()
-            .then(|| receipt_index.target_receipts(&gate.id))
-            .flatten();
+        let selected = receipt_index.target_receipts(&gate.id);
         let expected_config_digest = catalog.config_digest().to_owned();
         let expected_input_digests = required_targets
             .iter()
@@ -122,19 +117,14 @@ impl EvidenceGateEvaluation {
         let mut targets = Vec::with_capacity(required_targets.len());
         for target in required_targets {
             collection.ensure_active()?;
-            let receipt = group.and_then(|group| group.receipts.get(&target));
+            let receipt = selected.and_then(|receipts| receipts.get(&target));
             let expected_input_digest =
                 expected_input_digests.get(&target).cloned().unwrap_or(None);
-            let (freshness, freshness_reason) = index_error.as_ref().map_or_else(
-                || {
-                    target_evidence_freshness(
-                        receipt,
-                        &expected_config_digest,
-                        expected_input_digest.as_deref(),
-                        current_fingerprint,
-                    )
-                },
-                |error| (GateFreshness::Unknown, error.clone()),
+            let (freshness, freshness_reason) = target_evidence_freshness(
+                receipt,
+                &expected_config_digest,
+                expected_input_digest.as_deref(),
+                current_fingerprint,
             );
             let evaluated_receipt = EvaluatedReceipt::with_freshness(
                 receipt,
@@ -143,15 +133,15 @@ impl EvidenceGateEvaluation {
                 freshness,
                 freshness_reason,
             );
-            let outcome = match (index_error.as_ref(), receipt) {
-                (Some(_), _) => GateOutcome::Unknown,
-                (None, Some(receipt)) if receipt.exit_status != 0 => GateOutcome::Failed,
-                (None, Some(_)) => freshness.as_gate_outcome(),
-                (None, None) => GateOutcome::Missing,
+            let outcome = match receipt {
+                Some(receipt) if receipt.exit_status != 0 => GateOutcome::Failed,
+                Some(_) => freshness.as_gate_outcome(),
+                None => GateOutcome::Missing,
             };
             targets.push(TargetEvidenceEvaluation {
                 target,
                 run_id: receipt.map(|receipt| receipt.run_id.clone()),
+                started_at_ms: receipt.map(|receipt| receipt.started_at_ms),
                 outcome,
                 receipt: evaluated_receipt,
                 config_digest: receipt.and_then(|receipt| receipt.config_digest.clone()),
@@ -161,18 +151,70 @@ impl EvidenceGateEvaluation {
             });
         }
 
+        // A dependent proof cannot outlive a failed, missing, stale, or newer
+        // dependency result. Iterate to carry invalidity through the graph.
+        loop {
+            let invalidate: Vec<_> = targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    if target.outcome != GateOutcome::Passed {
+                        return None;
+                    }
+                    let action = catalog.action(&target.target)?;
+                    let invalid_dependency = action.depends_on.iter().any(|dependency| {
+                        targets
+                            .iter()
+                            .find(|entry| &entry.target == dependency)
+                            .is_none_or(|entry| {
+                                entry.outcome != GateOutcome::Passed
+                                    || entry.receipt.ended_at_ms > target.started_at_ms
+                            })
+                    });
+                    invalid_dependency.then_some(index)
+                })
+                .collect();
+            if invalidate.is_empty() {
+                break;
+            }
+            for index in invalidate {
+                targets[index].outcome = GateOutcome::Stale;
+                targets[index].receipt.freshness = GateFreshness::Stale;
+                targets[index].receipt.freshness_reason =
+                    "a required dependency has missing, nonpassing, stale or newer evidence".into();
+            }
+        }
         let freshness = aggregate_evidence_freshness(&targets);
         let outcome = aggregate_evidence_outcome(&targets);
+        let run_id = targets
+            .first()
+            .and_then(|first| first.run_id.as_ref())
+            .filter(|run_id| {
+                targets
+                    .iter()
+                    .all(|target| target.run_id.as_ref() == Some(*run_id))
+            })
+            .cloned();
         Ok(Self {
             id: gate.id.clone(),
             required: gate.required,
             selector: gate.selector.clone(),
             conclusion: gate.conclusion,
-            run_id: group.map(|group| group.run_id.clone()),
+            run_id,
             outcome,
             freshness,
-            index_error,
             targets,
+        })
+    }
+
+    pub(super) fn check_targets(&self) -> impl Iterator<Item = (TargetId, bool, Value)> + '_ {
+        self.targets.iter().map(|target| {
+            (
+                target.target.clone(),
+                target.outcome == GateOutcome::Passed
+                    && target.receipt.freshness == GateFreshness::Fresh,
+                target.to_value(),
+            )
         })
     }
 
@@ -210,7 +252,7 @@ impl EvidenceGateEvaluation {
 
     pub(super) fn to_value(&self) -> Value {
         let (target, profile) = self.selector_values();
-        let mut value = json!({
+        json!({
             "id": self.id,
             "kind": "evidence",
             "required": self.required,
@@ -222,11 +264,7 @@ impl EvidenceGateEvaluation {
             "freshness": self.freshness.as_str(),
             "freshness_reason": evidence_freshness_reason(self.freshness),
             "targets": self.targets.iter().map(TargetEvidenceEvaluation::to_value).collect::<Vec<_>>(),
-        });
-        if let Some(error) = &self.index_error {
-            value["index_error"] = Value::String(error.clone());
-        }
-        value
+        })
     }
 
     pub(super) fn status_view(&self) -> jig_ui::dashboard::StatusEvidenceGate {
@@ -249,13 +287,12 @@ impl EvidenceGateEvaluation {
                 .iter()
                 .map(TargetEvidenceEvaluation::status_view)
                 .collect(),
-            index_error: self.index_error.clone(),
+            index_error: None,
         }
     }
 
     pub(super) fn to_latest_evidence(&self) -> Option<Value> {
-        if self.index_error.is_some()
-            || self.targets.is_empty()
+        if self.targets.is_empty()
             || self.targets.iter().any(|target| {
                 target.receipt.exit_status != Some(0)
                     || target.receipt.freshness != GateFreshness::Fresh
@@ -322,7 +359,7 @@ fn target_evidence_freshness(
     let Some(receipt) = receipt else {
         return (
             GateFreshness::Missing,
-            "no receipt exists for this target in a compatible run".into(),
+            "no receipt exists for this target in this work plan".into(),
         );
     };
     if !crate::state::time_validity_is_current(
@@ -425,9 +462,7 @@ fn aggregate_evidence_freshness(targets: &[TargetEvidenceEvaluation]) -> GateFre
 const fn evidence_freshness_reason(freshness: GateFreshness) -> &'static str {
     match freshness {
         GateFreshness::Fresh => "all required target receipts match current inputs",
-        GateFreshness::Missing => {
-            "one or more required target receipts are missing from a compatible run"
-        }
+        GateFreshness::Missing => "one or more required targets have no receipt in this work plan",
         GateFreshness::Stale => "one or more required target receipts are stale",
         GateFreshness::Unknown => "freshness is unknown for one or more required target receipts",
     }
@@ -512,6 +547,7 @@ mod tests {
             config_digest: Some("sha256:config".into()),
             input_digest: Some("sha256:input".into()),
             exit_status: 0,
+            started_at_ms: 0,
             ended_at_ms: 1,
             changed_paths: Vec::new(),
             changed_path_count: 0,

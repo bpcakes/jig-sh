@@ -35,28 +35,15 @@ impl ReceiptProtectionIndex {
                 protected.insert(worker_receipt_id.clone());
             }
         }
-        for ((plan_id, gate_id), receipts) in &self.target_evidence {
-            if let Some(error) = receipts.error() {
-                bail!(
-                    "cannot safely archive target evidence for plan '{plan_id}' gate '{gate_id}': {error}"
-                );
-            }
-            if let Some(group) = receipts.selected()
-                && group.receipts.values().all(|receipt| {
-                    time_validity_is_current(
-                        receipt.valid_until_ms,
-                        receipt.requires_time_validity,
-                        self.now_ms,
-                    )
-                })
-            {
-                protected.extend(
-                    group
-                        .receipts
-                        .values()
-                        .map(|receipt| receipt.receipt_id.clone()),
-                );
-            }
+        // Keep each target's newest outcome, even a failure or expired proof.
+        // It prevents archiving from exposing an older passing receipt again.
+        for receipts in self.target_evidence.values() {
+            protected.extend(
+                receipts
+                    .selected()
+                    .values()
+                    .map(|receipt| receipt.receipt_id.clone()),
+            );
         }
         Ok(protected)
     }

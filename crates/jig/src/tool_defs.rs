@@ -75,6 +75,7 @@ pub(crate) mod cli_command {
     pub(crate) const CHECK_TYPESCRIPT_COVERAGE: &str = "typescript-coverage";
     pub(crate) const CHECK_TYPESCRIPT_LINT: &str = "typescript-lint";
     pub(crate) const CHECK_TYPESCRIPT_TYPECHECK: &str = "typescript-typecheck";
+    pub(crate) const CLAUDE: &str = "claude";
     pub(crate) const CODEX: &str = "codex";
     pub(crate) const CODEX_HOMES: &str = "homes";
     pub(crate) const CODEX_LAUNCH: &str = "launch";
@@ -279,7 +280,7 @@ impl MemoryTool {
                 "Append nonblank progress to a structured work plan using exactly one of body or body_file."
             }
             Self::Check => {
-                "Classify and run required applicable work gates by default, or force selected gate ids or legacy tool names."
+                "Validate required work gates, reuse current target passes and execute repairs with dependencies. Explicit gate ids or tool names select legacy checks; use native check selectors to force target execution."
             }
             Self::Gates => "Report configured work gate status for a plan.",
             Self::Evidence => {

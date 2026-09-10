@@ -36,6 +36,7 @@ mod change_scope;
 mod comparison;
 mod content;
 mod exact_path;
+mod metadata;
 mod process;
 mod scope;
 mod worktree;
@@ -640,7 +641,11 @@ fn repository_source_snapshot_inner(
             worktree_diff_output_limit(),
             collection,
         )?;
-        committed_source_tree_without_agent_state(&tree, collection)?
+        metadata::committed_source_tree_without_agent_state(
+            &tree,
+            &metadata::receipt_metadata_paths(root)?,
+            collection,
+        )?
     } else {
         b"unborn".to_vec()
     };
@@ -666,31 +671,6 @@ fn repository_source_snapshot_inner(
         head_commit,
         worktree_fingerprint: format!("sha256:{:x}", digest.finalize()),
     })
-}
-
-fn committed_source_tree_without_agent_state(
-    tree: &[u8],
-    collection: GitReceiptCollection<'_>,
-) -> Result<Vec<u8>> {
-    let mut source_tree = Vec::with_capacity(tree.len());
-    for record in tree
-        .split(|byte| *byte == 0)
-        .filter(|record| !record.is_empty())
-    {
-        collection.ensure_active()?;
-        let path_offset = record
-            .iter()
-            .position(|byte| *byte == b'\t')
-            .context("Git ls-tree record is missing its path separator")?
-            + 1;
-        let path = &record[path_offset..];
-        if path == b".agent" || path.starts_with(b".agent/") {
-            continue;
-        }
-        source_tree.extend_from_slice(record);
-        source_tree.push(0);
-    }
-    Ok(source_tree)
 }
 
 fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Result<DiffStat> {

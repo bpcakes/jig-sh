@@ -35,7 +35,7 @@ pub(crate) fn run(request: VaultTuiRequest, initial_passphrase: Option<SecretByt
         let result = jig_vault_tui::run(backend, initial_passphrase, move || {
             cancellation.cancelled()
         });
-        crate::codex::finish_signal_supervised(
+        crate::signal_supervision::finish(
             result,
             signal_session.finish(),
             "Vault TUI signal supervision could not retire safely",

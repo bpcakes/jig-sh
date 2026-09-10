@@ -25,7 +25,7 @@ fn argv_schema_snapshot_preserves_literal_runner_cwd_and_environment() {
         fs::write(path, toml::to_string(&source).unwrap()).unwrap();
         let script = temp.path().join("api/dump ; $(touch injected)");
         let contents = if executable_header {
-            "#!/usr/bin/env python3\nimport os, pathlib, sys\nassert sys.argv[1:] == [\"literal ' * $(touch injected)\"]\nassert pathlib.Path.cwd().name == 'api'\nassert pathlib.Path(os.environ['JIG_REPO_ROOT']) == pathlib.Path.cwd().parent\npathlib.Path('../docs/schema/tables.sql').write_text(os.environ['SCHEMA_VALUE']+'\\n')\n"
+            "#!/usr/bin/env python3\nimport os, pathlib, sys\nassert sys.argv[1:] == [\"literal ' * $(touch injected)\"]\nassert pathlib.Path.cwd().name == 'api'\nassert pathlib.Path(os.environ['JIG_REPO_ROOT']).resolve(strict=True) == pathlib.Path.cwd().parent\npathlib.Path('../docs/schema/tables.sql').write_text(os.environ['SCHEMA_VALUE']+'\\n')\n"
         } else {
             "printf changed > ../docs/schema/tables.sql\n"
         };

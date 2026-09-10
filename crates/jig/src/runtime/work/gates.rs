@@ -887,15 +887,6 @@ pub(crate) use dashboard::{
 };
 mod target_evidence;
 
-fn repository_for_evidence_gates(
-    ctx: &RepoContext,
-    work_gates: &[WorkGate],
-) -> Result<RepositoryCatalog> {
-    if !work_gates
-        .iter()
-        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
-    {
-        bail!("no evidence gates are configured");
-    }
-    RepositoryCatalog::from_context(ctx)
-}
+mod check_snapshot;
+pub(super) use check_snapshot::check_target_snapshot;
+use check_snapshot::repository_for_evidence_gates;

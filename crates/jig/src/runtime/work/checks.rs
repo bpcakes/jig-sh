@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::command::WorkCheckRequest;
 use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, PhasePosition};
-use crate::repository::{PlanRunRequest, RepositoryCatalog, plan_run, resolve_evidence_targets};
+use crate::repository::{RepositoryCatalog, resolve_evidence_targets};
 use crate::state::{
     ReceiptInput, ReusableWorkCheckEvidence, ReusableWorkCheckQuery, WORK_CHECK_EVIDENCE_SCHEMA,
     WorkCheckBatchEvidence, WorkCheckGateEvidence,
@@ -280,44 +280,22 @@ fn check_configured_with_execution(
         return Ok(result);
     }
 
-    let catalog = RepositoryCatalog::from_context(ctx)?;
-    let plan = plan_run(
-        ctx,
-        &catalog,
-        PlanRunRequest {
-            selectors: targets.iter().map(ToString::to_string).collect(),
-            profile: None,
-            affected_base: None,
-            comparison: None,
-            work_plan_id: Some(plan_id.to_owned()),
-        },
-    )?;
-    let evidence = execution.execute_evidence(
-        ctx,
-        &catalog,
-        plan.clone(),
-        ExecuteCheckRunRequest {
-            work_plan_id: Some(plan_id.to_owned()),
-            record_receipts: true,
-            fail_fast: false,
-        },
-        observer,
-    )?;
-    let evidence_ok = evidence.run.result.conclusion == Some(RunConclusion::Success);
-    let evidence_failure = evidence_failure_message(&evidence.run.result);
+    let evidence = targets::check(ctx, plan_id, targets, execution, observer)?;
+    let evidence_ok = evidence["ok"] == true;
+    let evidence_failure = evidence["error"]
+        .as_str()
+        .unwrap_or("required target evidence is not current and passing");
     let checks_ok = check_failures.is_empty();
     let object = result
         .as_object_mut()
         .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
-    object.insert("ok".into(), json!(checks_ok && evidence_ok));
-    object.insert("plan".into(), json!(plan));
-    object.insert("run".into(), json!(evidence.run.result));
-    object.insert("results".into(), json!(evidence.results));
-    object.insert("failed_targets".into(), json!(evidence.failed_targets));
-    object.insert(
-        "source_observations".into(),
-        json!(evidence.source_observations),
+    object.extend(
+        evidence
+            .as_object()
+            .expect("target check returns an object")
+            .clone(),
     );
+    object.insert("ok".into(), json!(checks_ok && evidence_ok));
 
     if failure_mode.aborts() {
         let check_failure = (!checks_ok).then(|| check_failures.join("\n"));
@@ -974,3 +952,5 @@ enum PreparedCheck {
 }
 
 include!("checks/tail.rs");
+
+mod targets;

@@ -170,6 +170,7 @@ impl CommandKind {
             Self::Proxy(_) => (tool_defs::cli_command::PROXY, Repository),
             Self::Prompt(_) => ("prompt", Repository),
             Self::Agent(_) => (tool_defs::cli_command::AGENT, Repository),
+            Self::Claude(_) => (tool_defs::cli_command::CLAUDE, CapabilityOnly),
             Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
             Self::AgentMap(_) => (tool_defs::cli_command::AGENT_MAP, Repository),
             Self::State(_) => (tool_defs::cli_command::STATE, Repository),
@@ -288,7 +289,7 @@ fn run_command(cli: Cli) -> Result<()> {
             #[cfg(all(unix, not(test)))]
             let outcome = status::snapshot_with_cancellation(&ctx, &|| cancellation.cancelled());
             #[cfg(all(unix, not(test)))]
-            let outcome = crate::codex::finish_signal_supervised(
+            let outcome = crate::signal_supervision::finish(
                 outcome,
                 signal_session.finish(),
                 "Status signal supervision could not retire safely",
@@ -402,6 +403,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 human_output,
             )
         }
+        CommandKind::Claude(command) => super::claude_run::run_claude_command(command, json_output),
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         CommandKind::Work(command) => {
             let human_output = work_human_output(&command);
@@ -768,7 +770,7 @@ fn dispatch_runtime_command(
     let outcome = runtime::dispatch_with_observer(&ctx, command, &mut observer);
     let outcome = observer.finish_with(outcome);
     #[cfg(all(unix, not(test)))]
-    let outcome = crate::codex::finish_signal_supervised(
+    let outcome = crate::signal_supervision::finish(
         outcome,
         signal_session.finish(),
         "Command signal supervision could not retire safely",

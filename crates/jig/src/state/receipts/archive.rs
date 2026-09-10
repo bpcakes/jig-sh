@@ -553,7 +553,7 @@ impl ReceiptProtectionIndex {
                 evidence_targets.iter().map(move |(gate_id, targets)| {
                     (
                         (plan_id.clone(), gate_id.clone()),
-                        IndexedTargetReceipts::for_archive(targets.clone()),
+                        IndexedTargetReceipts::new(targets.clone()),
                     )
                 })
             })

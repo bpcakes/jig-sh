@@ -1,0 +1,1 @@
+Implement DU-001 through DU-003 from the Rust duplication audit. Preserve cancellation and retirement semantics, layout selection and scrolling, and CLI/TUI quota formatting. Validate focused tests, formatting, Clippy, configured gates, and the full repository test command.

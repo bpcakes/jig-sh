@@ -33,7 +33,17 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
         .map(Vec::as_slice)
         .unwrap_or(&[]);
     let targets = target_summaries(value);
-    let status = work_check_summary_status(value, checks, gate_evidence, &targets);
+    let target_evidence = value["target_evidence"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let status = if target_evidence.is_empty() {
+        work_check_summary_status(value, checks, gate_evidence, &targets)
+    } else if value_bool(value, "ok") == Some(true) {
+        WorkCheckSummaryStatus::Passed
+    } else {
+        WorkCheckSummaryStatus::Failed
+    };
     let skipped_checks = checks
         .iter()
         .filter(|check| {
@@ -59,6 +69,24 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
         ),
         format!("  Checks: {}", checks.len()),
     ];
+
+    if !target_evidence.is_empty() {
+        lines.push(format!(
+            "  Target validation receipt: {}",
+            value_str(value, "target_validation_receipt_id").unwrap_or("none")
+        ));
+        for target in target_evidence {
+            lines.push(format!(
+                "  - {}:{}: {} ({}), receipt {}, run {}",
+                value_str(&target["target"], "component").unwrap_or("?"),
+                value_str(&target["target"], "action").unwrap_or("?"),
+                value_str(target, "status").unwrap_or("unknown"),
+                value_str(target, "disposition").unwrap_or("unknown"),
+                value_str(target, "receipt_id").unwrap_or("none"),
+                value_str(target, "run_id").unwrap_or("none")
+            ));
+        }
+    }
 
     if !gate_evidence.is_empty() {
         let count = |status: &str| {

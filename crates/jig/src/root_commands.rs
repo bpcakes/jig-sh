@@ -133,6 +133,11 @@ pub(crate) const CODEX: RootCommand = command(
     RootCommandCategory::AgentAutomation,
     515,
 );
+pub(crate) const CLAUDE: RootCommand = command(
+    cli_command::CLAUDE,
+    RootCommandCategory::AgentAutomation,
+    517,
+);
 pub(crate) const AGENT_MAP: RootCommand = command(
     cli_command::AGENT_MAP,
     RootCommandCategory::AgentAutomation,
@@ -170,6 +175,7 @@ pub(crate) const ALL: &[RootCommand] = &[
     PROMPT,
     AGENT,
     CODEX,
+    CLAUDE,
     AGENT_MAP,
     STATE,
     MCP,

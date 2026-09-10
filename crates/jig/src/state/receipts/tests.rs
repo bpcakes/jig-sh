@@ -112,7 +112,7 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
 }
 
 #[test]
-fn receipt_archive_protection_keeps_only_the_selected_evidence_group_after_overflow() {
+fn receipt_archive_protection_keeps_latest_targets_after_many_runs() {
     let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
     let evidence_targets = BTreeMap::from([(
         "verify".to_string(),
@@ -165,7 +165,7 @@ fn receipt_archive_protection_keeps_only_the_selected_evidence_group_after_overf
 }
 
 #[test]
-fn receipt_archive_refuses_to_drop_protection_when_evidence_indexing_overflows() {
+fn receipt_archive_protection_remains_bounded_across_incomplete_runs() {
     let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
     let evidence_targets = BTreeMap::from([(
         "verify".to_string(),
@@ -192,17 +192,14 @@ fn receipt_archive_refuses_to_drop_protection_when_evidence_indexing_overflows()
         );
     }
 
-    let error = index.protected_receipt_ids().unwrap_err().to_string();
-
-    assert!(
-        error.contains("cannot safely archive target evidence"),
-        "{error}"
+    assert_eq!(
+        index.protected_receipt_ids().unwrap(),
+        BTreeSet::from(["receipt_partial_16384".to_string()])
     );
-    assert!(error.contains("incomplete run groups"), "{error}");
 }
 
 #[test]
-fn archive_protection_does_not_preserve_expired_target_evidence_as_current() {
+fn archive_protection_keeps_expired_target_as_latest_outcome() {
     let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
     let evidence_targets = BTreeMap::from([(
         "verify".to_string(),
@@ -228,7 +225,10 @@ fn archive_protection_does_not_preserve_expired_target_evidence_as_current() {
         &BTreeSet::new(),
     );
 
-    assert!(index.protected_receipt_ids().unwrap().is_empty());
+    assert_eq!(
+        index.protected_receipt_ids().unwrap(),
+        BTreeSet::from(["receipt_expired".to_string()])
+    );
 }
 
 #[test]

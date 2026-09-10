@@ -4,8 +4,6 @@ use anyhow::{Result, anyhow, bail};
 use jig_tui::sanitize_text;
 
 use super::app_server::{self, AppServerThreadLookup, app_server_thread};
-#[cfg(all(unix, not(test)))]
-use super::finish_signal_supervised;
 use super::{
     DiscoveredHomes, DiscoveryIssue, MAX_PARALLEL_HOME_WORKERS, ResumeHomeProbeFailure,
     ResumeHomeSelection, ResumeProbeFailure, SESSION_LOOKUP_CANCELLED, ThreadHomeProbe,
@@ -36,28 +34,11 @@ pub(crate) fn resolve_resume_home_with_progress<F>(thread_id: &str, progress: F)
 where
     F: FnMut(usize, usize),
 {
-    #[cfg(all(unix, not(test)))]
-    {
-        let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
-            anyhow!(
-                "Codex session lookup was not started because the process-wide signal session is unavailable"
-            )
-        })?;
-        let result = resolve_resume_home_with_cancellation(
-            thread_id,
-            &|| signal_session.cancelled(),
-            progress,
-        );
-        finish_signal_supervised(
-            result,
-            signal_session.finish(),
-            "Codex session lookup signal supervision could not retire safely",
-        )
-    }
-    #[cfg(any(not(unix), test))]
-    {
-        resolve_resume_home_with_cancellation(thread_id, &|| false, progress)
-    }
+    crate::signal_supervision::supervise(
+        "Codex session lookup was not started because the process-wide signal session is unavailable",
+        "Codex session lookup signal supervision could not retire safely",
+        |cancelled| resolve_resume_home_with_cancellation(thread_id, &cancelled, progress),
+    )
 }
 
 pub(super) fn resolve_resume_home_with_cancellation<F>(

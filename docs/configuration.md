@@ -528,6 +528,31 @@ Codex `--profile` selects a configuration profile inside the chosen home; it doe
 
 Both the picker and `codex homes --usage` human output show quota remaining. Jig labels Codex windows whose reported durations are five hours and one week as `5h` and `weekly`, whether returned alone or together; unexpected durations show their duration without receiving a contradictory role. Other rate-limit buckets show their server-reported durations without imposing Codex-specific labels.
 
+## Claude Homes
+
+After upgrading Jig in an existing repository, run `scripts/jig update --recopy` to refresh its generated launcher. Upgrading only the runtime leaves older launchers changing to the repository root before starting Claude; this also changes how relative HOME paths resolve. The refreshed launcher preserves the directory where you invoked it.
+
+Use `scripts/jig claude homes` to list `~/.claude`, `~/.claude-*`, and the directory selected by `CLAUDE_CONFIG_DIR`, including a current directory outside those conventional locations. Symlink aliases are deduplicated within directory discovery. Discovery reads directory metadata only; it does not launch Claude, read credentials, or fetch account or usage data. Missing explicit overrides and unreadable candidates appear as warnings. An unset or empty `CLAUDE_CONFIG_DIR` selects `~/.claude` as current.
+
+Use `scripts/jig claude launch [HOME]` to run Claude with a selected configuration home. Named alternate homes and explicit paths must already exist and set `CLAUDE_CONFIG_DIR`. `work` and `claude-work` resolve to `~/.claude-work`; `claude` and `default` select the native default by unsetting `CLAUDE_CONFIG_DIR`. Claude stores its global app configuration at `~/.claude.json` in that mode; setting the variable explicitly instead selects a `.claude.json` inside the chosen directory. Therefore an explicit `~/.claude` path sets the override, while the aliases preserve the native default. When the current override points to the default directory, listing and the picker show both modes; `[default config]` identifies the native mode. Exact discovered names are also accepted. Absolute paths, `~/...`, and explicit relative paths such as `./work` resolve directly without discovery. Bare names never select a same-named directory in the working directory. The native default is always listed and available in the picker, even before `~/.claude` exists; Claude creates its own configuration as needed on launch. Without HOME, an interactive terminal opens the same full-screen home picker as Codex: arrows or `j`/`k` move, `/` searches, Tab switches to the details pane, Enter launches, and Esc or `q` cancels. The Claude details pane shows the selected configuration mode and `CLAUDE_CONFIG_DIR`, then loads subscription limits in the background. The same quota and projection display as Codex shows five-hour and weekly remaining percentages and reset countdowns; available Sonnet/Opus windows appear in the details pane. Enter can launch while inspection is loading or unavailable. Noninteractive and JSON callers must specify HOME.
+
+```sh
+mkdir -p ~/.claude-work
+scripts/jig claude launch work -- auth login
+scripts/jig claude homes
+scripts/jig claude launch work
+scripts/jig claude launch default -- --resume
+scripts/jig claude launch work --dry-run --json -- --model sonnet
+```
+
+Arguments after `--` pass directly to Claude without shell parsing. A launch dry run reports `config_dir: null` when the variable will be unset, or its selected value otherwise. Launch preserves the caller's working directory, stdin, stdout, stderr, and remaining environment, and returns Claude's exit status. Existing environment-based authentication settings therefore still apply. Set `JIG_CLAUDE_BIN` to select another Claude executable. `--json` is supported for listing and launch dry runs; real launches reject it before starting Claude. Human dry runs warn when non-UTF-8 values or terminal controls make the display differ from the actual launch. Dry runs never create directories or start Claude. Home selection does not copy settings or credentials between accounts.
+
+Use `scripts/jig claude homes --usage` (or add `--json`) for a one-shot usage report without opening the picker. Plain `homes`, explicit-home launches, and explicit-home dry runs do not read credentials or fetch limits. Usage inspection reads each home's saved Claude subscription login from the macOS Keychain or `.credentials.json`, then makes a read-only request to `https://api.anthropic.com/api/oauth/usage`, the endpoint used by Claude Code's `/usage`. This endpoint and credential layout are implementation details, not a stable public API; unsupported responses produce an unavailable message. API-key and third-party-provider limits are not subscription limits.
+
+On macOS, the interactive picker first tries noninteractive Keychain access, then may show a system permission dialog. That request is cancellable and times out after 30 seconds. `homes --usage` never opens a Keychain dialog. Credentials stay in memory and are not included in reports, logs, or receipts; Jig never refreshes tokens, starts a Claude session, or rewrites authentication or settings. An expired login must be refreshed by Claude. Ambient authentication or credential-storage overrides produce an unavailable result rather than attributing another login to a home. Requests have a five-second timeout, do not follow redirects, and do not retry on rate limiting. A failed home remains launchable and makes the report `partial`, with unknown usage instead of a zero estimate. Reopen the picker to fetch a new snapshot.
+
+Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars) as its configuration-directory override. This launcher provides home selection; use Claude's forwarded `--resume` option within the selected home to resume a conversation.
+
 ## `work` Shape
 
 The `work` block declares agent workflow defaults without adding repo-local launcher scripts:
