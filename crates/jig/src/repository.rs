@@ -123,6 +123,18 @@ pub(crate) fn resolve_evidence_targets(
             profile.targets.iter().cloned().collect()
         }
     };
+    let mut targets = targets;
+    let mut pending: Vec<_> = targets.iter().cloned().collect();
+    while let Some(target) = pending.pop() {
+        let action = catalog
+            .action(&target)
+            .ok_or_else(|| anyhow::anyhow!("work evidence references unknown target '{target}'"))?;
+        for dependency in &action.depends_on {
+            if targets.insert(dependency.clone()) {
+                pending.push(dependency.clone());
+            }
+        }
+    }
     planner::validate_check_actions(catalog, targets.iter())?;
     Ok(targets)
 }

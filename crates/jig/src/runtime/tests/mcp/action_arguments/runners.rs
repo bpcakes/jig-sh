@@ -96,7 +96,7 @@ fn argv_literal_program_positions_and_alias_preserve_bytes() {
         json!([
             ["literal * ; $HOME", literal, "", "tail"],
             "literal $(touch environment-injected)",
-            temp.path().to_str().unwrap()
+            temp.path().canonicalize().unwrap().to_str().unwrap()
         ])
     );
     let alias = execute_alias(&ctx, tool::TEST, json!({"message": literal})).unwrap();
@@ -295,7 +295,14 @@ fn argv_path_lookup_uses_the_declared_environment_and_working_directory() {
         serde_json::from_str(output["result"]["stdout"].as_str().unwrap()).unwrap();
     assert_eq!(
         captured[2],
-        json!(temp.path().join("api").to_str().unwrap())
+        json!(
+            temp.path()
+                .join("api")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        )
     );
     assert_eq!(captured[0], json!(["literal * ; $HOME", "example", "tail"]));
 }

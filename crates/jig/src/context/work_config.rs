@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkConfig {
+    /// Explicit repository ownership declaration: these tracker stores are not
+    /// consumed by checked application, test, build, or policy commands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    receipt_metadata: Vec<ReceiptMetadata>,
     #[serde(default)]
     checks: Vec<String>,
     #[serde(default)]
@@ -16,6 +20,12 @@ pub(crate) struct WorkConfig {
     #[allow(dead_code)]
     #[serde(default)]
     refinements: Vec<WorkRefinementConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReceiptMetadata {
+    Beads,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -120,6 +130,15 @@ pub(crate) struct WorkRefinementConfig {
 }
 
 impl WorkConfig {
+    pub(crate) fn receipt_metadata_paths(&self) -> Vec<&'static str> {
+        self.receipt_metadata
+            .iter()
+            .map(|metadata| match metadata {
+                ReceiptMetadata::Beads => ".beads",
+            })
+            .collect()
+    }
+
     pub(crate) fn gates(&self) -> Vec<WorkGate> {
         let mut gates = self.gates.clone();
         let mut existing_ids = gates
@@ -366,6 +385,7 @@ impl WorkGate {
 pub(crate) fn parse_work_gate(value: &toml::Value) -> Result<WorkGate> {
     let gate = value.clone().try_into::<WorkGateConfig>()?;
     let config = WorkConfig {
+        receipt_metadata: Vec::new(),
         checks: Vec::new(),
         gates: vec![gate.clone()],
         refinements: Vec::new(),

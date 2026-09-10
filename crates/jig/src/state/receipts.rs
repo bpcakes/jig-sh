@@ -43,8 +43,8 @@ pub(crate) use journal::{
     receipt_append_may_have_landed, receipt_record_id, with_receipt_journal_writer,
     with_receipt_journal_writer_until,
 };
+use target_evidence::IndexedTargetReceipts;
 pub(crate) use target_evidence::TargetReceiptStatus;
-use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
 
 const SUCCESSFUL_RECEIPT_PREVIEW_BYTES: usize = 512;
 
@@ -395,16 +395,13 @@ impl WorkGateReceiptIndex {
         self.check_gates.get(gate_id)
     }
 
-    pub(crate) fn target_receipts(&self, gate_id: &str) -> Option<&TargetReceiptGroup> {
+    pub(crate) fn target_receipts(
+        &self,
+        gate_id: &str,
+    ) -> Option<&BTreeMap<TargetId, TargetReceiptStatus>> {
         self.evidence
             .get(gate_id)
-            .and_then(IndexedTargetReceipts::selected)
-    }
-
-    pub(crate) fn target_receipt_error(&self, gate_id: &str) -> Option<&str> {
-        self.evidence
-            .get(gate_id)
-            .and_then(IndexedTargetReceipts::error)
+            .map(IndexedTargetReceipts::selected)
     }
 }
 

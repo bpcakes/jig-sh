@@ -253,3 +253,19 @@ fn work_evidence_summary_names_profile_evidence_without_unknown_labels() {
     assert!(summary.contains("profile verify: verify, receipt receipt_web"));
     assert!(!summary.contains("<unknown>"));
 }
+
+#[test]
+fn work_check_summary_exposes_reused_native_provenance_and_aggregate_failure() {
+    let mut value = json!({"ok": true, "plan_id": "plan_1", "checks": [],
+        "target_validation_receipt_id": "receipt_validation",
+        "target_evidence": [{"target": {"component": "api", "action": "test"},
+            "status": "passed", "disposition": "reused", "receipt_id": "receipt_original", "run_id": "run_original"}]});
+    let summary = format_work_check_summary(&value);
+    assert!(summary.contains("Work check: passed"));
+    assert!(
+        summary.contains("api:test: passed (reused), receipt receipt_original, run run_original")
+    );
+    assert!(summary.contains("Target validation receipt: receipt_validation"));
+    value["ok"] = json!(false);
+    assert!(format_work_check_summary(&value).contains("Work check: failed"));
+}
