@@ -94,6 +94,10 @@ impl RepoContext {
             config: loaded_config.config,
             manifest,
             contract_digest,
+            configuration_content_digests: [
+                loaded_config.content_digest,
+                format!("sha256:{:x}", Sha256::digest(manifest_text.as_bytes())),
+            ],
         })
     }
 }

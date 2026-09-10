@@ -1,20 +1,17 @@
 use super::*;
 
 pub(super) fn retained_plan(
-    context: &RepoContext,
-    id: RecorderEpochId,
-    observed_at_ms: u64,
-    plans: &StreamSection<PlanFacts>,
-    gates: &BTreeMap<String, GateFacts>,
+    epoch: &LocalObservationEpoch,
     plan_id: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<PlanSnapshotResult, SourceError> {
     PlanObservationBasis {
-        context,
-        id,
-        observed_at_ms,
-        plans,
-        retained_gates: Some(gates),
+        context: &epoch.context,
+        freshness_timeout_ms: epoch.freshness_timeout_ms,
+        id: epoch.id,
+        observed_at_ms: epoch.observed_at_ms,
+        plans: &epoch.plans,
+        retained_gates: Some(&epoch.gates),
     }
     .plan(plan_id, cancelled)
 }
@@ -24,11 +21,13 @@ pub(super) fn fresh_plan(
     id: RecorderEpochId,
     plan_id: &str,
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<PlanSnapshotResult, SourceError> {
     let observed_at_ms = crate::state::now_ms();
     let plans = collect_plans(context, cancelled)?;
     PlanObservationBasis {
         context,
+        freshness_timeout_ms,
         id,
         observed_at_ms,
         plans: &plans,
@@ -39,6 +38,7 @@ pub(super) fn fresh_plan(
 
 struct PlanObservationBasis<'a> {
     context: &'a RepoContext,
+    freshness_timeout_ms: Option<u64>,
     id: RecorderEpochId,
     observed_at_ms: u64,
     plans: &'a StreamSection<PlanFacts>,
@@ -154,6 +154,7 @@ impl PlanObservationBasis<'_> {
                     indexes.into_indexes(),
                     if info.closed { "closed" } else { "open" },
                     cancelled,
+                    self.freshness_timeout_ms,
                 )?
                 .remove(plan_id)
                 .unwrap_or_else(|| GateFacts {

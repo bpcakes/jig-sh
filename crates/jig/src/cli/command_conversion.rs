@@ -346,6 +346,7 @@ impl From<WorkGatesOpts> for command::WorkGatesRequest {
     fn from(opts: WorkGatesOpts) -> Self {
         Self {
             plan_id: opts.plan_id,
+            freshness_timeout_ms: opts.freshness_timeout_ms,
         }
     }
 }
@@ -354,6 +355,7 @@ impl From<WorkEvidenceOpts> for command::WorkEvidenceRequest {
     fn from(opts: WorkEvidenceOpts) -> Self {
         Self {
             plan_id: opts.plan_id,
+            freshness_timeout_ms: opts.freshness_timeout_ms,
         }
     }
 }

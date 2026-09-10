@@ -19,6 +19,7 @@ pub(super) struct LocalObservationEpoch {
     id: RecorderEpochId,
     observed_at_ms: u64,
     context: RepoContext,
+    freshness_timeout_ms: Option<u64>,
     repository: StatusRepositoryObservation,
     status_repository_errors: Vec<StatusCollectionError>,
     current_session_id: Option<String>,
@@ -115,6 +116,7 @@ impl LocalObservationEpoch {
         context: &RepoContext,
         id: RecorderEpochId,
         cancelled: &dyn Fn() -> bool,
+        freshness_timeout_ms: Option<u64>,
     ) -> Result<Self, SourceError> {
         ensure_active(cancelled)?;
         let observed_at_ms = crate::state::now_ms();
@@ -208,6 +210,7 @@ impl LocalObservationEpoch {
                 gate_indexes.into_indexes(),
                 "open",
                 cancelled,
+                freshness_timeout_ms,
             )?,
         };
         if gate_collection_error.is_none() {
@@ -228,6 +231,7 @@ impl LocalObservationEpoch {
             id,
             observed_at_ms,
             context: context.clone(),
+            freshness_timeout_ms,
             repository,
             status_repository_errors,
             current_session_id,
@@ -355,15 +359,7 @@ impl LocalObservationEpoch {
         plan_id: &str,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<PlanSnapshotResult, SourceError> {
-        retained_plan(
-            &self.context,
-            self.id,
-            self.observed_at_ms,
-            &self.plans,
-            &self.gates,
-            plan_id,
-            cancelled,
-        )
+        retained_plan(self, plan_id, cancelled)
     }
 
     pub(super) fn fresh_plan(
@@ -371,8 +367,9 @@ impl LocalObservationEpoch {
         id: RecorderEpochId,
         plan_id: &str,
         cancelled: &dyn Fn() -> bool,
+        freshness_timeout_ms: Option<u64>,
     ) -> Result<PlanSnapshotResult, SourceError> {
-        fresh_plan(context, id, plan_id, cancelled)
+        fresh_plan(context, id, plan_id, cancelled, freshness_timeout_ms)
     }
 
     fn status_state(&self) -> StatusStateSnapshot {

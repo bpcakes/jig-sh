@@ -75,6 +75,7 @@ pub(super) fn receipt_record(
     diff_stat: DiffStat,
 ) -> ReceiptRecord {
     ReceiptRecord {
+        target_freshness: None,
         id: id.into(),
         session_id: Some("session_1".into()),
         plan_id: Some("plan_1".into()),

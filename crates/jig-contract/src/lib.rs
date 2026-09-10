@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+pub mod freshness;
 pub mod repository;
 pub mod run;
 
 pub use repository::{
-    ActionArgumentSpec, ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ArgvValue,
-    ComponentId, ComponentSpec, FieldProvenance, MissingComparisonV1, NativeActionConfigurationV1,
-    NativeFileBudgetConfigV1, ProfileId, ProfileSpec, ResultParser, TargetId,
+    ActionArgumentSpec, ActionEffect, ActionId, ActionInputsPolicy, ActionIntent, ActionRunner,
+    ActionSpec, ArgvValue, ComponentId, ComponentSpec, FieldProvenance, MissingComparisonV1,
+    NativeActionConfigurationV1, NativeFileBudgetConfigV1, ProfileId, ProfileSpec, ResultParser,
+    TargetId,
 };
 pub use run::{
     ActionArguments, ComparisonPreparationFailureV1, ComparisonPreparationV1, ComparisonRequestV1,

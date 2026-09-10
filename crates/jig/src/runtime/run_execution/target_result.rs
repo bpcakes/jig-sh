@@ -6,6 +6,7 @@ pub(super) struct TargetFinisher<'a> {
     pub(super) run: &'a crate::state::DurableRun,
     pub(super) work_plan_id: Option<&'a str>,
     pub(super) record_receipts: bool,
+    pub(super) freshness: Option<&'a super::freshness::ExecutionFreshness>,
 }
 
 pub(super) struct CompletedTargetCapture {
@@ -17,7 +18,8 @@ pub(super) struct CompletedTargetCapture {
 impl CompletedTargetCapture {
     pub(super) fn now(started_at_ms: Option<u64>, capture: TargetCapture) -> Self {
         Self {
-            started_at_ms,
+            started_at_ms: started_at_ms
+                .map(|started| capture.authority_started_at_ms.unwrap_or(started)),
             ended_at_ms: now_ms(),
             capture,
         }
@@ -44,6 +46,9 @@ impl TargetFinisher<'_> {
         completed: CompletedTargetCapture,
         worktree_fingerprint: std::result::Result<String, String>,
     ) -> Result<(TargetRunResult, Option<Value>)> {
+        let target_freshness = self.freshness.map(|freshness| {
+            freshness.metadata(self.run, planned, &completed, &worktree_fingerprint)
+        });
         let CompletedTargetCapture {
             started_at_ms,
             ended_at_ms,
@@ -79,6 +84,7 @@ impl TargetFinisher<'_> {
                         worktree_fingerprint_override: Some(worktree_fingerprint),
                     },
                     TargetReceiptMetadata {
+                        target_freshness: target_freshness.clone(),
                         run_id: self.run.result.run_id.clone(),
                         target: planned.target.clone(),
                         config_digest: self.run.plan.config_digest.clone(),
@@ -93,6 +99,21 @@ impl TargetFinisher<'_> {
                 )
             })
             .transpose()?;
+
+        if let (Some(freshness), Some(receipt_id), Some(metadata)) = (
+            self.freshness,
+            receipt_id.as_deref(),
+            target_freshness.as_ref(),
+        ) {
+            freshness.recorded(
+                self.run,
+                planned,
+                receipt_id,
+                ended_at_ms,
+                capture.conclusion,
+                metadata,
+            );
+        }
 
         let mut result = TargetRunResult::queued(
             planned.target.clone(),
@@ -112,6 +133,7 @@ impl TargetFinisher<'_> {
         result.native_evidence.clone_from(&capture.native_evidence);
         result.evaluated_at_ms = capture.evaluated_at_ms;
         result.valid_until_ms = capture.valid_until_ms;
+        result.target_freshness.clone_from(&target_freshness);
 
         let compatibility = started_at_ms.map(|_| {
             let alias = self
@@ -119,7 +141,7 @@ impl TargetFinisher<'_> {
                 .aliases_for_target(&planned.target)
                 .first()
                 .cloned();
-            json!({
+            let mut value = json!({
                 "target": planned.target,
                 "tool": alias,
                 "response": {
@@ -139,7 +161,11 @@ impl TargetFinisher<'_> {
                     },
                     "receipt_id": receipt_id,
                 },
-            })
+            });
+            if let Some(metadata) = &target_freshness {
+                value["response"]["result"]["target_freshness"] = json!(metadata);
+            }
+            value
         });
         Ok((result, compatibility))
     }
@@ -162,6 +188,9 @@ pub(super) fn aggregate_conclusion(
 }
 
 pub(super) struct TargetCapture {
+    pub(super) authority_started_at_ms: Option<u64>,
+    pub(super) freshness_authority: Option<crate::repository::freshness::CollectionResult<()>>,
+    pub(super) execution_safety_proved: bool,
     pub(super) conclusion: RunConclusion,
     pub(super) exit_code: Option<i32>,
     pub(super) receipt_exit_status: i32,
@@ -210,6 +239,9 @@ impl TargetCapture {
             exit_status.max(1)
         };
         Self {
+            freshness_authority: None,
+            authority_started_at_ms: None,
+            execution_safety_proved: true,
             conclusion,
             exit_code: Some(exit_status),
             receipt_exit_status,
@@ -235,6 +267,12 @@ impl TargetCapture {
             1
         };
         Self {
+            freshness_authority: None,
+            authority_started_at_ms: None,
+            execution_safety_proved: matches!(
+                result.conclusion,
+                RunConclusion::Success | RunConclusion::Failure
+            ),
             conclusion: result.conclusion,
             exit_code: None,
             receipt_exit_status,
@@ -256,6 +294,9 @@ impl TargetCapture {
     pub(super) fn not_started(conclusion: RunConclusion, message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
+            freshness_authority: None,
+            authority_started_at_ms: None,
+            execution_safety_proved: false,
             conclusion,
             exit_code: None,
             receipt_exit_status: 1,
@@ -298,6 +339,9 @@ impl TargetCapture {
         }
         stderr.push_str(&message);
         Self {
+            authority_started_at_ms: None,
+            freshness_authority: None,
+            execution_safety_proved: false,
             conclusion: RunConclusion::Failure,
             exit_code: None,
             receipt_exit_status: 1,

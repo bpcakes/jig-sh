@@ -1,0 +1,102 @@
+name: Target Freshness Qualification
+
+on:
+  pull_request:
+    paths:
+      - "crates/jig/Cargo.toml"
+      - "crates/jig/src/bootstrap/**"
+      - "crates/jig/src/tool_defs.rs"
+      - "crates/jig/src/ui.rs"
+      - "crates/jig/src/ui/**"
+      - "crates/jig-ui/**"
+      - "crates/jig/src/repository.rs"
+      - "crates/jig/src/repository/**"
+      - "crates/jig/src/runtime.rs"
+      - "crates/jig/src/runtime/**"
+      - "crates/jig/src/state.rs"
+      - "crates/jig/src/state/**"
+      - "crates/jig/src/cli.rs"
+      - "crates/jig/src/cli/**"
+      - "crates/jig/src/status*"
+      - "crates/jig/src/git_receipts*"
+      - "crates/jig/src/git_receipts/**"
+      - "crates/jig/src/context*"
+      - "crates/jig/src/context/**"
+      - "crates/jig-contract/**"
+      - "crates/jig-owned-process/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/*target-freshness*"
+      - ".github/workflows/target-freshness-qualification.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-freshness-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: freshness-qualification
+      - name: Build candidate runtime
+        run: cargo build --locked --release -p jig-sh --bin jig
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: freshness-runtime
+          path: target/release/jig
+          if-no-files-found: error
+
+  commands:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [ci, constrained]
+        cache: [warm, cold]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: freshness-runtime
+          path: /tmp/ExampleRuntime
+      - run: chmod +x /tmp/ExampleRuntime/jig
+      - name: Measure hosted CI commands
+        if: matrix.profile == 'ci'
+        run: >-
+          python3 scripts/benchmark-target-freshness-commands.py
+          --binary /tmp/ExampleRuntime/jig --profile ci --cache '${{ matrix.cache }}'
+          --output 'qualification/commands-ci-${{ matrix.cache }}.json'
+      - name: Measure one-CPU storage-limited commands
+        if: matrix.profile == 'constrained'
+        run: >-
+          bash scripts/qualify-target-freshness-constrained.sh
+          /tmp/ExampleRuntime/jig '${{ matrix.cache }}'
+          'qualification/commands-constrained-${{ matrix.cache }}.json'
+      - name: Exercise hosted CI collection ceilings
+        if: matrix.profile == 'ci' && matrix.cache == 'cold'
+        run: >-
+          python3 scripts/benchmark-target-freshness-limits.py
+          --binary /tmp/ExampleRuntime/jig --profile ci
+          --output qualification/limits-ci.json
+      - name: Retain every measurement, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: freshness-${{ matrix.profile }}-${{ matrix.cache }}
+          path: qualification/*.json
+          if-no-files-found: error

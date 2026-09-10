@@ -158,6 +158,7 @@ fn work_gates(ctx: &RepoContext) -> Value {
     dispatch(
         ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -252,6 +253,7 @@ profile = "verify"
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                freshness_timeout_ms: None,
                 plan_id: Some("plan_1".into()),
             },
         )),
@@ -393,6 +395,7 @@ profile = "does-not-exist"
         &ctx,
         &["plan_1".into()],
         &|| false,
+        None,
     )
     .unwrap();
     assert_eq!(snapshots["plan_1"]["gates"][0]["status"], "unsupported");
@@ -480,6 +483,7 @@ target = "api:test"
         &ctx,
         &["plan_1".into()],
         &|| false,
+        None,
     )
     .unwrap();
     assert_eq!(snapshots["plan_1"]["gates"][0]["status"], "unsupported");
@@ -762,3 +766,4 @@ legacy_aliases = ["jig.broken_check"]
 }
 
 mod retries;
+mod scoped_freshness;

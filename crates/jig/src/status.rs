@@ -22,14 +22,23 @@ use git::{GitProbeError, git_text_with_cancellation, observe_git_checkout_with_c
 
 const STATUS_SCHEMA_VERSION: u64 = jig_ui::dashboard::STATUS_SCHEMA_VERSION;
 
-#[cfg(any(not(unix), test))]
+#[cfg(test)]
 pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {
     snapshot_with_cancellation(ctx, &|| false)
 }
 
+#[cfg(test)]
 pub(crate) fn snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    snapshot_with_freshness_timeout(ctx, cancelled, None)
+}
+
+pub(crate) fn snapshot_with_freshness_timeout(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<Value> {
     ensure_collection_active(cancelled)?;
     let current = refreshed_repository_context(ctx)?;
@@ -37,7 +46,7 @@ pub(crate) fn snapshot_with_cancellation(
     let ctx = &current;
     let (repository, mut errors) = repository_snapshot(ctx, cancelled)?;
     ensure_collection_active(cancelled)?;
-    let (work, work_errors) = work_snapshot(ctx, cancelled)?;
+    let (work, work_errors) = work_snapshot(ctx, cancelled, freshness_timeout_ms)?;
     errors.extend(work_errors);
     ensure_collection_active(cancelled)?;
     let (loops, loop_error) = loop_snapshot(ctx, cancelled)?;
@@ -226,6 +235,7 @@ fn local_upstream_snapshot(
 fn work_snapshot(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<(Value, Vec<StatusCollectionError>)> {
     ensure_collection_active(cancelled)?;
     let state = match state_summary_with_cancellation(ctx, cancelled) {
@@ -260,7 +270,12 @@ fn work_snapshot(
     let gate_snapshots = if open_plan_ids.is_empty() {
         Ok(BTreeMap::new())
     } else {
-        open_plan_gate_snapshots_with_cancellation(ctx, &open_plan_ids, cancelled)
+        open_plan_gate_snapshots_with_cancellation(
+            ctx,
+            &open_plan_ids,
+            cancelled,
+            freshness_timeout_ms,
+        )
     };
     let mut gates = Vec::with_capacity(open_plan_ids.len());
     for plan_id in open_plan_ids {

@@ -1,6 +1,6 @@
 use super::*;
 use crate::command::{MigrationAddRequest, RuntimeCommand, ToolRequest};
-use crate::context::RepoContext;
+use crate::context::{CURRENT_CONTRACT_VERSION, RepoContext};
 
 #[test]
 fn action_arguments_update_preserves_command_migration_alias() {
@@ -63,13 +63,22 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest["contract_version"] = serde_json::json!(version);
         // This fixture deliberately recreates a pre-v8 source. Fresh rendering
-        // now uses explicit shell runners, which those old epochs reject.
+        // now uses explicit shell runners and freshness policy fields, which
+        // those old epochs reject.
         for action in source["repository"]["actions"].as_array_mut().unwrap() {
+            action.as_table_mut().unwrap().remove("inputs_policy");
+            if let Some(provenance) = action.get_mut("provenance") {
+                provenance.as_table_mut().unwrap().remove("inputs_policy");
+            }
             if action["runner"]["kind"].as_str() == Some("shell") {
                 action["runner"]["kind"] = TomlValue::String("command".into());
             }
         }
         for action in manifest["actions"].as_array_mut().unwrap() {
+            action.as_object_mut().unwrap().remove("inputs_policy");
+            if let Some(provenance) = action.get_mut("provenance") {
+                provenance.as_object_mut().unwrap().remove("inputs_policy");
+            }
             if action["runner"]["kind"] == "shell" {
                 action["runner"]["kind"] = serde_json::json!("command");
             }
@@ -117,7 +126,7 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
             no_input: true,
         })
         .unwrap();
-        assert_migration_alias(&repo, 8, &name);
+        assert_migration_alias(&repo, CURRENT_CONTRACT_VERSION, &name);
         let mut expected_runner = action["runner"].clone();
         expected_runner["kind"] = serde_json::json!("shell");
 

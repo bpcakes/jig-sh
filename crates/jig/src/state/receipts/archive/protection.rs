@@ -53,11 +53,8 @@ fn latest_receipt(receipt: &ReceiptRecord, worker_receipt_id: Option<String>) ->
     LatestReceipt {
         id: receipt.id.clone(),
         worker_receipt_id,
-        valid_until_ms: receipt.valid_until_ms,
-        requires_time_validity: receipt
-            .evidence
-            .as_ref()
-            .is_some_and(super::evidence_requires_time_validity),
+        valid_until_ms: archive_time_validity(receipt).effective_valid_until_ms,
+        requires_time_validity: archive_time_validity(receipt).effective_requires_time_validity,
     }
 }
 
@@ -75,4 +72,39 @@ fn work_check_is_time_current(receipt: &ProtectedWorkCheck, now_ms: u64) -> bool
         receipt.requires_time_validity,
         now_ms,
     )
+}
+
+fn archive_time_validity(
+    receipt: &ReceiptRecord,
+) -> jig_contract::freshness::EffectiveTimeValidityV1 {
+    super::receipt_effective_time(receipt).unwrap_or_else(|| {
+        jig_contract::freshness::EffectiveTimeValidityV1::new(
+            receipt.valid_until_ms,
+            receipt
+                .evidence
+                .as_ref()
+                .is_some_and(super::evidence_requires_time_validity),
+        )
+    })
+}
+
+fn archive_gate_time_validity(
+    receipt: &ReceiptRecord,
+    gate: &super::WorkCheckGateEvidence,
+) -> jig_contract::freshness::EffectiveTimeValidityV1 {
+    use jig_contract::freshness::EffectiveTimeValidityV1;
+    let own = archive_time_validity(receipt);
+    if super::receipt_effective_time(receipt).is_none() && gate.effective_time.is_none() {
+        // Preserve pre-epoch-9 batch/gate expiry aggregation exactly.
+        return EffectiveTimeValidityV1::new(
+            [receipt.valid_until_ms, gate.valid_until_ms]
+                .into_iter()
+                .flatten()
+                .min(),
+            own.effective_requires_time_validity || gate.requires_time_validity,
+        );
+    }
+    own.combine(gate.effective_time.unwrap_or_else(|| {
+        EffectiveTimeValidityV1::new(gate.valid_until_ms, gate.requires_time_validity)
+    }))
 }

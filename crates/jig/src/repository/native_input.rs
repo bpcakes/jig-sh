@@ -24,6 +24,9 @@ const MAX_PREPARED_DIAGNOSTIC_CHARS_V1: usize = 1_024;
 const MAX_SYMBOLIC_COMPARISON_REF_BYTES_V1: usize = 1_024;
 const MAX_EXACT_OBJECT_ID_BYTES_V1: usize = 64;
 
+mod freshness;
+pub(crate) use freshness::{prepare_gate_file_budget_input, revalidate_freshness_native_input};
+
 pub(crate) fn prepare_file_budget_input_v1(
     ctx: &RepoContext,
     request: Option<ComparisonRequestV1>,
@@ -159,153 +162,30 @@ const fn current_view(request: &ComparisonRequestV1) -> CurrentViewV1 {
     }
 }
 
-fn prepare_policy(
-    ctx: &RepoContext,
-    view: CurrentViewV1,
-    current_date: PolicyDateV1,
-) -> PolicyPreparationV1 {
-    let bytes = match read_policy_bytes(ctx, view) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => {
-            return invalid_policy(
-                None,
-                PolicyPreparationFailureV1::Missing,
-                vec![PreparedDiagnosticV1 {
-                    severity: FindingSeverity::Error,
-                    code: "file_budget.policy_invalid".into(),
-                    message: format!("required file-budget policy '{POLICY_PATH_V1}' is missing"),
-                    path: Some(POLICY_PATH_V1.into()),
-                }],
-            );
-        }
-        Err(message) => {
-            return invalid_policy(
-                None,
-                PolicyPreparationFailureV1::Unreadable,
-                vec![PreparedDiagnosticV1 {
-                    severity: FindingSeverity::Error,
-                    code: "file_budget.policy_invalid".into(),
-                    message,
-                    path: Some(POLICY_PATH_V1.into()),
-                }],
-            );
-        }
-    };
-    match parse_policy_v1(&bytes, current_date) {
-        Ok(policy) => PolicyPreparationV1::Ready {
-            policy_raw_digest: format!("sha256:{}", policy.identity().raw_sha256()),
-            policy_semantic_digest: format!("sha256:{}", policy.identity().semantic_sha256()),
-        },
-        Err(error) => invalid_policy(
-            Some(format!("sha256:{}", error.raw_sha256())),
-            PolicyPreparationFailureV1::Invalid,
-            error
-                .diagnostics()
-                .iter()
-                .map(prepared_diagnostic)
-                .collect(),
-        ),
-    }
-}
-
-pub(crate) fn read_policy_bytes(
-    ctx: &RepoContext,
-    view: CurrentViewV1,
-) -> std::result::Result<Option<Vec<u8>>, String> {
-    if view == CurrentViewV1::Index {
-        return match read_index_blob_v1(ctx.root(), POLICY_PATH_V1, MAX_POLICY_BYTES_V1 + 1) {
-            Ok(Some(bytes)) if bytes.len() <= MAX_POLICY_BYTES_V1 => Ok(Some(bytes)),
-            Ok(Some(bytes)) => Err(format!(
-                "file-budget policy exceeds the {MAX_POLICY_BYTES_V1}-byte preparation limit (observed at least {} bytes)",
-                bytes.len()
-            )),
-            Ok(None) => Ok(None),
-            Err(error) => Err(bounded_message(&format!(
-                "file-budget policy could not be read from the index: {}",
-                redact_root(ctx, &format!("{error:#}"))
-            ))),
-        };
-    }
-    let path = ctx.root().join(POLICY_PATH_V1);
-    let before = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("file-budget policy metadata could not be read".into()),
-    };
-    if !before.file_type().is_file() || before.file_type().is_symlink() {
-        return Err("file-budget policy must be a regular file and may not be a symlink".into());
-    }
-    if before.len() > MAX_POLICY_BYTES_V1 as u64 {
-        return Err(format!(
-            "file-budget policy is {} bytes; preparation permits at most {MAX_POLICY_BYTES_V1}",
-            before.len()
-        ));
-    }
-    let mut file = File::open(&path).map_err(|_| "file-budget policy could not be opened")?;
-    let mut bytes = Vec::with_capacity(before.len() as usize);
-    file.by_ref()
-        .take((MAX_POLICY_BYTES_V1 + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "file-budget policy could not be read completely")?;
-    let after = file
-        .metadata()
-        .map_err(|_| "file-budget policy identity could not be rechecked")?;
-    if bytes.len() > MAX_POLICY_BYTES_V1 {
-        return Err(format!(
-            "file-budget policy exceeds the {MAX_POLICY_BYTES_V1}-byte preparation limit"
-        ));
-    }
-    if before.len() != after.len()
-        || before.modified().ok() != after.modified().ok()
-        || !after.file_type().is_file()
-    {
-        return Err("file-budget policy changed while it was being prepared".into());
-    }
-    Ok(Some(bytes))
-}
-
-fn prepared_diagnostic(diagnostic: &BudgetDiagnosticV1) -> PreparedDiagnosticV1 {
-    PreparedDiagnosticV1 {
-        severity: match diagnostic.severity {
-            BudgetSeverityV1::Error => FindingSeverity::Error,
-            BudgetSeverityV1::Warning => FindingSeverity::Warning,
-            BudgetSeverityV1::Notice => FindingSeverity::Notice,
-        },
-        code: diagnostic.code.as_str().into(),
-        message: bounded_message(&diagnostic.message),
-        path: diagnostic.path.as_deref().map(bounded_message),
-    }
-}
-
-fn invalid_policy(
-    policy_raw_digest: Option<String>,
-    reason: PolicyPreparationFailureV1,
-    diagnostics: Vec<PreparedDiagnosticV1>,
-) -> PolicyPreparationV1 {
-    let diagnostics_count = diagnostics.len() as u64;
-    let diagnostics_digest = digest_json(
-        b"jig-file-budget-preparation-diagnostics-v1\0",
-        &diagnostics,
-    );
-    let diagnostics_preview = diagnostics
-        .into_iter()
-        .take(MAX_PREPARED_DIAGNOSTICS_V1)
-        .collect();
-    PolicyPreparationV1::InvalidPolicy {
-        policy_raw_digest,
-        reason,
-        diagnostics_count,
-        diagnostics_digest,
-        diagnostics_preview,
-    }
-}
+mod policy;
+pub(crate) use policy::read_policy_bytes;
+use policy::{prepare_policy, prepare_policy_from_bytes};
 
 fn prepare_comparison(
     ctx: &RepoContext,
     request: &ComparisonRequestV1,
     missing_comparison: MissingComparisonV1,
 ) -> ComparisonPreparationV1 {
-    match resolve_comparison_with_push_before_fetch(ctx, request) {
+    comparison_preparation(
+        ctx,
+        request,
+        missing_comparison,
+        resolve_comparison_with_push_before_fetch(ctx, request),
+    )
+}
+
+fn comparison_preparation(
+    ctx: &RepoContext,
+    request: &ComparisonRequestV1,
+    missing_comparison: MissingComparisonV1,
+    resolution: Result<ResolvedComparisonV1>,
+) -> ComparisonPreparationV1 {
+    match resolution {
         Ok(comparison) => ComparisonPreparationV1::Ready { comparison },
         Err(error) => {
             let attempted_object_ids = attempted_object_ids(request);
@@ -615,6 +495,47 @@ max_lines = 100
     }
 
     #[test]
+    fn freshness_index_policy_matches_preparation_at_the_size_boundary() {
+        use crate::repository::freshness::{CollectionBudget, CollectionLimits};
+        let (_temp, ctx) = prepared_repository(VALID_POLICY);
+        for extra in [0, 1] {
+            let mut policy = VALID_POLICY.as_bytes().to_vec();
+            policy.resize(MAX_POLICY_BYTES_V1 + extra, b' ');
+            std::fs::write(ctx.root().join(POLICY_PATH_V1), policy).unwrap();
+            git(ctx.root(), &["add", POLICY_PATH_V1]);
+            let prepared = prepare_file_budget_input_v1(
+                &ctx,
+                Some(ComparisonRequestV1::IndexAgainstHead),
+                NativeFileBudgetConfigV1::default(),
+                None,
+            )
+            .unwrap();
+            if extra == 0 {
+                assert!(matches!(prepared.policy, PolicyPreparationV1::Ready { .. }));
+            } else {
+                let PolicyPreparationV1::InvalidPolicy {
+                    reason,
+                    diagnostics_preview,
+                    ..
+                } = &prepared.policy
+                else {
+                    panic!("oversized index policy must be rejected")
+                };
+                assert_eq!(*reason, PolicyPreparationFailureV1::Unreadable);
+                assert!(diagnostics_preview[0].message.contains("preparation limit"));
+            }
+            let mut budget = CollectionBudget::new(
+                CollectionLimits::with_timeout(std::time::Duration::from_secs(30)),
+                &|| false,
+            );
+            revalidate_freshness_native_input(&ctx, &prepared, &mut budget).unwrap();
+            assert!(
+                budget.finish_stats().content_bytes_read >= (MAX_POLICY_BYTES_V1 + extra) as u64
+            );
+        }
+    }
+
+    #[test]
     fn invalid_policy_and_missing_comparison_are_prepared_independently() {
         let (_temp, ctx) = prepared_repository("version = 2\n");
         let requested_oid = "0".repeat(40);
@@ -773,5 +694,62 @@ max_lines = 100
                 }
             }
         ));
+    }
+    #[test]
+    fn freshness_revalidates_push_before_fallback_without_repeating_fetch() {
+        use crate::repository::freshness::{CollectionBudget, CollectionLimits};
+        let (_temp, ctx) = prepared_repository(VALID_POLICY);
+        let (source, source_ctx) = prepared_repository(VALID_POLICY);
+        std::fs::write(
+            source_ctx.root().join("source.rs"),
+            "fn other_revision() {}\n",
+        )
+        .unwrap();
+        git(source_ctx.root(), &["add", "source.rs"]);
+        git(
+            source_ctx.root(),
+            &["commit", "-q", "-m", "Example available comparison"],
+        );
+        let requested_oid = git(source_ctx.root(), &["rev-parse", "HEAD"]);
+        let prepared = prepare_file_budget_input_v1(
+            &ctx,
+            Some(ComparisonRequestV1::ExactTree {
+                requested_oid,
+                provenance: jig_contract::ExactTreeProvenanceV1::PushBefore,
+            }),
+            NativeFileBudgetConfigV1 {
+                missing_comparison: MissingComparisonV1::StrictInventory,
+                ..NativeFileBudgetConfigV1::default()
+            },
+            None,
+        )
+        .unwrap();
+        let mut budget = CollectionBudget::new(
+            CollectionLimits::with_timeout(std::time::Duration::from_secs(30)),
+            &|| false,
+        );
+        revalidate_freshness_native_input(&ctx, &prepared, &mut budget).unwrap();
+        let mut corrupted = prepared.clone();
+        let ComparisonPreparationV1::Ready {
+            comparison:
+                ResolvedComparisonV1::StrictInventory {
+                    fallback_from: Some(fallback),
+                    ..
+                },
+        } = &mut corrupted.comparison
+        else {
+            panic!("fixture must select the explicit fallback")
+        };
+        fallback.failure.message = "changed diagnostic".into();
+        assert!(revalidate_freshness_native_input(&ctx, &corrupted, &mut budget).is_err());
+        std::fs::write(ctx.root().join(POLICY_PATH_V1), "changed policy").unwrap();
+        assert!(revalidate_freshness_native_input(&ctx, &prepared, &mut budget).is_err());
+        std::fs::write(ctx.root().join(POLICY_PATH_V1), VALID_POLICY).unwrap();
+        revalidate_freshness_native_input(&ctx, &prepared, &mut budget).unwrap();
+        git(
+            ctx.root(),
+            &["fetch", "-q", source.path().to_str().unwrap(), "main"],
+        );
+        assert!(revalidate_freshness_native_input(&ctx, &prepared, &mut budget).is_err());
     }
 }

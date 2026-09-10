@@ -76,6 +76,7 @@ fn work_gates_reject_stale_required_gate_receipts() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
     )
@@ -122,6 +123,7 @@ fn work_gates_reject_unknown_required_gate_freshness() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
     )
@@ -225,6 +227,7 @@ fn work_review_records_structured_codex_review_findings() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -294,6 +297,7 @@ fn work_review_surfaces_raw_counts_when_findings_are_truncated() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -337,6 +341,7 @@ fn work_review_fails_when_codex_exits_nonzero_with_below_threshold_findings() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -417,6 +422,7 @@ fn work_refine_runs_fixer_then_review_and_check_gates() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )

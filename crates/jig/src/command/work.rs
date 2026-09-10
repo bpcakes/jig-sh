@@ -63,11 +63,15 @@ pub(crate) struct WorkCheckRequest {
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkGatesRequest {
     pub(crate) plan_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_freshness_timeout_ms")]
+    pub(crate) freshness_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkEvidenceRequest {
     pub(crate) plan_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_freshness_timeout_ms")]
+    pub(crate) freshness_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,4 +125,18 @@ pub(crate) struct WorkFinishRequest {
     pub(crate) plan_id: String,
     pub(crate) resolution: Option<String>,
     pub(crate) outcome: Option<String>,
+}
+
+fn deserialize_freshness_timeout_ms<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    if (1..=30_000).contains(&value) {
+        Ok(Some(value))
+    } else {
+        Err(serde::de::Error::custom(
+            "freshness_timeout_ms must be an integer from 1 through 30000",
+        ))
+    }
 }

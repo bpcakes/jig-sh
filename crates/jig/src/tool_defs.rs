@@ -331,7 +331,16 @@ impl MemoryTool {
                 ],
                 &[args::OBJECTIVE, args::SUCCESS, args::VALIDATIONS],
             ),
-            Self::Gates | Self::Evidence => object_schema(&[(args::PLAN_ID, string_schema())], &[]),
+            Self::Gates | Self::Evidence => object_schema(
+                &[
+                    (args::PLAN_ID, string_schema()),
+                    (
+                        "freshness_timeout_ms",
+                        json!({"type": "integer", "minimum": 1, "maximum": 30000, "default": 2000}),
+                    ),
+                ],
+                &[],
+            ),
             Self::Review => object_schema(
                 &[
                     (args::PLAN_ID, string_schema()),

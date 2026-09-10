@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use jig_contract::TargetId;
+use jig_contract::freshness::{
+    EffectiveTimeValidityV1, FreshnessCollectionStats, FreshnessDetailsV1, FreshnessReasons,
+    FreshnessSummaryV1, TargetFreshness, TargetFreshnessStatus,
+};
 use serde_json::{Value, json};
 
 use crate::context::{WorkEvidenceGate, WorkEvidenceSelector};
@@ -12,6 +16,7 @@ use super::{EvaluatedReceipt, GateCollection, GateFreshness, GateOutcome, GateRe
 
 #[derive(Clone, Debug)]
 struct TargetEvidenceEvaluation {
+    scoped: Option<TargetFreshness>,
     target: TargetId,
     run_id: Option<String>,
     started_at_ms: Option<u64>,
@@ -25,6 +30,7 @@ struct TargetEvidenceEvaluation {
 
 #[derive(Clone, Debug)]
 pub(super) struct EvidenceGateEvaluation {
+    freshness_collection: Option<FreshnessCollectionStats>,
     id: String,
     required: bool,
     selector: WorkEvidenceSelector,
@@ -38,7 +44,7 @@ pub(super) struct EvidenceGateEvaluation {
 impl TargetEvidenceEvaluation {
     fn to_value(&self) -> Value {
         let receipt = &self.receipt;
-        json!({
+        let mut value = json!({
             "target": self.target,
             "status": self.outcome.as_str(),
             "receipt_id": receipt.receipt_id,
@@ -61,12 +67,17 @@ impl TargetEvidenceEvaluation {
             "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
             "valid_until_ms": receipt.valid_until_ms,
             "requires_time_validity": receipt.requires_time_validity,
-        })
+        });
+        if let Some(scoped) = &self.scoped {
+            extend_fields(&mut value, &FreshnessDetailsV1::from(scoped));
+        }
+        value
     }
 
     fn status_view(&self) -> jig_ui::dashboard::StatusEvidenceTarget {
         let receipt = &self.receipt;
         jig_ui::dashboard::StatusEvidenceTarget {
+            scoped_freshness: self.scoped.as_ref().map(FreshnessDetailsV1::from),
             target: self.target.clone(),
             status: self.outcome.as_str().to_string(),
             receipt_id: receipt.receipt_id.clone(),
@@ -93,12 +104,17 @@ impl TargetEvidenceEvaluation {
 }
 
 impl EvidenceGateEvaluation {
+    pub(super) fn collection_stats(&self) -> Option<&FreshnessCollectionStats> {
+        self.freshness_collection.as_ref()
+    }
+
     pub(super) fn evaluate(
         gate: &WorkEvidenceGate,
         catalog: &RepositoryCatalog,
         current_fingerprint: &CurrentWorktreeFingerprint,
         receipt_index: &WorkGateReceiptIndex,
         collection: GateCollection<'_>,
+        scoped: Option<&super::scoped_freshness::ScopedGateFreshness>,
     ) -> Result<Self> {
         let required_targets = resolve_evidence_targets(catalog, &gate.selector)?;
         let selected = receipt_index.target_receipts(&gate.id);
@@ -120,12 +136,20 @@ impl EvidenceGateEvaluation {
             let receipt = selected.and_then(|receipts| receipts.get(&target));
             let expected_input_digest =
                 expected_input_digests.get(&target).cloned().unwrap_or(None);
-            let (freshness, freshness_reason) = target_evidence_freshness(
-                receipt,
-                &expected_config_digest,
-                expected_input_digest.as_deref(),
-                current_fingerprint,
-            );
+            let scoped_target = scoped
+                .and_then(|scoped| scoped.targets.get(&target))
+                .cloned();
+            let (freshness, freshness_reason) = if let Some(scoped) = &scoped_target {
+                let freshness = GateFreshness::from(scoped.status);
+                (freshness, scoped_freshness_reason(scoped).to_owned())
+            } else {
+                target_evidence_freshness(
+                    receipt,
+                    &expected_config_digest,
+                    expected_input_digest.as_deref(),
+                    current_fingerprint,
+                )
+            };
             let evaluated_receipt = EvaluatedReceipt::with_freshness(
                 receipt,
                 receipt,
@@ -139,8 +163,9 @@ impl EvidenceGateEvaluation {
                 None => GateOutcome::Missing,
             };
             targets.push(TargetEvidenceEvaluation {
+                scoped: scoped_target,
                 target,
-                run_id: receipt.map(|receipt| receipt.run_id.clone()),
+                run_id: receipt.and_then(|receipt| receipt.run_id.clone()),
                 started_at_ms: receipt.map(|receipt| receipt.started_at_ms),
                 outcome,
                 receipt: evaluated_receipt,
@@ -153,7 +178,7 @@ impl EvidenceGateEvaluation {
 
         // A dependent proof cannot outlive a failed, missing, stale, or newer
         // dependency result. Iterate to carry invalidity through the graph.
-        loop {
+        while scoped.is_none() {
             let invalidate: Vec<_> = targets
                 .iter()
                 .enumerate()
@@ -196,6 +221,7 @@ impl EvidenceGateEvaluation {
             })
             .cloned();
         Ok(Self {
+            freshness_collection: scoped.map(|scoped| scoped.stats.clone()),
             id: gate.id.clone(),
             required: gate.required,
             selector: gate.selector.clone(),
@@ -252,7 +278,7 @@ impl EvidenceGateEvaluation {
 
     pub(super) fn to_value(&self) -> Value {
         let (target, profile) = self.selector_values();
-        json!({
+        let mut value = json!({
             "id": self.id,
             "kind": "evidence",
             "required": self.required,
@@ -262,9 +288,11 @@ impl EvidenceGateEvaluation {
             "status": self.outcome.as_str(),
             "run_id": self.run_id,
             "freshness": self.freshness.as_str(),
-            "freshness_reason": evidence_freshness_reason(self.freshness),
+            "freshness_reason": self.freshness_reason(),
             "targets": self.targets.iter().map(TargetEvidenceEvaluation::to_value).collect::<Vec<_>>(),
-        })
+        });
+        self.extend_summary(&mut value);
+        value
     }
 
     pub(super) fn status_view(&self) -> jig_ui::dashboard::StatusEvidenceGate {
@@ -273,6 +301,8 @@ impl EvidenceGateEvaluation {
             WorkEvidenceSelector::Profile(profile) => (None, Some(profile.to_string())),
         };
         jig_ui::dashboard::StatusEvidenceGate {
+            scoped_freshness: self.scoped_summary(),
+            freshness_collection: self.freshness_collection.clone(),
             id: self.id.clone(),
             required: self.required,
             target,
@@ -281,7 +311,7 @@ impl EvidenceGateEvaluation {
             status: self.outcome.as_str().to_string(),
             run_id: self.run_id.clone(),
             freshness: self.freshness.as_str().to_string(),
-            freshness_reason: evidence_freshness_reason(self.freshness).to_string(),
+            freshness_reason: self.freshness_reason(),
             targets: self
                 .targets
                 .iter()
@@ -316,7 +346,7 @@ impl EvidenceGateEvaluation {
             .targets
             .iter()
             .any(|target| target.receipt.requires_time_validity);
-        Some(json!({
+        let mut value = json!({
             "tool": null,
             "skill": null,
             "target": target,
@@ -329,7 +359,7 @@ impl EvidenceGateEvaluation {
             "freshness_receipt_id": null,
             "matches_current_worktree": self.freshness == GateFreshness::Fresh,
             "freshness": self.freshness.as_str(),
-            "freshness_reason": evidence_freshness_reason(self.freshness),
+            "freshness_reason": self.freshness_reason(),
             "changed_paths": receipt.changed_paths,
             "changed_path_count": receipt.changed_path_count,
             "changed_paths_truncated": receipt.changed_paths_truncated,
@@ -339,7 +369,85 @@ impl EvidenceGateEvaluation {
             "valid_until_ms": valid_until_ms,
             "requires_time_validity": requires_time_validity,
             "targets": self.targets.iter().map(TargetEvidenceEvaluation::to_value).collect::<Vec<_>>(),
-        }))
+        });
+        self.extend_summary(&mut value);
+        Some(value)
+    }
+
+    pub(super) fn effective_time_validity(&self) -> (Option<u64>, bool) {
+        if let Some(summary) = self.scoped_summary() {
+            (
+                summary.effective_valid_until_ms,
+                summary.effective_requires_time_validity,
+            )
+        } else {
+            (
+                self.targets
+                    .iter()
+                    .filter_map(|target| target.receipt.valid_until_ms)
+                    .min(),
+                self.targets
+                    .iter()
+                    .any(|target| target.receipt.requires_time_validity),
+            )
+        }
+    }
+
+    fn scoped_summary(&self) -> Option<FreshnessSummaryV1> {
+        self.freshness_collection.as_ref()?;
+        let mut reasons = FreshnessReasons::default();
+        let mut time = EffectiveTimeValidityV1::default();
+        for target in &self.targets {
+            if let Some(scoped) = &target.scoped {
+                for reason in &scoped.reasons.reasons {
+                    let mut reason = reason.clone();
+                    if reason.target.is_none() {
+                        reason.target = Some(target.target.clone());
+                    }
+                    reasons.push(reason);
+                }
+                reasons.reasons_total = reasons.reasons_total.saturating_add(
+                    scoped
+                        .reasons
+                        .reasons_total
+                        .saturating_sub(scoped.reasons.reasons.len() as u64),
+                );
+                reasons.reasons_truncated |= scoped.reasons.reasons_truncated;
+                time = time.combine(EffectiveTimeValidityV1::new(
+                    scoped.effective_valid_until_ms,
+                    scoped.effective_requires_time_validity,
+                ));
+            }
+        }
+        Some(FreshnessSummaryV1::new(
+            reasons,
+            time.effective_valid_until_ms,
+            time.effective_requires_time_validity,
+        ))
+    }
+
+    fn extend_summary(&self, value: &mut Value) {
+        if let Some(summary) = self.scoped_summary() {
+            extend_fields(value, &summary);
+            value["freshness_collection"] = json!(self.freshness_collection);
+        }
+    }
+
+    fn freshness_reason(&self) -> String {
+        if let Some(stats) = &self.freshness_collection
+            && self
+                .targets
+                .iter()
+                .filter_map(|target| target.scoped.as_ref())
+                .any(|target| {
+                    target.reasons.reasons.iter().any(|reason| {
+                        reason.code == jig_contract::freshness::FreshnessReasonCode::CollectionLimit
+                    })
+                })
+        {
+            return collection_limit_reason(stats);
+        }
+        evidence_freshness_reason(self.freshness).to_owned()
     }
 
     fn selector_values(&self) -> (Option<String>, Option<String>) {
@@ -348,6 +456,20 @@ impl EvidenceGateEvaluation {
             WorkEvidenceSelector::Profile(profile) => (None, Some(profile.to_string())),
         }
     }
+}
+
+fn collection_limit_reason(stats: &FreshnessCollectionStats) -> String {
+    let remedy = if stats.timeout_ms == 2_000
+        && stats.elapsed_us >= stats.timeout_ms.saturating_mul(1_000)
+    {
+        " For a deadline limit, rerun this inspection with --freshness-timeout-ms 30000. Resource ceilings are unchanged."
+    } else {
+        " A larger timeout does not raise entry, byte, graph, depth, or record limits."
+    };
+    format!(
+        "Freshness collection reached a time or resource limit (budget {} ms).{remedy}",
+        stats.timeout_ms
+    )
 }
 
 fn target_evidence_freshness(
@@ -362,6 +484,12 @@ fn target_evidence_freshness(
             "no receipt exists for this target in this work plan".into(),
         );
     };
+    if receipt.run_id.as_deref().is_none_or(str::is_empty) {
+        return (
+            GateFreshness::Unknown,
+            "receipt did not record an original run identity".into(),
+        );
+    }
     if !crate::state::time_validity_is_current(
         receipt.valid_until_ms,
         receipt.requires_time_validity,
@@ -441,6 +569,11 @@ fn target_evidence_freshness(
 fn aggregate_evidence_freshness(targets: &[TargetEvidenceEvaluation]) -> GateFreshness {
     if targets
         .iter()
+        .any(|target| target.receipt.freshness == GateFreshness::Unsupported)
+    {
+        GateFreshness::Unsupported
+    } else if targets
+        .iter()
         .any(|target| target.receipt.freshness == GateFreshness::Missing)
     {
         GateFreshness::Missing
@@ -465,12 +598,16 @@ const fn evidence_freshness_reason(freshness: GateFreshness) -> &'static str {
         GateFreshness::Missing => "one or more required targets have no receipt in this work plan",
         GateFreshness::Stale => "one or more required target receipts are stale",
         GateFreshness::Unknown => "freshness is unknown for one or more required target receipts",
+        GateFreshness::Unsupported => {
+            "one or more required target receipts need a compatible freshness reader"
+        }
     }
 }
 
 fn aggregate_evidence_outcome(targets: &[TargetEvidenceEvaluation]) -> GateOutcome {
     for outcome in [
         GateOutcome::Failed,
+        GateOutcome::Unsupported,
         GateOutcome::Missing,
         GateOutcome::Stale,
         GateOutcome::Unknown,
@@ -480,6 +617,74 @@ fn aggregate_evidence_outcome(targets: &[TargetEvidenceEvaluation]) -> GateOutco
         }
     }
     GateOutcome::Passed
+}
+
+pub(super) fn extend_fields(value: &mut Value, fields: &impl serde::Serialize) {
+    let Value::Object(fields) =
+        serde_json::to_value(fields).expect("typed freshness metadata serializes")
+    else {
+        unreachable!()
+    };
+    value
+        .as_object_mut()
+        .expect("evidence is an object")
+        .extend(fields);
+}
+
+pub(super) fn unsupported_reference_summary(
+    ctx: &crate::context::RepoContext,
+    gate: &WorkEvidenceGate,
+) -> Option<FreshnessSummaryV1> {
+    use jig_contract::freshness::{
+        FreshnessReason, FreshnessReasonCode, TARGET_FRESHNESS_CONTRACT_VERSION,
+    };
+    (ctx.contract_version() >= TARGET_FRESHNESS_CONTRACT_VERSION).then(|| {
+        let target = match &gate.selector {
+            WorkEvidenceSelector::Target(target) => Some(target.clone()),
+            WorkEvidenceSelector::Profile(_) => None,
+        };
+        FreshnessSummaryV1::new(
+            FreshnessReasons::one(FreshnessReason {
+                code: FreshnessReasonCode::UnsupportedReference,
+                target,
+                path: None,
+            }),
+            None,
+            false,
+        )
+    })
+}
+
+impl From<TargetFreshnessStatus> for GateFreshness {
+    fn from(status: TargetFreshnessStatus) -> Self {
+        match status {
+            TargetFreshnessStatus::Fresh => Self::Fresh,
+            TargetFreshnessStatus::Unknown => Self::Unknown,
+            TargetFreshnessStatus::Stale => Self::Stale,
+            TargetFreshnessStatus::Missing => Self::Missing,
+            TargetFreshnessStatus::Unsupported => Self::Unsupported,
+        }
+    }
+}
+
+fn scoped_freshness_reason(result: &TargetFreshness) -> &'static str {
+    match result.status {
+        TargetFreshnessStatus::Fresh => {
+            "original receipt matches current target authority and valid dependency proof"
+        }
+        TargetFreshnessStatus::Missing => {
+            "no original receipt exists for this target in this work plan"
+        }
+        TargetFreshnessStatus::Unsupported => {
+            "receipt authority requires a compatible freshness reader"
+        }
+        TargetFreshnessStatus::Stale => {
+            "target authority changed or its effective time validity expired"
+        }
+        TargetFreshnessStatus::Unknown => {
+            "original target authority or dependency execution proof could not be verified"
+        }
+    }
 }
 
 impl GateReceiptView for TargetReceiptStatus {
@@ -533,56 +738,4 @@ impl GateReceiptView for TargetReceiptStatus {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn target_receipt(
-        valid_until_ms: Option<u64>,
-        requires_time_validity: bool,
-    ) -> TargetReceiptStatus {
-        TargetReceiptStatus {
-            receipt_id: "receipt_target".into(),
-            run_id: "run_target".into(),
-            target: "repo:file-budget".parse().unwrap(),
-            config_digest: Some("sha256:config".into()),
-            input_digest: Some("sha256:input".into()),
-            exit_status: 0,
-            started_at_ms: 0,
-            ended_at_ms: 1,
-            changed_paths: Vec::new(),
-            changed_path_count: 0,
-            changed_paths_truncated: false,
-            changed_paths_digest: None,
-            diff_summary: String::new(),
-            worktree_fingerprint: Some("fingerprint".into()),
-            worktree_fingerprint_error: None,
-            valid_until_ms,
-            requires_time_validity,
-        }
-    }
-
-    #[test]
-    fn target_evidence_enforces_time_validity_before_source_identity() {
-        let current = CurrentWorktreeFingerprint {
-            fingerprint: Some("fingerprint".into()),
-            error: None,
-        };
-        let (expired, reason) = target_evidence_freshness(
-            Some(&target_receipt(Some(0), true)),
-            "sha256:config",
-            Some("sha256:input"),
-            &current,
-        );
-        assert_eq!(expired, GateFreshness::Stale);
-        assert!(reason.contains("expired"));
-
-        let (missing, reason) = target_evidence_freshness(
-            Some(&target_receipt(None, true)),
-            "sha256:config",
-            Some("sha256:input"),
-            &current,
-        );
-        assert_eq!(missing, GateFreshness::Unknown);
-        assert!(reason.contains("no boundary"));
-    }
-}
+mod tests;

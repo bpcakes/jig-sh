@@ -26,6 +26,9 @@ pub(crate) use plans::{
 };
 #[cfg(test)]
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
+pub(crate) use receipts::effective_time_from_value;
+pub(crate) use receipts::evidence_requires_time_validity;
+pub(crate) use receipts::metadata_time;
 #[cfg(test)]
 pub(crate) use receipts::receipt_append_may_have_landed_for_test;
 pub(crate) use receipts::receipt_diff_summary;
@@ -40,13 +43,13 @@ pub(crate) use receipts::{
     work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
     work_gate_receipt_indexes_with_cancellation,
 };
+pub(crate) use receipts::{OriginalReceiptIndex, TargetReceiptMetadata, record_target_receipt};
 pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
     record_receipt_with_cancellation, record_receipt_with_cancellation_until,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
-pub(crate) use receipts::{TargetReceiptMetadata, record_target_receipt};
 pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
 pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
 #[cfg(test)]
