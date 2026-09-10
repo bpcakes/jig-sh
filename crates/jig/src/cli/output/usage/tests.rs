@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn subscription_windows_preserve_cli_labels_and_order() {
-    for id in ["codex", "claude"] {
+    for id in ["codex", "claude", "example-subscription"] {
         for (primary, secondary, expected) in [
             (
                 json!({"used_percent": 20, "duration_minutes": 10080}),
@@ -28,13 +28,19 @@ fn subscription_windows_preserve_cli_labels_and_order() {
             ),
         ] {
             assert_eq!(
-                format_limits(&json!([{"id":id,"primary":primary,"secondary":secondary}])),
+                format_limits(
+                    &json!([{"id":id,"primary":primary,"secondary":secondary}]),
+                    Some(id)
+                ),
                 format!("{id}: {expected}")
             );
         }
     }
     assert_eq!(
-        format_limits(&json!([{"id":"other","primary":{"used_percent":0,"duration_minutes":300}}])),
+        format_limits(
+            &json!([{"id":"other","primary":{"used_percent":0,"duration_minutes":300}}]),
+            None
+        ),
         "other: 100% left (5h)"
     );
 }

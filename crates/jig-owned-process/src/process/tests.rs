@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 use super::*;
+
+#[cfg(target_os = "macos")]
+mod macos_exit;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_env::lock_env;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -520,13 +523,10 @@ fn macos_group_signal_rechecks_a_leader_that_exits_during_sigkill() {
             ]
         );
         match after_signal {
-            Ok(OwnedProcessObservation::Exited) => {
+            Ok(OwnedProcessObservation::Exited | OwnedProcessObservation::Running) => {
                 // This only permits the existing sole-leader proof to run;
                 // the signal result itself never establishes clean retirement.
                 assert_eq!(result.unwrap(), ProcessGroupSignalResult::Inconclusive);
-            }
-            Ok(OwnedProcessObservation::Running) => {
-                assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EPERM));
             }
             Err(_) => {
                 assert_eq!(
@@ -540,7 +540,7 @@ fn macos_group_signal_rechecks_a_leader_that_exits_during_sigkill() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_owned_process_group_eperm_is_inconclusive_only_for_an_exited_pinned_leader() {
+fn macos_owned_process_group_eperm_is_inconclusive_while_identity_is_pinned() {
     let eligible = resolve_macos_process_group_signal_eperm(
         std::io::Error::from_raw_os_error(libc::EPERM),
         Ok(OwnedProcessObservation::Exited),
@@ -548,12 +548,12 @@ fn macos_owned_process_group_eperm_is_inconclusive_only_for_an_exited_pinned_lea
     .unwrap();
     assert_eq!(eligible, ProcessGroupSignalResult::Inconclusive);
 
-    let running_error = resolve_macos_process_group_signal_eperm(
+    let running = resolve_macos_process_group_signal_eperm(
         std::io::Error::from_raw_os_error(libc::EPERM),
         Ok(OwnedProcessObservation::Running),
     )
-    .unwrap_err();
-    assert_eq!(running_error.raw_os_error(), Some(libc::EPERM));
+    .unwrap();
+    assert_eq!(running, ProcessGroupSignalResult::Inconclusive);
 
     let observation_error = resolve_macos_process_group_signal_eperm(
         std::io::Error::from_raw_os_error(libc::EPERM),

@@ -307,12 +307,12 @@ impl InspectionWorker {
         external_cancellation: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Self> {
         let (sender, updates) = mpsc::channel();
-        let worker = CooperativeWorker::spawn("jig-codex-inspection", move |cancelled| {
+        let worker = CooperativeWorker::spawn("jig-agent-inspection", move |cancelled| {
             let is_cancelled = || cancelled.is_cancelled() || external_cancellation();
             let mut emit = |update| {
                 sender
                     .send(update)
-                    .map_err(|_| "Codex picker stopped accepting inspection updates".to_owned())
+                    .map_err(|_| "Home picker stopped accepting inspection updates".to_owned())
             };
             source.inspect(&mut emit, &is_cancelled)
         })?;

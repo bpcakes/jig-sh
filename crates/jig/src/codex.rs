@@ -1,7 +1,6 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -18,16 +17,14 @@ use self::home::{
     user_home,
 };
 use self::inspection::{inspect_home, inspection_failure};
-pub(crate) use self::resume::{
-    normalize_session_id, resolve_resume_home, resolve_resume_home_with_progress,
-};
+pub(crate) use self::resume::{normalize_session_id, resolve_resume_home_with_progress};
 
 mod app_server;
 mod home;
 mod inspection;
+pub(crate) mod provider;
 mod resume;
 
-const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
 pub(crate) const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const MAX_PARALLEL_HOME_WORKERS: usize = 4;
 const SESSION_LOOKUP_CANCELLED: &str = "Codex session lookup was cancelled";
@@ -136,30 +133,6 @@ enum ResumeHomeSelection<'a> {
         failures: Vec<ResumeHomeProbeFailure<'a>>,
         discovery_incomplete: bool,
     },
-}
-
-pub(crate) fn homes_report(include_usage: bool) -> Result<JsonValue> {
-    homes_report_with_paths(include_usage).map(|(report, _)| report)
-}
-
-pub(crate) fn homes_report_with_paths(include_usage: bool) -> Result<(JsonValue, Vec<PathBuf>)> {
-    homes_report_with_progress(include_usage, |_, _, _| Ok(()))
-}
-
-pub(crate) fn homes_report_with_progress<F>(
-    include_usage: bool,
-    progress: F,
-) -> Result<(JsonValue, Vec<PathBuf>)>
-where
-    F: FnMut(usize, usize, Option<(usize, &JsonValue)>) -> Result<()>,
-{
-    crate::signal_supervision::supervise(
-        "Codex home inspection was not started because the process-wide signal session is unavailable",
-        "Codex home inspection supervision could not retire safely",
-        |cancelled| {
-            homes_report_with_progress_and_cancellation(include_usage, progress, &cancelled)
-        },
-    )
 }
 
 fn homes_report_with_progress_and_cancellation<F>(
@@ -587,20 +560,6 @@ fn command_dry_run_report(command: &str, home: &Path, args: &[OsString]) -> Json
     })
 }
 
-pub(crate) fn launch(home: &Path, args: &[OsString]) -> Result<()> {
-    let codex_bin = codex_bin();
-    let mut command = Command::new(&codex_bin);
-    command.args(args).env(CODEX_HOME_ENV, home);
-
-    crate::agent_launch::launch(&mut command, "Codex", || {
-        format!(
-            "Failed to launch {} with CODEX_HOME={}",
-            codex_bin.to_string_lossy(),
-            home.display()
-        )
-    })
-}
-
 pub(crate) fn configured_codex_home() -> Option<PathBuf> {
     env::var_os(CODEX_HOME_ENV)
         .map(PathBuf::from)
@@ -612,7 +571,7 @@ pub(crate) fn codex_config_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn codex_bin() -> OsString {
-    env::var_os(CODEX_BIN_ENV).unwrap_or_else(|| OsString::from("codex"))
+    <provider::Codex as crate::agent_provider::AgentProvider>::METADATA.executable()
 }
 
 #[cfg(test)]

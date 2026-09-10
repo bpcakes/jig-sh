@@ -1,5 +1,6 @@
 mod agent_guides;
 mod agent_launch;
+mod agent_provider;
 mod backend;
 mod bootstrap;
 #[cfg(test)]

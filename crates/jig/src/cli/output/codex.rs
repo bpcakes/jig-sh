@@ -1,10 +1,11 @@
 use jig_tui::sanitize_text;
 
-use super::usage::format_limits as format_codex_limits;
 #[cfg(test)]
 use super::usage::{
     format_reset_from as format_codex_reset_from, format_window as format_codex_window,
 };
+use crate::agent_provider::AgentProvider;
+use crate::codex::provider::Codex;
 
 use super::command_display::CommandDisplay;
 use super::{value_bool, value_str};
@@ -69,7 +70,10 @@ fn format_codex_home_fields(home: &serde_json::Value, usage_included: bool) -> S
     let usage_error = value_str(home, "usage_error");
     let mut fields = vec![name, account, plan];
     if usage_included && account_observed && inspection_error.is_none() && usage_error.is_none() {
-        fields.push(format_codex_limits(&home["rate_limits"]));
+        fields.push(super::usage::format_limits(
+            &home["rate_limits"],
+            Codex::METADATA.subscription_bucket,
+        ));
     }
     if let Some(status) = value_str(home, "status") {
         fields.push(sanitize_text(status));
