@@ -1,0 +1,1 @@
+Fetch per-home Claude subscription usage without launching sessions or refreshing credentials. Normalize five-hour and weekly limits for the shared picker; retain launch while loading and cancellation. Add opt-in homes --usage human and JSON output, isolated credential/HTTP/TUI tests, documentation, configured gates, and the final backend test check.

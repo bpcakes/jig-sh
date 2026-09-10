@@ -132,27 +132,9 @@ fn select_picker(
     homes: Vec<Home>,
     source: impl InspectionSource + 'static,
 ) -> Result<Option<PathBuf>> {
-    #[cfg(all(unix, not(test)))]
-    {
-        let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
-            anyhow::anyhow!(
-                "Codex home picker was not started because the process-wide signal session is unavailable"
-            )
-        })?;
-        let cancellation = signal_session.cancellation();
-        let result = jig_codex_tui::select_with_cancellation(homes, source, move || {
-            cancellation.cancelled()
-        });
-        crate::codex::finish_signal_supervised(
-            result,
-            signal_session.finish(),
-            "Codex home picker signal supervision could not retire safely",
-        )
-    }
-    #[cfg(any(not(unix), test))]
-    {
-        jig_codex_tui::select(homes, source)
-    }
+    super::home_picker::supervise(|cancelled| {
+        jig_codex_tui::select_with_cancellation(homes, source, cancelled)
+    })
 }
 
 struct PickerInspectionSource(crate::codex::CodexHomeInspection);

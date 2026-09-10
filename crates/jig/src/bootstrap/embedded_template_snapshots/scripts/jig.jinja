@@ -3,7 +3,7 @@ set -eu
 # jig-generated-runtime-launcher:v1
 # jig-runtime-repository-scope:v1
 # jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test
-# jig-capability-only-subcommands:adopt,codex,doctor,init,presets,update
+# jig-capability-only-subcommands:adopt,claude,codex,doctor,init,presets,update
 # jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work
 # jig-global-flags:--json
 
@@ -119,7 +119,7 @@ jig_capability_only_requested() {
         capability_command="$arg"
         case "$capability_command" in
           # jig-capability-only-subcommands-begin
-          adopt | codex | doctor | init | presets | update)
+          adopt | claude | codex | doctor | init | presets | update)
             # jig-capability-only-subcommands-end
             return 0
             ;;
@@ -329,9 +329,9 @@ if [ "$installer_scope" = repository ]; then
     "$@"
 fi
 
-# Codex homes are user-global, and the launched Codex process must inherit the
+# Agent homes are user-global, and the launched agent process must inherit the
 # directory where the user invoked the launcher rather than this Jig repo.
-if [ "$subcommand" = "codex" ]; then
+if [ "$subcommand" = "codex" ] || [ "$subcommand" = "claude" ]; then
   exec "$bin_path" "$@"
 fi
 

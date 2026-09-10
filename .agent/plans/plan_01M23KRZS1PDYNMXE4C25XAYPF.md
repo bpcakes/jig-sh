@@ -1,0 +1,1 @@
+Extract shared dry-run display safety, transparent agent execution and exit handling, and home path primitives. Preserve provider discovery, native-default mode, schemas and CLI behavior. Validate each cluster, both feature modes, configured work gates, and final backend test check.

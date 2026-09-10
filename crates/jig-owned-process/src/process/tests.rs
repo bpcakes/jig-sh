@@ -428,15 +428,15 @@ fn owned_process_group_signal_observes_the_pinned_leader_before_any_signal_attem
     }
 
     let mut injected = InjectedSignal::default();
-    let error = observe_owned_process_before_group_signal_with(
+    let error = signal_owned_process_group_with(
         &mut injected,
         |injected| {
             injected.observations += 1;
             Err(std::io::Error::from_raw_os_error(libc::ECHILD))
         },
-        |injected, _| {
+        |injected| {
             injected.signals += 1;
-            Ok(ProcessGroupSignalResult::Delivered)
+            Ok(())
         },
     )
     .unwrap_err();
@@ -484,6 +484,58 @@ fn owned_process_group_confirmation_checks_the_absolute_deadline_after_every_sig
     assert_eq!(cleanup.signals, 1);
     assert_eq!(cleanup.proofs, 0);
     assert_eq!(sleeps.get(), 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_group_signal_rechecks_a_leader_that_exits_during_sigkill() {
+    for after_signal in [
+        Ok(OwnedProcessObservation::Exited),
+        Ok(OwnedProcessObservation::Running),
+        Err(libc::ECHILD),
+    ] {
+        let mut steps = Vec::new();
+        let result = signal_owned_process_group_with(
+            &mut steps,
+            |steps| {
+                if steps.is_empty() {
+                    steps.push("observe before signal");
+                    Ok(OwnedProcessObservation::Running)
+                } else {
+                    steps.push("observe after EPERM");
+                    after_signal.map_err(std::io::Error::from_raw_os_error)
+                }
+            },
+            |steps| {
+                steps.push("SIGKILL returns EPERM");
+                Err(std::io::Error::from_raw_os_error(libc::EPERM))
+            },
+        );
+        assert_eq!(
+            steps,
+            [
+                "observe before signal",
+                "SIGKILL returns EPERM",
+                "observe after EPERM"
+            ]
+        );
+        match after_signal {
+            Ok(OwnedProcessObservation::Exited) => {
+                // This only permits the existing sole-leader proof to run;
+                // the signal result itself never establishes clean retirement.
+                assert_eq!(result.unwrap(), ProcessGroupSignalResult::Inconclusive);
+            }
+            Ok(OwnedProcessObservation::Running) => {
+                assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EPERM));
+            }
+            Err(_) => {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    std::io::Error::from_raw_os_error(libc::ECHILD).kind()
+                );
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

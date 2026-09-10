@@ -1,5 +1,12 @@
-use jig_tui::{format_countdown, format_percent, sanitize_text};
+use jig_tui::sanitize_text;
 
+use super::usage::format_limits as format_codex_limits;
+#[cfg(test)]
+use super::usage::{
+    format_reset_from as format_codex_reset_from, format_window as format_codex_window,
+};
+
+use super::command_display::CommandDisplay;
 use super::{value_bool, value_str};
 
 pub(super) fn format_codex_homes_summary(value: &serde_json::Value) -> String {
@@ -87,117 +94,6 @@ fn format_codex_account(account: &serde_json::Value) -> String {
     )
 }
 
-fn format_codex_limits(value: &serde_json::Value) -> String {
-    let Some(buckets) = value.as_array() else {
-        return "usage unavailable".into();
-    };
-    if buckets.is_empty() {
-        return "usage unavailable".into();
-    }
-    buckets
-        .iter()
-        .map(|bucket| {
-            let is_codex = value_str(bucket, "id") == Some("codex");
-            let label = sanitize_text(
-                value_str(bucket, "name")
-                    .or_else(|| value_str(bucket, "id"))
-                    .unwrap_or("limit"),
-            );
-            let mut windows = [&bucket["primary"], &bucket["secondary"]]
-                .into_iter()
-                .filter(|window| window.is_object())
-                .collect::<Vec<_>>();
-            windows.sort_by_key(|window| {
-                window
-                    .get("duration_minutes")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(u64::MAX)
-            });
-            match windows.as_slice() {
-                [window] if is_codex => format!(
-                    "{label}: {}",
-                    format_codex_window_with_duration_role(window)
-                ),
-                [window] => format!(
-                    "{label}: {}",
-                    format_codex_window(window).expect("window was checked above")
-                ),
-                [first, second] if is_codex => format!(
-                    "{label}: {}, {}",
-                    format_codex_window_with_duration_role(first),
-                    format_codex_window_with_duration_role(second)
-                ),
-                [first, second] => format!(
-                    "{label}: {}, {}",
-                    format_codex_window(first).expect("window was checked above"),
-                    format_codex_window(second).expect("window was checked above")
-                ),
-                [] => format!("{label}: unavailable"),
-                _ => unreachable!("a Codex rate-limit bucket has at most two windows"),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-fn format_codex_window_with_duration_role(window: &serde_json::Value) -> String {
-    let rendered = format_codex_window(window).expect("window was checked above");
-    match window["duration_minutes"].as_u64() {
-        Some(300) => format!("5h {rendered}"),
-        Some(10_080) => format!("weekly {rendered}"),
-        _ => rendered,
-    }
-}
-
-fn format_codex_window(window: &serde_json::Value) -> Option<String> {
-    let object = window.as_object()?;
-    let remaining = object
-        .get("used_percent")
-        .and_then(serde_json::Value::as_f64)
-        .filter(|used| used.is_finite() && *used >= 0.0)
-        .map(|used| (100.0 - used).max(0.0))
-        .map(|remaining| format!("{} left", format_percent(remaining)))
-        .unwrap_or_else(|| "remaining unavailable".into());
-    let duration = object
-        .get("duration_minutes")
-        .and_then(serde_json::Value::as_u64)
-        .map(format_codex_duration)
-        .unwrap_or_else(|| "window ?".into());
-    let reset = object
-        .get("resets_at")
-        .and_then(serde_json::Value::as_i64)
-        .and_then(format_codex_reset)
-        .map(|reset| format!(", resets in {reset}"))
-        .unwrap_or_default();
-    Some(format!("{remaining} ({duration}{reset})"))
-}
-
-fn format_codex_duration(minutes: u64) -> String {
-    if minutes > 0 && minutes.is_multiple_of(60 * 24) {
-        format!("{}d", minutes / (60 * 24))
-    } else if minutes > 0 && minutes.is_multiple_of(60) {
-        format!("{}h", minutes / 60)
-    } else {
-        format!("{minutes}m")
-    }
-}
-
-fn format_codex_reset(timestamp: i64) -> Option<String> {
-    let timestamp = u64::try_from(timestamp).ok()?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    format_codex_reset_from(timestamp, now)
-}
-
-fn format_codex_reset_from(timestamp: u64, now: u64) -> Option<String> {
-    let remaining = timestamp
-        .checked_sub(now)
-        .filter(|remaining| *remaining > 0)?;
-    Some(format_countdown(remaining))
-}
-
 pub(super) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
     format_codex_command_summary(value, "Codex launch")
 }
@@ -207,10 +103,9 @@ pub(super) fn format_codex_resume_summary(value: &serde_json::Value) -> String {
 }
 
 fn format_codex_command_summary(value: &serde_json::Value, label: &str) -> String {
-    let (home, home_sanitized) = sanitized_display(value_str(value, "home").unwrap_or("<unknown>"));
-    let (codex_bin, codex_bin_sanitized) =
-        sanitized_display(value_str(value, "codex_bin").unwrap_or("codex"));
-    let mut display_sanitized = home_sanitized || codex_bin_sanitized;
+    let mut display = CommandDisplay::default();
+    let home = display.text(value_str(value, "home").unwrap_or("<unknown>"));
+    let codex_bin = display.text(value_str(value, "codex_bin").unwrap_or("codex"));
     let mut command = vec![crate::shell::quote(&codex_bin)];
     command.extend(
         value["args"]
@@ -218,33 +113,17 @@ fn format_codex_command_summary(value: &serde_json::Value, label: &str) -> Strin
             .into_iter()
             .flatten()
             .filter_map(serde_json::Value::as_str)
-            .map(|argument| {
-                let (argument, sanitized) = sanitized_display(argument);
-                display_sanitized |= sanitized;
-                crate::shell::quote(&argument)
-            }),
+            .map(|argument| crate::shell::quote(&display.text(argument))),
     );
-    let mut lines = vec![
+    let lines = [
         format!("{label}: dry run"),
         format!("  CODEX_HOME: {home}"),
         format!("  Command (POSIX shell): {}", command.join(" ")),
     ];
-    if value_bool(value, "representation_lossy").unwrap_or(false) {
-        lines.push("  Warning: command contains non-UTF-8 values; display is lossy".into());
-    }
-    if display_sanitized {
-        lines.push(
-            "  Warning: terminal controls were replaced; displayed command is not launch-equivalent"
-                .into(),
-        );
-    }
-    lines.join("\n")
-}
-
-fn sanitized_display(value: &str) -> (String, bool) {
-    let sanitized = sanitize_text(value);
-    let changed = sanitized != value;
-    (sanitized, changed)
+    display.finish(
+        lines.join("\n"),
+        value_bool(value, "representation_lossy").unwrap_or(false),
+    )
 }
 
 #[cfg(test)]

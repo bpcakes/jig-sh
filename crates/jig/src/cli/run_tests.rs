@@ -221,6 +221,7 @@ fn launcher_capability_flag_allowlist_matches_clap_globals() {
     );
     let capability_invocations = [
         vec!["jig", "adopt", "."],
+        vec!["jig", "claude", "homes"],
         vec!["jig", "codex", "homes"],
         vec!["jig", "doctor"],
         vec!["jig", "init", "fixture"],
