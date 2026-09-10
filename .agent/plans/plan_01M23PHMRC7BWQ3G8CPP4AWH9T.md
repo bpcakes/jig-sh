@@ -351,3 +351,34 @@ The Linux no-default-features retry passed, leaving all standard CI checks green
 at `1df7c64c`; normal hosted qualification was already green there. `.4.3` is
 closed after its three per-task reviews. The final per-ID conflict correction
 and task evidence are committed for the requested full-branch review.
+
+
+Full-branch review round 1 captured clean `a2632c96` against `9d4bd0f2`,
+with matching complete fingerprints and no exclusions. Codex identified the
+archive frontier's journal-length-times-dependency-depth parsing cost under the
+exclusive writer lock. Claude's adapter exited 124 at its provider deadline
+without a report, so this round supplies a single-reviewer result. The archive
+fix builds one maintenance location index and resolves each required original
+directly. Per-ID ambiguity remains sticky, unknown fields participate in
+conflict checks, unsupported/missing evidence still blocks deletion, and
+maintenance remains independent of inspection quotas. Deep-chain record-visit,
+cycle, duplicate, missing/unsupported-original and expiry regressions accompany
+it. Round 2 will review the full updated branch; no fourth round is authorized.
+
+Hosted qualification run `34470517168` attempt 1 passed the CI warm/cold and
+constrained warm matrices plus CI collection limits. Constrained cold completed
+600 passing inspections but failed six latency comparisons: maximum phase p95
+1,367.314 ms and maximum full-command p95 delta 3,015.483 ms. All individual
+phases remained below the two-second deadline (maximum 1,675.174 ms). The full
+failed report is retained in the experiments journal; the constrained limit
+suite did not run after the matrix failed. One diagnostic rerun of that failed
+job is pending. Thresholds and collection policy are unchanged. All standard
+Rust and repository-policy CI checks passed at this head.
+
+The archive correction passed eight focused regressions. The 1,000-dependency
+chain in a 4,000-record journal performed exactly 5,000 record visits; the real
+250,001-record archival rewrite also passed. Strict crate Clippy, formatting,
+and the development binary build passed. Initial new-test attempts exposed an
+unstable test-counter API and the wrong target fixture JSON shape; both were
+corrected before the successful run. Final configured gates and backend testing
+will follow the remaining branch review.

@@ -92,7 +92,10 @@ verification and before closing the work plan.
 Archive retains each selected target's newest outcome, including blockers, and
 retains the original dependency closure of protected, time-current proofs. It
 does not recompute source identities. If required originals are missing or have
-unsupported metadata, archive stops before backup or journal mutation.
+unsupported metadata, archive stops before backup or journal mutation. A single
+location index resolves required originals without rescanning the journal for
+each dependency level. Archive has no inspection collection quotas, so it can
+still shrink journals that inspection refuses to collect.
 
 File-budget adoption and update still require the original full-repository,
 input/configuration, policy, and native prepared-authority checks. Epoch 9 also

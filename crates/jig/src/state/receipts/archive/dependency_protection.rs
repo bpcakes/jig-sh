@@ -7,12 +7,13 @@ use jig_contract::freshness::{
     TargetFreshnessMetadata, TargetFreshnessStateV1,
 };
 
-use super::{JsonlWriteGuard, parse_raw_receipt, scan_jsonl_raw_locked, target_receipt_status};
+use super::JsonlWriteGuard;
 use crate::state::{TargetReceiptStatus, time_validity_is_current};
+use originals::ArchiveOriginalIndex;
 
 /// Maintenance must be able to shrink journals larger than inspection limits.
-/// Stream under the existing writer lock, retaining only the required frontier
-/// each pass. Cycles terminate through `visited`; unknown required authority
+/// Index record locations once under the existing writer lock, then read only
+/// required originals. Cycles terminate through `visited`; unknown required authority
 /// still refuses deletion. This never grants freshness or bypasses inspection.
 pub(super) fn protect_dependencies(
     guard: &JsonlWriteGuard,
@@ -24,22 +25,22 @@ pub(super) fn protect_dependencies(
     let roots: BTreeMap<_, _> = roots.map(|root| (root.receipt_id.clone(), root)).collect();
     let mut pending: BTreeSet<_> = roots.keys().cloned().collect();
     let mut visited = BTreeSet::new();
-    let mut pinned_bytes = 0_u64;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut originals = ArchiveOriginalIndex::open(guard, path)?;
     while !pending.is_empty() {
-        let originals = resolve_frontier(guard, path, &pending, &mut pinned_bytes).with_context(|| {
-            format!(
-                "Cannot represent archive dependency protection: {} pinned record IDs, {} unresolved IDs, at least {pinned_bytes} pinned journal bytes observed",
-                protected.len(), pending.len(),
-            )
-        })?;
         let frontier = std::mem::take(&mut pending);
         for id in frontier {
-            let original = originals
-                .get(&id)
-                .context("Cannot archive while an original dependency receipt is missing")?;
+            let original = originals.get(&id).with_context(|| {
+                format!(
+                    "Cannot represent archive dependency protection for receipt {id}: {} pinned record IDs, {} original bytes loaded",
+                    protected.len(), originals.loaded_bytes,
+                )
+            })?;
             if let Some(root) = roots.get(&id) {
                 ensure!(
-                    original == root,
+                    &original == root,
                     "Selected original receipt changed during archive protection"
                 );
             }
@@ -89,34 +90,7 @@ pub(super) fn protect_dependencies(
     Ok(())
 }
 
-fn resolve_frontier(
-    guard: &JsonlWriteGuard,
-    path: &Path,
-    pending: &BTreeSet<String>,
-    pinned_bytes: &mut u64,
-) -> Result<BTreeMap<String, TargetReceiptStatus>> {
-    let mut originals = BTreeMap::new();
-    let mut values = BTreeMap::new();
-    let scan = scan_jsonl_raw_locked(guard, path, &|| false, |record| {
-        let receipt = parse_raw_receipt(record, path)?;
-        if pending.contains(&receipt.id) {
-            *pinned_bytes = pinned_bytes.saturating_add(record.bytes.len() as u64);
-            let value: serde_json::Value = serde_json::from_slice(record.bytes)?;
-            if let Some(previous) = values.insert(receipt.id.clone(), value.clone()) {
-                ensure!(
-                    previous == value,
-                    "Required original receipt has conflicting duplicate IDs"
-                );
-            }
-            if let Some(target) = &receipt.target {
-                originals.insert(receipt.id.clone(), target_receipt_status(&receipt, target));
-            }
-        }
-        Ok(())
-    })?;
-    ensure!(
-        !scan.unterminated_final_record,
-        "Cannot archive an unterminated original receipt journal"
-    );
-    Ok(originals)
-}
+mod originals;
+
+#[cfg(test)]
+mod tests;
