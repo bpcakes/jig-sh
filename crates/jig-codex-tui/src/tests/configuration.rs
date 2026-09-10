@@ -205,3 +205,48 @@ fn inspected_configurations_show_subscription_limits_and_preserve_mode_identity(
         Action::Select
     );
 }
+
+#[test]
+fn provider_metadata_drives_primary_quota_and_recommendations_without_known_names() {
+    let now = 1_800_000_000;
+    let make_entries = || {
+        vec![crate::ConfigurationHome {
+            home: crate::Home {
+                path: "/tmp/ExampleAgent".into(),
+                name: "Example Agent".into(),
+                current: true,
+            },
+            details: Vec::new(),
+        }]
+    };
+    for (primary, expected_usage, recommended) in [
+        (Some("example-subscription"), "5h 90% left", true),
+        (None, "Other 5h 0% left", false),
+    ] {
+        let mut app = App::provider(
+            "Example Agent Picker",
+            make_entries(),
+            vec![],
+            true,
+            primary,
+        );
+        app.apply_update_at(crate::HomeUpdate { index: 0, details: serde_json::json!({
+            "account":{"type":"example"}, "rate_limits":[
+                {"id":"other","name":"Other","primary":{"used_percent":100,"duration_minutes":300,"resets_at":now+9000}},
+                {"id":"example-subscription","primary":{"used_percent":10,"duration_minutes":300,"resets_at":now+9000}}
+            ]
+        }) }, now);
+        assert_eq!(app.rows[0].usage(), expected_usage);
+        assert_eq!(
+            app.rows[0]
+                .usage_snapshot_assessment_at(now)
+                .recommendation()
+                .is_some(),
+            recommended
+        );
+    }
+    let app = App::provider("Example Agent Picker", make_entries(), vec![], false, None);
+    assert!(app.static_configuration);
+    assert!(app.inspection_finished);
+    assert_eq!(app.selected, Some(0));
+}

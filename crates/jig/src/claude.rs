@@ -3,7 +3,6 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -15,6 +14,7 @@ use crate::home_paths::{
 
 pub(crate) const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
+pub(crate) mod provider;
 pub(crate) mod usage;
 
 pub(crate) struct Homes {
@@ -174,7 +174,7 @@ pub(crate) fn resolve_home(input: &Path) -> Result<Home> {
 }
 
 fn claude_bin() -> OsString {
-    env::var_os("JIG_CLAUDE_BIN").unwrap_or_else(|| "claude".into())
+    <provider::Claude as crate::agent_provider::AgentProvider>::METADATA.executable()
 }
 
 impl Homes {
@@ -242,18 +242,5 @@ pub(crate) fn dry_run_report(home: &Home, args: &[OsString]) -> Value {
         "claude_bin": bin.to_string_lossy(),
         "args": args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
         "representation_lossy": home.path.to_str().is_none() || bin.to_str().is_none() || args.iter().any(|arg| arg.to_str().is_none()),
-    })
-}
-
-pub(crate) fn launch(home: &Home, args: &[OsString]) -> Result<()> {
-    let mut command = Command::new(claude_bin());
-    command.args(args);
-    if home.default_config {
-        command.env_remove(CONFIG_DIR_ENV);
-    } else {
-        command.env(CONFIG_DIR_ENV, &home.path);
-    }
-    crate::agent_launch::launch(&mut command, "Claude", || {
-        "Failed to launch Claude; install claude or set JIG_CLAUDE_BIN".to_owned()
     })
 }

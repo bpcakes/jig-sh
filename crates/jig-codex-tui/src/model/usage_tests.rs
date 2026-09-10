@@ -25,6 +25,7 @@ fn subscription_windows_preserve_tui_labels_and_order() {
         ] {
             let bucket = RateLimitBucket::from_value(
                 &json!({"id":id,"primary":primary,"secondary":secondary}),
+                &["codex".into(), "claude".into()],
             )
             .unwrap();
             assert_eq!(bucket.summary(), expected);
@@ -32,6 +33,7 @@ fn subscription_windows_preserve_tui_labels_and_order() {
     }
     let bucket = RateLimitBucket::from_value(
         &json!({"id":"other","primary":{"used_percent":0,"duration_minutes":300}}),
+        &["codex".into(), "claude".into()],
     )
     .unwrap();
     assert_eq!(bucket.summary(), "other 5h 100% left");

@@ -13,7 +13,7 @@ mod configuration;
 mod projection;
 
 pub(crate) use crate::usage::WindowRole;
-use crate::usage::{self, is_subscription_bucket, remaining_percent};
+use crate::usage::{self, remaining_percent};
 pub(crate) use app::App;
 pub(crate) use projection::{Projection, UsageSnapshotAssessment};
 use projection::{UsageSnapshotFreshness, WindowProjection};
@@ -169,7 +169,7 @@ pub(crate) struct Details {
 }
 
 impl Details {
-    fn from_value(mut value: Value, observed_at: u64) -> Self {
+    fn from_value(mut value: Value, observed_at: u64, subscription_buckets: &[String]) -> Self {
         sanitize_value(&mut value);
         let account = value.get("account").filter(|account| account.is_object());
         let inferred_status = if account.is_some() {
@@ -194,7 +194,7 @@ impl Details {
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(RateLimitBucket::from_value)
+                .filter_map(|value| RateLimitBucket::from_value(value, subscription_buckets))
                 .collect(),
             inspection_error: optional_text(&value, "inspection_error"),
             usage_error: optional_text(&value, "usage_error"),
@@ -267,14 +267,14 @@ impl Details {
             self.projection(),
             quota_freshness,
             projection_freshness,
-            primary_bucket.is_some_and(|bucket| matches!(bucket.id.as_str(), "codex" | "claude")),
+            primary_bucket.is_some_and(|bucket| bucket.subscription),
         )
     }
 
     fn primary_bucket(&self) -> Option<&RateLimitBucket> {
         self.buckets
             .iter()
-            .find(|bucket| matches!(bucket.id.as_str(), "codex" | "claude"))
+            .find(|bucket| bucket.subscription)
             .or_else(|| self.buckets.first())
     }
 
@@ -346,6 +346,7 @@ impl Details {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RateLimitBucket {
+    subscription: bool,
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) plan: String,
@@ -354,7 +355,7 @@ pub(crate) struct RateLimitBucket {
 }
 
 impl RateLimitBucket {
-    fn from_value(value: &Value) -> Option<Self> {
+    fn from_value(value: &Value, subscription_buckets: &[String]) -> Option<Self> {
         let object = value.as_object()?;
         let mut windows = [object.get("primary"), object.get("secondary")]
             .into_iter()
@@ -363,6 +364,10 @@ impl RateLimitBucket {
             .collect::<Vec<_>>();
         windows.sort_by_key(|window| window.duration_minutes.unwrap_or(u64::MAX));
         Some(Self {
+            subscription: value
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| subscription_buckets.iter().any(|candidate| candidate == id)),
             id: value_str(value, "id"),
             name: value_str(value, "name"),
             plan: value_str(value, "plan_type"),
@@ -382,7 +387,7 @@ impl RateLimitBucket {
     pub(crate) fn summary(&self) -> String {
         match self.windows.as_slice() {
             [] => "unavailable".into(),
-            [only] if is_subscription_bucket(&self.id) => format!(
+            [only] if self.subscription => format!(
                 "{} {}",
                 only.subscription_role()
                     .map(|role| role.to_string())
@@ -390,7 +395,7 @@ impl RateLimitBucket {
                 only.remaining()
             ),
             [only] => self.generic_summary(std::slice::from_ref(only)),
-            [first, second, ..] if is_subscription_bucket(&self.id) => [first, second]
+            [first, second, ..] if self.subscription => [first, second]
                 .into_iter()
                 .map(|window| match window.subscription_role() {
                     Some(role) => format!("{role} {}", window.remaining()),
@@ -474,7 +479,7 @@ impl RateLimitBucket {
     }
 
     pub(crate) fn window_role(&self, index: usize) -> WindowRole {
-        if !is_subscription_bucket(&self.id) {
+        if !self.subscription {
             return WindowRole::Window;
         }
         self.windows

@@ -1,6 +1,9 @@
 use jig_tui::sanitize_text;
 use serde_json::Value;
 
+use crate::agent_provider::AgentProvider;
+use crate::claude::provider::Claude;
+
 use super::command_display::CommandDisplay;
 
 pub(super) fn homes_summary(value: &Value) -> String {
@@ -30,7 +33,10 @@ pub(super) fn homes_summary(value: &Value) -> String {
                 } else {
                     lines.push(format!(
                         "      {}",
-                        super::usage::format_limits(&home["rate_limits"])
+                        super::usage::format_limits(
+                            &home["rate_limits"],
+                            Claude::METADATA.subscription_bucket
+                        )
                     ));
                 }
             }

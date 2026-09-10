@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod agent;
+mod agent_run;
 mod bootstrap_run;
 mod check;
 mod claude;
