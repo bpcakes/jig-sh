@@ -37,6 +37,7 @@ fn work_refine_fails_when_review_gate_returns_invalid_output() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -86,6 +87,7 @@ fn work_refine_reports_failed_checks_without_aborting() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -185,6 +187,7 @@ skill = "jig-rust:rust-simplify"
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )

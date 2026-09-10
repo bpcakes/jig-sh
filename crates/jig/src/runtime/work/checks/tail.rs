@@ -25,6 +25,7 @@ fn gate_evidence_from_scope(
     reusable: Option<&ReusableWorkCheckEvidence>,
 ) -> WorkCheckGateEvidence {
     WorkCheckGateEvidence {
+        effective_time: reusable.and_then(|source| source.effective_time),
         gate_id: gate.id.clone(),
         tool: gate.tool.clone(),
         status: status.into(),
@@ -144,6 +145,69 @@ fn result_time_validity(result: &Value) -> (Option<u64>, bool) {
     (valid_until_ms, requires_time_validity)
 }
 
+fn batch_effective_time(
+    ctx: &RepoContext,
+    outcome: &BatchExecutionOutcome,
+) -> Option<jig_contract::freshness::EffectiveTimeValidityV1> {
+    use jig_contract::freshness::EffectiveTimeValidityV1;
+    (ctx.contract_version() >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION).then(
+        || {
+            let gates = outcome.gate_evidence.iter().fold(
+                EffectiveTimeValidityV1::default(),
+                |combined, gate| {
+                    combined
+                        .combine(EffectiveTimeValidityV1::new(
+                            gate.valid_until_ms,
+                            gate.requires_time_validity,
+                        ))
+                        .combine(gate.effective_time.unwrap_or_default())
+                },
+            );
+            outcome.results.iter().fold(gates, |combined, result| {
+                combined.combine(result_effective_time_validity(result))
+            })
+        },
+    )
+}
+
+fn result_effective_time_validity(
+    result: &Value,
+) -> jig_contract::freshness::EffectiveTimeValidityV1 {
+    use jig_contract::freshness::EffectiveTimeValidityV1;
+    let nested_result = result.get("result");
+    let objects = [
+        Some(result),
+        nested_result,
+        result.get("run"),
+        nested_result.and_then(|value| value.get("run")),
+    ];
+    let mut validity = EffectiveTimeValidityV1::default();
+    for value in objects.into_iter().flatten().flat_map(|object| {
+        std::iter::once(object).chain(["targets", "target_evidence"].into_iter().flat_map(
+            move |field| {
+                object
+                    .get(field)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            },
+        ))
+    }) {
+        let required = crate::state::evidence_requires_time_validity(value)
+            || value
+                .get("native_evidence")
+                .is_some_and(crate::state::evidence_requires_time_validity);
+        validity = validity.combine(EffectiveTimeValidityV1::new(
+            value.get("valid_until_ms").and_then(Value::as_u64),
+            required,
+        ));
+        if let Some(effective) = crate::state::effective_time_from_value(value) {
+            validity = validity.combine(effective);
+        }
+    }
+    validity
+}
+
 fn revalidate_gate_scopes(
     ctx: &RepoContext,
     plan_id: &str,
@@ -203,6 +267,32 @@ mod compatibility_tests {
                 }
             })),
             (Some(50), true)
+        );
+    }
+
+    #[test]
+    fn batch_effective_validity_preserves_missing_required_boundaries() {
+        use super::result_effective_time_validity;
+        use jig_contract::freshness::EffectiveTimeValidityV1;
+        let result = json!({"run": {"targets": [
+            {"valid_until_ms": null, "effective_valid_until_ms": 40, "effective_requires_time_validity": true},
+            {"valid_until_ms": 80}
+        ]}});
+        assert_eq!(
+            result_effective_time_validity(&result),
+            EffectiveTimeValidityV1::new(Some(40), true)
+        );
+        let mut missing = result.clone();
+        missing["run"]["targets"][0]["effective_valid_until_ms"] = serde_json::Value::Null;
+        assert_eq!(
+            result_effective_time_validity(&missing),
+            EffectiveTimeValidityV1::new(None, true)
+        );
+        let mut unsupported = result;
+        unsupported["run"]["targets"][0]["target_freshness"] = json!({"schema_version": 99});
+        assert_eq!(
+            result_effective_time_validity(&unsupported),
+            EffectiveTimeValidityV1::new(None, true)
         );
     }
 }

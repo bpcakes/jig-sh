@@ -1,4 +1,5 @@
 pub(crate) mod arguments;
+pub(crate) mod freshness;
 pub(crate) mod runners;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -18,12 +19,18 @@ pub(crate) use inspect::{
     CatalogInspection, InspectRequest, inspect_repository, inspect_repository_data,
 };
 pub(crate) use planner::{
-    PlanRunRequest, plan_action_run, plan_run, target_input_digest,
-    validate_current_repository_authority, validate_run_plan, validate_run_plan_source,
+    PlanRunRequest, plan_action_run_with_cancellation, plan_run_with_cancellation,
+    target_input_digest, validate_current_repository_authority, validate_run_plan,
+    validate_run_plan_source,
 };
+#[cfg(test)]
+pub(crate) use planner::{plan_action_run, plan_run};
 
 mod native_input;
-pub(crate) use native_input::{prepare_file_budget_input_v1, read_policy_bytes};
+pub(crate) use native_input::{
+    prepare_file_budget_input_v1, prepare_gate_file_budget_input, read_policy_bytes,
+    revalidate_freshness_native_input,
+};
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
 pub(crate) const FILE_BUDGET_CONTRACT_VERSION: u32 = 7;
@@ -99,45 +106,8 @@ fn parse_selector_part<T>(
     }
 }
 
-pub(crate) fn resolve_evidence_targets(
-    catalog: &RepositoryCatalog,
-    selector: &WorkEvidenceSelector,
-) -> Result<BTreeSet<TargetId>> {
-    let targets = match selector {
-        WorkEvidenceSelector::Target(target) => {
-            if catalog.action(target).is_none() {
-                bail!("work evidence gate references unknown target '{target}'");
-            }
-            BTreeSet::from([target.clone()])
-        }
-        WorkEvidenceSelector::Profile(profile) => {
-            let profile = catalog.profile(profile).ok_or_else(|| {
-                anyhow::anyhow!("work evidence gate references unknown profile '{profile}'")
-            })?;
-            if profile.targets.is_empty() {
-                bail!(
-                    "work evidence gate profile '{}' contains no targets",
-                    profile.id
-                );
-            }
-            profile.targets.iter().cloned().collect()
-        }
-    };
-    let mut targets = targets;
-    let mut pending: Vec<_> = targets.iter().cloned().collect();
-    while let Some(target) = pending.pop() {
-        let action = catalog
-            .action(&target)
-            .ok_or_else(|| anyhow::anyhow!("work evidence references unknown target '{target}'"))?;
-        for dependency in &action.depends_on {
-            if targets.insert(dependency.clone()) {
-                pending.push(dependency.clone());
-            }
-        }
-    }
-    planner::validate_check_actions(catalog, targets.iter())?;
-    Ok(targets)
-}
+mod evidence;
+pub(crate) use evidence::resolve_evidence_targets;
 
 pub(crate) fn validate_read_only_check_closure<'a, 'b>(
     actions: impl IntoIterator<Item = &'a ActionSpec>,
@@ -288,6 +258,7 @@ impl RepositoryCatalog {
             let mut action = action.clone();
             normalize_native_configuration(contract_version, &mut action)?;
             arguments::normalize_declarations(contract_version, &mut action)?;
+            freshness::validate_inputs_policy(contract_version, &action)?;
             runners::validate(contract_version, &action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(

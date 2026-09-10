@@ -95,11 +95,15 @@ sqlx_enabled = false
     let ctx = RepoContext::load_from(root.path()).unwrap();
     let calls = Cell::new(0);
 
-    let result = work_snapshot(&ctx, &|| {
-        let current = calls.get();
-        calls.set(current + 1);
-        current == 1
-    });
+    let result = work_snapshot(
+        &ctx,
+        &|| {
+            let current = calls.get();
+            calls.set(current + 1);
+            current == 1
+        },
+        None,
+    );
     let Err(error) = result else {
         panic!("non-sticky cancellation was converted into a partial work snapshot")
     };

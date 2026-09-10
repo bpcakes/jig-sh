@@ -6,6 +6,9 @@ use crate::bootstrap::template_source::PrivateAnswerOverrides;
 
 use super::*;
 
+#[path = "renderer_tests/freshness.rs"]
+mod freshness;
+
 fn rust_render_answers(projection: RepositoryProjectionHint) -> RenderAnswers {
     let destination = tempfile::tempdir().unwrap();
     let opts = AnswerOpts {

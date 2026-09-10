@@ -310,9 +310,9 @@ fn product_version_is_independent_of_the_runner_contract_epoch() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let contract: Value =
         serde_json::from_slice(&fs::read(root.join(".agent/jig-contract.json")).unwrap()).unwrap();
-    assert_eq!(contract["contract_version"], 8);
+    assert_eq!(contract["contract_version"], 9);
     let launcher = fs::read_to_string(root.join("scripts/jig")).unwrap();
-    assert!(launcher.contains("CONTRACT_VERSION=\"8\""));
+    assert!(launcher.contains("CONTRACT_VERSION=\"9\""));
 }
 
 #[test]

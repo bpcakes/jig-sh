@@ -46,6 +46,7 @@ pub(crate) use comparison::*;
 pub(crate) use content::*;
 pub(crate) use exact_path::*;
 use process::*;
+pub(crate) use process::{FreshnessGitObservationFailure, read_freshness_git_batch};
 use scope::*;
 use worktree::*;
 
@@ -706,11 +707,16 @@ pub(crate) use tail::{
 enum GitReceiptCollection<'a> {
     Blocking,
     Cancellable(&'a dyn Fn() -> bool),
+    Observed {
+        cancelled: &'a dyn Fn() -> bool,
+        bytes: &'a std::cell::Cell<u64>,
+    },
 }
 
 impl GitReceiptCollection<'_> {
     fn ensure_active(self) -> Result<()> {
-        if matches!(self, Self::Cancellable(cancelled) if cancelled()) {
+        if matches!(self, Self::Cancellable(cancelled) | Self::Observed { cancelled, .. } if cancelled())
+        {
             return Err(GitReceiptCollectionCancelled.into());
         }
         Ok(())
@@ -721,6 +727,9 @@ impl GitReceiptCollection<'_> {
             Self::Blocking => git_output(root, args, label),
             Self::Cancellable(cancelled) => {
                 git_output_with_cancellation(root, args, label, cancelled)
+            }
+            Self::Observed { .. } => {
+                self.git_bounded_output(root, args, label, 64 * 1024, "freshness")
             }
         }
     }
@@ -755,7 +764,7 @@ impl GitReceiptCollection<'_> {
     fn git_hash_file(self, root: &Path, full_path: &Path) -> Result<String> {
         match self {
             Self::Blocking => git_hash_file(root, full_path),
-            Self::Cancellable(cancelled) => {
+            Self::Cancellable(cancelled) | Self::Observed { cancelled, .. } => {
                 git_hash_file_with_cancellation(root, full_path, cancelled)
             }
         }

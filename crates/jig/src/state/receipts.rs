@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use jig_contract::freshness::EffectiveTimeValidityV1;
 use jig_contract::{ActionId, ComponentId, Finding, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,6 +32,10 @@ use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
 mod archive;
 mod journal;
+mod originals;
+mod validity;
+pub(crate) use originals::OriginalReceiptIndex;
+pub(crate) use validity::{effective_time_from_value, metadata_time, receipt_effective_time};
 mod target_evidence;
 pub(super) use archive::parse_archive_before_ms;
 use archive::refuse_unterminated_receipt_stream;
@@ -67,6 +72,7 @@ pub(crate) struct ReceiptInput<'a> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TargetReceiptMetadata {
+    pub(crate) target_freshness: Option<jig_contract::freshness::TargetFreshnessMetadata>,
     pub(crate) run_id: String,
     pub(crate) target: TargetId,
     pub(crate) config_digest: String,
@@ -81,6 +87,7 @@ pub(crate) struct TargetReceiptMetadata {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileBudgetLifecycleReceipt {
+    pub(crate) original: TargetReceiptStatus,
     pub(crate) receipt_id: String,
     pub(crate) config_digest: Option<String>,
     pub(crate) input_digest: Option<String>,
@@ -100,17 +107,30 @@ pub(crate) fn latest_file_budget_lifecycle_receipt(
         read_receipts_reverse(&ctx.state_file("receipts.jsonl"), 1, |receipt| {
             receipt.target.as_ref() == Some(&target)
         })?;
-    Ok(receipts.pop().map(|receipt| FileBudgetLifecycleReceipt {
-        receipt_id: receipt.id,
-        config_digest: receipt.config_digest,
-        input_digest: receipt.input_digest,
-        exit_status: receipt.exit_status,
-        worktree_fingerprint: receipt.worktree_fingerprint,
-        worktree_fingerprint_error: receipt.worktree_fingerprint_error,
-        evaluated_at_ms: receipt.evaluated_at_ms,
-        valid_until_ms: receipt.valid_until_ms,
-        evidence: receipt.evidence,
-    }))
+    Ok(receipts.pop().map(FileBudgetLifecycleReceipt::from_record))
+}
+
+impl FileBudgetLifecycleReceipt {
+    fn from_record(receipt: ReceiptRecord) -> Self {
+        Self {
+            original: target_receipt_status(
+                &receipt,
+                receipt
+                    .target
+                    .as_ref()
+                    .expect("lifecycle selection requires target metadata"),
+            ),
+            receipt_id: receipt.id,
+            config_digest: receipt.config_digest,
+            input_digest: receipt.input_digest,
+            exit_status: receipt.exit_status,
+            worktree_fingerprint: receipt.worktree_fingerprint,
+            worktree_fingerprint_error: receipt.worktree_fingerprint_error,
+            evaluated_at_ms: receipt.evaluated_at_ms,
+            valid_until_ms: receipt.valid_until_ms,
+            evidence: receipt.evidence,
+        }
+    }
 }
 
 pub(super) struct StateToolReceipt<'a> {
@@ -139,6 +159,7 @@ pub(crate) struct ReceiptListFilter {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ToolReceiptStatus {
+    pub(crate) effective_time: Option<EffectiveTimeValidityV1>,
     pub(crate) receipt_id: String,
     pub(crate) exit_status: i32,
     pub(crate) ended_at_ms: u64,
@@ -204,6 +225,8 @@ const fn bool_is_false(value: &bool) -> bool {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct WorkCheckBatchEvidence {
+    #[serde(default, flatten)]
+    pub(crate) effective_time: Option<EffectiveTimeValidityV1>,
     pub(crate) schema: String,
     #[serde(default)]
     pub(crate) changed_paths: Vec<String>,
@@ -230,9 +253,21 @@ impl WorkCheckBatchEvidence {
             valid_until_ms,
             requires_time_validity,
             mut gates,
+            effective_time,
             ..
         } = self;
         for gate in &mut gates {
+            if effective_time.is_some() || gate.effective_time.is_some() {
+                gate.effective_time = Some(
+                    EffectiveTimeValidityV1::new(valid_until_ms, requires_time_validity)
+                        .combine(EffectiveTimeValidityV1::new(
+                            gate.valid_until_ms,
+                            gate.requires_time_validity,
+                        ))
+                        .combine(effective_time.unwrap_or_default())
+                        .combine(gate.effective_time.unwrap_or_default()),
+                );
+            }
             if gate.changed_paths_digest.is_none() && changed_paths_digest.is_some() {
                 gate.changed_paths.clone_from(&changed_paths);
                 gate.changed_path_count = changed_path_count;
@@ -250,6 +285,8 @@ impl WorkCheckBatchEvidence {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct WorkCheckGateEvidence {
+    #[serde(default, flatten)]
+    pub(crate) effective_time: Option<EffectiveTimeValidityV1>,
     pub(crate) gate_id: String,
     pub(crate) tool: String,
     pub(crate) status: String,
@@ -312,6 +349,7 @@ pub(crate) struct WorkCheckGateReceiptStatus {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReusableWorkCheckEvidence {
+    pub(crate) effective_time: Option<EffectiveTimeValidityV1>,
     pub(crate) source_plan_id: String,
     pub(crate) source_batch_receipt_id: String,
     pub(crate) source_tool_receipt_id: String,
@@ -589,17 +627,38 @@ pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(
                     receipt.evidence.as_ref().unwrap_or(&Value::Null),
                 ) || gate.requires_time_validity
                     || proving.is_some_and(|(_, status)| status.requires_time_validity);
+                let effective_time = if receipt_effective_time(&receipt).is_some()
+                    || gate.effective_time.is_some()
+                    || proving.is_some_and(|(_, status)| status.effective_time.is_some())
+                {
+                    Some(
+                        EffectiveTimeValidityV1::new(valid_until_ms, requires_time_validity)
+                            .combine(receipt_effective_time(&receipt).unwrap_or_default())
+                            .combine(gate.effective_time.unwrap_or_default())
+                            .combine(
+                                proving
+                                    .and_then(|(_, status)| status.effective_time)
+                                    .unwrap_or_default(),
+                            ),
+                    )
+                } else {
+                    None
+                };
+                let validity = effective_time.unwrap_or_else(|| {
+                    EffectiveTimeValidityV1::new(valid_until_ms, requires_time_validity)
+                });
                 (receipt.exit_status == 0
                     && receipt.worktree_fingerprint.is_some()
                     && receipt.worktree_fingerprint_error.is_none()
                     && gate.status == "executed"
                     && proving.map(|(tool, _)| tool.as_str()) == Some(gate.tool.as_str())
                     && time_validity_is_current(
-                        valid_until_ms,
-                        requires_time_validity,
+                        validity.effective_valid_until_ms,
+                        validity.effective_requires_time_validity,
                         scan_now_ms,
                     ))
                 .then(|| ReusableWorkCheckEvidence {
+                    effective_time,
                     source_plan_id: plan_id.to_string(),
                     source_batch_receipt_id: receipt.id.clone(),
                     source_tool_receipt_id: proving_receipt.to_string(),

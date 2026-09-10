@@ -142,6 +142,7 @@ pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<std::collections::BTreeMap<String, Value>> {
     crate::cancellation::ensure_status_collection_active(cancelled)?;
     if plan_ids.is_empty() {
@@ -149,7 +150,12 @@ pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     }
     let current = refreshed_repository_context(ctx)?;
     crate::cancellation::ensure_status_collection_active(cancelled)?;
-    work::open_plan_gate_snapshots_with_cancellation(&current, plan_ids, cancelled)
+    work::open_plan_gate_snapshots_with_cancellation(
+        &current,
+        plan_ids,
+        cancelled,
+        freshness_timeout_ms,
+    )
 }
 
 pub(crate) use work::{DashboardGateReport, dashboard_gate_receipt_indexes};
@@ -160,14 +166,21 @@ pub(crate) fn dashboard_open_plan_reports_with_cancellation(
     indexes: std::collections::BTreeMap<String, crate::state::WorkGateReceiptIndex>,
     plan_state: &'static str,
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<std::collections::BTreeMap<String, DashboardGateReport>> {
     work::dashboard_open_plan_reports_with_cancellation(
-        ctx, baselines, indexes, plan_state, cancelled,
+        ctx,
+        baselines,
+        indexes,
+        plan_state,
+        cancelled,
+        freshness_timeout_ms,
     )
 }
 
 pub(crate) fn refreshed_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
-    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+    let current = ctx
+        .reload_execution_authority()
         .context("Failed to refresh repository authority")?;
     if current.contract_version() != ctx.contract_version() {
         bail!(
@@ -424,7 +437,7 @@ fn dispatch_repository_check_with_catalog(
         );
     }
     let (work_plan_id, _) = request.tool.clone().into_parts();
-    let plan = crate::repository::plan_run(
+    let plan = crate::repository::plan_run_with_cancellation(
         ctx,
         catalog,
         crate::repository::PlanRunRequest {
@@ -434,6 +447,7 @@ fn dispatch_repository_check_with_catalog(
             comparison: request.comparison,
             work_plan_id,
         },
+        &|| observer.cancelled(),
     )?;
     if request.explain {
         return Ok(json!({
@@ -543,7 +557,7 @@ pub(crate) fn call_tool_with_observer(
     }
     if ctx.contract_version() >= 6 {
         if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
-            return mcp_repository::call(ctx, tool, args);
+            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled());
         }
     } else if memory_tool.is_none() {
         let current = refreshed_repository_context(ctx)?;

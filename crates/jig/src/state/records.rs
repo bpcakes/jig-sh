@@ -471,6 +471,8 @@ impl<'de> Deserialize<'de> for PlanEvent {
 
 #[derive(Debug, Serialize, serde::Deserialize)]
 pub(crate) struct ReceiptRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) target_freshness: Option<jig_contract::freshness::TargetFreshnessMetadata>,
     pub(crate) id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) plan_id: Option<String>,

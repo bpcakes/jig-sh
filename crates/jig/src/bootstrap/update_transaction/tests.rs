@@ -111,6 +111,7 @@ fn uncommitted_phase_two_recovery_restores_bash_without_reusing_stale_proof() {
     let staged = staged(&[], &["scripts/check-rust-file-loc.sh"]);
     let identity = |byte: char| format!("sha256:{}", byte.to_string().repeat(64));
     let proof = super::super::file_budget_lifecycle::LifecycleProof {
+        effective_time: None,
         receipt_id: "receipt_fixture".into(),
         config_digest: identity('a'),
         input_digest: identity('b'),

@@ -90,7 +90,7 @@ pub(super) fn dispatch_with_observer(
         WorkCommand::Append(opts) => plans_append(ctx, opts.into()),
         WorkCommand::Check(opts) => checks::check_with_observer(ctx, opts, observer),
         WorkCommand::Gates(opts) => {
-            gates::snapshot_with_cancellation(ctx, opts.plan_id, &|| observer.cancelled())
+            gates::snapshot_with_cancellation(ctx, opts, &|| observer.cancelled())
         }
         WorkCommand::Evidence(opts) => {
             gates::evidence_with_cancellation(ctx, opts, &|| observer.cancelled())
@@ -113,8 +113,9 @@ pub(super) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<std::collections::BTreeMap<String, Value>> {
-    gates::open_plan_snapshots_with_cancellation(ctx, plan_ids, cancelled)
+    gates::open_plan_snapshots_with_cancellation(ctx, plan_ids, cancelled, freshness_timeout_ms)
 }
 
 pub(crate) use gates::{
@@ -163,14 +164,30 @@ pub(in crate::runtime) fn finish_with_cancellation(
     finish_after_required_gates_passed(ctx, opts, evaluated_worktree_fingerprint, cancelled)
 }
 
+#[derive(Default)]
+pub(in crate::runtime) struct RequiredGateProof {
+    pub(in crate::runtime) worktree_fingerprint: Option<String>,
+    pub(in crate::runtime) valid_until_ms: Option<u64>,
+    pub(in crate::runtime) requires_time_validity: bool,
+}
+
 pub(in crate::runtime) fn finish_after_required_gates_passed(
     ctx: &RepoContext,
     opts: WorkFinishRequest,
-    evaluated_worktree_fingerprint: Option<String>,
+    evaluated: RequiredGateProof,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
-    ensure_finish_authority_is_current(ctx, evaluated_worktree_fingerprint.as_deref(), cancelled)?;
+    ensure_finish_authority_is_current(ctx, evaluated.worktree_fingerprint.as_deref(), cancelled)?;
 
+    anyhow::ensure!(
+        crate::state::time_validity_is_current(
+            evaluated.valid_until_ms,
+            evaluated.requires_time_validity,
+            crate::state::now_ms()
+        ),
+        "Required work gate evidence expired before the plan could close; rerun work check and retry"
+    );
+    crate::cancellation::ensure_status_collection_active(cancelled)?;
     let plan = plans_close(ctx, (&opts).into())?;
     let session = match current_session(ctx)? {
         Some(_) => Some(session_end(
@@ -193,7 +210,8 @@ fn ensure_finish_authority_is_current(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
     crate::cancellation::ensure_status_collection_active(cancelled)?;
-    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+    let current = ctx
+        .reload_execution_authority()
         .context("Failed to reload repository authority before closing the work plan")?;
     ensure_finish_config_is_current(ctx, &current)?;
     if let Some(evaluated) = evaluated_worktree_fingerprint {
@@ -216,7 +234,8 @@ fn ensure_finish_authority_is_current(
     // The worktree scan excludes `.agent/**`; reload once more afterward so a
     // manifest-only authority change racing that scan cannot reach plan close.
     crate::cancellation::ensure_status_collection_active(cancelled)?;
-    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+    let current = ctx
+        .reload_execution_authority()
         .context("Failed to recheck repository authority before closing the work plan")?;
     ensure_finish_config_is_current(ctx, &current)
 }

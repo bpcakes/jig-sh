@@ -530,6 +530,7 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )

@@ -60,6 +60,7 @@ pub(super) fn execute_parallel_read_only_layer(
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     targets: &[(&PlannedTarget, PhasePosition)],
+    freshness: Option<&super::freshness::ExecutionFreshness>,
 ) -> Result<ParallelLayerExecution> {
     let cancellation = Arc::new(ParallelCancellationState::default());
     let initial_cancellation = control.cancelled();
@@ -151,10 +152,10 @@ pub(super) fn execute_parallel_read_only_layer(
                             ctx,
                             catalog,
                             run,
-                            planned,
-                            position,
+                            (planned, position),
                             &mut target_control,
                             (index >= worker_count).then_some(queued_source_epoch),
+                            freshness,
                         );
                         if outcome_tx.send((index, outcome)).is_err() {
                             break;
@@ -232,10 +233,10 @@ fn execute_parallel_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run: &crate::state::DurableRun,
-    planned: &PlannedTarget,
-    position: PhasePosition,
+    (planned, position): (&PlannedTarget, PhasePosition),
     control: &mut dyn RepositoryRunControl,
     queued_source_epoch: Option<&Mutex<&mut ExecutionSourceEpoch>>,
+    freshness: Option<&super::freshness::ExecutionFreshness>,
 ) -> Result<ParallelTargetExecution> {
     let execution = match control.cancelled() {
         Ok(true) => ParallelTargetExecution::not_started(
@@ -290,6 +291,7 @@ fn execute_parallel_target(
                     run.work_plan_id.as_deref(),
                     planned,
                     control,
+                    freshness,
                 );
                 let phase = phase.complete_owned();
                 ParallelTargetExecution::completed(started_at_ms, capture, phase)

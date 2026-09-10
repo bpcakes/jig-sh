@@ -345,6 +345,7 @@ fn status_gate_report() -> StatusGateReport {
         current_worktree_fingerprint: Some("sha256:example".to_string()),
         current_worktree_fingerprint_error: None,
         gates: vec![StatusGate::Check(Box::new(StatusCheckGate {
+            effective_time: None,
             id: "test".to_string(),
             required: true,
             tool: "jig.test".to_string(),

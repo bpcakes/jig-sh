@@ -125,6 +125,30 @@ fn parses_work_gates_command() {
 }
 
 #[test]
+fn freshness_inspection_flags_accept_only_the_documented_integer_range() {
+    for command in [
+        &["status"][..],
+        &["work", "gates"][..],
+        &["work", "evidence"][..],
+    ] {
+        for value in ["1", "2000", "30000"] {
+            let args = ["jig"]
+                .into_iter()
+                .chain(command.iter().copied())
+                .chain(["--freshness-timeout-ms", value]);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        for value in ["0", "30001", "-1", "1.5", "unknown"] {
+            let args = ["jig"]
+                .into_iter()
+                .chain(command.iter().copied())
+                .chain(["--freshness-timeout-ms", value]);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+}
+
+#[test]
 fn parses_work_evidence_command() {
     let cli = Cli::try_parse_from(["jig", "work", "evidence"]).unwrap();
 

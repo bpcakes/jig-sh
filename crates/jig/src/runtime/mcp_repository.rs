@@ -54,10 +54,15 @@ impl Drop for LiveRunGuard {
     }
 }
 
-pub(super) fn call(ctx: &RepoContext, tool: RepositoryTool, args: Value) -> Result<Value> {
+pub(super) fn call(
+    ctx: &RepoContext,
+    tool: RepositoryTool,
+    args: Value,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
     match tool {
         RepositoryTool::Inspect => inspect(ctx, parse_inspect_args(args)?),
-        RepositoryTool::PlanRun => plan(ctx, parse_args(args, "jig.plan_run")?),
+        RepositoryTool::PlanRun => plan(ctx, parse_args(args, "jig.plan_run")?, cancelled),
         RepositoryTool::ExecuteRun => execute(ctx, parse_args(args, "jig.execute_run")?),
         RepositoryTool::CancelRun => cancel(ctx, parse_args(args, "jig.cancel_run")?),
     }
@@ -102,7 +107,8 @@ fn catalog_inspection(
     ))
 }
 
-fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
+fn plan(ctx: &RepoContext, args: PlanRunArgs, cancelled: &dyn Fn() -> bool) -> Result<Value> {
+    crate::cancellation::ensure_status_collection_active(cancelled)?;
     let current = super::refreshed_repository_context(ctx)?;
     let catalog = RepositoryCatalog::from_context(&current)?;
     let arguments = args
@@ -115,7 +121,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
             Ok((target, arguments))
         })
         .collect::<Result<_>>()?;
-    let plan = crate::repository::plan_action_run(
+    let plan = crate::repository::plan_action_run_with_cancellation(
         &current,
         &catalog,
         PlanRunRequest {
@@ -126,6 +132,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
             work_plan_id: args.work_plan_id,
         },
         arguments,
+        cancelled,
     )?;
     serialize_output(PlanRunOutput {
         ok: true,

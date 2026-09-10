@@ -27,7 +27,7 @@ pub(super) fn dispatch(
         bail!("explicit run comparison authority requires repository contract version 7 or later");
     }
     let (work_plan_id, record_receipts) = request.tool.into_parts();
-    let plan = crate::repository::plan_action_run(
+    let plan = crate::repository::plan_action_run_with_cancellation(
         &current,
         &catalog,
         PlanRunRequest {
@@ -38,6 +38,7 @@ pub(super) fn dispatch(
             work_plan_id: work_plan_id.clone(),
         },
         request.arguments,
+        &|| observer.cancelled(),
     )?;
     if request.explain {
         return Ok(json!({"ok": true, "command": "run plan", "executed": false, "plan": plan}));

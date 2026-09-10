@@ -260,6 +260,8 @@ fn decode_unsupported<E: serde::de::Error>(
 ) -> Result<StatusUnsupportedGate, E> {
     #[derive(Deserialize)]
     struct UnsupportedWire {
+        #[serde(default, flatten)]
+        scoped_freshness: Option<jig_contract::freshness::FreshnessSummaryV1>,
         id: String,
         required: bool,
         status: String,
@@ -275,6 +277,7 @@ fn decode_unsupported<E: serde::de::Error>(
         .remove("kind");
     let fields: UnsupportedWire = serde_json::from_value(value).map_err(E::custom)?;
     Ok(StatusUnsupportedGate {
+        scoped_freshness: fields.scoped_freshness,
         kind: kind.to_string(),
         id: fields.id,
         required: fields.required,
@@ -286,6 +289,8 @@ fn decode_unsupported<E: serde::de::Error>(
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusCheckGate {
+    #[serde(default, flatten)]
+    pub effective_time: Option<jig_contract::freshness::EffectiveTimeValidityV1>,
     pub id: String,
     pub required: bool,
     pub tool: String,
@@ -331,6 +336,10 @@ pub struct StatusCheckGate {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusEvidenceGate {
+    #[serde(default, flatten)]
+    pub scoped_freshness: Option<jig_contract::freshness::FreshnessSummaryV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_collection: Option<jig_contract::freshness::FreshnessCollectionStats>,
     pub id: String,
     pub required: bool,
     pub target: Option<String>,
@@ -347,6 +356,8 @@ pub struct StatusEvidenceGate {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusEvidenceTarget {
+    #[serde(default, flatten)]
+    pub scoped_freshness: Option<jig_contract::freshness::FreshnessDetailsV1>,
     pub target: jig_contract::TargetId,
     pub status: String,
     pub receipt_id: Option<String>,
@@ -402,6 +413,8 @@ pub struct StatusCodexReviewGate {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusUnsupportedGate {
+    #[serde(default, flatten)]
+    pub scoped_freshness: Option<jig_contract::freshness::FreshnessSummaryV1>,
     pub kind: String,
     pub id: String,
     pub required: bool,

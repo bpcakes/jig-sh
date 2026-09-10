@@ -181,6 +181,7 @@ fn test_receipt(
     args: Value,
 ) -> ReceiptRecord {
     ReceiptRecord {
+        target_freshness: None,
         id: id.to_string(),
         session_id: None,
         plan_id: Some(plan_id.to_string()),

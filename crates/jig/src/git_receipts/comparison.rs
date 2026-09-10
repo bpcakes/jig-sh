@@ -23,6 +23,19 @@ pub(crate) fn resolve_comparison_v1_with_cancellation(
     resolve_comparison_inner(root, request, GitReceiptCollection::Cancellable(cancelled))
 }
 
+pub(crate) fn resolve_comparison_v1_observed(
+    root: &Path,
+    request: ComparisonRequestV1,
+    cancelled: &dyn Fn() -> bool,
+    bytes: &std::cell::Cell<u64>,
+) -> Result<ResolvedComparisonV1> {
+    resolve_comparison_inner(
+        root,
+        request,
+        GitReceiptCollection::Observed { cancelled, bytes },
+    )
+}
+
 fn resolve_comparison_inner(
     root: &Path,
     request: ComparisonRequestV1,

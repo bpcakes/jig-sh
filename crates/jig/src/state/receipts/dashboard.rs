@@ -131,8 +131,8 @@ impl WorkGateReceiptIndexes {
                 .insert(gate_id.to_string(), work_review_receipt_status(receipt));
         }
 
-        if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
-            let status = target_receipt_status(receipt, run_id, target);
+        if let Some(target) = receipt.target.as_ref() {
+            let status = target_receipt_status(receipt, target);
             for receipts in index.evidence.values_mut() {
                 receipts.observe(&status);
             }

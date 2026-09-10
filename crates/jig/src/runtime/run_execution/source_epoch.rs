@@ -337,3 +337,32 @@ fn enforce_read_only_layer_worktree_effect(
         Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
     }
 }
+
+pub(super) fn enforce_current_repository_authority(
+    ctx: &RepoContext,
+    expected_digest: &str,
+    planned: &PlannedTarget,
+    mut capture: TargetCapture,
+) -> TargetCapture {
+    let Err(error) = crate::repository::validate_current_repository_authority(ctx, expected_digest)
+    else {
+        return capture;
+    };
+    let message = format!(
+        "repository execution authority could not be verified after target '{}': {error:#}",
+        planned.target
+    );
+    if !capture.stderr.is_empty() && !capture.stderr.ends_with('\n') {
+        capture.stderr.push('\n');
+    }
+    capture.stderr.push_str(&message);
+    capture.stderr.push('\n');
+    capture
+        .findings
+        .push(finding(message, "execution_authority"));
+    if capture.conclusion == RunConclusion::Success {
+        capture.conclusion = RunConclusion::Blocked;
+        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+    }
+    capture
+}

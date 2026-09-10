@@ -27,6 +27,7 @@ impl EvaluatedReceipt {
         let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
             gate_changed_paths(freshness_receipt);
         Self {
+            effective_time: freshness_receipt.and_then(GateReceiptView::effective_time_validity),
             receipt_id: receipt.map(|receipt| receipt.receipt_id().to_string()),
             freshness_receipt_id: freshness_receipt.map(|receipt| receipt.receipt_id().to_string()),
             exit_status: receipt.map(GateReceiptView::exit_status),
@@ -59,12 +60,28 @@ impl EvaluatedReceipt {
             .min();
         let requires_time_validity =
             evidence.requires_time_validity || status.batch.requires_time_validity;
+        let effective_time = (evidence.effective_time.is_some()
+            || status.batch.effective_time.is_some())
+        .then(|| {
+            jig_contract::freshness::EffectiveTimeValidityV1::new(
+                valid_until_ms,
+                requires_time_validity,
+            )
+            .combine(evidence.effective_time.unwrap_or_default())
+            .combine(status.batch.effective_time.unwrap_or_default())
+        });
+        let validity = effective_time.unwrap_or_else(|| {
+            jig_contract::freshness::EffectiveTimeValidityV1::new(
+                valid_until_ms,
+                requires_time_validity,
+            )
+        });
         let (freshness, freshness_reason) = if !crate::state::time_validity_is_current(
-            valid_until_ms,
-            requires_time_validity,
+            validity.effective_valid_until_ms,
+            validity.effective_requires_time_validity,
             crate::state::now_ms(),
         ) {
-            if valid_until_ms.is_some() {
+            if validity.effective_valid_until_ms.is_some() {
                 (
                     GateFreshness::Stale,
                     "receipt time validity has expired".into(),
@@ -110,6 +127,7 @@ impl EvaluatedReceipt {
             }
         };
         Self {
+            effective_time,
             receipt_id: evidence
                 .tool_receipt_id
                 .clone()
@@ -243,6 +261,7 @@ fn evaluate_gate(
     current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
     receipt_index: &WorkGateReceiptIndex,
     collection: GateCollection<'_>,
+    scoped: Option<&scoped_freshness::ScopedGateFreshness>,
 ) -> Result<GateEvaluation> {
     collection.ensure_active()?;
     match gate {
@@ -250,6 +269,7 @@ fn evaluate_gate(
             let tool_name = gate.tool.as_str();
             if let Err(error) = validate_check_tool(ctx, tool_name, "Work gate") {
                 return Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+                    scoped_freshness: None,
                     id: gate.id.clone(),
                     required: gate.required,
                     kind: "check".into(),
@@ -357,9 +377,11 @@ fn evaluate_gate(
                 current_fingerprint,
                 receipt_index,
                 collection,
+                scoped,
             ) {
                 Ok(evaluation) => Ok(GateEvaluation::Evidence(evaluation)),
                 Err(error) => Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+                    scoped_freshness: target_evidence::unsupported_reference_summary(ctx, gate),
                     id: gate.id.clone(),
                     required: gate.required,
                     kind: "evidence".into(),
@@ -367,6 +389,7 @@ fn evaluate_gate(
                 })),
             },
             Err(error) => Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+                scoped_freshness: target_evidence::unsupported_reference_summary(ctx, gate),
                 id: gate.id.clone(),
                 required: gate.required,
                 kind: "evidence".into(),
@@ -402,6 +425,7 @@ fn evaluate_gate(
             )))
         }
         WorkGate::Unsupported(gate) => Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+            scoped_freshness: None,
             id: gate.id.clone(),
             required: gate.required,
             kind: gate.kind.clone(),
@@ -423,9 +447,23 @@ trait GateReceiptView {
     fn worktree_fingerprint_error(&self) -> Option<&str>;
     fn valid_until_ms(&self) -> Option<u64>;
     fn requires_time_validity(&self) -> bool;
+    fn effective_time_validity(&self) -> Option<jig_contract::freshness::EffectiveTimeValidityV1> {
+        None
+    }
+    fn evaluated_time_validity(&self) -> jig_contract::freshness::EffectiveTimeValidityV1 {
+        jig_contract::freshness::EffectiveTimeValidityV1::new(
+            self.valid_until_ms(),
+            self.requires_time_validity(),
+        )
+        .combine(self.effective_time_validity().unwrap_or_default())
+    }
 }
 
 impl GateReceiptView for ToolReceiptStatus {
+    fn effective_time_validity(&self) -> Option<jig_contract::freshness::EffectiveTimeValidityV1> {
+        self.effective_time
+    }
+
     fn receipt_id(&self) -> &str {
         &self.receipt_id
     }
@@ -553,12 +591,13 @@ fn gate_freshness<T: GateReceiptView>(
     let Some(receipt) = receipt else {
         return GateFreshness::Missing;
     };
+    let validity = receipt.evaluated_time_validity();
     if !crate::state::time_validity_is_current(
-        receipt.valid_until_ms(),
-        receipt.requires_time_validity(),
+        validity.effective_valid_until_ms,
+        validity.effective_requires_time_validity,
         crate::state::now_ms(),
     ) {
-        return if receipt.valid_until_ms().is_some() {
+        return if validity.effective_valid_until_ms.is_some() {
             GateFreshness::Stale
         } else {
             GateFreshness::Unknown
@@ -611,6 +650,7 @@ mod tests {
             outcome: GateOutcome::Passed,
             evidence: None,
             receipt: EvaluatedReceipt {
+                effective_time: None,
                 receipt_id: Some(receipt_id.to_string()),
                 freshness_receipt_id: Some(receipt_id.to_string()),
                 exit_status: Some(0),
@@ -707,6 +747,7 @@ mod tests {
         requires_time_validity: bool,
     ) -> crate::state::ToolReceiptStatus {
         crate::state::ToolReceiptStatus {
+            effective_time: None,
             receipt_id: "receipt-time".into(),
             exit_status: 0,
             ended_at_ms: 1,

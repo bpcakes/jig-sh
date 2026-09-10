@@ -184,6 +184,7 @@ pub(super) fn render_context(
             }
         }
         repository.prepare_runner_epoch(contract_version)?;
+        repository.prepare_freshness_epoch(contract_version)?;
         let repository_toml = repository.authored_toml()?;
         let repository_commands_toml = repository.commands_toml()?;
         let file_budget_policy_toml = repository.file_budget_policy_toml()?.unwrap_or_default();

@@ -7,6 +7,14 @@ pub(super) fn validate_repository_source(
     config
         .work
         .validate_contract_version(manifest.contract_version)?;
+    for action in config
+        .repository
+        .iter()
+        .flat_map(|source| &source.actions)
+        .chain(&manifest.actions)
+    {
+        crate::repository::freshness::validate_inputs_policy(manifest.contract_version, action)?;
+    }
     if manifest.contract_version < 6 {
         if config.repository.is_some() {
             bail!("[repository] requires jig contract version 6 or later");
@@ -24,7 +32,21 @@ pub(super) fn validate_repository_source(
             })
         );
     }
-    if source.actions != manifest.actions {
+    let normalized_actions = |actions: &[ActionSpec]| {
+        actions
+            .iter()
+            .cloned()
+            .map(|mut action| {
+                if manifest.contract_version
+                    >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
+                {
+                    action.inputs_policy = Some(action.inputs_policy.unwrap_or_default());
+                }
+                action
+            })
+            .collect::<Vec<_>>()
+    };
+    if normalized_actions(&source.actions) != normalized_actions(&manifest.actions) {
         bail!(
             "repository actions differ between .jig.toml and .agent/jig-contract.json at {}; run `jig update --recopy` to regenerate the resolved contract after reviewing the authored source",
             first_sequence_difference(&source.actions, &manifest.actions, |action| {
