@@ -2,10 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jig_contract::TargetId;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetReceiptStatus {
     pub(crate) receipt_id: String,
-    pub(crate) run_id: String,
+    pub(crate) run_id: Option<String>,
+    pub(crate) plan_id: Option<String>,
+    pub(crate) target_freshness: Option<jig_contract::freshness::TargetFreshnessMetadata>,
     pub(crate) target: TargetId,
     pub(crate) config_digest: Option<String>,
     pub(crate) input_digest: Option<String>,

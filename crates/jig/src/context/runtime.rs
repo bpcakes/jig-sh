@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result};
 use std::fs;
 
-use super::{CURRENT_CONTRACT_VERSION, RepoContext, find_repo_root_from_or_env};
+use super::{MAX_SUPPORTED_CONTRACT_VERSION, RepoContext, find_repo_root_from_or_env};
 
 #[derive(serde::Deserialize)]
 pub(super) struct ContractVersionProbe {
@@ -81,7 +81,7 @@ pub(crate) fn runtime_profile_cache_path(
 }
 
 pub(crate) const fn is_supported_contract_version(version: u32) -> bool {
-    version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= CURRENT_CONTRACT_VERSION
+    version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= MAX_SUPPORTED_CONTRACT_VERSION
 }
 
 pub(super) fn non_empty_legacy_jig_version<'a>(

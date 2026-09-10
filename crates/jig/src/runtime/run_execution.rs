@@ -333,7 +333,12 @@ fn execute_started_check_run_inner(
     let mut stop_after_failure = false;
     let mut source_epoch =
         ExecutionSourceEpoch::from_plan(run.plan.source.worktree_fingerprint.clone());
+    let freshness = (request.record_receipts
+        && catalog.contract_version()
+            >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
+        .then(|| freshness::ExecutionFreshness::prepare(ctx, catalog, &run, control));
     let finisher = TargetFinisher {
+        freshness: freshness.as_ref(),
         ctx,
         catalog,
         run: &run,
@@ -378,6 +383,7 @@ fn execute_started_check_run_inner(
                 control,
                 &mut source_epoch,
                 &positioned,
+                freshness.as_ref(),
             )?;
             for ((target_id, planned), outcome) in layer
                 .iter()
@@ -486,6 +492,7 @@ fn execute_started_check_run_inner(
                     run.work_plan_id.as_deref(),
                     planned,
                     control,
+                    freshness.as_ref(),
                 );
                 let completed = CompletedTargetCapture::now(Some(started_at_ms), capture);
                 let (completed, fingerprint) =
@@ -575,7 +582,9 @@ fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a Planne
         .ok_or_else(|| anyhow::anyhow!("run plan references missing target '{target}'"))
 }
 
-fn run_target_capture(
+use freshness::run_target_capture;
+
+fn run_target_capture_inner(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run_id: &str,
@@ -707,35 +716,7 @@ fn native_runner_error_capture(
     }
 }
 
-fn enforce_current_repository_authority(
-    ctx: &RepoContext,
-    expected_digest: &str,
-    planned: &PlannedTarget,
-    mut capture: TargetCapture,
-) -> TargetCapture {
-    let Err(error) = crate::repository::validate_current_repository_authority(ctx, expected_digest)
-    else {
-        return capture;
-    };
-    let message = format!(
-        "repository execution authority could not be verified after target '{}': {error:#}",
-        planned.target
-    );
-    if !capture.stderr.is_empty() && !capture.stderr.ends_with('\n') {
-        capture.stderr.push('\n');
-    }
-    capture.stderr.push_str(&message);
-    capture.stderr.push('\n');
-    capture
-        .findings
-        .push(finding(message, "execution_authority"));
-    if capture.conclusion == RunConclusion::Success {
-        capture.conclusion = RunConclusion::Blocked;
-        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
-    }
-    capture
-}
-
+mod freshness;
 mod source_epoch;
 use source_epoch::*;
 

@@ -3,7 +3,9 @@ use super::*;
 fn receipt(run: &str, target: &str, ended: u64, exit_status: i32) -> TargetReceiptStatus {
     TargetReceiptStatus {
         receipt_id: format!("receipt_{run}_{target}_{ended}"),
-        run_id: run.into(),
+        run_id: Some(run.into()),
+        plan_id: Some("plan_example".into()),
+        target_freshness: None,
         target: target.parse().unwrap(),
         config_digest: Some("config".into()),
         input_digest: Some("inputs".into()),
@@ -40,10 +42,10 @@ fn targeted_retry_keeps_original_provenance_for_other_targets() {
     assert_eq!(index.selected().len(), 2);
     let api = &index.selected()[&"api:test".parse().unwrap()];
     assert_eq!(api.receipt_id, retry.receipt_id);
-    assert_eq!(api.run_id, "retry");
+    assert_eq!(api.run_id.as_deref(), Some("retry"));
     let retained = &index.selected()[&"web:test".parse().unwrap()];
     assert_eq!(retained.receipt_id, web.receipt_id);
-    assert_eq!(retained.run_id, "full");
+    assert_eq!(retained.run_id.as_deref(), Some("full"));
 }
 
 #[test]

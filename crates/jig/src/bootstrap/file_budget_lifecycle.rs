@@ -22,6 +22,7 @@ pub(super) const LEGACY_CHECKER_PATH: &str = "scripts/check-rust-file-loc.sh";
 const LEGACY_REGISTRY_PATH: &str = ".agent/jig-legacy-assets.json";
 const RERUN_COMMAND: &str = "scripts/jig check repo:file-budget";
 const REGISTRY_VERSION: u32 = 1;
+mod freshness;
 
 #[derive(Clone, Copy)]
 struct KnownLegacyAsset {
@@ -147,6 +148,8 @@ struct LegacyAssetRegistry {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct LifecycleProof {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) effective_time: Option<jig_contract::freshness::EffectiveTimeValidityV1>,
     pub(super) receipt_id: String,
     pub(super) config_digest: String,
     pub(super) input_digest: String,
@@ -295,12 +298,33 @@ fn retirement_proof(
 
 fn validate_receipt_proof(root: &Path) -> Result<LifecycleProof> {
     let ctx = RepoContext::load_from_root(root.to_path_buf())?;
-    let catalog = RepositoryCatalog::from_context(&ctx)?;
+    validate_receipt_proof_with_context(&ctx)
+}
+
+fn validate_receipt_proof_with_context(ctx: &RepoContext) -> Result<LifecycleProof> {
+    let root = ctx.root();
+    let catalog = RepositoryCatalog::from_context(ctx)?;
     if !catalog_has_generated_action(&catalog) {
         bail!("generated repo:file-budget authority is absent or authored");
     }
-    let receipt = crate::state::latest_file_budget_lifecycle_receipt(&ctx)?
-        .context("no repo:file-budget receipt exists")?;
+    let mut budget = crate::repository::freshness::CollectionBudget::new(
+        crate::repository::freshness::CollectionLimits::with_timeout(
+            std::time::Duration::from_millis(crate::repository::freshness::RECORDING_TIMEOUT_MS),
+        ),
+        &|| false,
+    );
+    let mut originals = (ctx.contract_version()
+        >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
+        .then(|| {
+            crate::state::OriginalReceiptIndex::open(&ctx.state_file("receipts.jsonl"), &mut budget)
+        })
+        .transpose()?;
+    let receipt = if let Some(originals) = &mut originals {
+        originals.latest_lifecycle_receipt(&file_budget_target()?, &mut budget)?
+    } else {
+        crate::state::latest_file_budget_lifecycle_receipt(ctx)?
+    }
+    .context("no repo:file-budget receipt exists")?;
     if receipt.exit_status != 0 {
         bail!("the latest repo:file-budget receipt did not succeed");
     }
@@ -357,7 +381,7 @@ fn validate_receipt_proof(root: &Path) -> Result<LifecycleProof> {
     if active_waivers > 0 && valid_until_ms.is_none() {
         bail!("the latest repo:file-budget receipt used waivers without bounded validity");
     }
-    if valid_until_ms.is_some_and(|deadline| crate::state::now_ms() > deadline) {
+    if valid_until_ms.is_some_and(|deadline| crate::state::now_ms() >= deadline) {
         bail!("the latest repo:file-budget receipt has expired");
     }
 
@@ -371,8 +395,12 @@ fn validate_receipt_proof(root: &Path) -> Result<LifecycleProof> {
         .action(&target)
         .context("file-budget action disappeared")?;
     let configuration = action_file_budget_configuration(action)?;
-    let prepared =
-        crate::repository::prepare_file_budget_input_v1(&ctx, Some(request), configuration, None)?;
+    let prepared = crate::repository::prepare_file_budget_input_v1(
+        ctx,
+        Some(request),
+        configuration,
+        receipt.original.plan_id.clone(),
+    )?;
     for (field, current) in [
         (
             "policy_preparation",
@@ -397,7 +425,21 @@ fn validate_receipt_proof(root: &Path) -> Result<LifecycleProof> {
     if format!("sha256:{}", digest(&current_policy)) != policy_raw_digest {
         bail!("the authored file-budget policy changed after the latest receipt");
     }
+    let effective_time = originals
+        .map(|originals| {
+            freshness::validate(
+                ctx,
+                &catalog,
+                &receipt.original,
+                prepared,
+                &source.worktree_fingerprint,
+                originals,
+                &mut budget,
+            )
+        })
+        .transpose()?;
     Ok(LifecycleProof {
+        effective_time,
         receipt_id: receipt.receipt_id,
         config_digest: catalog.config_digest().into(),
         input_digest: expected_input,
@@ -416,10 +458,20 @@ fn catalog_has_generated_action(catalog: &RepositoryCatalog) -> bool {
     let Ok(target) = file_budget_target() else {
         return false;
     };
-    let Ok(expected) = generated_file_budget_action() else {
+    let Ok(mut expected) = generated_file_budget_action() else {
         return false;
     };
-    catalog.action(&target) == Some(&expected)
+    let Some(mut actual) = catalog.action(&target).cloned() else {
+        return false;
+    };
+    for action in [&mut expected, &mut actual] {
+        if super::repository_model::prepare_action_inputs_policy(action, catalog.contract_version())
+            .is_err()
+        {
+            return false;
+        }
+    }
+    actual == expected
 }
 
 fn action_file_budget_configuration(
@@ -632,131 +684,4 @@ fn executable(_metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::{TempDir, tempdir};
-
-    fn write_executable(path: &Path, bytes: &[u8]) {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bytes).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
-
-    fn staged_checker(bytes: &[u8]) -> StagedRender {
-        let root = tempdir().unwrap();
-        let destination = root.path().join("render");
-        write_executable(&destination.join(LEGACY_CHECKER_PATH), bytes);
-        let active_paths = BTreeSet::from([
-            PathBuf::from(LEGACY_CHECKER_PATH),
-            PathBuf::from(managed_paths::MANIFEST_PATH),
-        ]);
-        managed_paths::write_manifest(&destination, &active_paths).unwrap();
-        StagedRender {
-            _root: root,
-            destination,
-            active_paths,
-            retirement_paths: BTreeSet::new(),
-        }
-    }
-
-    fn destination_with_checker(bytes: &[u8]) -> TempDir {
-        let root = tempdir().unwrap();
-        write_executable(&root.path().join(LEGACY_CHECKER_PATH), bytes);
-        root
-    }
-
-    #[test]
-    fn durable_generation_table_contains_only_bounded_identities() {
-        assert!(!KNOWN_LEGACY_ASSETS.is_empty());
-        assert!(KNOWN_LEGACY_ASSETS.len() <= 16);
-        for asset in KNOWN_LEGACY_ASSETS {
-            assert_eq!(asset.path, LEGACY_CHECKER_PATH);
-            assert_eq!(asset.sha256.len(), 64);
-            assert!(asset.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
-            assert!(asset.executable);
-        }
-        let serialized = serde_json::to_string(&KNOWN_LEGACY_ASSETS.len()).unwrap();
-        assert!(!serialized.contains("#!/"));
-    }
-
-    #[test]
-    fn durable_table_retains_the_last_published_source_identity() {
-        let asset = KNOWN_LEGACY_ASSETS
-            .iter()
-            .find(|asset| asset.generation == "rust-loc-v5-source")
-            .expect("last published source generation");
-        assert_eq!(
-            asset.sha256,
-            "56fc9fe067912c47aa939f9f0044a34111b9361f3ef9e3bb47274e17cd735b8c"
-        );
-    }
-
-    #[test]
-    fn recognized_checker_is_retained_in_phase_one_and_registered_without_source_copy() {
-        let destination = destination_with_checker(b"generated checker\n");
-        let mut staged = staged_checker(b"generated checker\n");
-
-        let report =
-            prepare_legacy_migration(destination.path(), &mut staged, &BTreeSet::new()).unwrap();
-
-        assert_eq!(report.status, "phase_one_retained");
-        assert_eq!(report.generation.as_deref(), Some("rust-loc-rendered-v1"));
-        assert_eq!(report.rerun_command, Some(RERUN_COMMAND));
-        assert_eq!(
-            fs::read(staged.destination.join(LEGACY_CHECKER_PATH)).unwrap(),
-            b"generated checker\n"
-        );
-        assert!(staged.active_paths.contains(Path::new(LEGACY_CHECKER_PATH)));
-        assert!(
-            staged
-                .active_paths
-                .contains(Path::new(LEGACY_REGISTRY_PATH))
-        );
-        let registry = read_registry(&staged.destination).unwrap();
-        assert_eq!(registry.assets.len(), 1);
-        assert_eq!(registry.assets[0].sha256, digest(b"generated checker\n"));
-    }
-
-    #[test]
-    fn modified_checker_is_preserved_as_authored_and_deowned() {
-        let destination = destination_with_checker(b"authored checker\n");
-        let mut staged = staged_checker(b"generated checker\n");
-        let prior = BTreeSet::from([PathBuf::from(LEGACY_CHECKER_PATH)]);
-
-        let report = prepare_legacy_migration(destination.path(), &mut staged, &prior).unwrap();
-
-        assert_eq!(report.status, "preserved_authored");
-        assert!(!staged.active_paths.contains(Path::new(LEGACY_CHECKER_PATH)));
-        assert!(
-            !staged
-                .retirement_paths
-                .contains(Path::new(LEGACY_CHECKER_PATH))
-        );
-        assert!(!staged.destination.join(LEGACY_CHECKER_PATH).exists());
-        assert_eq!(
-            fs::read(destination.path().join(LEGACY_CHECKER_PATH)).unwrap(),
-            b"authored checker\n"
-        );
-    }
-
-    #[test]
-    fn fresh_repository_omits_the_bash_checker_and_its_managed_ownership() {
-        let destination = tempdir().unwrap();
-        let mut staged = staged_checker(b"generated checker\n");
-
-        let report =
-            prepare_legacy_migration(destination.path(), &mut staged, &BTreeSet::new()).unwrap();
-
-        assert_eq!(report.status, "absent");
-        assert!(!staged.active_paths.contains(Path::new(LEGACY_CHECKER_PATH)));
-        assert!(!staged.destination.join(LEGACY_CHECKER_PATH).exists());
-        let managed = managed_paths::load_manifest(&staged.destination)
-            .unwrap()
-            .unwrap();
-        assert!(!managed.contains(Path::new(LEGACY_CHECKER_PATH)));
-    }
-}
+mod tests;

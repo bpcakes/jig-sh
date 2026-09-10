@@ -43,8 +43,19 @@ impl IdentityEncoder {
     }
 
     pub(super) fn finish(self) -> String {
-        format!("sha256:{:x}", self.0.finalize())
+        finish_hash(self.0)
     }
+}
+
+pub(super) fn finish_hash(hash: Sha256) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(7 + 64);
+    output.push_str("sha256:");
+    for byte in hash.finalize() {
+        output.push(HEX[usize::from(byte >> 4)] as char);
+        output.push(HEX[usize::from(byte & 15)] as char);
+    }
+    output
 }
 
 #[cfg(test)]

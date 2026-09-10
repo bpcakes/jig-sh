@@ -119,6 +119,15 @@ pub(super) fn check(
             evidence
         })
         .collect();
+    let mut batch_evidence = json!({"schema": "jig.work_check_targets/v1", "targets": evidence});
+    let effective_time = (ctx.contract_version()
+        >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
+        .then(|| result_effective_time_validity(&batch_evidence));
+    if let Some(validity) = effective_time {
+        batch_evidence["effective_valid_until_ms"] = json!(validity.effective_valid_until_ms);
+        batch_evidence["effective_requires_time_validity"] =
+            json!(validity.effective_requires_time_validity);
+    }
     let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
@@ -131,7 +140,7 @@ pub(super) fn check(
             exit_status: if ok { 0 } else { 1 },
             stdout: "",
             stderr: &error,
-            evidence: Some(json!({"schema": "jig.work_check_targets/v1", "targets": evidence})),
+            evidence: Some(batch_evidence),
             session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: false,
@@ -150,6 +159,14 @@ pub(super) fn check(
         json!(error)
     };
     result["target_evidence"] = json!(evidence);
+    if let Some(validity) = effective_time {
+        result["effective_valid_until_ms"] = json!(validity.effective_valid_until_ms);
+        result["effective_requires_time_validity"] =
+            json!(validity.effective_requires_time_validity);
+    }
+    if let Some(stats) = after.freshness_collection {
+        result["freshness_collection"] = json!(stats);
+    }
     result["target_validation_receipt_id"] = json!(receipt_id);
     Ok(result)
 }

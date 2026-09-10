@@ -180,3 +180,101 @@ Case p95 was 1,196.984 ms clean, 1,286.206 ms narrow dirty, 947.084 ms wide
 dirty, 1,175.618 ms staged, and 973.915 ms untracked. This contended run fails
 the p95 requirement and is preserved in the release sample file; it is not a CI
 qualification. Median times were 927–937 ms. Normal epoch 8 remains active.
+
+## Receipt integration measurements
+
+The first bounded file read-ahead implementation completed 100/100 collector
+samples in the one-CPU/20-MiB/s cold profile. Case p95 was 928.269 ms clean,
+920.257 ms narrow dirty, 921.378 ms wide dirty, 930.503 ms staged, and
+930.327 ms untracked. This qualifies that collector experiment, not the full
+receipt integration. Its pending-file window held at most 16 verified open
+files, with a 64 KiB advisory read per file, bounded by remaining content budget.
+
+Real CLI smoke measurements exposed the extra final source scan after original
+receipt lookup. Moving lookup before source collection retains a final source
+check after journal I/O and removes that duplicate scan. The next cold smoke
+reported phase times of 1002.996 ms for status, 936.022 ms for gates, and
+991.923 ms for evidence. These single samples are not qualification and the
+status sample still exceeds the one-second requirement. The current candidate
+uses a sliding window of at most 64 open source files to overlap sibling I/O;
+all content still passes through the same streaming hash, byte accounting, and
+metadata checks. The queue drains before descending or closing a directory.
+
+[Integration experiments](benchmarks/target-freshness-integration-experiments.jsonl)
+retain the complete collector run and the failed smoke runs, including a host
+smoke performed alongside focused tests on a host with more than 3,400 processes.
+That host smoke hit the two-second phase deadline and is not a substitute for
+the documented qualification profiles.
+
+The first full CLI matrix completed all 600 inspections and retained non-leaf
+freshness, but four command/case p95s exceeded one second. A subsequent
+240-invocation clean/narrow probe also completed, with phase p95s of
+1,006–1,020 ms. Both failed results are retained. The probe overlapped host
+compilation and focused tests. Counters separate matching, identity encoding,
+original proof lookup, and path revalidation; the next candidate removes
+duplicate glob evaluations within each filesystem entry's observation.
+
+The full-command driver creates two independent generic repositories with the
+same source shape and graph, one on epoch 8 and one on epoch 9. Each case records
+real original receipts before measurement. Each command uses at least 20 new
+processes, with separate warm and cold runs. It measures `status`, `work gates`,
+and `work evidence`, verifies their gate outcomes, and compares phase p95 and
+full-command p95 against the matching epoch 8 baseline. All four fixture targets
+opt in and retain exhaustive authority through both shared dependency levels.
+It also checks non-leaf freshness after an unrelated edit and successful finish.
+
+```sh
+cargo build --release -p jig-sh --bin jig --features target-freshness-dev
+python3 scripts/benchmark-target-freshness-commands.py \
+  --binary target/release/jig --cache warm --profile local \
+  --output /tmp/example-command-warm.json
+bash scripts/qualify-target-freshness-constrained.sh \
+  target/release/jig cold /tmp/example-command-cold.json
+```
+
+The constrained wrapper uses a separate container with one CPU and enforced
+20 MiB/s reads on the fixture's backing device. `JIG_BENCH_DEVICE` can select
+that device when automatic discovery is unavailable. Cold reports require
+observed physical reads through the throttled queue, not just a declared cgroup
+setting. Every sample evicts regular fixture file data with `fsync` and
+`POSIX_FADV_DONTNEED`; directory metadata remains warm. Warm runs perform one
+untimed command before each series.
+
+The separate limits driver declares its expectations before execution: 480 MiB
+of committed source must fit recording, explicit 30-second inspection, and
+finish; 513 MiB and 27,000 ordinary files must produce bounded unknown. The
+entry case counts repeated Git, matching, and final path observations, which
+exceed 250,000 even though its unique file count is smaller. Default inspection
+of the within-ceiling case may pass or report its elapsed two-second deadline.
+Every over-ceiling case must block finish and produce no complete target proof.
+Separate required ignored-file and symlink cases must report unobservable input
+within the default phase deadline and block finish; unaffected targets may still
+have complete proof.
+The constrained cold wrapper includes these cases after the command matrix.
+
+`.github/workflows/target-freshness-qualification.yml` runs real hosted CI and
+constrained profiles with both cache conditions and retains failed artifacts.
+The CI profile refuses to identify an ordinary local run as GitHub Actions.
+Normal epoch 8 remains active until the complete qualification and review pass.
+
+The subsequent full cold CLI matrix with shared match checks completed every
+inspection but retained eight phase-p95 failures. Instrumentation showed the
+existing plan-change Git scan was included in the new-phase timer. The candidate
+now prepares that existing scope before the shared freshness budget begins;
+source, original proof, native authority, final revalidation, and full-command
+elapsed measurement retain their previous work. Both failed matrices remain in
+the experiment journal. The corrected candidate was qualified separately.
+A constrained 480 MiB case has passed recording, 30-second inspection, and finish;
+its default inspection reported the expected collection-limit deadline.
+
+The corrected release binary completed all 600 cold full-command samples in the
+one-CPU/20-MiB/s profile with no qualification failures. Phase p95 across all 15
+command/case pairs was 299.462–873.346 ms. Full-command p95 was within the two-second
+allowance over each matching epoch-8 baseline. Both shared dependency levels
+remained fresh after an unrelated edit, and finish succeeded. This result uses
+binary SHA-256 `a9186d9663c22a7470da0c173a2c4173e9145cd1aacc16d42cf7fa89ef00dd4b`.
+The five constrained limit cases also passed, including 480 MiB recording and
+explicit inspection, and refusal for bytes/entries over the ceiling and required
+ignored/symlink inputs. [Raw local qualification reports](benchmarks/target-freshness-integration-qualified-local.jsonl)
+include every sample and limit outcome. These local results do not substitute
+for the pending actual hosted-CI warm/cold matrix.

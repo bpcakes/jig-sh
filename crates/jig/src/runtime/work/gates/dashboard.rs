@@ -20,7 +20,7 @@ use crate::state::{
 pub(super) struct GateReportPlanInput<'a> {
     pub(super) plan_id: &'a str,
     pub(super) plan_state: &'static str,
-    pub(super) prepared_scope: Option<PlanGateContext>,
+    pub(super) prepared_scope: PlanGateContext,
 }
 
 pub(crate) fn gate_receipt_indexes(
@@ -71,6 +71,7 @@ pub(crate) fn open_plan_reports_with_cancellation(
     indexes: BTreeMap<String, WorkGateReceiptIndex>,
     plan_state: &'static str,
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> AnyResult<BTreeMap<String, DashboardGateReport>> {
     ensure_gate_collection_active(cancelled)?;
     if baselines.is_empty() {
@@ -81,11 +82,10 @@ pub(crate) fn open_plan_reports_with_cancellation(
     let mut snapshots = BTreeMap::new();
     let mut plan_changes =
         BTreeMap::<String, Option<std::result::Result<Rc<PlanChangeSnapshot>, String>>>::new();
+    let timeout_ms = super::inspection_timeout(freshness_timeout_ms)?;
+    let mut scopes = BTreeMap::new();
     for (plan_id, baseline) in baselines {
         ensure_gate_collection_active(cancelled)?;
-        let index = indexes
-            .get(plan_id)
-            .ok_or_else(|| anyhow!("dashboard receipt reducer omitted plan {plan_id}"))?;
         let cache_key = baseline.as_ref().and_then(plan_change_cache_key);
         let prepared = if let Some(cache_key) = cache_key {
             if let Some(prepared) = plan_changes.get(&cache_key) {
@@ -100,18 +100,32 @@ pub(crate) fn open_plan_reports_with_cancellation(
         } else {
             None
         };
-        let plan_scope = PlanGateContext::from_prepared(baseline.clone(), prepared);
+        scopes.insert(
+            plan_id,
+            PlanGateContext::from_prepared(baseline.clone(), prepared),
+        );
+    }
+    let mut budget = super::CollectionBudget::new(
+        super::CollectionLimits::with_timeout(std::time::Duration::from_millis(timeout_ms)),
+        cancelled,
+    );
+    for (plan_id, plan_scope) in scopes {
+        ensure_gate_collection_active(cancelled)?;
+        let index = indexes
+            .get(plan_id)
+            .ok_or_else(|| anyhow!("dashboard receipt reducer omitted plan {plan_id}"))?;
         let report = evaluate_gate_report_from_index(
             ctx,
             GateReportPlanInput {
                 plan_id,
                 plan_state,
-                prepared_scope: Some(plan_scope),
+                prepared_scope: plan_scope,
             },
             current_fingerprint.clone(),
             work_gates.clone(),
             index,
             GateCollection::Cancellable(cancelled),
+            &mut budget,
         )?;
         snapshots.insert(plan_id.clone(), DashboardGateReport(report));
     }
@@ -195,6 +209,7 @@ impl GateEvaluation {
                 let evidence = gate.evidence.as_ref();
                 let current = &gate.current_scope;
                 StatusGate::Check(Box::new(StatusCheckGate {
+                    effective_time: receipt.effective_time,
                     id: gate.id.clone(),
                     required: gate.required,
                     tool: gate.tool.clone(),
@@ -294,12 +309,23 @@ impl GateEvaluation {
                 }))
             }
             Self::Unsupported(gate) => StatusGate::Unsupported(StatusUnsupportedGate {
+                scoped_freshness: gate.scoped_freshness.clone(),
                 kind: gate.kind.clone(),
                 id: gate.id.clone(),
                 required: gate.required,
                 status: super::GateOutcome::Unsupported.as_str().to_string(),
                 reason: gate.reason.clone(),
-                extensions: BTreeMap::new(),
+                extensions: if gate.scoped_freshness.is_some() {
+                    BTreeMap::from([
+                        ("freshness".into(), serde_json::json!("unsupported")),
+                        (
+                            "freshness_reason".into(),
+                            serde_json::json!("the evidence gate reference could not be resolved"),
+                        ),
+                    ])
+                } else {
+                    BTreeMap::new()
+                },
             }),
         }
     }

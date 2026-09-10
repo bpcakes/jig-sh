@@ -194,7 +194,8 @@ pub(crate) fn validate_current_repository_authority(
     ctx: &RepoContext,
     expected_digest: &str,
 ) -> Result<()> {
-    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+    let current = ctx
+        .reload_execution_authority()
         .context("Failed to reload current repository execution authority")?;
     if current.contract_digest() != expected_digest {
         bail!(

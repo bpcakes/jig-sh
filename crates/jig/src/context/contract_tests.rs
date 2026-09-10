@@ -99,7 +99,7 @@ bootstrap_command = "cargo fetch"
     fs::write(
         temp.path().join(".agent/jig-contract.json"),
         serde_json::to_string_pretty(&json!({
-            "contract_version": CURRENT_CONTRACT_VERSION + 1,
+            "contract_version": MAX_SUPPORTED_CONTRACT_VERSION + 1,
             "tool_namespace": "jig",
             "jig_version": "0.2.0-beta.1",
             "required_commands": ["bootstrap_command"],
@@ -115,7 +115,7 @@ bootstrap_command = "cargo fetch"
 
     assert!(error.contains(&format!(
         "Unsupported jig contract version: {}",
-        CURRENT_CONTRACT_VERSION + 1
+        MAX_SUPPORTED_CONTRACT_VERSION + 1
     )));
 }
 

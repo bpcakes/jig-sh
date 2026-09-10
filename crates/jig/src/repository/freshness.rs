@@ -14,12 +14,16 @@ use crate::context::RepoContext;
 mod authority;
 mod budget;
 mod encoding;
+pub(crate) mod proof;
 mod source;
 
 pub(crate) use budget::{
-    CollectionBudget, CollectionFailure, CollectionLimits, CollectionResult, RECORDING_TIMEOUT_MS,
+    CollectionBudget, CollectionFailure, CollectionLimits, CollectionResult, INSPECTION_TIMEOUT_MS,
+    RECORDING_TIMEOUT_MS,
 };
 use encoding::IdentityEncoder;
+pub(crate) use source::ExecutionAuthorityGuard;
+pub(crate) use source::{read_native_authority_bytes, revalidate_whole_source};
 
 pub(crate) fn validate_inputs_policy(epoch: u32, action: &ActionSpec) -> Result<()> {
     ensure!(
@@ -45,12 +49,58 @@ pub(crate) fn validate_inputs_policy(epoch: u32, action: &ActionSpec) -> Result<
 }
 
 pub(crate) struct TargetIdentityCollection {
+    source: source::SourceSnapshot,
     pub(crate) targets: BTreeMap<TargetId, CollectionResult<TargetIdentityV1>>,
     #[allow(
         dead_code,
         reason = "collection metrics are measured by the development benchmark; .4.3 exposes them through gate inspection"
     )]
     pub(crate) stats: FreshnessCollectionStats,
+}
+
+impl TargetIdentityCollection {
+    pub(crate) fn execution_authority(
+        &mut self,
+        ctx: &RepoContext,
+        catalog: &RepositoryCatalog,
+        invocation: &PlannedTarget,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<ExecutionAuthorityGuard> {
+        self.source.revalidate_execution(ctx, budget)?;
+        let identity = self
+            .targets
+            .get(&invocation.target)
+            .ok_or_else(|| {
+                CollectionFailure::new(
+                    FreshnessReasonCode::CollectionFailed,
+                    "the live worker did not collect this target identity",
+                )
+            })?
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let action = catalog.action(&invocation.target).ok_or_else(|| {
+            CollectionFailure::new(
+                FreshnessReasonCode::UnsupportedReference,
+                "execution target is missing from the repository catalog",
+            )
+        })?;
+        self.source.execution_authority(
+            ctx,
+            catalog,
+            action,
+            invocation,
+            &identity.authority_digest,
+            budget,
+        )
+    }
+
+    pub(crate) fn revalidate(
+        &self,
+        ctx: &RepoContext,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        self.source.revalidate(ctx, budget)
+    }
 }
 
 pub(crate) fn prepare_plan_identities(
@@ -107,6 +157,22 @@ pub(crate) fn collect_target_identities(
     whole_repository_token: &str,
     budget: &mut CollectionBudget<'_>,
 ) -> CollectionResult<TargetIdentityCollection> {
+    collect_target_identities_with_source(
+        ctx,
+        catalog,
+        invocations,
+        Some(whole_repository_token),
+        budget,
+    )
+}
+
+pub(crate) fn collect_target_identities_with_source(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    invocations: &[PlannedTarget],
+    whole_repository_token: Option<&str>,
+    budget: &mut CollectionBudget<'_>,
+) -> CollectionResult<TargetIdentityCollection> {
     if catalog.contract_version() != TARGET_FRESHNESS_CONTRACT_VERSION {
         return Err(CollectionFailure::new(
             FreshnessReasonCode::UnsupportedAuthority,
@@ -137,6 +203,7 @@ pub(crate) fn collect_target_identities(
         .collect::<Vec<_>>();
     let mut snapshot = source::SourceSnapshot::capture(ctx, &actions, budget)?;
     let mut targets: BTreeMap<TargetId, CollectionResult<TargetIdentityV1>> = BTreeMap::new();
+    let identity_started = std::time::Instant::now();
     for target in order {
         budget.ensure_active()?;
         let action = catalog
@@ -217,8 +284,10 @@ pub(crate) fn collect_target_identities(
         })();
         targets.insert(target, identity);
     }
+    budget.stats.identity_us += identity_started.elapsed().as_micros() as u64;
     snapshot.revalidate(ctx, budget)?;
     Ok(TargetIdentityCollection {
+        source: snapshot,
         targets,
         stats: budget.finish_stats(),
     })

@@ -70,7 +70,26 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
                 receipts_path.display()
             );
         }
-        let protected = protection_index.protected_receipt_ids()?;
+        let mut protected = protection_index.protected_receipt_ids()?;
+        if ctx.contract_version() >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
+            || protection_index.target_evidence.values().any(|receipts| {
+                receipts
+                    .selected()
+                    .values()
+                    .any(|receipt| receipt.target_freshness.is_some())
+            })
+        {
+            dependency_protection::protect_dependencies(
+                guard,
+                &receipts_path,
+                protection_index
+                    .target_evidence
+                    .values()
+                    .flat_map(|receipts| receipts.selected().values().cloned()),
+                &mut protected,
+                protection_index.now_ms,
+            )?;
+        }
         let mut receipt_count_before = 0usize;
         let mut receipts_archived = 0usize;
         let mut protected_retained = 0usize;
@@ -580,8 +599,8 @@ impl ReceiptProtectionIndex {
         else {
             return;
         };
-        if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
-            let status = target_receipt_status(receipt, run_id, target);
+        if let Some(target) = receipt.target.as_ref() {
+            let status = target_receipt_status(receipt, target);
             for ((evidence_plan_id, _), receipts) in &mut self.target_evidence {
                 if evidence_plan_id == plan_id {
                     receipts.observe(&status);
@@ -614,11 +633,9 @@ impl ReceiptProtectionIndex {
                         .and_then(|evidence| evidence.get("worker_receipt_id"))
                         .and_then(Value::as_str)
                         .map(str::to_string),
-                    valid_until_ms: receipt.valid_until_ms,
-                    requires_time_validity: receipt
-                        .evidence
-                        .as_ref()
-                        .is_some_and(super::evidence_requires_time_validity),
+                    valid_until_ms: archive_time_validity(receipt).effective_valid_until_ms,
+                    requires_time_validity: archive_time_validity(receipt)
+                        .effective_requires_time_validity,
                 },
             );
         }
@@ -638,11 +655,9 @@ impl ReceiptProtectionIndex {
                     ProtectedWorkCheck {
                         id: receipt.id.clone(),
                         receipt_ids: Vec::new(),
-                        valid_until_ms: receipt.valid_until_ms,
-                        requires_time_validity: receipt
-                            .evidence
-                            .as_ref()
-                            .is_some_and(super::evidence_requires_time_validity),
+                        valid_until_ms: archive_time_validity(receipt).effective_valid_until_ms,
+                        requires_time_validity: archive_time_validity(receipt)
+                            .effective_requires_time_validity,
                     },
                 );
             }
@@ -658,6 +673,7 @@ impl ReceiptProtectionIndex {
                     if !check_gate_ids.contains(&gate.gate_id) {
                         continue;
                     }
+                    let gate_time = archive_gate_time_validity(receipt, &gate);
                     let receipt_ids = [
                         gate.tool_receipt_id,
                         gate.source_batch_receipt_id,
@@ -673,15 +689,8 @@ impl ReceiptProtectionIndex {
                         ProtectedWorkCheck {
                             id: receipt.id.clone(),
                             receipt_ids,
-                            valid_until_ms: [receipt.valid_until_ms, gate.valid_until_ms]
-                                .into_iter()
-                                .flatten()
-                                .min(),
-                            requires_time_validity: gate.requires_time_validity
-                                || receipt
-                                    .evidence
-                                    .as_ref()
-                                    .is_some_and(super::evidence_requires_time_validity),
+                            valid_until_ms: gate_time.effective_valid_until_ms,
+                            requires_time_validity: gate_time.effective_requires_time_validity,
                         },
                     );
                 }
@@ -713,11 +722,9 @@ impl ReceiptProtectionIndex {
                 let batch = ProtectedWorkCheck {
                     id: receipt.id.clone(),
                     receipt_ids: receipt_ids.clone(),
-                    valid_until_ms: receipt.valid_until_ms,
-                    requires_time_validity: receipt
-                        .evidence
-                        .as_ref()
-                        .is_some_and(super::evidence_requires_time_validity),
+                    valid_until_ms: archive_time_validity(receipt).effective_valid_until_ms,
+                    requires_time_validity: archive_time_validity(receipt)
+                        .effective_requires_time_validity,
                 };
                 if receipt_ids
                     .iter()
@@ -733,6 +740,7 @@ impl ReceiptProtectionIndex {
 }
 
 include!("archive/protection.rs");
+mod dependency_protection;
 
 pub(in crate::state) fn parse_archive_before_ms(value: &str) -> Result<u64> {
     let value = value.trim();

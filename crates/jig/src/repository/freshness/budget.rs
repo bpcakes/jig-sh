@@ -5,10 +5,6 @@ use jig_contract::freshness::{
 };
 
 pub(crate) const RECORDING_TIMEOUT_MS: u64 = 30_000;
-#[allow(
-    dead_code,
-    reason = "reserved inspection default for receipt/gate integration"
-)]
 pub(crate) const INSPECTION_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Clone, Copy, Debug)]
@@ -84,6 +80,7 @@ pub(crate) struct CollectionBudget<'a> {
     pub(crate) limits: CollectionLimits,
     pub(crate) stats: FreshnessCollectionStats,
     started: Instant,
+    elapsed_before: Duration,
     deadline: Instant,
     cancelled: &'a dyn Fn() -> bool,
 }
@@ -98,9 +95,25 @@ impl<'a> CollectionBudget<'a> {
                 ..FreshnessCollectionStats::default()
             },
             started,
+            elapsed_before: Duration::ZERO,
             deadline: started + limits.timeout,
             cancelled,
         }
+    }
+
+    /// Resume cumulative observation work after a target executed. No source or
+    /// proof counters reset, and time spent running targets is not observation.
+    pub(crate) fn resume(
+        limits: CollectionLimits,
+        cancelled: &'a dyn Fn() -> bool,
+        stats: FreshnessCollectionStats,
+    ) -> Self {
+        let mut budget = Self::new(limits, cancelled);
+        budget.elapsed_before = Duration::from_micros(stats.elapsed_us);
+        budget.deadline = budget.started + limits.timeout.saturating_sub(budget.elapsed_before);
+        budget.stats = stats;
+        budget.stats.timeout_ms = limits.timeout.as_millis() as u64;
+        budget
     }
 
     pub(crate) fn ensure_active(&self) -> CollectionResult<()> {
@@ -114,6 +127,16 @@ impl<'a> CollectionBudget<'a> {
             return Err(CollectionFailure::new(
                 FreshnessReasonCode::CollectionLimit,
                 &format!("freshness collection exceeded {} ms", self.stats.timeout_ms),
+            ));
+        }
+        if self.stats.discovered_entries > self.limits.entries
+            || self.stats.content_bytes_read > self.limits.bytes
+            || self.stats.targets > self.limits.targets
+            || self.stats.dependency_edges > self.limits.edges
+        {
+            return Err(CollectionFailure::new(
+                FreshnessReasonCode::CollectionLimit,
+                "freshness collection exhausted a shared entry, byte, target, or dependency limit",
             ));
         }
         Ok(())
@@ -141,8 +164,10 @@ impl<'a> CollectionBudget<'a> {
     }
 
     pub(crate) fn bytes(&mut self, count: u64) -> CollectionResult<()> {
-        self.ensure_active()?;
+        // Callers charge bytes already returned by a read, including a read
+        // which crossed the deadline or observed cancellation.
         self.stats.content_bytes_read = self.stats.content_bytes_read.saturating_add(count);
+        self.ensure_active()?;
         if self.stats.content_bytes_read > self.limits.bytes {
             return Err(CollectionFailure::new(
                 FreshnessReasonCode::CollectionLimit,
@@ -178,7 +203,53 @@ impl<'a> CollectionBudget<'a> {
 
     pub(crate) fn finish_stats(&self) -> FreshnessCollectionStats {
         let mut stats = self.stats.clone();
-        stats.elapsed_us = self.started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+        stats.elapsed_us = self
+            .elapsed_before
+            .saturating_add(self.started.elapsed())
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
         stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resumed_recording_cannot_reset_an_exhausted_observation_allowance() {
+        let stats = FreshnessCollectionStats {
+            elapsed_us: RECORDING_TIMEOUT_MS * 1_000,
+            content_bytes_read: 73,
+            discovered_entries: 19,
+            ..FreshnessCollectionStats::default()
+        };
+        let budget = CollectionBudget::resume(
+            CollectionLimits::with_timeout(Duration::from_millis(RECORDING_TIMEOUT_MS)),
+            &|| false,
+            stats,
+        );
+        assert_eq!(
+            budget.ensure_active().unwrap_err().reason.code,
+            FreshnessReasonCode::CollectionLimit
+        );
+        let observed = budget.finish_stats();
+        assert!(observed.elapsed_us >= RECORDING_TIMEOUT_MS * 1_000);
+        assert_eq!(observed.content_bytes_read, 73);
+        assert_eq!(observed.discovered_entries, 19);
+    }
+
+    #[test]
+    fn already_read_bytes_are_counted_even_when_the_read_crosses_cancellation() {
+        let cancelled = std::cell::Cell::new(false);
+        let is_cancelled = || cancelled.get();
+        let mut budget = CollectionBudget::new(
+            CollectionLimits::with_timeout(Duration::from_secs(30)),
+            &is_cancelled,
+        );
+        budget.ensure_active().unwrap();
+        cancelled.set(true);
+        assert!(budget.bytes(64).is_err());
+        assert_eq!(budget.finish_stats().content_bytes_read, 64);
     }
 }

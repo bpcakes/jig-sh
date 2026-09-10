@@ -16,11 +16,13 @@ use super::source_inputs::FRONTEND_SHARED_INPUTS;
 mod adoption;
 pub(super) mod adoption_refresh;
 mod file_budget;
+mod freshness;
 mod runners;
 mod rust_file_loc;
 
 use file_budget::add_file_budget_action;
 pub(super) use file_budget::generated_file_budget_action;
+pub(super) use freshness::prepare_action_inputs_policy;
 #[cfg(test)]
 pub(in crate::bootstrap) use rust_file_loc::generated_legacy_rust_file_loc_action;
 use rust_file_loc::refresh_managed_rust_file_loc_command;
@@ -93,44 +95,8 @@ struct AuthoredRepository<'a> {
     profiles: &'a [ProfileSpec],
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub(super) struct AuthoredRepositoryModel {
-    pub(super) default_check_profile: ProfileId,
-    #[serde(default)]
-    pub(super) affected_ignore: Vec<String>,
-    #[serde(default)]
-    pub(super) components: Vec<ComponentSpec>,
-    #[serde(default)]
-    pub(super) actions: Vec<ActionSpec>,
-    #[serde(default)]
-    pub(super) profiles: Vec<ProfileSpec>,
-}
-
-impl AuthoredRepositoryModel {
-    pub(super) fn is_complete(&self) -> bool {
-        !self.components.is_empty() && !self.actions.is_empty() && !self.profiles.is_empty()
-    }
-
-    pub(super) fn has_adapter(&self, expected: &str) -> bool {
-        self.components
-            .iter()
-            .any(|component| component.adapters.iter().any(|adapter| adapter == expected))
-    }
-
-    pub(super) fn scaffold_go_component_roots(&self) -> Vec<String> {
-        self.components
-            .iter()
-            .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
-            .map(|component| component.root.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    }
-
-    pub(super) fn rust_workspace_guidance_enabled(&self) -> bool {
-        rust_workspace_guidance_enabled(&self.components)
-    }
-}
+mod authored;
+pub(super) use authored::AuthoredRepositoryModel;
 
 #[derive(Serialize)]
 struct AuthoredRepositoryDocument<'a> {

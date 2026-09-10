@@ -164,7 +164,7 @@ target = "api:test"
         &ctx,
         &["plan_1".into()],
         &|| false,
-    )
+     None)
     .unwrap();
     let finish_error = call_tool(
         &ctx,

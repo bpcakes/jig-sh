@@ -34,6 +34,9 @@ required-features = ["dev-proxy"]
 # only need the harness/runtime API can use `default-features = false`.
 default = ["dev-proxy"]
 dev-proxy = ["dep:jig-dev-proxy"]
+# Temporary opt-in for epoch-9 development fixtures and CI qualification.
+# Normal rendering and the source repository remain on the active epoch.
+target-freshness-dev = []
 
 [dependencies]
 anyhow.workspace = true

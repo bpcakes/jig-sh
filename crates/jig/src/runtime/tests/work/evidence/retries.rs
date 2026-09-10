@@ -368,6 +368,7 @@ fn explicit_native_retry_preserves_prepared_work_plan_authority() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some(plan_id.into()),
         })),
     )

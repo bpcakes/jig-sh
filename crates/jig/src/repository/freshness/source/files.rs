@@ -10,6 +10,11 @@ use sha2::{Digest, Sha256};
 use super::super::{CollectionBudget, CollectionFailure, CollectionResult};
 use super::{InputPatterns, SourceProblem};
 
+mod reads;
+use reads::PendingReads;
+mod native;
+pub(crate) use native::read_native_authority_bytes;
+
 #[derive(Clone, Debug)]
 pub(super) struct CurrentEntry {
     pub(super) kind: &'static str,
@@ -36,9 +41,25 @@ struct Frame {
 #[derive(Default)]
 pub(super) struct DirectoryAuthority {
     observed: BTreeMap<String, Signature>,
+    identity_only: bool,
 }
 
 impl DirectoryAuthority {
+    pub(super) fn for_execution() -> Self {
+        Self {
+            observed: BTreeMap::new(),
+            identity_only: true,
+        }
+    }
+
+    fn matches(&self, left: &Signature, right: &Signature) -> bool {
+        if self.identity_only {
+            left.0[..3] == right.0[..3]
+        } else {
+            left == right
+        }
+    }
+
     pub(super) fn observe(
         &mut self,
         root: &Dir,
@@ -95,7 +116,7 @@ impl DirectoryAuthority {
         if self
             .observed
             .get(path)
-            .is_some_and(|previous| *previous != observed)
+            .is_some_and(|previous| !self.matches(previous, &observed))
         {
             return Err(raced(path));
         }
@@ -108,6 +129,23 @@ impl DirectoryAuthority {
         root: &Dir,
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<()> {
+        self.revalidate_with_identity_policy(root, budget, false)
+    }
+
+    pub(super) fn revalidate_identity(
+        &self,
+        root: &Dir,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        self.revalidate_with_identity_policy(root, budget, true)
+    }
+
+    fn revalidate_with_identity_policy(
+        &self,
+        root: &Dir,
+        budget: &mut CollectionBudget<'_>,
+        identity_only: bool,
+    ) -> CollectionResult<()> {
         // Check parents after their children, so moving or replacing an ignored
         // ancestor cannot escape the final path/type comparison.
         for (path, expected) in self.observed.iter().rev() {
@@ -118,12 +156,88 @@ impl DirectoryAuthority {
                 root.symlink_metadata(path)
             }
             .map_err(|_| raced(path))?;
-            if signature(&metadata) != *expected {
+            let current = signature(&metadata);
+            if if identity_only {
+                current.0[..3] != expected.0[..3]
+            } else {
+                !self.matches(&current, expected)
+            } {
                 return Err(raced(path));
             }
         }
         Ok(())
     }
+}
+
+#[derive(Default)]
+pub(super) struct RunnerFileAuthority {
+    observed: BTreeMap<String, Option<Signature>>,
+}
+
+impl RunnerFileAuthority {
+    pub(super) fn observe(
+        &mut self,
+        root: &Dir,
+        path: &str,
+        projection: Option<&FileProjection>,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        budget.entries(1)?;
+        let current = optional_signature(root, path)?;
+        let expected = projection.and_then(|projection| {
+            projection
+                .observed
+                .iter()
+                .find(|(observed, _)| observed == path)
+                .map(|(_, signature)| signature)
+        });
+        if current.as_ref() != expected {
+            return Err(raced(path));
+        }
+        self.observed.insert(path.into(), current);
+        Ok(())
+    }
+
+    pub(super) fn revalidate(
+        &self,
+        root: &Dir,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        for (path, expected) in &self.observed {
+            budget.entries(1)?;
+            if &optional_signature(root, path)? != expected {
+                return Err(raced(path));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn optional_signature(root: &Dir, path: &str) -> CollectionResult<Option<Signature>> {
+    match root.symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            Ok(Some(signature(&metadata)))
+        }
+        Ok(_) => Err(raced(path)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(_) => Err(raced(path)),
+    }
+}
+
+pub(super) fn same_directory(root: &Dir, current: &Dir) -> CollectionResult<()> {
+    let before = signature(&root.dir_metadata().map_err(|_| raced("."))?);
+    let after = signature(&current.dir_metadata().map_err(|_| raced("."))?);
+    if before.0[..3] != after.0[..3] {
+        return Err(raced("."));
+    }
+    Ok(())
 }
 
 impl FileProjection {
@@ -144,9 +258,11 @@ impl FileProjection {
             root.try_clone().map_err(|_| failed(""))?,
         )?];
         let mut hash_buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+        let mut pending = PendingReads::default();
         while let Some(parent) = stack.last_mut() {
             budget.ensure_active()?;
             let Some(entry) = parent.entries.next() else {
+                pending.finish(&mut result, budget, &mut hash_buffer)?;
                 let parent = stack.pop().expect("directory frame exists");
                 let after = signature(
                     &parent
@@ -184,14 +300,41 @@ impl FileProjection {
                     "a relevant nested Git repository needs recursive authority, which policy v1 does not collect"));
                 continue;
             }
-            if source_excluded(&path) || !patterns.intersects(&path) {
+            if source_excluded(&path) {
                 continue;
             }
-            let metadata = parent
-                .directory
-                .symlink_metadata(name)
-                .map_err(|_| failed(&path))?;
-            if metadata.file_type().is_symlink() || gitlinks.contains(&path) {
+            let matches = patterns.matches(&path);
+            if !matches && !patterns.descends(&path) {
+                continue;
+            }
+            let gitlink = gitlinks.contains(&path);
+            let is_ignored = ignored_path(&path, ignored);
+            let unobservable_ignored = is_ignored && !observable_dotenv(&path, ignored);
+            // For an observable regular entry, open without following links
+            // and take initial authority directly from that descriptor. Its
+            // metadata is checked after streaming and its name after the full
+            // observation, so a separate pre-open path stat adds no proof.
+            // Unknown directory-entry types retain the conservative path check.
+            let opened = if matches
+                && !gitlink
+                && !unobservable_ignored
+                && entry.file_type().is_ok_and(|kind| kind.is_file())
+            {
+                Some(
+                    entry
+                        .open_with(&read_options(false))
+                        .map_err(|_| raced(&path))?,
+                )
+            } else {
+                None
+            };
+            let metadata = if let Some(file) = &opened {
+                file.metadata()
+            } else {
+                parent.directory.symlink_metadata(name)
+            }
+            .map_err(|_| failed(&path))?;
+            if metadata.file_type().is_symlink() || gitlink {
                 result.problems.push(SourceProblem::unobservable(
                     &path,
                     true,
@@ -199,9 +342,7 @@ impl FileProjection {
                 ));
                 continue;
             }
-            if ignored_path(&path, ignored)
-                && !(metadata.is_file() && observable_dotenv(&path, ignored))
-            {
+            if unobservable_ignored || (!metadata.is_file() && is_ignored) {
                 result.problems.push(SourceProblem::unobservable(
                     &path,
                     metadata.is_dir(),
@@ -210,7 +351,7 @@ impl FileProjection {
                 continue;
             }
             if metadata.is_dir() {
-                if patterns.matches(&path) {
+                if matches {
                     result.entries.insert(
                         path.clone(),
                         CurrentEntry {
@@ -221,6 +362,7 @@ impl FileProjection {
                     );
                 }
                 if patterns.descends(&path) {
+                    pending.finish(&mut result, budget, &mut hash_buffer)?;
                     if stack.len() >= budget.limits.directory_depth {
                         return Err(CollectionFailure::new(
                             FreshnessReasonCode::CollectionLimit,
@@ -238,27 +380,25 @@ impl FileProjection {
                     }
                     stack.push(frame(path, Dir::from_std_file(file.into_std()))?);
                 }
-            } else if metadata.is_file() && patterns.matches(&path) {
-                let mut file = entry
-                    .open_with(&read_options(false))
-                    .map_err(|_| failed(&path))?;
-                let before = signature(&metadata);
-                if before != signature(&file.metadata().map_err(|_| failed(&path))?) {
-                    return Err(raced(&path));
+            } else if metadata.is_file() && matches {
+                let file = match opened {
+                    Some(file) => file,
+                    None => {
+                        let file = entry
+                            .open_with(&read_options(false))
+                            .map_err(|_| failed(&path))?;
+                        if signature(&metadata)
+                            != signature(&file.metadata().map_err(|_| failed(&path))?)
+                        {
+                            return Err(raced(&path));
+                        }
+                        file
+                    }
+                };
+                pending.push(path, file, metadata, budget)?;
+                if pending.full() {
+                    pending.finish_one(&mut result, budget, &mut hash_buffer)?;
                 }
-                let digest = hash_file(&mut file, &metadata, budget, &path, &mut hash_buffer)?;
-                // hash_file rechecks the open file's identity after streaming;
-                // revalidate checks its name and all parent identities after the
-                // complete Git observation. No duplicate per-file parent reopen.
-                result.observed.push((path.clone(), before));
-                result.entries.insert(
-                    path,
-                    CurrentEntry {
-                        kind: "regular",
-                        mode: executable_mode(&metadata),
-                        digest: Some(digest),
-                    },
-                );
             } else if !metadata.is_file() || patterns.has_declared_descendant(&path) {
                 result.problems.push(SourceProblem::unobservable(
                     &path,
@@ -274,6 +414,23 @@ impl FileProjection {
         &self,
         root: &Dir,
         budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        self.revalidate_with_directory_contents(root, budget, true)
+    }
+
+    pub(super) fn revalidate_execution(
+        &self,
+        root: &Dir,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        self.revalidate_with_directory_contents(root, budget, false)
+    }
+
+    fn revalidate_with_directory_contents(
+        &self,
+        root: &Dir,
+        budget: &mut CollectionBudget<'_>,
+        directory_contents: bool,
     ) -> CollectionResult<()> {
         // Retain at most one parent capability for consecutive siblings. Every
         // entry and every traversed directory still has its signature checked;
@@ -304,7 +461,13 @@ impl FileProjection {
                     .symlink_metadata(name)
             }
             .map_err(|_| raced(path))?;
-            if signature(&current) != *expected {
+            let observed = signature(&current);
+            let matches = if !directory_contents && current.is_dir() {
+                observed.0[..3] == expected.0[..3]
+            } else {
+                observed == *expected
+            };
+            if !matches {
                 return Err(raced(path));
             }
         }
@@ -354,13 +517,15 @@ fn hash_file(
 ) -> CollectionResult<String> {
     let mut hash = Sha256::new();
     let mut length = 0_u64;
-    loop {
+    while length < before.len() {
         budget.ensure_active()?;
         let remaining = budget
             .limits
             .bytes
             .saturating_sub(budget.stats.content_bytes_read);
-        let capacity = buffer.len().min(remaining.saturating_add(1) as usize);
+        let capacity = buffer
+            .len()
+            .min(remaining.saturating_add(1).min(before.len() - length) as usize);
         let count = file
             .read(&mut buffer[..capacity])
             .map_err(|_| failed(path))?;
@@ -371,11 +536,14 @@ fn hash_file(
         length = length.saturating_add(count as u64);
         hash.update(&buffer[..count]);
     }
+    // The final signature verifies both length and modification identity, so
+    // reading a separate EOF after the captured length adds no authority.
+    budget.ensure_active()?;
     let after = file.metadata().map_err(|_| failed(path))?;
     if length != before.len() || signature(before) != signature(&after) {
         return Err(raced(path));
     }
-    Ok(format!("sha256:{:x}", hash.finalize()))
+    Ok(super::super::encoding::finish_hash(hash))
 }
 
 fn frame(path: String, directory: Dir) -> CollectionResult<Frame> {
@@ -491,15 +659,23 @@ fn raced(path: &str) -> CollectionFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::cell::RefCell;
+    use std::io::Seek;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
 
     #[test]
-    fn concurrent_writer_between_file_chunks_cannot_publish_a_projection() {
+    fn concurrent_writer_between_file_chunks_cannot_publish_a_digest() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("example.txt");
         std::fs::write(&path, vec![b'x'; 1024 * 1024]).unwrap();
+        let root = open_root(temp.path()).unwrap();
+        let before = root.symlink_metadata("example.txt").unwrap();
+        let mut file = root.open_with("example.txt", &read_options(false)).unwrap();
+        // A duplicate file handle observes the real shared read position, so
+        // injecting this race does not depend on cancellation callback counts.
+        let position = RefCell::new(file.try_clone().unwrap());
         let (start_tx, start_rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
         let writer = std::thread::spawn(move || {
@@ -507,11 +683,11 @@ mod tests {
             std::fs::write(path, b"changed during streaming").unwrap();
             done_tx.send(()).unwrap();
         });
-        let calls = AtomicUsize::new(0);
+        let changed = AtomicBool::new(false);
         let cancelled = || {
-            // Calls 3 and 4 bracket the first content read; pause before the
-            // second chunk until a separate writer has changed the open file.
-            if calls.fetch_add(1, Ordering::SeqCst) == 4 {
+            if position.borrow_mut().stream_position().unwrap() >= 64 * 1024
+                && !changed.swap(true, Ordering::SeqCst)
+            {
                 start_tx.send(()).unwrap();
                 done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
             }
@@ -521,22 +697,12 @@ mod tests {
             super::super::super::CollectionLimits::with_timeout(Duration::from_secs(30)),
             &cancelled,
         );
-        let patterns = InputPatterns {
-            patterns: vec![super::super::InputPattern {
-                text: "example.txt".into(),
-                matcher: globset::Glob::new("example.txt").unwrap().compile_matcher(),
-                prefix: "example.txt".into(),
-                literal: true,
-                max_depth: Some(1),
-            }],
-        };
-        let root = open_root(temp.path()).unwrap();
-        let result = FileProjection::capture(
-            &root,
-            &patterns,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
+        let result = hash_file(
+            &mut file,
+            &before,
             &mut budget,
+            "example.txt",
+            &mut vec![0; 64 * 1024].into_boxed_slice(),
         );
         writer.join().unwrap();
         assert_eq!(

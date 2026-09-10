@@ -384,12 +384,18 @@ pub(super) fn collect_gates(
     indexes: BTreeMap<String, crate::state::WorkGateReceiptIndex>,
     plan_state: &'static str,
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<BTreeMap<String, GateFacts>, SourceError> {
     if baselines.is_empty() {
         return Ok(BTreeMap::new());
     }
     let reports = match crate::runtime::dashboard_open_plan_reports_with_cancellation(
-        context, baselines, indexes, plan_state, cancelled,
+        context,
+        baselines,
+        indexes,
+        plan_state,
+        cancelled,
+        freshness_timeout_ms,
     ) {
         Ok(reports) => reports,
         Err(error)

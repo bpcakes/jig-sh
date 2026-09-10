@@ -316,8 +316,14 @@ impl OwnedProcessObserver for GitReceiptProcessObserver<'_> {
     fn cancelled(&mut self) -> bool {
         matches!(
             self.collection,
-            GitReceiptCollection::Cancellable(cancelled) if cancelled()
+            GitReceiptCollection::Cancellable(cancelled) | GitReceiptCollection::Observed { cancelled, .. } if cancelled()
         )
+    }
+
+    fn output(&mut self, _stream: OwnedProcessOutputStream, output: &[u8]) {
+        if let GitReceiptCollection::Observed { bytes, .. } = self.collection {
+            bytes.set(bytes.get().saturating_add(output.len() as u64));
+        }
     }
 }
 

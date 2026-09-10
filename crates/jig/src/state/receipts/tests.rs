@@ -527,6 +527,7 @@ fn test_receipt(
     args: Value,
 ) -> ReceiptRecord {
     ReceiptRecord {
+        target_freshness: None,
         id: id.to_string(),
         session_id: None,
         plan_id: Some(plan_id.to_string()),
@@ -577,7 +578,7 @@ fn receipts_without_native_result_or_time_fields_keep_legacy_defaults() {
     assert_eq!(receipt.valid_until_ms, None);
 }
 
-fn reusable_time_fixture(valid_until_ms: u64) -> bool {
+fn reusable_time_fixture(valid_until_ms: u64, effective: Option<EffectiveTimeValidityV1>) -> bool {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     let ctx = crate::context::RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
@@ -605,6 +606,7 @@ fn reusable_time_fixture(valid_until_ms: u64) -> bool {
     )
     .unwrap();
     let gate = WorkCheckGateEvidence {
+        effective_time: effective,
         gate_id: "gate".into(),
         tool: "jig.test".into(),
         status: "executed".into(),
@@ -653,6 +655,7 @@ fn reusable_time_fixture(valid_until_ms: u64) -> bool {
             stderr: "",
             evidence: Some(
                 serde_json::to_value(WorkCheckBatchEvidence {
+                    effective_time: effective,
                     schema: WORK_CHECK_EVIDENCE_SCHEMA.into(),
                     changed_paths: vec!["src/lib.rs".into()],
                     changed_path_count: 1,
@@ -689,8 +692,8 @@ fn reusable_time_fixture(valid_until_ms: u64) -> bool {
 
 #[test]
 fn reusable_work_check_evidence_rejects_expired_time_authority() {
-    assert!(!reusable_time_fixture(0));
-    assert!(reusable_time_fixture(u64::MAX));
+    assert!(!reusable_time_fixture(0, None));
+    assert!(reusable_time_fixture(u64::MAX, None));
     assert!(time_validity_is_current(Some(42), true, 41));
     assert!(!time_validity_is_current(Some(42), true, 42));
 }
@@ -708,4 +711,20 @@ fn run_git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+#[test]
+fn reusable_evidence_enforces_inherited_expiry_and_missing_effective_boundary() {
+    assert!(reusable_time_fixture(
+        u64::MAX,
+        Some(EffectiveTimeValidityV1::new(Some(u64::MAX), true))
+    ));
+    assert!(!reusable_time_fixture(
+        u64::MAX,
+        Some(EffectiveTimeValidityV1::new(Some(0), true))
+    ));
+    assert!(!reusable_time_fixture(
+        u64::MAX,
+        Some(EffectiveTimeValidityV1::new(None, true))
+    ));
 }

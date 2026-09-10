@@ -18,6 +18,7 @@ use epoch::MAX_AGGREGATION_KEYS;
 /// repository, state, loop, or gate work.
 pub(crate) struct RepoDashboardSource {
     context: RepoContext,
+    freshness_timeout_ms: Option<u64>,
     state: Mutex<SourceState>,
 }
 
@@ -30,11 +31,17 @@ impl RepoDashboardSource {
     pub(crate) fn new(context: RepoContext) -> Self {
         Self {
             context,
+            freshness_timeout_ms: None,
             state: Mutex::new(SourceState {
                 last_epoch_id: None,
                 retained: None,
             }),
         }
+    }
+
+    pub(crate) fn with_freshness_timeout(mut self, timeout_ms: Option<u64>) -> Self {
+        self.freshness_timeout_ms = timeout_ms;
+        self
     }
 
     fn allocate_epoch(&self) -> Result<RecorderEpochId, SourceError> {
@@ -66,7 +73,8 @@ impl RepoDashboardSource {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Arc<LocalObservationEpoch>, SourceError> {
         let id = self.allocate_epoch()?;
-        LocalObservationEpoch::collect(context, id, cancelled).map(Arc::new)
+        LocalObservationEpoch::collect(context, id, cancelled, self.freshness_timeout_ms)
+            .map(Arc::new)
     }
 
     fn collect_and_retain(
@@ -141,7 +149,13 @@ impl DashboardSource for RepoDashboardSource {
                 let current = crate::runtime::refreshed_repository_context(&self.context)
                     .map_err(|error| epoch::collection_error(error, cancelled))?;
                 let id = self.allocate_epoch()?;
-                return LocalObservationEpoch::fresh_plan(&current, id, &plan_id, cancelled);
+                return LocalObservationEpoch::fresh_plan(
+                    &current,
+                    id,
+                    &plan_id,
+                    cancelled,
+                    self.freshness_timeout_ms,
+                );
             }
         };
         epoch.plan(&plan_id, cancelled)

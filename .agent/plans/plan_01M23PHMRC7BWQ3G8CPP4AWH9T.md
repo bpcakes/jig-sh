@@ -15,8 +15,9 @@ plans and read-only mutation detection continue to cover the entire repository.
 - [x] Publish deterministic encoding vectors and reproducible generic measurements.
 - [x] Review `.4.2`; fix findings and repeat comprehensive review at most twice.
 - [x] Run applicable gates and final backend tests, close `.4.2`, and commit.
-- [ ] Claim `.4.3`; implement additive receipt metadata and dependency proof.
-- [ ] Integrate validity, diagnostics, retry reuse, archive, and inspection budgets.
+- [x] Claim `.4.3` after fingerprint commit `6d0859ea`.
+- [x] Implement additive receipt metadata and dependency proof.
+- [x] Integrate validity, diagnostics, retry reuse, archive, and inspection budgets.
 - [ ] Qualify full command performance, then activate the epoch and source schema.
 - [ ] Review `.4.3`; fix/review at most twice, validate, close, and commit.
 - [ ] Review the full branch; fix/review at most twice and audit all acceptance.
@@ -147,3 +148,108 @@ all 3,984 tests. Focused checks passed 46 tests. Beads privacy, diff whitespace,
 and append-only journal checks passed. `.4.2` is closed; this work plan remains
 open for `.4.3` and the full-branch review. The final contended cold run completed
 200/200 samples but failed three p95 cases, so activation is still deferred.
+
+### Receipt integration staging
+
+`.4.3` is now claimed. Keep normal source/renderer epoch 8 while implementing
+and qualifying epoch 9 in explicit development fixtures. A development-only
+build feature may admit epoch 9 for CLI/CI qualification; it must not change
+normal rendering or the source epoch. Gate invocation reconstruction uses
+configured defaults and the exact work-plan baseline. Keep one shared bounded
+source observation for gate closures and preserve original dependency receipt
+references, global launch/mutation guards, and inherited validity.
+
+The additive metadata, bounded original-receipt location index, iterative proof
+validation, and epoch-9 gate reader are implemented in development fixtures.
+Original proof validation checks canonical dependency/identity encoding, every
+reference field, same-plan provenance, execution ordering, global safety, and
+inherited expiry. Gate inspection reconstructs default invocations, validates
+the shared closure, detects newer blockers during lookup, and revalidates source
+and configuration after resolving originals. Typed CLI/MCP/dashboard projections
+preserve separate outcome and freshness precedence and bounded reason arrays.
+The focused freshness suite passed 82 tests, including live sequential and
+parallel receipt recording, archive retention of original cross-run dependencies,
+request timeout validation, inherited expiry in status/evidence/check summaries,
+and final finish expiry checks; one explicit benchmark remains ignored. A
+separate native execution regression also passes: a parent inherits its native
+file-budget dependency's waiver boundary and work-check reuse preserves both
+original receipts. Inspection budgets are wired through CLI/MCP/status/dashboard;
+work-check and finish evaluations use 30 seconds. Archive refuses mutation when
+protected dependency proof is missing or unsupported. Additional validity and
+native adoption regressions are being verified. Performance qualification,
+epoch activation, comprehensive reviews, and final gates remain outstanding.
+Normal source and renderer epoch remains 8. The latest matching optimization
+compiled, but its default-parallelism run encountered 15 Git supervision and
+cleanup failures on the shared host; that failed run is retained and is being
+diagnosed separately before review. The cold full-command matrix and subsequent
+clean/narrow probe returned complete proof but missed the one-second p95 bar.
+
+The first integration comprehensive review completed with matching complete
+fingerprints from Claude and Codex and no exclusions. Confirmed findings concern
+archive maintenance borrowing inspection quotas, fabricated time requirements
+for incomplete metadata, and missing-deadline aggregation. Fixes use a locked
+streaming archive frontier and preserve time constraints independently of proof
+completeness. Recording now carries cumulative observation time as well as
+resource counters. Shared closure/aggregate limits, original append-race refusal,
+and unsupported archive-proof refusal remain required by the agreed policy.
+The parent also corrected phase measurement to exclude the existing plan-change
+scan; all new proof/source work and full-command measurements remain included.
+Regression and performance qualification of these fixes are in progress.
+
+The review-fix freshness suite passed all 88 tests (one explicit benchmark
+ignored), including a real archive/rewrite of 250,001 old records that preserved
+both required originals, missing-time profile and transitive proofs, and
+cumulative observation accounting. The first compile attempt exposed one old
+earliest-deadline helper call; it was migrated to the same conservative fold.
+
+The corrected constrained cold command matrix passed all 600 invocations and
+all 15 phase/full-command p95 comparisons; maximum phase p95 was 873.346 ms.
+All five constrained limit cases passed. Full raw local reports are checked in;
+actual hosted-CI qualification remains pending. The second integration review
+completed against an unchanged complete fingerprint, with both reviewers and no
+exclusions. Fixes preserve known time constraints when original proof lookup
+fails, admit complete native failures without accepting blocked/cancelled work,
+retain bounded push-before fetch provenance during local native revalidation,
+and correct the development maximum-version fixture. A final whole-repository
+source check covers whole-policy dependencies after journal lookup. Shared
+inspection/run budgets and unknown archive-dependency refusal remain explicit
+policy. Workflow paths now target the implementation's dependencies while
+keeping performance qualification mandatory.
+
+The preactivation configured work check passed Clippy (all features), formatting,
+contract, file-budget, and all 4,026 workspace tests (three skipped). Gates and
+evidence reported passed/fresh; receipts and work status were inspected. The
+separate feature-enabled contract regression passed. Final local corrections
+place journal revalidation after the whole-source guard and distinguish missing
+global authority from a detected source race; focused validation follows these
+changes before the third per-task review. The required final backend test and
+configured gate run will follow epoch activation.
+
+The final source-ordering change passed its focused regressions. The focused
+suite passed 92 cases; the native gate case passed separately after correcting
+the test to distinguish a blocked report from a failed gate. It asserts the
+native target remains fresh, the gate fails, and the original receipt ID remains
+visible. The push-before test separately rejects a changed policy, accepts its
+byte-for-byte restoration, and rejects a newly available comparison object.
+Final Clippy checks passed. No additional runtime behavior changes followed.
+
+The third integration review completed with both reviewers against fingerprint
+`1cfdbb89805b733eb357e3a20a87cf37c8b53e98188077ef9f0f62eb0b665eb5`, complete
+before/after captures and no exclusions. Claude attested all 113 evidence pages;
+Codex reported no actionable findings. An initial native invocation had a stray
+command argument and exited before inspection; the corrected invocation supplied
+the completed report. Final fixes clarify resource-limit remedies, align staged
+native policy size validation, consistently count diagnostic occurrences, and
+include the affected consumers in CI qualification triggers. Explicit shared
+inspection/journal/run budgets remain the agreed policy; their aggregate-order
+and journal-growth effects are now documented. Deep archive chains and multi-plan
+exhaustion remain unmeasured scale cases. These fixes will be covered by the
+full-branch review, without a fourth per-task round.
+
+After those fixes, all 98 focused freshness tests passed with the development
+feature enabled, including both sides of the staged policy size boundary.
+Clippy passed for the runtime, contract and dashboard crates with all targets
+and warnings denied. Benchmark script syntax, Beads export privacy, diff checks,
+and byte-for-byte append-only receipt/run journal checks passed. The candidate
+is ready for hosted CI qualification; epoch 8 remains the normal runtime/source
+contract until those measurements pass.

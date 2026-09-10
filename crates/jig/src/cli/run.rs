@@ -277,6 +277,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 return ui::run_status(
                     ctx,
                     std::time::Duration::from_secs(opts.effective_refresh_seconds()),
+                    opts.freshness_timeout_ms,
                 );
             }
             #[cfg(all(unix, not(test)))]
@@ -286,7 +287,11 @@ fn run_command(cli: Cli) -> Result<()> {
             #[cfg(all(unix, not(test)))]
             let cancellation = signal_session.cancellation();
             #[cfg(all(unix, not(test)))]
-            let outcome = status::snapshot_with_cancellation(&ctx, &|| cancellation.cancelled());
+            let outcome = status::snapshot_with_freshness_timeout(
+                &ctx,
+                &|| cancellation.cancelled(),
+                opts.freshness_timeout_ms,
+            );
             #[cfg(all(unix, not(test)))]
             let outcome = crate::codex::finish_signal_supervised(
                 outcome,
@@ -294,7 +299,8 @@ fn run_command(cli: Cli) -> Result<()> {
                 "Status signal supervision could not retire safely",
             );
             #[cfg(any(not(unix), test))]
-            let outcome = status::snapshot(&ctx);
+            let outcome =
+                status::snapshot_with_freshness_timeout(&ctx, &|| false, opts.freshness_timeout_ms);
             let output = outcome?;
             emit(json_output, HumanOutput::Status, &output)
         }

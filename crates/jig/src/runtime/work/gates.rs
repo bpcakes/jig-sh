@@ -1,5 +1,9 @@
+use crate::repository::freshness::{
+    CollectionBudget, CollectionLimits, INSPECTION_TIMEOUT_MS, RECORDING_TIMEOUT_MS,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -33,6 +37,13 @@ enum GateCollection<'a> {
 }
 
 impl GateCollection<'_> {
+    fn cancelled(self) -> bool {
+        match self {
+            Self::Blocking => false,
+            Self::Cancellable(cancelled) => cancelled(),
+        }
+    }
+
     fn ensure_active(self) -> Result<()> {
         match self {
             Self::Blocking => Ok(()),
@@ -87,6 +98,7 @@ enum GateFreshness {
     Missing,
     Stale,
     Unknown,
+    Unsupported,
 }
 
 impl GateFreshness {
@@ -96,6 +108,7 @@ impl GateFreshness {
             Self::Missing => "missing",
             Self::Stale => "stale",
             Self::Unknown => "unknown",
+            Self::Unsupported => "unsupported",
         }
     }
 
@@ -105,6 +118,7 @@ impl GateFreshness {
             Self::Missing => GateOutcome::Missing,
             Self::Stale => GateOutcome::Stale,
             Self::Unknown => GateOutcome::Unknown,
+            Self::Unsupported => GateOutcome::Unsupported,
         }
     }
 
@@ -119,7 +133,8 @@ impl GateFreshness {
             Self::Stale
                 if receipt.is_some_and(|receipt| {
                     receipt
-                        .valid_until_ms()
+                        .evaluated_time_validity()
+                        .effective_valid_until_ms
                         .is_some_and(|boundary| crate::state::now_ms() >= boundary)
                 }) =>
             {
@@ -128,7 +143,13 @@ impl GateFreshness {
             Self::Stale => "receipt was recorded for a different worktree fingerprint",
             Self::Unknown
                 if receipt.is_some_and(|receipt| {
-                    receipt.requires_time_validity() && receipt.valid_until_ms().is_none()
+                    receipt
+                        .evaluated_time_validity()
+                        .effective_requires_time_validity
+                        && receipt
+                            .evaluated_time_validity()
+                            .effective_valid_until_ms
+                            .is_none()
                 }) =>
             {
                 "receipt requires time validity but recorded no boundary"
@@ -144,12 +165,14 @@ impl GateFreshness {
                 "current worktree fingerprint could not be collected"
             }
             Self::Unknown => "worktree freshness could not be determined",
+            Self::Unsupported => "receipt authority requires a compatible freshness reader",
         }
     }
 }
 
 #[derive(Clone, Debug)]
 struct EvaluatedReceipt {
+    effective_time: Option<jig_contract::freshness::EffectiveTimeValidityV1>,
     receipt_id: Option<String>,
     freshness_receipt_id: Option<String>,
     exit_status: Option<i32>,
@@ -193,6 +216,7 @@ struct ReviewGateEvaluation {
 
 #[derive(Clone, Debug)]
 struct UnsupportedGateEvaluation {
+    scoped_freshness: Option<jig_contract::freshness::FreshnessSummaryV1>,
     id: String,
     required: bool,
     kind: String,
@@ -313,6 +337,9 @@ impl GateEvaluation {
                 });
                 value["valid_until_ms"] = json!(receipt.valid_until_ms);
                 value["requires_time_validity"] = json!(receipt.requires_time_validity);
+                if let Some(validity) = receipt.effective_time {
+                    target_evidence::extend_fields(&mut value, &validity);
+                }
                 value
             }
             Self::Evidence(gate) => gate.to_value(),
@@ -358,6 +385,12 @@ impl GateEvaluation {
                 });
                 if let Some(reason) = &gate.reason {
                     value["reason"] = Value::String(reason.clone());
+                }
+                if let Some(summary) = &gate.scoped_freshness {
+                    target_evidence::extend_fields(&mut value, summary);
+                    value["freshness"] = json!("unsupported");
+                    value["freshness_reason"] =
+                        json!("the evidence gate reference could not be resolved");
                 }
                 value
             }
@@ -412,6 +445,9 @@ impl GateEvaluation {
             "valid_until_ms": receipt.valid_until_ms,
             "requires_time_validity": receipt.requires_time_validity,
         });
+        if let Some(validity) = receipt.effective_time {
+            target_evidence::extend_fields(&mut value, &validity);
+        }
         if let Self::Check(gate) = self {
             value["applicability"] = json!(
                 gate.current_scope
@@ -547,24 +583,27 @@ impl RequiredGateFailures {
 }
 
 pub(super) fn gates(ctx: &RepoContext, opts: WorkGatesRequest) -> Result<Value> {
+    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
-    Ok(gate_report(ctx, &plan_id)?.to_value())
+    Ok(gate_report(ctx, &plan_id, timeout)?.to_value())
 }
 
 pub(super) fn snapshot_with_cancellation(
     ctx: &RepoContext,
-    plan_id: Option<String>,
+    opts: WorkGatesRequest,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     ensure_gate_collection_active(cancelled)?;
-    let plan_id = resolve_work_plan_id_with_cancellation(ctx, plan_id, cancelled)?;
+    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
+    let plan_id = resolve_work_plan_id_with_cancellation(ctx, opts.plan_id, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
-    Ok(gate_report_with_cancellation(ctx, &plan_id, cancelled)?.to_value())
+    Ok(gate_report_with_cancellation(ctx, &plan_id, cancelled, timeout)?.to_value())
 }
 
 pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<Value> {
+    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
-    let report = gate_report(ctx, &plan_id)?;
+    let report = gate_report(ctx, &plan_id, timeout)?;
     evidence_from_report(report)
 }
 
@@ -574,9 +613,10 @@ pub(super) fn evidence_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     ensure_gate_collection_active(cancelled)?;
+    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
     let plan_id = resolve_work_plan_id_with_cancellation(ctx, opts.plan_id, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
-    let report = gate_report_with_cancellation(ctx, &plan_id, cancelled)?;
+    let report = gate_report_with_cancellation(ctx, &plan_id, cancelled, timeout)?;
     evidence_from_report(report)
 }
 
@@ -595,15 +635,40 @@ pub(super) fn ensure_required_gates_passed_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
     cancelled: &dyn Fn() -> bool,
-) -> Result<Option<String>> {
-    let report = gate_report_with_cancellation(ctx, plan_id, cancelled)?;
+) -> Result<super::RequiredGateProof> {
+    let report = gate_report_with_cancellation(ctx, plan_id, cancelled, RECORDING_TIMEOUT_MS)?;
     if report.gates_ok() {
-        return Ok(report
-            .gates
-            .iter()
-            .any(GateEvaluation::required)
-            .then(|| report.current_worktree_fingerprint.clone())
-            .flatten());
+        let mut proof = super::RequiredGateProof::default();
+        for gate in report.gates.iter().filter(|gate| gate.required()) {
+            proof
+                .worktree_fingerprint
+                .clone_from(&report.current_worktree_fingerprint);
+            let (boundary, requires) = match gate {
+                GateEvaluation::Evidence(gate) => gate.effective_time_validity(),
+                _ => gate.receipt().map_or((None, false), |receipt| {
+                    let validity = receipt.effective_time.unwrap_or_else(|| {
+                        jig_contract::freshness::EffectiveTimeValidityV1::new(
+                            receipt.valid_until_ms,
+                            receipt.requires_time_validity,
+                        )
+                    });
+                    (
+                        validity.effective_valid_until_ms,
+                        validity.effective_requires_time_validity,
+                    )
+                }),
+            };
+            let validity = jig_contract::freshness::EffectiveTimeValidityV1::new(
+                proof.valid_until_ms,
+                proof.requires_time_validity,
+            )
+            .combine(jig_contract::freshness::EffectiveTimeValidityV1::new(
+                boundary, requires,
+            ));
+            proof.valid_until_ms = validity.effective_valid_until_ms;
+            proof.requires_time_validity = validity.effective_requires_time_validity;
+        }
+        return Ok(proof);
     }
 
     let failures = &report.required_failures;
@@ -625,163 +690,16 @@ pub(super) fn ensure_required_gates_passed_with_cancellation(
     )
 }
 
-fn gate_report(ctx: &RepoContext, plan_id: &str) -> Result<GateReport> {
-    let plan_state = resolve_plan_state(ctx, plan_id)?;
-    evaluate_gate_report(
-        ctx,
-        plan_id,
-        plan_state,
-        current_worktree_fingerprint(ctx),
-        GateCollection::Blocking,
-    )
-}
-
-fn gate_report_with_cancellation(
-    ctx: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<GateReport> {
-    ensure_gate_collection_active(cancelled)?;
-    let plan_state = resolve_plan_state_with_cancellation(ctx, plan_id, cancelled)?;
-    ensure_gate_collection_active(cancelled)?;
-    let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
-    ensure_gate_collection_active(cancelled)?;
-    evaluate_gate_report(
-        ctx,
-        plan_id,
-        plan_state,
-        current_fingerprint,
-        GateCollection::Cancellable(cancelled),
-    )
-}
-
-fn evaluate_gate_report(
-    ctx: &RepoContext,
-    plan_id: &str,
-    plan_state: &'static str,
-    current_fingerprint: crate::state::CurrentWorktreeFingerprint,
-    collection: GateCollection<'_>,
-) -> Result<GateReport> {
-    collection.ensure_active()?;
-    let work_gates = ctx.work_gates();
-    let mut check_tools = BTreeSet::new();
-    let mut review_gate_ids = BTreeSet::new();
-    let mut evidence_targets = BTreeMap::new();
-    let repository = repository_for_evidence_gates(ctx, &work_gates).ok();
-    for gate in &work_gates {
-        collection.ensure_active()?;
-        match gate {
-            WorkGate::Check(gate) => {
-                if validate_check_tool(ctx, &gate.tool, "Work gate").is_ok() {
-                    check_tools.insert(gate.tool.clone());
-                }
-            }
-            WorkGate::CodexReview(gate) => {
-                review_gate_ids.insert(gate.id.clone());
-            }
-            WorkGate::Evidence(gate) => {
-                if let Some(repository) = &repository
-                    && let Ok(targets) = resolve_evidence_targets(repository, &gate.selector)
-                {
-                    evidence_targets.insert(gate.id.clone(), targets);
-                }
-            }
-            WorkGate::Unsupported(_) => {}
-        }
-    }
-    collection.ensure_active()?;
-    let receipt_index = match collection {
-        GateCollection::Blocking => work_gate_receipt_index(
-            ctx,
-            plan_id,
-            &check_tools,
-            &review_gate_ids,
-            &evidence_targets,
-        )?,
-        GateCollection::Cancellable(cancelled) => work_gate_receipt_index_with_cancellation(
-            ctx,
-            plan_id,
-            &check_tools,
-            &review_gate_ids,
-            &evidence_targets,
-            cancelled,
-        )?,
-    };
-    collection.ensure_active()?;
-
-    evaluate_gate_report_from_index(
-        ctx,
-        GateReportPlanInput {
-            plan_id,
-            plan_state,
-            prepared_scope: None,
-        },
-        current_fingerprint,
-        work_gates,
-        &receipt_index,
-        collection,
-    )
-}
-
-fn evaluate_gate_report_from_index(
-    ctx: &RepoContext,
-    plan: GateReportPlanInput<'_>,
-    current_fingerprint: crate::state::CurrentWorktreeFingerprint,
-    work_gates: Vec<WorkGate>,
-    receipt_index: &WorkGateReceiptIndex,
-    collection: GateCollection<'_>,
-) -> Result<GateReport> {
-    let GateReportPlanInput {
-        plan_id,
-        plan_state,
-        prepared_scope,
-    } = plan;
-    let mut gates = Vec::new();
-    let mut required_failures = RequiredGateFailures::default();
-    let plan_scope = if let Some(plan_scope) = prepared_scope {
-        plan_scope
-    } else {
-        match collection {
-            GateCollection::Blocking => PlanGateContext::load(ctx, plan_id)?,
-            GateCollection::Cancellable(cancelled) => {
-                PlanGateContext::load_with_cancellation(ctx, plan_id, cancelled)?
-            }
-        }
-    };
-    plan_scope.seed_legacy_fingerprint(current_fingerprint.clone());
-
-    for gate in work_gates {
-        collection.ensure_active()?;
-        let status = evaluate_gate(
-            ctx,
-            &plan_scope,
-            &gate,
-            &current_fingerprint,
-            receipt_index,
-            collection,
-        )?;
-        collection.ensure_active()?;
-        required_failures.observe(&status);
-        gates.push(status);
-    }
-    collection.ensure_active()?;
-
-    Ok(GateReport {
-        plan_id: plan_id.to_string(),
-        plan_state,
-        plan_baseline: plan_scope.baseline().cloned(),
-        current_worktree_fingerprint: current_fingerprint.fingerprint,
-        current_worktree_fingerprint_error: current_fingerprint.error,
-        gates,
-        required_failures,
-    })
-}
+mod collection;
+use collection::{evaluate_gate_report_from_index, gate_report, gate_report_with_cancellation};
 
 pub(super) fn open_plan_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
+    freshness_timeout_ms: Option<u64>,
 ) -> Result<BTreeMap<String, Value>> {
+    let timeout_ms = inspection_timeout(freshness_timeout_ms)?;
     ensure_gate_collection_active(cancelled)?;
     if plan_ids.is_empty() {
         return Ok(BTreeMap::new());
@@ -826,11 +744,9 @@ pub(super) fn open_plan_snapshots_with_cancellation(
     let mut snapshots = BTreeMap::new();
     let mut plan_changes =
         BTreeMap::<String, Option<std::result::Result<Rc<PlanChangeSnapshot>, String>>>::new();
+    let mut scopes = BTreeMap::new();
     for plan_id in plan_ids {
         ensure_gate_collection_active(cancelled)?;
-        let index = indexes
-            .get(plan_id)
-            .expect("every requested open plan has a receipt index");
         let baseline = baselines.get(plan_id).cloned().flatten();
         let cache_key = baseline.as_ref().and_then(plan_change_cache_key);
         let prepared = if let Some(cache_key) = cache_key {
@@ -846,18 +762,29 @@ pub(super) fn open_plan_snapshots_with_cancellation(
         } else {
             None
         };
-        let plan_scope = PlanGateContext::from_prepared(baseline, prepared);
+        scopes.insert(plan_id, PlanGateContext::from_prepared(baseline, prepared));
+    }
+    let mut budget = CollectionBudget::new(
+        CollectionLimits::with_timeout(Duration::from_millis(timeout_ms)),
+        cancelled,
+    );
+    for (plan_id, plan_scope) in scopes {
+        ensure_gate_collection_active(cancelled)?;
+        let index = indexes
+            .get(plan_id)
+            .expect("every requested open plan has a receipt index");
         let report = evaluate_gate_report_from_index(
             ctx,
             GateReportPlanInput {
                 plan_id,
                 plan_state: "open",
-                prepared_scope: Some(plan_scope),
+                prepared_scope: plan_scope,
             },
             current_fingerprint.clone(),
             work_gates.clone(),
             index,
             GateCollection::Cancellable(cancelled),
+            &mut budget,
         )?;
         snapshots.insert(plan_id.clone(), report.to_value());
     }
@@ -885,8 +812,18 @@ pub(crate) use dashboard::{
     DashboardGateReport, gate_receipt_indexes as dashboard_gate_receipt_indexes,
     open_plan_reports_with_cancellation as dashboard_open_plan_reports_with_cancellation,
 };
+mod scoped_freshness;
 mod target_evidence;
 
 mod check_snapshot;
 pub(super) use check_snapshot::check_target_snapshot;
 use check_snapshot::repository_for_evidence_gates;
+
+fn inspection_timeout(requested: Option<u64>) -> Result<u64> {
+    let timeout = requested.unwrap_or(INSPECTION_TIMEOUT_MS);
+    anyhow::ensure!(
+        (1..=RECORDING_TIMEOUT_MS).contains(&timeout),
+        "freshness_timeout_ms must be an integer from 1 through 30000"
+    );
+    Ok(timeout)
+}

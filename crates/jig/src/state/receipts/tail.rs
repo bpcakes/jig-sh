@@ -166,6 +166,9 @@ fn record_receipt_inner_with_writer(
         .as_ref()
         .and_then(|evidence| evidence.get("valid_until_ms"))
         .and_then(Value::as_u64);
+    let target_freshness = target
+        .as_ref()
+        .and_then(|metadata| metadata.target_freshness.clone());
     let (
         run_id,
         target_id,
@@ -209,6 +212,7 @@ fn record_receipt_inner_with_writer(
     );
     let root_spellings = repository_root_spellings(ctx.root());
     let receipt = ReceiptRecord {
+        target_freshness,
         id: new_id("receipt"),
         session_id: match input.session_override {
             Some(session_id) => Some(session_id),
@@ -343,6 +347,7 @@ fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
     let changed_paths_truncated =
         receipt.changed_paths_truncated || changed_path_count > receipt.changed_paths.len();
     ToolReceiptStatus {
+        effective_time: receipt_effective_time(receipt),
         receipt_id: receipt.id.clone(),
         exit_status: receipt.exit_status,
         ended_at_ms: receipt.ended_at_ms,
@@ -361,15 +366,13 @@ fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
     }
 }
 
-fn target_receipt_status(
-    receipt: &ReceiptRecord,
-    run_id: &str,
-    target: &TargetId,
-) -> TargetReceiptStatus {
+fn target_receipt_status(receipt: &ReceiptRecord, target: &TargetId) -> TargetReceiptStatus {
     let tool = tool_receipt_status(receipt);
     TargetReceiptStatus {
         receipt_id: tool.receipt_id,
-        run_id: run_id.to_owned(),
+        run_id: receipt.run_id.clone(),
+        plan_id: receipt.plan_id.clone(),
+        target_freshness: receipt.target_freshness.clone(),
         target: target.clone(),
         config_digest: receipt.config_digest.clone(),
         input_digest: receipt.input_digest.clone(),
@@ -388,7 +391,7 @@ fn target_receipt_status(
     }
 }
 
-fn evidence_requires_time_validity(evidence: &Value) -> bool {
+pub(crate) fn evidence_requires_time_validity(evidence: &Value) -> bool {
     evidence
         .get("requires_time_validity")
         .and_then(Value::as_bool)

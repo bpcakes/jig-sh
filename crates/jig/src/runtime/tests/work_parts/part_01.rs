@@ -66,6 +66,7 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -105,6 +106,7 @@ fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -118,6 +120,7 @@ fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+            freshness_timeout_ms: None,
                 plan_id: Some("plan_1".into()),
             },
         )),
@@ -149,7 +152,7 @@ fn status_gate_batch_scans_receipts_once_for_multiple_open_plans() {
 
     crate::state::reset_work_gate_receipt_index_scan_count();
     let snapshots =
-        super::super::open_plan_gate_snapshots_with_cancellation(&ctx, &plan_ids, &|| false)
+        super::super::open_plan_gate_snapshots_with_cancellation(&ctx, &plan_ids, &|| false, None)
             .unwrap();
 
     assert_eq!(snapshots.len(), 2);
@@ -168,6 +171,7 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     let missing = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -192,6 +196,7 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     let passed = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
     )
@@ -217,7 +222,7 @@ fn empty_open_plan_gate_batch_skips_fingerprint_collection() {
         let current = cancellation_checks.get();
         cancellation_checks.set(current + 1);
         current > 0
-    })
+    }, None)
     .unwrap();
 
     assert!(snapshots.is_empty());
@@ -244,7 +249,8 @@ fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() 
     let evidence = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts { plan_id: None },
+            crate::cli::WorkEvidenceOpts {
+            freshness_timeout_ms: None, plan_id: None },
         )),
     )
     .unwrap();
@@ -287,7 +293,8 @@ fn work_evidence_gate_health_reflects_blocked_gates() {
     let evidence = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts { plan_id: None },
+            crate::cli::WorkEvidenceOpts {
+            freshness_timeout_ms: None, plan_id: None },
         )),
     )
     .unwrap();
@@ -330,6 +337,7 @@ fn work_evidence_reports_closed_plan_state() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+            freshness_timeout_ms: None,
                 plan_id: Some("plan_1".into()),
             },
         )),
@@ -359,7 +367,8 @@ fn work_evidence_requires_plan_id_when_multiple_plans_are_open() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts { plan_id: None },
+            crate::cli::WorkEvidenceOpts {
+            freshness_timeout_ms: None, plan_id: None },
         )),
     )
     .unwrap_err()
@@ -386,7 +395,8 @@ fn work_evidence_without_open_plan_points_to_work_status() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts { plan_id: None },
+            crate::cli::WorkEvidenceOpts {
+            freshness_timeout_ms: None, plan_id: None },
         )),
     )
     .unwrap_err()
@@ -405,6 +415,7 @@ fn work_gates_defaults_to_single_open_plan() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: None,
         })),
     )
@@ -424,6 +435,7 @@ fn work_gates_rejects_unknown_plan() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            freshness_timeout_ms: None,
             plan_id: Some("plan_missing".into()),
         })),
     )

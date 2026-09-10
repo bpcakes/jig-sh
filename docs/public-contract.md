@@ -558,6 +558,13 @@ receipt/gate integration belongs to `jig-sh-generic-monorepo-zac.4.3` after
 `jig-sh-qh4` establishes target receipt selection. This design changes no Rust
 types, generated schemas, contract numbers, or existing journal records.
 
+The implementation reserves epoch 9. Fingerprints and receipt integration are
+available in development fixtures; normal source and rendering remain on epoch
+8 while qualification runs. See [receipt integration](target-freshness-integration.md)
+and the [retained measurements](target-freshness-benchmark.md) for implementation
+status. The `target-freshness-dev` build feature admits epoch 9 for CLI and CI
+qualification without changing the default generated epoch.
+
 ### Version and completeness declaration
 
 The implementation must allocate a new contract epoch, called `E` here, after
@@ -816,6 +823,10 @@ the earlier of this deadline and the caller's deadline. Enumeration, hashing,
 and subprocess cleanup must all be bounded. A stricter existing collector limit
 may fail earlier; it must be reported. Do not truncate enumeration to fit.
 Use an iterative graph traversal, and stop promptly on cancellation.
+Original receipt lookup applies an additional 16 MiB per-record ceiling while
+indexing the active journal. Journal reads, including repeated original lookups,
+share the phase's byte and entry budgets with source collection. A malformed,
+conflicting, missing, changed, or oversized required original cannot supply proof.
 Read-only status, gates, and evidence inspections default to an earlier two-second
 deadline on the entire new freshness collection/comparison phase, including
 dependency proof resolution. At epoch `E`, their CLI surfaces accept
@@ -831,7 +842,19 @@ post-execution freshness evaluation. `work finish` also evaluates required gates
 under that ceiling; it does not inherit the two-second inspection default.
 In every path an earlier caller deadline still wins. On expiry return `unknown`
 with `collection_limit` and never silently retry with a different policy or
-compare partial results. Existing unrelated command work retains its own limits.
+compare partial results. Existing unrelated command work, including legacy plan
+change scans, retains its own limits. Aggregate status/dashboard requests share
+one new-phase allowance across their plans. Recording carries resource counters
+and cumulative observation time across before/after target observations; time
+spent executing a target is excluded. Archive maintenance uses its writer-locked
+streaming retention scan independently of these inspection ceilings, so an
+oversized journal can still be shrunk without deleting required originals.
+Consequently, later plans in an aggregate inspection can report a collection
+limit even when inspecting that plan alone succeeds. Per-plan collection counters
+in that aggregate are cumulative. Use `work gates --plan-id ...` to inspect one
+plan independently. Active journal growth also spends the shared entry and byte
+allowance; archive eligible old receipts when that history makes inspection too
+large. A longer timeout does not increase any resource ceiling.
 If exhaustive source collection remains impractical even within 30 seconds,
 authors can explicitly restore `inputs_policy = "whole_repository"` on affected
 actions, prepare new plans, and rerun checks. This changes repository authority
@@ -896,7 +919,11 @@ the existing `freshness_reason` string as human text. Publish
 `freshness_reasons_total` and `freshness_reasons_truncated` alongside the array.
 Use the same reason objects in `TargetFreshness.reasons` and incomplete receipt
 metadata. Aggregate summaries preserve target attribution under the same bounds;
-clients must not parse human text to distinguish unsupported authority from an
+total counts measure diagnostic occurrences, including repeated reasons, while
+the bounded preview removes duplicates. Truncation means a distinct preview was
+omitted for the count or byte limit; a repeated retained reason alone does not
+set it.
+Clients must not parse human text to distinguish unsupported authority from an
 unsupported reference. Raw legacy receipt output gains no fabricated evaluation
 fields. `.4.3` owns the additive typed models and JSON compatibility tests.
 

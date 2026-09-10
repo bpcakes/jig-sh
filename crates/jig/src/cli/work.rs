@@ -223,12 +223,16 @@ pub(crate) struct WorkCheckOpts {
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkGatesOpts {
+    #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..=30_000), help = "Freshness collection budget; defaults to 2000 ms")]
+    pub(crate) freshness_timeout_ms: Option<u64>,
     #[arg(long, help = "Plan id to inspect; defaults to the single open plan")]
     pub(crate) plan_id: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct WorkEvidenceOpts {
+    #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..=30_000), help = "Freshness collection budget; defaults to 2000 ms")]
+    pub(crate) freshness_timeout_ms: Option<u64>,
     #[arg(long, help = "Open plan id whose evidence should be summarized")]
     pub(crate) plan_id: Option<String>,
 }

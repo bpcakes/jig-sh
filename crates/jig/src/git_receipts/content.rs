@@ -4,13 +4,37 @@ use super::*;
 /// used by repository evidence. The caller supplies a validated
 /// repository-relative path and receives complete bytes, absence, or an error.
 pub(crate) fn read_index_blob_v1(root: &Path, path: &str, limit: usize) -> Result<Option<Vec<u8>>> {
+    read_index_blob_inner(root, path, limit, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn read_index_blob_v1_observed(
+    root: &Path,
+    path: &str,
+    limit: usize,
+    cancelled: &dyn Fn() -> bool,
+    bytes: &std::cell::Cell<u64>,
+) -> Result<Option<Vec<u8>>> {
+    read_index_blob_inner(
+        root,
+        path,
+        limit,
+        GitReceiptCollection::Observed { cancelled, bytes },
+    )
+}
+
+fn read_index_blob_inner(
+    root: &Path,
+    path: &str,
+    limit: usize,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Option<Vec<u8>>> {
     let listing = git_bounded_proof_stdout(
         root,
         &["--literal-pathspecs", "ls-files", "-z", "--", path],
         "git list optional index blob",
         path.len().saturating_mul(4).saturating_add(4),
         "index-blob-presence",
-        GitReceiptCollection::Blocking,
+        collection,
     )?;
     if listing.is_empty() {
         return Ok(None);
@@ -27,7 +51,7 @@ pub(crate) fn read_index_blob_v1(root: &Path, path: &str, limit: usize) -> Resul
         "git cat-file index blob",
         limit,
         "index-blob",
-        GitReceiptCollection::Blocking,
+        collection,
     )
     .map(Some)
 }

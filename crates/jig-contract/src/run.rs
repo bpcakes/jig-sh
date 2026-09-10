@@ -429,6 +429,8 @@ pub struct EvidenceReference {
 #[serde(deny_unknown_fields)]
 pub struct TargetRunResult {
     pub target: TargetId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_freshness: Option<crate::freshness::TargetFreshnessMetadata>,
     pub status: RunStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conclusion: Option<RunConclusion>,
@@ -469,6 +471,7 @@ impl TargetRunResult {
     ) -> Self {
         Self {
             target,
+            target_freshness: None,
             status: RunStatus::Queued,
             conclusion: None,
             started_at_ms: None,

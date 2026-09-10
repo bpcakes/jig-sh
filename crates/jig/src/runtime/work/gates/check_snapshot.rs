@@ -17,6 +17,8 @@ pub(in crate::runtime::work) struct CheckTargetSnapshot {
     pub(in crate::runtime::work) passing: BTreeSet<jig_contract::TargetId>,
     pub(in crate::runtime::work) targets: BTreeMap<jig_contract::TargetId, Value>,
     pub(in crate::runtime::work) fingerprint: Option<String>,
+    pub(in crate::runtime::work) freshness_collection:
+        Option<jig_contract::freshness::FreshnessCollectionStats>,
 }
 
 pub(in crate::runtime::work) fn check_target_snapshot(
@@ -24,13 +26,15 @@ pub(in crate::runtime::work) fn check_target_snapshot(
     plan_id: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckTargetSnapshot> {
-    let report = gate_report_with_cancellation(ctx, plan_id, cancelled)?;
+    let report = gate_report_with_cancellation(ctx, plan_id, cancelled, RECORDING_TIMEOUT_MS)?;
     let mut passing = BTreeSet::new();
     let mut targets = BTreeMap::new();
+    let mut freshness_collection = None;
     for gate in &report.gates {
         if let GateEvaluation::Evidence(gate) = gate
             && gate.required()
         {
+            freshness_collection = gate.collection_stats().cloned().or(freshness_collection);
             for (target, passed, value) in gate.check_targets() {
                 if passed {
                     passing.insert(target.clone());
@@ -43,5 +47,6 @@ pub(in crate::runtime::work) fn check_target_snapshot(
         passing,
         targets,
         fingerprint: report.current_worktree_fingerprint,
+        freshness_collection,
     })
 }

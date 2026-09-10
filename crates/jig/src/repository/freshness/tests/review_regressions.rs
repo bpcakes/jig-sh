@@ -612,3 +612,41 @@ fn successful_git_with_warnings_is_explicitly_unknown() {
     assert!(error.is::<crate::git_receipts::FreshnessGitObservationFailure>());
     assert!(error.to_string().contains("permissions"));
 }
+
+#[test]
+fn whole_dependency_revalidation_rejects_an_edit_outside_exhaustive_inputs() {
+    let mut fixture = Fixture::new();
+    fixture.actions[2].inputs_policy = None;
+    fixture.write_authority();
+    let ctx = fixture.context();
+    let catalog = fixture.catalog(&ctx);
+    let invocations = fixture.invocations();
+    let token = crate::state::current_worktree_fingerprint(&ctx)
+        .fingerprint
+        .unwrap();
+    let budget = CollectionBudget::new(
+        CollectionLimits::with_timeout(Duration::from_secs(30)),
+        &|| false,
+    );
+    revalidate_whole_source(&ctx, &catalog, &invocations, Some(&token), &budget).unwrap();
+    assert_eq!(
+        revalidate_whole_source(&ctx, &catalog, &invocations, None, &budget)
+            .unwrap_err()
+            .reason
+            .code,
+        FreshnessReasonCode::CollectionFailed,
+    );
+    fs::write(
+        fixture.root().join("docs/guide.md"),
+        "Changed outside narrow inputs\n",
+    )
+    .unwrap();
+    let error =
+        revalidate_whole_source(&ctx, &catalog, &invocations, Some(&token), &budget).unwrap_err();
+    assert_eq!(error.reason.code, FreshnessReasonCode::SourceRaced);
+    fixture.actions[2].inputs_policy = Some(ActionInputsPolicy::Exhaustive);
+    fixture.write_authority();
+    let ctx = fixture.context();
+    let catalog = fixture.catalog(&ctx);
+    revalidate_whole_source(&ctx, &catalog, &invocations, Some(&token), &budget).unwrap();
+}

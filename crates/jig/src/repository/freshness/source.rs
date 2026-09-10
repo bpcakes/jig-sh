@@ -15,7 +15,10 @@ use crate::context::RepoContext;
 mod files;
 mod git;
 mod matches;
+mod whole;
+pub(crate) use whole::revalidate_whole_source;
 
+pub(crate) use files::read_native_authority_bytes;
 use files::{FileProjection, observable_dotenv, source_excluded};
 use git::GitProjection;
 
@@ -270,8 +273,12 @@ pub(super) struct SourceSnapshot {
     files: Option<FileProjection>,
     problems: Vec<SourceProblem>,
     directories: files::DirectoryAuthority,
+    execution_runners: Option<files::RunnerFileAuthority>,
     matched: matches::PatternMatches,
 }
+
+mod execution;
+pub(crate) use execution::ExecutionAuthorityGuard;
 
 impl SourceSnapshot {
     pub(super) fn capture(
@@ -342,12 +349,14 @@ impl SourceSnapshot {
             budget.stats.worktree_us += started.elapsed().as_micros() as u64;
             (Some(git), Some(files))
         };
+        let matching_started = Instant::now();
         let matched = match (&git, &files) {
             (Some(git), Some(files)) => {
                 matches::PatternMatches::collect(&patterns, git, files, budget)?
             }
             _ => matches::PatternMatches::default(),
         };
+        budget.stats.matching_us += matching_started.elapsed().as_micros() as u64;
         Ok(Self {
             root,
             configuration,
@@ -357,6 +366,7 @@ impl SourceSnapshot {
             files,
             problems,
             directories: files::DirectoryAuthority::default(),
+            execution_runners: None,
             matched,
         })
     }
@@ -365,7 +375,7 @@ impl SourceSnapshot {
         &self,
         epoch: u32,
         action: &ActionSpec,
-        whole_repository_token: &str,
+        whole_repository_token: Option<&str>,
         budget: &CollectionBudget<'_>,
     ) -> CollectionResult<SourceDigest> {
         budget.ensure_active()?;
@@ -381,6 +391,12 @@ impl SourceSnapshot {
             hash.text(pattern);
         }
         if policy == ActionInputsPolicy::WholeRepository {
+            let whole_repository_token = whole_repository_token.ok_or_else(|| {
+                CollectionFailure::new(
+                    FreshnessReasonCode::CollectionFailed,
+                    "whole-repository source authority could not be collected",
+                )
+            })?;
             hash.text(whole_repository_token);
             return Ok(SourceDigest {
                 digest: hash.finish(),
@@ -472,10 +488,10 @@ impl SourceSnapshot {
     }
 
     pub(super) fn require_runner_candidate(
-        &self,
+        &mut self,
         action: &ActionSpec,
         path: &str,
-        budget: &CollectionBudget<'_>,
+        budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<()> {
         if action.inputs_policy != Some(ActionInputsPolicy::Exhaustive) {
             return Ok(());
@@ -504,6 +520,9 @@ impl SourceSnapshot {
             )
             .at(path));
         }
+        if let Some(guard) = &mut self.execution_runners {
+            guard.observe(&self.root, path, self.files.as_ref(), budget)?;
+        }
         Ok(())
     }
 
@@ -520,19 +539,47 @@ impl SourceSnapshot {
         ctx: &RepoContext,
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<()> {
+        self.revalidate_with_execution_policy(ctx, budget, false)
+    }
+
+    pub(super) fn revalidate_execution(
+        &self,
+        ctx: &RepoContext,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<()> {
+        self.revalidate_with_execution_policy(ctx, budget, true)
+    }
+
+    fn revalidate_with_execution_policy(
+        &self,
+        ctx: &RepoContext,
+        budget: &mut CollectionBudget<'_>,
+        execution: bool,
+    ) -> CollectionResult<()> {
+        files::same_directory(&self.root, &files::open_root(ctx.root())?)?;
         if let Some(git) = &self.git {
             git.revalidate(ctx.root(), &self.patterns, budget)?;
         }
+        let paths_started = Instant::now();
         if let Some(files) = &self.files {
-            files.revalidate(&self.root, budget)?;
+            if execution {
+                files.revalidate_execution(&self.root, budget)?;
+            } else {
+                files.revalidate(&self.root, budget)?;
+            }
         }
-        self.directories.revalidate(&self.root, budget)?;
+        if execution {
+            self.directories.revalidate_identity(&self.root, budget)?;
+        } else {
+            self.directories.revalidate(&self.root, budget)?;
+        }
         if self.configuration != files::configuration(&self.root, budget)? {
             return Err(CollectionFailure::new(
                 FreshnessReasonCode::SourceRaced,
                 "repository configuration changed during freshness collection",
             ));
         }
+        budget.stats.path_revalidation_us += paths_started.elapsed().as_micros() as u64;
         budget.ensure_active()
     }
 }
