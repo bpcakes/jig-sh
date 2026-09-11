@@ -594,7 +594,7 @@ fn process_start_token(pid: libc::pid_t) -> Option<String> {
             size.try_into().ok()?,
         )
     };
-    if bytes != size.try_into().ok()? {
+    if bytes != libc::c_int::try_from(size).ok()? {
         return None;
     }
     // SAFETY: proc_pidinfo reported a complete initialized result.
