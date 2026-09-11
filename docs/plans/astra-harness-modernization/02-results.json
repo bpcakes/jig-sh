@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "issue": "jig-sh-9wcn.2",
+  "implementation_base_revision": "d89129a880042665751954f81e270e02073a67ee",
+  "implementation_state": "uncommitted worktree; exact implementation files identified by sha256",
+  "implementation_sha256": {
+    "scripts/evaluate-harness.py": "653f55fcce7f117647ab072fd3cffb5deb6c79cb894134ed106d628eeb56d675",
+    "scripts/harness_eval/experiment.py": "90fb9d74cc6c22e4f05365a37a7111620a53e75aa4b3fc8df7593b6ee331a853",
+    "scripts/harness_eval/fixtures.py": "61f2a66913013873a7c92dc9eb84d054a7db8d6c7f8eee6a8b453d4b509e7eac",
+    "scripts/harness_eval/grade.py": "5a5f30b99801e81e52d4b47f7277015d1fcc52528042cc01c6407e52bfda18ce",
+    "scripts/harness_eval/openai_adapter.py": "f34d428e86434a48c26fa7238f1bfd2bdca4a42b12442f09b5087ae203f1a73b",
+    "scripts/harness_eval/runner.py": "4d6f1dd2ca9e9ae9223e6d1f9a0b3aba6460a9b35a86c57c1544b5bbcbeaa1eb",
+    "scripts/tests/test_harness_eval.py": "d889c607d242f4ed67e5c8d1aee2ecf2d18d71bb3ff5c6eaa152af1d38a7d955",
+    ".jig.toml": "482a0f20602ee46ebc752985b6cbae05ec6c734e6b22224eb335dedccdfc0297",
+    ".agent/jig-contract.json": "8b10cee08c9701541390958c33a24955fc780cd4617d1efe1e8032211fb00968",
+    ".github/workflows/repo-policy.yml": "920e973fbce3168a3657ed41a47dcaa48aacaa00ab3f98dd54ae6bcb85eff4a3",
+    "tests/fixtures/harness-eval/tools-original.json": "3684f4c178c92fa30e6ff07a5f7ea7a5284194fb8030a63bb5c0c97bf214b043",
+    "tests/fixtures/harness-eval/tools-compact.json": "66598d0bc22511f09afcd3ed3bcef35c42da306bbc1be3a7dc5bda58c1906c1f",
+    "tests/fixtures/harness-eval/baseline.json": "ee038ad01fa8d414572d54990e62d6ca9a6f1f20c5028edde57edd103ab83675",
+    "tests/fixtures/harness-eval/baseline/AGENTS.md.snapshot": "1047f07e6560c513acacb2c780cc683fd1e089be4b2d688280daddf233e27661",
+    "tests/fixtures/harness-eval/baseline/.agent/PLANS.md.snapshot": "f3683d407a0a5b8efb2946ea3c50098dfa079fa545dedd8404a633d674f336f5"
+  },
+  "fixture_smoke": {
+    "baseline_revision": "03e9a9e4e5122b5bc12c66b1f635ae1faac05e15",
+    "cases": {
+      "cross-crate": {
+        "incorrect_rejected": true,
+        "invariant_rejected": true,
+        "reference_accepted": true,
+        "reference_failure": null
+      },
+      "frontend": {
+        "incorrect_rejected": true,
+        "invariant_rejected": true,
+        "reference_accepted": true,
+        "reference_failure": null
+      },
+      "migration": {
+        "incorrect_rejected": true,
+        "invariant_rejected": true,
+        "reference_accepted": true,
+        "reference_failure": null
+      },
+      "resume": {
+        "incorrect_rejected": true,
+        "invariant_rejected": true,
+        "reference_accepted": true,
+        "reference_failure": null
+      },
+      "small-fix": {
+        "incorrect_rejected": true,
+        "invariant_rejected": true,
+        "reference_accepted": true,
+        "reference_failure": null
+      }
+    },
+    "mode": "fixture-only",
+    "model_calls": 0,
+    "passed": true,
+    "schema_version": 1
+  },
+  "paired_preparation": {
+    "trials": 90,
+    "pairs": 45,
+    "repetitions": 3,
+    "seed": 20260911,
+    "retained_artifact": "tmp/harness-eval-prepared/experiment.json",
+    "reconstruction_and_pair_integrity": "passed"
+  },
+  "verification": {
+    "work_plan": "plan_01M28DTQG7Q8TFY7YYH9FPJYV7",
+    "run": "run_01M28FHZ8CTNFMJGCS14XK1Y1S",
+    "validation_receipt": "receipt_01M28FYKSMFDZ2EQ5NR18GDQ6C",
+    "configured_gates": "all six passed",
+    "python_tests_passed": 18,
+    "rust_tests_passed": 4083,
+    "rust_tests_skipped": 3,
+    "agent_map": "passed"
+  },
+  "model_execution": {
+    "paid_calls": 0,
+    "live_provider_api": "not run",
+    "adapter_protocol": "tested with fake transport",
+    "performance_improvement_claimed": false
+  }
+}

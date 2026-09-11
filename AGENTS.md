@@ -11,8 +11,11 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients. Discover targets with `scripts/jig info targets`; preview verification with `scripts/jig check --explain`.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
 - Run local services with `scripts/jig dev` to use the repository's proxy and port configuration.
-- For substantial work, use `scripts/jig work start`, then `scripts/jig work check --plan-id <id>` and `scripts/jig work finish --plan-id <id> --resolution "..."`. Use `scripts/jig work gates`, `evidence`, `receipts`, or `status` for diagnostics when needed.
+- Routine investigation needs no implementation plan or unrelated tests. For small edits, run the relevant `scripts/jig check` targets.
+- Use structured work for substantial implementation, durable handoffs, or when repository policy requires it: `scripts/jig work start`, `scripts/jig work check --plan-id <id>`, then `scripts/jig work finish --plan-id <id> --resolution "..."`. Short work notes can use `--body`; use `.agent/PLANS.md` to decide when an ExecPlan is needed.
+- Supply the explicit plan ID for work checks, reviews, and finish, and for plain checks intended as that plan’s evidence. Use `work gates` or `work evidence` and their recovery advice when blocked; use `receipts` or `status` for history or plan discovery.
 - Plans capture an exact Git baseline. `work check` reuses current passing target evidence when its freshness policy allows and reruns checks that need new evidence. Required gate policies still govern `work finish`.
+- Plain `check` executes selected targets; receipt reuse belongs to `work check`. Where supported, `--affected` narrows candidates, including to a no-op, and never waives required work gates.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -42,10 +45,11 @@ No web apps are configured in `.jig.toml`.
 
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For backend changes, finish with `scripts/jig check test`.
+- Completion requires current passing evidence for the applicable checks below and the configured profiles and required work gates, including authored custom profiles and review gates. Preserve those requirements; a narrower selection does not replace them.
+- For backend changes, evidence must cover the configured tests (`scripts/jig check test`).
 
 
+- A qualifying pass already covering current inputs satisfies its check; do not repeat tests just to make them the last command. Run configured reviews with `scripts/jig work review --plan-id <id>`; `work check` does not supply review evidence.
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
 ## Backend Guide Conventions
@@ -77,17 +81,16 @@ cargo build -p jig-sh --bin jig
 export JIG_DEV_BIN=target/debug/jig
 ```
 
-For substantial work, open structured work, run configured gates, then inspect gate status and receipts:
+For substantial work, open structured work, validate configured gates, and finish once all required evidence is current:
 
 ```sh
 plan_id="$(scripts/jig work start --title "Describe the work" --body "Validation plan." --print-plan-id)"
 
 scripts/jig work check --plan-id "$plan_id"
-scripts/jig work gates --plan-id "$plan_id"
-scripts/jig work evidence --plan-id "$plan_id"
-scripts/jig work receipts --plan-id "$plan_id"
-scripts/jig work status
+scripts/jig work finish --plan-id "$plan_id" --resolution "Describe the verified outcome"
 ```
+
+If blocked, follow the recovery advice from `scripts/jig work gates --plan-id "$plan_id"` or `scripts/jig work evidence --plan-id "$plan_id"`. Inspect `work receipts` for command history or `work status` to find plans when needed. A repeated `work check` reuses qualifying passes; no additional final test run is required when current evidence already covers the configured tests.
 
 Do not rely on the repo-local cached `jig` binary for runtime changes unless you have intentionally refreshed it. `JIG_DEV_BIN` is the expected local-development cutover.
 

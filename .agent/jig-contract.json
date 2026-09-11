@@ -656,6 +656,28 @@
       "action": "source-vault-test",
       "component": "repo"
     }
+  },
+  {
+    "description": "Verify the local harness evaluation driver and independent graders without model access.",
+    "effects": ["read_only", "process"],
+    "inputs": ["scripts/evaluate-harness.py", "scripts/harness_eval/**", "scripts/tests/**", "scripts/beads-sync.py", "tests/fixtures/harness-eval/**"],
+    "intent": "check",
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "runner": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "args": ["-B", "-m", "unittest", "discover", "-s", "scripts/tests"],
+      "kind": "argv",
+      "program": "python3"
+    },
+    "target": {
+      "action": "harness-eval-test",
+      "component": "repo"
+    }
   }
 ],
   "profiles": [
@@ -685,6 +707,10 @@
       },
       {
         "action": "file-budget",
+        "component": "repo"
+      },
+      {
+        "action": "harness-eval-test",
         "component": "repo"
       }
     ]

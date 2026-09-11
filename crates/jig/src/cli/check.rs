@@ -9,6 +9,9 @@ use super::{AgentMapOpts, ToolOpts};
 
 pub(super) const CHECK_AFTER_HELP: &str = "\
 Run configured project checks or Jig-owned repository policy checks.
+Plain check executes selected targets; work check reuses qualifying target evidence.
+Use --plan-id ID to link receipts to structured work.
+--affected narrows candidates; an empty selection never waives required work gates.
 
 Examples:
   jig check

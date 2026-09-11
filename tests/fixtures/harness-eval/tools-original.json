@@ -1,0 +1,57 @@
+[
+  {
+    "name": "read_file",
+    "description": "Read the entire UTF-8 contents of a repository-relative file. Use this tool when inspecting source files or repository guidance before making a change.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "Write UTF-8 contents to a repository-relative file, creating the parent directories if necessary. This replaces the file contents. Inspect relevant existing contents before choosing a replacement.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "run_command",
+    "description": "Execute a command specified as an argument vector in the repository root. Use this tool for compilation and verification. Record the actual command outcome; a successful invocation is evidence only for the checks that it executed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

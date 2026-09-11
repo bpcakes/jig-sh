@@ -8,6 +8,8 @@ use super::*;
 
 #[path = "renderer_tests/freshness.rs"]
 mod freshness;
+#[path = "renderer_tests/verification.rs"]
+mod verification;
 
 fn rust_render_answers(projection: RepositoryProjectionHint) -> RenderAnswers {
     let destination = tempfile::tempdir().unwrap();
@@ -46,8 +48,12 @@ fn root_guidance_matches_rendered_native_and_legacy_work_gates() {
                 &AnswerOpts {
                     repo_name: Some("ExampleProject".into()),
                     backend_language: Some(language),
-                    sqlx_enabled: Some(false),
-                    schema_dump_enabled: Some(false),
+                    sqlx_enabled: Some(language == BackendLanguage::Rust),
+                    schema_dump_enabled: Some(language == BackendLanguage::Rust),
+                    rust_migration_dir: (language == BackendLanguage::Rust)
+                        .then(|| "migrations".into()),
+                    go_database: (language == BackendLanguage::Go)
+                        .then_some(crate::backend::GoDatabase::Postgres),
                     application_contracts_enabled: Some(true),
                     frontend_apps: vec![crate::bootstrap::FrontendApp {
                         name: "web".into(),
@@ -81,6 +87,7 @@ fn root_guidance_matches_rendered_native_and_legacy_work_gates() {
                 .iter()
                 .all(|gate| gate["kind"].as_str() == Some("evidence"));
             assert_eq!(native, version >= 6);
+            verification::assert_required_coverage(&config, native, language);
             let guide = fs::read_to_string(destination.path().join("AGENTS.md")).unwrap();
             assert_eq!(guide.contains("configured repository profile"), native);
             assert_eq!(
@@ -93,7 +100,8 @@ fn root_guidance_matches_rendered_native_and_legacy_work_gates() {
             );
             assert!(!guide.contains("four atomic path-aware gates per app"));
             assert!(!guide.contains("have separate `application-contracts`"));
-            assert!(guide.contains("finish with `scripts/jig check test`"));
+            assert!(guide.contains("evidence must cover the configured tests"));
+            assert!(!guide.contains("finish with `scripts/jig check test`"));
             assert!(guide.contains("`scripts/jig dev`"));
             assert!(guide.contains("`kind` selects `vite` or `env-port`"));
             assert!(guide.contains("`role` selects `spa`, `admin`, or `astro`"));
@@ -300,7 +308,7 @@ fn rust_backend_guidance_keeps_ownership_and_verification_rules() {
         "before backend work",
         "## Backend Defaults",
         "Keep transport logic thin and business logic in the owning crate.",
-        "For backend changes, finish with `scripts/jig check test`.",
+        "For backend changes, evidence must cover the configured tests (`scripts/jig check test`).",
         "`scripts/jig dev`",
         "## Backend Guide Conventions",
     ] {

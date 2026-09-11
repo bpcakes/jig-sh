@@ -13,12 +13,15 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 [% if not rust_workspace_guidance_enabled -%]
 - Run local services with `scripts/jig dev` to use the repository's proxy and port configuration.
 [% endif -%]
-- For substantial work, use `scripts/jig work start`, then `scripts/jig work check --plan-id <id>` and `scripts/jig work finish --plan-id <id> --resolution "..."`. Use `scripts/jig work gates`, `evidence`, `receipts`, or `status` for diagnostics when needed.
+- Routine investigation needs no implementation plan or unrelated tests. For small edits, run the relevant `scripts/jig check` targets.
+- Use structured work for substantial implementation, durable handoffs, or when repository policy requires it: `scripts/jig work start`, `scripts/jig work check --plan-id <id>`, then `scripts/jig work finish --plan-id <id> --resolution "..."`. Short work notes can use `--body`; use `.agent/PLANS.md` to decide when an ExecPlan is needed.
+- Supply the explicit plan ID for work checks, reviews, and finish, and for plain checks intended as that plan’s evidence. Use `work gates` or `work evidence` and their recovery advice when blocked; use `receipts` or `status` for history or plan discovery.
 [% if _jig.contract_version >= 6 -%]
 - Plans capture an exact Git baseline. `work check` reuses current passing target evidence when its freshness policy allows and reruns checks that need new evidence. Required gate policies still govern `work finish`.
 [% else -%]
 - Plans capture an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; `work finish` enforces required gates.
 [% endif -%]
+- Plain `check` executes selected targets; receipt reuse belongs to `work check`. Where supported, `--affected` narrows candidates, including to a no-op, and never waives required work gates.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -103,17 +106,18 @@ No web apps are configured in `.jig.toml`.
 
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, finish with `scripts/jig check test`.
+- Completion requires current passing evidence for the applicable checks below and the configured profiles and required work gates, including authored custom profiles and review gates. Preserve those requirements; a narrower selection does not replace them.
+- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, evidence must cover the configured tests (`scripts/jig check test`).
 [% if frontend_apps | length > 0 %]
-- For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
+- For frontend changes, evidence must cover the relevant `scripts/jig check typescript-*` gates.
 [% endif %]
 [% if sqlx_enabled %]
-- For SQLx or migration changes, run `scripts/jig check sqlx`.
+- For SQLx or migration changes, evidence must cover `scripts/jig check sqlx`.
 [% if schema_dump_enabled %]
-- For schema-doc-enabled repos, run `scripts/jig check schema`.
+- For schema-doc-enabled repos, evidence must cover `scripts/jig check schema`.
 [% endif %]
 [% endif %]
+- A qualifying pass already covering current inputs satisfies its check; do not repeat tests just to make them the last command. Run configured reviews with `scripts/jig work review --plan-id <id>`; `work check` does not supply review evidence.
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
 ## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions

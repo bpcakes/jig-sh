@@ -238,17 +238,51 @@ dotenv. The plan explains each direct path and configured
 component-dependent propagation; runtime-owned `.agent/state/` and
 `.agent/.cache/` data are ignored while checked-in contract inputs remain
 eligible. A valid empty
-selection is a no-op. Action dependencies are added only after this filtering,
+selection is a no-op. This only selects candidates: an affected no-op is not
+proof that every required work gate passed and does not waive any gate. Action
+dependencies are added only after this filtering,
 and versions 2 through 5 retain their legacy check behavior without affected
 selection.
 
-Contract-v6 work gates name the same target/profile vocabulary. A default
-`scripts/jig work check --plan-id ...` resolves all configured evidence gates
-and executes their target union once, allowing a profile gate to prove that all
-members succeeded in one compatible run. An exact target receipt cannot satisfy
-a different target, and separate partial runs cannot be combined into profile
-evidence. Legacy tool gates remain available for older contracts and explicit
-`work check --tool ...` compatibility.
+Plain `check` executes its selected targets every time; it is not a universal
+receipt cache. Routine investigation needs no implementation plan or unrelated
+tests. For a small edit, select the relevant checks and satisfy applicable
+repository verification policy.
+
+Use structured work for substantial implementation, durable handoffs, or when
+repository policy requires it. `work start --body` accepts short notes; use an
+ExecPlan for complex work or handoff context that needs one. Pass the returned
+plan ID explicitly to `work check`, `work review`, and `work finish`. Plain
+`check ... --plan-id ID` links its receipts to that plan; without the ID, do not
+expect those receipts to satisfy its gates. Gate/evidence inspection may infer
+the ID only when exactly one plan is open.
+
+Contract-v6 work gates name the same target/profile vocabulary. With the current
+runtime, `scripts/jig work check --plan-id ID` validates configured evidence
+gates, reuses qualifying current target passes, and executes checks needing new
+evidence together with their prerequisites and invalidated dependents. Profile
+evidence can reference original receipts from separate runs when every required
+target and dependency proof remains valid. Contract v8 and later use declared
+`inputs_policy` and `source_state`; older target evidence uses conservative
+repository fingerprints. Changed relevant inputs invalidate evidence, and
+incomplete observations can still require conservative verification.
+
+Completion requires current evidence covering applicable repository checks and
+all required gates, including authored custom profiles and review gates. A
+passing check need not be repeated merely to make tests the last command.
+`work check` does not run reviews: use `work review --plan-id ID` when a configured
+review requires evidence. `work finish` revalidates all required gates.
+
+If blocked, use `work gates --plan-id ID` or `work evidence --plan-id ID` and
+follow the existing recovery projection. It distinguishes reusable targets,
+checks needing execution, and unavailable inspection; an observation timeout
+alone does not establish stale evidence. Inspect receipts or work status only
+when history or plan discovery is needed.
+
+Legacy `kind: check` gates retain their configured applicability and opt-in reuse
+policy. `work check --plan-id ID --tool jig.test` explicitly runs the legacy
+tool path and cannot satisfy a native `api:test` evidence gate. To force native
+evidence, use `check api:test --plan-id ID`, substituting the configured target.
 
 `--explain` is read-only: it prints the immutable plan, bounded target-reason
 previews (with total-count metadata when truncated), dependency layers, effects,

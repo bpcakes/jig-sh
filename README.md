@@ -85,6 +85,8 @@ scripts/jig work finish \
   --outcome success
 ```
 
+Small edits can use relevant `scripts/jig check` targets without opening a plan unless repository policy requires structured work. Use structured work for substantial implementation and durable handoffs. Current passing evidence satisfies its check; `work check` reuses qualifying target receipts, while plain `check` executes selected targets. An `--affected` no-op does not waive required gates. See [verification and evidence](docs/developer-ux.md) for receipt, review, and recovery details.
+
 For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an existing repository, use `jig adopt .` to preview changes and `jig adopt . --write` to apply them.
 
 `setup` runs the read-only doctor, bootstraps project dependencies, registers configured agent tooling when needed, verifies the generated contract, and runs doctor again. Pass `--json` to Jig commands when automation needs structured output.

@@ -5,7 +5,11 @@ use clap::{ArgGroup, Args, Subcommand};
 use crate::tool_defs::{self, DEFAULT_RECEIPTS_LIMIT};
 
 pub(super) const WORK_START_AFTER_HELP: &str = "\
+Use structured work for substantial implementation, durable handoffs, or repository policy.
+Routine investigation and small edits need no plan unless policy requires one.
 Use --body for short notes or --body-file for a prepared markdown plan.
+Pass the resulting plan ID explicitly to work check, review, and finish, and to
+plain checks whose receipts should serve as this plan’s evidence.
 Use --print-plan-id when shell scripts only need the new plan id.
 Human-readable output is the default. Pass --json for structured automation output.
 
@@ -15,7 +19,12 @@ Examples:
 
 pub(super) const WORK_CHECK_AFTER_HELP: &str = "\
 Validate configured target/profile evidence and legacy check gates for a plan.
-Reuse current target passes; execute missing, failed or stale checks and their dependencies.
+Reuse qualifying current target passes under their declared freshness policy.
+Execute checks needing new evidence, their prerequisites, and invalidated dependents.
+A repeated work check does not rerun qualifying passes merely for command ordering.
+Required review gates need work review evidence; work check does not run reviews.
+Use work gates or work evidence recovery advice when blocked.
+A plain check --affected no-op does not prove required work gates passed.
 Use jig check COMPONENT:ACTION --plan-id ID to force a native target execution.
 Use --tool to select a legacy execution tool; its receipt does not satisfy a native target gate.
 Human-readable output is the default. Pass --json for structured automation output.
@@ -61,7 +70,9 @@ Examples:
   jig work refine --plan-id plan_abc123 --json";
 
 pub(super) const WORK_FINISH_AFTER_HELP: &str = "\
-Close a plan after required gates pass; use --outcome for a machine-readable result.
+Close a plan after required gates have current passing evidence, including reviews.
+Revalidate evidence at finish; no repeated final test command is required.
+Use --outcome for a machine-readable result.
 
 Examples:
   jig work finish --plan-id plan_abc123 --resolution \"Auth flow complete\" --outcome success";
@@ -216,7 +227,7 @@ pub(crate) struct WorkCheckOpts {
 
     #[arg(
         long = "tool",
-        help = "Specific execution tool to force-run; defaults to required applicable gates"
+        help = "Legacy execution tool to force-run; its receipt cannot satisfy a native target gate"
     )]
     pub(crate) tools: Vec<String>,
 }

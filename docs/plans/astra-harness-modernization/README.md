@@ -11,7 +11,7 @@ and consumer compatibility.
 This plan covers every recommendation in the September 11 audit.
 It creates one epic with sixteen direct child tasks.
 Task 01 is the first implementation task and an independently shippable quick win.
-Planning and task 01 implementation are complete. Further implementation follows
+Planning and tasks 01–02 implementation are complete. Further implementation follows
 explicit task requests; this document does not authorize starting the whole epic.
 
 ## Progress
@@ -26,21 +26,23 @@ explicit task requests; this document does not authorize starting the whole epic
 - [x] Run export privacy and planning-artifact verification.
 - [x] Record the epic ID, first task, and plan location.
 - [x] Implement task 01 and close its Beads issue after verification.
+- [x] Implement task 02 with five offline graders and reproducible paired evaluation inputs.
 - [ ] Complete the remaining epic tasks and integrated evaluation.
 
 Local planning/reconciliation work ID: `plan_01M28626D98WHJJFH0432ZBEKH`.
 Task 01 implementation work ID: `plan_01M28819Z3PAE8YA2MBBBPY57Z` (closed).
+Task 02 implementation work ID: `plan_01M28DTQG7Q8TFY7YYH9FPJYV7`; see [acceptance evidence](02-implementation.md).
 Beads epic: `jig-sh-9wcn`.
 Implementation issues: `jig-sh-9wcn.1` through `jig-sh-9wcn.16`.
-Next ready implementation issue: `jig-sh-9wcn.2`.
+Next implementation candidates after task 02 closure: `jig-sh-9wcn.3`, `.4`, `.6`, and `.7`.
 Immutable evaluation control: `03e9a9e4e5122b5bc12c66b1f635ae1faac05e15`.
 Feature-branch base: `dc68b74497c4f5ae27049425bb63e6d0ec4ff014`.
-Restart checkpoint: task 01 is implemented and closed; tasks 02–16 remain planned.
+Restart checkpoint: tasks 01–02 are implemented; tasks 03–16 remain planned.
 Its initial implementation run is `run_01M289WM1CWE50CWPBRV7YAAFC`, with validation
 receipt `receipt_01M28A9NCY7YHW0VJH0M96MG1M` in the local state journals.
 Review follow-up results are recorded in the local planning/reconciliation record.
 When continuing implementation, run `br ready --parent jig-sh-9wcn --json` and
-claim task 02 if it is still ready. Do not restart completed task 01.
+verify the requested task's current status before claiming it. Do not restart tasks 01–02.
 Use plain `br` from the main checkout. The canonical database owns this epic.
 The isolated database handoff has been superseded.
 
@@ -116,7 +118,8 @@ Six conversion checks passed at initial creation, when task 01 was the only read
 Beads conversion and verification results are recorded in reviews.md and the
 associated planning work record.
 No claimed improvement in task performance has been measured.
-Task 01 delivered the first guidance changes; tasks 02–16 remain unimplemented.
+Task 01 delivered the first guidance changes; task 02 delivered reproducible synthetic
+evaluation fixtures and independent graders. Tasks 03–16 remain unimplemented.
 The completed epic must distinguish delivered changes from rejected experiments.
 
 ## Repository orientation
