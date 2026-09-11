@@ -36,6 +36,139 @@ fn live_template_source() -> PreparedTemplateSource {
 }
 
 #[test]
+fn root_guidance_matches_rendered_native_and_legacy_work_gates() {
+    let template = live_template_source();
+    let selected = BTreeSet::from([PathBuf::from(".jig.toml"), PathBuf::from("AGENTS.md")]);
+    for language in [BackendLanguage::Rust, BackendLanguage::Go] {
+        for version in [5, 8] {
+            let destination = tempfile::tempdir().unwrap();
+            let answers = AnswerResolution::from_opts(
+                &AnswerOpts {
+                    repo_name: Some("ExampleProject".into()),
+                    backend_language: Some(language),
+                    sqlx_enabled: Some(false),
+                    schema_dump_enabled: Some(false),
+                    application_contracts_enabled: Some(true),
+                    frontend_apps: vec![crate::bootstrap::FrontendApp {
+                        name: "web".into(),
+                        dir: "apps/web".into(),
+                        coverage_threshold: 80,
+                        kind: "vite".into(),
+                        role: "spa".into(),
+                    }],
+                    ..AnswerOpts::default()
+                },
+                destination.path(),
+                false,
+            )
+            .unwrap()
+            .into_parts()
+            .0;
+            render_template_files(
+                &template,
+                &answers,
+                destination.path(),
+                Some(&selected),
+                Some(version),
+            )
+            .unwrap();
+            let config: toml::Value =
+                toml::from_str(&fs::read_to_string(destination.path().join(".jig.toml")).unwrap())
+                    .unwrap();
+            let gates = config["work"]["gates"].as_array().unwrap();
+            assert!(!gates.is_empty());
+            let native = gates
+                .iter()
+                .all(|gate| gate["kind"].as_str() == Some("evidence"));
+            assert_eq!(native, version >= 6);
+            let guide = fs::read_to_string(destination.path().join("AGENTS.md")).unwrap();
+            assert_eq!(guide.contains("configured repository profile"), native);
+            assert_eq!(
+                guide.contains("Structured work uses configured check gates"),
+                !native
+            );
+            assert_eq!(
+                guide.contains("reuses current passing target evidence"),
+                native
+            );
+            assert!(!guide.contains("four atomic path-aware gates per app"));
+            assert!(!guide.contains("have separate `application-contracts`"));
+            assert!(guide.contains("finish with `scripts/jig check test`"));
+            assert!(guide.contains("`scripts/jig dev`"));
+            assert!(guide.contains("`kind` selects `vite` or `env-port`"));
+            assert!(guide.contains("`role` selects `spa`, `admin`, or `astro`"));
+        }
+    }
+}
+
+#[test]
+fn database_guidance_matches_enabled_migration_and_schema_commands() {
+    use crate::context::RustMigrationLayout::{FlatMigrations, VersionedArtifacts};
+
+    let template = live_template_source();
+    let selected = BTreeSet::from([
+        PathBuf::from("AGENTS.md"),
+        PathBuf::from(".agent/jig-contract.json"),
+    ]);
+    for (sqlx, schema, layout) in [
+        (false, false, FlatMigrations),
+        (true, false, FlatMigrations),
+        (true, true, FlatMigrations),
+        (true, true, VersionedArtifacts),
+    ] {
+        let destination = tempfile::tempdir().unwrap();
+        let answers = AnswerResolution::from_opts(
+            &AnswerOpts {
+                repo_name: Some("ExampleProject".into()),
+                sqlx_enabled: Some(sqlx),
+                schema_dump_enabled: Some(schema),
+                rust_migration_dir: sqlx.then(|| "migrations".into()),
+                rust_migration_layout: sqlx.then_some(layout),
+                ..AnswerOpts::default()
+            },
+            destination.path(),
+            false,
+        )
+        .unwrap()
+        .into_parts()
+        .0;
+        render_template_files(
+            &template,
+            &answers,
+            destination.path(),
+            Some(&selected),
+            Some(crate::context::CURRENT_CONTRACT_VERSION),
+        )
+        .unwrap();
+        let guide = fs::read_to_string(destination.path().join("AGENTS.md")).unwrap();
+        let contract: JsonValue = serde_json::from_slice(
+            &fs::read(destination.path().join(".agent/jig-contract.json")).unwrap(),
+        )
+        .unwrap();
+        let has_tool = |name: &str| {
+            contract["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == name)
+        };
+        assert_eq!(
+            has_tool("jig.migration_add"),
+            sqlx && layout == FlatMigrations
+        );
+        assert_eq!(has_tool("jig.schema_dump"), schema);
+        assert_eq!(
+            guide.contains("`scripts/jig migration add NAME`"),
+            has_tool("jig.migration_add")
+        );
+        assert_eq!(
+            guide.contains("`scripts/jig sqlx schema dump`"),
+            has_tool("jig.schema_dump")
+        );
+    }
+}
+
+#[test]
 fn action_arguments_and_freshness_render_in_v8_and_preserve_file_budget_configuration() {
     let destination = tempfile::tempdir().unwrap();
     let answers = AnswerResolution::from_opts(
@@ -120,7 +253,7 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
     }
     for absent in [
         "Keep transport logic thin",
-        "- `scripts/jig dev`",
+        "`scripts/jig dev`",
         "## Backend Defaults",
         "For backend changes",
         "## Backend Guide Conventions",
@@ -150,7 +283,7 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
 }
 
 #[test]
-fn existing_rust_backend_guidance_branch_remains_unchanged() {
+fn rust_backend_guidance_keeps_ownership_and_verification_rules() {
     let destination = tempfile::tempdir().unwrap();
     render_template_files(
         &live_template_source(),
@@ -167,8 +300,8 @@ fn existing_rust_backend_guidance_branch_remains_unchanged() {
         "before backend work",
         "## Backend Defaults",
         "Keep transport logic thin and business logic in the owning crate.",
-        "- `scripts/jig dev`",
-        "For backend changes",
+        "For backend changes, finish with `scripts/jig check test`.",
+        "`scripts/jig dev`",
         "## Backend Guide Conventions",
     ] {
         assert!(guide.contains(expected), "missing {expected}");

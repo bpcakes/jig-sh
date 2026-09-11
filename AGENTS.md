@@ -5,14 +5,14 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 ## Start Here
 
-- Use this file for repo-wide defaults.
 - Open [agent-map.md](./agent-map.md) before backend work.
 - Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
 - Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
-- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
+- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients. Discover targets with `scripts/jig info targets`; preview verification with `scripts/jig check --explain`.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
+- Run local services with `scripts/jig dev` to use the repository's proxy and port configuration.
+- For substantial work, use `scripts/jig work start`, then `scripts/jig work check --plan-id <id>` and `scripts/jig work finish --plan-id <id> --resolution "..."`. Use `scripts/jig work gates`, `evidence`, `receipts`, or `status` for diagnostics when needed.
+- Plans capture an exact Git baseline. `work check` reuses current passing target evidence when its freshness policy allows and reruns checks that need new evidence. Required gate policies still govern `work finish`.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -39,24 +39,6 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 No web apps are configured in `.jig.toml`.
 
-
-## Preferred Commands
-
-- `scripts/jig bootstrap`
-- `scripts/jig doctor`
-- `scripts/jig dev`
-- `scripts/jig check test`
-- `scripts/jig check fmt`
-
-
-- `scripts/jig check clippy`
-
-- `scripts/jig work status`
-- `scripts/jig work evidence`
-
-
-
-- `scripts/jig check contract`
 
 ## Done Means
 

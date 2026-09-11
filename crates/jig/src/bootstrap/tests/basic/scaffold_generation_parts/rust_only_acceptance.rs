@@ -416,7 +416,7 @@ fn assert_rust_only_guides_and_workflow(destination: &Path, case: RustOnlyAccept
         &root_guide,
         &[
             "Keep transport logic thin",
-            "- `scripts/jig dev`",
+            "`scripts/jig dev`",
             "## Backend Defaults",
             "For backend changes",
         ],
