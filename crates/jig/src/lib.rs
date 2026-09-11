@@ -60,7 +60,6 @@ mod info;
 mod mcp;
 mod policy;
 mod progress;
-mod prompt_registry;
 mod repository;
 mod repository_path;
 mod root_commands;

@@ -101,7 +101,6 @@ pub(crate) mod cli_command {
     pub(crate) const MIGRATION_ADD_NESTED: &str = "add";
     pub(crate) const MIGRATION_ADD: &str = "migration-add";
     pub(crate) const PRESETS: &str = "presets";
-    pub(crate) const PROMPT: &str = "prompt";
     pub(crate) const PROXY: &str = "proxy";
     pub(crate) const PROXY_ALIAS: &str = "alias";
     pub(crate) const PROXY_CERT: &str = "cert";

@@ -180,7 +180,6 @@ pub(super) fn info_with_capabilities(
     commands.push(sqlx_command(ctx));
     commands.push(vault_command(vault, &jig));
     commands.push(proxy_command(Some(ctx)));
-    commands.push(ready_command(root_commands::PROMPT));
     commands.push(agent_command(agent, &jig));
     commands.extend([
         ready_command(root_commands::CODEX),
@@ -206,43 +205,40 @@ pub(super) fn info_with_capabilities(
 }
 
 pub(super) fn info_without_context(context_error: &str, fallback: ContextFallback) -> Value {
-    let (context_status, dev, vault, prompt, repo_context_next_step, dev_proxy_available) =
-        match fallback {
-            ContextFallback::Tolerant {
-                context_status,
-                dev,
-                vault,
-                jig,
-                dev_proxy_available,
-            } => (
-                context_status,
-                dev,
-                vault_command(vault, &jig),
-                ready_command(root_commands::PROMPT),
-                match context_status {
-                    RepoContextStatus::Invalid | RepoContextStatus::Recovered => {
-                        INVALID_OVERRIDE_NEXT_STEP
-                    }
-                    RepoContextStatus::Valid | RepoContextStatus::Absent => REPO_CONTEXT_NEXT_STEP,
-                },
-                dev_proxy_available,
-            ),
-            ContextFallback::Invalid { invalid_override } => {
-                let next_step = if invalid_override {
+    let (context_status, dev, vault, repo_context_next_step, dev_proxy_available) = match fallback {
+        ContextFallback::Tolerant {
+            context_status,
+            dev,
+            vault,
+            jig,
+            dev_proxy_available,
+        } => (
+            context_status,
+            dev,
+            vault_command(vault, &jig),
+            match context_status {
+                RepoContextStatus::Invalid | RepoContextStatus::Recovered => {
                     INVALID_OVERRIDE_NEXT_STEP
-                } else {
-                    REPO_CONTEXT_NEXT_STEP
-                };
-                (
-                    RepoContextStatus::Invalid,
-                    dev_without_context_command_with_next_step(next_step),
-                    repo_context_command_with_next_step(root_commands::VAULT, next_step),
-                    repo_context_command_with_next_step(root_commands::PROMPT, next_step),
-                    next_step,
-                    dev_proxy_available(None),
-                )
-            }
-        };
+                }
+                RepoContextStatus::Valid | RepoContextStatus::Absent => REPO_CONTEXT_NEXT_STEP,
+            },
+            dev_proxy_available,
+        ),
+        ContextFallback::Invalid { invalid_override } => {
+            let next_step = if invalid_override {
+                INVALID_OVERRIDE_NEXT_STEP
+            } else {
+                REPO_CONTEXT_NEXT_STEP
+            };
+            (
+                RepoContextStatus::Invalid,
+                dev_without_context_command_with_next_step(next_step),
+                repo_context_command_with_next_step(root_commands::VAULT, next_step),
+                next_step,
+                dev_proxy_available(None),
+            )
+        }
+    };
     let commands = vec![
         ready_command(root_commands::INIT),
         ready_command(root_commands::PRESETS),
@@ -264,7 +260,6 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         repo_context_command_with_next_step(root_commands::SQLX, repo_context_next_step),
         vault,
         proxy_without_valid_context_command(repo_context_next_step, dev_proxy_available),
-        prompt,
         repo_context_command_with_next_step(root_commands::AGENT, repo_context_next_step),
         ready_command(root_commands::CODEX),
         ready_command(root_commands::CLAUDE),

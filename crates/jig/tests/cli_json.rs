@@ -200,43 +200,6 @@ mod checks;
 mod foreground_cancellation;
 
 #[test]
-fn prompt_get_honors_json_mode() {
-    let home = tempdir().unwrap();
-    let repo = tempdir().unwrap();
-    let added = jig()
-        .current_dir(repo.path())
-        .env("JIG_PROMPT_HOME", home.path())
-        .args(["prompt", "add", "json-test", "Hello {{ name }}"])
-        .output()
-        .unwrap();
-    assert!(
-        added.status.success(),
-        "{}",
-        String::from_utf8_lossy(&added.stderr)
-    );
-
-    let output = jig()
-        .current_dir(repo.path())
-        .env("JIG_PROMPT_HOME", home.path())
-        .args([
-            "prompt",
-            "get",
-            "json-test",
-            "--var",
-            "name=world",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["command"], "prompt get");
-    assert_eq!(output["body"], "Hello world");
-}
-
-#[test]
 fn info_commands_exposes_versioned_json_and_grouped_human_output() {
     let repo = tempdir().unwrap();
     let vault = tempdir().unwrap();
@@ -289,7 +252,6 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "sqlx",
             "vault",
             "proxy",
-            "prompt",
             "agent",
             "codex",
             "claude",
@@ -663,7 +625,7 @@ fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
     let output: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output["repo"]["context_status"], "invalid");
     assert!(output["repo"]["context_error"].is_string());
-    for name in ["info", "vault", "prompt"] {
+    for name in ["info", "vault"] {
         assert_eq!(command_status(&output, name), "needs_setup", "{name}");
         assert_eq!(
             command_by_name(&output, name)["reason_code"],
@@ -677,7 +639,6 @@ fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
         &["info", "--json"][..],
         &["vault", "status", "--json"][..],
         &["proxy", "list", "--json"][..],
-        &["prompt", "list", "--json"][..],
     ] {
         let command = jig()
             .current_dir(repo.path())

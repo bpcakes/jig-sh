@@ -56,7 +56,6 @@ fn top_level_help_describes_common_commands() {
         &help,
         "Inspect Codex homes, launch Codex, or resume a session from its owning home",
     );
-    assert_help_contains(&help, "Manage user, repo, and prompt-pack prompt libraries");
     assert_help_omits(&help, "generate-sqlx-unchecked-queries-todo");
 }
 
@@ -81,7 +80,6 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  sqlx ",
         "  vault ",
         "  proxy ",
-        "  prompt ",
         "  agent ",
         "  agent-map ",
         "  state ",
@@ -446,27 +444,6 @@ fn codex_help_distinguishes_homes_from_configuration_profiles() {
         &resume_help,
         "jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 --dry-run -- --search",
     );
-}
-
-#[test]
-fn prompt_help_includes_registry_examples() {
-    let prompt_help = rendered_help(&["prompt"]);
-    assert_help_contains(&prompt_help, "get");
-    assert_help_contains(
-        &prompt_help,
-        "Print a rendered prompt, using a command envelope with --json",
-    );
-
-    let prompt_get_help = rendered_help(&["prompt", "get"]);
-    assert_help_contains(&prompt_get_help, "jig prompt get comprehensive-review-loop");
-    assert_help_contains(&prompt_get_help, "--var");
-    assert_help_contains(&prompt_get_help, "--json requests a command envelope");
-
-    let prompt_export_help = rendered_help(&["prompt", "export"]);
-    assert_help_contains(&prompt_export_help, "--output");
-
-    let prompt_list_help = rendered_help(&["prompt", "list"]);
-    assert_help_contains(&prompt_list_help, "--no-packs");
 }
 
 #[test]

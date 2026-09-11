@@ -10,7 +10,6 @@ mod agent;
 mod check;
 mod loops;
 mod migration;
-mod prompt;
 mod proxy;
 mod repository_run;
 mod sqlx;
@@ -28,11 +27,6 @@ pub(crate) use loops::{
     LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
 pub(crate) use migration::MigrationAddRequest;
-pub(crate) use prompt::{
-    PROMPT_BODY_KEY, PromptAddRequest, PromptCommand, PromptEditRequest, PromptExportRequest,
-    PromptImportRequest, PromptListRequest, PromptNameRequest, PromptRenderRequest,
-    PromptSearchRequest,
-};
 pub(crate) use proxy::{
     DevCommand, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest, ProxyCertCommand,
     ProxyCertGenerateRequest, ProxyCertRuntimeRequest, ProxyCertTrustRequest,

@@ -118,11 +118,6 @@ pub(crate) const VAULT: RootCommand =
 pub(crate) const PROXY: RootCommand =
     command(cli_command::PROXY, RootCommandCategory::LocalServices, 400);
 
-pub(crate) const PROMPT: RootCommand = command(
-    cli_command::PROMPT,
-    RootCommandCategory::AgentAutomation,
-    500,
-);
 pub(crate) const AGENT: RootCommand = command(
     cli_command::AGENT,
     RootCommandCategory::AgentAutomation,
@@ -172,7 +167,6 @@ pub(crate) const ALL: &[RootCommand] = &[
     SQLX,
     VAULT,
     PROXY,
-    PROMPT,
     AGENT,
     CODEX,
     CLAUDE,

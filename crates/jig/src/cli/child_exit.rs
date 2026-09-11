@@ -88,10 +88,10 @@ fn json_request_detection_ignores_child_arguments_after_separator() {
         .map(OsString::from)
     ));
     assert!(!args_target_mcp(
-        ["--__launcher-profile", "mcp", "prompt", "get"].map(OsString::from)
+        ["--__launcher-profile", "mcp", "vault", "status"].map(OsString::from)
     ));
     assert!(!args_target_mcp(
-        ["prompt", "get", "mcp", "--json"].map(OsString::from)
+        ["vault", "status", "mcp", "--json"].map(OsString::from)
     ));
     assert!(!args_target_mcp(
         ["vault", "run", "--", "mcp", "--json"].map(OsString::from)
