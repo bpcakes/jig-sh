@@ -35,6 +35,10 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 - Breaking: remove the external status-provider subsystem, its configuration, protocol DTOs and schemas, process execution, and Packages and Blockers dashboard views. `[status]` and `[[status.providers]]` are now rejected as unknown configuration, `jig ui --status-refresh-seconds` is rejected as an unknown option, and `jig status --json` advances to schema version 2 with only local repository, work, loop, and collection-error fields. The terminal dashboard has one completion-relative local refresh domain.
 - Breaking: stop publishing the internal `jig-status-tui` crate after moving both terminal-dashboard entrypoints into `jig-ui`; previously published versions remain available but neither internal crate is a supported cross-version integration boundary.
 
+### Documentation
+
+- Add an end-to-end scheduled Codex task guide covering checkout selection, mutating prompt requirements, nested receipt boundaries, and cron, launchd, and systemd dispatchers.
+
 ## v0.3.0 - 2026-09-05
 
 ### Added

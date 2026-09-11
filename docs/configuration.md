@@ -438,6 +438,15 @@ sandbox = "workspace-write"
 checkout = "worktree"
 ```
 
+`worktree` is the safe default for inspection-only tasks, but Jig does not merge
+changes from that detached checkout. A task that must update the selected
+repository, such as recording Beads issues, needs `checkout = "repo"`; repo mode
+requires a clean checkout at startup and a clean result, normally an explicitly
+authorized commit. Repo-mode prompts must also avoid nested receipt-producing
+Jig commands because an extra receipt append makes the result ambiguous. See
+[Scheduled Codex Tasks](codex-task-operations.md) for checkout guidance, prompt
+rules, scheduler installation, validation, and recovery examples.
+
 Workflow execution leases and attempt budgets remain worktree-specific. PR-manager branch leases are different: they live in `jig/loop/branch_leases.json` below the repository's common Git directory, so dispatchers in linked worktrees serialize mutation of the same remote branch; manual and scheduled PR-manager runs validate this authority before claiming an occurrence. Stop older dispatchers before adopting this authority cutover. PR head identity is normalized strictly from GitHub CLI's separate `headRepositoryOwner.login` and `headRepository.name` fields; the composite repository field is not treated as mutation authority. Review-reply reconciliation binds the trusted-feedback generation and repair commit, so retry wording cannot create a duplicate response to the same feedback; resolution rechecks the complete comment ID/update/body generation. Worktree authority and PR action evidence preserve non-UTF-8 Unix path bytes in a tagged ledger representation, while cleanup retains the native path rather than reconstructing filesystem authority from serialized evidence; Git metadata path pointers and command output remain byte-preserving until filesystem use. An unexecuted retry may remove only a repair worktree created by that retry; a pre-existing retained worktree remains attention evidence.
 
 Protected lease and attempt replacements sync both the new file and its containing Git-metadata directory before publication returns.
