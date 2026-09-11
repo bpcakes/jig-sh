@@ -27,7 +27,10 @@ pub const fn supported_freshness_epoch(epoch: u32) -> bool {
     // v9 and v10 were never released. Keep their already-recorded local
     // receipts readable after the 0.4.0 v8 consolidation; new repositories
     // and receipts use v8 exclusively.
-    matches!(epoch, 8..=10)
+    matches!(
+        epoch,
+        TARGET_FRESHNESS_CONTRACT_VERSION..=SOURCE_STATE_IDENTITY_CONTRACT_VERSION
+    )
 }
 
 pub const fn freshness_identity_includes_source_state(epoch: u32) -> bool {

@@ -22,7 +22,6 @@ fn current_epoch_proof_rejects_missing_wrong_and_future_source_authority() {
         ("source_state", Value::Null),
         ("source_state", json!("git")),
         ("contract_epoch", json!(11)),
-        ("contract_epoch", json!(11)),
     ] {
         let mut invalid = current.clone();
         invalid["target_freshness"]["identity"][field] = value;
