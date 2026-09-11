@@ -317,7 +317,10 @@ fn append_waits_for_the_verified_sidecar_lock() {
             .send(read_plan_body(&reader_ctx, "plan_locked", &|| false))
             .unwrap();
     });
-    assert!(read_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    // Keep this well below PLAN_BODY_LOCK_WAIT_LIMIT. The reader's 250ms
+    // shared-lock deadline starts immediately, and the appender still has to
+    // finish after the sidecar is released.
+    assert!(read_rx.recv_timeout(Duration::from_millis(20)).is_err());
     FileExt::unlock(&lock).unwrap();
     rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
     let body_after_append = read_rx
