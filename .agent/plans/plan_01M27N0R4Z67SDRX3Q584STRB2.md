@@ -1,0 +1,1 @@
+Collapse unreleased contract epochs 8 through 10 into a single contract v8 while preserving v2 through v7 behavior. Update compatibility gates, generated defaults, release metadata, and public documentation. Validate focused contract tests, formatting, contract checks, and the backend suite.

@@ -286,7 +286,7 @@ fn unborn_and_absent_git_authority_never_produce_partial_scoped_identity() {
             &|| false,
         );
         let result = source::SourceSnapshot::capture(&ctx, &[&fixture.actions[0]], &mut budget);
-        assert!(result.is_err());
+        assert_eq!(result.is_err(), remove_git);
     }
 }
 

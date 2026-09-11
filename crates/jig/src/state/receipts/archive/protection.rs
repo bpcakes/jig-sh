@@ -95,7 +95,7 @@ fn archive_gate_time_validity(
     use jig_contract::freshness::EffectiveTimeValidityV1;
     let own = archive_time_validity(receipt);
     if super::receipt_effective_time(receipt).is_none() && gate.effective_time.is_none() {
-        // Preserve pre-epoch-9 batch/gate expiry aggregation exactly.
+        // Preserve pre-freshness-epoch batch/gate expiry aggregation exactly.
         return EffectiveTimeValidityV1::new(
             [receipt.valid_until_ms, gate.valid_until_ms]
                 .into_iter()

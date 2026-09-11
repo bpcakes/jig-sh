@@ -30,7 +30,7 @@ fn lifecycle_freshness_keeps_global_native_proof_and_rejects_unusable_metadata()
     let root = temp.path();
     crate::test_env::TestRepoBuilder::new(root)
         .repo_name("ExampleProject")
-        .contract_version(9)
+        .contract_version(8)
         .required_commands(std::iter::empty::<String>())
         .write();
     let components = vec![ComponentSpec::new(ComponentId::parse("repo").unwrap(), ".")];

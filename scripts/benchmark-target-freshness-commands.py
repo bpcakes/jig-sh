@@ -20,6 +20,8 @@ import time
 
 CASES = ("clean", "narrow-dirty", "wide-dirty", "staged", "untracked")
 COMMANDS = ("status", "gates", "evidence")
+BASELINE_EPOCH = 7
+TREATMENT_EPOCH = 8
 
 
 def run(command, root, **kwargs):
@@ -69,25 +71,32 @@ def create_fixture(root, epoch):
     ]
     actions = []
     for name, inputs, dependencies in specs:
+        runner = ({"kind": "command", "command": "benchmark_check_command"}
+                  if epoch == BASELINE_EPOCH else
+                  {"kind": "argv", "program": "scripts/check.sh", "args": []})
         action = {"target": target(name), "intent": "check", "effects": ["read_only", "process"],
-                  "runner": {"kind": "argv", "program": "scripts/check.sh", "args": []},
+                  "runner": runner,
                   "inputs": inputs, "depends_on": list(map(target, dependencies))}
-        if epoch == 9:
+        if epoch == TREATMENT_EPOCH:
             action["inputs_policy"] = "exhaustive"
+            action["source_state"] = "git"
         actions.append(action)
     components = [{"id": "web", "root": "web"}, {"id": "api", "root": "api"}]
     profiles = [{"id": "verify", "targets": [target("web:test"), target("web:broad")]}]
     config = ['_src_path = "/tmp/ExampleTemplate"', '_commit = "example"',
-              'repo_name = "ExampleProject"', 'default_branch = "main"',
-              '[repository]', 'default_check_profile = "verify"']
+              'repo_name = "ExampleProject"', 'default_branch = "main"']
+    if epoch == BASELINE_EPOCH:
+        config += ['[commands]', 'benchmark_check_command = "scripts/check.sh"']
+    config += ['[repository]', 'default_check_profile = "verify"']
     for kind, entries in (("components", components), ("actions", actions), ("profiles", profiles)):
         for entry in entries:
             config.append(f"[[repository.{kind}]]")
             config.extend(f"{key} = {toml_value(value)}" for key, value in entry.items())
     config += ['[[work.gates]]', 'id = "verify"', 'kind = "evidence"', 'profile = "verify"']
     (root / ".jig.toml").write_text("\n".join(config) + "\n")
+    required_commands = ["benchmark_check_command"] if epoch == BASELINE_EPOCH else []
     manifest = {"contract_version": epoch, "tool_namespace": "jig", "tools": [],
-                "required_commands": [], "components": components, "actions": actions,
+                "required_commands": required_commands, "components": components, "actions": actions,
                 "profiles": profiles, "default_check_profile": "verify"}
     (root / ".agent/jig-contract.json").write_text(json.dumps(manifest) + "\n")
     git(root, "init", "-q", "-b", "main")
@@ -218,7 +227,7 @@ def main():
               "platform": platform.platform(), "logical_cpus": os.cpu_count(),
               "cpu_max": cpu_max, "io_max": io_max, "binary_sha256": hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
               "ci_run_id": os.environ.get("GITHUB_RUN_ID") if os.environ.get("GITHUB_ACTIONS") == "true" else None,
-              "fixture": "4000 512-byte files; 100 narrow files; 10000 ignored entries; four explicit exhaustive targets, two roots sharing a two-target dependency chain",
+              "fixture": "4000 512-byte files; 100 narrow files; 10000 ignored entries; four targets, with explicit exhaustive Git authority at v8, and two roots sharing a two-target dependency chain",
               "samples_per_case_command_epoch": args.samples, "smoke": args.smoke,
               "cases": {}, "failures": []}
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +237,7 @@ def main():
     # externally supplied existing checkout as a mutation target.
     parent = Path(tempfile.mkdtemp(prefix="ExampleFreshnessCommands-"))
     try:
-        for epoch in (8, 9):
+        for epoch in (BASELINE_EPOCH, TREATMENT_EPOCH):
             root = parent / f"epoch-{epoch}"
             create_fixture(root, epoch)
             plan = run([binary, "work", "start", "--title", "Example freshness measurement", "--body", "Generic fixture validation.", "--print-plan-id"], root, check=True).stdout.strip()
@@ -246,7 +255,7 @@ def main():
                     group[command] = row
                     if any(sample["exit_status"] != 0 or sample["gate_statuses"] != ["passed"] for sample in samples):
                         report["failures"].append(f"{case}/{epoch}/{command}: every inspection must pass with its original receipts")
-                    if epoch == 9:
+                    if epoch == TREATMENT_EPOCH:
                         if args.profile == "constrained" and args.cache == "cold":
                             limited = {line.split()[0] for line in io_max.splitlines() if "rbps=20971520" in line}
                             if any(sum(sample["io_delta"].get(device, {}).get("rbytes", 0) for device in limited) < 8 * 1024 * 1024 for sample in samples):
@@ -258,11 +267,11 @@ def main():
                             row["phase"] = summary(phases)
                             if row["phase"]["p95_ms"] >= 1000 or max(phases) >= 2000:
                                 report["failures"].append(f"{case}/{command}: new phase exceeds acceptance")
-                        if row["p95_ms"] > report["cases"][case]["8"][command]["p95_ms"] + 2000:
+                        if row["p95_ms"] > report["cases"][case][str(BASELINE_EPOCH)][command]["p95_ms"] + 2000:
                             report["failures"].append(f"{case}/{command}: full command exceeds baseline + 2000 ms")
                     save()
                     print(json.dumps({"case": case, "epoch": epoch, "command": command, **{key: value for key, value in row.items() if key != "samples"}}), flush=True)
-            if epoch == 9:
+            if epoch == TREATMENT_EPOCH:
                 (root / "unrelated.md").write_text("Example unrelated edit\n")
                 retained, _, _ = cli(binary, root, "work", "gates", "--plan-id", plan)
                 report["non_leaf_retained_after_unrelated_edit"] = all(row["status"] == "passed" for row in gate_rows(retained)) and bool(gate_rows(retained))

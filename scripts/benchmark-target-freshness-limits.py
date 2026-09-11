@@ -69,7 +69,7 @@ def main():
     try:
         for case in cases:
             root = parent / case
-            commands.create_fixture(root, 9)
+            commands.create_fixture(root, commands.TREATMENT_EPOCH)
             if case.startswith("content-"):
                 with (root / "docs/boundary.bin").open("wb") as stream:
                     for _ in range(480 if case == "content-near" else 513):

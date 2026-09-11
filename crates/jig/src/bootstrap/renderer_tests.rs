@@ -36,7 +36,7 @@ fn live_template_source() -> PreparedTemplateSource {
 }
 
 #[test]
-fn action_arguments_render_only_in_v8_and_preserve_file_budget_configuration() {
+fn action_arguments_and_freshness_render_in_v8_and_preserve_file_budget_configuration() {
     let destination = tempfile::tempdir().unwrap();
     let answers = AnswerResolution::from_opts(
         &AnswerOpts {
@@ -85,10 +85,13 @@ fn action_arguments_render_only_in_v8_and_preserve_file_budget_configuration() {
         serde_json::to_value(&authored["arguments"]).unwrap(),
         migration["arguments"]
     );
-    assert_eq!(
-        action(&v7, jig_contract::tool::FILE_BUDGET),
-        action(&v8, jig_contract::tool::FILE_BUDGET)
-    );
+    let v7_file_budget = action(&v7, jig_contract::tool::FILE_BUDGET);
+    let v8_file_budget = action(&v8, jig_contract::tool::FILE_BUDGET);
+    assert_eq!(v7_file_budget["runner"], v8_file_budget["runner"]);
+    assert!(v7_file_budget.get("inputs_policy").is_none());
+    assert!(v7_file_budget.get("source_state").is_none());
+    assert_eq!(v8_file_budget["inputs_policy"], "whole_repository");
+    assert_eq!(v8_file_budget["source_state"], "git");
 }
 
 #[test]

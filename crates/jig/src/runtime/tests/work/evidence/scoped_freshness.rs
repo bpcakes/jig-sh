@@ -26,7 +26,7 @@ fn fixture(root: &Path, dependency: bool, profile: bool) -> RepoContext {
         toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
     let manifest_path = root.join(".agent/jig-contract.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["contract_version"] = json!(9);
+    manifest["contract_version"] = json!(8);
     for action in config["repository"]["actions"].as_array_mut().unwrap() {
         action.as_table_mut().unwrap().insert(
             "inputs_policy".into(),
@@ -101,7 +101,7 @@ fn original_records(ctx: &RepoContext) -> BTreeMap<TargetId, Value> {
             "diff_stat": {"files": 0, "insertions": 0, "deletions": 0},
             "worktree_fingerprint": source, "config_digest": catalog.config_digest(), "input_digest": "legacy-input",
             "target_freshness": {
-                "schema_version": 1, "contract_epoch": 9, "state": "complete", "identity": identity,
+                "schema_version": 1, "contract_epoch": 8, "state": "complete", "identity": identity,
                 "dependency_execution_proof": dependencies, "effective_valid_until_ms": null,
                 "effective_requires_time_validity": false,
                 "global_execution_proof": {"state": "unchanged", "before_source_digest": source, "after_source_digest": source},

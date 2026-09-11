@@ -1,10 +1,13 @@
 # Target freshness collector measurements
 
-Epoch 9 is active after receipt integration and the required hosted CI and
-constrained qualification. The final qualification results below establish the
-[Target Freshness Policy v1](public-contract.md#target-freshness-policy-v1-design)
-rollout criteria. Earlier measurements, including failed experiments, are retained
-to document the implementation baseline and the changes that made it qualify.
+The retained results below qualified target freshness before the contract
+consolidation: the then-unreleased epoch 8 was the runner-only baseline and
+epoch 9 was the freshness treatment. They establish the performance of
+[Target Freshness Policy v1](public-contract.md#target-freshness-policy-v1-design),
+but do not by themselves qualify the consolidated v8 receipt shape. The current
+qualification driver measures the released v7 baseline against consolidated v8.
+Earlier measurements, including failed experiments, remain under their original
+epoch labels.
 
 The fixture has 4,000 generated 512-byte source files, a 100-file narrow input
 tree, broad inputs covering all 4,000 files, four targets sharing a transitive
@@ -213,14 +216,20 @@ compilation and focused tests. Counters separate matching, identity encoding,
 original proof lookup, and path revalidation; the subsequent candidate removed
 duplicate glob evaluations within each filesystem entry's observation.
 
-The full-command driver creates two independent generic repositories with the
-same source shape and graph, one on epoch 8 and one on epoch 9. Each case records
-real original receipts before measurement. Each command uses at least 20 new
-processes, with separate warm and cold runs. It measures `status`, `work gates`,
-and `work evidence`, verifies their gate outcomes, and compares phase p95 and
+The driver used for the retained results created two independent generic
+repositories with the same source shape and graph, one on the former epoch 8
+baseline and one on the former epoch 9 treatment. Each case recorded real
+original receipts before measurement. Each command used at least 20 new
+processes, with separate warm and cold runs. It measured `status`, `work gates`,
+and `work evidence`, verified their gate outcomes, and compared phase p95 and
 full-command p95 against the matching epoch 8 baseline. All four fixture targets
-opt in and retain exhaustive authority through both shared dependency levels.
-It also checks non-leaf freshness after an unrelated edit and successful finish.
+opted in and retained exhaustive authority through both shared dependency levels.
+It also checked non-leaf freshness after an unrelated edit and successful finish.
+
+The current driver uses a v7-compatible command runner for its released baseline
+and an explicit argv runner plus exhaustive Git source authority for consolidated
+v8. Running the commands below produces new v7→v8 measurements; it does not
+relabel the historical results.
 
 ```sh
 cargo build --release -p jig-sh --bin jig
@@ -305,7 +314,7 @@ for oversized source, entry overflow, ignored inputs and symlinks.
 retain the samples, counters, outcomes and exact runtime identity. Downloaded
 artifact checksums were verified before inspecting the reports, and the phase
 and full-command p95 values were recalculated from the samples. These results
-satisfy the performance prerequisite for epoch 9 activation.
+satisfied the performance prerequisite for the former epoch 9 activation.
 
 ## Normal runtime qualification
 

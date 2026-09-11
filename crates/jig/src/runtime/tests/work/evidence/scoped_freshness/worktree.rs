@@ -7,7 +7,7 @@ fn worktree_fixture(root: &Path, policy: &str, api_source: Option<&str>) -> (Rep
         toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
     let manifest_path = root.join(".agent/jig-contract.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["contract_version"] = json!(10);
+    manifest["contract_version"] = json!(8);
     for (index, action) in config["repository"]["actions"]
         .as_array_mut()
         .unwrap()

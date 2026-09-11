@@ -14,12 +14,29 @@ pub use receipt::{
     TargetFreshnessStateV1, TargetFreshnessV1,
 };
 
-pub const TARGET_FRESHNESS_CONTRACT_VERSION: u32 = 9;
-pub const WORKTREE_FRESHNESS_CONTRACT_VERSION: u32 = 10;
+/// The 0.4.0 contract cutover ships target freshness and source-state
+/// authority together.  The names distinguish the feature gates, not epochs.
+pub const TARGET_FRESHNESS_CONTRACT_VERSION: u32 = 8;
+pub const WORKTREE_FRESHNESS_CONTRACT_VERSION: u32 = TARGET_FRESHNESS_CONTRACT_VERSION;
+
+/// The original unreleased receipt format added `source_state` at epoch 10.
+/// Consolidated epoch 8 also writes it, while authentic epoch-9 receipts do not.
+pub const SOURCE_STATE_IDENTITY_CONTRACT_VERSION: u32 = 10;
 
 pub const fn supported_freshness_epoch(epoch: u32) -> bool {
-    epoch >= TARGET_FRESHNESS_CONTRACT_VERSION && epoch <= WORKTREE_FRESHNESS_CONTRACT_VERSION
+    // v9 and v10 were never released. Keep their already-recorded local
+    // receipts readable after the 0.4.0 v8 consolidation; new repositories
+    // and receipts use v8 exclusively.
+    matches!(
+        epoch,
+        TARGET_FRESHNESS_CONTRACT_VERSION..=SOURCE_STATE_IDENTITY_CONTRACT_VERSION
+    )
 }
+
+pub const fn freshness_identity_includes_source_state(epoch: u32) -> bool {
+    epoch == WORKTREE_FRESHNESS_CONTRACT_VERSION || epoch >= SOURCE_STATE_IDENTITY_CONTRACT_VERSION
+}
+
 pub const TARGET_IDENTITY_SCHEMA_VERSION: u32 = 1;
 pub const TARGET_IDENTITY_DOMAIN: &str = "jig-target-identity-v1";
 pub const MAX_FRESHNESS_REASON_PREVIEWS: usize = 100;

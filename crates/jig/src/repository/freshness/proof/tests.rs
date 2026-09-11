@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use jig_contract::ActionInputsPolicy;
-use jig_contract::freshness::DependencyIdentity;
+use jig_contract::freshness::{DependencyIdentity, freshness_identity_includes_source_state};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -12,12 +12,12 @@ use crate::repository::freshness::CollectionLimits;
 
 fn identity(target: &str) -> TargetIdentityV1 {
     let mut identity = TargetIdentityV1 {
-        contract_epoch: 9,
+        contract_epoch: 8,
         schema_version: 1,
         digest_domain: TARGET_IDENTITY_DOMAIN.into(),
         target: target.parse().unwrap(),
         inputs_policy: ActionInputsPolicy::Exhaustive,
-        source_state: None,
+        source_state: Some(jig_contract::ActionSourceState::Git),
         source_digest: "source".into(),
         authority_digest: "authority".into(),
         dependency_digest: "dependencies".into(),
@@ -46,7 +46,7 @@ fn encode_identity(identity: &mut TargetIdentityV1) {
     identity.dependency_digest = dependencies.finish();
     let mut complete = IdentityEncoder::new(TARGET_IDENTITY_DOMAIN, identity.contract_epoch);
     complete.target(&identity.target);
-    if identity.contract_epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION {
+    if freshness_identity_includes_source_state(identity.contract_epoch) {
         complete.source_state(identity.source_state);
     }
     complete.text(&identity.source_digest);
@@ -64,7 +64,7 @@ fn receipt(id: &str, target: &str, run: &str, started: u64, ended: u64) -> Value
         "diff_stat": {"files": 0, "insertions": 0, "deletions": 0},
         "config_digest": "configuration", "input_digest": "legacy-input", "worktree_fingerprint": "global-source",
         "target_freshness": TargetFreshnessV1 {
-            schema_version: 1, contract_epoch: 9, effective_valid_until_ms: None,
+            schema_version: 1, contract_epoch: 8, effective_valid_until_ms: None,
             effective_requires_time_validity: false,
             global_execution_proof: GlobalExecutionProofV1::Unchanged {
                 before_source_digest: "global-source".into(), after_source_digest: "global-source".into(),
@@ -302,8 +302,8 @@ fn legacy_future_old_and_mutated_metadata_never_use_matching_legacy_digests() {
         Status::Unsupported
     );
     let mut older = original.clone();
-    older["target_freshness"]["contract_epoch"] = json!(8);
-    older["target_freshness"]["identity"]["contract_epoch"] = json!(8);
+    older["target_freshness"]["contract_epoch"] = json!(7);
+    older["target_freshness"]["identity"]["contract_epoch"] = json!(7);
     let result = evaluate(&[older], "receipt_parent", 90);
     assert_eq!(result.status, Status::Stale);
     assert!(has(&result, Code::AuthorityVersionChanged));

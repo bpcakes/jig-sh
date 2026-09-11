@@ -183,7 +183,7 @@ mod tests {
         assert!(serde_json::to_vec(&reasons.reasons).unwrap().len() <= 4_000);
         let metadata = TargetFreshnessMetadata::V1(Box::new(TargetFreshnessV1 {
             schema_version: 1,
-            contract_epoch: 9,
+            contract_epoch: 8,
             effective_valid_until_ms: None,
             effective_requires_time_validity: false,
             global_execution_proof: GlobalExecutionProofV1::Unknown,

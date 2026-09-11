@@ -51,7 +51,7 @@ fn measurement() {
         action.inputs_policy = Some(ActionInputsPolicy::Exhaustive);
     }
     let catalog = RepositoryCatalog::from_native(
-        9,
+        8,
         ctx.contract_digest(),
         ctx.component_specs(),
         &actions,
