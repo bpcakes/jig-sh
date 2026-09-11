@@ -1,24 +1,25 @@
 use super::*;
 
 #[test]
-fn freshness_limit_remedy_distinguishes_elapsed_and_resource_limits() {
+fn freshness_limit_remedy_uses_actual_cause_for_any_inspection_budget() {
+    use jig_contract::freshness::FreshnessCollectionLimit;
     let mut stats = FreshnessCollectionStats {
-        timeout_ms: 2_000,
-        elapsed_us: 1_000,
+        limit: Some(FreshnessCollectionLimit::Resource),
+        timeout_ms: 1,
+        elapsed_us: 2_000_001,
         discovered_entries: 250_001,
         ..FreshnessCollectionStats::default()
     };
     let resource = collection_limit_reason(&stats);
     assert!(!resource.contains("--freshness-timeout-ms"));
     assert!(resource.contains("does not raise entry"));
-    stats.elapsed_us = 2_000_001;
+    stats.limit = Some(FreshnessCollectionLimit::Deadline);
     let elapsed = collection_limit_reason(&stats);
-    assert!(elapsed.contains("For a deadline limit"));
     assert!(elapsed.contains("--freshness-timeout-ms 30000"));
     assert!(elapsed.contains("Resource ceilings are unchanged"));
     stats.timeout_ms = 30_000;
-    stats.elapsed_us = 30_000_001;
     assert!(!collection_limit_reason(&stats).contains("--freshness-timeout-ms"));
+    assert!(collection_limit_reason(&stats).contains("maximum timeout"));
 }
 
 fn target_receipt(

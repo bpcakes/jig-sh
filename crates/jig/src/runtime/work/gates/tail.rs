@@ -687,6 +687,7 @@ mod tests {
     #[test]
     fn latest_passing_gates_keeps_distinct_gate_identities() {
         let report = GateReport {
+            recovery: None,
             plan_id: "plan-test".into(),
             plan_state: "open",
             plan_baseline: None,

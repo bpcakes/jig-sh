@@ -172,6 +172,7 @@ impl GateReport {
     fn status_view(&self) -> jig_ui::dashboard::StatusGateReport {
         jig_ui::dashboard::StatusGateReport {
             ok: true,
+            recovery: self.recovery.clone(),
             gates_ok: self.gates_ok(),
             plan_id: self.plan_id.clone(),
             plan_state: self.plan_state.to_string(),

@@ -15,35 +15,7 @@ pub(super) fn check(
     let catalog = RepositoryCatalog::from_context(ctx)?;
     validate_current_repository_authority(ctx, catalog.config_digest())?;
     let before = check_target_snapshot(ctx, plan_id, &|| observer.cancelled())?;
-    let mut scheduled = required
-        .difference(&before.passing)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-
-    // The planner executes dependencies normally. Include every required
-    // dependent of that closure so rerunning a shared dependency cannot leave
-    // an older dependent proof behind.
-    loop {
-        let mut expanded = scheduled.clone();
-        for target in &required {
-            let action = catalog
-                .action(target)
-                .ok_or_else(|| anyhow!("unknown target {target}"))?;
-            if scheduled.contains(target) {
-                expanded.extend(action.depends_on.iter().cloned());
-            } else if action
-                .depends_on
-                .iter()
-                .any(|dependency| scheduled.contains(dependency))
-            {
-                expanded.insert(target.clone());
-            }
-        }
-        if expanded == scheduled {
-            break;
-        }
-        scheduled = expanded;
-    }
+    let scheduled = super::super::check_schedule::schedule(&catalog, &required, &before.passing)?;
 
     let mut result = json!({"plan": null, "run": null, "results": [], "failed_targets": []});
     let mut dispositions = std::collections::BTreeMap::new();

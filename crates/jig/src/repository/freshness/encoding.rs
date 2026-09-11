@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use jig_contract::{TargetId, freshness::TARGET_IDENTITY_SCHEMA_VERSION};
+use jig_contract::{ActionSourceState, TargetId, freshness::TARGET_IDENTITY_SCHEMA_VERSION};
 
 /// V1: NUL-terminated domain followed by length-framed fields. Integers are
 /// fixed-width big-endian fields; an optional field has its own presence tag.
@@ -35,6 +35,13 @@ impl IdentityEncoder {
         if let Some(value) = value {
             self.text(value);
         }
+    }
+
+    pub(super) fn source_state(&mut self, state: Option<ActionSourceState>) {
+        self.optional(state.map(|state| match state {
+            ActionSourceState::Git => "git",
+            ActionSourceState::Worktree => "worktree",
+        }));
     }
 
     pub(super) fn target(&mut self, target: &TargetId) {

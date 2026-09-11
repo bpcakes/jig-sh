@@ -8,6 +8,7 @@ use crate::bootstrap::AnswerOpts;
 use crate::bootstrap::answers::AnswerResolution;
 
 mod go_workflow;
+mod independent_checks;
 mod rust_file_loc;
 mod rust_workspace;
 

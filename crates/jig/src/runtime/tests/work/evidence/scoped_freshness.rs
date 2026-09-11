@@ -8,6 +8,8 @@ use super::*;
 use crate::repository::freshness::{CollectionBudget, CollectionLimits, collect_target_identities};
 
 mod native;
+mod recovery;
+mod worktree;
 
 fn fixture(root: &Path, dependency: bool, profile: bool) -> RepoContext {
     let selector = if profile {
@@ -370,6 +372,29 @@ fn inspection_timeout_is_request_scoped_and_check_uses_recording_budget() {
         )
         .unwrap();
         assert_eq!(response["gates"][0]["freshness"], "unknown", "{response:#}");
+        assert_eq!(
+            response["recovery"]["inspection"], "deadline_exhausted",
+            "{response:#}"
+        );
+        assert_eq!(response["recovery"]["preview_available"], false);
+        assert_eq!(response["recovery"]["next_step"]["read_only"], true);
+        let operation = if tool == crate::tool_defs::tool::WORK_GATES {
+            "gates"
+        } else {
+            "evidence"
+        };
+        assert_eq!(
+            response["recovery"]["next_step"]["argv"],
+            json!([
+                "scripts/jig",
+                "work",
+                operation,
+                "--plan-id",
+                "plan_1",
+                "--freshness-timeout-ms",
+                "30000"
+            ])
+        );
         assert_eq!(
             response["gates"][0]["freshness_collection"]["timeout_ms"],
             1

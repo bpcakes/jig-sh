@@ -246,6 +246,7 @@ impl FileProjection {
         patterns: &InputPatterns,
         ignored: &BTreeSet<String>,
         gitlinks: &BTreeSet<String>,
+        excluded_metadata: &[&str],
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<Self> {
         let mut result = Self {
@@ -300,7 +301,7 @@ impl FileProjection {
                     "a relevant nested Git repository needs recursive authority, which policy v1 does not collect"));
                 continue;
             }
-            if source_excluded(&path) {
+            if source_excluded(&path) || metadata_path(&path, excluded_metadata) {
                 continue;
             }
             let matches = patterns.matches(&path);
@@ -334,6 +335,13 @@ impl FileProjection {
                 parent.directory.symlink_metadata(name)
             }
             .map_err(|_| failed(&path))?;
+            if unobservable_ignored && !gitlink {
+                result.problems.push(SourceProblem::ignored(
+                    &path,
+                    metadata.is_dir() || metadata.file_type().is_symlink(),
+                ));
+                continue;
+            }
             if metadata.file_type().is_symlink() || gitlink {
                 result.problems.push(SourceProblem::unobservable(
                     &path,
@@ -342,12 +350,10 @@ impl FileProjection {
                 ));
                 continue;
             }
-            if unobservable_ignored || (!metadata.is_file() && is_ignored) {
-                result.problems.push(SourceProblem::unobservable(
-                    &path,
-                    metadata.is_dir(),
-                    "required input is ignored and unobservable",
-                ));
+            if !metadata.is_file() && is_ignored {
+                result
+                    .problems
+                    .push(SourceProblem::ignored(&path, metadata.is_dir()));
                 continue;
             }
             if metadata.is_dir() {
@@ -575,6 +581,15 @@ fn read_options(directory: bool) -> OpenOptions {
 
 pub(super) fn source_excluded(path: &str) -> bool {
     path.split('/').any(|part| part == ".git") || path.split('/').next() == Some(".agent")
+}
+
+pub(super) fn metadata_path(path: &str, roots: &[&str]) -> bool {
+    roots.iter().any(|root| {
+        path == *root
+            || path
+                .strip_prefix(root)
+                .is_some_and(|tail| tail.starts_with('/'))
+    })
 }
 
 pub(super) fn ignored_path(path: &str, ignored: &BTreeSet<String>) -> bool {

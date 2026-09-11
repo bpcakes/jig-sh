@@ -1,25 +1,44 @@
 # Target freshness receipt integration
 
-Epoch 9 activates scoped target receipts and gate evaluation. Normal source,
-rendering, loading and launcher capabilities use the same epoch; the development
-feature and special test-loader bypass have been removed. The
+Epoch 9 introduced scoped target receipts and gate evaluation. Epoch 10 adds
+explicit working-file receipt reuse across staging and commits. Normal source,
+rendering, loading and launcher capabilities now use epoch 10. The
 [public policy](public-contract.md#target-freshness-policy-v1-design) defines
 the compatibility rules, and the [measurements](target-freshness-benchmark.md)
 record hosted CI and constrained qualification.
 
-Use an epoch-9-compatible runtime to update a repository, then rerun `work check`
-to record new evidence. Earlier receipts remain readable but cannot satisfy
-epoch 9 gates without their missing original proof. Actions default to
-`whole_repository`; opt into `exhaustive` only after auditing the entire input
-and dependency closure. Existing epoch 2–8 repositories keep their prior rules.
+Use an epoch-10-compatible runtime to update a repository, then rerun `work check`
+to record new evidence. Earlier receipts remain readable but cannot satisfy the
+new epoch's identity. Existing epoch 2–9 repositories keep their prior rules;
+upgrading does not rewrite receipts.
+
+Actions default to `inputs_policy = "whole_repository"` and
+`source_state = "git"`. The first declaration controls path coverage; the second
+controls whether Git placement itself is an input. Opt into `exhaustive` only
+after auditing the entire input and dependency closure. Opt into `worktree` only
+for commands whose results depend on working files without depending on HEAD,
+branch, history, index state or a Git comparison. Both assertions remain the
+repository owner's responsibility.
+
+Working-file source identity covers current paths, types, executable modes and
+bytes. Staging and committing unchanged checked files preserve it. Edits,
+additions, deletions and renames still change it. Whole-repository worktree
+collection observes eligible source outside `.agent/`, `.git/` and ignored
+outputs, honoring explicit `work.receipt_metadata` exclusions as well. Exhaustive
+declarations retain their input scope; required ignored files remain unknown. Existing
+observable ignored-dotenv handling remains. Git source authority conservatively
+includes committed/index state plus HEAD commit and symbolic branch identity.
+Native checks retain Git and prepared comparison authority and reject worktree
+policy. See the [source-state contract](public-contract.md#contract-epoch-10-working-file-receipt-reuse)
+for declaration and compatibility details.
 
 ## Recording and inspection
 
-Each epoch 9 target receipt adds `target_freshness`. A complete value contains
+Epoch 9 and later target receipts contain `target_freshness`. A complete value contains
 the current identity, original dependency receipt references, effective expiry,
 and proof that the original execution did not change global source. Incomplete
 values contain bounded reasons without a partial identity. Future metadata is
-retained as unsupported data; an epoch 9 reader never substitutes legacy digests
+retained as unsupported data; a target-freshness reader never substitutes legacy digests
 for missing or unsupported metadata.
 
 The live execution worker collects one shared source snapshot, checks runner,
@@ -44,7 +63,7 @@ The index retains conflicts as ambiguous receipt IDs. Selected and dependency or
 with an ambiguous ID are unusable; conflicts in unrelated historical receipts
 do not poison another target's proof. All historical records remain unchanged.
 The collector's final source and configuration checks follow receipt lookup;
-whole-policy dependencies also recheck the existing global source token, then
+whole-repository Git-policy dependencies also recheck the existing global source token, then
 the journal identity is checked again before returning results. Current default
 invocations and native work-plan baselines determine expected authority. Recorded
 explicit arguments cannot redefine the invocation a gate requires.
@@ -65,8 +84,13 @@ scripts/jig status --freshness-timeout-ms 30000
 ```
 
 An inspection that exhausts its deadline or resource budget reports unknown,
-with `collection_limit`, its effective budget, and the explicit longer retry
-when the default was used. Typed CLI, MCP, and dashboard results share bounded
+with `collection_limit` and its effective budget. The optional typed
+`freshness_collection.limit` distinguishes `deadline` from `resource`. Deadline
+exhaustion below 30 seconds suggests another read-only inspection at 30,000 ms;
+it does not suggest rerunning checks. A larger timeout does not increase resource
+ceilings. When inspection remains unavailable, reaches the maximum deadline or
+exhausts a resource limit, execution previews and execution remedies are withheld
+because current evidence has not been established. Typed CLI, MCP, and dashboard results share bounded
 `freshness_reasons`, their total and truncation indicator, and separate outcome
 and freshness precedence. Failed execution takes precedence in gate outcome;
 unsupported authority remains visible in aggregate freshness.
@@ -75,6 +99,56 @@ The new phase includes original proof resolution, source collection, and
 comparison. Existing global source checks and legacy journal selection retain
 their own limits. The 16 MiB original-record cap is an additional bound;
 collection never hashes a truncated record or partial file set.
+
+## Recovery without unrelated reruns
+
+`work gates` and `work evidence` show unresolved target IDs, freshness reasons,
+available changed-input paths and any preview truncation. When inspection is
+complete, they preview native targets that would execute and current required
+passes that would be reused. Execution previews include actual prerequisites;
+checks that merely need to pass together belong in a profile, not in one
+another's `depends_on` lists. Generated test, formatting, contract and file-budget
+checks already use independent profile membership. Updates preserve authored
+dependencies, so repositories must review their custom prerequisite edges.
+
+The normal recovery command preserves the work plan's comparison authority and
+runs the required checks that need fresh evidence:
+
+```sh
+scripts/jig work check --plan-id PLAN_ID
+```
+
+For a deliberately forced native target, use the exact target command emitted
+by inspection, for example:
+
+```sh
+scripts/jig check repo:file-budget --plan-id PLAN_ID
+```
+
+Do not add an explicit comparison override to this repair: the gate expects the
+work plan's comparison authority. `work check --tool jig.file_budget` records
+legacy tool evidence, which cannot satisfy a native target gate. When native
+gates coexist, that command reports a `native_evidence_note` explaining the
+mismatch instead of presenting its receipt as native repair evidence.
+
+The runtime-owned CLI and MCP gate/evidence JSON adds `recovery`, or null when
+there are no required native evidence targets. Its fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `scope` | `required_native_targets`; the preview does not claim to cover legacy or external gates. |
+| `inspection` | `complete`, `deadline_exhausted`, `resource_exhausted` or `unavailable`. |
+| `preview_available` | Whether current evidence supports an execution/reuse preview. |
+| `execute`, `reuse` | Structured target IDs for scheduled execution, including prerequisites, and current required passes. |
+| `targets` | Target disposition, reason and optional `refresh` command. Reasons include `current_pass`, `dependency_execution` and `evidence_not_current_and_passing`. |
+| `next_step` | An optional command object with literal `argv` and `read_only`; timeout recovery uses read-only inspection. |
+| `message`, `legacy_tool_note` | Human explanation and legacy/native receipt guidance. |
+
+Each target `refresh` uses the same `argv`/`read_only` shape, with `read_only`
+false for receipt-producing execution. This is an inspection result, not a new
+`--dry-run` mode or a reservation of future execution state. Source changes after
+inspection can alter the checks required by the eventual command. Existing
+freshness statuses and reason codes retain their meanings.
 
 ## Time validity and retention
 
@@ -98,14 +172,15 @@ each dependency level. Archive has no inspection collection quotas, so it can
 still shrink journals that inspection refuses to collect.
 
 File-budget adoption and update still require the original full-repository,
-input/configuration, policy, and native prepared-authority checks. Epoch 9 also
-requires complete original freshness proof and effective validity. A scoped
+input/configuration, policy, and native prepared-authority checks. Epoch 9 and later also
+require complete original freshness proof and effective validity. A scoped
 gate pass alone cannot authorize either operation.
 
-Generated and inherited actions default to `whole_repository` with ordinary
-field provenance. Recopy preserves explicit exhaustive declarations. Enabling
-epoch 9 alone does not establish that an action's inputs are exhaustive; its
-entire dependency closure must be audited before unrelated edits can save reruns.
+Generated and inherited actions default to `whole_repository` and `git` with
+ordinary field provenance. Recopy preserves explicit exhaustive and worktree
+declarations. Enabling epoch 10 alone asserts neither input completeness nor
+independence from Git state; review the entire dependency closure before opting
+in. Original execution safety remains unchanged even for worktree receipts.
 
 Archive maintenance streams the required dependency frontier under its existing
 writer lock. It does not spend source inspection quotas, so reaching an

@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::*;
+
+mod worktree;
 use crate::repository::freshness::CollectionLimits;
 
 fn identity(target: &str) -> TargetIdentityV1 {
@@ -15,6 +17,7 @@ fn identity(target: &str) -> TargetIdentityV1 {
         digest_domain: TARGET_IDENTITY_DOMAIN.into(),
         target: target.parse().unwrap(),
         inputs_policy: ActionInputsPolicy::Exhaustive,
+        source_state: None,
         source_digest: "source".into(),
         authority_digest: "authority".into(),
         dependency_digest: "dependencies".into(),
@@ -43,6 +46,9 @@ fn encode_identity(identity: &mut TargetIdentityV1) {
     identity.dependency_digest = dependencies.finish();
     let mut complete = IdentityEncoder::new(TARGET_IDENTITY_DOMAIN, identity.contract_epoch);
     complete.target(&identity.target);
+    if identity.contract_epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION {
+        complete.source_state(identity.source_state);
+    }
     complete.text(&identity.source_digest);
     complete.text(&identity.authority_digest);
     complete.text(&identity.dependency_digest);

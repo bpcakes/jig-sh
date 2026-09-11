@@ -4,6 +4,8 @@
 # their record terminator here. Failure or diagnostics invalidates the batch.
 set -e
 set -o pipefail
+allow_unborn="$1"
+shift
 scope_count="$1"
 shift
 scope=()
@@ -14,9 +16,22 @@ done
 printf 'format\0'
 git rev-parse --show-object-format
 printf '\0\0head\0'
-git rev-parse --verify HEAD
+if jig_head=$(git rev-parse --verify --quiet HEAD); then
+    printf '%s\n' "$jig_head"
+else
+    jig_result=$?
+    [ "$allow_unborn" -eq 1 ] && [ "$jig_result" -eq 1 ] || exit 1
+    jig_branch=$(git symbolic-ref -q HEAD)
+    jig_result=0
+    git show-ref --verify --quiet "$jig_branch" || jig_result=$?
+    [ "$jig_result" -eq 1 ] || exit 1
+    jig_head=unborn
+    printf 'unborn\n'
+fi
 printf '\0\0tree\0'
-git --no-replace-objects --literal-pathspecs ls-tree -r -z HEAD -- "${scope[@]}"
+if [ "$jig_head" != unborn ]; then
+    git --no-replace-objects --literal-pathspecs ls-tree -r -z HEAD -- "${scope[@]}"
+fi
 printf '\0index\0'
 git --no-replace-objects --literal-pathspecs ls-files --stage -t -z -- "${scope[@]}"
 printf '\0ita_visible\0'

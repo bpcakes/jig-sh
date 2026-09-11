@@ -4,9 +4,11 @@ use anyhow::{Result, ensure};
 use jig_contract::freshness::{
     DependencyIdentity, FreshnessCollectionStats, FreshnessReasonCode,
     TARGET_FRESHNESS_CONTRACT_VERSION, TARGET_IDENTITY_DOMAIN, TARGET_IDENTITY_SCHEMA_VERSION,
-    TargetIdentityV1,
+    TargetIdentityV1, WORKTREE_FRESHNESS_CONTRACT_VERSION, supported_freshness_epoch,
 };
-use jig_contract::{ActionInputsPolicy, ActionSpec, PlannedTarget, RunPlan, TargetId};
+use jig_contract::{
+    ActionInputsPolicy, ActionSourceState, ActionSpec, PlannedTarget, RunPlan, TargetId,
+};
 
 use super::RepositoryCatalog;
 use crate::context::RepoContext;
@@ -26,6 +28,17 @@ pub(crate) use source::ExecutionAuthorityGuard;
 pub(crate) use source::{read_native_authority_bytes, revalidate_whole_source};
 
 pub(crate) fn validate_inputs_policy(epoch: u32, action: &ActionSpec) -> Result<()> {
+    ensure!(
+        epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION || action.source_state.is_none(),
+        "target '{}' source_state requires contract version {WORKTREE_FRESHNESS_CONTRACT_VERSION} or later",
+        action.target
+    );
+    ensure!(
+        action.source_state != Some(ActionSourceState::Worktree)
+            || !matches!(action.runner, jig_contract::ActionRunner::Native { .. }),
+        "native target '{}' must retain Git and comparison authority; source_state = worktree is for commands that consume working files",
+        action.target
+    );
     ensure!(
         epoch >= TARGET_FRESHNESS_CONTRACT_VERSION || action.inputs_policy.is_none(),
         "target '{}' inputs_policy requires contract version {TARGET_FRESHNESS_CONTRACT_VERSION} or later, including an explicit whole_repository value",
@@ -173,7 +186,7 @@ pub(crate) fn collect_target_identities_with_source(
     whole_repository_token: Option<&str>,
     budget: &mut CollectionBudget<'_>,
 ) -> CollectionResult<TargetIdentityCollection> {
-    if catalog.contract_version() != TARGET_FRESHNESS_CONTRACT_VERSION {
+    if !supported_freshness_epoch(catalog.contract_version()) {
         return Err(CollectionFailure::new(
             FreshnessReasonCode::UnsupportedAuthority,
             "target identity contract epoch is unsupported",
@@ -260,6 +273,11 @@ pub(crate) fn collect_target_identities_with_source(
             let mut identity_hash =
                 IdentityEncoder::new(TARGET_IDENTITY_DOMAIN, catalog.contract_version());
             identity_hash.target(&target);
+            let source_state = (catalog.contract_version() >= WORKTREE_FRESHNESS_CONTRACT_VERSION)
+                .then(|| action.source_state.unwrap_or_default());
+            if catalog.contract_version() >= WORKTREE_FRESHNESS_CONTRACT_VERSION {
+                identity_hash.source_state(source_state);
+            }
             identity_hash.text(&source.digest);
             identity_hash.text(&authority.digest);
             identity_hash.text(&dependency_digest);
@@ -269,6 +287,7 @@ pub(crate) fn collect_target_identities_with_source(
                 digest_domain: TARGET_IDENTITY_DOMAIN.into(),
                 target: target.clone(),
                 inputs_policy: action.inputs_policy.unwrap_or_default(),
+                source_state,
                 source_digest: source.digest,
                 authority_digest: authority.digest,
                 dependency_digest,

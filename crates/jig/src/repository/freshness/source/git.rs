@@ -19,6 +19,7 @@ pub(super) struct GitProjection {
     pub(super) ignored: BTreeSet<String>,
     pub(super) problems: Vec<SourceProblem>,
     raw: Vec<u8>,
+    allow_unborn: bool,
     entries: u64,
 }
 
@@ -26,10 +27,11 @@ impl GitProjection {
     pub(super) fn capture(
         root: &Path,
         patterns: &InputPatterns,
+        allow_unborn: bool,
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<Self> {
         let started = Instant::now();
-        let raw = git(root, patterns, budget)?;
+        let raw = git(root, patterns, allow_unborn, budget)?;
         budget.stats.git_us += started.elapsed().as_micros() as u64;
         let before_entries = budget.stats.discovered_entries;
         let mut problems = Vec::new();
@@ -42,7 +44,9 @@ impl GitProjection {
             ));
         }
         let head = blocks.scalar("head")?;
-        validate_oid(head, format)?;
+        if !(allow_unborn && head == "unborn") {
+            validate_oid(head, format)?;
+        }
         let committed_started = Instant::now();
         let raw_tree = blocks.take("tree")?;
         let committed = parse_entries(raw_tree, false, format, budget, &mut problems)?;
@@ -82,6 +86,7 @@ impl GitProjection {
             ignored,
             problems,
             raw,
+            allow_unborn,
             entries: budget.stats.discovered_entries - before_entries,
         })
     }
@@ -92,7 +97,7 @@ impl GitProjection {
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<()> {
         let started = Instant::now();
-        let current = git(root, patterns, budget)?;
+        let current = git(root, patterns, self.allow_unborn, budget)?;
         budget.stats.git_us += started.elapsed().as_micros() as u64;
         // The complete validated protocol is re-observed byte for byte. If it
         // matches, parsing its maps again adds no proof. Charge the same visited
@@ -297,6 +302,7 @@ fn nul_records(raw: &[u8]) -> CollectionResult<impl Iterator<Item = &[u8]>> {
 fn git(
     root: &Path,
     patterns: &InputPatterns,
+    allow_unborn: bool,
     budget: &CollectionBudget<'_>,
 ) -> CollectionResult<Vec<u8>> {
     let mut command = std::process::Command::new("bash");
@@ -310,6 +316,7 @@ fn git(
             include_str!("git.sh"),
             "jig-freshness-git",
         ])
+        .arg(if allow_unborn { "1" } else { "0" })
         .arg(roots.len().to_string())
         .args(roots)
         .args(patterns.observation_prefixes());
@@ -339,6 +346,32 @@ fn git(
             failed()
         }
     })
+}
+
+// Retain HEAD and branch identity for Git-sensitive epoch-10 actions even
+// when their declared file scope is unchanged by a commit or branch switch.
+pub(super) fn head_authority(
+    root: &Path,
+    budget: &CollectionBudget<'_>,
+) -> CollectionResult<String> {
+    let mut command = std::process::Command::new("bash");
+    command.current_dir(root).args([
+        "--noprofile",
+        "--norc",
+        "-c",
+        include_str!("head.sh"),
+        "jig-freshness-head",
+    ]);
+    crate::shell::sanitize_bash_environment(&mut command);
+    let result = crate::git_receipts::read_freshness_git_batch(
+        root,
+        &mut command,
+        8192,
+        budget.remaining()?,
+        &|| budget.stopped(),
+    );
+    budget.ensure_active()?;
+    String::from_utf8(result.map_err(|_| failed())?).map_err(|_| failed())
 }
 
 fn failed() -> CollectionFailure {

@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use jig_contract::freshness::FreshnessReasonCode;
-use jig_contract::{ActionInputsPolicy, ActionRunner, ActionSpec, ArgvValue, PlannedTarget};
+use jig_contract::{ActionRunner, ActionSpec, ArgvValue, PlannedTarget};
 use serde_json::json;
 
 use super::{
@@ -50,7 +50,7 @@ pub(super) fn collect(
             working_directory,
             environment,
         } => {
-            if action.inputs_policy == Some(ActionInputsPolicy::Exhaustive) {
+            if super::source::uses_file_projection(action) {
                 let paths = repository_programs(
                     ctx,
                     program,
@@ -115,7 +115,7 @@ pub(super) fn collect(
             let path = normalized_working_directory(working_directory.as_deref())?;
             // The configured path itself is authority; absolute checkout paths
             // never enter a digest. A symlinked cwd cannot create scoped proof.
-            if action.inputs_policy == Some(ActionInputsPolicy::Exhaustive) {
+            if super::source::uses_file_projection(action) {
                 source.observe_working_directory(&path, budget)?;
             }
             *working_directory = Some(path);

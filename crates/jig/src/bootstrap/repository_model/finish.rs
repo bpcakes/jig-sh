@@ -3,6 +3,8 @@ use super::*;
 impl ModelBuilder<'_> {
     pub(super) fn finish(self) -> Result<RepositoryRenderModel> {
         let default_check_profile = ProfileId::parse(DEFAULT_PROFILE)?;
+        // Profile membership requires every check to pass without turning policy
+        // receipts into execution prerequisites of otherwise independent checks.
         let profile_targets = self
             .actions
             .values()

@@ -43,32 +43,8 @@ pub(super) fn check_from_mcp_with_observer(
     check_with_execution(ctx, opts, WorkCheckExecution::RejectContention, observer)
 }
 
-fn check_with_execution(
-    ctx: &RepoContext,
-    opts: WorkCheckRequest,
-    execution: WorkCheckExecution,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    // Closed plans are inspectable through gates/evidence, but checks append
-    // fresh receipts and must stay tied to open work.
-    crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
-    if opts.gates.is_empty() && opts.tools.is_empty() {
-        return check_configured_with_execution(
-            ctx,
-            &opts.plan_id,
-            FailureMode::Abort,
-            execution,
-            observer,
-        );
-    }
-    check_selected_with_observer(
-        ctx,
-        &opts.plan_id,
-        selected_checks(ctx, &opts.gates, &opts.tools)?,
-        execution,
-        observer,
-    )
-}
+mod selection;
+use selection::check_with_execution;
 
 #[cfg(test)]
 pub(in crate::runtime) fn check_tools_collect_failures_with_observer(

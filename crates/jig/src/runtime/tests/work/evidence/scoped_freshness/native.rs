@@ -1,6 +1,6 @@
 use super::*;
 
-fn configure_native(ctx: &RepoContext, policy: &str) {
+pub(super) fn configure_native(ctx: &RepoContext, policy: &str) {
     let runner = jig_contract::ActionRunner::native_configured(
         jig_contract::tool::FILE_BUDGET,
         jig_contract::NativeActionConfigurationV1::file_budget(

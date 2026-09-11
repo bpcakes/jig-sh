@@ -133,15 +133,16 @@ pub(super) fn evaluate_gate_report_from_index(
     let plan_scope = prepared_scope;
     plan_scope.seed_legacy_fingerprint(current_fingerprint.clone());
 
-    let scoped = repository_for_evidence_gates(ctx, &work_gates)
-        .ok()
+    let repository = repository_for_evidence_gates(ctx, &work_gates).ok();
+    let scoped = repository
+        .as_ref()
         .filter(|catalog| {
             catalog.contract_version() >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
         })
         .map(|catalog| {
             scoped_freshness::ScopedGateFreshness::collect(
                 ctx,
-                &catalog,
+                catalog,
                 scoped_freshness::ScopedGateInputs {
                     plan_id,
                     baseline: plan_scope.baseline(),
@@ -170,7 +171,8 @@ pub(super) fn evaluate_gate_report_from_index(
     }
     collection.ensure_active()?;
 
-    Ok(GateReport {
+    let mut report = GateReport {
+        recovery: None,
         plan_id: plan_id.to_string(),
         plan_state,
         plan_baseline: plan_scope.baseline().cloned(),
@@ -178,5 +180,7 @@ pub(super) fn evaluate_gate_report_from_index(
         current_worktree_fingerprint_error: current_fingerprint.error,
         gates,
         required_failures,
-    })
+    };
+    report.recovery = recovery::from_report(&report, repository.as_ref());
+    Ok(report)
 }

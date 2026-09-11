@@ -158,6 +158,7 @@ pub struct StatusPlanGates {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusGateReport {
     pub ok: bool,
+    pub recovery: Option<jig_contract::recovery::GateRecovery>,
     pub gates_ok: bool,
     pub plan_id: String,
     pub plan_state: String,

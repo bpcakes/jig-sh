@@ -7,11 +7,12 @@ use jig_contract::freshness::{
     FreshnessReasonCode, MAX_FRESHNESS_DIAGNOSTIC_BYTES, MAX_FRESHNESS_REASON_PREVIEWS,
     SourceIdentityPreview,
 };
-use jig_contract::{ActionInputsPolicy, ActionSpec, TargetId};
+use jig_contract::{ActionInputsPolicy, ActionSourceState, ActionSpec, TargetId};
 
 use super::{CollectionBudget, CollectionFailure, CollectionResult, encoding::IdentityEncoder};
 use crate::context::RepoContext;
 
+mod digest;
 mod files;
 mod git;
 mod matches;
@@ -36,6 +37,22 @@ struct InputPattern {
     max_depth: Option<usize>,
 }
 
+pub(super) fn uses_file_projection(action: &ActionSpec) -> bool {
+    action.inputs_policy == Some(ActionInputsPolicy::Exhaustive)
+        || action.source_state == Some(ActionSourceState::Worktree)
+}
+
+fn observation_inputs(action: &ActionSpec) -> Vec<&String> {
+    static WHOLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| "**".into());
+    if action.inputs_policy != Some(ActionInputsPolicy::Exhaustive)
+        && action.source_state == Some(ActionSourceState::Worktree)
+    {
+        vec![&WHOLE]
+    } else {
+        action.inputs.iter().collect()
+    }
+}
+
 impl InputPatterns {
     pub(super) fn new(
         actions: &[&ActionSpec],
@@ -43,11 +60,8 @@ impl InputPatterns {
     ) -> CollectionResult<Self> {
         let mut patterns = Vec::new();
         let mut seen = BTreeSet::new();
-        for action in actions
-            .iter()
-            .filter(|action| action.inputs_policy == Some(ActionInputsPolicy::Exhaustive))
-        {
-            for input in &action.inputs {
+        for action in actions.iter().filter(|action| uses_file_projection(action)) {
+            for input in observation_inputs(action) {
                 budget.ensure_active()?;
                 if !seen.insert(input.clone()) {
                     continue;
@@ -160,9 +174,8 @@ impl InputPatterns {
     }
 
     fn for_action(&self, action: &ActionSpec) -> Self {
-        let patterns = action
-            .inputs
-            .iter()
+        let patterns = observation_inputs(action)
+            .into_iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter_map(|input| {
@@ -206,6 +219,7 @@ pub(super) struct SourceProblem {
     path: String,
     raw_path: Option<Vec<u8>>,
     descendants: bool,
+    ignored: bool,
     failure: CollectionFailure,
 }
 
@@ -215,9 +229,20 @@ impl SourceProblem {
             path: path.into(),
             raw_path: None,
             descendants,
+            ignored: false,
             failure: CollectionFailure::new(FreshnessReasonCode::UnobservableInput, message)
                 .at(path),
         }
+    }
+
+    fn ignored(path: &str, descendants: bool) -> Self {
+        let mut problem = Self::unobservable(
+            path,
+            descendants,
+            "required input is ignored and unobservable",
+        );
+        problem.ignored = true;
+        problem
     }
 
     fn unsupported_path(raw: &[u8]) -> Self {
@@ -239,6 +264,7 @@ impl SourceProblem {
             path: preview.clone(),
             raw_path: Some(raw.to_vec()),
             descendants: true,
+            ignored: false,
             failure: CollectionFailure::new(
                 FreshnessReasonCode::UnobservableInput,
                 "an input has unsupported path encoding or text beneath this directory",
@@ -266,6 +292,8 @@ pub(super) struct SourceDigest {
 
 pub(super) struct SourceSnapshot {
     root: Dir,
+    head: Option<String>,
+    receipt_metadata: Vec<&'static str>,
     configuration: Vec<String>,
     patterns: InputPatterns,
     action_patterns: BTreeMap<TargetId, InputPatterns>,
@@ -298,10 +326,34 @@ impl SourceSnapshot {
                 "repository execution configuration changed before collection",
             ));
         }
+        let head = if ctx.contract_version()
+            >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION
+            && actions
+                .iter()
+                .any(|action| action.source_state.unwrap_or_default() == ActionSourceState::Git)
+        {
+            Some(git::head_authority(ctx.root(), budget)?)
+        } else {
+            None
+        };
+        let receipt_metadata = ctx.work_receipt_metadata_paths();
         let patterns = InputPatterns::new(actions, budget)?;
+        // Whole working-file projections retain the existing explicit tracker
+        // ownership exclusion. An exhaustive sibling can still observe a path
+        // it declares; that must not widen the whole-policy action's digest.
+        let excluded_metadata = receipt_metadata
+            .iter()
+            .copied()
+            .filter(|path| {
+                !actions.iter().any(|action| {
+                    action.inputs_policy == Some(ActionInputsPolicy::Exhaustive)
+                        && patterns.for_action(action).intersects(path)
+                })
+            })
+            .collect::<Vec<_>>();
         let action_patterns = actions
             .iter()
-            .filter(|action| action.inputs_policy == Some(ActionInputsPolicy::Exhaustive))
+            .filter(|action| uses_file_projection(action))
             .map(|action| (action.target.clone(), patterns.for_action(action)))
             .collect();
         let mut problems = Vec::new();
@@ -314,7 +366,13 @@ impl SourceSnapshot {
                     "scoped source identity requires supported filesystem identity metadata",
                 ));
             }
-            let git = GitProjection::capture(ctx.root(), &patterns, budget)?;
+            let git = GitProjection::capture(
+                ctx.root(),
+                &patterns,
+                ctx.contract_version()
+                    >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION,
+                budget,
+            )?;
             let gitlinks = git
                 .committed
                 .iter()
@@ -338,14 +396,17 @@ impl SourceSnapshot {
                 let descendants = root
                     .symlink_metadata(path)
                     .map_or(true, |metadata| metadata.is_dir());
-                problems.push(SourceProblem::unobservable(
-                    path,
-                    descendants,
-                    "required input is ignored and unobservable",
-                ));
+                problems.push(SourceProblem::ignored(path, descendants));
             }
             let started = Instant::now();
-            let files = FileProjection::capture(&root, &patterns, &git.ignored, &gitlinks, budget)?;
+            let files = FileProjection::capture(
+                &root,
+                &patterns,
+                &git.ignored,
+                &gitlinks,
+                &excluded_metadata,
+                budget,
+            )?;
             budget.stats.worktree_us += started.elapsed().as_micros() as u64;
             (Some(git), Some(files))
         };
@@ -359,6 +420,8 @@ impl SourceSnapshot {
         budget.stats.matching_us += matching_started.elapsed().as_micros() as u64;
         Ok(Self {
             root,
+            head,
+            receipt_metadata,
             configuration,
             patterns,
             action_patterns,
@@ -371,120 +434,8 @@ impl SourceSnapshot {
         })
     }
 
-    pub(super) fn for_action(
-        &self,
-        epoch: u32,
-        action: &ActionSpec,
-        whole_repository_token: Option<&str>,
-        budget: &CollectionBudget<'_>,
-    ) -> CollectionResult<SourceDigest> {
-        budget.ensure_active()?;
-        let mut hash = IdentityEncoder::new("jig-target-source-v1", epoch);
-        let policy = action.inputs_policy.unwrap_or_default();
-        hash.text(match policy {
-            ActionInputsPolicy::WholeRepository => "whole_repository",
-            ActionInputsPolicy::Exhaustive => "exhaustive",
-        });
-        let normalized = action.inputs.iter().collect::<BTreeSet<_>>();
-        hash.number(normalized.len() as u64);
-        for pattern in normalized {
-            hash.text(pattern);
-        }
-        if policy == ActionInputsPolicy::WholeRepository {
-            let whole_repository_token = whole_repository_token.ok_or_else(|| {
-                CollectionFailure::new(
-                    FreshnessReasonCode::CollectionFailed,
-                    "whole-repository source authority could not be collected",
-                )
-            })?;
-            hash.text(whole_repository_token);
-            return Ok(SourceDigest {
-                digest: hash.finish(),
-                preview: Vec::new(),
-                count: 0,
-                truncated: false,
-            });
-        }
-        let patterns = self
-            .action_patterns
-            .get(&action.target)
-            .expect("exhaustive action patterns exist");
-        let git = self
-            .git
-            .as_ref()
-            .expect("exhaustive source projection exists");
-        let files = self
-            .files
-            .as_ref()
-            .expect("exhaustive worktree projection exists");
-        for problem in self
-            .problems
-            .iter()
-            .chain(&git.problems)
-            .chain(&files.problems)
-        {
-            if problem.applies(patterns) {
-                return Err(problem.failure.clone());
-            }
-        }
-        let mut paths = BTreeSet::new();
-        // Every declaration has a complete precomputed count, including zero.
-        // Shared declarations never rescan the whole projection per target.
-        for pattern in &patterns.patterns {
-            let matched = &self.matched.by_pattern[&pattern.text];
-            hash.number(matched.len() as u64);
-            for index in matched {
-                budget.ensure_active()?;
-                paths.insert(*index);
-            }
-        }
-        hash.number(paths.len() as u64);
-        let mut preview = Vec::new();
-        let mut preview_bytes = 2; // enclosing JSON array
-        let mut preview_exhausted = false;
-        for index in &paths {
-            budget.ensure_active()?;
-            let path = &self.matched.paths[*index];
-            let mut entry = IdentityEncoder::new("jig-target-source-v1", epoch);
-            entry.text("entry-preview");
-            entry.text(path);
-            for projection in [&git.committed, &git.index] {
-                let value = projection.get(path);
-                entry.optional(value.map(|value| value.mode.as_str()));
-                entry.optional(value.map(|value| value.object.as_str()));
-            }
-            let current = files.entries.get(path);
-            entry.optional(current.map(|current| current.kind));
-            if let Some(current) = current {
-                entry.number(current.mode);
-                entry.optional(current.digest.as_deref());
-            }
-            let digest = entry.finish();
-            hash.text(path);
-            hash.text(&digest);
-            if !preview_exhausted && preview.len() < MAX_FRESHNESS_REASON_PREVIEWS {
-                let item = SourceIdentityPreview {
-                    path: path.clone(),
-                    digest,
-                };
-                let bytes = serde_json::to_vec(&item)
-                    .expect("string preview encodes as JSON")
-                    .len()
-                    + usize::from(!preview.is_empty());
-                if preview_bytes + bytes <= MAX_FRESHNESS_DIAGNOSTIC_BYTES {
-                    preview_bytes += bytes;
-                    preview.push(item);
-                } else {
-                    preview_exhausted = true;
-                }
-            }
-        }
-        Ok(SourceDigest {
-            digest: hash.finish(),
-            truncated: preview.len() < paths.len(),
-            preview,
-            count: paths.len() as u64,
-        })
+    fn is_receipt_metadata(&self, path: &str) -> bool {
+        files::metadata_path(path, &self.receipt_metadata)
     }
 
     pub(super) fn require_runner_candidate(
@@ -493,10 +444,24 @@ impl SourceSnapshot {
         path: &str,
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<()> {
-        if action.inputs_policy != Some(ActionInputsPolicy::Exhaustive) {
+        if !uses_file_projection(action) {
             return Ok(());
         }
         budget.ensure_active()?;
+        if action.source_state == Some(ActionSourceState::Worktree)
+            && (source_excluded(path)
+                || (action.inputs_policy != Some(ActionInputsPolicy::Exhaustive)
+                    && self.is_receipt_metadata(path))
+                || self.git.as_ref().is_some_and(|git| {
+                    files::ignored_path(path, &git.ignored)
+                        && !observable_dotenv(path, &git.ignored)
+                }))
+        {
+            return Err(CollectionFailure::new(
+                FreshnessReasonCode::UnobservableInput,
+                "repository-local runner is excluded or ignored and cannot prove working-file authority",
+            ).at(path));
+        }
         if !self
             .action_patterns
             .get(&action.target)
@@ -557,6 +522,14 @@ impl SourceSnapshot {
         execution: bool,
     ) -> CollectionResult<()> {
         files::same_directory(&self.root, &files::open_root(ctx.root())?)?;
+        if let Some(head) = &self.head
+            && *head != git::head_authority(ctx.root(), budget)?
+        {
+            return Err(CollectionFailure::new(
+                FreshnessReasonCode::SourceRaced,
+                "Git HEAD changed during source collection",
+            ));
+        }
         if let Some(git) = &self.git {
             git.revalidate(ctx.root(), &self.patterns, budget)?;
         }
