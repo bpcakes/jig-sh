@@ -3,9 +3,8 @@ use std::sync::TryLockError;
 
 use jig_contract::freshness::{
     DependencyExecutionProofV1, EffectiveTimeValidityV1, FreshnessReason,
-    FreshnessReasonCode as Code, FreshnessReasons, GlobalExecutionProofV1,
-    TARGET_FRESHNESS_CONTRACT_VERSION, TargetFreshnessMetadata, TargetFreshnessStateV1,
-    TargetFreshnessV1,
+    FreshnessReasonCode as Code, FreshnessReasons, GlobalExecutionProofV1, TargetFreshnessMetadata,
+    TargetFreshnessStateV1, TargetFreshnessV1,
 };
 
 use super::*;
@@ -16,6 +15,7 @@ use crate::repository::freshness::{
 };
 
 pub(super) struct ExecutionFreshness {
+    contract_epoch: u32,
     collected: Mutex<CollectionResult<TargetIdentityCollection>>,
     completed: Mutex<BTreeMap<TargetId, CompletedProof>>,
 }
@@ -48,6 +48,7 @@ impl ExecutionFreshness {
             &mut budget,
         );
         Self {
+            contract_epoch: catalog.contract_version(),
             collected: Mutex::new(collected),
             completed: Mutex::new(BTreeMap::new()),
         }
@@ -243,7 +244,7 @@ impl ExecutionFreshness {
         };
         TargetFreshnessMetadata::V1(Box::new(TargetFreshnessV1 {
             schema_version: 1,
-            contract_epoch: TARGET_FRESHNESS_CONTRACT_VERSION,
+            contract_epoch: self.contract_epoch,
             effective_valid_until_ms: time.effective_valid_until_ms,
             effective_requires_time_validity: time.effective_requires_time_validity,
             global_execution_proof,

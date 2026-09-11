@@ -338,6 +338,7 @@ fn status_open_plan() -> StatusOpenPlan {
 fn status_gate_report() -> StatusGateReport {
     StatusGateReport {
         ok: true,
+        recovery: None,
         gates_ok: true,
         plan_id: "plan_example".to_string(),
         plan_state: "open".to_string(),

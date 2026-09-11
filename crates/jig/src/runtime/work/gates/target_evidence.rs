@@ -459,17 +459,17 @@ impl EvidenceGateEvaluation {
 }
 
 fn collection_limit_reason(stats: &FreshnessCollectionStats) -> String {
-    let remedy = if stats.timeout_ms == 2_000
-        && stats.elapsed_us >= stats.timeout_ms.saturating_mul(1_000)
-    {
-        " For a deadline limit, rerun this inspection with --freshness-timeout-ms 30000. Resource ceilings are unchanged."
-    } else {
-        " A larger timeout does not raise entry, byte, graph, depth, or record limits."
-    };
-    format!(
-        "Freshness collection reached a time or resource limit (budget {} ms).{remedy}",
-        stats.timeout_ms
-    )
+    use jig_contract::freshness::FreshnessCollectionLimit;
+    match stats.limit {
+        Some(FreshnessCollectionLimit::Deadline) if stats.timeout_ms < super::RECORDING_TIMEOUT_MS => format!(
+            "Freshness inspection exceeded its {} ms budget; freshness is unknown. Retry read-only inspection with --freshness-timeout-ms 30000. Resource ceilings are unchanged.", stats.timeout_ms
+        ),
+        Some(FreshnessCollectionLimit::Deadline) => format!(
+            "Freshness inspection exceeded its {} ms budget at the maximum timeout; freshness is unknown. Resolve the observation limit before executing checks.", stats.timeout_ms
+        ),
+        Some(FreshnessCollectionLimit::Resource) => "Freshness inspection exhausted a resource ceiling; freshness is unknown. A larger timeout does not raise entry, byte, graph, depth, or record limits.".into(),
+        None => "Freshness collection reached a time or resource limit; freshness is unknown. Inspect collection diagnostics before executing checks.".into(),
+    }
 }
 
 fn target_evidence_freshness(
@@ -597,7 +597,7 @@ const fn evidence_freshness_reason(freshness: GateFreshness) -> &'static str {
         GateFreshness::Fresh => "all required target receipts match current inputs",
         GateFreshness::Missing => "one or more required targets have no receipt in this work plan",
         GateFreshness::Stale => "one or more required target receipts are stale",
-        GateFreshness::Unknown => "freshness is unknown for one or more required target receipts",
+        GateFreshness::Unknown => "freshness is unknown for one or more required targets",
         GateFreshness::Unsupported => {
             "one or more required target receipts need a compatible freshness reader"
         }
@@ -682,7 +682,7 @@ fn scoped_freshness_reason(result: &TargetFreshness) -> &'static str {
             "target authority changed or its effective time validity expired"
         }
         TargetFreshnessStatus::Unknown => {
-            "original target authority or dependency execution proof could not be verified"
+            "current or original target authority or dependency execution proof could not be verified"
         }
     }
 }

@@ -42,6 +42,11 @@ pub(super) fn validate_repository_source(
                 {
                     action.inputs_policy = Some(action.inputs_policy.unwrap_or_default());
                 }
+                if manifest.contract_version
+                    >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION
+                {
+                    action.source_state = Some(action.source_state.unwrap_or_default());
+                }
                 action
             })
             .collect::<Vec<_>>()

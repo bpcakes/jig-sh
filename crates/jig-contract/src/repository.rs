@@ -493,6 +493,17 @@ pub enum ActionInputsPolicy {
     Exhaustive,
 }
 
+/// Whether Git placement itself is an input, independently of path coverage.
+/// Working-file actions assert that staging and committing unchanged files do
+/// not affect their result. Omission retains conservative Git source authority.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionSourceState {
+    #[default]
+    Git,
+    Worktree,
+}
+
 /// One typed capability offered by a component.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -511,6 +522,9 @@ pub struct ActionSpec {
     /// the freshness epoch. Omission means `whole_repository`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs_policy: Option<ActionInputsPolicy>,
+    /// Available from the working-file freshness epoch. Omission means `git`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<ActionSourceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<TargetId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -535,6 +549,7 @@ impl ActionSpec {
             arguments: BTreeMap::new(),
             inputs: Vec::new(),
             inputs_policy: None,
+            source_state: None,
             depends_on: Vec::new(),
             timeout_seconds: None,
             result_parser: ResultParser::default(),

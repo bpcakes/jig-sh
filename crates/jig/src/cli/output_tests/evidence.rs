@@ -269,3 +269,79 @@ fn work_check_summary_exposes_reused_native_provenance_and_aggregate_failure() {
     value["ok"] = json!(false);
     assert!(format_work_check_summary(&value).contains("Work check: failed"));
 }
+
+#[test]
+fn recovery_summaries_show_actual_input_changes_and_plan_bound_native_commands() {
+    let value = json!({"plan_id":"plan_example", "plan_state":"open", "overall":"blocked",
+    "gates":[{"id":"verify", "status":"stale", "targets":[{
+        "target":{"component":"api", "action":"test"}, "status":"stale", "freshness":"stale",
+        "freshness_reason":"target authority changed", "changed_paths":["old-coverage.md"],
+        "freshness_reasons":[{"code":"direct_input_changed", "path":"api/example.go"}],
+        "freshness_reasons_truncated":true
+    }]}], "recovery":{
+        "preview_available":true,
+        "execute":[{"component":"api", "action":"test"}],
+        "reuse":[{"component":"web", "action":"test"}],
+        "targets":[{"target":{"component":"api", "action":"test"},
+            "refresh":{"argv":["scripts/jig","check","api:test","--plan-id","plan_example"]}}],
+        "legacy_tool_note":"work check --tool records legacy tool evidence; it cannot satisfy a native target gate.",
+        "next_step":{"argv":["scripts/jig","work","check","--plan-id","plan_example"]}
+    }});
+    for summary in [
+        format_work_gates_summary(&value),
+        format_work_evidence_summary(&value),
+    ] {
+        assert!(summary.contains("api:test: stale"), "{summary}");
+        assert!(
+            summary.contains("direct_input_changed; input api/example.go"),
+            "{summary}"
+        );
+        assert!(!summary.contains("input old-coverage.md"));
+        assert!(summary.contains("preview is truncated"));
+        assert!(summary.contains("Native checks would execute: api:test"));
+        assert!(summary.contains("Native passes would be reused: web:test"));
+        assert!(summary.contains("scripts/jig check api:test --plan-id plan_example"));
+        assert!(summary.contains("cannot satisfy a native target gate"));
+        assert!(!summary.contains("--comparison"));
+    }
+}
+
+#[test]
+fn recovery_summaries_prefer_read_only_timeout_retry_and_suppress_execution_when_unknown() {
+    let mut value = json!({"plan_id":"plan_example", "plan_state":"open", "overall":"blocked",
+        "gates":[{"id":"verify", "status":"unknown", "freshness":"unknown"}],
+        "recovery":{"preview_available":false, "inspection":"deadline_exhausted",
+            "message":"Inspection exceeded its budget; this does not establish that evidence is stale.",
+            "next_step":{"read_only":true,"argv":["scripts/jig","work","gates","--plan-id","plan_example","--freshness-timeout-ms","30000"]}}});
+    for summary in [
+        format_work_gates_summary(&value),
+        format_work_evidence_summary(&value),
+    ] {
+        assert!(
+            summary
+                .lines()
+                .last()
+                .unwrap()
+                .contains("--freshness-timeout-ms 30000"),
+            "{summary}"
+        );
+        assert!(!summary.contains("work check"), "{summary}");
+        assert!(!summary.contains("would execute"), "{summary}");
+    }
+    value["recovery"]["inspection"] = json!("resource_exhausted");
+    value["recovery"]["next_step"] = serde_json::Value::Null;
+    for summary in [
+        format_work_gates_summary(&value),
+        format_work_evidence_summary(&value),
+    ] {
+        assert!(!summary.contains("work check"), "{summary}");
+        assert!(
+            summary
+                .lines()
+                .last()
+                .unwrap()
+                .contains("resolve the inspection diagnostics"),
+            "{summary}"
+        );
+    }
+}

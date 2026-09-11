@@ -18,11 +18,8 @@ pub(super) fn matches_generated_actions(expected: &[ActionSpec], authored: &[Act
             let mut authored = authored.clone();
             for action in [&mut expected, &mut authored] {
                 super::runners::make_shell_explicit(&mut action.runner);
-                if prepare_action_inputs_policy(
-                    action,
-                    jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION,
-                )
-                .is_err()
+                if prepare_action_inputs_policy(action, crate::context::CURRENT_CONTRACT_VERSION)
+                    .is_err()
                 {
                     return false;
                 }
@@ -47,6 +44,18 @@ pub(in crate::bootstrap) fn prepare_action_inputs_policy(
         action
             .provenance
             .entry("inputs_policy".into())
+            .or_insert(provenance);
+    }
+    if epoch >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION {
+        let provenance = if action.source_state.is_some() {
+            FieldProvenance::Declared
+        } else {
+            FieldProvenance::Inferred
+        };
+        action.source_state = Some(action.source_state.unwrap_or_default());
+        action
+            .provenance
+            .entry("source_state".into())
             .or_insert(provenance);
     }
     crate::repository::freshness::validate_inputs_policy(epoch, action)

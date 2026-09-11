@@ -7,6 +7,7 @@ use jig_contract::freshness::{
     GlobalExecutionProofV1, TARGET_FRESHNESS_CONTRACT_VERSION, TARGET_IDENTITY_DOMAIN,
     TARGET_IDENTITY_SCHEMA_VERSION, TargetFreshness, TargetFreshnessMetadata,
     TargetFreshnessStateV1, TargetFreshnessStatus as Status, TargetFreshnessV1, TargetIdentityV1,
+    WORKTREE_FRESHNESS_CONTRACT_VERSION, supported_freshness_epoch,
 };
 
 use super::{CollectionBudget, CollectionFailure, CollectionResult};
@@ -222,10 +223,12 @@ impl OriginalProofValidator {
                 );
                 if identity.target != receipt.target
                     || identity.contract_epoch != metadata.contract_epoch
+                    || (identity.contract_epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION)
+                        != identity.source_state.is_some()
                 {
                     add(&mut result, Status::Unknown, Code::DependencyProofInvalid);
                 }
-                if identity.contract_epoch == TARGET_FRESHNESS_CONTRACT_VERSION
+                if supported_freshness_epoch(identity.contract_epoch)
                     && identity.schema_version == TARGET_IDENTITY_SCHEMA_VERSION
                     && identity.digest_domain == TARGET_IDENTITY_DOMAIN
                     && !identity_encoding_is_consistent(identity)
@@ -392,6 +395,9 @@ fn identity_encoding_is_consistent(identity: &TargetIdentityV1) -> bool {
     }
     let mut complete = IdentityEncoder::new(TARGET_IDENTITY_DOMAIN, identity.contract_epoch);
     complete.target(&identity.target);
+    if identity.contract_epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION {
+        complete.source_state(identity.source_state);
+    }
     complete.text(&identity.source_digest);
     complete.text(&identity.authority_digest);
     complete.text(&identity.dependency_digest);
@@ -518,7 +524,7 @@ pub(crate) fn apply_time(result: &mut TargetFreshness, now_ms: u64) {
 }
 
 fn check_version(result: &mut TargetFreshness, epoch: u32, schema: u32, domain: &str) {
-    if epoch == TARGET_FRESHNESS_CONTRACT_VERSION
+    if supported_freshness_epoch(epoch)
         && schema == TARGET_IDENTITY_SCHEMA_VERSION
         && domain == TARGET_IDENTITY_DOMAIN
     {

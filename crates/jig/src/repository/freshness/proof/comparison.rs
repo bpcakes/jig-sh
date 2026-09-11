@@ -25,6 +25,7 @@ pub(super) fn compare(
         || recorded.schema_version != expected.schema_version
         || recorded.digest_domain != expected.digest_domain
     {
+        add(result, Status::Stale, Code::AuthorityVersionChanged);
         return;
     }
     for (different, reason) in [

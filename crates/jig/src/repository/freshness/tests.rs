@@ -13,8 +13,10 @@ mod benchmark;
 mod conservative;
 mod invocation;
 mod review_regressions;
+mod worktree;
 
 struct Fixture {
+    epoch: u32,
     temp: TempDir,
     nested_root: Option<std::path::PathBuf>,
     actions: Vec<ActionSpec>,
@@ -79,6 +81,7 @@ impl Fixture {
             &["shared/source/**", "scripts/check.sh"],
         );
         let fixture = Self {
+            epoch: 9,
             temp,
             nested_root: None,
             actions: vec![web, shared, leaf],
@@ -105,11 +108,13 @@ impl Fixture {
     }
 
     fn write_authority(&self) {
-        // During .4.2 the new catalog is exercised as a development fixture;
-        // ordinary repository loading/generation deliberately remains on v8.
+        // Preserve historical fixtures; new source-state cases use the live epoch.
         let mut actions = self.actions.clone();
         for action in &mut actions {
-            action.inputs_policy = None;
+            if self.epoch < 10 {
+                action.inputs_policy = None;
+                action.source_state = None;
+            }
         }
         let components = vec![
             ComponentSpec::new("web".parse().unwrap(), "apps/web"),
@@ -130,7 +135,7 @@ impl Fixture {
         )
         .unwrap();
         let mut manifest = repository;
-        manifest["contract_version"] = json!(8);
+        manifest["contract_version"] = json!(if self.epoch >= 10 { self.epoch } else { 8 });
         manifest["tool_namespace"] = json!("jig");
         manifest["required_commands"] = json!([]);
         manifest["tools"] = json!([]);
@@ -147,7 +152,7 @@ impl Fixture {
 
     fn catalog(&self, ctx: &RepoContext) -> RepositoryCatalog {
         RepositoryCatalog::from_native(
-            9,
+            self.epoch,
             ctx.contract_digest(),
             ctx.component_specs(),
             &self.actions,

@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use super::{concise_preview, status, value_bool, value_i64, value_str};
 
 mod check_targets;
+mod gate_recovery;
 use check_targets::{TargetSummary, append_target_summary, target_summaries};
 
 pub(super) fn format_work_start_plan_id(value: &serde_json::Value) -> Result<String> {
@@ -137,6 +138,9 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
         ));
     }
     append_target_summary(&mut lines, value, &targets);
+    if let Some(note) = value_str(value, "native_evidence_note") {
+        lines.push(note.into());
+    }
 
     if skipped_checks > 0 && skipped_checks == checks.len() && targets.is_empty() {
         lines.push(
@@ -349,6 +353,7 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
         }
     }
 
+    gate_recovery::append_details(&mut lines, value);
     if overall == "passed" && plan_state == "open" {
         lines.push(format!(
             "Next step: scripts/jig work finish --plan-id {plan_id} --resolution <summary> --outcome success"
@@ -362,7 +367,9 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
                 "Status: {overall}; no categorized blockers reported"
             )),
         }
-        if plan_state == "open" {
+        if gate_recovery::append_next_step(&mut lines, value) {
+            // Shared recovery may prescribe read-only inspection or no execution.
+        } else if plan_state == "open" {
             lines.push(format!(
                 "Next step: scripts/jig work check --plan-id {plan_id}"
             ));
@@ -463,12 +470,15 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         }
     }
 
+    gate_recovery::append_details(&mut lines, value);
     if overall == "passed" && plan_state == "open" {
         lines.push(format!(
             "Next step: scripts/jig work finish --plan-id {plan_id} --resolution <summary> --outcome success"
         ));
     } else if overall == "passed" {
         lines.push("Next step: none; plan is closed".into());
+    } else if gate_recovery::append_next_step(&mut lines, value) {
+        // Shared recovery may prescribe read-only inspection or no execution.
     } else if plan_state == "open" {
         lines.push(format!(
             "Next step: scripts/jig work check --plan-id {plan_id}"

@@ -138,6 +138,7 @@ inputs = [
     "**/clippy.toml",
     "**/.clippy.toml",
 ]
+source_state = "worktree"
 intent = "check"
 legacy_aliases = [
     "jig.fmt_check",
@@ -145,6 +146,7 @@ legacy_aliases = [
 ]
 
 [repository.actions.provenance]
+source_state = "declared"
 effects = "inherited"
 inputs = "inherited"
 intent = "inherited"
@@ -194,24 +196,7 @@ legacy_aliases = [
     "jig.source_test",
 ]
 
-[[repository.actions.depends_on]]
-action = "clippy"
-component = "api"
-
-[[repository.actions.depends_on]]
-action = "fmt"
-component = "api"
-
-[[repository.actions.depends_on]]
-action = "contract"
-component = "repo"
-
-[[repository.actions.depends_on]]
-action = "file-budget"
-component = "repo"
-
 [repository.actions.provenance]
-depends_on = "declared"
 effects = "inherited"
 inputs = "inherited"
 intent = "inherited"
@@ -579,6 +564,8 @@ id = "inferred"
 root = "inferred"
 
 [[repository.profiles]]
+# Require independent checks together without making their receipts prerequisites
+# of tests. Reserve action depends_on for actual execution prerequisites.
 description = "Default repository verification targets."
 id = "verify"
 

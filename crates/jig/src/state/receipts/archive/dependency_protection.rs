@@ -3,8 +3,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
 use jig_contract::freshness::{
-    TARGET_FRESHNESS_CONTRACT_VERSION, TARGET_IDENTITY_DOMAIN, TARGET_IDENTITY_SCHEMA_VERSION,
-    TargetFreshnessMetadata, TargetFreshnessStateV1,
+    TARGET_IDENTITY_DOMAIN, TARGET_IDENTITY_SCHEMA_VERSION, TargetFreshnessMetadata,
+    TargetFreshnessStateV1, supported_freshness_epoch,
 };
 
 use super::JsonlWriteGuard;
@@ -56,7 +56,7 @@ pub(super) fn protect_dependencies(
                 Some(TargetFreshnessMetadata::V1(metadata)) => metadata,
             };
             ensure!(
-                metadata.contract_epoch == TARGET_FRESHNESS_CONTRACT_VERSION
+                supported_freshness_epoch(metadata.contract_epoch)
                     && metadata.schema_version == TARGET_IDENTITY_SCHEMA_VERSION,
                 "Cannot archive protected dependency evidence with an unsupported authority version"
             );

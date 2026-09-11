@@ -4,7 +4,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ActionInputsPolicy, TargetId};
+use crate::{ActionInputsPolicy, ActionSourceState, TargetId};
 
 mod evaluation;
 mod receipt;
@@ -15,6 +15,11 @@ pub use receipt::{
 };
 
 pub const TARGET_FRESHNESS_CONTRACT_VERSION: u32 = 9;
+pub const WORKTREE_FRESHNESS_CONTRACT_VERSION: u32 = 10;
+
+pub const fn supported_freshness_epoch(epoch: u32) -> bool {
+    epoch >= TARGET_FRESHNESS_CONTRACT_VERSION && epoch <= WORKTREE_FRESHNESS_CONTRACT_VERSION
+}
 pub const TARGET_IDENTITY_SCHEMA_VERSION: u32 = 1;
 pub const TARGET_IDENTITY_DOMAIN: &str = "jig-target-identity-v1";
 pub const MAX_FRESHNESS_REASON_PREVIEWS: usize = 100;
@@ -88,6 +93,8 @@ pub struct IdentityComponents {
     pub schema_version: u32,
     pub digest_domain: String,
     pub inputs_policy: ActionInputsPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<ActionSourceState>,
     pub source_digest: String,
     pub authority_digest: String,
     pub dependency_digest: String,
@@ -104,6 +111,7 @@ impl From<&TargetIdentityV1> for IdentityComponents {
             schema_version: identity.schema_version,
             digest_domain: identity.digest_domain.clone(),
             inputs_policy: identity.inputs_policy,
+            source_state: identity.source_state,
             source_digest: identity.source_digest.clone(),
             authority_digest: identity.authority_digest.clone(),
             dependency_digest: identity.dependency_digest.clone(),
@@ -149,6 +157,8 @@ pub struct TargetIdentityV1 {
     pub digest_domain: String,
     pub target: TargetId,
     pub inputs_policy: ActionInputsPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<ActionSourceState>,
     pub source_digest: String,
     pub authority_digest: String,
     pub dependency_digest: String,
@@ -162,10 +172,20 @@ pub struct TargetIdentityV1 {
     pub dependencies: Vec<DependencyIdentity>,
 }
 
+/// The actual collection failure, independent of elapsed-time heuristics.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FreshnessCollectionLimit {
+    Deadline,
+    Resource,
+}
+
 /// Counters are observations, never identity authority. In particular elapsed
 /// time and absolute checkout paths must not affect a plan's equality token.
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct FreshnessCollectionStats {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<FreshnessCollectionLimit>,
     pub elapsed_us: u64,
     pub git_us: u64,
     pub committed_us: u64,

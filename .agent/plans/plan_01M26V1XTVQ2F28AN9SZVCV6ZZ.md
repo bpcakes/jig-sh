@@ -1,0 +1,1 @@
+Preserve unavailable current authority independently of receipt presence and omit ignored symlink outputs without weakening exhaustive inputs or runner authority. Validate focused regressions, required harness gates, and a fresh full working-tree review.

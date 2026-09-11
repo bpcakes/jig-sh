@@ -5,7 +5,7 @@ use jig_contract::{ActionRunner, NativeActionConfigurationV1, PlannedTarget, Tar
 
 use super::*;
 use crate::repository::freshness::proof::{
-    OriginalProofValidator, compare_current_identity, empty, unverified,
+    OriginalProofValidator, compare_current_identity, empty, unknown, unverified,
 };
 use crate::repository::freshness::{
     CollectionBudget, CollectionFailure, CollectionResult, collect_target_identities_with_source,
@@ -90,14 +90,18 @@ impl ScopedGateFreshness {
             )?;
             for (target, result) in &mut targets {
                 budget.ensure_active()?;
+                let expected = identities.targets.get(target).ok_or_else(|| {
+                    CollectionFailure::new(
+                        FreshnessReasonCode::CollectionFailed,
+                        "current required target identity is missing",
+                    )
+                })?;
                 if let Some(receipt) = selected.get(target) {
-                    let expected = identities.targets.get(target).ok_or_else(|| {
-                        CollectionFailure::new(
-                            FreshnessReasonCode::CollectionFailed,
-                            "current required target identity is missing",
-                        )
-                    })?;
                     compare_current_identity(result, receipt, expected);
+                } else if let Err(failure) = expected {
+                    // Missing execution evidence does not erase an unavailable
+                    // current authority or make execution advice safe.
+                    *result = unknown(failure.reason.clone());
                 }
             }
             revalidate_whole_source(ctx, catalog, &invocations, whole_source_token, budget)?;
@@ -110,13 +114,14 @@ impl ScopedGateFreshness {
             Ok::<_, CollectionFailure>(targets)
         })();
         let targets = results.unwrap_or_else(|failure| {
+            budget.stats.limit = failure.limit;
             required
                 .into_iter()
                 .map(|target| {
                     let result = if let Some(receipt) = selected.get(&target) {
                         unverified(receipt, failure.reason.clone(), crate::state::now_ms())
                     } else {
-                        missing()
+                        unknown(failure.reason.clone())
                     };
                     (target, result)
                 })

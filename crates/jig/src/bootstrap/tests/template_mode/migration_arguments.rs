@@ -67,8 +67,10 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
         // those old epochs reject.
         for action in source["repository"]["actions"].as_array_mut().unwrap() {
             action.as_table_mut().unwrap().remove("inputs_policy");
+            action.as_table_mut().unwrap().remove("source_state");
             if let Some(provenance) = action.get_mut("provenance") {
                 provenance.as_table_mut().unwrap().remove("inputs_policy");
+                provenance.as_table_mut().unwrap().remove("source_state");
             }
             if action["runner"]["kind"].as_str() == Some("shell") {
                 action["runner"]["kind"] = TomlValue::String("command".into());
@@ -76,8 +78,10 @@ fn assert_command_migration_alias_survives_update(recopy: bool) {
         }
         for action in manifest["actions"].as_array_mut().unwrap() {
             action.as_object_mut().unwrap().remove("inputs_policy");
+            action.as_object_mut().unwrap().remove("source_state");
             if let Some(provenance) = action.get_mut("provenance") {
                 provenance.as_object_mut().unwrap().remove("inputs_policy");
+                provenance.as_object_mut().unwrap().remove("source_state");
             }
             if action["runner"]["kind"] == "shell" {
                 action["runner"]["kind"] = serde_json::json!("command");

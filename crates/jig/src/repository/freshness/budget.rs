@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use jig_contract::freshness::{
-    FreshnessCollectionStats, FreshnessReason, FreshnessReasonCode, MAX_FRESHNESS_DIAGNOSTIC_BYTES,
+    FreshnessCollectionLimit, FreshnessCollectionStats, FreshnessReason, FreshnessReasonCode,
+    MAX_FRESHNESS_DIAGNOSTIC_BYTES,
 };
 
 pub(crate) const RECORDING_TIMEOUT_MS: u64 = 30_000;
@@ -34,6 +35,7 @@ impl CollectionLimits {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CollectionFailure {
+    pub(crate) limit: Option<FreshnessCollectionLimit>,
     pub(crate) reason: FreshnessReason,
     pub(crate) message: String,
 }
@@ -41,6 +43,8 @@ pub(crate) struct CollectionFailure {
 impl CollectionFailure {
     pub(crate) fn new(code: FreshnessReasonCode, message: &str) -> Self {
         Self {
+            limit: (code == FreshnessReasonCode::CollectionLimit)
+                .then_some(FreshnessCollectionLimit::Resource),
             reason: FreshnessReason {
                 code,
                 target: None,
@@ -48,6 +52,15 @@ impl CollectionFailure {
             },
             message: bounded_text(message, MAX_FRESHNESS_DIAGNOSTIC_BYTES.min(1_000)),
         }
+    }
+
+    fn deadline(timeout_ms: u64) -> Self {
+        let mut failure = Self::new(
+            FreshnessReasonCode::CollectionLimit,
+            &format!("freshness collection exceeded {timeout_ms} ms"),
+        );
+        failure.limit = Some(FreshnessCollectionLimit::Deadline);
+        failure
     }
 
     pub(crate) fn at(mut self, path: &str) -> Self {
@@ -124,10 +137,7 @@ impl<'a> CollectionBudget<'a> {
             ));
         }
         if Instant::now() >= self.deadline {
-            return Err(CollectionFailure::new(
-                FreshnessReasonCode::CollectionLimit,
-                &format!("freshness collection exceeded {} ms", self.stats.timeout_ms),
-            ));
+            return Err(CollectionFailure::deadline(self.stats.timeout_ms));
         }
         if self.stats.discovered_entries > self.limits.entries
             || self.stats.content_bytes_read > self.limits.bytes
@@ -215,6 +225,23 @@ impl<'a> CollectionBudget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_limit_classification_records_the_actual_failure() {
+        let deadline =
+            CollectionBudget::new(CollectionLimits::with_timeout(Duration::ZERO), &|| false);
+        assert_eq!(
+            deadline.ensure_active().unwrap_err().limit,
+            Some(FreshnessCollectionLimit::Deadline)
+        );
+        let mut limits = CollectionLimits::with_timeout(Duration::from_secs(30));
+        limits.entries = 0;
+        let mut resource = CollectionBudget::new(limits, &|| false);
+        assert_eq!(
+            resource.entries(1).unwrap_err().limit,
+            Some(FreshnessCollectionLimit::Resource)
+        );
+    }
 
     #[test]
     fn resumed_recording_cannot_reset_an_exhausted_observation_allowance() {
