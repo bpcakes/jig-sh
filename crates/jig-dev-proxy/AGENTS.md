@@ -15,6 +15,7 @@
 - `src/ports.rs`: local port probing and LAN address detection.
 - `src/server.rs`: HTTP and HTTPS proxy listeners.
 - `src/processes.rs`: app command spawning, port env injection, and route cleanup.
+- `src/processes/cleanup/launcher.rs`: private CLI-to-worker lifetime channel, signal forwarding, and launcher-loss cleanup.
 - `src/certs.rs`: local CA and leaf certificate generation and trust helpers.
 - `src/service.rs`: user service install/uninstall/status helpers.
 - `src/workspace.rs`: JavaScript workspace package discovery.
@@ -32,6 +33,7 @@
 ## Invariants
 
 - Keep this crate independent from Jig repository state, receipts, MCP, and templates.
+- CLI dev launches run their owning supervisor in a separate Unix session behind a private lifetime socket. Only the invoking CLI holds its endpoint; restore close-on-exec on the worker endpoint before preflight and app spawn. Launcher loss requests ordinary bounded cleanup in the owning worker. Do not claim protection against SIGKILL of that worker, or signal registry PIDs to compensate for its loss.
 - Store mutable proxy state outside `.agent/state`; that directory is append-only work memory.
 - Route mutations must be lock-protected and safe to repeat.
 - Dev-session mutations share the route-state lock so a replacement claim and route ownership decision are atomic. Keep `dev-sessions.json` versioned, owner-only, symlink-hardened, bounded, and fail-closed on malformed or unknown state.

@@ -11,7 +11,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 frontend_filter='package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
-process_filter='(package(jig-sh) & (binary(claude_launcher) | binary(codex_launcher) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
+process_filter='(package(jig-sh) & (binary(claude_launcher) | binary(codex_launcher) | binary(dev_launcher_loss) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 vault_filter='package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 status_args=(--status-level fail --final-status-level fail)
 

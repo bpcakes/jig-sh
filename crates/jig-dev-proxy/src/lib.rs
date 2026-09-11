@@ -62,7 +62,10 @@ use crate::ports::{is_tcp_listening, jig_proxy_http_pid, local_lan_ip_for_ipv4_l
 use crate::state::{PidObservation, StateStore, now_ms, observe_pid};
 use crate::types::{Route, RouteMode};
 
-pub use crate::dev_api::{dev, dev_resolved, dev_status, dev_stop};
+pub use crate::dev_api::{dev, dev_resolved, dev_resolved_with_preflight, dev_status, dev_stop};
+#[cfg(unix)]
+#[doc(hidden)]
+pub use crate::processes::cleanup::launcher::{DevLauncherWatch, launch_dev_worker};
 pub use crate::state::MAX_ROUTES_FILE_BYTES;
 pub use crate::types::{
     AppKind, AppRunSpec, CommandSpec, DevRequest, DevStatusRequest, DevStopRequest,
@@ -219,29 +222,6 @@ fn resolve_selected_app_directories(root: &Path, specs: &mut [AppRunSpec]) -> Re
         spec.dir = resolved;
     }
     Ok(())
-}
-
-/// Runs a resolved development plan under one foreground termination session,
-/// including a caller-owned preflight that can poll for cancellation.
-///
-/// # Errors
-///
-/// Returns an error when executable discovery, preflight, process supervision,
-/// app readiness, proxy routing, or cleanup fails.
-pub fn dev_resolved_with_preflight(
-    request: ResolvedDevRequest,
-    preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
-) -> Result<Value> {
-    let current_exe = current_exe()?;
-    dev_api::normalize_dev_result(processes::run_apps_with_preflight(
-        &request.repo_name,
-        &request.root,
-        request.apps,
-        &request.settings,
-        &current_exe,
-        request.replace,
-        preflight,
-    ))
 }
 
 fn normalize_proxy_run_result(result: Result<Value>, app: &str, hostname: &str) -> Result<Value> {

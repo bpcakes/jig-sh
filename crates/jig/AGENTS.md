@@ -9,6 +9,7 @@
 - `src/main.rs`: binary entrypoint.
 - `src/lib.rs`: library entrypoint and module wiring.
 - `src/cli.rs`: clap command definitions and top-level command dispatch.
+- `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
 - `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
 - `src/mcp.rs`: JSON-RPC/MCP stdio server.
 - `src/state.rs`: sessions, plans, receipts, and decisions stored under `.agent/state`.

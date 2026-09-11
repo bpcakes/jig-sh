@@ -69,9 +69,16 @@ fn assert_same_repo_conflict(conflict: &CommandOutput, first: &mut ForegroundDev
 
 fn assert_replaced_status(status: &Value, replacement: &ForegroundDev) {
     assert_eq!(status["sessions"].as_array().unwrap().len(), 1);
+    let worker_pid = status["sessions"][0]["supervisor_pid"].as_u64().unwrap();
+    assert_ne!(worker_pid, u64::from(replacement.id()));
+    let output = Command::new("ps")
+        .args(["-o", "ppid=", "-p", &worker_pid.to_string()])
+        .output()
+        .expect("inspect owning worker parent");
+    assert!(output.status.success());
     assert_eq!(
-        status["sessions"][0]["supervisor_pid"],
-        u64::from(replacement.id())
+        String::from_utf8(output.stdout).unwrap().trim(),
+        replacement.id().to_string()
     );
 }
 

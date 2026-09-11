@@ -581,6 +581,7 @@ fn dev_help_describes_launch_and_session_management() {
     assert_help_contains(&dev_help, "jig dev status");
     assert_help_contains(&dev_help, "jig dev stop");
     assert_help_omits(&dev_help, "--jig-project");
+    assert_help_omits(&dev_help, "--jig-worker-fd");
 
     let status_help = rendered_help(&["dev", "status"]);
     assert_help_contains(&status_help, "--state-dir");

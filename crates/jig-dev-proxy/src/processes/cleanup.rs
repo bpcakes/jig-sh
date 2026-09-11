@@ -12,6 +12,8 @@ use super::output::CapturedAppOutput;
 use crate::dev_sessions::DevCleanupLease;
 use crate::state::{ProcessRouteOwnership, STATE_LOCK_TIMEOUT, StateStore};
 
+#[cfg(unix)]
+pub(crate) mod launcher;
 mod termination_reason;
 
 const SESSION_INACTIVE: u8 = 0;
