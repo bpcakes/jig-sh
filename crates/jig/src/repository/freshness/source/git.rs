@@ -348,7 +348,7 @@ fn git(
     })
 }
 
-// Retain HEAD and branch identity for Git-sensitive epoch-10 actions even
+// Retain HEAD and branch identity for Git-sensitive freshness actions even
 // when their declared file scope is unchanged by a commit or branch switch.
 pub(super) fn head_authority(
     root: &Path,

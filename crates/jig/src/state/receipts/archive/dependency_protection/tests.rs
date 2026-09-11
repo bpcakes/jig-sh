@@ -17,10 +17,10 @@ fn receipt(id: usize, dependency: Option<usize>) -> Value {
         "stdout_preview": "", "stderr_preview": "", "changed_paths": [],
         "diff_stat": {"files": 0, "insertions": 0, "deletions": 0},
         "target_freshness": {
-            "schema_version": 1, "contract_epoch": 9, "state": "complete",
+            "schema_version": 1, "contract_epoch": 8, "state": "complete",
             "identity": {
-                "contract_epoch": 9, "schema_version": 1, "digest_domain": TARGET_IDENTITY_DOMAIN,
-                "target": target, "inputs_policy": "exhaustive", "source_digest": "source",
+                "contract_epoch": 8, "schema_version": 1, "digest_domain": TARGET_IDENTITY_DOMAIN,
+                "target": target, "inputs_policy": "exhaustive", "source_state": "git", "source_digest": "source",
                 "authority_digest": "authority", "dependency_digest": "dependencies",
                 "identity_digest": "identity", "configuration_digest": "configuration",
                 "runner_digest": "runner", "invocation_digest": "invocation", "source_preview": [],

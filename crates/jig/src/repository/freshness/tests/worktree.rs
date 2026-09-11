@@ -2,7 +2,7 @@ use super::*;
 
 fn worktree_fixture(policy: ActionInputsPolicy) -> Fixture {
     let mut fixture = Fixture::new();
-    fixture.epoch = 10;
+    fixture.epoch = 8;
     for action in &mut fixture.actions {
         action.source_state = Some(ActionSourceState::Worktree);
         action.inputs_policy = Some(policy);
@@ -218,16 +218,16 @@ fn source_state_requires_new_epoch_and_native_comparison_cannot_opt_out() {
     let mut command = action("web:test", &["apps/web/**"]);
     for state in [ActionSourceState::Git, ActionSourceState::Worktree] {
         command.source_state = Some(state);
-        for epoch in 2..10 {
+        for epoch in 2..8 {
             assert!(validate_inputs_policy(epoch, &command).is_err());
         }
-        assert!(validate_inputs_policy(10, &command).is_ok());
+        assert!(validate_inputs_policy(8, &command).is_ok());
     }
     command.runner = ActionRunner::Native {
         operation: "file_budget".into(),
         configuration: None,
     };
-    assert!(validate_inputs_policy(10, &command).is_err());
+    assert!(validate_inputs_policy(8, &command).is_err());
 }
 
 #[test]

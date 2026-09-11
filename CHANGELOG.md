@@ -6,13 +6,15 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 
 ### Added
 
-- Add one contract v8 epoch for bounded named string arguments and literal argv
-  execution, with explicit `shell` runners for checked-in Bash commands. Bind
-  repeatable `jig run --arg TARGET:NAME=VALUE` or MCP target-keyed arguments only
-  to whole argv positions; never parse or expand their values. Reject implicit
-  shell fallback for executable text without an interpreter header. Validate
-  before execution and hash canonical bindings into plans; preserve released v7
-  file-budget configuration and v6/v7 native migration-name compatibility.
+- Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
+  literal-argv, explicit-shell, target-freshness, and working-file-authority
+  changes. Bind repeatable `jig run --arg TARGET:NAME=VALUE` or MCP
+  target-keyed arguments only to whole argv positions; never parse or expand
+  their values. V8 rejects implicit shell fallback, defaults action input policy
+  to `whole_repository` and source state to `git`, and permits audited command
+  actions to opt into `exhaustive` inputs and `worktree` source authority.
+  Preserve released v7 file-budget configuration and v6/v7 native
+  migration-name compatibility.
 
 ### Fixed
 

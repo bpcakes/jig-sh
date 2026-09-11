@@ -1,15 +1,15 @@
 # Target freshness receipt integration
 
-Epoch 9 introduced scoped target receipts and gate evaluation. Epoch 10 adds
-explicit working-file receipt reuse across staging and commits. Normal source,
-rendering, loading and launcher capabilities now use epoch 10. The
+Epoch 8 introduces scoped target receipts, gate evaluation, and explicit
+working-file receipt reuse across staging and commits. Normal source, rendering,
+loading and launcher capabilities use epoch 8. The
 [public policy](public-contract.md#target-freshness-policy-v1-design) defines
 the compatibility rules, and the [measurements](target-freshness-benchmark.md)
 record hosted CI and constrained qualification.
 
-Use an epoch-10-compatible runtime to update a repository, then rerun `work check`
+Use an epoch-8-compatible runtime to update a repository, then rerun `work check`
 to record new evidence. Earlier receipts remain readable but cannot satisfy the
-new epoch's identity. Existing epoch 2–9 repositories keep their prior rules;
+new epoch's identity. Existing epoch 2–7 repositories keep their prior rules;
 upgrading does not rewrite receipts.
 
 Actions default to `inputs_policy = "whole_repository"` and
@@ -29,12 +29,12 @@ declarations retain their input scope; required ignored files remain unknown. Ex
 observable ignored-dotenv handling remains. Git source authority conservatively
 includes committed/index state plus HEAD commit and symbolic branch identity.
 Native checks retain Git and prepared comparison authority and reject worktree
-policy. See the [source-state contract](public-contract.md#contract-epoch-10-working-file-receipt-reuse)
+policy. See the [source-state contract](public-contract.md#contract-epoch-8-working-file-receipt-reuse)
 for declaration and compatibility details.
 
 ## Recording and inspection
 
-Epoch 9 and later target receipts contain `target_freshness`. A complete value contains
+Epoch 8 target receipts contain `target_freshness`. A complete value contains
 the current identity, original dependency receipt references, effective expiry,
 and proof that the original execution did not change global source. Incomplete
 values contain bounded reasons without a partial identity. Future metadata is
@@ -172,13 +172,13 @@ each dependency level. Archive has no inspection collection quotas, so it can
 still shrink journals that inspection refuses to collect.
 
 File-budget adoption and update still require the original full-repository,
-input/configuration, policy, and native prepared-authority checks. Epoch 9 and later also
+input/configuration, policy, and native prepared-authority checks. Epoch 8 also
 require complete original freshness proof and effective validity. A scoped
 gate pass alone cannot authorize either operation.
 
 Generated and inherited actions default to `whole_repository` and `git` with
 ordinary field provenance. Recopy preserves explicit exhaustive and worktree
-declarations. Enabling epoch 10 alone asserts neither input completeness nor
+declarations. Enabling epoch 8 alone asserts neither input completeness nor
 independence from Git state; review the entire dependency closure before opting
 in. Original execution safety remains unchanged even for worktree receipts.
 

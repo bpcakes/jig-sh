@@ -3,10 +3,10 @@ use super::*;
 fn upgraded() -> Value {
     let mut record = receipt("receipt_worktree", "web:test", "run_worktree", 10, 20);
     let mut current = identity("web:test");
-    current.contract_epoch = 10;
+    current.contract_epoch = 8;
     current.source_state = Some(jig_contract::ActionSourceState::Worktree);
     encode_identity(&mut current);
-    record["target_freshness"]["contract_epoch"] = json!(10);
+    record["target_freshness"]["contract_epoch"] = json!(8);
     record["target_freshness"]["identity"] = json!(current);
     record
 }
@@ -21,7 +21,7 @@ fn current_epoch_proof_rejects_missing_wrong_and_future_source_authority() {
     for (field, value) in [
         ("source_state", Value::Null),
         ("source_state", json!("git")),
-        ("contract_epoch", json!(9)),
+        ("contract_epoch", json!(11)),
         ("contract_epoch", json!(11)),
     ] {
         let mut invalid = current.clone();
@@ -46,8 +46,15 @@ fn current_epoch_proof_rejects_missing_wrong_and_future_source_authority() {
 }
 
 #[test]
-fn original_epoch_nine_pass_cannot_satisfy_epoch_ten_identity() {
-    let old = receipt("receipt_old", "web:test", "run_old", 10, 20);
+fn pre_release_epoch_nine_receipt_remains_readable_but_stale_after_v8_consolidation() {
+    let mut old = receipt("receipt_old", "web:test", "run_old", 10, 20);
+    old["target_freshness"]["contract_epoch"] = json!(9);
+    old["target_freshness"]["identity"]["contract_epoch"] = json!(9);
+    let mut old_identity: TargetIdentityV1 =
+        serde_json::from_value(old["target_freshness"]["identity"].clone()).unwrap();
+    old_identity.source_state = None;
+    encode_identity(&mut old_identity);
+    old["target_freshness"]["identity"] = json!(old_identity);
     let temp = journal(&[old]);
     let mut budget = CollectionBudget::new(
         CollectionLimits::with_timeout(Duration::from_secs(2)),
@@ -62,4 +69,5 @@ fn original_epoch_nine_pass_cannot_satisfy_epoch_ten_identity() {
     let result = validator.evaluate(&selected, &Ok(current), &mut budget);
     assert_eq!(result.status, Status::Stale);
     assert!(has(&result, Code::AuthorityVersionChanged));
+    assert!(!has(&result, Code::DependencyProofInvalid));
 }

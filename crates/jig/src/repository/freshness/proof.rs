@@ -7,7 +7,7 @@ use jig_contract::freshness::{
     GlobalExecutionProofV1, TARGET_FRESHNESS_CONTRACT_VERSION, TARGET_IDENTITY_DOMAIN,
     TARGET_IDENTITY_SCHEMA_VERSION, TargetFreshness, TargetFreshnessMetadata,
     TargetFreshnessStateV1, TargetFreshnessStatus as Status, TargetFreshnessV1, TargetIdentityV1,
-    WORKTREE_FRESHNESS_CONTRACT_VERSION, supported_freshness_epoch,
+    freshness_identity_includes_source_state, supported_freshness_epoch,
 };
 
 use super::{CollectionBudget, CollectionFailure, CollectionResult};
@@ -223,7 +223,7 @@ impl OriginalProofValidator {
                 );
                 if identity.target != receipt.target
                     || identity.contract_epoch != metadata.contract_epoch
-                    || (identity.contract_epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION)
+                    || freshness_identity_includes_source_state(identity.contract_epoch)
                         != identity.source_state.is_some()
                 {
                     add(&mut result, Status::Unknown, Code::DependencyProofInvalid);
@@ -395,7 +395,7 @@ fn identity_encoding_is_consistent(identity: &TargetIdentityV1) -> bool {
     }
     let mut complete = IdentityEncoder::new(TARGET_IDENTITY_DOMAIN, identity.contract_epoch);
     complete.target(&identity.target);
-    if identity.contract_epoch >= WORKTREE_FRESHNESS_CONTRACT_VERSION {
+    if freshness_identity_includes_source_state(identity.contract_epoch) {
         complete.source_state(identity.source_state);
     }
     complete.text(&identity.source_digest);

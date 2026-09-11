@@ -1,5 +1,5 @@
 {
-  "contract_version": 10,
+  "contract_version": 8,
   "tool_namespace": "jig",
 
   "required_commands": [

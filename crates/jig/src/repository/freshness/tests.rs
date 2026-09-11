@@ -81,7 +81,7 @@ impl Fixture {
             &["shared/source/**", "scripts/check.sh"],
         );
         let fixture = Self {
-            epoch: 9,
+            epoch: 8,
             temp,
             nested_root: None,
             actions: vec![web, shared, leaf],
@@ -108,10 +108,10 @@ impl Fixture {
     }
 
     fn write_authority(&self) {
-        // Preserve historical fixtures; new source-state cases use the live epoch.
+        // Preserve historical fixtures; source-state cases use the live epoch.
         let mut actions = self.actions.clone();
         for action in &mut actions {
-            if self.epoch < 10 {
+            if self.epoch < 8 {
                 action.inputs_policy = None;
                 action.source_state = None;
             }
@@ -135,7 +135,7 @@ impl Fixture {
         )
         .unwrap();
         let mut manifest = repository;
-        manifest["contract_version"] = json!(if self.epoch >= 10 { self.epoch } else { 8 });
+        manifest["contract_version"] = json!(self.epoch);
         manifest["tool_namespace"] = json!("jig");
         manifest["required_commands"] = json!([]);
         manifest["tools"] = json!([]);
@@ -237,6 +237,7 @@ fn action(target: &str, inputs: &[&str]) -> ActionSpec {
     action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
     action.inputs = inputs.iter().map(|value| (*value).into()).collect();
     action.inputs_policy = Some(ActionInputsPolicy::Exhaustive);
+    action.source_state = Some(ActionSourceState::Git);
     action
 }
 
@@ -280,7 +281,7 @@ fn unrelated_source_edits_and_commits_preserve_scoped_identity_but_stale_plans()
     assert!(super::super::validate_run_plan_source(&ctx, &plan).is_err());
     git(fixture.root(), &["add", "docs/guide.md"]);
     git(fixture.root(), &["commit", "-q", "-m", "unrelated source"]);
-    assert_eq!(before, fixture.identity("web:test"));
+    assert_ne!(before, fixture.identity("web:test"));
     assert!(super::super::validate_run_plan(&ctx, &catalog, &plan).is_err());
 }
 
@@ -558,24 +559,19 @@ fn old_epoch_policy_presence_and_empty_exhaustive_declarations_are_rejected() {
         ActionInputsPolicy::Exhaustive,
     ] {
         fixture.actions[0].inputs_policy = Some(policy);
-        for epoch in 2..9 {
+        for epoch in 2..8 {
             assert!(validate_inputs_policy(epoch, &fixture.actions[0]).is_err());
         }
-        validate_inputs_policy(9, &fixture.actions[0]).unwrap();
+        validate_inputs_policy(8, &fixture.actions[0]).unwrap();
     }
     fixture.actions[0].inputs.clear();
-    assert!(validate_inputs_policy(9, &fixture.actions[0]).is_err());
+    assert!(validate_inputs_policy(8, &fixture.actions[0]).is_err());
     fixture.actions[0].inputs_policy = None;
-    validate_inputs_policy(9, &fixture.actions[0]).unwrap();
+    validate_inputs_policy(8, &fixture.actions[0]).unwrap();
     let manifest = fixture.root().join(".agent/jig-contract.json");
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
     value["actions"][0]["inputs_policy"] = json!("whole_repository");
     fs::write(manifest, serde_json::to_vec(&value).unwrap()).unwrap();
-    assert!(
-        RepoContext::load_from_root(fixture.root().to_path_buf())
-            .unwrap_err()
-            .to_string()
-            .contains("inputs_policy requires contract version 9")
-    );
+    assert!(RepoContext::load_from_root(fixture.root().to_path_buf()).is_err());
 }

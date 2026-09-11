@@ -80,7 +80,7 @@ mod tests {
     fn incomplete_freshness_preserves_time_constraints_without_inventing_one() {
         for (boundary, required) in [(None, false), (Some(100), true), (None, true)] {
             let value = json!({"target_freshness": {
-                "schema_version": 1, "contract_epoch": 9, "state": "incomplete",
+                "schema_version": 1, "contract_epoch": 8, "state": "incomplete",
                 "global_execution_proof": {"state": "unknown"},
                 "effective_valid_until_ms": boundary, "effective_requires_time_validity": required,
                 "reasons": [{"code": "collection_limit"}], "reasons_total": 1,
