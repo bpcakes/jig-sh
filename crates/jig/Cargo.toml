@@ -64,10 +64,6 @@ libc.workspace = true
 minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
 rpassword.workspace = true
 reqwest.workspace = true
-# Rustyline 18 requires unicode-width 0.2.2, which cannot resolve alongside
-# Ratatui 0.29's exact 0.2.0 requirement. Keep Rustyline 17 while Ratatui 0.29
-# remains the workspace constraint.
-rustyline = { version = "=17.0.2", default-features = false }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

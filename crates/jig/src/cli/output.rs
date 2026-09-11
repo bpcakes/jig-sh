@@ -13,7 +13,6 @@ use self::loops::{
     format_loop_dispatch_summary, format_loop_run_summary, format_loop_status_summary,
     format_loop_tick_summary,
 };
-pub(super) use self::prompt::{format_prompt_human_output, print_prompt_warnings};
 use self::state::{
     format_state_archive_summary, format_state_compact_summary, format_state_diagnose_summary,
     format_state_export_summary, format_state_restore_summary, format_state_summary,
@@ -35,7 +34,6 @@ mod dev;
 mod doctor;
 mod info;
 mod loops;
-mod prompt;
 mod state;
 mod status;
 mod usage;

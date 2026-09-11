@@ -326,7 +326,6 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Status(_)
         | CommandKind::Claude(_)
         | CommandKind::Codex(_)
-        | CommandKind::Prompt(_)
         | CommandKind::Vault(_)
         | CommandKind::Ui(_)
         | CommandKind::Mcp => {

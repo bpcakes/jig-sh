@@ -13,7 +13,6 @@ use super::bootstrap_run::{
 };
 use super::codex_run::run_codex_command;
 use super::output::{HumanOutput, emit, print_json};
-use super::prompt_run::run_prompt_command;
 use super::setup_run::run_setup_command;
 use super::structured_error::{
     is_json_output_already_emitted, json_error_payload, json_output_already_emitted,
@@ -168,7 +167,6 @@ impl CommandKind {
                 Repository,
             ),
             Self::Proxy(_) => (tool_defs::cli_command::PROXY, Repository),
-            Self::Prompt(_) => ("prompt", Repository),
             Self::Agent(_) => (tool_defs::cli_command::AGENT, Repository),
             Self::Claude(_) => (tool_defs::cli_command::CLAUDE, CapabilityOnly),
             Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
@@ -398,7 +396,6 @@ fn run_command(cli: Cli) -> Result<()> {
             HumanOutput::ToolExecution,
         ),
         CommandKind::Vault(command) => run_vault_command(command, json_output),
-        CommandKind::Prompt(command) => run_prompt_command(command, json_output),
         CommandKind::Agent(command) => {
             let require_ok = agent_command_reports_failure_with_ok(&command);
             let human_output = agent_human_output(&command);

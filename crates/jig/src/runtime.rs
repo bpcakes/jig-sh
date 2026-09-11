@@ -17,7 +17,6 @@ mod file_budget;
 mod loops;
 mod mcp_repository;
 mod migration;
-mod prompt;
 mod repository_run;
 mod run_cancellation;
 mod run_execution;
@@ -234,13 +233,6 @@ pub(crate) fn preflight_scoped_vault_command(
     command: &mut crate::command::VaultCommand,
 ) -> Result<()> {
     vault::preflight_scoped_command(command)
-}
-
-pub(crate) fn dispatch_prompt(
-    ctx: Option<&RepoContext>,
-    command: crate::command::PromptCommand,
-) -> Result<Value> {
-    prompt::dispatch(ctx, command)
 }
 
 pub(crate) fn capture_vault_passphrase() -> Result<()> {

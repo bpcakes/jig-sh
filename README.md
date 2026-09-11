@@ -277,19 +277,6 @@ scripts/jig vault audit verify
 
 Vault metadata, child output, and plaintext do not enter command receipts or MCP results. Once a child receives a value, however, that process can disclose it; output redaction does not stop malicious transformations or side channels. Jig Vault reduces local development exposure and does not replace a production secret manager. See [Vault runtime](docs/configuration.md#vault-runtime) and [Security Policy](SECURITY.md).
 
-### Prompt library
-
-Prompts can be user-level, repo-level, or distributed through read-only prompt packs:
-
-```sh
-scripts/jig prompt add comprehensive-review-loop --file prompt.md --tag review
-scripts/jig prompt get comprehensive-review-loop
-scripts/jig prompt get repo:release-checklist --var base=main
-scripts/jig prompt search review
-```
-
-`prompt get` prints only the rendered MiniJinja body unless global `--json` is passed. See [Developer UX](docs/developer-ux.md).
-
 ### Local development proxy
 
 Configured development apps run behind stable, repo-scoped local hostnames:

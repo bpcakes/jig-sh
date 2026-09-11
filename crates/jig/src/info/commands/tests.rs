@@ -310,9 +310,7 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
         .map(|command| command["name"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(names, discoverable_command_names());
-    for name in [
-        "init", "presets", "adopt", "doctor", "prompt", "codex", "claude",
-    ] {
+    for name in ["init", "presets", "adopt", "doctor", "codex", "claude"] {
         assert_eq!(command_by_name(&output, name)["status"], "ready", "{name}");
     }
     for name in [
@@ -375,7 +373,7 @@ fn invalid_repo_context_blocks_commands_that_consult_optional_context() {
     );
 
     assert_eq!(output["repo"]["context_status"], "invalid");
-    for name in ["info", "vault", "prompt"] {
+    for name in ["info", "vault"] {
         assert_command_status(&output, name, "needs_setup", "repo_context_unavailable");
     }
     #[cfg(feature = "dev-proxy")]
@@ -398,7 +396,7 @@ fn invalid_override_remains_the_remediation_when_local_recovery_also_fails() {
     );
 
     assert_eq!(output["repo"]["context_status"], "invalid");
-    for name in ["info", "check", "agent", "vault", "prompt"] {
+    for name in ["info", "check", "agent", "vault"] {
         assert!(
             command_by_name(&output, name)["next_step"]
                 .as_str()
@@ -445,7 +443,6 @@ fn tolerant_fallback_uses_recovered_context_only_for_tolerant_workflows() {
     assert_eq!(command_by_name(&output, "dev")["status"], "ready");
     assert_command_status(&output, "proxy", "needs_setup", "repo_context_unavailable");
     assert_eq!(command_by_name(&output, "vault")["status"], "ready");
-    assert_eq!(command_by_name(&output, "prompt")["status"], "ready");
     let summary = format_summary(&output);
     assert!(summary.contains("Jig command availability: recovered repository context"));
     assert!(summary.contains("Context (recovered): JIG_REPO_ROOT"));

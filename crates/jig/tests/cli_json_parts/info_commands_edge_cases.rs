@@ -7,7 +7,6 @@ fn assert_invalid_override_info(output: &Value, adopted: bool) {
         if adopted { "recovered" } else { "invalid" }
     );
     assert_eq!(command_status(output, "info"), "needs_setup");
-    assert_eq!(command_status(output, "prompt"), "ready");
     assert_dev_proxy_status(output, "proxy", "needs_setup", "repo_context_unavailable");
     if adopted {
         assert_dev_proxy_status(output, "dev", "not_configured", "dev_apps_not_configured");
@@ -53,25 +52,19 @@ fn assert_contextless_commands_run(
     proxy_state: &Path,
     adopted: bool,
 ) {
-    for args in [
-        &["vault", "status", "--json"][..],
-        &["prompt", "list", "--json"][..],
-    ] {
-        let command = jig()
-            .current_dir(repo)
-            .env("JIG_REPO_ROOT", invalid_root)
-            .env("JIG_VAULT_HOME", vault)
-            .env("JIG_PROXY_STATE_DIR", proxy_state)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            command.status.success(),
-            "adopted={adopted}: {}\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&command.stderr)
-        );
-    }
+    let command = jig()
+        .current_dir(repo)
+        .env("JIG_REPO_ROOT", invalid_root)
+        .env("JIG_VAULT_HOME", vault)
+        .env("JIG_PROXY_STATE_DIR", proxy_state)
+        .args(["vault", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        command.status.success(),
+        "adopted={adopted}: vault status --json\n{}",
+        String::from_utf8_lossy(&command.stderr)
+    );
 }
 
 fn assert_proxy_and_dev_contextless_commands(
@@ -175,7 +168,7 @@ fn info_commands_prioritizes_invalid_override_recovery_when_the_local_repo_is_al
     assert!(output.stderr.is_empty());
     let output: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output["repo"]["context_status"], "invalid");
-    for name in ["info", "check", "agent", "vault", "prompt"] {
+    for name in ["info", "check", "agent", "vault"] {
         assert!(
             command_by_name(&output, name)["next_step"]
                 .as_str()

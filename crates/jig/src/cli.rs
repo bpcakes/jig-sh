@@ -23,7 +23,6 @@ mod home_picker;
 mod init_wizard;
 mod loops;
 mod migration;
-mod prompt;
 mod proxy;
 mod repository_run;
 mod setup_run;
@@ -47,7 +46,6 @@ pub(crate) use loops::{
     LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
 pub(crate) use migration::{MigrationAddOpts, MigrationCommand};
-pub(crate) use prompt::PromptCommand;
 pub(crate) use proxy::{
     DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, ProxyAliasOpts,
     ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
@@ -104,7 +102,7 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,claude,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test";
 
@@ -392,13 +390,6 @@ pub(crate) enum CommandKind {
         subcommand
     )]
     Proxy(ProxyCommand),
-    /// Manage user, repo, and prompt-pack prompt libraries.
-    #[command(
-        name = root_commands::PROMPT.name,
-        display_order = root_commands::PROMPT.display_order,
-        subcommand
-    )]
-    Prompt(PromptCommand),
     /// Inspect or bootstrap local agent tooling.
     #[command(
         name = root_commands::AGENT.name,
@@ -584,7 +575,6 @@ fn parse_ui_plan_id(value: &str) -> Result<String, String> {
 mod command_conversion;
 
 mod output;
-mod prompt_run;
 mod run;
 mod structured_error;
 mod vault_run;
