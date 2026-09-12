@@ -15,7 +15,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::de::IgnoredAny;
 use sha2::{Digest, Sha256};
 
-use super::json_scan::{skip_json_string, skip_json_value, skip_whitespace};
+use super::json_scan::{first_non_whitespace, skip_json_string, skip_json_value, skip_whitespace};
 
 const JSONL_READ_CHUNK: usize = 16 * 1024;
 const MAX_EMBEDDED_VALIDATION_CACHE_ENTRIES: usize = 4096;
@@ -959,11 +959,6 @@ fn trim_range(input: &[u8], range: Range<usize>) -> Range<usize> {
         end -= 1;
     }
     start..end
-}
-
-fn first_non_whitespace(input: &[u8], range: &Range<usize>) -> Option<u8> {
-    let cursor = skip_whitespace(input, range.start, range.end);
-    input.get(cursor).copied()
 }
 
 fn value_is_null(input: &[u8], range: &Range<usize>) -> bool {

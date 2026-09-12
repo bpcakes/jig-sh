@@ -135,7 +135,7 @@ pub(super) fn service_status_snapshot(
         });
     let service_state_dir_matches = service_state_dir_match == ServiceStateDirMatch::Match;
     let service = manager_status(path);
-    let manager_active = service_manager_active(&service);
+    let manager_active = service.is_active();
     let restart_candidate = if file_present {
         service.loaded && (service.enabled || service.running)
     } else {
@@ -250,10 +250,6 @@ fn service_state_dir_error(
         ServiceStateDirMatch::MissingMetadata => Some(SERVICE_STATE_DIR_METADATA_ERROR.into()),
         ServiceStateDirMatch::Unknown { reason } => Some(reason.clone()),
     }
-}
-
-const fn service_manager_active(service: &ServiceManagerStatus) -> bool {
-    service.loaded || service.enabled || service.running
 }
 
 pub(super) const fn service_reload_hint() -> &'static str {

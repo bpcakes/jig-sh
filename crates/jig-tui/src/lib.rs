@@ -1,6 +1,7 @@
 //! Shared terminal lifecycle and cooperative worker foundations for Jig TUIs.
 
 use std::{
+    cell::Cell,
     io::{self, IsTerminal, Stdout, Write},
     sync::{
         Arc,
@@ -21,6 +22,33 @@ use crossterm::{
     },
 };
 use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
+
+/// Scroll offset state shared by list views that reset when their viewport height changes.
+#[derive(Clone, Debug, Default)]
+pub struct ListViewportState {
+    offset: Cell<usize>,
+    height: Cell<u16>,
+}
+
+impl ListViewportState {
+    /// Returns the current offset, resetting it when the viewport height changes.
+    pub fn offset_for_height(&self, height: u16) -> usize {
+        if self.height.replace(height) != height {
+            self.offset.set(0);
+        }
+        self.offset.get()
+    }
+
+    /// Records the offset selected by the list renderer.
+    pub fn set_offset(&self, offset: usize) {
+        self.offset.set(offset);
+    }
+
+    /// Resets the list to its first row without changing its known viewport height.
+    pub fn reset(&self) {
+        self.offset.set(0);
+    }
+}
 
 /// Requires both terminal input and output for a full-screen interface.
 pub fn require_terminal(command: &str, fallback: &str) -> Result<()> {
@@ -470,6 +498,19 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
     use super::*;
+
+    #[test]
+    fn list_viewport_resets_only_when_height_changes_or_reset_is_requested() {
+        let viewport = ListViewportState::default();
+
+        assert_eq!(viewport.offset_for_height(8), 0);
+        viewport.set_offset(3);
+        assert_eq!(viewport.offset_for_height(8), 3);
+        assert_eq!(viewport.offset_for_height(5), 0);
+        viewport.set_offset(2);
+        viewport.reset();
+        assert_eq!(viewport.offset_for_height(5), 0);
+    }
 
     #[test]
     fn terminal_requirement_explains_redirected_streams() {
