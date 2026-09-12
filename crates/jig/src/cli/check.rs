@@ -238,7 +238,7 @@ pub(crate) enum CheckCommand {
     /// Check agent-map.md coverage and links.
     #[command(name = tool_defs::cli_command::CHECK_AGENT_MAP)]
     AgentMap(AgentMapOpts),
-    /// Verify crate-level AGENTS.md guide coverage and required sections.
+    /// Validate local guide references and declared owner guides; headings are advisory.
     #[command(name = tool_defs::cli_command::CHECK_AGENT_GUIDES)]
     AgentGuides,
     /// Verify existing migrations were not mutated.

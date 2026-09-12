@@ -420,6 +420,49 @@ pub(super) fn format_tool_execution_summary(value: &serde_json::Value) -> String
 }
 
 fn append_policy_check_details(lines: &mut Vec<String>, value: &serde_json::Value) {
+    if let Some(diagnostics) = value["diagnostics"].as_array() {
+        for (severity, label) in [
+            ("error", "Errors"),
+            ("warning", "Warnings"),
+            ("info", "Unverified references"),
+        ] {
+            let selected = diagnostics
+                .iter()
+                .filter(|d| d["severity"] == severity)
+                .collect::<Vec<_>>();
+            if !selected.is_empty() {
+                lines.push(format!("  {label}: {}", selected.len()));
+                if severity == "info" {
+                    continue;
+                }
+                for diagnostic in selected.iter().take(5) {
+                    let mut location = value_str(diagnostic, "guide")
+                        .unwrap_or("guide")
+                        .to_string();
+                    if let Some(line) = value_u64(diagnostic, "line") {
+                        location.push_str(&format!(":{line}"));
+                    }
+                    if let Some(component) = value_str(diagnostic, "component") {
+                        location.push_str(&format!(" (component {component}"));
+                        if let Some(reference) = value_str(diagnostic, "reference") {
+                            location.push_str(&format!(", guidance {reference}"));
+                        }
+                        location.push(')');
+                    }
+                    let description = format!(
+                        "{location}: {}: {}",
+                        value_str(diagnostic, "code").unwrap_or("diagnostic"),
+                        value_str(diagnostic, "message").unwrap_or("")
+                    );
+                    lines.push(format!(
+                        "  - {}",
+                        concise_preview(&jig_tui::sanitize_text(&description), 220)
+                    ));
+                }
+            }
+        }
+    }
+
     if let Some(count) = value_u64(value, "guide_count") {
         lines.push(format!("  Guides: {count}"));
     }

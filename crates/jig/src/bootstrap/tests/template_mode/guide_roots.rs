@@ -108,7 +108,7 @@ targets = [{ component = "api", action = "test" }]
         if invalid {
             fs::write(
                 repo.join("apps/worker/AGENTS.md"),
-                "Invalid backend guide.\n",
+                "[Broken reference](missing.rs)\n",
             )
             .unwrap();
         }
@@ -133,14 +133,18 @@ targets = [{ component = "api", action = "test" }]
 fn assert_guides(repo: &Path, valid: bool) {
     let ctx = RepoContext::load_from(repo).unwrap();
     let result = run_check(&ctx, PolicyCheckCommand::AgentGuides).unwrap();
-    assert_eq!(result["guide_count"], 3, "{result}");
+    assert_eq!(result["guide_count"], 6, "{result}");
     assert_eq!(result["ok"], valid, "{result}");
     if !valid {
-        assert_eq!(
-            result["missing_entry_ref"],
-            serde_json::json!([
-                "apps/worker/AGENTS.md: missing src/lib.rs or src/main.rs entrypoint reference"
-            ])
+        assert!(
+            result["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic["guide"] == "apps/worker/AGENTS.md"
+                        && diagnostic["code"] == "reference_missing"
+                })
         );
     }
 }

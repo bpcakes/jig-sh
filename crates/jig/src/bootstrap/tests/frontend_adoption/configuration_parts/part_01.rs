@@ -45,7 +45,7 @@ fn init_renders_web_commands_for_all_supported_package_managers() {
         assert!(!repo.join("Makefile").exists());
         let agent_guidance = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
         assert!(agent_guidance.contains(
-            "Install scope follows package-manager workspace membership"
+            "Keep registry, authentication, and install-script policy project-owned"
         ));
         assert!(agent_guidance.contains("scripts/check-webapps.sh run-script <app-dir> <script>"));
         assert!(

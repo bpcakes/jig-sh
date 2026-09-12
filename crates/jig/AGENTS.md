@@ -22,7 +22,7 @@
 ## Edit here for X
 
 - Change CLI flags or subcommands: `src/cli.rs`.
-- Add an agent provider: `src/agent_provider.rs` defines the internal contract; `src/claude/provider.rs` and `src/codex/provider.rs` are implementations. Keep home identity and credential policy provider-owned; `src/cli/agent_run.rs` owns common homes/launch orchestration. See `docs/agent-providers.md`.
+- Add an agent provider: `src/agent_provider.rs` defines the internal contract; `src/claude/provider.rs` and `src/codex/provider.rs` are implementations. Keep home identity and credential policy provider-owned; `src/cli/agent_run.rs` owns common homes/launch orchestration. See [agent providers](../../docs/agent-providers.md).
 - Change shared Claude/Codex path primitives: `src/home_paths.rs`; keep discovery and default-home policy in the provider modules.
 - Change Claude credential lookup and read-only subscription usage: `src/claude/usage/`; keep secrets, HTTP, and platform storage out of the TUI and output renderers.
 - Change shared operation signal supervision: `src/signal_supervision.rs`; `src/cli/home_picker.rs` supplies picker diagnostics and provider adapters supply entries to `jig-codex-tui`.
@@ -36,8 +36,7 @@
 - Change status provider execution or aggregate facts: `src/status.rs` and `src/status/`.
 - Change terminal status navigation, refresh runtime, or rendering: `crates/jig-ui/src/terminal/`.
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
-- Change bounded owned-process execution or process-tree cleanup: `src/process.rs` and
-  `src/process/tests.rs`.
+- Change bounded owned-process execution or process-tree cleanup: [jig-owned-process](../jig-owned-process/AGENTS.md).
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`.
 - Change git metadata captured in receipts: `src/git_receipts.rs`.
 
@@ -47,20 +46,9 @@
 - Preserve generated-repo compatibility for `.jig.toml`, `.agent/jig-contract.json`, and `.agent/state/*.jsonl`.
 - Treat `.agent/state/*.jsonl` as append-only unless a migration path is explicit.
 - Keep execution tools aligned with the generated contract manifest and template outputs.
-- Do not make template update flows switch source identity implicitly.
-- Vault references stay project-relative as `jig://ITEM/FIELD`; repository scope, `--global`, or `--home` selects the vault and a reference must never override that selection.
-- Validate vault raw input, import sources/destinations, and lifecycle paths before passphrase capture. Revealed values and transparent child output must bypass structured emitters, JSON, MCP, and receipts; errors and recovery commands must remain value-free.
-- Keep `vault exec` as transparent inherited-stdin/environment streaming with exact child status, and keep the compatible `vault run` broker constrained, buffered, capped, timed, and process-tree-owned. Successful vault capture and every spawned resolver/child must strip both reserved passphrase variables.
-- Backup restore must use the static absent-target path; it may prepare missing private parent directories, but must never resolve or create the selected vault home before restore preflight and installation.
-- The Vault TUI fixes one resolved scope for its lifetime, retains only a process-local credential in the CLI-owned backend, and must join its sole action worker before lock or terminal restoration. TUI action results and ordinary Ratatui frames remain metadata-only; private export and transient Peek consume plaintext only in their immediate hardened/terminal-safe sinks and never return it to the model.
-- The generic owned-process runner must establish a verifiable process tree before starting work, retain the direct-child identity until descendant cleanup is confirmed, share one absolute cleanup deadline across normal/error/drop paths, and fail closed on incomplete output or unsupported supervision. While that unreaped exact child pins the PGID generation, forced confirmation must re-send group `SIGKILL` before every membership proof so a concurrently exposed member cannot outlive a one-shot signal; never retry after identity loss or reap. Linux procfs confirmation must check the deadline around every signal, enumeration, stat read, fallback membership probe, and before accepting either a live or empty result, with a re-signal between its two required empty scans. On macOS, neither a cached leader exit, `ESRCH`, nor `EPERM` proves group absence; require a fresh exact terminal observation plus an atomic sole-leader membership snapshot. Unix doctor signal sessions are serialized and reusable only after clean retirement: hold the session guard through handler restoration and restored-signal redelivery, and publish permanent poison before snapshotting signals on an unsafe retirement.
-- Jig-owned Bash probes such as dependency readiness, Codex capability checks, and launcher-backed doctor diagnostics must remove startup, directory, option, trace, and byte-exact exported-function controls. Do not apply that constrained environment to agent bootstrap, committed checks, or configured development commands, which intentionally inherit the caller's ordinary environment.
-- Existing-destination init must budget retained generations before acquiring snapshots. Charge a possible preimage plus one generated version per planned leaf, count repeated publications explicitly, and include directory/staging identities plus transient headroom; apply the generation cap to unique leaves plus repeats without trusting a currently missing path to remain absent.
-- Generated dependency installers must distinguish repository-owned package-manager policy from hostile ambient install shaping. A successful install may be stamped only after the selected scope, lock/config authority, real-write mode, complete workspace participation, platform, dependency classes, and executable-link behavior are pinned; preserve explicit registry/authentication and install-script approval policy. Keep the checker compatible with stock Bash 3.2, propagate authority-producer failures, and use shell-owned job identity after `wait` rather than recyclable PIDs.
-- Generated npm package-script execution must select exactly the configured app, require the named script, and neutralize only ambient npm routing/dependency-class selectors. Preserve explicit application environment, registry/authentication, dependency layout, peer/lifecycle policy, and every user-authored development command. All generated web and E2E workflow package scripts must enter through the public checker boundary.
-- Generated Rust/React source must be rustfmt-stable and pass its generated strict Clippy gate for every supported normalized package stem, database branch, and valid migration path. Validate the 216-byte Cargo artifact boundary before destination mutation, keep rendered identifiers behind fixed aliases, narrowly scope any lint acknowledgement required by intentional formatter-stability constructs, and keep long fallback API labels DNS-safe without changing short-name output.
-- Classify each `node_modules` install root independently: missing, empty, and exact ignored-only real roots share the absent proof, while any unknown/type-replaced/nested entry makes the root present and fully attested. Preserve package metadata, links, member receipt-like files, launcher bytes/modes, and the v5/v3/v2 receipt formats.
-- Rust/React scaffolds require Rust 1.94. Database-enabled variants pin SQLx 0.9 and use `.sqlx`; Doctor must enforce the active Rust floor and matching SQLx CLI minor line. PostgreSQL browser E2E owns its Linux service-container runner independently of the repository-wide runner; managed Rust workflow triggers and offline environments must follow configured migration and metadata authorities.
+- Before changing process supervision or Bash probes, read the [process reference](../../docs/process-supervision.md) and the [owned-process guide](../jig-owned-process/AGENTS.md).
+- Before changing vault entrypoints or dispatch, read the [vault runtime guide](src/runtime/vault/AGENTS.md).
+- Before changing bootstrap entrypoints, scaffold toolchain checks, or project templates, read the [bootstrap guide](src/bootstrap/AGENTS.md).
 - When editing the runtime, build `target/debug/jig` and dogfood through `JIG_DEV_BIN=target/debug/jig scripts/jig ...` so the cached repo-local binary cannot mask current code.
 
 ## Common commands

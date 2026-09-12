@@ -8,7 +8,7 @@
 - Parent: `jig-sh-9wcn`, Astra harness modernization.
 - Depends on: `jig-sh-9wcn.4`
 - Unblocks: 08, 15.
-- Status: planned; implementation has not started.
+- Status: implemented; see [acceptance evidence](05-implementation.md).
 
 ## Context and outcome
 

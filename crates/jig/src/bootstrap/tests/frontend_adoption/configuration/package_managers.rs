@@ -9,7 +9,7 @@ fn assert_package_manager_rendered_helpers(
     assert_text_contains_all(
         &agent_guidance,
         &[
-            "Install scope follows package-manager workspace membership",
+            "Keep registry, authentication, and install-script policy project-owned",
             "scripts/check-webapps.sh run-script <app-dir> <script>",
         ],
     );

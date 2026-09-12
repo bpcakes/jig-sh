@@ -772,6 +772,7 @@ fn utc_timestamp_at(now: time::OffsetDateTime) -> String {
 }
 
 mod agent_map;
+mod guide_check;
 mod schema;
 mod sqlx;
 #[cfg(test)]

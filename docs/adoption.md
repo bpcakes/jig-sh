@@ -16,6 +16,20 @@
 
 Before publishing a generated repo contract or wiring long-lived MCP clients to it, review [Public Contract](./public-contract.md) for the stable CLI, MCP, and manifest guarantees.
 
+### Frontend dependency installation
+
+Jig validates configured package scripts during adoption; generated web CI validates
+those scripts again before running. Install scope follows package-manager workspace
+membership. Keep registry, authentication, and install-script policy project-owned.
+Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
+The generated root guide retains required scripts, coverage output, app locations,
+and CI/development configuration so ordinary app work needs no installer internals.
+
+Contributors changing dependency proof, locking, environment handling, or generated
+installers must follow the [bootstrap guide](../crates/jig/src/bootstrap/AGENTS.md).
+Full adoption still ships the existing harness files; minimal adoption continues to
+omit guidance and launcher/MCP files. This reference adds no generated file.
+
 ### Review component ownership
 
 The preview lists each component candidate's relative root, proposed ID, evidence,

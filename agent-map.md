@@ -1,6 +1,7 @@
 # Agent Map
 
-Fast jump index for agent-facing guidance in this repository.
+Use this index when you need help locating the guide for an area.
+If the owning area is already clear, read its nearest guide directly.
 
 ## Root guide
 
@@ -24,6 +25,8 @@ Fast jump index for agent-facing guidance in this repository.
 - [crates/jig-vault-tui](./crates/jig-vault-tui/AGENTS.md)
 - [crates/jig-vault](./crates/jig-vault/AGENTS.md)
 - [crates/jig](./crates/jig/AGENTS.md)
+- [crates/jig/src/bootstrap](./crates/jig/src/bootstrap/AGENTS.md)
+- [crates/jig/src/runtime/vault](./crates/jig/src/runtime/vault/AGENTS.md)
 
 ## Suggested usage pattern
 

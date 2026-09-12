@@ -20,9 +20,10 @@
 ## Invariants
 
 - Pipe adapters retain no captured bytes and expose reads only after nonblocking preparation succeeds; callers own buffering, zeroization, and process cleanup.
-- Establish a verifiable process-tree identity before starting child work and retain the direct-child identity until descendant cleanup is confirmed.
-- Keep one absolute cleanup deadline across normal, error, and drop paths; fail closed when cleanup or bounded output completion cannot be proved.
-- Never signal a recycled numeric PID or process group after identity loss or reap.
+- The generic owned-process runner must establish a verifiable process tree before starting work, retain the direct-child identity until descendant cleanup is confirmed, share one absolute cleanup deadline across normal/error/drop paths, and fail closed on incomplete output or unsupported supervision.
+- While that unreaped exact child pins the PGID generation, forced confirmation must re-send group `SIGKILL` before every membership proof so a concurrently exposed member cannot outlive a one-shot signal; never retry after identity loss or reap.
+- Linux procfs confirmation must check the deadline around every signal, enumeration, stat read, fallback membership probe, and before accepting either a live or empty result, with a re-signal between its two required empty scans.
+- On macOS, neither a cached leader exit, `ESRCH`, nor `EPERM` proves group absence; require a fresh exact terminal observation plus an atomic sole-leader membership snapshot.
 - Keep this crate independent from repository context, state, CLI, MCP, templates, proxy routing, and vault secret handling.
 - Do not replace the specialized process ownership in `jig-dev-proxy` or `jig-vault`; those crates have additional route and secret invariants.
 

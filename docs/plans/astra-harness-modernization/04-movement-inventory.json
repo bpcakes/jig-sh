@@ -1,0 +1,534 @@
+[
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Keep transport layers thin; shared behavior should live in runtime, state, or bootstrap helpers.",
+    "destination": "crates/jig/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Preserve generated-repo compatibility for `.jig.toml`, `.agent/jig-contract.json`, and `.agent/state/*.jsonl`.",
+    "destination": "crates/jig/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Treat `.agent/state/*.jsonl` as append-only unless a migration path is explicit.",
+    "destination": "crates/jig/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Keep execution tools aligned with the generated contract manifest and template outputs.",
+    "destination": "crates/jig/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Do not make template update flows switch source identity implicitly.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Vault references stay project-relative as `jig://ITEM/FIELD`; repository scope, `--global`, or `--home` selects the vault and a reference must never override that selection.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Validate vault raw input, import sources/destinations, and lifecycle paths before passphrase capture.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Revealed values and transparent child output must bypass structured emitters, JSON, MCP, and receipts; errors and recovery commands must remain value-free.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Keep `vault exec` as transparent inherited-stdin/environment streaming with exact child status, and keep the compatible `vault run` broker constrained, buffered, capped, timed, and process-tree-owned.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Successful vault capture and every spawned resolver/child must strip both reserved passphrase variables.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Backup restore must use the static absent-target path; it may prepare missing private parent directories, but must never resolve or create the selected vault home before restore preflight and installation.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "The Vault TUI fixes one resolved scope for its lifetime, retains only a process-local credential in the CLI-owned backend, and must join its sole action worker before lock or terminal restoration.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "TUI action results and ordinary Ratatui frames remain metadata-only; private export and transient Peek consume plaintext only in their immediate hardened/terminal-safe sinks and never return it to the model.",
+    "destination": "crates/jig/src/runtime/vault/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "The generic owned-process runner must establish a verifiable process tree before starting work, retain the direct-child identity until descendant cleanup is confirmed, share one absolute cleanup deadline across normal/error/drop paths, and fail closed on incomplete output or unsupported supervision.",
+    "destination": "crates/jig-owned-process/AGENTS.md + docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "While that unreaped exact child pins the PGID generation, forced confirmation must re-send group `SIGKILL` before every membership proof so a concurrently exposed member cannot outlive a one-shot signal; never retry after identity loss or reap.",
+    "destination": "crates/jig-owned-process/AGENTS.md + docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Linux procfs confirmation must check the deadline around every signal, enumeration, stat read, fallback membership probe, and before accepting either a live or empty result, with a re-signal between its two required empty scans.",
+    "destination": "crates/jig-owned-process/AGENTS.md + docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "On macOS, neither a cached leader exit, `ESRCH`, nor `EPERM` proves group absence; require a fresh exact terminal observation plus an atomic sole-leader membership snapshot.",
+    "destination": "crates/jig-owned-process/AGENTS.md + docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Unix doctor signal sessions are serialized and reusable only after clean retirement: hold the session guard through handler restoration and restored-signal redelivery, and publish permanent poison before snapshotting signals on an unsafe retirement.",
+    "destination": "crates/jig-owned-process/AGENTS.md + docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Jig-owned Bash probes such as dependency readiness, Codex capability checks, and launcher-backed doctor diagnostics must remove startup, directory, option, trace, and byte-exact exported-function controls.",
+    "destination": "docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Do not apply that constrained environment to agent bootstrap, committed checks, or configured development commands, which intentionally inherit the caller's ordinary environment.",
+    "destination": "docs/process-supervision.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Existing-destination init must budget retained generations before acquiring snapshots.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Charge a possible preimage plus one generated version per planned leaf, count repeated publications explicitly, and include directory/staging identities plus transient headroom; apply the generation cap to unique leaves plus repeats without trusting a currently missing path to remain absent.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Generated dependency installers must distinguish repository-owned package-manager policy from hostile ambient install shaping.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "A successful install may be stamped only after the selected scope, lock/config authority, real-write mode, complete workspace participation, platform, dependency classes, and executable-link behavior are pinned; preserve explicit registry/authentication and install-script approval policy.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Keep the checker compatible with stock Bash 3.2, propagate authority-producer failures, and use shell-owned job identity after `wait` rather than recyclable PIDs.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Generated npm package-script execution must select exactly the configured app, require the named script, and neutralize only ambient npm routing/dependency-class selectors.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Preserve explicit application environment, registry/authentication, dependency layout, peer/lifecycle policy, and every user-authored development command.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "All generated web and E2E workflow package scripts must enter through the public checker boundary.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Generated Rust/React source must be rustfmt-stable and pass its generated strict Clippy gate for every supported normalized package stem, database branch, and valid migration path.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Validate the 216-byte Cargo artifact boundary before destination mutation, keep rendered identifiers behind fixed aliases, narrowly scope any lint acknowledgement required by intentional formatter-stability constructs, and keep long fallback API labels DNS-safe without changing short-name output.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Classify each `node_modules` install root independently: missing, empty, and exact ignored-only real roots share the absent proof, while any unknown/type-replaced/nested entry makes the root present and fully attested.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Preserve package metadata, links, member receipt-like files, launcher bytes/modes, and the v5/v3/v2 receipt formats.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Rust/React scaffolds require Rust 1.94.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Database-enabled variants pin SQLx 0.9 and use `.sqlx`; Doctor must enforce the active Rust floor and matching SQLx CLI minor line.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "PostgreSQL browser E2E owns its Linux service-container runner independently of the repository-wide runner; managed Rust workflow triggers and offline environments must follow configured migration and metadata authorities.",
+    "destination": "crates/jig/src/bootstrap/AGENTS.md"
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "When editing the runtime, build `target/debug/jig` and dogfood through `JIG_DEV_BIN=target/debug/jig scripts/jig ...` so the cached repo-local binary cannot mask current code.",
+    "destination": "crates/jig/AGENTS.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "This project uses [beads_rust](https://github.com/Dicklesworthstone/beads_rust) (`br`) for issue tracking and [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) (`bv`) for graph-aware triage. Issues are stored in `.beads/` and tracked in git. Current `br` workspaces normally export `.beads/issues.jsonl`; older `bd`/legacy workspaces may use `.beads/beads.jsonl`. `bv` auto-discovers the supported JSONL files, so agents should use `br`/`bv` commands instead of hard-coding a single filename.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "### Using bv as an AI sidecar",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv is a graph-aware triage engine for Beads projects. Instead of parsing .beads/issues.jsonl / .beads/beads.jsonl directly or hallucinating graph traversal, use robot flags for deterministic, dependency-aware outputs with precomputed metrics (PageRank, betweenness, critical path, cycles, HITS, eigenvector, k-core).",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "**Scope boundary:** bv handles *what to work on* (triage, priority, planning). `br` handles creating, modifying, and closing beads.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "**CRITICAL: Use ONLY --robot-* flags. Bare bv launches an interactive TUI that blocks your session.**",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "#### The Workflow: Start With Triage",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "**`bv --robot-triage` is your single entry point.** It returns everything you need in one call:",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- `quick_ref`: at-a-glance counts + top 3 picks",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- `recommendations`: ranked actionable items with scores, reasons, unblock info",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- `quick_wins`: low-effort high-impact items",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- `blockers_to_clear`: items that unblock the most downstream work",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- `project_health`: status/type/priority distributions, graph metrics",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- `commands`: copy-paste shell commands for next steps",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "```bash",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --robot-triage        # THE MEGA-COMMAND: start here",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --robot-next          # Minimal: just the single top pick + claim command",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "# Token-optimized output (TOON) for lower LLM context usage:",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --robot-triage --format toon",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "```",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "Before claiming, verify current state with `br show <id> --json` or `br ready --json`. `recommendations` can include graph-important blocked or assigned work; only `quick_ref.top_picks` and non-empty `claim_command` fields represent claimable work.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "Check the triage output's `source_path` when older Beads exports coexist. If it selects a stale snapshot, use the current export reported by `br info`: `bv --db \"$(br info --json | jq -r .jsonl_path)\" --robot-triage`. Verify candidates against `br ready` afterward; a historical export can rank already-closed tasks.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "#### Other bv Commands",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| Command | Returns |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "|---------|---------|",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-plan` | Parallel execution tracks with unblocks lists |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-priority` | Priority misalignment detection with confidence |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-insights` | Full metrics: PageRank, betweenness, HITS, eigenvector, critical path, cycles, k-core |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-alerts` | Stale issues, blocking cascades, priority mismatches |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-suggest` | Hygiene: duplicates, missing deps, label suggestions, cycle breaks |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-diff --diff-since <ref>` | Changes since ref: new/closed/modified issues |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "| `--robot-graph [--graph-format=json\\|dot\\|mermaid]` | Dependency graph export |",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "#### Scoping & Filtering",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "```bash",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --robot-plan --label backend              # Scope to label's subgraph",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --robot-insights --as-of HEAD~30          # Historical point-in-time",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --recipe actionable --robot-plan          # Pre-filter: ready to work (no blockers)",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "bv --recipe high-impact --robot-triage       # Pre-filter: top PageRank scores",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "```",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "### br Commands for Issue Management",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "```bash",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br ready --json                       # Show issues ready to work (no blockers)",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br list --status=open --json          # All open issues",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br show <id> --json                   # Full issue details with dependencies",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br create --title=\"...\" --type=task --priority=2 --json",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br update <id> --status=in_progress --json",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br close <id> --reason=\"Completed\" --json",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "br close <id1> <id2> --reason=\"Completed\" --json",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "python3 scripts/beads-sync.py          # Clear machine-local paths, then export DB to JSONL",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "```",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "### Workflow Pattern",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "1. **Triage**: Run `bv --robot-triage` to find the highest-impact actionable work",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "2. **Claim**: Use `br update <id> --status=in_progress --json`",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "3. **Work**: Implement the task",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "4. **Complete**: Use `br close <id> --reason=\"Completed\" --json`",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "5. **Sync**: Run `python3 scripts/beads-sync.py` after Beads mutations so the JSONL export is current and contains no machine-local `source_repo_path` values. Repo configuration disables automatic export; do not bypass the helper with a direct flush. `python3 scripts/beads-sync.py --check` is the read-only CI guard.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "### Key Concepts",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- **Dependencies**: Issues can block other issues. `br ready --json` shows only unblocked work.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers 0-4, not words)",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- **Types**: task, bug, feature, epic, chore, docs, question",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "- **Blocking**: `br dep add <issue> <depends-on>` to add dependencies",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "### Git Policy",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md / Beads Workflow Integration",
+    "sentence": "`br` never commits or pushes. Follow this repository's own git instructions before staging, committing, or pushing. If the repository says \"commit only when asked,\" that rule overrides any generic workflow advice.",
+    "destination": "docs/beads-workflow.md"
+  },
+  {
+    "source": "AGENTS.md + templates/project/AGENTS.md.jinja",
+    "sentence": "Open agent-map.md before backend/Rust work.",
+    "destination": "Same entry guides",
+    "disposition": "Reworded as optional discovery; nearest existing guide remains required."
+  },
+  {
+    "source": "templates/project/AGENTS.md.jinja",
+    "sentence": "Jig validates those scripts during adoption; generated web CI validates them again before running.",
+    "destination": "docs/adoption.md#frontend-dependency-installation",
+    "disposition": "Moved; generated guidance links to the maintained source reference."
+  },
+  {
+    "source": "templates/project/AGENTS.md.jinja",
+    "sentence": "Install scope follows package-manager workspace membership; keep registry, authentication, and install-script policy project-owned.",
+    "destination": "docs/adoption.md#frontend-dependency-installation + templates/project/AGENTS.md.jinja",
+    "disposition": "Move scope implementation detail; retain project-owned policy at root."
+  },
+  {
+    "source": "AGENTS.md",
+    "sentence": "All non-Beads instructions except mandatory map discovery.",
+    "destination": "AGENTS.md",
+    "disposition": "Retained byte-for-byte; includes privacy, sync-independent fixture hygiene, dogfooding, required verification and compatibility policy."
+  },
+  {
+    "source": "templates/project/AGENTS.md.jinja",
+    "sentence": "All other conditional guidance, including app scripts, coverage output, CI/dev metadata and migration authorities.",
+    "destination": "templates/project/AGENTS.md.jinja + embedded snapshot",
+    "disposition": "Retained byte-for-byte."
+  },
+  {
+    "source": "crates/jig/AGENTS.md",
+    "sentence": "Change bounded owned-process execution or process-tree cleanup: src/process.rs and src/process/tests.rs.",
+    "destination": "crates/jig-owned-process/AGENTS.md",
+    "disposition": "Correct obsolete paths to the current owning crate."
+  },
+  {
+    "source": "crates/jig-owned-process/AGENTS.md",
+    "sentence": "Establish a verifiable process-tree identity before starting child work and retain the direct-child identity until descendant cleanup is confirmed. Keep one absolute cleanup deadline across normal, error, and drop paths; fail closed when cleanup or bounded output completion cannot be proved. Never signal a recycled numeric PID or process group after identity loss or reap.",
+    "destination": "crates/jig-owned-process/AGENTS.md",
+    "disposition": "Merged with the more detailed moved process invariants; same obligations, no duplicate summary."
+  }
+]

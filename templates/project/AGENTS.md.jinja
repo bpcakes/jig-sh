@@ -5,7 +5,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 ## Start Here
 
-- Open [agent-map.md](./agent-map.md) before [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Use [agent-map.md](./agent-map.md) to find relevant guides when the owning area is unclear.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
 - Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients. Discover targets with `scripts/jig info targets`; preview verification with `scripts/jig check --explain`.
@@ -95,9 +95,9 @@ Structured work uses configured check gates; repository-wide TypeScript checks r
 For application contract freshness and public deployment boundaries, use `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts`.
 [% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
-Jig validates those scripts during adoption; generated web CI validates them again before running.
 Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
-Install scope follows package-manager workspace membership; keep registry, authentication, and install-script policy project-owned.
+Keep registry, authentication, and install-script policy project-owned.
+For dependency installation details, see the [Jig frontend installation reference](https://github.com/bpcakes/jig-sh/blob/master/docs/adoption.md#frontend-dependency-installation).
 `[[frontend_apps]]` owns CI and coverage metadata; matching `[[dev.apps]]` entries own local development. Extra dev apps have no generated web CI. Replace legacy `dev_command` with `[dev]` and `[[dev.apps]]`.
 `kind` selects `vite` or `env-port`; `role` selects `spa`, `admin`, or `astro`.
 [% else -%]
@@ -122,11 +122,13 @@ No web apps are configured in `.jig.toml`.
 
 ## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions
 
-When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, use these sections:
+When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, these sections are optional suggestions:
 
 - `## Purpose`
 - `## Key entrypoints`
 - `## Edit here for X`
 - `## Invariants`
 - `## Common commands`
+
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands; concise guides with different headings are valid. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
 <!-- END JIG MANAGED BLOCK -->

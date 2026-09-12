@@ -252,7 +252,7 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
 
     for expected in [
         "ownership guidance in crate-level guides",
-        "before Rust work",
+        "when the owning area is unclear",
         "## Rust Defaults",
         "For Rust changes",
         "## Crate Guide Conventions",
@@ -305,7 +305,7 @@ fn rust_backend_guidance_keeps_ownership_and_verification_rules() {
 
     for expected in [
         "ownership guidance in backend-level guides",
-        "before backend work",
+        "when the owning area is unclear",
         "## Backend Defaults",
         "Keep transport logic thin and business logic in the owning crate.",
         "For backend changes, evidence must cover the configured tests (`scripts/jig check test`).",

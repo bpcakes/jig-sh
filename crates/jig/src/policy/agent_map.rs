@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -36,29 +36,65 @@ pub(crate) fn write(root: &Path, map_path: &Path) -> Result<()> {
 pub(crate) fn render(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     // Normalize here as the boundary guard for both CLI generation and
     // renderer post-processing callers.
-    let _map_path = normalize_map_path(map_path)?;
+    let map_path = normalize_map_path(map_path)?;
+    let depth = map_path
+        .parent()
+        .map_or(0, |parent| parent.components().count());
+    let root_prefix = if depth == 0 {
+        "./".to_owned()
+    } else {
+        "../".repeat(depth)
+    };
     let guides = list_guides(root)?;
     let mut body = String::new();
     body.push_str("# Agent Map\n\n");
-    body.push_str("Fast jump index for agent-facing guidance in this repository.\n\n");
+    body.push_str("Use this index when you need help locating the guide for an area.\n");
+    body.push_str("If the owning area is already clear, read its nearest guide directly.\n\n");
     body.push_str("## Root guide\n\n");
-    body.push_str("- [Repository AGENTS.md](./AGENTS.md)\n\n");
+    let _ = writeln!(body, "- [Repository AGENTS.md]({root_prefix}AGENTS.md)\n");
     body.push_str("## Nested guides\n\n");
     let nested = guides.iter().filter(|path| path.as_str() != "AGENTS.md");
     let mut nested_count = 0usize;
     for guide in nested {
         nested_count += 1;
-        let label = guide.trim_end_matches("/AGENTS.md");
-        let _ = writeln!(body, "- [{label}](./{guide})");
+        let label = escape_link_label(guide.trim_end_matches("/AGENTS.md"));
+        let destination = encode_link_path(guide);
+        let _ = writeln!(body, "- [{label}]({root_prefix}{destination})");
     }
     if nested_count == 0 {
         body.push_str("_None yet_\n");
     }
     body.push_str("\n## Suggested usage pattern\n\n");
-    body.push_str("1. Start with the root [AGENTS.md](./AGENTS.md).\n");
+    let _ = writeln!(
+        body,
+        "1. Start with the root [AGENTS.md]({root_prefix}AGENTS.md)."
+    );
     body.push_str("2. Open the nearest guide for the area you will change.\n");
     body.push_str("3. Follow that guide's entrypoint map before editing.\n");
     Ok(body.into_bytes())
+}
+
+fn escape_link_label(label: &str) -> String {
+    let mut escaped = String::new();
+    for character in label.chars() {
+        if matches!(character, '\\' | '[' | ']' | '`' | '*' | '_' | '<' | '>') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
+fn encode_link_path(path: &str) -> String {
+    let mut encoded = String::new();
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 pub(crate) fn write_rendered(root: &Path, map_path: &Path, body: &[u8]) -> Result<()> {
@@ -68,157 +104,7 @@ pub(crate) fn write_rendered(root: &Path, map_path: &Path, body: &[u8]) -> Resul
 }
 
 pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
-    // Backend guides intentionally use this exact repo-wide heading contract so
-    // agents can scan every package or crate guide without learning local synonyms.
-    let required = [
-        "## Purpose",
-        "## Key entrypoints",
-        "## Edit here for X",
-        "## Invariants",
-        "## Common commands",
-    ];
-    let mut missing_sections = Vec::new();
-    let mut missing_entry_ref = Vec::new();
-    let guides = backend_guides(ctx)?;
-    for (guide, languages) in &guides {
-        let rel = relative_string(ctx.root(), guide)?;
-        let text = fs::read_to_string(guide)?;
-        for section in required {
-            if !text.lines().any(|line| line.trim_end() == section) {
-                missing_sections.push(format!("{rel}: missing section '{section}'"));
-            }
-        }
-        for language in languages {
-            let (has_entry_ref, expected) = match language {
-                GuideLanguage::Go => (
-                    has_backticked_go_entrypoint(&text),
-                    "a backticked .go entrypoint",
-                ),
-                GuideLanguage::Rust => (
-                    text.contains("`src/lib.rs`") || text.contains("`src/main.rs`"),
-                    "src/lib.rs or src/main.rs entrypoint reference",
-                ),
-            };
-            if !has_entry_ref {
-                missing_entry_ref.push(format!("{rel}: missing {expected}"));
-            }
-        }
-    }
-    Ok(json!({
-        "ok": missing_sections.is_empty() && missing_entry_ref.is_empty(),
-        "guide_count": guides.len(),
-        "missing_guides": [],
-        "missing_guides_note": "placeholder backend-level AGENTS.md files are no longer required; existing guides are validated when present",
-        "missing_sections": missing_sections,
-        "missing_entry_ref": missing_entry_ref,
-    }))
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum GuideLanguage {
-    Go,
-    Rust,
-}
-
-fn backend_guides(ctx: &RepoContext) -> Result<BTreeMap<PathBuf, BTreeSet<GuideLanguage>>> {
-    let mut guides = BTreeMap::new();
-    if ctx.contract_version() < 6 {
-        if ctx.is_go_backend() {
-            for root in ["cmd", "internal"] {
-                add_child_guides(&ctx.root().join(root), GuideLanguage::Go, &mut guides)?;
-            }
-        } else {
-            for root in ctx.rust_crate_roots() {
-                add_child_guides(&ctx.root().join(root), GuideLanguage::Rust, &mut guides)?;
-            }
-        }
-        return Ok(guides);
-    }
-
-    for component in ctx.component_specs() {
-        let component_root = ctx.component_root_path(component)?;
-        if component.adapters.iter().any(|adapter| adapter == "go") {
-            if component_root != ctx.root() {
-                add_guide_if_present(&component_root, GuideLanguage::Go, &mut guides);
-            }
-            for root in ["cmd", "internal"] {
-                add_child_guides(&component_root.join(root), GuideLanguage::Go, &mut guides)?;
-            }
-        }
-        if component.adapters.iter().any(|adapter| adapter == "rust")
-            && component_root != ctx.root()
-        {
-            add_guide_if_present(&component_root, GuideLanguage::Rust, &mut guides);
-        }
-    }
-    for root in ctx
-        .rust_crate_roots()
-        .iter()
-        .filter(|root| root.as_str() != ".")
-    {
-        add_fallback_rust_guides(&ctx.root().join(root), &mut guides)?;
-    }
-    Ok(guides)
-}
-
-fn add_fallback_rust_guides(
-    backend_root: &Path,
-    guides: &mut BTreeMap<PathBuf, BTreeSet<GuideLanguage>>,
-) -> Result<()> {
-    if !backend_root.is_dir() {
-        return Ok(());
-    }
-    for entry in sorted_dirs(backend_root)? {
-        let guide = entry.join("AGENTS.md");
-        if guide.exists() {
-            guides
-                .entry(guide)
-                .or_insert_with(|| BTreeSet::from([GuideLanguage::Rust]));
-        }
-    }
-    Ok(())
-}
-
-fn add_child_guides(
-    backend_root: &Path,
-    language: GuideLanguage,
-    guides: &mut BTreeMap<PathBuf, BTreeSet<GuideLanguage>>,
-) -> Result<()> {
-    if !backend_root.is_dir() {
-        return Ok(());
-    }
-    // Backend roots contain first-level packages or crates; deeper AGENTS.md
-    // files are covered by agent-map link validation rather than guide policy.
-    for entry in sorted_dirs(backend_root)? {
-        let guide = entry.join("AGENTS.md");
-        if guide.exists() {
-            guides.entry(guide).or_default().insert(language);
-        }
-    }
-    Ok(())
-}
-
-fn add_guide_if_present(
-    component_root: &Path,
-    language: GuideLanguage,
-    guides: &mut BTreeMap<PathBuf, BTreeSet<GuideLanguage>>,
-) {
-    let guide = component_root.join("AGENTS.md");
-    if guide.exists() {
-        guides.entry(guide).or_default().insert(language);
-    }
-}
-
-fn has_backticked_go_entrypoint(text: &str) -> bool {
-    text.split('`')
-        .skip(1)
-        .step_by(2)
-        .map(str::trim)
-        .any(|reference| {
-            !reference.is_empty()
-                && !reference.chars().any(char::is_whitespace)
-                && reference.ends_with(".go")
-        })
+    super::guide_check::check(ctx)
 }
 
 struct CheckResult {
@@ -234,25 +120,42 @@ impl CheckResult {
 }
 
 fn validate(root: &Path, map_path: &Path) -> Result<CheckResult> {
+    use crate::agent_guides::references::{
+        Destination, GuideFiles, markdown_references, resolve_reference,
+    };
     let map_path = normalize_map_path(map_path)?;
-    let full_map_path = root.join(&map_path);
-    let text = fs::read_to_string(&full_map_path)
-        .with_context(|| format!("Failed to read {}", full_map_path.display()))?;
-    let map_dir = map_path.parent().unwrap_or_else(|| Path::new(""));
-    let linked = markdown_local_links(&text, map_dir);
-    let linked_set = linked
-        .iter()
-        .map(|(_, _, path)| path.clone())
-        .collect::<HashSet<_>>();
+    let files = GuideFiles::new(root)?;
+    let text = files.read(&map_path.to_string_lossy())?;
+    let mut linked_set = HashSet::new();
     let mut broken_links = Vec::new();
-    for (line, raw, path) in linked {
-        if path.starts_with("../") || path == ".." {
+    for reference in markdown_references(&text) {
+        if let Some(problem) = reference.problem {
             broken_links.push(format!(
-                "{}:{line}: {raw} -> {path} (outside repository)",
-                map_path.display()
+                "{}:{}: {} ({problem})",
+                map_path.display(),
+                reference.line,
+                reference.target
             ));
-        } else if !root.join(&path).exists() {
-            broken_links.push(format!("{}:{line}: {raw} -> {path}", map_path.display()));
+            continue;
+        }
+        let problem = match resolve_reference(&map_path, &reference.target) {
+            Ok(Destination::Local(path)) => {
+                linked_set.insert(path.clone());
+                files
+                    .check_target(&path, false)
+                    .err()
+                    .map(|error| format!("{path} ({error})"))
+            }
+            Ok(Destination::External | Destination::Fragment) => None,
+            Err(error) => Some(error.to_string()),
+        };
+        if let Some(problem) = problem {
+            broken_links.push(format!(
+                "{}:{}: {} -> {problem}",
+                map_path.display(),
+                reference.line,
+                reference.target
+            ));
         }
     }
     let guides = list_guides(root)?;
@@ -260,7 +163,7 @@ fn validate(root: &Path, map_path: &Path) -> Result<CheckResult> {
         .iter()
         .filter(|path| !linked_set.contains(*path))
         .cloned()
-        .collect::<Vec<_>>();
+        .collect();
     Ok(CheckResult {
         agent_count: guides.len(),
         missing_agents,
@@ -272,7 +175,7 @@ fn normalize_map_path(map_path: &Path) -> Result<PathBuf> {
     crate::repository_path::normalize_repo_relative_path(map_path, "agent map path")
 }
 
-fn list_guides(root: &Path) -> Result<Vec<String>> {
+pub(super) fn list_guides(root: &Path) -> Result<Vec<String>> {
     let mut guides = BTreeSet::new();
     if super::git_success(root, &["rev-parse", "--is-inside-work-tree"])? {
         for args in [
@@ -287,7 +190,11 @@ fn list_guides(root: &Path) -> Result<Vec<String>> {
             ],
         ] {
             for path in super::split_nul(&super::git_output(root, &args)?) {
-                if path == "AGENTS.md" || path.ends_with("/AGENTS.md") {
+                if (path == "AGENTS.md" || path.ends_with("/AGENTS.md"))
+                    && !Path::new(&path)
+                        .components()
+                        .any(is_ignored_guide_component)
+                {
                     guides.insert(path);
                 }
             }
@@ -317,53 +224,6 @@ fn collect_guides(root: &Path, current: &Path, guides: &mut BTreeSet<String>) ->
     Ok(())
 }
 
-fn markdown_local_links(text: &str, map_dir: &Path) -> Vec<(usize, String, String)> {
-    let mut links = Vec::new();
-    for (line_index, line) in text.lines().enumerate() {
-        let mut rest = line;
-        while let Some(open) = rest.find("](") {
-            let after_open = &rest[open + 2..];
-            let Some(close) = after_open.find(')') else {
-                break;
-            };
-            let raw = &after_open[..close];
-            if let Some(normalized) = normalize_link(raw, map_dir) {
-                links.push((line_index + 1, raw.to_string(), normalized));
-            }
-            rest = &after_open[close + 1..];
-        }
-    }
-    links
-}
-
-fn normalize_link(raw: &str, map_dir: &Path) -> Option<String> {
-    let mut target = raw.trim();
-    if target.is_empty() {
-        return None;
-    }
-    if let Some(stripped) = target.strip_prefix('<') {
-        target = stripped.split('>').next().unwrap_or(stripped);
-    } else {
-        target = target.split_whitespace().next().unwrap_or(target);
-    }
-    target = target.split('#').next().unwrap_or(target);
-    target = target.split('?').next().unwrap_or(target);
-    if target.is_empty()
-        || target.starts_with('#')
-        || target.starts_with("http:")
-        || target.starts_with("https:")
-        || target.starts_with("mailto:")
-    {
-        return None;
-    }
-    let combined = if let Some(stripped) = target.strip_prefix('/') {
-        PathBuf::from(stripped)
-    } else {
-        map_dir.join(target)
-    };
-    Some(normalize_relative_path(&combined))
-}
-
 // Keep the explicit current-directory case distinct from unsupported/root
 // components even though both intentionally leave the relative stack unchanged.
 #[allow(clippy::match_same_arms)]
@@ -390,18 +250,6 @@ fn normalize_relative_path(path: &Path) -> String {
     }
 }
 
-fn sorted_dirs(path: &Path) -> Result<Vec<PathBuf>> {
-    let mut dirs = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            dirs.push(entry.path());
-        }
-    }
-    dirs.sort();
-    Ok(dirs)
-}
-
 fn relative_string(root: &Path, path: &Path) -> Result<String> {
     Ok(normalize_relative_path(path.strip_prefix(root)?))
 }
@@ -413,7 +261,6 @@ mod tests {
 
     use tempfile::tempdir;
 
-    #[cfg(unix)]
     use super::write;
     use super::{check_guides, normalize_map_path, validate};
     use crate::context::RepoContext;
@@ -439,6 +286,50 @@ mod tests {
         let error = normalize_map_path(Path::new("/tmp/agent-map.md")).unwrap_err();
 
         assert!(error.to_string().contains("repository-relative"));
+    }
+
+    #[test]
+    fn generated_map_links_round_trip_literal_paths_from_each_map_location() {
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("AGENTS.md"), "# ExampleProject\n").unwrap();
+        let names = [
+            "100%",
+            "example%20guide",
+            "example guide",
+            "example#guide",
+            "example(guide)",
+            "example[guide",
+            "example]guide",
+            "example`guide",
+            "example_guide",
+            "café",
+        ];
+        for name in names {
+            let directory = root.path().join(name);
+            fs::create_dir(&directory).unwrap();
+            fs::write(directory.join("AGENTS.md"), "# Owner\n").unwrap();
+        }
+        for map in [
+            "agent-map.md",
+            "docs/agent-map.md",
+            "docs/nested/agent-map.md",
+        ] {
+            let path = Path::new(map);
+            fs::create_dir_all(root.path().join(path.parent().unwrap())).unwrap();
+            write(root.path(), path).unwrap();
+            let result = validate(root.path(), path).unwrap();
+            assert_eq!(result.agent_count, names.len() + 1);
+            assert!(
+                result.missing_agents.is_empty(),
+                "{map}: {:?}",
+                result.missing_agents
+            );
+            assert!(
+                result.broken_links.is_empty(),
+                "{map}: {:?}",
+                result.broken_links
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -539,93 +430,43 @@ mod tests {
         fs::create_dir_all(temp.path().join("crates/api")).unwrap();
         fs::create_dir_all(temp.path().join("crates/worker")).unwrap();
         TestRepoBuilder::new(temp.path())
-            .config(
-                r#"
-rust_crate_roots = ["crates"]
-rust_test_command = "cargo test"
-"#,
-            )
-            .contract_version(2)
-            .required_commands(["rust_test_command"])
+            .config("rust_crate_roots = [\"crates\"]")
             .write();
         fs::write(
             temp.path().join("crates/api/AGENTS.md"),
-            "## Purpose\nNo entrypoint reference yet.\n",
+            "# Ownership\nKeep APIs stable.\n",
         )
         .unwrap();
-
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let output = check_guides(&ctx).unwrap();
-
-        assert_eq!(output["ok"], false);
+        let output = check_guides(&RepoContext::load_from(temp.path()).unwrap()).unwrap();
+        assert_eq!(output["ok"], true);
         assert_eq!(output["guide_count"], 1);
-        assert!(output["missing_guides"].as_array().unwrap().is_empty());
-        assert!(
-            output["missing_guides_note"]
-                .as_str()
-                .unwrap()
-                .contains("no longer required")
-        );
-        assert!(
-            output["missing_sections"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|section| section.as_str().unwrap().contains("## Key entrypoints"))
-        );
-        assert!(
-            output["missing_entry_ref"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|entry| entry.as_str().unwrap().contains("crates/api/AGENTS.md"))
-        );
+        assert_eq!(output["missing_guides"], serde_json::json!([]));
+        assert_eq!(output["missing_sections"], serde_json::json!([]));
+        assert_eq!(output["missing_entry_ref"], serde_json::json!([]));
     }
 
     #[test]
-    fn check_guides_discovers_go_packages_and_requires_go_entrypoints() {
+    fn check_guides_discovers_go_packages_without_literal_entrypoint_requirements() {
         let temp = tempdir().unwrap();
         fs::create_dir_all(temp.path().join("cmd/api")).unwrap();
         fs::create_dir_all(temp.path().join("internal/core")).unwrap();
         TestRepoBuilder::new(temp.path())
-            .config(
-                r#"
-backend_language = "go"
-go_database = "none"
-rust_crate_roots = []
-"#,
-            )
+            .config("backend_language = \"go\"\ngo_database = \"none\"\nrust_crate_roots = []")
             .write();
-        let required_sections = "## Purpose\nExample package.\n\n## Key entrypoints\nENTRYPOINT\n\n## Edit here for X\nExample edits.\n\n## Invariants\nExample invariant.\n\n## Common commands\nExample command.\n";
         fs::write(
             temp.path().join("cmd/api/AGENTS.md"),
-            required_sections.replace("ENTRYPOINT", "- `main.go`"),
+            "# API\nOwn HTTP entrypoints.\n",
         )
         .unwrap();
         fs::write(
             temp.path().join("internal/core/AGENTS.md"),
-            required_sections.replace("ENTRYPOINT", "- core.go"),
+            "# Core\nKeep transport outside this package.\n",
         )
         .unwrap();
-
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let output = check_guides(&ctx).unwrap();
-
-        assert_eq!(output["ok"], false);
-        assert_eq!(output["guide_count"], 2);
-        assert_eq!(
-            output["missing_entry_ref"][0],
-            "internal/core/AGENTS.md: missing a backticked .go entrypoint"
-        );
-
-        fs::write(
-            temp.path().join("internal/core/AGENTS.md"),
-            required_sections.replace("ENTRYPOINT", "- `core.go`"),
-        )
-        .unwrap();
-        let output = check_guides(&ctx).unwrap();
+        let output = check_guides(&RepoContext::load_from(temp.path()).unwrap()).unwrap();
         assert_eq!(output["ok"], true);
         assert_eq!(output["guide_count"], 2);
+        assert_eq!(output["missing_entry_ref"], serde_json::json!([]));
     }
 
     #[test]
@@ -746,6 +587,6 @@ targets = [
         let output = check_guides(&ctx).unwrap();
 
         assert_eq!(output["ok"], true);
-        assert_eq!(output["guide_count"], 3);
+        assert_eq!(output["guide_count"], 4);
     }
 }
