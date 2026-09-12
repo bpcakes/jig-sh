@@ -84,7 +84,7 @@ scripts/jig check test
 
 Setup creates `Cargo.lock`; commit it for either preset so locked checks and CI share the resolution. The root/member Cargo manifests, root `clippy.toml`, seed source, crate guide, and scaffold README are generated once and become project-owned. `jig update` maintains the harness without rewriting them. Root guidance talks about the Rust workspace and crate ownership, and neither preset configures or recommends `scripts/jig dev`.
 
-When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
+When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, Batter runtime crate, HTTP boundary and shared middleware crates, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass. An admin frontend also gets a separate admin API and HTTP crate. See [Rust applications on Batter](rust-applications.md) for lifecycle ownership and deployment limits:
 
 ```sh
 jig presets

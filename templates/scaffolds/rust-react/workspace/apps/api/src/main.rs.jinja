@@ -1,7 +1,8 @@
-use std::{net::SocketAddr, process::ExitCode};
+use std::process::ExitCode;
 
 use ::<<[ module_name ]>> as app_crate;
 use ::<<[ module_name ]>>_http as app_http_crate;
+use ::<<[ module_name ]>>_runtime as runtime;
 use anyhow::Context;
 
 #[tokio::main]
@@ -36,7 +37,7 @@ async fn run() -> anyhow::Result<()> {
     let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
 [% if db_enabled %]
     if command == Command::BootstrapDatabase {
-        let created = app_crate::AppState::bootstrap_database(&config)
+        let created = runtime::bootstrap_database(config)
             .await
             .context("Failed to bootstrap the database")?;
         if created {
@@ -47,12 +48,7 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 [% endif %]
-    let addr: SocketAddr = config.bind_addr();
-    let state = app_crate::AppState::from_config(config)
-        .await
-        .context("Failed to initialize application state")?;
-
-    serve(addr, state).await
+    runtime::serve(config, app_http_crate::router_with_shutdown).await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,22 +82,6 @@ fn parse_command() -> anyhow::Result<Command> {
     }
 }
 
-async fn serve(addr: SocketAddr, state: app_crate::AppState) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("Failed to bind API listener to {addr}"))?;
-    let bound_addr = listener
-        .local_addr()
-        .context("Failed to read API listener address after bind")?;
-    tracing::info!(%bound_addr, "listening");
-
-    axum::serve(listener, app_http_crate::router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("API server exited with an error")?;
-    Ok(())
-}
-
 fn init_tracing() {
     #[allow(clippy::useless_concat)]
     let default_filter = concat!(
@@ -109,6 +89,7 @@ fn init_tracing() {
         "<<[ module_name ]>>=info,",
         "<<[ module_name ]>>_api=info,",
         "tower_http=info",
+        ",batter=info,batter_axum=info",
     );
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -125,36 +106,104 @@ fn install_panic_hook() {
         default_hook(panic_info);
     }));
 }
+[% if not db_enabled %]
 
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(signal) => signal,
-                Err(error) => {
-                    tracing::error!(error = %error, "failed to listen for SIGTERM");
-                    wait_for_ctrl_c().await;
-                    return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Read,
+        process::{Command as ProcessCommand, Stdio},
+        time::Duration,
+    };
+    use tokio::net::TcpListener;
+
+    const BIND_FAILURE_CHILD: &str = "JIG_NO_DB_BIND_FAILURE_CHILD";
+    const BIND_FAILURE_TEST: &str = "tests::production_serve_reports_bind_failure";
+
+    #[tokio::test]
+    async fn production_serve_reports_bind_failure() {
+        if std::env::var_os(BIND_FAILURE_CHILD).is_some() {
+            let config = app_crate::AppConfig::from_env().expect("test bind address is valid");
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                runtime::serve(config, app_http_crate::router_with_shutdown),
+            )
+            .await
+            .expect("serve should fail the occupied bind instead of hanging");
+            let error = result.expect_err("the production serve entrypoint must reject the bind");
+            let display = error.to_string();
+            assert!(
+                display.contains("startup failed at http.bind"),
+                "bind failure should retain its production startup stage: {display}"
+            );
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()),
+                "bind failure should retain its I/O cause: {display}"
+            );
+            return;
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener for the occupied address");
+        let bind_addr = listener
+            .local_addr()
+            .expect("read the occupied listener address")
+            .to_string();
+        let mut child = ProcessCommand::new(
+            std::env::current_exe().expect("locate the generated API test executable"),
+        )
+        .args(["--exact", BIND_FAILURE_TEST, "--nocapture"])
+        .env(BIND_FAILURE_CHILD, "1")
+        .env("BIND_ADDR", &bind_addr)
+        .env_remove("HOST")
+        .env_remove("PORT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn an isolated production bind-failure test");
+        let status =
+            match tokio::time::timeout(Duration::from_secs(5), wait_for_child(&mut child)).await {
+                Ok(status) => status.expect("wait for the production bind-failure child"),
+                Err(_) => {
+                    let kill = child.kill();
+                    let wait = child.wait();
+                    panic!("production bind-failure child timed out; kill={kill:?}, wait={wait:?}");
                 }
             };
+        let mut stdout = String::new();
+        child
+            .stdout
+            .take()
+            .expect("capture child stdout")
+            .read_to_string(&mut stdout)
+            .expect("read child stdout");
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .expect("capture child stderr")
+            .read_to_string(&mut stderr)
+            .expect("read child stderr");
+        drop(listener);
+        assert!(
+            status.success(),
+            "isolated production bind-failure test failed: status={status}, stdout={stdout}, stderr={stderr}"
+        );
+    }
 
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => log_ctrl_c_result(result),
-            _ = terminate.recv() => {}
+    async fn wait_for_child(
+        child: &mut std::process::Child,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
-
-    #[cfg(not(unix))]
-    wait_for_ctrl_c().await;
 }
-
-async fn wait_for_ctrl_c() {
-    log_ctrl_c_result(tokio::signal::ctrl_c().await);
-}
-
-fn log_ctrl_c_result(result: std::io::Result<()>) {
-    if let Err(error) = result {
-        tracing::error!(error = %error, "failed to listen for Ctrl-C");
-    }
-}
+[% endif %]

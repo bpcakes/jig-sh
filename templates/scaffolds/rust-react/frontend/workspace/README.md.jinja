@@ -1,6 +1,45 @@
 # <<[ package_name ]>>
 
-Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Axum, React, and OpenAPI[% endif %] workspace.
+Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Batter, Axum, React, and OpenAPI[% endif %] workspace.
+
+[% if backend_language != "go" %]
+Batter and `batter-axum`[% if db == "postgres" %], plus `batter-sqlx`[% endif %] are
+pinned Git dependencies in `Cargo.toml` (not registry releases). The services target
+Unix and require network access on the first build. Commit `Cargo.lock` after
+bootstrap; upgrade all applicable Batter Git pins together deliberately.
+
+`crates/<<[ package_name ]>>-runtime` owns protected startup, native signals, and
+resource cleanup. `Startup::scoped` constrains initialization to stage metadata,
+cleanup reservation, and supported registration adapters. Startup has a shared
+30-second budget, including database connection and migrations when enabled. HTTP handlers have a 10-second response
+construction budget; streaming bodies and WebSockets need separate limits. Shutdown
+drains for 10 seconds, then allows 2 seconds for cancellation and 1 second for
+abort/reap before separately bounded cleanup. These policies are application-owned.
+Failed or incomplete cleanup makes the process exit unsuccessfully.
+Shutdown phases share one first-stop clock; scheduling delay consumes the allowance.
+`jig dev` has a shorter, two-second SIGTERM grace period before force-killing the
+service process group. Slow requests can therefore be interrupted before Batter
+finishes draining or closing resources. To test the full shutdown budget, launch
+the built service binary directly and send it SIGTERM; production process managers
+must allow enough time for drain, cancellation, abort/reap, and cleanup.
+[% if db != "none" %]
+Database setup uses Batter's finite `Command` owner with 30 seconds for work and
+independently bounded pool cleanup, including after SIGINT/SIGTERM or migration
+failure. Cancellation does not roll back database creation or committed migrations.
+[% endif %]
+
+Public `/health/live` and `/health/ready` probes remain outside request admission.
+The separate admin service also exposes those operational probes; admin business
+routes remain denied until an application authorizer is supplied. Do not add business
+data to unauthenticated probes.
+Readiness combines the runtime lifecycle with initialized application state; it is
+not a continuous database connectivity check. PostgreSQL pool construction registers
+local cleanup before an explicit bounded connectivity check; local closure does not
+roll back remote transactions or guarantee remote session termination. SQLite keeps
+its native configuration and manual cleanup path. Change lifecycle budgets in the
+runtime crate and request policy in `crates/<<[ package_name ]>>-http-common/src/requests.rs`;
+these are source policies, not `.jig.toml` settings.
+[% endif %]
 
 ## Quickstart
 
@@ -81,7 +120,7 @@ The command binds PostgreSQL to a random loopback port, uses a `test_db_` databa
 [% if admin_api_enabled %]
 ## Admin boundary
 
-The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so future matched admin routes return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `<<[ package_name ]>>_admin_http::router`. Keep the admin listener private at the network/deployment layer as well.
+The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so admitted privileged requests return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `<<[ package_name ]>>_admin_http::router_with_shutdown`, preserving the runtime's shutdown handle. The convenience `router` creates an independent ready handle for in-process tests, not production lifecycle wiring. Keep the admin listener private at the network/deployment layer as well.
 
 Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, and do not publish the admin client with public frontend or documentation artifacts.
 

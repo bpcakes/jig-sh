@@ -227,17 +227,13 @@ fn assert_api_entrypoint(destination: &Path) {
             "use ::my_app_http as app_http_crate;",
             "load_dotenv();",
             "warning: failed to load .env",
-            "let bound_addr = listener",
-            "Failed to read API listener address after bind",
-            "tracing::info!(%bound_addr, \"listening\")",
-            "app_http_crate::router",
+            "runtime::serve(config, app_http_crate::router_with_shutdown).await",
             "app_crate::AppConfig::from_env()",
-            "app_crate::AppState::from_config(config)",
             "--bootstrap-database",
             "    let command = parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
             "match (arguments.next(), arguments.next())",
             "unexpected API argument",
-            "app_crate::AppState::bootstrap_database(&config)",
+            "runtime::bootstrap_database(config)",
             "install_panic_hook",
             "tracing::error!(error = ?error, \"API server failed\")",
             "#[allow(clippy::useless_concat)]\n    let default_filter",
@@ -245,13 +241,31 @@ fn assert_api_entrypoint(destination: &Path) {
             "\"my_app=info,\",",
             "\"my_app_api=info,\",",
             "\"tower_http=info\",",
-            "Failed to bind API listener",
-            "API server exited with an error",
-            "SignalKind::terminate",
-            "failed to listen for Ctrl-C",
         ],
     );
-    assert_contains_none(&api_main, &["args_os().any"]);
+    assert_contains_none(
+        &api_main,
+        &["args_os().any", "unsafe {", "std::env::set_var", "std::env::remove_var"],
+    );
+    let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
+    assert_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "register_http_in",
+            ".with_unix_signals(\"signals\")",
+            "let supervisor = Supervisor::new(budget);",
+            "let shutdown = supervisor.handle();",
+            "ProtectedStartupScope",
+            "check_shutdown",
+            "reserve_cleanup(\"database.close\")",
+            "Db::connect_in(database_url, cleanup).await?",
+        ],
+    );
+    assert_contains_none(
+        &runtime,
+        &["Startup::new", "scope.supervisor()", "install_signals", "signals.received()"],
+    );
 }
 
 fn assert_generated_dev_config(destination: &Path) {
@@ -281,6 +295,11 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(workspace_cargo.contains("sqlx = { version = \"0.9\""));
     assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
+    for package in ["batter", "batter-axum", "batter-sqlx"] {
+        assert!(workspace_cargo.contains(&format!(
+            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"f5824cf836c9d1146d67d7b0dc99d011921bd02f\" }}"
+        )));
+    }
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-http-common""#));
@@ -294,6 +313,19 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
 }
 
 fn assert_application_and_public_http_crates(destination: &Path) {
+    let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
+    assert_contains_all(
+        &runtime,
+        &[
+            "pub async fn bootstrap_database(config: app_crate::AppConfig)",
+            "use batter::command::{Command, check_command}",
+            "let command = Command::new(",
+            "scope.reserve_cleanup(\"database.close\")?",
+            "scope.stage(\"database.migrate\")?",
+            "command.cancel(); command.wait().await",
+            "let report = check_command(outcome)?",
+        ],
+    );
     let app_lib = fs::read_to_string(destination.join("crates/my-app/src/lib.rs")).unwrap();
     assert_contains_all(
         &app_lib,
@@ -307,7 +339,6 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "partial_jig_bind_values_fall_back_to_bind_addr",
             "DATABASE_URL is required when the db feature is enabled",
             "pub async fn from_config(config: AppConfig) -> Result<Self>",
-            "pub async fn bootstrap_database(config: &AppConfig)",
             "pub fn new_with_version(version: impl Into<String>)",
             "pub fn version(&self) -> &AppVersion",
             "pub fn is_ready(&self) -> bool",
@@ -320,6 +351,8 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "return self.db.is_some()",
             "use axum::",
             "pub fn router",
+            "bootstrap_database",
+            "batter::",
         ],
     );
     let http_lib = fs::read_to_string(destination.join("crates/my-app-http/src/lib.rs")).unwrap();
@@ -327,9 +360,9 @@ fn assert_application_and_public_http_crates(destination: &Path) {
         &http_lib,
         &[
             "pub fn router(state: AppState) -> Router",
-            "TraceLayer::new_for_http()",
+            "batter_axum::observe_http",
             "SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid)",
-            "Router::from(public::routes()).fallback(not_found)",
+            "public::operational_routes(shutdown).fallback(not_found)",
         ],
     );
     assert_contains_none(&http_lib, &["admin"]);
@@ -426,6 +459,9 @@ fn assert_database_crate_and_test_support(destination: &Path) {
     assert!(db_lib.contains("create_if_missing"));
     assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
     assert!(db_lib.contains("connect_with_timeout"));
+    assert!(db_lib.contains("batter_sqlx::pool_in"));
+    assert!(db_lib.contains("pub async fn connect_in("));
+    assert!(db_lib.contains("sqlx::query(\"SELECT 1\")"));
     assert!(db_lib.contains("migrate_with_timeout"));
     let test_support_db =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/db.rs")).unwrap();
@@ -464,6 +500,10 @@ fn assert_generated_backend_docs(destination: &Path) {
     assert!(root_readme.contains("Commit the generated `bun.lock`"));
     assert!(root_readme.contains("DenyAllAdminAuthorizer"));
     assert!(root_readme.contains("bun run test:postgres"));
+    assert!(root_readme.contains("`batter-sqlx`"));
+    assert!(root_readme.contains("all applicable Batter Git pins together"));
+    assert!(root_readme.contains("Startup::scoped"));
+    assert!(root_readme.contains("local closure does not"));
     let http_agents = fs::read_to_string(destination.join("crates/my-app-http/AGENTS.md")).unwrap();
     assert!(http_agents.contains("`src/public.rs`: owns public routes"));
     assert!(http_agents.contains("Never depend on `my-app-admin-http`"));

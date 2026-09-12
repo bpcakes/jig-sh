@@ -3,6 +3,7 @@ use ::<<[ module_name ]>>_http_common::ApiError;
 use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
 use ::<<[ module_name ]>>_http_common::REQUEST_ID_HEADER;
 use ::<<[ module_name ]>>_http_common::not_found;
+use ::<<[ module_name ]>>_http_common::requests;
 use async_trait::async_trait;
 use axum::{
     Json, Router,
@@ -11,11 +12,9 @@ use axum::{
     middleware::{self, Next},
     response::Response,
 };
+use batter::lifecycle::ShutdownHandle;
 use serde::Serialize;
-use tower_http::{
-    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-    trace::TraceLayer,
-};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use utoipa::{OpenApi, ToSchema, openapi::OpenApi as OpenApiDocument};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -127,18 +126,43 @@ fn router_from_routes<A: AdminAuthorizer>(
     authorizer: A,
     protected_routes: Router<AppState>,
 ) -> Router {
-    // `layer` only wraps routes already present. Adding the fallback afterward
-    // keeps unknown paths as a standard 404 without turning them into an auth oracle.
-    protected_routes
-        .layer(middleware::from_fn_with_state(
+    let shutdown = ShutdownHandle::new();
+    shutdown.mark_ready();
+    operational_router(state, authorizer, protected_routes, shutdown)
+}
+
+fn operational_router<A: AdminAuthorizer>(
+    state: AppState,
+    authorizer: A,
+    protected_routes: Router<AppState>,
+    shutdown: ShutdownHandle,
+) -> Router {
+    let protected_routes = requests::guard(
+        protected_routes.layer(middleware::from_fn_with_state(
             authorizer,
             require_admin_authorization::<A>,
-        ))
+        )),
+        shutdown.clone(),
+    );
+    let probes = Router::new()
+        .route("/health/live", axum::routing::get(batter_axum::liveness))
+        .route("/health/ready", axum::routing::get(batter_axum::readiness))
+        .with_state(shutdown);
+    protected_routes
         .fallback(not_found)
         .with_state(state)
+        .merge(probes)
+        .layer(middleware::from_fn(batter_axum::observe_http))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
         .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
-        .layer(TraceLayer::new_for_http())
+}
+
+pub fn router_with_shutdown<A: AdminAuthorizer>(
+    state: AppState,
+    authorizer: A,
+    shutdown: ShutdownHandle,
+) -> Router {
+    operational_router(state, authorizer, Router::from(routes()), shutdown)
 }
 
 pub fn router<A: AdminAuthorizer>(state: AppState, authorizer: A) -> Router {

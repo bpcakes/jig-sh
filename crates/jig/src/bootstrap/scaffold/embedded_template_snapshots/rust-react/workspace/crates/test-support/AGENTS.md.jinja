@@ -24,6 +24,7 @@ Owns reusable test harness code only. It should make integration tests concise w
 
 - Do not add production-only code paths to this crate.
 - Prefer behavior assertions over implementation-detail assertions.
+- `TestApp` uses an independent ready lifecycle handle. Use `router_with_shutdown` with a controlled handle for lifecycle admission tests, and the built service binary for signal and native cleanup tests; in-memory HTTP tests do not prove those process-level guarantees.
 - Keep test state construction explicit so DB-backed readiness cannot accidentally pass without a DB fixture.
 
 ## Common commands

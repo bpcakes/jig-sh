@@ -4,20 +4,24 @@ use ::<<[ module_name ]>>::AppState;
 use ::<<[ module_name ]>>_http_common::REQUEST_ID_HEADER;
 use ::<<[ module_name ]>>_http_common::not_found;
 use axum::Router;
-use tower_http::{
-    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-    trace::TraceLayer,
-};
+use batter::lifecycle::ShutdownHandle;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use utoipa::openapi::OpenApi;
 
 pub fn router(state: AppState) -> Router {
-    let router = Router::from(public::routes()).fallback(not_found);
+    let shutdown = ShutdownHandle::new();
+    shutdown.mark_ready();
+    router_with_shutdown(state, shutdown)
+}
+
+pub fn router_with_shutdown(state: AppState, shutdown: ShutdownHandle) -> Router {
+    let router = public::operational_routes(shutdown).fallback(not_found);
 
     router
         .with_state(state)
+        .layer(axum::middleware::from_fn(batter_axum::observe_http))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
         .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
-        .layer(TraceLayer::new_for_http())
 }
 
 pub fn public_openapi() -> OpenApi {

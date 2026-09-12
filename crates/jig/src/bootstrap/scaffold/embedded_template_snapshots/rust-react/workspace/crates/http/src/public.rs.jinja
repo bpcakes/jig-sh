@@ -2,11 +2,14 @@ use ::<<[ module_name ]>>::AppState;
 use ::<<[ module_name ]>>_core::AppVersion;
 use ::<<[ module_name ]>>_http_common::ApiError;
 use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
+use ::<<[ module_name ]>>_http_common::requests;
+use axum::{Extension, Router};
 use axum::{
     Json,
     extract::State,
     http::{HeaderMap, StatusCode},
 };
+use batter::lifecycle::{Readiness, ShutdownHandle};
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -42,11 +45,27 @@ pub struct AppStatusResponse {
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(PublicApi::openapi())
+        .merge(probe_routes())
+        .merge(application_routes())
+}
+
+fn probe_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
         .routes(routes!(health))
         .routes(routes!(live))
         .routes(routes!(ready))
+}
+
+fn application_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
         .routes(routes!(version))
         .routes(routes!(status))
+}
+
+pub(super) fn operational_routes(shutdown: ShutdownHandle) -> Router<AppState> {
+    requests::guard(Router::from(application_routes()), shutdown.clone())
+        .merge(Router::from(probe_routes()))
+        .layer(Extension(shutdown))
 }
 
 #[utoipa::path(
@@ -81,7 +100,18 @@ async fn health() -> &'static str {
     ),
     tag = "public"
 )]
-async fn ready(State(state): State<AppState>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
+async fn ready(
+    State(state): State<AppState>,
+    Extension(shutdown): Extension<ShutdownHandle>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    if shutdown.readiness() != Readiness::Ready {
+        return Err(ApiError::service_unavailable(
+            "service_unavailable",
+            "The service is not ready",
+            &headers,
+        ));
+    }
     if state.is_ready() {
         Ok(StatusCode::OK)
     } else {

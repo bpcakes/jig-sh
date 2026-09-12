@@ -1,0 +1,1 @@
+Implement protected Startup::scoped service composition, PostgreSQL batter-sqlx pool_in ownership in service and finite database setup, collision validation, docs, snapshots, and generated checks per .agent/plans/batter-protected-startup.md.

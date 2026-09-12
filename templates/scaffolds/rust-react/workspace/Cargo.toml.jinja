@@ -9,6 +9,7 @@ members = [
   "crates/<<[ package_name ]>>",
   "crates/<<[ package_name ]>>-http",
   "crates/<<[ package_name ]>>-http-common",
+  "crates/<<[ package_name ]>>-runtime",
 [% if admin_api_enabled %]
   "crates/<<[ package_name ]>>-admin-http",
 [% endif %]
@@ -29,6 +30,11 @@ cognitive_complexity = "warn"
 mod_module_files = "warn"
 
 [workspace.dependencies]
+batter = { git = "https://github.com/bpcakes/batter", rev = "<<[ batter_revision ]>>" }
+batter-axum = { git = "https://github.com/bpcakes/batter", rev = "<<[ batter_revision ]>>" }
+[% if sqlx_driver == "postgres" %]
+batter-sqlx = { git = "https://github.com/bpcakes/batter", rev = "<<[ batter_revision ]>>" }
+[% endif %]
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"

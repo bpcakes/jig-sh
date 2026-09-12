@@ -1,0 +1,305 @@
+//! Application-owned operational policy. Budgets end at response construction;
+//! streaming bodies and WebSockets need their own limits.
+
+use std::time::Duration;
+
+use ::<<[ module_name ]>> as app_crate;
+use axum::Router;
+use batter::{
+    cleanup::CleanupBudget,
+    lifecycle::{ShutdownBudget, ShutdownHandle, Supervisor},
+    operation::OperationContext,
+    startup::{ProtectedStartupScope, Startup},
+};
+
+/// Own startup and shutdown for either HTTP application. Native resources stay
+/// registered until the HTTP task has joined; incomplete cleanup is an error.
+pub async fn serve<F>(config: app_crate::AppConfig, router: F) -> anyhow::Result<()>
+where
+    F: FnOnce(app_crate::AppState, ShutdownHandle) -> Router + Send + 'static,
+{
+    let cleanup = CleanupBudget::new(
+        Duration::from_secs(5),
+        Duration::from_secs(3),
+        Duration::from_secs(1),
+    )?;
+    let budget = ShutdownBudget::new(
+        Duration::from_secs(10),
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+        cleanup,
+    )?;
+    let supervisor = Supervisor::new(budget);
+    let shutdown = supervisor.handle();
+    let mut starting = Startup::scoped(
+        supervisor,
+        OperationContext::new(Duration::from_secs(30))?,
+        cleanup,
+        move |scope| {
+            let shutdown = shutdown.clone();
+            Box::pin(async move {
+                let initialize_service = async {
+                    scope.stage("application.initialize")?;
+                    let addr = config.bind_addr();
+                    let state = initialize(config, scope).await?;
+                    scope.stage("http.bind")?;
+                    let application = router(state, shutdown);
+                    let listener = tokio::net::TcpListener::bind(addr).await?;
+                    let bound_addr = listener.local_addr()?;
+                    tracing::info!(%bound_addr, "listening");
+                    batter_axum::register_http_in(scope, "http", listener, application)?;
+                    Ok::<_, anyhow::Error>(())
+                };
+                initialize_service.await.map_err(std::io::Error::other)
+            })
+        },
+    )
+    .with_unix_signals("signals")
+    .start();
+    let running = starting.wait().await?;
+    batter::lifecycle::check_shutdown(running.wait().await)?;
+    Ok(())
+}
+
+/// Register native resource teardown before migrations can fail or startup
+/// can be cancelled. The caller must retain and await Batter's startup owner.
+async fn initialize(
+    config: app_crate::AppConfig,
+    scope: &mut ProtectedStartupScope,
+) -> anyhow::Result<app_crate::AppState> {
+[% if db_enabled %]
+    #[cfg(feature = "db")]
+    {
+        let database_url = config.database_url().ok_or_else(|| {
+            anyhow::anyhow!("DATABASE_URL is required to initialize the database")
+        })?;
+        let cleanup = scope.reserve_cleanup("database.close")?;
+[% if sqlx_driver == "postgres" %]
+        let db = app_crate::db::Db::connect_in(database_url, cleanup).await?;
+[% else %]
+        let db = app_crate::db::Db::connect(database_url).await?;
+        let pool = db.pool().clone();
+        cleanup.register(move || async move {
+            pool.close().await;
+            Ok(())
+        });
+[% endif %]
+        db.migrate().await?;
+        Ok(app_crate::AppState::from_database(config, db))
+    }
+
+    #[cfg(not(feature = "db"))]
+    {
+        let _ = scope;
+        app_crate::AppState::from_config(config).await
+    }
+[% else %]
+    let _ = scope;
+    app_crate::AppState::from_config(config).await
+[% endif %]
+}
+[% if db_enabled %]
+
+/// Run finite database setup with owned cleanup, without starting an HTTP service.
+/// Cancellation cannot roll back database creation or committed migrations.
+#[cfg(feature = "db")]
+pub async fn bootstrap_database(config: app_crate::AppConfig) -> anyhow::Result<bool> {
+    use anyhow::Context;
+    use batter::command::{Command, check_command};
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let cleanup = CleanupBudget::new(
+        Duration::from_secs(5),
+        Duration::from_secs(3),
+        Duration::from_secs(1),
+    )?;
+    let command = Command::new(
+        OperationContext::new(Duration::from_secs(30))?,
+        cleanup,
+        move |scope| {
+            Box::pin(async move {
+                let work = async {
+                    scope.stage("database.create")?;
+                    let database_url = config.database_url().ok_or_else(|| {
+                        anyhow::anyhow!("DATABASE_URL is required to bootstrap the database")
+                    })?;
+                    let created = app_crate::db::Db::create_if_missing(database_url)
+                        .await
+[% if sqlx_driver == "postgres" %]
+                        .context("Failed to create the database with the configured role; use a pre-created database or a role already authorized to create it")?;
+[% else %]
+                        .context("Failed to create the database")?;
+[% endif %]
+                    scope.stage("database.connect")?;
+                    let cleanup = scope.reserve_cleanup("database.close")?;
+[% if sqlx_driver == "postgres" %]
+                    let db = app_crate::db::Db::connect_in(database_url, cleanup).await?;
+[% else %]
+                    let db = app_crate::db::Db::connect(database_url).await?;
+                    let pool = db.pool().clone();
+                    cleanup.register(move || async move {
+                        pool.close().await;
+                        Ok(())
+                    });
+[% endif %]
+                    scope.stage("database.migrate")?;
+                    db.migrate()
+                        .await
+                        .context("Failed to run database migrations")?;
+                    Ok::<_, anyhow::Error>(created)
+                };
+                work.await.map_err(std::io::Error::other)
+            })
+        },
+    )
+    .start();
+    let outcome = tokio::select! {
+        biased;
+        _ = interrupt.recv() => { command.cancel(); command.wait().await }
+        _ = terminate.recv() => { command.cancel(); command.wait().await }
+        outcome = command.wait() => outcome,
+    };
+    let report = check_command(outcome)?;
+    Ok(*report
+        .work
+        .as_ref()
+        .expect("check_command validated successful work"))
+}
+[% endif %]
+
+#[cfg(test)]
+mod tests {
+    use batter::{
+        cleanup::{CleanupBudget, CleanupOutcome},
+        lifecycle::{Readiness, ShutdownBudget, Supervisor},
+        operation::OperationContext,
+        startup::{InitializationError, Startup, StartupCause, StartupError, StartupOutcome},
+    };
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+    fn cleanup_budget() -> CleanupBudget {
+        CleanupBudget::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .unwrap()
+    }
+
+    fn shutdown_budget() -> ShutdownBudget {
+        ShutdownBudget::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            cleanup_budget(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn protected_startup_failure_closes_reserved_resources() {
+        let closed = Arc::new(AtomicUsize::new(0));
+        let count = closed.clone();
+        let mut starting = Startup::scoped(
+            Supervisor::new(shutdown_budget()),
+            OperationContext::new(Duration::from_secs(1)).unwrap(),
+            cleanup_budget(),
+            move |scope| {
+                Box::pin(async move {
+                    scope.stage("test.initialize").unwrap();
+                    scope
+                        .reserve_cleanup("test.resource")
+                        .unwrap()
+                        .register(move || async move {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        });
+                    Err::<(), _>(std::io::Error::other("startup failed"))
+                })
+            },
+        )
+        .start();
+        let observer = starting.observer();
+        let report = match tokio::time::timeout(Duration::from_secs(2), starting.wait())
+            .await
+            .expect("protected startup failure should be reported promptly")
+        {
+            Err(StartupError::Failed(report)) => report,
+            Err(StartupError::Coordinator(_)) => panic!("expected reported startup failure"),
+            Ok(_) => panic!("expected startup failure"),
+        };
+        let observed = tokio::time::timeout(Duration::from_secs(2), observer.wait())
+            .await
+            .expect("startup observer should report the failure promptly");
+        let StartupOutcome::Failed(StartupError::Failed(observed)) = observed else {
+            panic!("expected observed startup failure")
+        };
+        assert!(Arc::ptr_eq(&report, &observed));
+        assert!(matches!(
+            report.cause,
+            StartupCause::Failed(InitializationError::Application(_))
+        ));
+        assert_eq!(report.stage, "test.initialize");
+        assert_eq!(report.cleanup.records.len(), 1);
+        assert_eq!(report.cleanup.records[0].name, "test.resource");
+        assert_eq!(report.cleanup.records[0].outcome, CleanupOutcome::Succeeded);
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn protected_startup_owner_drop_cancels_initialization_and_closes_resources() {
+        let entered = Arc::new(AtomicUsize::new(0));
+        let entered_flag = entered.clone();
+        let closed = Arc::new(AtomicUsize::new(0));
+        let count = closed.clone();
+        let supervisor = Supervisor::new(shutdown_budget());
+        let handle = supervisor.handle();
+        let starting = Startup::scoped(
+            supervisor,
+            OperationContext::new(Duration::from_secs(10)).unwrap(),
+            cleanup_budget(),
+            move |scope| {
+                Box::pin(async move {
+                    scope.stage("test.wait").unwrap();
+                    scope
+                        .reserve_cleanup("test.resource")
+                        .unwrap()
+                        .register(move || async move {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        });
+                    entered_flag.store(1, Ordering::SeqCst);
+                    std::future::pending::<Result<(), std::io::Error>>().await
+                })
+            },
+        )
+        .start();
+        let observer = starting.observer();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while entered.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("protected startup initialization should begin promptly");
+        drop(starting);
+        let observed = tokio::time::timeout(Duration::from_secs(2), observer.wait())
+            .await
+            .expect("startup observer should report owner cancellation promptly");
+        let StartupOutcome::Failed(StartupError::Failed(report)) = observed else {
+            panic!("expected drained startup failure")
+        };
+        assert!(matches!(report.cause, StartupCause::Draining));
+        assert!(report.cleanup.is_success());
+        assert_eq!(report.cleanup.records.len(), 1);
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+        assert_eq!(handle.readiness(), Readiness::Draining);
+    }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "<<[ package_name ]>>-runtime"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+<<[ package_name ]>> = { path = "../<<[ package_name ]>>" }
+anyhow.workspace = true
+axum.workspace = true
+batter.workspace = true
+batter-axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[% if db_enabled %]
+[features]
+db = ["<<[ package_name ]>>/db"]
+[% endif %]

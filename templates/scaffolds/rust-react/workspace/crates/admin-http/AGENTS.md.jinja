@@ -16,6 +16,8 @@
 
 ## Invariants
 
+- Production entrypoints use `router_with_shutdown` with the runtime's handle. The convenience `router` creates an independent ready handle for in-process tests.
+- Keep `/health/live` and `/health/ready` outside request admission and admin authorization; unauthenticated probes must not expose business data.
 - Every matched privileged route passes through `AdminAuthorizer`; keep the generated deny-all authorizer until the real implementation and its tests are ready.
 - Keep the authorizer fail closed on missing, malformed, expired, or unverifiable credentials. Use `Forbidden` only for an authenticated principal that lacks permission.
 - Keep all privileged operations under `/admin-api` so public artifact checks can identify accidental bundling.

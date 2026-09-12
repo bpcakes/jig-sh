@@ -18,6 +18,7 @@ Owns application configuration, shared application state, and business use cases
 
 - Parse environment configuration once at startup, then pass typed config into `AppState`.
 - Do not read request transport details in this crate.
+- Keep Batter supervision in `crates/<<[ package_name ]>>-runtime`; application state uses native application and database types.
 [% if db_enabled %]
 - Access persistence through the `<<[ package_name ]>>-db` boundary and keep DB wiring behind the `db` feature.
 [% endif %]
