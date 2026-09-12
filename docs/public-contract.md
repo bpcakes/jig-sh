@@ -50,13 +50,19 @@ Existing complete authored models remain authoritative during readoption and
 update; selection flags on those models fail with guidance to edit `.jig.toml`.
 
 
-`scripts/jig check agent-guides` validates existing root and nested `AGENTS.md` files
-and explicit `repository.components[].guidance` references for all component adapters,
+At contract epoch 8, `scripts/jig check agent-guides` validates existing root and
+nested `AGENTS.md` files and explicit `repository.components[].guidance` references for all component adapters,
 including Rust and Go. `guidance` names a literal repository-relative regular guide file;
 it need not be called `AGENTS.md`. Omitted guidance and absent optional guides do not
 require placeholders. Guide discovery excludes `.git` and `target` directory components.
 
-The runtime-owned JSON retains `ok` (boolean), `guide_count` (number of distinct guide
+Supported epochs 2 through 7 retain their original backend-guide discovery, required
+headings, and literal Rust/Go entrypoint checks. They do not validate Markdown link
+targets or require the root guide's `agent-map.md` to exist. A runtime update alone
+keeps that behavior; upgrading the repository contract to epoch 8 through update or
+readoption enables the policy below. `check agent-map` remains a separate check.
+
+The epoch-8 runtime-owned JSON retains `ok` (boolean), `guide_count` (number of distinct guide
 paths selected), `missing_guides`, `missing_sections`, `missing_entry_ref` (string arrays),
 and `missing_guides_note` (string). The three arrays remain empty compatibility fields:
 there are no required heading names or literal entrypoint spellings. New `diagnostics`

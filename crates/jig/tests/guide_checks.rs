@@ -19,25 +19,35 @@ fn run(root: &Path, args: &[&str]) -> Output {
 fn fixture(guide: &str) -> TempDir {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join(".agent")).unwrap();
-    // Shell runner is the preexisting legacy contract. Quote the one fixed binary
-    // path; guide content is never a command argument or executable input.
-    let executable = env!("CARGO_BIN_EXE_jig").replace('\'', "'\\''");
+    let target = json!({"component":"repo", "action":"guides"});
+    let repository = json!({
+        "components":[{"id":"repo", "root":"."}],
+        "actions":[{
+            "target":target, "intent":"check", "effects":["read_only", "process"],
+            "runner":{"kind":"argv", "program":env!("CARGO_BIN_EXE_jig"), "args":["check", "agent-guides", "--json"]}
+        }],
+        "profiles":[{"id":"verify", "targets":[target]}], "default_check_profile":"verify"
+    });
     let config = json!({
         "_src_path":"embedded:jig-sh", "_commit":"example", "repo_name":"ExampleProject",
-        "jig_version":"0.2.0-beta.1", "default_branch":"main", "rust_crate_roots":[],
-        "commands":{"guides_command":format!("'{executable}' check agent-guides --json")},
-        "work":{"gates":[{"id":"guides","kind":"check","tool":"jig.guides","required":true}]}
+        "default_branch":"main", "repository":repository,
+        "work":{"gates":[{"id":"guides", "kind":"evidence", "profile":"verify", "conclusion":"success"}]}
     });
     fs::write(
         root.path().join(".jig.toml"),
         toml::to_string(&config).unwrap(),
     )
     .unwrap();
-    fs::write(root.path().join(".agent/jig-contract.json"), serde_json::to_vec(&json!({
-        "contract_version":3,"jig_version":"0.2.0-beta.1","tool_namespace":"jig",
-        "required_commands":["guides_command"],
-        "tools":[{"name":"jig.guides","kind":"command","command":"guides_command","description":"Validate ExampleProject guides."}]
-    })).unwrap()).unwrap();
+    let mut manifest = repository;
+    manifest["contract_version"] = json!(8);
+    manifest["tool_namespace"] = json!("jig");
+    manifest["required_commands"] = json!([]);
+    manifest["tools"] = json!([]);
+    fs::write(
+        root.path().join(".agent/jig-contract.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
     fs::write(root.path().join("AGENTS.md"), guide).unwrap();
     root
 }
@@ -288,4 +298,136 @@ fn human_owner_errors_identify_each_component_and_guidance_safely() {
         "{text}"
     );
     assert!(!text.contains('\u{1b}'), "{text:?}");
+}
+
+fn legacy_fixture(epoch: u32) -> TempDir {
+    let root = fixture("# ExampleProject\n[Agent map](agent-map.md)\n");
+    let mut config = json!({
+        "_src_path":"embedded:jig-sh", "_commit":"example", "repo_name":"ExampleProject",
+        "default_branch":"main", "rust_crate_roots":["crates"]
+    });
+    let mut manifest = json!({
+        "contract_version":epoch, "tool_namespace":"jig", "required_commands":[], "tools":[]
+    });
+    if epoch <= 5 {
+        // Legacy repositories must declare at least one command-backed tool,
+        // even though this test invokes the runtime-owned guide check directly.
+        let executable = env!("CARGO_BIN_EXE_jig").replace('\'', "'\\''");
+        config["commands"] = json!({
+            "guides_command":format!("'{executable}' check agent-guides --json")
+        });
+        manifest["required_commands"] = json!(["guides_command"]);
+        manifest["tools"] = json!([{
+            "name":"jig.guides", "kind":"command", "command":"guides_command",
+            "description":"Validate ExampleProject guides."
+        }]);
+    }
+    if epoch <= 3 {
+        config["jig_version"] = json!("0.2.0-beta.1");
+        manifest["jig_version"] = json!("0.2.0-beta.1");
+    }
+    if epoch >= 6 {
+        let repository = json!({
+            "components":[{"id":"example-api", "root":"crates/api", "adapters":["rust"]}],
+            "actions":[], "profiles":[{"id":"verify", "targets":[]}], "default_check_profile":"verify"
+        });
+        config["repository"] = repository.clone();
+        for (key, value) in repository.as_object().unwrap() {
+            manifest[key] = value.clone();
+        }
+    }
+    fs::write(
+        root.path().join(".jig.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join(".agent/jig-contract.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("crates/api")).unwrap();
+    root
+}
+
+const LEGACY_GUIDE: &str = "## Purpose\nExample API.\n## Key entrypoints\n`src/lib.rs`\n## Edit here for X\nAPI changes.\n## Invariants\nStable API.\n## Common commands\nRun tests.\n";
+
+#[test]
+fn legacy_epochs_preserve_guide_policy_without_validating_link_targets() {
+    for epoch in 2..=7 {
+        let root = legacy_fixture(epoch);
+        fs::create_dir_all(root.path().join("target")).unwrap();
+        fs::write(
+            root.path().join("target/example.md"),
+            "Example generated document\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("docs")).unwrap();
+        fs::write(
+            root.path().join("docs/AGENTS.md"),
+            "[Unowned](missing.md)\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("crates/api/AGENTS.md"),
+            format!("{LEGACY_GUIDE}[Missing](missing.md)\n[Ignored](../../target/example.md)\n"),
+        )
+        .unwrap();
+        assert!(!root.path().join("agent-map.md").exists());
+        let output = run(root.path(), &["check", "agent-guides", "--json"]);
+        assert!(output.status.success(), "epoch {epoch}: {output:?}");
+        let result = parse(&output);
+        assert_eq!(result["ok"], true, "epoch {epoch}: {result}");
+        assert_eq!(result["guide_count"], 1);
+        assert!(result.get("diagnostics").is_none());
+        for field in ["missing_guides", "missing_sections", "missing_entry_ref"] {
+            assert_eq!(result[field], json!([]));
+        }
+
+        // Keeping links unchecked must also retain the old positive requirements.
+        fs::write(
+            root.path().join("crates/api/AGENTS.md"),
+            "# API ownership\n",
+        )
+        .unwrap();
+        let output = run(root.path(), &["check", "agent-guides", "--json"]);
+        assert!(!output.status.success(), "epoch {epoch}: {output:?}");
+        let result = parse(&output);
+        assert_eq!(result["missing_sections"].as_array().unwrap().len(), 5);
+        assert_eq!(result["missing_entry_ref"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_epochs_do_not_inspect_symlinked_link_targets() {
+    use std::os::unix::fs::symlink;
+
+    for epoch in 2..=7 {
+        let root = legacy_fixture(epoch);
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("example.md"),
+            "Example external document\n",
+        )
+        .unwrap();
+        symlink(
+            outside.path().join("example.md"),
+            root.path().join("crates/api/linked.md"),
+        )
+        .unwrap();
+        symlink(
+            outside.path(),
+            root.path().join("crates/api/linked-directory"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("crates/api/AGENTS.md"),
+            format!("{LEGACY_GUIDE}[Leaf](linked.md)\n[Ancestor](linked-directory/example.md)\n"),
+        )
+        .unwrap();
+        let output = run(root.path(), &["check", "agent-guides", "--json"]);
+        assert!(output.status.success(), "epoch {epoch}: {output:?}");
+        assert_eq!(parse(&output)["guide_count"], 1);
+    }
 }

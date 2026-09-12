@@ -15,6 +15,7 @@ import test_harness_eval as helpers
 from harness_eval.child_environment import command_environment
 from harness_eval.experiment import environment_versions, experiment_lock
 from harness_eval.runner import finalize_trial, run, run_trial
+from harness_eval.process import stop_group
 from harness_eval.workspace import release_workspace
 
 
@@ -53,6 +54,48 @@ class BoundaryTests(unittest.TestCase):
             result = run(output, limit=0)["results"][0]
         self.assertEqual(result["status"], "completed")
         self.assertTrue(result["grade"]["passed"])
+
+    def test_cli_cleanup_failure_is_durable_excluded_and_never_finalized(self):
+        output, trial, _, _ = self.prepared_trial(first=True)
+        children = []
+
+        def fail_cleanup(child, **kwargs):
+            children.append(child)
+            raise RuntimeError("example cleanup inspection failure")
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        try:
+            with patch("harness_eval.runner.stop_group", side_effect=fail_cleanup), \
+                 patch("harness_eval.runner.grade", side_effect=AssertionError("unsafe grading")), \
+                 patch("harness_eval.runner.retain_workspace", side_effect=AssertionError("unsafe retention")), \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = helpers.driver.main(["run", "--output", str(output), "--execute", "--limit", "1"])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("evaluation error:", stderr.getvalue())
+            self.assertIn("process-group cleanup unresolved", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+            result = helpers.read_json(trial / "result.json")
+            self.assertEqual(result["status"], "cleanup_failed")
+            self.assertEqual(result["execution_status"], "completed")
+            self.assertEqual(result["cleanup_error"], "example cleanup inspection failure")
+            self.assertTrue(result["excluded"])
+            self.assertIsNone(result["grade"])
+            self.assertGreater(result["elapsed_seconds"], 0)
+            self.assertTrue(Path(result["execution_workspace"]["path"]).is_dir())
+            self.assertTrue((trial / "edit-observations.json").exists())
+            with patch("harness_eval.runner.finalize_trial", side_effect=AssertionError("unsafe finalization")), \
+                 patch("harness_eval.runner.run_trial", side_effect=AssertionError("client replay")):
+                resumed = run(output, limit=0)
+            self.assertEqual(resumed["results"][0], result)
+            with self.assertRaisesRegex(ValueError, "unresolved"):
+                finalize_trial(trial, {}, result)
+        finally:
+            for child in children:
+                stop_group(child)
+            result_path = trial / "result.json"
+            if result_path.exists():
+                release_workspace(helpers.read_json(result_path)["execution_workspace"])
 
     def test_lost_unretained_workspace_can_be_excluded_without_blocking_later_trials(self):
         output, trial, config, _ = self.prepared_trial(first=True)

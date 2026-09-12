@@ -23,7 +23,7 @@ from harness_eval.experiment import (BASELINE, baseline_guidance, command, diges
 from harness_eval.fixtures import TASKS, starting_files
 from harness_eval.grade import grade, write_files
 from harness_eval.openai_adapter import CLIENT, VERSION, evaluate, execute_tool
-from harness_eval.runner import observations, run, run_trial, verify_trial
+from harness_eval.runner import CHECK_CLASSIFICATION, observations, run, run_trial, verify_trial
 
 spec = importlib.util.spec_from_file_location("evaluate_harness", SCRIPTS / "evaluate-harness.py")
 driver = importlib.util.module_from_spec(spec)
@@ -34,6 +34,58 @@ def config(argv=None, timeout=5):
     return {"argv": argv or [sys.executable, "@openai-adapter"], "model": "example-model",
             "reasoning": "high", "client": CLIENT, "client_version": VERSION,
             "timeout_seconds": timeout}
+
+
+class ObservationTests(unittest.TestCase):
+    def test_missing_usage_is_not_zero_and_checks_need_source_identity(self):
+        _, missing, metrics = observations({}, config(), "example-hash")
+        self.assertIn("model", missing)
+        self.assertIsNone(metrics["usage_tokens"]["value"])
+        self.assertIsNone(metrics["unnecessary_questions"]["value"])
+        identity = {**config(), "tools_sha256": "example-hash"}
+        trace = [{"name": "run_command", "kind": "check", "check_key": "cargo test", "source_sha256": "a" * 64}] * 2
+        _, missing, metrics = observations({"identity": identity, "tool_calls": trace,
+                                            "check_classification": CHECK_CLASSIFICATION,
+                                            "tool_trace_complete": True,
+                                            "usage_tokens": {"input_tokens": 0, "output_tokens": None}}, config(), "example-hash")
+        self.assertFalse(missing)
+        self.assertEqual(metrics["tool_calls"]["value"], 2)
+        self.assertEqual(metrics["repeated_checks"]["value"], 1)
+        self.assertIsNone(metrics["usage_tokens"]["value"]["output_tokens"])
+        with self.assertRaises(ValueError):
+            observations({"usage_tokens": {"input_tokens": -1}}, config(), "example-hash")
+
+    def test_repeated_checks_require_supported_exhaustive_classification(self):
+        check = {"name": "run_command", "kind": "check", "check_key": "cargo test", "source_sha256": "a" * 64}
+        for trace, classification, complete in (
+            ([], None, True),
+            ([{"name": "read_file"}], None, True),
+            ([check, check], "cargo test/check/clippy argv only; other verification is unclassified", True),
+            ([check, {"name": "run_command"}], CHECK_CLASSIFICATION, True),
+            ([check, {"name": "read_file", "kind": "unknown"}], CHECK_CLASSIFICATION, True),
+            ([{**check, "source_sha256": ""}], CHECK_CLASSIFICATION, True),
+            ([{**check, "check_key": ""}], CHECK_CLASSIFICATION, True),
+            ([check, check], CHECK_CLASSIFICATION, None),
+            ([check, check], CHECK_CLASSIFICATION, "true"),
+        ):
+            with self.subTest(trace=trace, classification=classification, complete=complete):
+                _, _, metrics = observations({"tool_calls": trace, "check_classification": classification,
+                                              "tool_trace_complete": complete}, config(), "example-hash")
+                self.assertIsNone(metrics["repeated_checks"]["value"])
+                self.assertEqual(metrics["tool_calls"]["value"], len(trace))
+
+    def test_classified_repeated_checks_preserve_partial_trace_and_source_identity(self):
+        check = {"name": "run_command", "kind": "check", "check_key": "cargo test", "source_sha256": "a" * 64}
+        for complete in (False, True):
+            for trace, count in (([], 0), ([{"name": "read_file", "kind": "non_check"}], 0),
+                                 ([check, check, {**check, "source_sha256": "b" * 64},
+                                   {"name": "read_file", "kind": "non_check"}], 1)):
+                with self.subTest(complete=complete, trace=trace):
+                    _, _, metrics = observations({"tool_calls": trace,
+                        "check_classification": CHECK_CLASSIFICATION,
+                        "tool_trace_complete": complete}, config(), "example-hash")
+                    self.assertEqual(metrics["repeated_checks"]["value"], count)
+                    self.assertIs(metrics["repeated_checks"]["complete"], complete)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -116,22 +168,6 @@ class EvaluationTests(unittest.TestCase):
         trial = next(t for t in self.manifest["schedule"] if t["task"] == "resume")
         metadata = read_json(self.experiment / "trials" / f"{trial['order']:03d}" / "trial.json")
         self.assertIn(" M parser.py", metadata["initial_git_status"])
-
-    def test_missing_usage_is_not_zero_and_checks_need_source_identity(self):
-        _, missing, metrics = observations({}, config(), "example-hash")
-        self.assertIn("model", missing)
-        self.assertIsNone(metrics["usage_tokens"]["value"])
-        self.assertIsNone(metrics["unnecessary_questions"]["value"])
-        identity = {**config(), "tools_sha256": "example-hash"}
-        trace = [{"name": "run_command", "kind": "check", "check_key": "cargo test", "source_sha256": "same"}] * 2
-        _, missing, metrics = observations({"identity": identity, "tool_calls": trace,
-                                            "usage_tokens": {"input_tokens": 0, "output_tokens": None}}, config(), "example-hash")
-        self.assertFalse(missing)
-        self.assertEqual(metrics["tool_calls"]["value"], 2)
-        self.assertEqual(metrics["repeated_checks"]["value"], 1)
-        self.assertIsNone(metrics["usage_tokens"]["value"]["output_tokens"])
-        with self.assertRaises(ValueError):
-            observations({"usage_tokens": {"input_tokens": -1}}, config(), "example-hash")
 
     def trial_copy(self, name, task="resume"):
         trial = next(t for t in self.manifest["schedule"] if t["task"] == task)

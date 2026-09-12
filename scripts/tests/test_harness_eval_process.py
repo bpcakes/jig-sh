@@ -14,6 +14,7 @@ from unittest.mock import patch
 import test_harness_eval as helpers
 from harness_eval import openai_adapter as adapter
 from harness_eval.child_environment import command_environment
+from harness_eval.grade import command
 from harness_eval.process import capture_command
 from harness_eval.runner import run_trial
 
@@ -41,6 +42,19 @@ class ProcessTests(unittest.TestCase):
         started = time.monotonic()
         result = capture_command([sys.executable, "-c", code], self.root, command_environment(), 2)
         self.assertEqual(result, {"returncode": 0, "output": "ready\n"})
+        self.assertLess(time.monotonic() - started, 5)
+        self.assert_stopped(int(pidfile.read_text()))
+
+    def test_successful_grading_command_retires_descendants_with_inherited_output(self):
+        pidfile = self.root / "grading-background.pid"
+        code = ('import pathlib, subprocess, sys\n'
+                'p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])\n'
+                f'pathlib.Path({str(pidfile)!r}).write_text(str(p.pid))\n'
+                'print("grading completed")\n'
+                'print("diagnostic", file=sys.stderr)\n')
+        started = time.monotonic()
+        output = command([sys.executable, "-c", code], self.root, timeout=2)
+        self.assertEqual(output, "grading completed\n")
         self.assertLess(time.monotonic() - started, 5)
         self.assert_stopped(int(pidfile.read_text()))
 

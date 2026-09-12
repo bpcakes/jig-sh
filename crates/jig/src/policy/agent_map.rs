@@ -250,7 +250,7 @@ fn normalize_relative_path(path: &Path) -> String {
     }
 }
 
-fn relative_string(root: &Path, path: &Path) -> Result<String> {
+pub(super) fn relative_string(root: &Path, path: &Path) -> Result<String> {
     Ok(normalize_relative_path(path.strip_prefix(root)?))
 }
 
@@ -434,7 +434,7 @@ mod tests {
             .write();
         fs::write(
             temp.path().join("crates/api/AGENTS.md"),
-            "# Ownership\nKeep APIs stable.\n",
+            "## Purpose\n## Key entrypoints\n`src/lib.rs`\n## Edit here for X\n## Invariants\n## Common commands\n",
         )
         .unwrap();
         let output = check_guides(&RepoContext::load_from(temp.path()).unwrap()).unwrap();
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn check_guides_discovers_go_packages_without_literal_entrypoint_requirements() {
+    fn check_guides_preserves_legacy_go_entrypoint_requirements() {
         let temp = tempdir().unwrap();
         fs::create_dir_all(temp.path().join("cmd/api")).unwrap();
         fs::create_dir_all(temp.path().join("internal/core")).unwrap();
@@ -455,12 +455,12 @@ mod tests {
             .write();
         fs::write(
             temp.path().join("cmd/api/AGENTS.md"),
-            "# API\nOwn HTTP entrypoints.\n",
+            "## Purpose\n## Key entrypoints\n`main.go`\n## Edit here for X\n## Invariants\n## Common commands\n",
         )
         .unwrap();
         fs::write(
             temp.path().join("internal/core/AGENTS.md"),
-            "# Core\nKeep transport outside this package.\n",
+            "## Purpose\n## Key entrypoints\n`core.go`\n## Edit here for X\n## Invariants\n## Common commands\n",
         )
         .unwrap();
         let output = check_guides(&RepoContext::load_from(temp.path()).unwrap()).unwrap();
@@ -587,6 +587,6 @@ targets = [
         let output = check_guides(&ctx).unwrap();
 
         assert_eq!(output["ok"], true);
-        assert_eq!(output["guide_count"], 4);
+        assert_eq!(output["guide_count"], 3);
     }
 }

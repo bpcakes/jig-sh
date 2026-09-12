@@ -146,7 +146,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("evaluation interrupted; existing artifacts retained", file=sys.stderr)
         return 130
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RuntimeError) as error:
         print("evaluation error: " + ascii(str(error)), file=sys.stderr)
         return 2
 

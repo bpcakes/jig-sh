@@ -13,6 +13,8 @@ from .grade import command, grade
 from .process import exit_status, stop_group
 from .workspace import create_workspace, release_workspace, retain_workspace, workspace_path
 
+CHECK_CLASSIFICATION = "exhaustive-checks-v1"
+
 
 def fingerprints(checkout, names):
     return {name: digest((checkout / name).read_bytes())
@@ -39,10 +41,21 @@ def observations(response, requested, tools_hash):
         metrics["tool_calls"] = {"value": len(trace), "source": "client trace",
                                  "complete": response.get("tool_trace_complete")}
         checks = [event for event in trace if event.get("kind") == "check"]
-        if all(isinstance(event.get("check_key"), str) and isinstance(event.get("source_sha256"), str) for event in checks):
+        classified = (response.get("check_classification") == CHECK_CLASSIFICATION
+                      and isinstance(response.get("tool_trace_complete"), bool)
+                      and all(event.get("kind") in ("check", "non_check") for event in trace)
+                      and all(isinstance(event.get("check_key"), str) and event["check_key"].strip()
+                              and isinstance(event.get("source_sha256"), str)
+                              and len(event["source_sha256"]) == 64
+                              and all(char in "0123456789abcdef" for char in event["source_sha256"])
+                              for event in checks))
+        if classified:
             keys = [(event["check_key"], event["source_sha256"]) for event in checks]
             metrics["repeated_checks"] = {"value": len(keys) - len(set(keys)), "source": "client trace; same classified check and source digest",
-                                         "classification": response.get("check_classification")}
+                                         "classification": CHECK_CLASSIFICATION,
+                                         "complete": response["tool_trace_complete"]}
+        else:
+            metrics["repeated_checks"] = unavailable("trace lacks supported exhaustive check classification or completeness")
     for key in ("usage_tokens", "client_context_tokens"):
         value = response.get(key)
         if value is not None:
@@ -143,7 +156,19 @@ def run_trial(trial_dir, config, environment=None):
         if child is not None:
             # Let the bundled adapter retire its active command group before
             # forcibly retiring the outer client group. Never reap before signals.
-            stop_group(child, grace_seconds=5)
+            try:
+                stop_group(child, grace_seconds=5)
+            except Exception as error:
+                reason = "client process-group cleanup unresolved; inspect recorded process and workspace before recovery"
+                result.update(execution_status=result["status"], status="cleanup_failed",
+                              cleanup_error=str(error), reason=reason, excluded=True,
+                              exclusion_reason=reason, initial_files=initial,
+                              elapsed_seconds=time.monotonic() - started)
+                # Publish before propagating: neither replay nor local finalization
+                # is safe while the detached workspace may still be changing.
+                dump(trial_dir / "result.json", result)
+                dump(trial_dir / "edit-observations.json", edits)
+                raise RuntimeError(reason) from error
         result["elapsed_seconds"] = time.monotonic() - started
     dump(trial_dir / "edit-observations.json", edits)
     result.update(execution_status=result["status"], status="finalizing", initial_files=initial)
@@ -156,6 +181,8 @@ def run_trial(trial_dir, config, environment=None):
 
 def finalize_trial(trial_dir, config, result):
     """Resume local finalization only; never launch or replay a client here."""
+    if result.get("cleanup_error") is not None or result["status"] == "cleanup_failed":
+        raise ValueError("cannot finalize a trial with unresolved client process-group cleanup")
     metadata = read_json(trial_dir / "trial.json")
     checkout = trial_dir / "checkout"
     if result.get("execution_workspace") and not result.get("checkout_retained"):

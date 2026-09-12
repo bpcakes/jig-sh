@@ -41,7 +41,12 @@ struct GuideReport {
     diagnostics: Vec<Diagnostic>,
 }
 
+mod legacy;
+
 pub(super) fn check(ctx: &RepoContext) -> Result<Value> {
+    if ctx.contract_version() < 8 {
+        return legacy::check(ctx);
+    }
     let files = GuideFiles::new(ctx.root())?;
     let mut guides: BTreeSet<String> = super::agent_map::list_guides(ctx.root())?
         .into_iter()

@@ -2,10 +2,8 @@
 
 from contextlib import closing
 import json
-import os
 from pathlib import Path
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -14,24 +12,30 @@ import time
 
 from .fixtures import TASKS, starting_files
 from .child_environment import command_environment
+from .process import exit_status, stop_group
 
 SQL_TIMEOUT_SECONDS = 30
 
 
 def command(argv, cwd, timeout=30):
-    """Kill the whole process group on timeout or cancellation (POSIX hosts)."""
-    with subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          stdin=subprocess.DEVNULL, start_new_session=True,
-                          env=command_environment()) as child:
+    """Retire descendants before reaping the leader, including on success."""
+    # File capture lets a completed leader finish even when descendants inherit
+    # its output handles. Keep stdout separate and complete for Git observations.
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        child = subprocess.Popen(argv, cwd=cwd, stdout=output, stderr=errors,
+                                 stdin=subprocess.DEVNULL, start_new_session=True,
+                                 env=command_environment())
+        deadline = time.monotonic() + timeout
         try:
-            stdout, stderr = child.communicate(timeout=timeout)
-        except BaseException:
-            try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            child.communicate()
-            raise
+            while exit_status(child) is None:
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                time.sleep(0.01)
+        finally:
+            stop_group(child)
+        output.seek(0)
+        errors.seek(0)
+        stdout, stderr = output.read(), errors.read()
     if child.returncode:
         raise ValueError(f"{Path(argv[0]).name} exited {child.returncode}: "
                          + (stdout + stderr).decode(errors="replace")[-4000:])

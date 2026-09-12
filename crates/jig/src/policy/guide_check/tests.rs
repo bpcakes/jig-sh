@@ -157,7 +157,7 @@ fn invalid_owner_paths_and_directory_owners_fail() {
 }
 
 #[test]
-fn legacy_epochs_keep_result_fields_and_accept_nonstandard_guides() {
+fn legacy_epochs_keep_result_fields_and_exclude_root_guides() {
     for epoch in [2, 3, 4, 5] {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path())
@@ -171,7 +171,7 @@ fn legacy_epochs_keep_result_fields_and_accept_nonstandard_guides() {
         .unwrap();
         let result = check(&RepoContext::load_from(temp.path()).unwrap()).unwrap();
         assert_eq!(result["ok"], true, "epoch {epoch}: {result}");
-        assert_eq!(result["guide_count"], 1);
+        assert_eq!(result["guide_count"], 0);
         for field in ["missing_guides", "missing_sections", "missing_entry_ref"] {
             assert!(result[field].as_array().unwrap().is_empty());
         }

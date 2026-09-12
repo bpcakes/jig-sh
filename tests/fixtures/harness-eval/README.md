@@ -146,7 +146,15 @@ inspection of its recorded process handles before exclusion; age is not proof th
 execution stopped. Once client cleanup completes, a durable `finalizing` result
 retains the execution outcome and edit observations. Repeating `run` resumes only
 local checkout retention, grading, and observations for that trial, never the client.
-A terminal result is published only after those steps. A durable `checkout_retained`
+If outer client cleanup cannot be confirmed, the driver publishes an excluded
+`cleanup_failed` result with the original execution status, cleanup diagnostic,
+elapsed time, process identifiers, and detached workspace authority before exiting
+with status 2. It preserves edit observations and the workspace without copying or
+grading potentially changing files. Subsequent runs include that excluded result
+and neither replay nor finalize it. Inspect and retire the recorded processes before
+manually removing its workspace; the driver does not retry numeric process signals
+after losing ownership of the original child handle.
+A graded terminal result is published only after finalization. A durable `checkout_retained`
 checkpoint allows grading to resume from the recorded checkout even if the temporary
 workspace was removed. If it disappeared before retention completed, exclude the
 trial with a reason to continue the schedule; do not guess that a partial copy is
@@ -163,7 +171,7 @@ and experiment tree. Its ancestors contain neither frozen reference solutions no
 the source repository harness. Final working files are copied back to the trial
 checkout before grading; the detached copy remains available if finalization is
 interrupted and is removed after the terminal result is published. Keep the
-`execution_workspace` recorded in a running or finalizing result until recovery is
+`execution_workspace` recorded in a running, finalizing, or cleanup_failed result until recovery is
 complete. `TMPDIR` must be outside the repository and experiment directories.
 
 This prevents accidental reference discovery through ancestor traversal. Local
@@ -205,13 +213,25 @@ It must report provider/client observations, not ask the model to self-report th
 }
 ```
 
-Tool events require `name`; check events additionally use `kind: "check"`,
-`check_key`, and `source_sha256` to count identical checks on unchanged source.
+Tool events require `name`. Repeated-check measurements require the adapter to
+declare `check_classification: "exhaustive-checks-v1"`, classify every observed
+event as `kind: "check"` or `kind: "non_check"`, and provide a boolean
+`tool_trace_complete`. A check is an invocation that verifies the task or repository;
+classification must cover every supported tool and command, including indirect
+verification through wrappers. Check events require a nonempty stable `check_key`
+for equivalent verification invocations and a lowercase 64-digit `source_sha256`
+covering all inputs that can affect the check. Adapters unable to meet that contract
+must omit it. Unsupported or incomplete event classification makes `repeated_checks`
+unavailable, including for an empty trace; it never implies zero.
 Missing traces or usage must be omitted or `null`, never fabricated as zero.
-An observed empty trace may legitimately mean zero calls. Partial traces retain
-their completeness flag. The bundled adapter classifies only `cargo test`,
+An observed empty trace may legitimately mean zero calls. With the supported
+classification contract, zero repeated checks is also valid. Partial traces retain
+`complete: false` on both tool-call and repeated-check counts; those counts cover
+only the observed trace and must not be compared as complete-trial measurements.
+The bundled adapter classifies only `cargo test`,
 `cargo check`, and `cargo clippy` argv as checks; other commands remain unclassified.
-Its raw trace retains all commands for independent review.
+It does not supply the exhaustive contract, so its repeated-check metric remains
+unavailable. Its raw trace retains all commands for independent review.
 
 Artifacts are versioned JSON (`schema_version: 1` on experiment/trial-result/summary
 envelopes). Fields may be added; consumers should ignore unknown fields.
@@ -264,7 +284,7 @@ a measured checkout. This reconstructs inputs, not a deterministic model respons
 
 Exit statuses: 0 for successful preparation/annotation or passing smoke/grade/run;
 1 for failed grading or a run containing failed/excluded trials; 2 for invalid
-arguments, changed inputs, or setup errors; 130 for interruption. Preparation and
+arguments, changed inputs, setup errors, or unresolved process cleanup; 130 for interruption. Preparation and
 setup failures print a diagnostic to stderr with empty stdout. A paused successful
 run can return 0; its `finished` and `scheduled` counts show whether work remains.
 Help is credential-free. No performance improvement follows merely from fewer bytes.
