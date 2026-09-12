@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -26,6 +28,80 @@ impl std::error::Error for RenewalOwnershipLost {}
 pub(super) enum RenewalAttemptError {
     Terminal(anyhow::Error),
     Retryable(anyhow::Error),
+}
+
+pub(super) struct RenewalWorker {
+    stop: Option<Sender<()>>,
+    handle: Option<JoinHandle<Result<()>>>,
+    failed: Arc<AtomicBool>,
+    panic_message: &'static str,
+}
+
+impl RenewalWorker {
+    pub(super) fn spawn(
+        thread_name: String,
+        panic_message: &'static str,
+        interval: Duration,
+        expires_at_ms: u64,
+        renew: impl FnMut(Instant) -> std::result::Result<u64, RenewalAttemptError> + Send + 'static,
+        now: impl Fn() -> u64 + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let (stop, receiver) = mpsc::channel();
+        let failed = Arc::new(AtomicBool::new(false));
+        let failed_in_thread = Arc::clone(&failed);
+        let handle = thread::Builder::new().name(thread_name).spawn(move || {
+            run_with_wait(
+                interval,
+                expires_at_ms,
+                &failed_in_thread,
+                renew,
+                now,
+                |wait| receiver.recv_timeout(wait),
+            )
+        })?;
+        Ok(Self {
+            stop: Some(stop),
+            handle: Some(handle),
+            failed,
+            panic_message,
+        })
+    }
+
+    pub(super) fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_test_handle(
+        handle: JoinHandle<Result<()>>,
+        failed: bool,
+        panic_message: &'static str,
+    ) -> Self {
+        Self {
+            stop: None,
+            handle: Some(handle),
+            failed: Arc::new(AtomicBool::new(failed)),
+            panic_message,
+        }
+    }
+
+    pub(super) fn shutdown(&mut self) -> Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!(self.panic_message))??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RenewalWorker {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
 }
 
 pub(super) fn renewal_interval(ttl_seconds: u64) -> Duration {
@@ -132,6 +208,23 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+
+    #[test]
+    fn renewal_worker_shutdown_is_idempotent() {
+        let mut worker = RenewalWorker::spawn(
+            "test-renewal-worker".into(),
+            "test renewal worker panicked",
+            Duration::from_secs(60),
+            u64::MAX,
+            |_| Ok(u64::MAX),
+            || 0,
+        )
+        .unwrap();
+
+        worker.shutdown().unwrap();
+        worker.shutdown().unwrap();
+        assert!(!worker.failed());
+    }
 
     #[test]
     fn renewal_lock_wait_preserves_the_cancellation_window() {

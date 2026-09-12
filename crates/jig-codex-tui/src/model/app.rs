@@ -1,6 +1,6 @@
 use std::{cell::Cell, collections::HashSet};
 
-use jig_tui::{PreparedFuzzyText, sanitize_text};
+use jig_tui::{ListViewportState, PreparedFuzzyText, sanitize_text};
 
 use super::{Details, ExitState, Focus, HomeRow, Inspection, unix_timestamp_now};
 use crate::{Home, HomeUpdate};
@@ -17,8 +17,7 @@ pub(crate) struct App {
     pub(crate) focus: Focus,
     pub(crate) detail_scroll: u16,
     detail_scroll_limit: Cell<u16>,
-    list_offset: Cell<usize>,
-    list_viewport_height: Cell<u16>,
+    list_viewport: ListViewportState,
     pub(crate) completed: usize,
     pub(crate) inspection_finished: bool,
     pub(crate) inspection_error: Option<String>,
@@ -45,8 +44,7 @@ impl App {
             focus: Focus::Homes,
             detail_scroll: 0,
             detail_scroll_limit: Cell::new(0),
-            list_offset: Cell::new(0),
-            list_viewport_height: Cell::new(0),
+            list_viewport: ListViewportState::default(),
             completed: 0,
             inspection_finished: false,
             inspection_error: None,
@@ -218,18 +216,15 @@ impl App {
     }
 
     pub(crate) fn list_offset_for_viewport(&self, height: u16) -> usize {
-        if self.list_viewport_height.replace(height) != height {
-            self.list_offset.set(0);
-        }
-        self.list_offset.get()
+        self.list_viewport.offset_for_height(height)
     }
 
     pub(crate) fn set_list_offset(&self, offset: usize) {
-        self.list_offset.set(offset);
+        self.list_viewport.set_offset(offset);
     }
 
     fn reset_list_viewport(&self) {
-        self.list_offset.set(0);
+        self.list_viewport.reset();
     }
 
     fn record_inspection_error(&mut self, error: &str) {

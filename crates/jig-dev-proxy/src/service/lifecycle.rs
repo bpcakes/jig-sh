@@ -57,7 +57,7 @@ fn unload_missing_service_file(
     unload: impl FnOnce(&Path) -> Value,
     reload_after_remove: impl FnOnce(&Path) -> Value,
 ) -> Value {
-    let manager_active = service_manager_active(&service);
+    let manager_active = service.is_active();
     if !manager_active && service.ok {
         return json!({
             "ok": true,
@@ -113,10 +113,6 @@ fn unload_missing_service_file(
         ),
         "note": service_reload_hint(),
     })
-}
-
-const fn service_manager_active(service: &ServiceManagerStatus) -> bool {
-    service.loaded || service.enabled || service.running
 }
 
 const fn missing_service_file_uninstall_warning(

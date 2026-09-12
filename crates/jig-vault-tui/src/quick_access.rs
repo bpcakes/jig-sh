@@ -1,6 +1,8 @@
-use std::{cell::Cell, collections::BTreeMap};
+use std::collections::BTreeMap;
 
-use jig_tui::{FuzzyMatchScore, PreparedFuzzyText, RankedFuzzyText, best_ranked_fuzzy_match};
+use jig_tui::{
+    FuzzyMatchScore, ListViewportState, PreparedFuzzyText, RankedFuzzyText, best_ranked_fuzzy_match,
+};
 use jig_vault::{FieldKind, VaultReference};
 
 use crate::{
@@ -139,8 +141,7 @@ pub(crate) struct QuickAccess {
     query: LineEditor,
     visible_indices: Vec<usize>,
     selected: usize,
-    list_offset: Cell<usize>,
-    list_viewport_height: Cell<u16>,
+    list_viewport: ListViewportState,
 }
 
 impl QuickAccess {
@@ -195,8 +196,7 @@ impl QuickAccess {
             query: LineEditor::search(),
             visible_indices,
             selected,
-            list_offset: Cell::new(0),
-            list_viewport_height: Cell::new(0),
+            list_viewport: ListViewportState::default(),
         }
     }
 
@@ -258,14 +258,11 @@ impl QuickAccess {
     }
 
     pub(crate) fn list_offset_for_viewport(&self, height: u16) -> usize {
-        if self.list_viewport_height.replace(height) != height {
-            self.list_offset.set(0);
-        }
-        self.list_offset.get()
+        self.list_viewport.offset_for_height(height)
     }
 
     pub(crate) fn set_list_offset(&self, offset: usize) {
-        self.list_offset.set(offset);
+        self.list_viewport.set_offset(offset);
     }
 
     fn refresh_query_results(&mut self) {
@@ -283,6 +280,6 @@ impl QuickAccess {
             matches.into_iter().map(|(_, index)| index).collect()
         };
         self.selected = 0;
-        self.list_offset.set(0);
+        self.list_viewport.reset();
     }
 }
