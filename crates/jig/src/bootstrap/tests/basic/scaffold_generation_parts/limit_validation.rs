@@ -1,5 +1,94 @@
 use super::*;
 
+#[test]
+fn rust_react_rejects_batter_dependency_collisions_before_destination_mutation() {
+    let temp = tempdir().unwrap();
+    for name in ["batter", "Batter", "batter-axum", "Batter_Axum"] {
+        for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+            for existing in [false, true] {
+                let parent = tempfile::tempdir_in(temp.path()).unwrap();
+                let destination = parent.path().join(name);
+                if existing {
+                    fs::create_dir(&destination).unwrap();
+                    fs::write(
+                        destination.join("Cargo.toml"),
+                        "preserve existing manifest\n",
+                    )
+                    .unwrap();
+                }
+                let error = run_init(InitOpts {
+                    path: destination.clone(),
+                    scaffold: ScaffoldOpts {
+                        preset: Some(ScaffoldPreset::RustReact),
+                        db: Some(db),
+                        frontends: Vec::new(),
+                        frontend_list: Vec::new(),
+                    },
+                    template: None,
+                    template_mode: None,
+                    vcs_ref: None,
+                    force: existing,
+                    defaults: true,
+                    no_input: true,
+                    no_vault: true,
+                    // Exercise both an explicit name and one inferred from the destination.
+                    answers: AnswerOpts {
+                        repo_name: existing.then(|| name.to_string()),
+                        ..AnswerOpts::default()
+                    },
+                })
+                .unwrap_err()
+                .to_string();
+                assert!(
+                    error.contains("conflicts with a required Batter dependency"),
+                    "{error}"
+                );
+                assert!(error.contains("Choose a different --repo-name"), "{error}");
+                if existing {
+                    assert_eq!(
+                        fs::read_to_string(destination.join("Cargo.toml")).unwrap(),
+                        "preserve existing manifest\n"
+                    );
+                    assert_eq!(fs::read_dir(&destination).unwrap().count(), 1);
+                } else {
+                    assert!(!destination.exists());
+                    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn rust_only_presets_allow_names_without_batter_dependency_collisions() {
+    let temp = tempdir().unwrap();
+    for preset in [ScaffoldPreset::RustLibrary, ScaffoldPreset::RustCli] {
+        for name in ["batter", "batter-axum"] {
+            let plan = scaffold::InitScaffoldPlan::from_opts(
+                &ScaffoldOpts {
+                    preset: Some(preset),
+                    ..ScaffoldOpts::default()
+                },
+                &AnswerOpts {
+                    repo_name: Some(name.into()),
+                    ..AnswerOpts::default()
+                },
+                temp.path(),
+            )
+            .unwrap()
+            .unwrap();
+            let destination = tempfile::tempdir_in(temp.path()).unwrap();
+            let report = plan.write(destination.path(), false).unwrap();
+            assert_eq!(report["repo_name"], name);
+            let manifest =
+                fs::read_to_string(destination.path().join(format!("crates/{name}/Cargo.toml")))
+                    .unwrap();
+            let manifest: toml::Value = toml::from_str(&manifest).unwrap();
+            assert_eq!(manifest["package"]["name"].as_str(), Some(name));
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {

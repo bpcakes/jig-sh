@@ -1,0 +1,174 @@
+//! Application-owned operational policy. Budgets end at response construction;
+//! streaming bodies and WebSockets need their own limits.
+
+use std::time::Duration;
+
+use ::<<[ module_name ]>> as app_crate;
+use axum::Router;
+use batter::{
+    cleanup::CleanupBudget,
+    lifecycle::{ShutdownBudget, ShutdownHandle, Supervisor},
+    operation::OperationContext,
+    startup::Startup,
+};
+
+/// Own startup and shutdown for either HTTP application. Native resources stay
+/// registered until the HTTP task has joined; incomplete cleanup is an error.
+pub async fn serve<F>(config: app_crate::AppConfig, router: F) -> anyhow::Result<()>
+where
+    F: FnOnce(app_crate::AppState, ShutdownHandle) -> Router + Send + 'static,
+{
+    let cleanup = CleanupBudget::new(
+        Duration::from_secs(5),
+        Duration::from_secs(3),
+        Duration::from_secs(1),
+    )?;
+    let budget = ShutdownBudget::new(
+        Duration::from_secs(10),
+        Duration::from_secs(2),
+        Duration::from_secs(1),
+        cleanup,
+    )?;
+    let mut starting = Startup::new(
+        Supervisor::new(budget),
+        OperationContext::new(Duration::from_secs(30))?,
+        cleanup,
+        move |scope| {
+            Box::pin(async move {
+                let mut signals = batter::lifecycle::install_signals(scope.supervisor(), "signals")
+                    .map_err(std::io::Error::other)?;
+                let shutdown = scope.supervisor().handle();
+                let initialize_service = async {
+                    scope.stage("application.initialize")?;
+                    let addr = config.bind_addr();
+                    let state = initialize(config, scope.supervisor()).await?;
+                    scope.stage("http.bind")?;
+                    let application = router(state, scope.supervisor().handle());
+                    let listener = tokio::net::TcpListener::bind(addr).await?;
+                    let bound_addr = listener.local_addr()?;
+                    tracing::info!(%bound_addr, "listening");
+                    batter_axum::register_http(scope.supervisor(), "http", listener, application)?;
+                    Ok::<_, anyhow::Error>(())
+                };
+                tokio::select! {
+                    biased;
+                    _ = signals.received() => {
+                        shutdown.request();
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Service startup interrupted",
+                        ));
+                    }
+                    result = initialize_service => result.map_err(std::io::Error::other)?,
+                }
+                signals
+                    .register(scope.supervisor())
+                    .map_err(std::io::Error::other)
+            })
+        },
+    )
+    .start();
+    let running = starting.wait().await?;
+    batter::lifecycle::check_shutdown(running.wait().await)?;
+    Ok(())
+}
+
+/// Register native resource teardown before migrations can fail or startup
+/// can be cancelled. The caller must retain and await Batter's startup owner.
+async fn initialize(
+    config: app_crate::AppConfig,
+    supervisor: &mut batter::lifecycle::Supervisor,
+) -> anyhow::Result<app_crate::AppState> {
+[% if db_enabled %]
+    #[cfg(feature = "db")]
+    {
+        let database_url = config.database_url().ok_or_else(|| {
+            anyhow::anyhow!("DATABASE_URL is required to initialize the database")
+        })?;
+        let cleanup = supervisor.reserve_cleanup("database.close")?;
+        let db = app_crate::db::Db::connect(database_url).await?;
+        let pool = db.pool().clone();
+        cleanup.register(move || async move {
+            pool.close().await;
+            Ok(())
+        });
+        db.migrate().await?;
+        Ok(app_crate::AppState::from_database(config, db))
+    }
+
+    #[cfg(not(feature = "db"))]
+    {
+        let _ = supervisor;
+        app_crate::AppState::from_config(config).await
+    }
+[% else %]
+    let _ = supervisor;
+    app_crate::AppState::from_config(config).await
+[% endif %]
+}
+[% if db_enabled %]
+
+/// Run finite database setup with owned cleanup, without starting an HTTP service.
+/// Cancellation cannot roll back database creation or committed migrations.
+#[cfg(feature = "db")]
+pub async fn bootstrap_database(config: app_crate::AppConfig) -> anyhow::Result<bool> {
+    use anyhow::Context;
+    use batter::command::{Command, check_command};
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let cleanup = CleanupBudget::new(
+        Duration::from_secs(5),
+        Duration::from_secs(3),
+        Duration::from_secs(1),
+    )?;
+    let command = Command::new(
+        OperationContext::new(Duration::from_secs(30))?,
+        cleanup,
+        move |scope| {
+            Box::pin(async move {
+                let work = async {
+                    scope.stage("database.create")?;
+                    let database_url = config.database_url().ok_or_else(|| {
+                        anyhow::anyhow!("DATABASE_URL is required to bootstrap the database")
+                    })?;
+                    let created = app_crate::db::Db::create_if_missing(database_url)
+                        .await
+[% if sqlx_driver == "postgres" %]
+                        .context("Failed to create the database with the configured role; use a pre-created database or a role already authorized to create it")?;
+[% else %]
+                        .context("Failed to create the database")?;
+[% endif %]
+                    scope.stage("database.connect")?;
+                    let cleanup = scope.reserve_cleanup("database.close")?;
+                    let db = app_crate::db::Db::connect(database_url).await?;
+                    let pool = db.pool().clone();
+                    cleanup.register(move || async move {
+                        pool.close().await;
+                        Ok(())
+                    });
+                    scope.stage("database.migrate")?;
+                    db.migrate()
+                        .await
+                        .context("Failed to run database migrations")?;
+                    Ok::<_, anyhow::Error>(created)
+                };
+                work.await.map_err(std::io::Error::other)
+            })
+        },
+    )
+    .start();
+    let outcome = tokio::select! {
+        biased;
+        _ = interrupt.recv() => { command.cancel(); command.wait().await }
+        _ = terminate.recv() => { command.cancel(); command.wait().await }
+        outcome = command.wait() => outcome,
+    };
+    let report = check_command(outcome)?;
+    Ok(*report
+        .work
+        .as_ref()
+        .expect("check_command validated successful work"))
+}
+[% endif %]

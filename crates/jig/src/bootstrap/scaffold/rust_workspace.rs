@@ -115,6 +115,22 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         template: "rust-react/workspace/crates/test-support/tests/http.rs.jinja",
         output: "crates/{package}-test-support/tests/http.rs",
     },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/src/lib.rs.jinja",
+        output: "crates/{package}-runtime/src/lib.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/Cargo.toml.jinja",
+        output: "crates/{package}-runtime/Cargo.toml",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/AGENTS.md.jinja",
+        output: "crates/{package}-runtime/AGENTS.md",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http-common/src/requests.rs.jinja",
+        output: "crates/{package}-http-common/src/requests.rs",
+    },
 ];
 
 const RUST_ADMIN_API_TEMPLATES: &[ScaffoldTemplateFile] = &[
@@ -270,6 +286,7 @@ impl InitScaffoldPlan {
             bounded_postgres_identifier(&format!("test_db_{}", self.module_name));
 
         json!({
+        "batter_revision": "39c1b6e3c1c75f808becb5a5e7c33f58001a2ee4",
             "package_name": self.package_name,
             "module_name": self.module_name,
             "repo_name": self.repo_name,

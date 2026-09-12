@@ -388,6 +388,11 @@ impl InitScaffoldPlan {
             .clone()
             .unwrap_or_else(|| default_repo_name(destination));
         let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
+        if matches!(package_name.as_str(), "batter" | "batter-axum") {
+            bail!(
+                "Rust-react repo name normalizes to '{package_name}', which conflicts with a required Batter dependency. Choose a different --repo-name."
+            );
+        }
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
         let (dev_proxy_port, dev_tld) = scaffold_dev_proxy_answers(answers)?;

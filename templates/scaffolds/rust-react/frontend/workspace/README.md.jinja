@@ -1,6 +1,35 @@
 # <<[ package_name ]>>
 
-Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Axum, React, and OpenAPI[% endif %] workspace.
+Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Batter, Axum, React, and OpenAPI[% endif %] workspace.
+
+[% if backend_language != "go" %]
+Batter and `batter-axum` are pinned Git dependencies in `Cargo.toml` (not registry
+releases). The services target Unix and require network access on the first build.
+Commit `Cargo.lock` after bootstrap; upgrade the Batter revision deliberately.
+
+`crates/<<[ package_name ]>>-runtime` owns startup, native signals, and resource
+cleanup. Startup has a 30-second budget. HTTP handlers have a 10-second response
+construction budget; streaming bodies and WebSockets need separate limits. Shutdown
+drains for 10 seconds, then allows 2 seconds for cancellation and 1 second for
+abort/reap before separately bounded cleanup. These policies are application-owned.
+Failed or incomplete cleanup makes the process exit unsuccessfully.
+Shutdown phases share one first-stop clock; scheduling delay consumes the allowance.
+`jig dev` has a shorter, two-second SIGTERM grace period before force-killing the
+service process group. Slow requests can therefore be interrupted before Batter
+finishes draining or closing resources. To test the full shutdown budget, launch
+the built service binary directly and send it SIGTERM; production process managers
+must allow enough time for drain, cancellation, abort/reap, and cleanup.
+[% if db != "none" %]
+Database setup uses Batter's finite `Command` owner with 30 seconds for work and
+independently bounded pool cleanup, including after SIGINT/SIGTERM or migration
+failure. Cancellation does not roll back database creation or committed migrations.
+[% endif %]
+
+Public `/health/live` and `/health/ready` probes remain outside request admission.
+The separate admin service also exposes those operational probes; admin business
+routes remain denied until an application authorizer is supplied. Do not add business
+data to unauthenticated probes.
+[% endif %]
 
 ## Quickstart
 

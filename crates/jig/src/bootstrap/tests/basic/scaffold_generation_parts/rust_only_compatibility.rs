@@ -101,6 +101,7 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
             "crates/exampleproject",
             "crates/exampleproject-http",
             "crates/exampleproject-http-common",
+            "crates/exampleproject-runtime",
             "crates/exampleproject-test-support",
         ]
         .map(|member| toml::Value::String(member.into()))

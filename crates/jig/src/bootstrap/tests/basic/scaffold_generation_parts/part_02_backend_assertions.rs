@@ -227,17 +227,13 @@ fn assert_api_entrypoint(destination: &Path) {
             "use ::my_app_http as app_http_crate;",
             "load_dotenv();",
             "warning: failed to load .env",
-            "let bound_addr = listener",
-            "Failed to read API listener address after bind",
-            "tracing::info!(%bound_addr, \"listening\")",
-            "app_http_crate::router",
+            "runtime::serve(config, app_http_crate::router_with_shutdown).await",
             "app_crate::AppConfig::from_env()",
-            "app_crate::AppState::from_config(config)",
             "--bootstrap-database",
             "    let command = parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
             "match (arguments.next(), arguments.next())",
             "unexpected API argument",
-            "app_crate::AppState::bootstrap_database(&config)",
+            "runtime::bootstrap_database(config)",
             "install_panic_hook",
             "tracing::error!(error = ?error, \"API server failed\")",
             "#[allow(clippy::useless_concat)]\n    let default_filter",
@@ -245,13 +241,19 @@ fn assert_api_entrypoint(destination: &Path) {
             "\"my_app=info,\",",
             "\"my_app_api=info,\",",
             "\"tower_http=info\",",
-            "Failed to bind API listener",
-            "API server exited with an error",
-            "SignalKind::terminate",
-            "failed to listen for Ctrl-C",
         ],
     );
     assert_contains_none(&api_main, &["args_os().any"]);
+    let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
+    assert_contains_all(&runtime, &[
+        "Startup::new",
+        "register_http",
+        "install_signals",
+        "signals.received()",
+        "check_shutdown",
+        "reserve_cleanup(\"database.close\")",
+        "pool.close().await",
+    ]);
 }
 
 fn assert_generated_dev_config(destination: &Path) {
@@ -294,6 +296,19 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
 }
 
 fn assert_application_and_public_http_crates(destination: &Path) {
+    let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
+    assert_contains_all(
+        &runtime,
+        &[
+            "pub async fn bootstrap_database(config: app_crate::AppConfig)",
+            "use batter::command::{Command, check_command}",
+            "let command = Command::new(",
+            "scope.reserve_cleanup(\"database.close\")?",
+            "scope.stage(\"database.migrate\")?",
+            "command.cancel(); command.wait().await",
+            "let report = check_command(outcome)?",
+        ],
+    );
     let app_lib = fs::read_to_string(destination.join("crates/my-app/src/lib.rs")).unwrap();
     assert_contains_all(
         &app_lib,
@@ -307,7 +322,6 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "partial_jig_bind_values_fall_back_to_bind_addr",
             "DATABASE_URL is required when the db feature is enabled",
             "pub async fn from_config(config: AppConfig) -> Result<Self>",
-            "pub async fn bootstrap_database(config: &AppConfig)",
             "pub fn new_with_version(version: impl Into<String>)",
             "pub fn version(&self) -> &AppVersion",
             "pub fn is_ready(&self) -> bool",
@@ -320,6 +334,8 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "return self.db.is_some()",
             "use axum::",
             "pub fn router",
+            "bootstrap_database",
+            "batter::",
         ],
     );
     let http_lib = fs::read_to_string(destination.join("crates/my-app-http/src/lib.rs")).unwrap();
@@ -327,9 +343,9 @@ fn assert_application_and_public_http_crates(destination: &Path) {
         &http_lib,
         &[
             "pub fn router(state: AppState) -> Router",
-            "TraceLayer::new_for_http()",
+            "batter_axum::observe_http",
             "SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid)",
-            "Router::from(public::routes()).fallback(not_found)",
+            "public::operational_routes(shutdown).fallback(not_found)",
         ],
     );
     assert_contains_none(&http_lib, &["admin"]);

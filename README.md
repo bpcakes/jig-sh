@@ -41,11 +41,20 @@ Jig is opinionated about the stacks it generates. It is not a universal applicat
 | `harness-only` | Jig harness files without application code | Rust 1.88+, Bash, Python 3.8+ |
 | `rust-library` | Rust 2024 workspace with one library crate | Rust 1.88+, Bash, Python 3.8+ |
 | `rust-cli` | Rust 2024 workspace with one binary crate | Rust 1.88+, Bash, Python 3.8+ |
-| `rust-react` | Rust API plus optional Vite React, Astro, and admin frontends | Rust 1.94+; Node.js 24.19.0+ and a supported package manager for frontends; selected database tools when enabled |
+| `rust-react` | Batter-based Rust API plus optional Vite React, Astro, and admin frontends | Unix, Rust 1.94+; Node.js 24.19.0+ and a supported package manager for frontends; selected database tools when enabled |
 | `go-react` | Go API plus Vite React or Astro frontends | Go 1.26; Node.js 24.19.0+ and a supported package manager; PostgreSQL tools when enabled |
 | `jig adopt` | Harness added to an existing repository after a read-only preview | Depends on the repository; Rust/SQLx and JavaScript/TypeScript inference are the most established adoption paths |
 
 Linux and macOS are supported hosts. See [Platform Support](docs/platform-support.md) for CI guarantees and feature-specific limits. Run `jig presets` for the current generated layouts and rejected combinations.
+
+New Rust application scaffolds always use [Batter](https://github.com/bpcakes/batter).
+`jig init ./example-app --defaults` selects `rust-react`; there is no separate legacy
+non-Batter application preset. A dedicated runtime crate owns startup, signals, and
+resource cleanup. HTTP crates apply request deadlines and lifecycle admission while
+keeping health probes reachable. Batter is unpublished, so generated manifests pin
+a Git revision and need network access on their first build. Existing application
+source is project-owned and is not migrated by `jig update`. Library and CLI presets
+remain independent project shapes without a service runtime.
 
 ## Project status
 

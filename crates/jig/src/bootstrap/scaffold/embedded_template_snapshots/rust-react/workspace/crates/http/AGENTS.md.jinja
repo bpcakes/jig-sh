@@ -19,6 +19,8 @@ Owns only the public Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, han
 
 - Keep handlers thin and delegate domain work to `<<[ package_name ]>>`.
 - Keep observability middleware at this HTTP boundary.
+- Production entrypoints use `router_with_shutdown` with the runtime's handle. The convenience `router` uses an independent ready handle for in-process tests.
+- Add business routes to `application_routes` and probes to `probe_routes`; both feed the runtime router and OpenAPI document. Keep probes outside request admission.
 - Preserve `/health/live` for process liveness and `/health/ready` for dependency readiness.
 - Never depend on `<<[ package_name ]>>-admin-http` or mount privileged routes here. Admin transport has a separate crate and binary deployment boundary.
 - Return JSON errors through `<<[ package_name ]>>-http-common`; never disclose internal error chains.
