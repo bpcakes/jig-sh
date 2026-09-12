@@ -377,6 +377,9 @@ fn work_goal_opens_durable_plan_and_prompt() {
     assert!(body.contains("Reduce API handler duplication"));
     assert!(body.contains("- scripts/jig work check"));
     assert!(body.contains("- [ ] Capture baseline gate status"));
+    assert!(body.contains("- Do not change public routes"));
+    assert!(body.contains("Prefer small commits."));
+    assert_eq!(body.matches("- [ ] ").count(), 1);
     assert!(body.contains("custom: check (jig.custom_check)"));
     assert_eq!(
         output["commands"]["gates"],
@@ -513,7 +516,9 @@ fn work_goal_normalizes_prompt_and_defaults_missing_checkpoints() {
     assert!(prompt.contains("duplication is reduced and the configured gate passes"));
     assert!(!prompt.contains("reduced\nand"));
     assert!(body.contains("duplication is reduced\nand the configured gate passes"));
-    assert!(body.contains("- [ ] Read the relevant AGENTS.md files and repo guidance."));
+    assert!(body.contains("- [ ] duplication is reduced and the configured gate passes"));
+    assert_eq!(body.matches("- [ ] ").count(), 1);
+    assert!(!body.contains("Establish the baseline validation result before risky edits."));
 }
 
 #[test]
@@ -639,6 +644,7 @@ mod checks;
 mod evidence;
 mod gate_receipt_ordering;
 mod gates;
+mod goal;
 mod review;
 
 include!("work_parts/part_01.rs");

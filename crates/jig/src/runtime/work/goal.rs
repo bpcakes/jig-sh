@@ -28,7 +28,7 @@ impl GoalHarness {
         let constraints = clean_provided_items("--constraint", &request.constraints)?;
 
         let checkpoints = if request.checkpoints.is_empty() {
-            default_checkpoints()
+            vec![single_line_text(&success)]
         } else {
             clean_provided_items("--checkpoint", &request.checkpoints)?
         };
@@ -143,7 +143,7 @@ fn goal_body(ctx: &RepoContext, goal: &GoalHarness) -> String {
 
 {success}
 
-## Validation Loop
+## Validation
 
 {validations}
 
@@ -161,7 +161,15 @@ fn goal_body(ctx: &RepoContext, goal: &GoalHarness) -> String {
 
 ## Progress Log
 
-- Goal harness created. Keep this section short and append dated checkpoints, failed attempts, and validation evidence.
+- Created; outcome unverified. Record completed work, material decisions, current evidence, the next action, and any blocker here. On resume, reconcile this checkpoint with the actual worktree and evidence before continuing.
+
+## Execution
+
+Carry the authorized objective through acceptance and required checks. A research or planning objective authorizes that deliverable only. Preserve explicit approval checkpoints; ordinary progress checkpoints do not require renewed permission. Resolve routine reversible choices within scope and continue independent authorized work while a material question is pending. Pause dependent work when a user decision or required authority is missing, and record the blocker and next action.
+
+Stop and report a blocker if acceptance or required checks cannot be satisfied without changing the objective, success condition, constraints, or configured gates, or would require unsafe permissions. Record the evidence and the decision or authority needed to proceed; do not weaken checks or redefine success.
+
+Use qualifying current evidence for the supplied validations and configured gates. Repeat or broaden checks only for changed inputs, unresolved concerns, or repository requirements. Finish when acceptance and required checks are satisfied.
 
 ## Notes
 
@@ -179,7 +187,7 @@ fn goal_body(ctx: &RepoContext, goal: &GoalHarness) -> String {
 
 fn goal_prompt(plan_id: &str, body_path: &str, goal: &GoalHarness) -> String {
     format!(
-        "/goal Complete the objective in {body_path} without stopping until this verifiable stopping condition is met: {success}. Use {body_path} as the durable progress log, keep changes scoped to the stated constraints, run the validation loop recorded there, inspect gates with `scripts/jig work gates --plan-id {plan_id}`, and stop if blocked by missing product guidance, unsafe permissions, or a validation result that cannot be improved without changing the goal.",
+        "/goal Complete the authorized objective in {body_path}. Success: {success}. Follow its constraints, explicit approval checkpoints, and execution guidance; a planning objective remains planning. Continue through acceptance and required checks, using qualifying current evidence. Keep restart state and evidence in {body_path}; reconcile them with the worktree on resume. Resolve routine choices within scope and continue independent authorized work while questions are pending. Pause dependent work for a missing user decision or required authority. Stop and report a blocker if acceptance or required checks cannot be satisfied without changing the objective, success condition, constraints, or configured gates, or would require unsafe permissions. Record the evidence and the decision or authority needed to proceed; do not weaken checks or redefine success. Inspect gates with `scripts/jig work gates --plan-id {plan_id}` and finish only when acceptance and required checks are satisfied.",
         success = single_line_text(&goal.success),
     )
 }
@@ -202,19 +210,6 @@ fn clean_provided_items(flag: &str, items: &[String]) -> Result<Vec<String>> {
         bail!("{flag} values cannot be empty.");
     }
     Ok(cleaned)
-}
-
-fn default_checkpoints() -> Vec<String> {
-    [
-        "Read the relevant AGENTS.md files and repo guidance.",
-        "Establish the baseline validation result before risky edits.",
-        "Make scoped changes and record each meaningful attempt.",
-        "Run the validation loop and inspect gate status.",
-        "Finish only after the stopping condition is met.",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
 }
 
 fn markdown_bullets(items: &[String], empty: &str) -> String {

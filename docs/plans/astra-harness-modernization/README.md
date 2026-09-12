@@ -11,7 +11,7 @@ and consumer compatibility.
 This plan covers every recommendation in the September 11 audit.
 It creates one epic with sixteen direct child tasks.
 Task 01 is the first implementation task and an independently shippable quick win.
-Planning and tasks 01–05 implementation are complete. Further implementation follows
+Planning and tasks 01–06 implementation are complete. Further implementation follows
 explicit task requests; this document does not authorize starting the whole epic.
 
 ## Progress
@@ -30,24 +30,43 @@ explicit task requests; this document does not authorize starting the whole epic
 - [x] Implement task 03: configured verification evidence is the completion authority.
 - [x] Implement task 04: specialized guidance moved to owning guides and references; see [acceptance evidence](04-implementation.md).
 - [x] Implement task 05: validate local and authored owner-guide references with advisory headings; see [acceptance evidence](05-implementation.md).
-- [ ] Complete tasks 06–16 and integrated evaluation.
+- [x] Implement task 06: compact plan policy and outcome checkpoints with preserved goal boundaries; see [acceptance evidence](06-implementation.md).
+- [ ] Complete tasks 07–16 and integrated evaluation.
 
 Local planning/reconciliation work ID: `plan_01M28626D98WHJJFH0432ZBEKH`.
 Task 01 implementation work ID: `plan_01M28819Z3PAE8YA2MBBBPY57Z` (closed).
 Task 02 implementation work ID: `plan_01M28DTQG7Q8TFY7YYH9FPJYV7`; see [acceptance evidence](02-implementation.md).
 Beads epic: `jig-sh-9wcn`.
 Implementation issues: `jig-sh-9wcn.1` through `jig-sh-9wcn.16`.
-Next implementation candidates after task 05 closure: `jig-sh-9wcn.6` and `.7`.
+Task 06 work ID: `plan_01M2AZK2RASETQ4SHFVA7CA109`; its work journal records final evidence and closure.
+Task 06 runtime repair work ID: `plan_01M2B5C1NTCDTG3ZZJ03Z8ZT19`; its journal
+records the blocked-goal regression and passing 4,090-test Rust / 42-test harness run.
+Next independent implementation candidate: `jig-sh-9wcn.7`.
 Immutable evaluation control: `03e9a9e4e5122b5bc12c66b1f635ae1faac05e15`.
 Feature-branch base: `dc68b74497c4f5ae27049425bb63e6d0ec4ff014`.
-Restart checkpoint: tasks 01–05 are implemented; tasks 06–16 remain planned.
+Restart checkpoint: tasks 01–06 are implemented; tasks 07–16 remain planned.
 Its initial implementation run is `run_01M289WM1CWE50CWPBRV7YAAFC`, with validation
 receipt `receipt_01M28A9NCY7YHW0VJH0M96MG1M` in the local state journals.
 Review follow-up results are recorded in the local planning/reconciliation record.
 When continuing implementation, run `br ready --parent jig-sh-9wcn --json` and
-verify the requested task's current status before claiming it. Do not restart tasks 01–05.
-Use plain `br` from the main checkout. The canonical database owns this epic.
-The isolated database handoff has been superseded.
+verify the requested task's current status before claiming it. Do not restart tasks 01–06.
+
+## Beads database selection
+
+This is the shared rule for this epic's task specifications and Beads descriptions.
+Before mutation or export, run `br info --json` from the intended checkout and verify
+its database and export paths belong to that checkout. Confirm with
+`br show <task-id> --json` that it contains the branch's current task history.
+If discovery selects another checkout or older history, stop and resolve it before
+mutating or exporting; do not replace a newer tracked export with older records.
+Run `python3 scripts/beads-sync.py` from the verified checkout after Beads mutations.
+The helper invokes `br` with that checkout as its working directory; it does not
+independently select a canonical main-checkout database.
+
+The September 12 task 06 session found that main-checkout discovery selected an
+older database without task 06; explicitly opening this worktree's configured database
+imported its tracked export. That resolved discovery for that session, not a guarantee
+about a later checkout. Recheck discovery when resuming.
 
 ## Surprises & Discoveries
 
@@ -112,6 +131,15 @@ clients. Astra-specific behavior is a measured evaluation concern.
 Rationale: the available native agents can review repository evidence directly.
 No claim is made that GPT Pro or any external reviewer ran.
 
+2026-09-12: Task 06 rechecked current official Astra guidance before implementation;
+see its [audit and revised specification](06-compact-execplans.md). Preserve task 02's
+immutable evaluation control; task 15 owns comparative model measurements.
+
+2026-09-12, handoff review: aligned tasks 07–16 and their Beads descriptions with the
+shared database-selection rule after inspecting `scripts/beads-sync.py` and current
+`br info` / `br show` output. Task 06's Beads notes link its later repair evidence;
+the original close reason remains historical evidence, not proof of subsequent edits.
+
 ## Outcomes & Retrospective
 
 The task specifications passed four sequential native reasoning-agent reviews.
@@ -124,7 +152,8 @@ No claimed improvement in task performance has been measured.
 Task 01 delivered the first guidance changes; task 02 delivered reproducible synthetic
 evaluation fixtures and independent graders. Tasks 03–04 delivered evidence-based
 completion policy and localized guidance. Task 05 delivered semantic guide checks.
-Tasks 06–16 remain unimplemented.
+Task 06 delivered compact plan policy and goal generation with all six configured
+verification targets passing. Tasks 07–16 remain unimplemented.
 The completed epic must distinguish delivered changes from rejected experiments.
 
 ## Repository orientation
@@ -389,6 +418,9 @@ Related repository documents:
 - [Task specifications](01-guidance-quick-wins.md)
 
 ## Handoff correction
+
+Historical correction from September 11; the current task 06 worktree/database
+resolution is recorded in Progress above.
 
 The separate-worktree handoff was a mistake. The plan and epic now live in the main
 jig-sh checkout on feat/astra-harness-modernization, created from updated

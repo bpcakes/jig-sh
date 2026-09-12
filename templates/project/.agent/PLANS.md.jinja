@@ -47,27 +47,22 @@ prototype with a question, evidence to collect, and a criterion for choosing the
 approach. Revise the plan when evidence changes the approach; do not keep executing
 obsolete steps.
 
-When subagents are available, delegate independent work when it is likely to improve
-time or quality. Give each assignment a bounded scope, relevant context, allowed write
-paths, and expected evidence. Avoid overlapping writes. The main agent integrates and
-verifies the result.
+Delegation is optional when the client supports it and independent work would benefit.
+Bound each assignment's scope, allowed writes, and expected evidence; integrate and
+verify the result. An unavailable optional skill or subagent need not block work that
+can be completed directly. Required repository checks and review gates still apply.
 
-## Required Sections
+## Durable State
 
-Every ExecPlan must contain these sections and keep them current:
+Keep the following information current, using whatever headings fit the task:
 
-- `Progress`: Checkboxes for completed and remaining work; split partially completed
-  items. Include a restart checkpoint: current milestone, next action, blockers, and
-  relevant worktree or environment state. Record the associated Jig plan ID and baseline
+- Progress and restart context: completed and remaining work, next action, blockers,
+  and relevant worktree or environment state. Include the Jig plan ID and baseline
   when using structured work.
-- `Surprises & Discoveries`: Findings that changed the approach, with concise evidence
-  or repository-local artifact references. Use "None yet" when appropriate.
-- `Decision Log`: Material decisions, their rationale, and significant changes to scope
-  or approach. Include dates and identify superseded decisions; do not record a running
-  thought transcript.
-- `Outcomes & Retrospective`: Delivered behavior compared with acceptance criteria,
-  verification evidence, remaining gaps, and lessons. Until completion, state what
-  remains unverified or unfinished.
+- Material discoveries and decisions: what changed the approach, supporting evidence,
+  dated rationale, and any superseded decision. Omit empty logs and thought transcripts.
+- Outcomes and evidence: delivered behavior against acceptance, actual check results
+  or receipt references, and remaining gaps. Mark unfinished or unverified work clearly.
 
 ## Writing Rules
 
@@ -84,23 +79,18 @@ Use the repository's established location for plans and evidence. For Jig-manage
 connect the narrative to the existing structured-work workflow and receipts rather than
 creating a competing gate ledger. Keep secrets out of plans and evidence.
 
-## Suggested Skeleton
+## Plan Shape
 
-Use this order; combine supporting sections when that avoids repetition. Keep the four
-required sections distinct. Address each applicable topic below; briefly explain
-material omissions.
+A compact plan is valid when it contains the required properties and durable state.
+For small work needing a handoff, a few paragraphs or a short checklist can cover the
+outcome, scope, acceptance, next action, and evidence. No fixed headings, section count,
+or length target is required.
 
-1. Title and purpose, including scope and acceptance criteria
-2. `Progress`
-3. `Surprises & Discoveries`
-4. `Decision Log`
-5. `Outcomes & Retrospective`
-6. Context and orientation
-7. Plan of work and milestones
-8. Concrete steps
-9. Validation and acceptance
-10. Idempotence and recovery
-11. Interfaces and dependencies
+Expand plans for uncertain designs, multiple dependent stages, or compatibility risks.
+Include relevant interfaces, milestones, rollout order, and recovery details where
+they affect acceptance. Existing detailed plans remain valid; preserve their material
+decisions when consolidating them. A milestone records progress, not an approval pause,
+unless the user explicitly requests that checkpoint.
 
 ## Verification and Recovery
 

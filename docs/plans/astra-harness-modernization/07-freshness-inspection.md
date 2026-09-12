@@ -106,5 +106,11 @@ These flags are proposed interfaces, not existing commands.
 Attach implementation revision, relevant result artifacts, and acceptance disposition to the bead.
 Close only after the task's stated outcome is delivered; a plan or expected test result is not proof.
 Leave an actionable restart checkpoint if interrupted.
-Run `python3 scripts/beads-sync.py` after Beads mutations, using the canonical main-checkout database.
+Follow the [shared Beads database-selection rule](README.md#beads-database-selection):
+verify `br info --json` before mutations or export, then run
+`python3 scripts/beads-sync.py` from the verified checkout after mutations.
 See README.md in this plan directory for shared rollout policy and the dependency matrix.
+
+Revision note (2026-09-12, task 06 handoff review): replaced the unconditional
+main-checkout database instruction with verified checkout-local discovery. The sync
+helper uses that checkout's `br` discovery; task scope and status are unchanged.

@@ -168,7 +168,7 @@ pub(crate) struct WorkGoalOpts {
     pub(crate) constraints: Vec<String>,
     #[arg(
         long = "checkpoint",
-        help = "Progress checkpoint to include in the plan; may be repeated"
+        help = "Progress checkpoint to include in the plan; may be repeated; defaults to the success condition"
     )]
     pub(crate) checkpoints: Vec<String>,
     #[arg(long, help = "Optional plan title; defaults from the objective")]
