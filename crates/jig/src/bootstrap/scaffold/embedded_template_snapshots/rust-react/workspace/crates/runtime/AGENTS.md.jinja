@@ -15,6 +15,9 @@ Own service initialization, native resources, and shutdown through Batter.
 
 Change service budgets, register background components, or add resource cleanup here.
 Business behavior belongs in the application crate; HTTP policy belongs in HTTP crates.
+The shared startup budget is 30 seconds, including database connection and migrations
+when enabled. Request deadlines live in the HTTP-common crate. These policies are
+source-owned, not `.jig.toml` or generated environment settings.
 
 ## Invariants
 

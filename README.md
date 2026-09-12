@@ -55,6 +55,8 @@ keeping health probes reachable. Batter is unpublished, so generated manifests p
 a Git revision and need network access on their first build. Existing application
 source is project-owned and is not migrated by `jig update`. Library and CLI presets
 remain independent project shapes without a service runtime.
+See [Rust applications on Batter](docs/rust-applications.md) for runtime ownership,
+operational limits, dependency upgrades, and existing-application migration guidance.
 
 ## Project status
 

@@ -5,10 +5,11 @@ Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAP
 [% if backend_language != "go" %]
 Batter and `batter-axum` are pinned Git dependencies in `Cargo.toml` (not registry
 releases). The services target Unix and require network access on the first build.
-Commit `Cargo.lock` after bootstrap; upgrade the Batter revision deliberately.
+Commit `Cargo.lock` after bootstrap; upgrade both Batter Git pins together deliberately.
 
 `crates/<<[ package_name ]>>-runtime` owns startup, native signals, and resource
-cleanup. Startup has a 30-second budget. HTTP handlers have a 10-second response
+cleanup. Startup has a shared 30-second budget, including database connection and
+migrations when enabled. HTTP handlers have a 10-second response
 construction budget; streaming bodies and WebSockets need separate limits. Shutdown
 drains for 10 seconds, then allows 2 seconds for cancellation and 1 second for
 abort/reap before separately bounded cleanup. These policies are application-owned.
@@ -29,6 +30,10 @@ Public `/health/live` and `/health/ready` probes remain outside request admissio
 The separate admin service also exposes those operational probes; admin business
 routes remain denied until an application authorizer is supplied. Do not add business
 data to unauthenticated probes.
+Readiness combines the runtime lifecycle with initialized application state; it is
+not a continuous database connectivity check. Change lifecycle budgets in the runtime
+crate and request policy in `crates/<<[ package_name ]>>-http-common/src/requests.rs`;
+these are source policies, not `.jig.toml` settings.
 [% endif %]
 
 ## Quickstart
@@ -110,7 +115,7 @@ The command binds PostgreSQL to a random loopback port, uses a `test_db_` databa
 [% if admin_api_enabled %]
 ## Admin boundary
 
-The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so future matched admin routes return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `<<[ package_name ]>>_admin_http::router`. Keep the admin listener private at the network/deployment layer as well.
+The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so admitted privileged requests return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `<<[ package_name ]>>_admin_http::router_with_shutdown`, preserving the runtime's shutdown handle. The convenience `router` creates an independent ready handle for in-process tests, not production lifecycle wiring. Keep the admin listener private at the network/deployment layer as well.
 
 Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, and do not publish the admin client with public frontend or documentation artifacts.
 

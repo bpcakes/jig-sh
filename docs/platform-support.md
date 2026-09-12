@@ -14,6 +14,7 @@ A failure that is reproducible on Linux or macOS is a supported-platform regress
 Supported host does not mean that every platform-dependent capability is identical:
 
 - Core CLI, init/adopt/update, generated repository commands, vault operation, and local development workflows are supported on Linux and macOS.
+- Generated `rust-react` applications use Batter's Unix runtime and require Rust 1.94; Windows is not supported. Their pinned Git dependencies require network access on the first uncached build. Standalone Rust library and CLI presets retain their separate Rust 1.88 baseline and do not use Batter. See [Rust applications on Batter](rust-applications.md).
 - Vault backup restore currently requires Linux's atomic absent-directory installation guarantee. Backup creation and the remaining vault workflow are supported on both supported hosts.
 - Certificate trust, service installation, filesystem permissions, and process supervision use host-specific implementations and prerequisites documented in [Configuration](configuration.md).
 - Generated PostgreSQL browser E2E jobs use Linux because GitHub Actions service containers require it. During adoption, Jig selects a statically detected Linux or macOS runner, or falls back to `ubuntu-latest`; explicit custom or self-hosted runner choices remain project-owned.
