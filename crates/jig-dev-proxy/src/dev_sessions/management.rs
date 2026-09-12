@@ -18,6 +18,9 @@ use crate::state::{
 };
 use crate::types::{DevStatusRequest, DevStopRequest, Route};
 
+mod diagnostics;
+use diagnostics::retention_warning;
+
 const CONTROL_RETIRE_BASE_TIMEOUT: Duration = Duration::from_secs(35);
 const CONTROL_RETIRE_PER_APP_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -678,51 +681,6 @@ fn orphan_recovery_assessment_with_observations(
         }
     }
     OrphanRecoveryAssessment::Retirable
-}
-
-fn retention_warning(session: &DevSessionRecord, reason: &OrphanRetentionReason) -> StopWarning {
-    let detail = match reason {
-        OrphanRetentionReason::SupervisorAlive => format!(
-            "supervisor PID {} remained live after the authenticated stop request",
-            session.supervisor.pid
-        ),
-        OrphanRetentionReason::SupervisorUncertain => format!(
-            "supervisor PID {} could not be classified safely",
-            session.supervisor.pid
-        ),
-        OrphanRetentionReason::PreflightCleanupPending => {
-            "development preflight cleanup was not confirmed".to_owned()
-        }
-        OrphanRetentionReason::AppAlive(app) => {
-            format!("registered app '{app}' is still live")
-        }
-        OrphanRetentionReason::AppUncertain(app) => {
-            format!("registered app '{app}' could not be classified safely")
-        }
-        OrphanRetentionReason::AppSpawnPending(app) => {
-            format!("app '{app}' may have spawned before its process identity was durably recorded")
-        }
-        OrphanRetentionReason::AppSpawnUntracked(app) => format!(
-            "legacy app '{app}' has no process identity and predates durable spawn-state tracking"
-        ),
-    };
-    let repair = matches!(
-        reason,
-        OrphanRetentionReason::PreflightCleanupPending
-            | OrphanRetentionReason::AppSpawnPending(_)
-            | OrphanRetentionReason::AppSpawnUntracked(_)
-    )
-    .then_some(
-        "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --forget-ambiguous-orphans`",
-    )
-    .unwrap_or_default();
-    StopWarning {
-        session_id: session.session_id.clone(),
-        message: format!(
-            "session '{}': {detail}; the registry entry was retained without signaling numeric PIDs{repair}",
-            session.session_id
-        ),
-    }
 }
 
 fn forgotten_cleanup_ambiguities(

@@ -172,6 +172,8 @@ pub(crate) struct DevLaunchOpts {
         help = "Internal process-list identity added by Jig"
     )]
     pub(crate) jig_project: Option<OsString>,
+    #[arg(long = "jig-worker-fd", hide = true, value_name = "FD")]
+    pub(crate) jig_worker_fd: Option<i32>,
     #[arg(long = "app", help = "Configured app name to run; may be repeated")]
     pub(crate) apps: Vec<String>,
     #[arg(long, help = "Discover JavaScript workspace apps with dev scripts")]

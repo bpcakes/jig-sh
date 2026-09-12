@@ -1,10 +1,34 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::types::{DevRequest, DevStatusRequest, DevStopRequest};
+use crate::types::{AppRunSpec, DevRequest, DevStatusRequest, DevStopRequest};
 use crate::{
-    dev_outcome, dev_resolved_with_preflight, dev_sessions, processes, resolve_dev_request,
+    DevPreflightResult, ResolvedDevRequest, current_exe, dev_outcome, dev_sessions, processes,
+    resolve_dev_request,
 };
+
+/// Runs a resolved development plan under one foreground termination session,
+/// including a caller-owned preflight that can poll for cancellation.
+///
+/// # Errors
+///
+/// Returns an error when executable discovery, preflight, process supervision,
+/// app readiness, proxy routing, or cleanup fails.
+pub fn dev_resolved_with_preflight(
+    request: ResolvedDevRequest,
+    preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
+) -> Result<Value> {
+    let current_exe = current_exe()?;
+    normalize_dev_result(processes::run_apps_with_preflight(
+        &request.repo_name,
+        &request.root,
+        request.apps,
+        &request.settings,
+        &current_exe,
+        request.replace,
+        preflight,
+    ))
+}
 
 /// Resolves and runs a development request.
 ///

@@ -58,7 +58,7 @@ use self::route_publication::publish_process_route_interruptible;
 use self::route_publication::publish_process_route_interruptible_with_verifier;
 
 mod child_lifecycle;
-mod cleanup;
+pub(crate) mod cleanup;
 mod dev_session;
 mod frameworks;
 mod listener_owner;

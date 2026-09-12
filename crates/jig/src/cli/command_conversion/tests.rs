@@ -133,6 +133,7 @@ fn dev_conversion_preserves_default_launch_and_replace() {
     let request: command::DevCommand = DevOpts {
         command: None,
         launch: DevLaunchOpts {
+            jig_worker_fd: None,
             jig_project: Some("demo@/tmp/demo".into()),
             apps: vec!["web".into(), "api".into()],
             discover_workspace: true,
