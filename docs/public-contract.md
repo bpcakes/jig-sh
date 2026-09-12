@@ -50,7 +50,65 @@ Existing complete authored models remain authoritative during readoption and
 update; selection flags on those models fail with guidance to edit `.jig.toml`.
 
 
-Agent-guide check JSON keeps `missing_guides` as an empty compatibility field in this contract version and includes `missing_guides_note` to explain that placeholder backend-level `AGENTS.md` files are no longer required. Existing Rust crate and Go package guide files are validated when present. Consumers should stop treating `missing_guides` as the guide-coverage gate; use `missing_sections` and `missing_entry_ref` for existing-guide quality issues.
+At contract epoch 8, `scripts/jig check agent-guides` validates existing root and
+nested `AGENTS.md` files and explicit `repository.components[].guidance` references for all component adapters,
+including Rust and Go. `guidance` names a literal repository-relative regular guide file;
+it need not be called `AGENTS.md`. Omitted guidance and absent optional guides do not
+require placeholders. Guide discovery excludes `.git` and `target` directory components.
+
+Supported epochs 2 through 7 retain their original backend-guide discovery, required
+headings, and literal Rust/Go entrypoint checks. They do not validate Markdown link
+targets or require the root guide's `agent-map.md` to exist. A runtime update alone
+keeps that behavior; upgrading the repository contract to epoch 8 through update or
+readoption enables the policy below. `check agent-map` remains a separate check.
+
+The epoch-8 runtime-owned JSON retains `ok` (boolean), `guide_count` (number of distinct guide
+paths selected), `missing_guides`, `missing_sections`, `missing_entry_ref` (string arrays),
+and `missing_guides_note` (string). The three arrays remain empty compatibility fields:
+there are no required heading names or literal entrypoint spellings. New `diagnostics`
+records carry `severity` (`error`, `warning`, `info`), `code`, `guide`, nullable one-based
+`line`, nullable `reference`, nullable `component`, and `message`. Consumers must use
+`ok` or `severity == "error"` for failure; warnings never change exit status or block work
+finish. Clients should ignore additional runtime diagnostic fields and treat unknown
+codes according to severity. Strict legacy decoders can project the six existing fields
+before decoding; the command does not change manifest or MCP schemas.
+
+| Diagnostic code | Severity | Meaning |
+| --- | --- | --- |
+| `owner_guide_invalid` | error | Authored guidance is not a portable repository-relative path |
+| `owner_guide_missing` | error | A component explicitly names an absent guide |
+| `owner_guide_unreadable` | error | An explicit guide cannot be safely read as a regular UTF-8 file |
+| `guide_unreadable` | error | A discovered guide cannot be safely read |
+| `reference_missing` | error | A local link target does not exist |
+| `reference_unsafe` | error | A target has a symlink, unsupported type, or inaccessible path |
+| `reference_invalid` | error | A link has malformed encoding, nonportable syntax, or escapes the repository |
+| `guide_structure` | warning | A nested `AGENTS.md` does not use the optional five-heading organization; root and differently named owner guides are exempt |
+| `external_reference` | info | A URI or network-path reference was not checked over the network |
+
+Markdown links and images use CommonMark parsing, including reference-style destinations,
+titles, escaping, balanced parentheses, and URL/email autolinks. Email autolinks are
+normalized to `mailto:` references and reported as unverified external links.
+Explicit reference links with an undefined
+label are errors; ordinary bracketed prose is not a link declaration. Inline/fenced/indented code and HTML examples
+are not link declarations. Backticked source names and prose are not validated as paths.
+Local links resolve relative to the containing guide; `/` anchors at the repository root.
+Contained `..` segments are allowed, percent escapes decode once, and URL query/fragment
+suffixes do not become filesystem names. Fragment-only/empty destinations stay within
+the document; heading anchors are not validated. External references are reported as
+unverified, with no network requests. Each path ancestor and leaf must be a real repository
+entry; symlinks are rejected even when they currently point inside the repository.
+Guide reads are capped at 1 MiB and fail rather than silently validating a prefix.
+
+Generated agent maps escape Markdown labels and URL-encode filesystem paths, so
+literal percent signs and other reserved characters retain their filename meaning.
+Links resolve from the map's directory, including when the map is stored below the root.
+
+Human output reports error/warning counts and up to five diagnostics of each severity,
+including component and guidance identity for owner-guide failures;
+full locations and references remain available with `--json`. A valid or warnings-only
+check exits 0; reference errors exit nonzero. Output remains noninteractive and terminal
+control characters from guide names or references are escaped for human display. This
+checks references and declared ownership, not the truth or quality of guide prose.
 
 Dev proxy and vault JSON are also runtime-owned. Proxy status may include machine-local health fields such as `pid`, `pid_alive`, `pid_observation`, `health_pid`, `handshake_ok`, `pid_matches_proxy`, `running`, listener addresses, and route URLs; `pid_alive` means positively observed alive while `pid_observation` preserves an `alive`, `absent`, or `uncertain` result. Status and listing commands may perform a loopback HTTP health probe to populate those fields. Strict cross-machine automation should rely on the stable generated command contract instead of treating those runtime diagnostics as a contract schema.
 

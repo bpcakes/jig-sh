@@ -732,7 +732,7 @@ fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() 
     let guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
     assert!(guide.contains("complete versioned schema artifacts"));
     assert!(guide.contains("do not use `scripts/jig migration add`"));
-    assert!(!guide.contains("- `scripts/jig migration add NAME`"));
+    assert!(!guide.contains("`scripts/jig migration add NAME`"));
 }
 
 #[test]

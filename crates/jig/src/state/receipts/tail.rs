@@ -511,10 +511,11 @@ pub(crate) fn receipt_diff_summary(receipt: &ReceiptRecord) -> String {
 }
 
 fn receipt_output_preview(value: &str, exit_status: i32) -> String {
+    let value = redact_host_paths(value);
     if exit_status != 0 {
-        return truncate(value);
+        return truncate(&value);
     }
-    truncate_to_bytes(value, SUCCESSFUL_RECEIPT_PREVIEW_BYTES)
+    truncate_to_bytes(&value, SUCCESSFUL_RECEIPT_PREVIEW_BYTES)
 }
 
 fn truncate_to_bytes(value: &str, limit: usize) -> String {

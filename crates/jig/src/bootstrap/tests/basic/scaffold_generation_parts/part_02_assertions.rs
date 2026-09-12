@@ -11,7 +11,10 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
         .iter()
         .position(|step| step.as_str() == Some("scripts/jig setup"))
         .unwrap();
-    let database_setup = next_steps.iter().position(|step| step.as_str() == Some("bash scripts/setup-database.sh")).unwrap();
+    let database_setup = next_steps
+        .iter()
+        .position(|step| step.as_str() == Some("bash scripts/setup-database.sh"))
+        .unwrap();
     assert!(setup < database_config);
     assert!(database_config < database_setup);
     let context = crate::context::RepoContext::load_from(destination).unwrap();
@@ -39,7 +42,7 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
     let agent_guides_check =
         crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
     assert_eq!(agent_guides_check["ok"], true);
-    assert_eq!(agent_guides_check["guide_count"], 6);
+    assert_eq!(agent_guides_check["guide_count"], 7);
     assert!(
         agent_guides_check["missing_entry_ref"]
             .as_array()

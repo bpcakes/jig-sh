@@ -5,14 +5,23 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 ## Start Here
 
-- Use this file for repo-wide defaults.
-- Open [agent-map.md](./agent-map.md) before [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Use [agent-map.md](./agent-map.md) to find relevant guides when the owning area is unclear.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
 - Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
-- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
+- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients. Discover targets with `scripts/jig info targets`; preview verification with `scripts/jig check --explain`.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
+[% if not rust_workspace_guidance_enabled -%]
+- Run local services with `scripts/jig dev` to use the repository's proxy and port configuration.
+[% endif -%]
+- Routine investigation needs no implementation plan or unrelated tests. For small edits, run the relevant `scripts/jig check` targets.
+- Use structured work for substantial implementation, durable handoffs, or when repository policy requires it: `scripts/jig work start`, `scripts/jig work check --plan-id <id>`, then `scripts/jig work finish --plan-id <id> --resolution "..."`. Short work notes can use `--body`; use `.agent/PLANS.md` to decide when an ExecPlan is needed.
+- Supply the explicit plan ID for work checks, reviews, and finish, and for plain checks intended as that plan’s evidence. Use `work gates` or `work evidence` and their recovery advice when blocked; use `receipts` or `status` for history or plan discovery.
+[% if _jig.contract_version >= 6 -%]
+- Plans capture an exact Git baseline. `work check` reuses current passing target evidence when its freshness policy allows and reruns checks that need new evidence. Required gate policies still govern `work finish`.
+[% else -%]
+- Plans capture an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; `work finish` enforces required gates.
+[% endif -%]
+- Plain `check` executes selected targets; receipt reuse belongs to `work check`. Where supported, `--affected` narrows candidates, including to a no-op, and never waives required work gates.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -41,6 +50,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Keep the Huma API constructor free of database connections, listeners, and other process lifecycle work so `cmd/openapi` remains offline.
 [% if go_postgres_enabled %]
 - Embedded Goose migrations live under `internal/database/migrations/`; sqlc queries and committed generated code live under `internal/database/queries/` and `internal/database/sqlc/`.
+- Add migrations with `scripts/jig migration add NAME`; verify generated SQL code with `scripts/jig check sqlc`.
 - Use pgxpool for application traffic and keep Goose's `database/sql` adapter short-lived.
 [% endif %]
 [% endif %]
@@ -53,11 +63,14 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 [% endif %]
 [% if sqlx_enabled %]
 [% if rust_migration_layout == "flat_migrations" %]
-- SQL migrations live under `<<[ migration_dir ]>>`.
+- SQL migrations live under `<<[ migration_dir ]>>`; add them with `scripts/jig migration add NAME`.
 [% else %]
 - Versioned SQL schema artifacts live under `<<[ migration_dir ]>>`; do not use `scripts/jig migration add` in this layout.
 [% endif %]
 - SQLx metadata is committed in `<<[ rust_sqlx_metadata_dir ]>>`.
+[% if schema_dump_enabled %]
+- Refresh schema documentation with `scripts/jig sqlx schema dump`.
+[% endif %]
 [% endif %]
 [% if sqlx_enabled %]
 - Keep transaction boundaries explicit and deterministic.
@@ -73,88 +86,49 @@ Configured web apps:
 [% endfor %]
 
 Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, and `test:coverage`.
-Structured work uses four atomic path-aware gates per app; repository-wide TypeScript checks remain available for an intentional full-matrix run.
+[% if _jig.contract_version >= 6 -%]
+Structured work verifies the configured repository profile, including its frontend targets.
+[% else -%]
+Structured work uses configured check gates; repository-wide TypeScript checks remain available for an intentional full-matrix run.
+[% endif -%]
 [% if application_contracts_enabled -%]
-Application contract freshness and public deployment boundaries have separate `application-contracts` and `public-artifacts` work gates; `jig-contract` remains limited to Jig harness wiring.
+For application contract freshness and public deployment boundaries, use `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts`.
 [% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
-Jig validates those scripts during adoption; generated web CI validates them again before running.
-Generated install steps select the package-manager project from workspace membership, not root-lock presence: npm, pnpm, Bun, and Yarn Classic members use the root project, while standalone apps and nested Yarn Berry projects use their app-local project.
-Generated npm installs pin real writes, lock creation, workspace participation, platform packages, executable links, and all dependency classes despite ambient install-shaping variables; registry/authentication, dependency layout, peer resolution, and install-script approval remain project-owned.
-Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>` for the generated execution boundary; generated web and browser-E2E workflows do this for every package script. For npm it pins the exact current package and required-script behavior despite ambient npm selectors; explicit app environment plus registry, authentication, layout, peer, and lifecycle policy remain project-owned.
-The dependency checker supports stock macOS Bash 3.2, treats Yarn authority-enumeration failures as hard errors, and follows Bash-owned worker-job identity after an interrupted `wait` rather than probing a reaped PID.
-Dependency readiness treats a missing, empty, or exact cache-only real `node_modules` root equivalently. It ignores only real top-level tool-cache directories (`.cache`, `.vite`, `.vite-temp`, and `.tmp`) plus a regular `.DS_Store`; unknown entries, nested/type-replaced cache names, package entries, metadata, symlinks, and launchers remain attested.
-`[[frontend_apps]]` keeps CI, coverage, and semantic role metadata; generated `[[dev.apps]]` drives `scripts/jig dev` and takes precedence for local dev settings. When both sections are present, Jig requires a matching dev app name and dir for every frontend app. `kind` selects `vite` versus `env-port`; `role` selects `spa`, `admin`, or `astro` without guessing from the directory name. Extra `[[dev.apps]]` entries without `[[frontend_apps]]` are treated as dev-only and are not covered by generated web CI.
-Remove legacy `dev_command` keys; local dev now runs through `[dev]` and `[[dev.apps]]`.
+Run package scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`.
+Keep registry, authentication, and install-script policy project-owned.
+For dependency installation details, see the [Jig frontend installation reference](https://github.com/bpcakes/jig-sh/blob/master/docs/adoption.md#frontend-dependency-installation).
+`[[frontend_apps]]` owns CI and coverage metadata; matching `[[dev.apps]]` entries own local development. Extra dev apps have no generated web CI. Replace legacy `dev_command` with `[dev]` and `[[dev.apps]]`.
+`kind` selects `vite` or `env-port`; `role` selects `spa`, `admin`, or `astro`.
 [% else -%]
 No web apps are configured in `.jig.toml`.
 [% endif %]
 
-## Preferred Commands
-
-- `scripts/jig bootstrap`
-- `scripts/jig doctor`
-[% if not rust_workspace_guidance_enabled %]
-- `scripts/jig dev`
-[% endif %]
-- `scripts/jig check test`
-- `scripts/jig check fmt`
-[% if go_backend_enabled %]
-- `scripts/jig check lint`
-[% endif %]
-[% if rust_backend_enabled %]
-- `scripts/jig check clippy`
-[% endif %]
-- `scripts/jig work status`
-- `scripts/jig work evidence`
-[% if frontend_apps | length > 0 %]
-- `scripts/jig check typescript-lint`
-- `scripts/jig check typescript-typecheck`
-- `scripts/jig check typescript-build`
-- `scripts/jig check typescript-coverage`
-[% if application_contracts_enabled %]
-- `scripts/check-webapps.sh application-contracts`
-- `scripts/check-webapps.sh public-artifacts`
-[% endif %]
-[% endif %]
-[% if sqlx_enabled %]
-- `scripts/jig check sqlx`
-[% if schema_dump_enabled %]
-- `scripts/jig check schema`
-- `scripts/jig sqlx schema dump`
-[% endif %]
-[% if rust_migration_layout == "flat_migrations" %]
-- `scripts/jig migration add NAME`
-[% endif %]
-[% endif %]
-[% if go_postgres_enabled %]
-- `scripts/jig migration add NAME`
-- `scripts/jig check sqlc`
-[% endif %]
-- `scripts/jig check contract`
-
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, finish with `scripts/jig check test`.
+- Completion requires current passing evidence for the applicable checks below and the configured profiles and required work gates, including authored custom profiles and review gates. Preserve those requirements; a narrower selection does not replace them.
+- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, evidence must cover the configured tests (`scripts/jig check test`).
 [% if frontend_apps | length > 0 %]
-- For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
+- For frontend changes, evidence must cover the relevant `scripts/jig check typescript-*` gates.
 [% endif %]
 [% if sqlx_enabled %]
-- For SQLx or migration changes, run `scripts/jig check sqlx`.
+- For SQLx or migration changes, evidence must cover `scripts/jig check sqlx`.
 [% if schema_dump_enabled %]
-- For schema-doc-enabled repos, run `scripts/jig check schema`.
+- For schema-doc-enabled repos, evidence must cover `scripts/jig check schema`.
 [% endif %]
 [% endif %]
+- A qualifying pass already covering current inputs satisfies its check; do not repeat tests just to make them the last command. Run configured reviews with `scripts/jig work review --plan-id <id>`; `work check` does not supply review evidence.
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
 
 ## [% if rust_workspace_guidance_enabled %]Crate Guide[% else %]Backend Guide[% endif %] Conventions
 
-When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, use these sections:
+When a [% if rust_workspace_guidance_enabled %]Rust crate[% else %]backend package or crate[% endif %] has an `AGENTS.md`, these sections are optional suggestions:
 
 - `## Purpose`
 - `## Key entrypoints`
 - `## Edit here for X`
 - `## Invariants`
 - `## Common commands`
+
+Use the structure that fits the area. Preserve ownership, entrypoints, invariants, and useful commands; concise guides with different headings are valid. Link to repository files when a reference must be checked. Run `scripts/jig check agent-guides` to validate local links and explicitly declared component guidance.
 <!-- END JIG MANAGED BLOCK -->

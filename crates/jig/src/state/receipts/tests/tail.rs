@@ -226,3 +226,44 @@ fn run_git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+#[test]
+fn persisted_receipts_sanitize_previews_without_changing_source_output() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let output = format!(
+        "{} /opt/homebrew/lib/probe.py {}",
+        temp.path().join("src/main.rs").display(),
+        std::env::temp_dir()
+            .join("ExampleProject/result.json")
+            .display()
+    );
+    record_receipt(
+        &ctx,
+        ReceiptInput {
+            tool_name: tool::TEST,
+            args: json!({}),
+            invoked_command_key: None,
+            plan_id: None,
+            started_at_ms: 1,
+            ended_at_ms: 2,
+            exit_status: 1,
+            stdout: &output,
+            stderr: &output,
+            evidence: None,
+            session_override: None,
+            collect_git_metadata: false,
+            collect_worktree_fingerprint: false,
+            worktree_fingerprint_override: None,
+        },
+    )
+    .unwrap();
+    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
+    assert_eq!(
+        receipts[0].stdout_preview,
+        "<repository-root>/src/main.rs <homebrew-root>/lib/probe.py <temporary-root>/ExampleProject/result.json"
+    );
+    assert_eq!(receipts[0].stderr_preview, receipts[0].stdout_preview);
+    assert!(output.contains("/opt/homebrew/lib/probe.py"));
+}

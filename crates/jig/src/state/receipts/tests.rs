@@ -10,6 +10,26 @@ use crate::state::jsonl::read_jsonl;
 use crate::test_env::TestRepoBuilder;
 
 #[test]
+fn receipt_previews_redact_host_paths_before_truncation() {
+    let temporary = std::env::temp_dir();
+    let output = format!(
+        "File \"/opt/homebrew/Cellar/python/3/lib/pathlib.py\", line 787\nmissing: '{}/ExampleProject/result.json'\nrelative: scripts/probe.py\nunchanged: /opt/homebrew-other/file",
+        temporary.display()
+    );
+    for status in [0, 1] {
+        let preview = receipt_output_preview(&output, status);
+        assert!(preview.contains("<homebrew-root>/Cellar/python/3/lib/pathlib.py"));
+        assert!(preview.contains("<temporary-root>/ExampleProject/result.json"));
+        assert!(preview.contains("relative: scripts/probe.py"));
+        assert!(preview.contains("unchanged: /opt/homebrew-other/file"));
+        assert!(!preview.contains(&format!("{}/ExampleProject", temporary.display())));
+    }
+    let prefix = "x".repeat(SUCCESSFUL_RECEIPT_PREVIEW_BYTES - 12) + " ";
+    let output = prefix.clone() + "/opt/homebrew/Cellar/python/file";
+    assert_eq!(receipt_output_preview(&output, 0), prefix + "<homebrew-r…");
+}
+
+#[test]
 fn successful_receipt_previews_are_small_but_failures_keep_diagnostics() {
     let output = "x".repeat(5_000);
 

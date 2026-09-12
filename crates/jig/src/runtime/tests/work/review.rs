@@ -35,6 +35,14 @@ fn work_review_records_structured_codex_review_findings() {
     write_review_codex_stub(&codex_path);
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    // Passing configured checks cannot manufacture required review evidence.
+    let checked = call_tool(&ctx, tool::WORK_CHECK, json!({"plan_id": "plan_1"})).unwrap();
+    assert_eq!(checked["ok"], true);
+    let pending = call_tool(&ctx, tool::WORK_GATES, json!({"plan_id": "plan_1"})).unwrap();
+    assert_eq!(pending["gates"][0]["status"], "missing");
+    assert_eq!(pending["gates"][1]["status"], "passed");
+    assert!(call_tool(&ctx, tool::WORK_FINISH, json!({"plan_id": "plan_1"})).is_err());
+
     let mut observer = PhaseObserver::default();
 
     let output = crate::runtime::dispatch_with_observer(

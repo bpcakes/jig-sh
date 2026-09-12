@@ -538,6 +538,28 @@ args = ["vault"]
 action = "source-vault-test"
 component = "repo"
 
+[[repository.actions]]
+description = "Verify the local harness evaluation driver and independent graders without model access."
+effects = ["read_only", "process"]
+inputs = ["scripts/evaluate-harness.py", "scripts/harness_eval/**", "scripts/tests/**", "scripts/beads-sync.py", "tests/fixtures/harness-eval/**"]
+intent = "check"
+
+[repository.actions.provenance]
+effects = "declared"
+inputs = "declared"
+intent = "declared"
+runner = "declared"
+target = "declared"
+
+[repository.actions.runner]
+kind = "argv"
+program = "python3"
+args = ["-B", "-m", "unittest", "discover", "-s", "scripts/tests"]
+
+[repository.actions.target]
+action = "harness-eval-test"
+component = "repo"
+
 [[repository.components]]
 adapters = ["rust"]
 description = "Primary application backend."
@@ -591,6 +613,10 @@ component = "repo"
 
 [[repository.profiles.targets]]
 action = "file-budget"
+component = "repo"
+
+[[repository.profiles.targets]]
+action = "harness-eval-test"
 component = "repo"
 
 [vault]

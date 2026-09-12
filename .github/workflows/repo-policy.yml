@@ -17,6 +17,10 @@ on:
       - ".beads/**"
       - "scripts/beads-sync.py"
       - "scripts/tests/test_beads_sync.py"
+      - "scripts/evaluate-harness.py"
+      - "scripts/harness_eval/**"
+      - "scripts/tests/test_harness_eval*.py"
+      - "tests/fixtures/harness-eval/**"
   push:
     branches:
       - master
@@ -35,6 +39,10 @@ on:
       - ".beads/**"
       - "scripts/beads-sync.py"
       - "scripts/tests/test_beads_sync.py"
+      - "scripts/evaluate-harness.py"
+      - "scripts/harness_eval/**"
+      - "scripts/tests/test_harness_eval*.py"
+      - "tests/fixtures/harness-eval/**"
   merge_group:
     types:
       - checks_requested
@@ -55,6 +63,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Verify all harness fixture graders without model access
+        run: python3 scripts/evaluate-harness.py smoke --output tmp/harness-eval-smoke
       - name: Test export guard
         run: python3 -m unittest discover -s scripts/tests
       - name: Check exported metadata

@@ -45,9 +45,9 @@ fn init_renders_web_commands_for_all_supported_package_managers() {
         assert!(!repo.join("Makefile").exists());
         let agent_guidance = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
         assert!(agent_guidance.contains(
-            "Generated install steps select the package-manager project from workspace membership, not root-lock presence"
+            "Keep registry, authentication, and install-script policy project-owned"
         ));
-        assert!(agent_guidance.contains("It ignores only real top-level tool-cache directories"));
+        assert!(agent_guidance.contains("scripts/check-webapps.sh run-script <app-dir> <script>"));
         assert!(
             !agent_guidance
                 .contains("Generated install steps use a repo-root lockfile when one exists")

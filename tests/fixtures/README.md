@@ -1,5 +1,9 @@
 # Fixture Answer Files
 
+The [harness evaluation fixtures](harness-eval/README.md) provide a separate,
+credential-free driver for five objective task graders and opt-in paired model
+experiments. Their historical guidance snapshots are immutable experiment inputs.
+
 Keep these TOML fixtures in lockstep with their matching fixture-backed
 `examples/*.toml` files; release and fixture checks verify matching contents so
 fixture coverage and visible answer files do not drift. Additional freestanding

@@ -24,7 +24,7 @@ pub(super) fn repository_root_spellings(root: &Path) -> Vec<String> {
 
 pub(super) fn redact_repository_root(value: &str, spellings: &[String]) -> String {
     spellings.iter().fold(value.to_string(), |redacted, root| {
-        redact_path_bounded_occurrences(&redacted, root)
+        redact_path_bounded_occurrences(&redacted, root, REPOSITORY_ROOT_REDACTION)
     })
 }
 
@@ -50,7 +50,32 @@ pub(super) fn redact_repository_root_in_value(mut value: Value, spellings: &[Str
     value
 }
 
-fn redact_path_bounded_occurrences(value: &str, root: &str) -> String {
+/// Keep diagnostic suffixes, but do not persist the executing host's home,
+/// temporary-directory identity, or Homebrew installation prefix in previews.
+/// Repository-root redaction must run first to retain its more specific marker.
+pub(super) fn redact_host_paths(value: &str) -> String {
+    let mut redacted = value.to_string();
+    let temporary = std::env::temp_dir();
+    let home = dirs::home_dir();
+    for (path, replacement) in [
+        (Some(temporary.as_path()), "<temporary-root>"),
+        (home.as_deref(), "<home>"),
+        (Some(Path::new("/opt/homebrew")), "<homebrew-root>"),
+        (Some(Path::new("/usr/local/Cellar")), "<homebrew-cellar>"),
+    ] {
+        if let Some(path) = path {
+            // TMPDIR commonly ends in a separator on macOS. Normalize it so
+            // replacing the prefix retains the separator before the filename.
+            let path = path.components().collect::<std::path::PathBuf>();
+            for spelling in repository_root_spellings(&path) {
+                redacted = redact_path_bounded_occurrences(&redacted, &spelling, replacement);
+            }
+        }
+    }
+    redacted
+}
+
+fn redact_path_bounded_occurrences(value: &str, root: &str, replacement: &str) -> String {
     let mut redacted = value.to_string();
     let mut search_from = 0;
     while let Some(relative_start) = redacted[search_from..].find(root) {
@@ -60,8 +85,8 @@ fn redact_path_bounded_occurrences(value: &str, root: &str) -> String {
         let has_left_boundary = previous.is_none_or(is_left_token_boundary);
         let has_right_boundary = has_right_token_boundary(&redacted[end..], previous);
         if has_left_boundary && has_right_boundary {
-            redacted.replace_range(start..end, REPOSITORY_ROOT_REDACTION);
-            search_from = start + REPOSITORY_ROOT_REDACTION.len();
+            redacted.replace_range(start..end, replacement);
+            search_from = start + replacement.len();
         } else {
             search_from = end;
         }

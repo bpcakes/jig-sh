@@ -1,0 +1,1 @@
+Implement jig-sh-9wcn.2: pin audited guidance, isolate paired treatments, add five objective fixture graders and explicit model adapter execution, verify failures and telemetry, run configured gates.
