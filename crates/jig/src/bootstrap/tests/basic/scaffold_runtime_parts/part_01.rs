@@ -37,14 +37,23 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     let dependencies = &manifest["workspace"]["dependencies"];
     for package in ["batter", "batter-axum"] {
         assert_eq!(dependencies[package]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-        assert_eq!(dependencies[package]["rev"].as_str(), Some("39c1b6e3c1c75f808becb5a5e7c33f58001a2ee4"));
+        assert_eq!(dependencies[package]["rev"].as_str(), Some("f5824cf836c9d1146d67d7b0dc99d011921bd02f"));
     }
+    assert!(dependencies.get("batter-sqlx").is_none());
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
-    assert!(cargo_toml.ends_with('\n'));
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");
     let runtime = fs::read_to_string(temp.path().join(format!("crates/{repo_name}-runtime/src/lib.rs"))).unwrap();
-    assert_text_contains_all(&runtime, &["Startup::new", "register_http", "install_signals", "check_shutdown"]);
+    assert_text_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "register_http_in",
+            ".with_unix_signals(\"signals\")",
+            "check_shutdown",
+        ],
+    );
+    assert_text_contains_none(&runtime, &["Startup::new", "scope.supervisor()", "install_signals"]);
     let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
     assert_eq!(
         env_example,

@@ -18,8 +18,11 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 
 ### Fixed
 
-- Reject Rust application names that normalize to `batter` or `batter-axum`
-  before writing destination files, avoiding generated Cargo package collisions.
+- Reject Rust-react application names that normalize to `batter` or
+  `batter-axum` before writing destination files, and reject `batter-sqlx` for
+  PostgreSQL Rust-react applications where that dependency is generated. Keep
+  SQLite, no-database, and rust-only names independent of the conditional
+  PostgreSQL dependency.
 - Keep machine-local Beads paths out of exports through the repository sync
   helper and CI guard. Continue Linux argv PATH searches past unavailable
   filesystem entries while preserving direct-executable errors.
@@ -35,9 +38,12 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 
 ### Changed
 
-- Generate all new `rust-react` applications with Batter-owned startup, shutdown,
-  and cleanup, lifecycle-aware HTTP admission, and finite database bootstrap commands.
-  These scaffolds require Rust 1.94 on Unix and pin unpublished Batter Git dependencies.
+- Generate all new `rust-react` applications with Batter-protected
+  `Startup::scoped` ownership, signal-aware shutdown, lifecycle-aware HTTP
+  admission, and finite database bootstrap commands. PostgreSQL registers its
+  SQLx pool through `batter-sqlx::pool_in` before the bounded connectivity check;
+  SQLite retains its native/manual cleanup path. These scaffolds require Rust
+  1.94 on Unix and pin all applicable unpublished Batter Git dependencies.
   There is no legacy non-Batter application preset. Rust library and CLI presets
   remain independent; `jig update` does not migrate existing application source.
 - Breaking: remove the `jig prompt` library CLI (`get`, `copy`, `add`, `edit`, `remove`, `list`, `search`, `export`, `import`), its user/repo/pack file registry, MiniJinja rendering, clipboard helpers, and `JIG_PROMPT_HOME` override. Named prompt packs are no longer a Jig surface. This is a runtime-owned CLI removal and does not require a new contract epoch.

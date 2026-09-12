@@ -6,7 +6,7 @@ Own service initialization, native resources, and shutdown through Batter.
 
 ## Key entrypoints
 
-`src/lib.rs`: `serve` composes startup, HTTP serving, signals, and cleanup.
+`src/lib.rs`: `serve` composes protected startup, HTTP serving, signals, and cleanup.
 [% if db_enabled %]
 `bootstrap_database` uses Batter's finite `Command` owner for setup and pool closure.
 [% endif %]
@@ -21,12 +21,18 @@ source-owned, not `.jig.toml` or generated environment settings.
 
 ## Invariants
 
-Register cleanup before any subsequent fallible startup step. Keep the startup owner
-alive and await its result. Readiness requires initialized resources and started tasks.
+Use `Startup::scoped` with `with_unix_signals` and `register_http_in`; capture the
+shutdown handle before moving the supervisor and pass that handle to the router.
+The protected scope exposes stage metadata, cleanup reservation, and supported
+registration adapters, not full supervisor control. Register cleanup before any
+subsequent fallible startup step. Keep the startup owner alive and await its result.
+Readiness requires initialized resources and started tasks.
 Shutdown must await the owned tasks and report incomplete cleanup as failure.
 Never move Batter supervision into application state merely to access the runtime.
 Use `Command` and `check_command` for finite work, not an empty service supervisor.
-Register native runtimes with descendants through supported managed adapters;
+PostgreSQL database startup uses the DB crate's `batter_sqlx::pool_in` owner followed
+by an explicit bounded connectivity check; SQLite retains native configuration and
+manual pool cleanup. Register native runtimes with descendants through supported managed adapters;
 joining a wrapper task alone does not prove its descendants stopped.
 Shutdown phase allowances share Batter's first-stop clock; scheduling delays consume
 the budget. Cleanup has an independent allowance and cannot roll back remote effects.

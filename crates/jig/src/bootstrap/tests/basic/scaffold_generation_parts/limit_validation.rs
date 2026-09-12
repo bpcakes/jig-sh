@@ -60,10 +60,74 @@ fn rust_react_rejects_batter_dependency_collisions_before_destination_mutation()
 }
 
 #[test]
+fn rust_react_batter_sqlx_collision_is_postgres_only_and_preflighted() {
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    for requested_name in ["batter-sqlx", "Batter_Sqlx"] {
+        for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+            for existing in [false, true] {
+                let parent = tempfile::tempdir_in(temp.path()).unwrap();
+                let destination = parent.path().join(requested_name);
+                if existing {
+                    fs::create_dir(&destination).unwrap();
+                    fs::write(
+                        destination.join("Cargo.toml"),
+                        "preserve existing manifest\n",
+                    )
+                    .unwrap();
+                }
+                let result = run_init(InitOpts {
+                    path: destination.clone(),
+                    scaffold: ScaffoldOpts {
+                        preset: Some(ScaffoldPreset::RustReact),
+                        db: Some(db),
+                        frontends: Vec::new(),
+                        frontend_list: Vec::new(),
+                    },
+                    template: Some(template.path().display().to_string()),
+                    template_mode: None,
+                    vcs_ref: None,
+                    force: existing,
+                    defaults: true,
+                    no_input: true,
+                    no_vault: true,
+                    answers: AnswerOpts {
+                        // Existing destinations exercise an explicit answer;
+                        // a fresh destination infers the normalized name from
+                        // its path. Include the underscore/case spelling to
+                        // cover the normalized package collision.
+                        repo_name: existing.then(|| requested_name.into()),
+                        ..AnswerOpts::default()
+                    },
+                });
+                if db == ScaffoldDb::Postgres {
+                    let error = result.unwrap_err().to_string();
+                    assert!(error.contains("conflicts with a required Batter dependency"));
+                    assert!(error.contains("normalizes to 'batter-sqlx'"));
+                    if existing {
+                        assert_eq!(
+                            fs::read_to_string(destination.join("Cargo.toml")).unwrap(),
+                            "preserve existing manifest\n"
+                        );
+                        assert_eq!(fs::read_dir(&destination).unwrap().count(), 1);
+                    } else {
+                        assert!(!destination.exists());
+                    }
+                } else {
+                    result.unwrap();
+                    let workspace = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
+                    assert!(!workspace.contains("batter-sqlx ="));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn rust_only_presets_allow_names_without_batter_dependency_collisions() {
     let temp = tempdir().unwrap();
     for preset in [ScaffoldPreset::RustLibrary, ScaffoldPreset::RustCli] {
-        for name in ["batter", "batter-axum"] {
+        for name in ["batter", "batter-axum", "batter-sqlx"] {
             let plan = scaffold::InitScaffoldPlan::from_opts(
                 &ScaffoldOpts {
                     preset: Some(preset),

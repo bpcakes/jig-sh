@@ -10,6 +10,10 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+[% if sqlx_driver == "postgres" %]
+batter.workspace = true
+batter-sqlx.workspace = true
+[% endif %]
 [% if sqlx_driver == "sqlite" %]
 fs4.workspace = true
 url.workspace = true

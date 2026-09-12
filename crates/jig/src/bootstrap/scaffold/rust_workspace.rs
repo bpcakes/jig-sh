@@ -286,7 +286,7 @@ impl InitScaffoldPlan {
             bounded_postgres_identifier(&format!("test_db_{}", self.module_name));
 
         json!({
-        "batter_revision": "39c1b6e3c1c75f808becb5a5e7c33f58001a2ee4",
+            "batter_revision": "f5824cf836c9d1146d67d7b0dc99d011921bd02f",
             "package_name": self.package_name,
             "module_name": self.module_name,
             "repo_name": self.repo_name,

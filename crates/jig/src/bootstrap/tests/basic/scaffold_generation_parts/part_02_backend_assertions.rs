@@ -243,17 +243,29 @@ fn assert_api_entrypoint(destination: &Path) {
             "\"tower_http=info\",",
         ],
     );
-    assert_contains_none(&api_main, &["args_os().any"]);
+    assert_contains_none(
+        &api_main,
+        &["args_os().any", "unsafe {", "std::env::set_var", "std::env::remove_var"],
+    );
     let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
-    assert_contains_all(&runtime, &[
-        "Startup::new",
-        "register_http",
-        "install_signals",
-        "signals.received()",
-        "check_shutdown",
-        "reserve_cleanup(\"database.close\")",
-        "pool.close().await",
-    ]);
+    assert_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "register_http_in",
+            ".with_unix_signals(\"signals\")",
+            "let supervisor = Supervisor::new(budget);",
+            "let shutdown = supervisor.handle();",
+            "ProtectedStartupScope",
+            "check_shutdown",
+            "reserve_cleanup(\"database.close\")",
+            "Db::connect_in(database_url, cleanup).await?",
+        ],
+    );
+    assert_contains_none(
+        &runtime,
+        &["Startup::new", "scope.supervisor()", "install_signals", "signals.received()"],
+    );
 }
 
 fn assert_generated_dev_config(destination: &Path) {
@@ -283,6 +295,11 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(workspace_cargo.contains("sqlx = { version = \"0.9\""));
     assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
+    for package in ["batter", "batter-axum", "batter-sqlx"] {
+        assert!(workspace_cargo.contains(&format!(
+            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"f5824cf836c9d1146d67d7b0dc99d011921bd02f\" }}"
+        )));
+    }
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-http-common""#));
@@ -442,6 +459,9 @@ fn assert_database_crate_and_test_support(destination: &Path) {
     assert!(db_lib.contains("create_if_missing"));
     assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
     assert!(db_lib.contains("connect_with_timeout"));
+    assert!(db_lib.contains("batter_sqlx::pool_in"));
+    assert!(db_lib.contains("pub async fn connect_in("));
+    assert!(db_lib.contains("sqlx::query(\"SELECT 1\")"));
     assert!(db_lib.contains("migrate_with_timeout"));
     let test_support_db =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/db.rs")).unwrap();
@@ -480,6 +500,10 @@ fn assert_generated_backend_docs(destination: &Path) {
     assert!(root_readme.contains("Commit the generated `bun.lock`"));
     assert!(root_readme.contains("DenyAllAdminAuthorizer"));
     assert!(root_readme.contains("bun run test:postgres"));
+    assert!(root_readme.contains("`batter-sqlx`"));
+    assert!(root_readme.contains("all applicable Batter Git pins together"));
+    assert!(root_readme.contains("Startup::scoped"));
+    assert!(root_readme.contains("local closure does not"));
     let http_agents = fs::read_to_string(destination.join("crates/my-app-http/AGENTS.md")).unwrap();
     assert!(http_agents.contains("`src/public.rs`: owns public routes"));
     assert!(http_agents.contains("Never depend on `my-app-admin-http`"));

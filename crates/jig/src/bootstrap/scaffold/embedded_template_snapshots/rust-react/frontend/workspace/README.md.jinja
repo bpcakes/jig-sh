@@ -3,13 +3,15 @@
 Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Batter, Axum, React, and OpenAPI[% endif %] workspace.
 
 [% if backend_language != "go" %]
-Batter and `batter-axum` are pinned Git dependencies in `Cargo.toml` (not registry
-releases). The services target Unix and require network access on the first build.
-Commit `Cargo.lock` after bootstrap; upgrade both Batter Git pins together deliberately.
+Batter and `batter-axum`[% if db == "postgres" %], plus `batter-sqlx`[% endif %] are
+pinned Git dependencies in `Cargo.toml` (not registry releases). The services target
+Unix and require network access on the first build. Commit `Cargo.lock` after
+bootstrap; upgrade all applicable Batter Git pins together deliberately.
 
-`crates/<<[ package_name ]>>-runtime` owns startup, native signals, and resource
-cleanup. Startup has a shared 30-second budget, including database connection and
-migrations when enabled. HTTP handlers have a 10-second response
+`crates/<<[ package_name ]>>-runtime` owns protected startup, native signals, and
+resource cleanup. `Startup::scoped` constrains initialization to stage metadata,
+cleanup reservation, and supported registration adapters. Startup has a shared
+30-second budget, including database connection and migrations when enabled. HTTP handlers have a 10-second response
 construction budget; streaming bodies and WebSockets need separate limits. Shutdown
 drains for 10 seconds, then allows 2 seconds for cancellation and 1 second for
 abort/reap before separately bounded cleanup. These policies are application-owned.
@@ -31,8 +33,11 @@ The separate admin service also exposes those operational probes; admin business
 routes remain denied until an application authorizer is supplied. Do not add business
 data to unauthenticated probes.
 Readiness combines the runtime lifecycle with initialized application state; it is
-not a continuous database connectivity check. Change lifecycle budgets in the runtime
-crate and request policy in `crates/<<[ package_name ]>>-http-common/src/requests.rs`;
+not a continuous database connectivity check. PostgreSQL pool construction registers
+local cleanup before an explicit bounded connectivity check; local closure does not
+roll back remote transactions or guarantee remote session termination. SQLite keeps
+its native configuration and manual cleanup path. Change lifecycle budgets in the
+runtime crate and request policy in `crates/<<[ package_name ]>>-http-common/src/requests.rs`;
 these are source policies, not `.jig.toml` settings.
 [% endif %]
 

@@ -16,12 +16,15 @@ Batter runtime. This cutover does not mean Jig's own runtime uses Batter through
 
 Generated applications require Rust 1.94 on Linux or macOS. Database variants use
 SQLx 0.9. Batter is unpublished: the generated workspace pins `batter` and
-`batter-axum` to the same Git revision, so the first uncached build needs network
-access. Commit the generated `Cargo.lock` after dependency bootstrap.
+`batter-axum` to the same Git revision, and PostgreSQL variants add `batter-sqlx`
+at that revision. The first uncached build needs network access. Commit the
+generated `Cargo.lock` after dependency bootstrap.
 
 Application names that normalize to `batter` or `batter-axum` collide with runtime
-packages and are rejected before destination files are written. Choose another
-`--repo-name`; this restriction does not apply to standalone library or CLI presets.
+packages and are rejected before destination files are written. PostgreSQL
+Rust-react applications also reject names normalizing to `batter-sqlx`; SQLite,
+database-free, library, and CLI shapes do not reserve that name. Choose another
+`--repo-name` when the selected shape includes a conflicting dependency.
 
 ## Ownership in the generated workspace
 
@@ -44,10 +47,13 @@ it does not connect a server to the production shutdown lifecycle. In-memory
 
 ## Lifecycle and HTTP policy
 
-Service startup has one 30-second budget covering resource initialization,
-database connection and migrations when enabled, and listener binding. Cleanup
-capacity is reserved before connecting a database, and pool closure is registered
-before later fallible startup work.
+Service startup uses Batter's protected `Startup::scoped` boundary, with library-owned
+Unix signal listeners and constrained HTTP registration. It has one 30-second budget
+covering resource initialization, database connection and migrations when enabled,
+and listener binding. Cleanup capacity is reserved before connecting a database, and
+pool closure is owned before later fallible startup work. Initialization failure or
+cancellation therefore retains the same cleanup owner; it does not make native
+resource acquisition asynchronous RAII.
 
 Business requests pass through Batter admission and a 10-second request deadline.
 The deadline ends at response construction; it does not bound streaming bodies or
@@ -57,8 +63,9 @@ WebSocket sessions. Middleware failures retain the API error envelope with
 Both public and admin listeners expose `/health/live` and `/health/ready` outside
 request admission. Admin probes are also outside authorization. Readiness requires
 both Batter's ready lifecycle state and initialized application state; a configured
-pool is not a continuous database connectivity check. Keep probes reachable during
-draining without admitting new business work.
+pool is not a continuous database connectivity check. PostgreSQL pool construction
+is lazy but performs an explicit bounded connectivity check before readiness and
+migrations. Keep probes reachable during draining without admitting new business work.
 
 Admin business routes under `/admin-api` remain fail-closed with
 `DenyAllAdminAuthorizer`. Supply the real authorizer through the production
@@ -87,14 +94,19 @@ The PostgreSQL role must already exist; setup does not grant privileges.
 
 Database bootstrap uses Batter's finite `Command` owner with a 30-second work
 budget and independently bounded cleanup, rather than an empty service supervisor.
-SIGINT or SIGTERM cancels the command and waits for cleanup. Normal server startup
-also applies pending migrations but does not create the database. Cancellation
-does not roll back already committed migrations, database creation, or remote effects.
+PostgreSQL setup uses the same cleanup-slot-aware pool owner and bounded connectivity
+check before migrations; SQLite keeps its native configuration and manual cleanup
+path. SIGINT or SIGTERM cancels the command and waits for cleanup. Normal server
+startup also applies pending migrations but does not create the database. Cancellation
+does not roll back already committed migrations, database creation, remote
+transactions, or other remote effects; local pool closure is not a remote rollback
+or continuous connectivity guarantee.
 
 ## Upgrades and existing applications
 
-Upgrade both Batter Git pins together in the generated `Cargo.toml`, regenerate
-and commit the lockfile, and validate startup, request admission, shutdown, and
+Upgrade all applicable Batter Git pins together in the generated `Cargo.toml`
+(`batter` and `batter-axum`, plus `batter-sqlx` for PostgreSQL), regenerate and
+commit the lockfile, and validate startup, request admission, shutdown, and
 database setup for the project's enabled shape. For Jig maintainers, new scaffold
 pins live in `crates/jig/src/bootstrap/scaffold/rust_workspace.rs`.
 

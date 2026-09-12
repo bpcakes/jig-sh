@@ -106,3 +106,104 @@ fn install_panic_hook() {
         default_hook(panic_info);
     }));
 }
+[% if not db_enabled %]
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Read,
+        process::{Command as ProcessCommand, Stdio},
+        time::Duration,
+    };
+    use tokio::net::TcpListener;
+
+    const BIND_FAILURE_CHILD: &str = "JIG_NO_DB_BIND_FAILURE_CHILD";
+    const BIND_FAILURE_TEST: &str = "tests::production_serve_reports_bind_failure";
+
+    #[tokio::test]
+    async fn production_serve_reports_bind_failure() {
+        if std::env::var_os(BIND_FAILURE_CHILD).is_some() {
+            let config = app_crate::AppConfig::from_env().expect("test bind address is valid");
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                runtime::serve(config, app_http_crate::router_with_shutdown),
+            )
+            .await
+            .expect("serve should fail the occupied bind instead of hanging");
+            let error = result.expect_err("the production serve entrypoint must reject the bind");
+            let display = error.to_string();
+            assert!(
+                display.contains("startup failed at http.bind"),
+                "bind failure should retain its production startup stage: {display}"
+            );
+            assert!(
+                error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()),
+                "bind failure should retain its I/O cause: {display}"
+            );
+            return;
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener for the occupied address");
+        let bind_addr = listener
+            .local_addr()
+            .expect("read the occupied listener address")
+            .to_string();
+        let mut child = ProcessCommand::new(
+            std::env::current_exe().expect("locate the generated API test executable"),
+        )
+        .args(["--exact", BIND_FAILURE_TEST, "--nocapture"])
+        .env(BIND_FAILURE_CHILD, "1")
+        .env("BIND_ADDR", &bind_addr)
+        .env_remove("HOST")
+        .env_remove("PORT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn an isolated production bind-failure test");
+        let status =
+            match tokio::time::timeout(Duration::from_secs(5), wait_for_child(&mut child)).await {
+                Ok(status) => status.expect("wait for the production bind-failure child"),
+                Err(_) => {
+                    let kill = child.kill();
+                    let wait = child.wait();
+                    panic!("production bind-failure child timed out; kill={kill:?}, wait={wait:?}");
+                }
+            };
+        let mut stdout = String::new();
+        child
+            .stdout
+            .take()
+            .expect("capture child stdout")
+            .read_to_string(&mut stdout)
+            .expect("read child stdout");
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .expect("capture child stderr")
+            .read_to_string(&mut stderr)
+            .expect("read child stderr");
+        drop(listener);
+        assert!(
+            status.success(),
+            "isolated production bind-failure test failed: status={status}, stdout={stdout}, stderr={stderr}"
+        );
+    }
+
+    async fn wait_for_child(
+        child: &mut std::process::Child,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+[% endif %]
