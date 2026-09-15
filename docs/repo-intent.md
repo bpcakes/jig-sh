@@ -121,6 +121,10 @@ The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig sta
 - `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
 - `decisions.jsonl`: structured decision records
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
+- `work-links.jsonl`: immutable joins from Jig plans to portable external-work
+  identities and their observed task snapshots
+- `tracker-operations.jsonl`: retry-stable facts about pending and completed
+  external-tracker operations
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
 validated whole-file rewrites: session compaction creates an exact recovery
@@ -130,6 +134,11 @@ as separate compressed cold streams under ignored
 `.agent/.cache/state-archives/`. Explicit receipt exports
 go only to the caller-selected path. None of these operations rewrite Git
 history.
+
+Work-link and tracker-operation journals are not maintenance rewrite targets.
+Their committed records are newline-terminated, and unknown versions are retained
+as raw history without acquiring mutation authority. Archive treats pending
+tracker operations as retention roots for their plans and referenced evidence.
 
 The current session pointer is cache state, not part of the durable JSONL record model.
 

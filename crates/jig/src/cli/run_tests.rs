@@ -519,16 +519,44 @@ fn capability_probe_can_use_launcher_contract_when_manifest_is_malformed() {
     })
     .unwrap();
 
+    for unsupported in [9, 10, crate::context::TRACKER_JOURNAL_CONTRACT_VERSION, 999] {
+        let error = run_runtime_compatible(RuntimeCompatibleOpts {
+            profile: RuntimeCompatibilityProfile::Runtime,
+            capability_only: true,
+            contract_version: Some(unsupported),
+            repo_root: temp.path().to_path_buf(),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains(&format!("Inactive Jig contract version {unsupported}")),
+            "{error}"
+        );
+        assert!(
+            error.contains("supports active versions 2 through 8"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn capability_probe_without_explicit_version_rejects_inactive_epoch() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(crate::context::TRACKER_JOURNAL_CONTRACT_VERSION)
+        .write();
+
     let error = run_runtime_compatible(RuntimeCompatibleOpts {
         profile: RuntimeCompatibilityProfile::Runtime,
         capability_only: true,
-        contract_version: Some(999),
+        contract_version: None,
         repo_root: temp.path().to_path_buf(),
     })
     .unwrap_err()
     .to_string();
+
     assert!(
-        error.contains("Unsupported Jig contract version 999"),
+        error.contains("Inactive Jig contract version 11"),
         "{error}"
     );
 }

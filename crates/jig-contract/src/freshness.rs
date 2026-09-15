@@ -25,12 +25,10 @@ pub const SOURCE_STATE_IDENTITY_CONTRACT_VERSION: u32 = 10;
 
 pub const fn supported_freshness_epoch(epoch: u32) -> bool {
     // v9 and v10 were never released. Keep their already-recorded local
-    // receipts readable after the 0.4.0 v8 consolidation; new repositories
-    // and receipts use v8 exclusively.
-    matches!(
-        epoch,
-        TARGET_FRESHNESS_CONTRACT_VERSION..=SOURCE_STATE_IDENTITY_CONTRACT_VERSION
-    )
+    // receipts readable after the 0.4.0 v8 consolidation. Repository contract
+    // v11 is reserved for tracker journals, and its receipts retain the v8
+    // freshness contract with source-state authority.
+    matches!(epoch, TARGET_FRESHNESS_CONTRACT_VERSION..=11)
 }
 
 pub const fn freshness_identity_includes_source_state(epoch: u32) -> bool {
@@ -41,6 +39,21 @@ pub const TARGET_IDENTITY_SCHEMA_VERSION: u32 = 1;
 pub const TARGET_IDENTITY_DOMAIN: &str = "jig-target-identity-v1";
 pub const MAX_FRESHNESS_REASON_PREVIEWS: usize = 100;
 pub const MAX_FRESHNESS_DIAGNOSTIC_BYTES: usize = 4_000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracker_journal_repository_receipts_retain_supported_freshness_authority() {
+        for epoch in 8..=11 {
+            assert!(supported_freshness_epoch(epoch));
+        }
+        assert!(!supported_freshness_epoch(7));
+        assert!(!supported_freshness_epoch(12));
+        assert!(freshness_identity_includes_source_state(11));
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

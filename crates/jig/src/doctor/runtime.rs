@@ -119,7 +119,7 @@ impl<'a> RuntimeFacts<'a> {
             RuntimeDiagnosis::ContractUnreadable
         } else if let Some(version) = self
             .contract_version
-            .filter(|version| !crate::context::is_supported_contract_version(*version))
+            .filter(|version| !crate::context::is_active_contract_version(*version))
         {
             RuntimeDiagnosis::UnsupportedContract(version)
         } else if !self.launcher.contract_probe {

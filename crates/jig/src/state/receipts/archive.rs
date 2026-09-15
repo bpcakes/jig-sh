@@ -24,6 +24,9 @@ use super::super::jsonl::{
 use super::super::maintenance::create_receipts_backup;
 use super::super::records::{PlanEvent, ReceiptRecord};
 use super::super::support::ensure_state_layout;
+use super::super::tracker_operations::PendingTrackerRetentionRoots;
+#[cfg(test)]
+use super::super::tracker_operations::with_tracker_operations_coordination_lock;
 use super::{
     IndexedTargetReceipts, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, parse_raw_receipt,
     receipt_arg_strings, receipt_args_has_receipt_ids, target_receipt_status,
@@ -36,11 +39,23 @@ pub(crate) struct StateArchiveRequest {
     pub(crate) dry_run: bool,
 }
 
+#[cfg(test)]
 pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) -> Result<Value> {
+    with_tracker_operations_coordination_lock(ctx, |roots| {
+        receipts_archive_with_retention_roots(ctx, request, roots)
+    })
+}
+
+pub(crate) fn receipts_archive_with_retention_roots(
+    ctx: &RepoContext,
+    request: StateArchiveRequest,
+    tracker_roots: &PendingTrackerRetentionRoots,
+) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let before_ms = parse_archive_before_ms(&request.before)?;
-    let open_plan_ids =
+    let mut protected_plan_ids =
         current_open_plan_ids(&read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?);
+    protected_plan_ids.extend(tracker_roots.plan_ids.iter().cloned());
     let configured_evidence = configured_gate_evidence_keys(ctx)?;
     let receipts_path = ctx.state_file("receipts.jsonl");
     let source_path = receipts_path
@@ -51,45 +66,18 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
     let mut recovery_hint = None;
     let mut archive_hint = None;
     let result = with_jsonl_write_lock(&receipts_path, |guard| {
-        let mut protection_index =
-            ReceiptProtectionIndex::with_evidence(&open_plan_ids, &configured_evidence.targets);
-        let protection_scan = scan_jsonl_raw_locked(guard, &receipts_path, &|| false, |record| {
-            let receipt = parse_raw_receipt(record, &receipts_path)?;
-            protection_index.observe(
-                &receipt,
-                &open_plan_ids,
-                &configured_evidence.check_tools,
-                &configured_evidence.check_gate_ids,
-                &configured_evidence.review_gate_ids,
-            );
-            Ok(())
-        })?;
-        if protection_scan.unterminated_final_record {
-            bail!(
-                "Refusing to archive {} because its final JSONL record is not newline-terminated",
-                receipts_path.display()
-            );
-        }
-        let mut protected = protection_index.protected_receipt_ids()?;
-        if ctx.contract_version() >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
-            || protection_index.target_evidence.values().any(|receipts| {
-                receipts
-                    .selected()
-                    .values()
-                    .any(|receipt| receipt.target_freshness.is_some())
-            })
-        {
-            dependency_protection::protect_dependencies(
-                guard,
-                &receipts_path,
-                protection_index
-                    .target_evidence
-                    .values()
-                    .flat_map(|receipts| receipts.selected().values().cloned()),
-                &mut protected,
-                protection_index.now_ms,
-            )?;
-        }
+        let mut protected = plan_receipt_dependency_closure(
+            ctx.contract_version(),
+            guard,
+            &receipts_path,
+            &protected_plan_ids,
+            &configured_evidence,
+        )?;
+        protected.extend(tracker_receipt_dependency_closure(
+            guard,
+            &receipts_path,
+            &tracker_roots.receipt_ids,
+        )?);
         let mut receipt_count_before = 0usize;
         let mut receipts_archived = 0usize;
         let mut protected_retained = 0usize;
@@ -171,6 +159,8 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
             "receipts_archived": receipts_archived,
             "receipts_retained": receipts_retained,
             "protected_receipts_retained": protected_retained,
+            "tracker_pending_plan_roots": tracker_roots.plan_ids.len(),
+            "tracker_pending_receipt_roots": tracker_roots.receipt_ids.len(),
             "uncompressed_bytes": artifact.as_ref().map(|artifact| artifact.uncompressed_bytes),
             "compressed_bytes": artifact.as_ref().map(|artifact| artifact.compressed_bytes),
             "sha256": artifact.as_ref().map(|artifact| artifact.sha256.as_str()),
@@ -468,67 +458,6 @@ pub(super) fn sha256_reader(mut reader: impl Read) -> Result<String> {
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
-fn current_open_plan_ids(events: &[PlanEvent]) -> BTreeSet<String> {
-    let mut open = BTreeMap::<String, bool>::new();
-    for event in events {
-        match event {
-            PlanEvent::Open { plan_id, .. } => {
-                open.insert(plan_id.clone(), true);
-            }
-            PlanEvent::Close { plan_id, .. } => {
-                open.insert(plan_id.clone(), false);
-            }
-            PlanEvent::Append { .. } | PlanEvent::Unknown { .. } => {}
-        }
-    }
-    open.into_iter()
-        .filter_map(|(plan_id, is_open)| is_open.then_some(plan_id))
-        .collect()
-}
-
-struct ConfiguredGateEvidence {
-    check_tools: BTreeSet<String>,
-    check_gate_ids: BTreeSet<String>,
-    review_gate_ids: BTreeSet<String>,
-    targets: BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
-}
-
-fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvidence> {
-    let mut configured = ConfiguredGateEvidence {
-        check_tools: BTreeSet::new(),
-        check_gate_ids: BTreeSet::new(),
-        review_gate_ids: BTreeSet::new(),
-        targets: BTreeMap::new(),
-    };
-    let gates = ctx.work_gates();
-    let repository = gates
-        .iter()
-        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
-        .then(|| RepositoryCatalog::from_context(ctx))
-        .transpose()?;
-    for gate in gates {
-        match gate {
-            WorkGate::Check(gate) => {
-                configured.check_gate_ids.insert(gate.id);
-                configured.check_tools.insert(gate.tool);
-            }
-            WorkGate::CodexReview(gate) => {
-                configured.review_gate_ids.insert(gate.id);
-            }
-            WorkGate::Evidence(gate) => {
-                let catalog = repository
-                    .as_ref()
-                    .expect("evidence gates initialize the repository catalog");
-                configured
-                    .targets
-                    .insert(gate.id, resolve_evidence_targets(catalog, &gate.selector)?);
-            }
-            WorkGate::Unsupported(_) => {}
-        }
-    }
-    Ok(configured)
-}
-
 #[derive(Clone, Debug)]
 struct LatestReceipt {
     id: String,
@@ -741,6 +670,38 @@ impl ReceiptProtectionIndex {
 
 include!("archive/protection.rs");
 mod dependency_protection;
+
+pub(in crate::state) fn tracker_receipt_dependency_closure(
+    guard: &JsonlWriteGuard,
+    path: &Path,
+    roots: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let mut protected = BTreeSet::new();
+    dependency_protection::protect_receipt_ids(guard, path, roots, &mut protected)?;
+    Ok(protected)
+}
+
+pub(in crate::state) fn tracker_protected_receipt_ids(
+    ctx: &RepoContext,
+    guard: &JsonlWriteGuard,
+    path: &Path,
+    roots: &PendingTrackerRetentionRoots,
+) -> Result<BTreeSet<String>> {
+    let configured_evidence = configured_gate_evidence_keys(ctx)?;
+    let mut protected = plan_receipt_dependency_closure(
+        ctx.contract_version(),
+        guard,
+        path,
+        &roots.plan_ids,
+        &configured_evidence,
+    )?;
+    protected.extend(tracker_receipt_dependency_closure(
+        guard,
+        path,
+        &roots.receipt_ids,
+    )?);
+    Ok(protected)
+}
 
 pub(in crate::state) fn parse_archive_before_ms(value: &str) -> Result<u64> {
     let value = value.trim();

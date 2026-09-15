@@ -497,6 +497,16 @@ struct RuntimeCompatibilityRequest<'a> {
 }
 
 impl RuntimeCompatibilityRequest<'_> {
+    fn validate_active_contract_version(self, contract_version: u32) -> Result<()> {
+        if !crate::context::is_active_contract_version(contract_version) {
+            bail!(
+                "Inactive Jig contract version {contract_version}; this runtime cache supports active versions {}",
+                crate::context::active_contract_versions_label()
+            );
+        }
+        Ok(())
+    }
+
     fn canonical_repo_root(self) -> Result<std::path::PathBuf> {
         let repo_root = std::fs::canonicalize(self.repo_root).with_context(|| {
             format!(
@@ -504,14 +514,8 @@ impl RuntimeCompatibilityRequest<'_> {
                 self.repo_root.display()
             )
         })?;
-        if let Some(contract_version) = self.contract_version
-            && !crate::context::is_supported_contract_version(contract_version)
-        {
-            bail!(
-                "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
-                crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
-                crate::context::CURRENT_CONTRACT_VERSION
-            );
+        if let Some(contract_version) = self.contract_version {
+            self.validate_active_contract_version(contract_version)?;
         }
         Ok(repo_root)
     }
@@ -564,7 +568,8 @@ fn validate_capability_runtime_compatibility(
         // Keep direct/manual uses of the private probe useful. Generated
         // launchers and installers pass their rendered epoch explicitly so
         // repair paths do not depend on a readable manifest.
-        RepoContext::supported_contract_version_from_root(&repo_root)?;
+        let contract_version = RepoContext::supported_contract_version_from_root(&repo_root)?;
+        request.validate_active_contract_version(contract_version)?;
     }
     request.validate_profile()
 }

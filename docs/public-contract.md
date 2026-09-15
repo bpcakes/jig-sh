@@ -466,8 +466,83 @@ Current JSONL state files:
 - `receipts.jsonl`
 - `decisions.jsonl`
 - `runs.jsonl`
+- `work-links.jsonl`
+- `tracker-operations.jsonl`
 
 State readers should tolerate missing files by treating them as empty. JSONL readers should ignore blank lines and fail loudly on malformed nonblank records. Session-start records retain their durable write-time summary, but `summary.recent_sessions` contains shallow event references whose nested `summary` is `null`; historical records that recursively embedded older summaries remain readable. Canonical session readers collapse duplicate IDs with identical event envelopes, as can arise after a line-union merge, and reject the same ID with a conflicting envelope.
+
+`work-links.jsonl` is an additive, versioned join and does not change the legacy
+plan journal. A version-1 record names its event and plan, the `beads` provider,
+a portable tracker-workspace identity, canonical issue ID, exact repository-relative
+tracker root `.beads`, observation time, bounded title and acceptance snapshot,
+the snapshot's domain-separated deterministic digest, and whether the link was
+created at plan start or attached later. A plan has at most one distinct link.
+A retry naming the same portable issue is idempotent even when it carries a newly
+observed historical snapshot. Line-union records for that same plan/issue converge
+on the lowest event ID as the canonical immutable snapshot; a different issue or a
+repeated event ID with different semantic JSON is a conflict, never last-write-wins.
+Snapshot text is historical context rather than synchronized issue authority.
+Absolute tracker database and source paths are invalid durable fields.
+
+`tracker-operations.jsonl` is a versioned fact journal for recoverable external
+side effects. Version-1 records retain stable event and operation IDs, operation
+kind and phase, the immutable plan/issue identity, bounded retry correlation, and
+explicit receipt or run references. An acknowledgement carries an applied or
+no-effect outcome plus `resolves_event_ids`, the IDs of attempt, observation, or
+error facts whose uncertain effects it resolves. An operation is terminal only
+when compatible acknowledgements collectively resolve every such fact; an
+unresolved fact introduced by another line-union branch keeps the operation and
+its retention roots pending. One acknowledgement may resolve any bounded subset,
+so operations with more facts than one record can name converge through multiple
+compatible acknowledgements without weakening that terminal test. Identical event
+retries collapse; identity drift,
+illegal histories, unknown resolution targets, different terminal outcomes, and
+duplicate IDs with different semantic JSON conflict. Projection orders facts by
+their timestamp and event ID rather than physical line position, so a line-union
+merge can interleave valid branch-local facts without changing the result.
+Sequential writers still validate their next phase against the physical append
+tail held under the writer lock; timestamp and event-ID sorting is only the
+deterministic read projection. Later lifecycle commands append operation-specific
+facts; the journal does not itself invoke or embed Beads.
+
+For both journals, a record is committed only when its physical JSONL line ends in
+a newline. Every append syncs both file data and the containing directory entry
+before returning, so first creation and retries both confirm the journal's durable
+name before external effects begin. A malformed or unterminated record
+blocks further authoritative writes.
+An exact retry of a visible tracker record re-syncs both boundaries before it
+reports success, covering a prior append whose sync result was ambiguous. Readers
+enforce the 512-KiB work-link and 64-KiB tracker-operation per-record ceilings while
+streaming and discard excess line bytes with bounded memory before failing closed.
+Generic shallow and deep state diagnosis uses those same ceilings before semantic
+inspection; an oversized journal record is corrupt authority rather than an
+unreadable-file diagnostic.
+Unknown schema, provider, kind, or phase remains inspectable raw history but cannot
+authorize tracker mutation. A damaged link does not hide unrelated standalone Jig
+plans. Maintenance does not compact, archive, or restore either journal and must
+preserve unknown bytes. Pending operation histories protect their plan and explicit
+receipt/run references from normal state archive; ambiguous operation authority
+causes destructive maintenance to fail before a backup or rewrite. A changing
+receipt or run restore is permitted only when its validated backup contains every
+currently protected record byte-for-byte, including all events for a protected run;
+an identical-checksum no-op does not require tracker authority because it replaces
+nothing. With no relevant pending roots, damaged current receipt or run state remains
+recoverable from a valid backup. When relevant roots do exist, a damaged current
+stream blocks a changing restore because Jig cannot prove that the backup preserves
+the protected evidence. An explicit
+receipt or run root that is absent from the active journal has no active bytes to
+protect and does not prevent other records from being archived. Explicit tracker
+receipt roots retain their complete dependency proof even after its freshness window
+expires: this preservation is historical recovery evidence, not a freshness grant.
+
+Repository contract epoch 11 owns these journal writers. The runtime may understand
+that capability while generated repositories remain at current epoch 8 until the
+tracker configuration and lifecycle cutover is complete. Repository epochs 9 and
+10 remain reserved historical receipt-freshness semantics and are not valid manifest
+epochs. A repository below epoch 11 can read absent or existing journal state but
+cannot append tracker authority. Until epoch 11 becomes the generated current epoch,
+the launcher capability probe does not advertise it as cache-compatible; this keeps
+an epoch-8 runtime from being reused after the later configuration cutover.
 
 Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, normalized `findings`, complete `finding_count`/`findings_truncated`/`findings_digest` metadata, `evaluated_at_ms`, and `valid_until_ms`; older records deserialize with those fields absent. A validity boundary is fresh only while `now_ms < valid_until_ms`, so equality is expired. That boundary is enforced, not merely displayed, by direct target status, work-check batch and scoped evidence, reusable and latest evidence, and archive protection. Historical receipts without the field retain their prior semantics, except new file-budget evidence proving active waivers without a required boundary is unknown rather than indefinitely fresh. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Configured-command timeout, await, cleanup, and capture failures use `evidence.kind = "supervised_command"`, `status = "error"`, and retain the diagnostic in the failed stderr preview. Cancellation after spawn uses the same evidence kind with `status = "cancelled"`; cancellation before spawn records no child receipt, and a work-check batch references only children that actually started. Older receipts without the new evidence or path-summary fields remain readable. A Codex worker receipt uses its separately bounded last-message file as authoritative `stdout_preview`; provider stdout is diagnostic transcript data in additive `evidence.provider_stdout_preview`. `provider_stdout_preview_truncated` reports bounding of that evidence preview, and `provider_stdout_truncated` reports truncation by the process supervisor. The legacy additive `stdout_truncated` evidence field remains an alias for provider-transcript truncation, while `stderr_truncated` continues to describe provider stderr. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
 

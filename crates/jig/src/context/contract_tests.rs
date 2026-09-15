@@ -3,7 +3,125 @@ use std::path::Path;
 use serde_json::json;
 use tempfile::tempdir;
 
+use super::runtime::{
+    MIN_SUPPORTED_CONTRACT_VERSION, active_contract_versions_label_at,
+    is_active_contract_version_at, supported_contract_versions_label,
+};
 use super::*;
+
+fn write_native_contract_fixture(root: &Path, contract_version: u32) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "repo"
+root = "."
+adapters = ["jig"]
+
+[[repository.actions]]
+target = { component = "repo", action = "contract" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "native", operation = "jig.contract_check" }
+
+[[repository.profiles]]
+id = "verify"
+targets = [{ component = "repo", action = "contract" }]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": contract_version,
+            "tool_namespace": "jig",
+            "required_commands": [],
+            "tools": [],
+            "components": [{"id": "repo", "root": ".", "adapters": ["jig"]}],
+            "actions": [{
+                "target": {"component": "repo", "action": "contract"},
+                "intent": "check",
+                "effects": ["read_only", "process"],
+                "runner": {"kind": "native", "operation": "jig.contract_check"}
+            }],
+            "profiles": [{
+                "id": "verify",
+                "targets": [{"component": "repo", "action": "contract"}]
+            }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn tracker_journal_epoch_is_supported_without_activating_or_reusing_reserved_epochs() {
+    assert_eq!(CURRENT_CONTRACT_VERSION, 8);
+    assert_eq!(TRACKER_JOURNAL_CONTRACT_VERSION, 11);
+    assert_eq!(MAX_SUPPORTED_CONTRACT_VERSION, 11);
+
+    for version in MIN_SUPPORTED_CONTRACT_VERSION..=CURRENT_CONTRACT_VERSION {
+        assert!(is_supported_contract_version(version));
+        assert!(!supports_tracker_journals(version));
+    }
+    for version in [9, 10] {
+        assert!(!is_supported_contract_version(version));
+        assert!(!supports_tracker_journals(version));
+    }
+    assert!(is_supported_contract_version(
+        TRACKER_JOURNAL_CONTRACT_VERSION
+    ));
+    assert!(!is_active_contract_version(
+        TRACKER_JOURNAL_CONTRACT_VERSION
+    ));
+    assert!(supports_tracker_journals(TRACKER_JOURNAL_CONTRACT_VERSION));
+    assert_eq!(supported_contract_versions_label(), "2 through 8 and 11");
+    assert_eq!(active_contract_versions_label(), "2 through 8");
+
+    assert!(is_active_contract_version_at(
+        TRACKER_JOURNAL_CONTRACT_VERSION,
+        TRACKER_JOURNAL_CONTRACT_VERSION
+    ));
+    for version in [9, 10] {
+        assert!(!is_active_contract_version_at(
+            version,
+            TRACKER_JOURNAL_CONTRACT_VERSION
+        ));
+    }
+    assert_eq!(
+        active_contract_versions_label_at(TRACKER_JOURNAL_CONTRACT_VERSION),
+        "2 through 8 and 11"
+    );
+}
+
+#[test]
+fn repository_loading_accepts_tracker_journal_epoch_and_rejects_reserved_epochs() {
+    let supported = tempdir().unwrap();
+    write_native_contract_fixture(supported.path(), TRACKER_JOURNAL_CONTRACT_VERSION);
+    let context = RepoContext::load_from_root(supported.path().to_path_buf()).unwrap();
+    assert_eq!(context.contract_version(), TRACKER_JOURNAL_CONTRACT_VERSION);
+
+    for reserved in [9, 10] {
+        let rejected = tempdir().unwrap();
+        write_native_contract_fixture(rejected.path(), reserved);
+        let error = RepoContext::load_from_root(rejected.path().to_path_buf())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            format!("Unsupported jig contract version: {reserved}")
+        );
+    }
+}
 
 #[test]
 fn legacy_contract_versions_two_through_five_remain_supported() {

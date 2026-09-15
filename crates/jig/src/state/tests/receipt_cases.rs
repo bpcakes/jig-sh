@@ -1,5 +1,7 @@
 use super::*;
 
+mod tracker_operations;
+
 #[test]
 fn receipts_list_is_read_only() {
     let temp = tempdir().unwrap();

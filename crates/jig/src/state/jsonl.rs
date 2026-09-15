@@ -27,6 +27,7 @@ pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
 thread_local! {
     static DASHBOARD_SCAN_COUNTS: std::cell::RefCell<std::collections::BTreeMap<PathBuf, usize>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    static PARENT_DIRECTORY_SYNC_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -37,6 +38,16 @@ pub(crate) fn reset_dashboard_scan_counts() {
 #[cfg(test)]
 pub(crate) fn dashboard_scan_count(path: &Path) -> usize {
     DASHBOARD_SCAN_COUNTS.with(|counts| counts.borrow().get(path).copied().unwrap_or(0))
+}
+
+#[cfg(test)]
+pub(crate) fn reset_parent_directory_sync_count() {
+    PARENT_DIRECTORY_SYNC_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn parent_directory_sync_count() -> usize {
+    PARENT_DIRECTORY_SYNC_COUNT.with(std::cell::Cell::get)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -132,21 +143,12 @@ pub(super) fn append_jsonl_with_end_offset<T: Serialize>(path: &Path, value: &T)
     with_jsonl_write_lock(path, |guard| append_jsonl_locked(guard, path, value))
 }
 
-pub(super) fn append_jsonl_locked<T: Serialize>(
-    _guard: &JsonlWriteGuard,
-    path: &Path,
-    value: &T,
-) -> Result<u64> {
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .with_context(|| format!("Failed to open {}", path.display()))?;
-    serde_json::to_writer(&mut file, value)?;
-    file.write_all(b"\n")?;
-    file.sync_data()?;
-    Ok(file.metadata()?.len())
-}
+mod durable_append;
+#[cfg(test)]
+pub(crate) use durable_append::{DurableAppendFailurePoint, fail_next_durable_append_at};
+pub(super) use durable_append::{
+    append_jsonl_durable_locked, append_jsonl_locked, confirm_jsonl_durable_locked,
+};
 
 pub(super) struct JsonlWriteGuard {
     lock_file: File,
@@ -315,6 +317,8 @@ fn validate_replacement_record(bytes: &[u8], line_number: u64, path: &Path) -> R
 }
 
 fn sync_parent_directory(parent: &Path) -> Result<()> {
+    #[cfg(test)]
+    PARENT_DIRECTORY_SYNC_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     #[cfg(unix)]
     {
         File::open(parent)
@@ -495,6 +499,15 @@ pub(super) fn scan_jsonl_raw(
     visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
 ) -> Result<JsonlScanStats> {
     scan_jsonl_raw_with_limit(path, cancelled, None, visitor)
+}
+
+pub(super) fn scan_jsonl_raw_bounded(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    max_record_bytes: usize,
+    visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+) -> Result<JsonlScanStats> {
+    scan_jsonl_raw_with_limit(path, cancelled, Some(max_record_bytes), visitor)
 }
 
 pub(crate) fn scan_dashboard_jsonl_raw(
@@ -682,6 +695,26 @@ pub(super) fn scan_jsonl_raw_locked(
         }
     };
     scan_jsonl_file(&file, path, cancelled, &mut visitor)
+}
+
+pub(super) fn scan_jsonl_raw_locked_bounded(
+    _guard: &JsonlWriteGuard,
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+    max_record_bytes: usize,
+    mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+) -> Result<JsonlScanStats> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(JsonlScanStats::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to open {} for locked scan", path.display()));
+        }
+    };
+    scan_jsonl_file_with_limit(&file, path, cancelled, Some(max_record_bytes), &mut visitor)
 }
 
 mod read_access;

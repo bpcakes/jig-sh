@@ -576,33 +576,35 @@ fn damaged_contract_manifest_recommends_full_update_not_launcher_repair() {
 }
 
 #[test]
-fn unsupported_newer_contract_does_not_recommend_downgrade_repair() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(
-        temp.path().join("scripts/jig"),
-        generated_launcher_with_contract(99),
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join("scripts/install-jig.sh"),
-        CURRENT_GENERATED_INSTALLER,
-    )
-    .unwrap();
+fn inactive_or_newer_contract_does_not_recommend_downgrade_repair() {
+    for version in [crate::context::TRACKER_JOURNAL_CONTRACT_VERSION, 99] {
+        let temp = tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("scripts")).unwrap();
+        fs::write(
+            temp.path().join("scripts/jig"),
+            generated_launcher_with_contract(version),
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("scripts/install-jig.sh"),
+            CURRENT_GENERATED_INSTALLER,
+        )
+        .unwrap();
 
-    let output = runtime_check(temp.path(), Some(99), None, true);
+        let output = runtime_check(temp.path(), Some(version), None, true);
 
-    assert!(!output.ok);
-    assert_eq!(output.status, "unsupported");
-    assert!(
-        output
-            .detail
-            .contains("does not support repository contract 99")
-    );
-    assert_eq!(output.data["launcher_contract_version"], 99);
-    let fix = output.fix.as_deref().unwrap();
-    assert!(fix.contains("does not support"));
-    assert!(fix.contains("newer compatible Jig"));
-    assert!(!fix.contains(" update "));
-    assert!(!fix.contains(" adopt "));
+        assert!(!output.ok);
+        assert_eq!(output.status, "unsupported");
+        assert!(
+            output
+                .detail
+                .contains(&format!("does not support repository contract {version}"))
+        );
+        assert_eq!(output.data["launcher_contract_version"], version);
+        let fix = output.fix.as_deref().unwrap();
+        assert!(fix.contains("does not support"));
+        assert!(fix.contains("newer compatible Jig"));
+        assert!(!fix.contains(" update "));
+        assert!(!fix.contains(" adopt "));
+    }
 }
