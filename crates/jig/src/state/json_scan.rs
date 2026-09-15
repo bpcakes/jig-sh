@@ -1,4 +1,11 @@
+use std::ops::Range;
+
 use anyhow::{Result, anyhow, bail};
+
+pub(super) fn first_non_whitespace(input: &[u8], range: &Range<usize>) -> Option<u8> {
+    let cursor = skip_whitespace(input, range.start, range.end);
+    input.get(cursor).copied()
+}
 
 pub(super) fn skip_json_value(input: &[u8], start: usize, end: usize) -> Result<usize> {
     let start = skip_whitespace(input, start, end);
@@ -85,7 +92,13 @@ pub(super) fn skip_whitespace(input: &[u8], mut cursor: usize, end: usize) -> us
 
 #[cfg(test)]
 mod tests {
-    use super::skip_json_value;
+    use super::{first_non_whitespace, skip_json_value};
+
+    #[test]
+    fn locates_first_non_whitespace_from_a_range() {
+        assert_eq!(first_non_whitespace(b"x  [ ]", &(1..6)), Some(b'['));
+        assert_eq!(first_non_whitespace(b"  ", &(0..2)), None);
+    }
 
     #[test]
     fn locates_nested_value_with_strings_and_escapes() {

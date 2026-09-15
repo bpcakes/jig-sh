@@ -4,12 +4,6 @@ use std::fs;
 #[cfg(test)]
 use std::fs::File;
 use std::path::Path;
-use std::sync::mpsc::{self, Sender};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
@@ -20,7 +14,7 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::renewal::{renewal_interval, run_with_wait};
+use super::renewal::{RenewalWorker, renewal_interval};
 use super::workflow::ResolvedWorkflow;
 
 mod bounded_json;
@@ -203,9 +197,7 @@ pub(super) struct LeaseGuard {
     store: LeaseStore,
     key: String,
     owner: String,
-    stop: Option<Sender<()>>,
-    renewal: Option<JoinHandle<Result<()>>>,
-    renewal_failed: Arc<AtomicBool>,
+    renewal: RenewalWorker,
     ttl_seconds: u64,
     release_pending: bool,
 }
@@ -244,29 +236,22 @@ impl LeaseGuard {
         ttl_seconds: u64,
         interval: Duration,
     ) -> Result<Self> {
-        let (stop, receiver) = mpsc::channel();
         let mut renewal_store = store.clone();
         let renewal_key = key.to_string();
         let renewal_owner = lease.owner.clone();
-        let renewal_failed = Arc::new(AtomicBool::new(false));
-        let renewal_failed_in_thread = Arc::clone(&renewal_failed);
         let lease_expires_at_ms = lease.expires_at_ms;
-        let renewal = thread::Builder::new()
-            .name(format!("jig-loop-lease-{}", lease.owner))
-            .spawn(move || {
-                run_with_wait(
-                    interval,
-                    lease_expires_at_ms,
-                    &renewal_failed_in_thread,
-                    |deadline| {
-                        renewal_store
-                            .renew_for_guard(&renewal_key, &renewal_owner, ttl_seconds, deadline)
-                            .map(|lease| lease.expires_at_ms)
-                    },
-                    now_ms,
-                    |wait| receiver.recv_timeout(wait),
-                )
-            });
+        let renewal = RenewalWorker::spawn(
+            format!("jig-loop-lease-{}", lease.owner),
+            "Loop lease renewal thread panicked",
+            interval,
+            lease_expires_at_ms,
+            move |deadline| {
+                renewal_store
+                    .renew_for_guard(&renewal_key, &renewal_owner, ttl_seconds, deadline)
+                    .map(|lease| lease.expires_at_ms)
+            },
+            now_ms,
+        );
         let renewal = match renewal {
             Ok(renewal) => renewal,
             Err(error) => {
@@ -285,16 +270,14 @@ impl LeaseGuard {
             store,
             key: key.to_string(),
             owner: lease.owner.clone(),
-            stop: Some(stop),
-            renewal: Some(renewal),
-            renewal_failed,
+            renewal,
             ttl_seconds,
             release_pending: true,
         })
     }
 
     pub(super) fn renewal_failed(&self) -> bool {
-        self.renewal_failed.load(Ordering::Acquire)
+        self.renewal.failed()
     }
 
     pub(super) fn refresh(&mut self) -> Result<()> {
@@ -308,18 +291,7 @@ impl LeaseGuard {
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        let renewal_result = self
-            .renewal
-            .take()
-            .map(|renewal| {
-                renewal
-                    .join()
-                    .map_err(|_| anyhow!("Loop lease renewal thread panicked"))?
-            })
-            .transpose();
+        let renewal_result = self.renewal.shutdown();
         let release_result = if self.release_pending {
             let result = self.store.release(&self.key, &self.owner);
             if result.is_ok() {

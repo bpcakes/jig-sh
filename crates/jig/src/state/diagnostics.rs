@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
 
-use super::json_scan::{skip_json_string, skip_json_value, skip_whitespace};
+use super::json_scan::{first_non_whitespace, skip_json_string, skip_json_value, skip_whitespace};
 use super::jsonl::scan_jsonl_raw;
 
 const STATE_STREAMS: [(&str, &str); 5] = [
@@ -272,16 +272,15 @@ fn analyze_session_record(record: &[u8]) -> Result<SessionRecordProjection> {
         ..SessionRecordProjection::default()
     };
     visit_object_members(record, 0..record.len(), &mut |key, value| {
-        if key != "summary" || first_non_whitespace(record, value.clone()) != Some(b'{') {
+        if key != "summary" || first_non_whitespace(record, &value) != Some(b'{') {
             return Ok(());
         }
         visit_object_members(record, value, &mut |key, value| {
-            if key != "recent_sessions" || first_non_whitespace(record, value.clone()) != Some(b'[')
-            {
+            if key != "recent_sessions" || first_non_whitespace(record, &value) != Some(b'[') {
                 return Ok(());
             }
             visit_array_values(record, value, &mut |reference| {
-                if first_non_whitespace(record, reference.clone()) != Some(b'{') {
+                if first_non_whitespace(record, &reference) != Some(b'{') {
                     return Ok(());
                 }
                 visit_object_members(record, reference, &mut |key, nested_summary| {
@@ -426,11 +425,6 @@ fn visit_array_values(
             _ => bail!("Expected ',' or ']' at byte {cursor}"),
         }
     }
-}
-
-fn first_non_whitespace(input: &[u8], range: Range<usize>) -> Option<u8> {
-    let cursor = skip_whitespace(input, range.start, range.end);
-    input.get(cursor).copied()
 }
 
 #[derive(Debug, Default, serde::Serialize)]
