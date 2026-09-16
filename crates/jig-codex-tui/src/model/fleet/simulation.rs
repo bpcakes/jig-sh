@@ -12,9 +12,14 @@
 use std::collections::BTreeMap;
 
 use super::{DEPLETED_PERCENT, FULL_QUOTA_PERCENT, FleetAccount, WORK_BUDGET, WindowRole};
+use crate::usage::remaining_percent;
 
 /// Timeline resolution below which two events are treated as simultaneous.
 const TIME_EPSILON: f64 = 1e-6;
+
+/// Upper bound on the events needed to carry one account's sample to the forecast origin.
+/// That interval is a fraction of a single inspection pass in practice.
+const ALIGNMENT_EVENT_BUDGET: usize = 512;
 
 pub(super) enum SimulationOutcome {
     NoGap {
@@ -25,6 +30,7 @@ pub(super) enum SimulationOutcome {
         recovers_at: Option<u64>,
         limiting: Vec<WindowRole>,
     },
+    AlignmentBudgetExceeded,
     BudgetExceeded,
 }
 
@@ -33,6 +39,7 @@ pub(super) struct Simulation {
     origin: u64,
     horizon: f64,
     recovery_limit: f64,
+    aligned: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -44,6 +51,9 @@ struct SimWindow {
     /// Fleet-wide consumption rate charged to this dimension while this account serves the
     /// whole estimated workload.
     demand: f64,
+    /// This account's own observed pace, used only to carry its sample to the forecast
+    /// origin. Zero for a window whose pace is not yet evidence.
+    self_rate: f64,
     /// Next modeled reset, as seconds after the forecast origin.
     resets_at: f64,
 }
@@ -60,30 +70,27 @@ impl Simulation {
                 *demand.entry(window.duration).or_default() += window.rate;
             }
         }
+        let mut aligned = true;
         let accounts = accounts
             .iter()
             .map(|account| {
-                account
+                let mut windows = account
                     .windows
                     .iter()
-                    .map(|window| {
-                        let (remaining, resets_at) = state_at_origin(
-                            window.used_percent,
-                            window.rate,
-                            window.duration,
-                            window.resets_at,
-                            account.observed_at,
-                            origin,
-                        );
-                        SimWindow {
-                            role: window.role,
-                            duration: window.duration as f64,
-                            remaining,
-                            demand: demand.get(&window.duration).copied().unwrap_or_default(),
-                            resets_at,
-                        }
+                    .map(|window| SimWindow {
+                        role: window.role,
+                        duration: window.duration as f64,
+                        remaining: remaining_percent(window.used_percent),
+                        demand: demand.get(&window.duration).copied().unwrap_or_default(),
+                        // A warming pace is not evidence, so it must not spend observed quota
+                        // on the way to the origin. It still counts toward fleet demand, which
+                        // conserves the estimated workload.
+                        self_rate: if window.warming { 0.0 } else { window.rate },
+                        resets_at: offset_from(window.resets_at, origin),
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                aligned &= align_to_origin(&mut windows, offset_from(account.observed_at, origin));
+                windows
             })
             .collect();
         let horizon = longest_window as f64;
@@ -92,10 +99,14 @@ impl Simulation {
             origin,
             horizon,
             recovery_limit: horizon * 2.0,
+            aligned,
         }
     }
 
     pub(super) fn run(mut self) -> SimulationOutcome {
+        if !self.aligned {
+            return SimulationOutcome::AlignmentBudgetExceeded;
+        }
         if !self.burn_observed() {
             return SimulationOutcome::NoGap {
                 burn_observed: false,
@@ -182,11 +193,7 @@ impl Simulation {
         self.accounts
             .iter()
             .enumerate()
-            .filter(|(_, windows)| {
-                windows
-                    .iter()
-                    .all(|window| window.remaining > DEPLETED_PERCENT)
-            })
+            .filter(|(_, windows)| usable(windows))
             .min_by(|(left_index, left), (right_index, right)| {
                 next_reset(left, elapsed)
                     .total_cmp(&next_reset(right, elapsed))
@@ -205,24 +212,12 @@ impl Simulation {
     }
 
     fn charge(&mut self, index: usize, step: f64) {
-        for window in &mut self.accounts[index] {
-            let remaining = window.remaining - window.demand * step;
-            window.remaining = if remaining > DEPLETED_PERCENT {
-                remaining.min(FULL_QUOTA_PERCENT)
-            } else {
-                0.0
-            };
-        }
+        charge(&mut self.accounts[index], step, |window| window.demand);
     }
 
-    /// Replaces each due window's allowance with a full quota. Unused quota is replaced,
-    /// never accumulated, and a reset never touches a sibling window.
     fn apply_resets(&mut self, elapsed: f64) {
-        for window in self.accounts.iter_mut().flatten() {
-            if window.resets_at <= elapsed {
-                window.remaining = FULL_QUOTA_PERCENT;
-                window.resets_at += window.duration;
-            }
+        for windows in &mut self.accounts {
+            apply_due_resets(windows, elapsed);
         }
     }
 
@@ -255,34 +250,76 @@ fn next_reset(windows: &[SimWindow], elapsed: f64) -> f64 {
         .unwrap_or(f64::INFINITY)
 }
 
-/// Projects one observed window forward to the common forecast origin.
+fn offset_from(instant: u64, origin: u64) -> f64 {
+    instant as f64 - origin as f64
+}
+
+/// Carries one account's sample forward from its own observation time to the forecast origin.
 ///
-/// Samples older than the origin are advanced by their own observed pace, and their own
-/// resets are applied on the way, so a fixed sample is never reinterpreted as a declining
-/// rate. Returns the remaining allowance and the next reset as seconds after the origin.
-fn state_at_origin(
-    used_percent: f64,
-    rate: f64,
-    duration: u64,
-    resets_at: u64,
-    observed_at: u64,
-    origin: u64,
-) -> (f64, f64) {
-    let (last_reset, allowance) = if resets_at <= origin {
-        let periods = (origin - resets_at) / duration;
-        (
-            resets_at.saturating_add(periods.saturating_mul(duration)),
-            FULL_QUOTA_PERCENT,
-        )
-    } else {
-        (observed_at, FULL_QUOTA_PERCENT - used_percent)
-    };
-    let remaining = (allowance - rate * origin.saturating_sub(last_reset) as f64)
-        .clamp(0.0, FULL_QUOTA_PERCENT);
-    let next_reset = if resets_at <= origin {
-        last_reset.saturating_add(duration)
-    } else {
-        resets_at
-    };
-    (remaining, next_reset.saturating_sub(origin) as f64)
+/// The account's windows advance together rather than independently, because an account
+/// cannot spend any window's allowance while another applicable window blocks work. That is
+/// the same all-windows constraint the main loop enforces, and skipping it here would let a
+/// blocked account's surviving allowance be consumed on paper and then delay its recovery.
+/// Resets still apply per window while the account is idle.
+///
+/// Returns false when the interval needs more events than its budget allows.
+fn align_to_origin(windows: &mut [SimWindow], observed_at: f64) -> bool {
+    let mut elapsed = observed_at;
+    for _ in 0..ALIGNMENT_EVENT_BUDGET {
+        apply_due_resets(windows, elapsed);
+        if elapsed >= 0.0 {
+            return true;
+        }
+        let mut target = next_reset(windows, elapsed).min(0.0);
+        if usable(windows) {
+            if let Some(depletion) = self_depletion(windows) {
+                let depleted_at = elapsed + depletion;
+                if depleted_at < target - TIME_EPSILON {
+                    target = depleted_at;
+                }
+            }
+            charge(windows, target - elapsed, |window| window.self_rate);
+        }
+        elapsed = target;
+    }
+    false
+}
+
+/// Whether an account can serve work: every reported window must have allowance left,
+/// because any served work counts against all of them.
+fn usable(windows: &[SimWindow]) -> bool {
+    windows
+        .iter()
+        .all(|window| window.remaining > DEPLETED_PERCENT)
+}
+
+/// Replaces each due window's allowance with a full quota. Unused quota is replaced, never
+/// accumulated, and a reset never touches a sibling window.
+fn apply_due_resets(windows: &mut [SimWindow], elapsed: f64) {
+    for window in windows {
+        if window.resets_at <= elapsed {
+            window.remaining = FULL_QUOTA_PERCENT;
+            window.resets_at += window.duration;
+        }
+    }
+}
+
+/// Seconds until this account exhausts its tightest window at its own observed pace.
+fn self_depletion(windows: &[SimWindow]) -> Option<f64> {
+    windows
+        .iter()
+        .filter(|window| window.self_rate > 0.0)
+        .map(|window| window.remaining / window.self_rate)
+        .min_by(f64::total_cmp)
+}
+
+fn charge(windows: &mut [SimWindow], step: f64, rate: impl Fn(&SimWindow) -> f64) {
+    for window in windows {
+        let remaining = window.remaining - rate(window) * step;
+        window.remaining = if remaining > DEPLETED_PERCENT {
+            remaining.min(FULL_QUOTA_PERCENT)
+        } else {
+            0.0
+        };
+    }
 }

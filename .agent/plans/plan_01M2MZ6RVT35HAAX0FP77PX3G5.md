@@ -78,6 +78,19 @@ relocation, then the feature.
     exhausted five-hour window and a warming weekly window reported `collecting pace evidence`
     instead of blocked, even though present unavailability and the reset that ends it are both
     independent of the pace estimate.
+12. Re-review found that the first attempt at discovery 11 was incomplete because origin
+    alignment was itself rate-based. `state_at_origin` subtracted `rate × interval` per window,
+    so a warming rate could erase an observed remainder and manufacture a blocked pool. A
+    scratch experiment confirmed it: a sample reporting 10% left with 60 s elapsed, aligned
+    across 60 s at 1.5 points/second, reported `BlockedNow` where `Collecting` was correct. The
+    claim that blocking followed from observed quota only held when every sample shared the
+    origin.
+13. Re-review found that alignment advanced each window independently, so it spent an
+    account's surviving allowance while an exhausted sibling made that account unable to serve
+    any work. The main loop enforces the all-windows constraint; its initialization did not.
+    Confirmed by experiment: an account with 1% short-window quota and an exhausted weekly
+    window had that 1% consumed across a 30 s interval, moving modeled recovery from the weekly
+    reset at 300 s out to the short-window reset at 16,170 s.
 
 ## Decision Log
 
@@ -130,6 +143,18 @@ Decisions below were made on September 16, 2026. None are superseded.
   Rationale: Per discovery 11, exhausted quota is observed, and gap recovery consumes nothing,
   so neither result depends on the warming estimate. The detail pane still states that pace
   evidence is collecting.
+- Decision: Give a warming window no consumption during origin alignment, while still pooling
+  its rate into fleet demand.
+  Rationale: Per discovery 12, the two uses differ. Spending observed quota with an untrusted
+  pace lets warmup manufacture exhaustion, whereas dropping the rate from demand would lose
+  workload. Blocking may still follow from a trusted rate's extrapolation, which is the same
+  inference the main loop already makes.
+- Decision: Align an account's windows together under the all-windows usability constraint,
+  applying resets per window while the account is idle.
+  Rationale: Per discovery 13, independent per-window advancement contradicted the constraint
+  the main loop enforces and stranded a blocked account's surviving allowance. Alignment is a
+  bounded per-account event loop, and exceeding its budget reports the existing forecast-budget
+  outcome rather than a silent partial result.
 
 ## Outcomes & Retrospective
 
@@ -147,7 +172,7 @@ Delivered against the acceptance criteria:
 - Presentation uses the header's previously unused second row, so the supported 46x12
   minimum and the wide and stacked layouts are unchanged.
 
-Verification evidence: 122 `jig-codex-tui` tests pass, including analytically checked cases
+Verification evidence: 125 `jig-codex-tui` tests pass, including analytically checked cases
 for pooled demand, staggered resets, allowance replacement, complementary cross-window
 exhaustion, depletion exactly at a restoring reset, row-order invariance, and retained
 demand from an exhausted account. All five required gates passed under this plan, with
@@ -155,10 +180,17 @@ demand from an exhausted account. All five required gates passed under this plan
 horizon of five-hour resets in roughly 10 ms in a debug build.
 
 Review of the pull request found three input-classification and outcome-selection defects,
-recorded as discoveries 9 through 11 and fixed with six regressions. Each regression was
-confirmed to fail against the pre-fix code before the fix was restored, so none is a
-tautology. The allocation policy, consumption estimator, and periodic-reset model were not
-changed; the review agreed those are disclosed modeling assumptions rather than defects.
+recorded as discoveries 9 through 11 and fixed with six regressions. Re-review then found two
+origin-alignment defects, recorded as discoveries 12 and 13, both reachable only when accounts
+have different observation times. Those are fixed with two further regressions plus one forward
+guard that a blocked account keeps contributing demand; the guard passes against the pre-fix
+code by design, while all other added regressions were confirmed to fail against it before the
+fix was restored. The allocation policy, consumption estimator, and periodic-reset model were
+not changed; both reviews agreed those are disclosed modeling assumptions rather than defects.
+
+Lesson: an invariant the main loop enforces must also hold in the state its initialization
+builds. Discoveries 12 and 13 were both cases where alignment quietly used a weaker model than
+the simulation it fed, and no single-observation-time test could reach them.
 
 Remaining gaps, stated rather than closed:
 

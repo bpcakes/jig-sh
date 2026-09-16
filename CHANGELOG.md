@@ -19,7 +19,12 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   as unreported, homes that disagree about one shared account at the same
   observation second withhold that pool instead of letting discovery order decide,
   and a window inside its warmup withholds a consumption forecast without hiding an
-  already exhausted window. Existing per-account usage, projections, and
+  already exhausted window. Samples observed at different times are carried forward
+  to the newest one with each account's windows advancing together, so a warming pace
+  cannot extrapolate an account into exhaustion and a blocked account does not spend
+  allowances it could not have used, while its estimated pace still counts toward
+  fleet demand. Alignment-budget exhaustion is reported separately from exhausting the
+  forecast horizon's work budget. Existing per-account usage, projections, and
   recommendations are unchanged, and Claude and configuration pickers gain nothing.
 
 - Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
