@@ -26,8 +26,9 @@ use super::tracker_identity::{
 const SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"jig-work-link-snapshot-v1\0";
 const MAX_EVENT_ID_BYTES: usize = 128;
 const MAX_TITLE_BYTES: usize = 16 * 1024;
-const MAX_ACCEPTANCE_CONTEXT_BYTES: usize = 256 * 1024;
-pub(crate) const MAX_WORK_LINK_RECORD_BYTES: usize = 512 * 1024;
+const MAX_DESCRIPTION_BYTES: usize = 256 * 1024;
+const MAX_ACCEPTANCE_CRITERIA_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_WORK_LINK_RECORD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_JOURNAL_DIAGNOSTIC_SAMPLES: usize = 20;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -74,7 +75,8 @@ impl WorkLinkIssueV1 {
 pub(crate) struct WorkLinkSnapshotV1 {
     pub(crate) observed_at_ms: u64,
     pub(crate) title: String,
-    pub(crate) acceptance_context: String,
+    pub(crate) description: String,
+    pub(crate) acceptance_criteria: String,
     pub(crate) context_digest: String,
 }
 
@@ -82,24 +84,35 @@ impl WorkLinkSnapshotV1 {
     pub(crate) fn new(
         observed_at_ms: u64,
         title: impl Into<String>,
-        acceptance_context: impl Into<String>,
+        description: impl Into<String>,
+        acceptance_criteria: impl Into<String>,
     ) -> Result<Self> {
         let title = title.into();
-        let acceptance_context = acceptance_context.into();
-        validate_snapshot_text(observed_at_ms, &title, &acceptance_context)?;
+        let description = description.into();
+        let acceptance_criteria = acceptance_criteria.into();
+        validate_snapshot_text(observed_at_ms, &title, &description, &acceptance_criteria)?;
         Ok(Self {
             observed_at_ms,
-            context_digest: snapshot_context_digest(&title, &acceptance_context),
+            context_digest: snapshot_context_digest(&title, &description, &acceptance_criteria),
             title,
-            acceptance_context,
+            description,
+            acceptance_criteria,
         })
     }
 
     fn validate(&self) -> Result<()> {
-        validate_snapshot_text(self.observed_at_ms, &self.title, &self.acceptance_context)?;
-        let expected = snapshot_context_digest(&self.title, &self.acceptance_context);
+        validate_snapshot_text(
+            self.observed_at_ms,
+            &self.title,
+            &self.description,
+            &self.acceptance_criteria,
+        )?;
+        let expected =
+            snapshot_context_digest(&self.title, &self.description, &self.acceptance_criteria);
         if self.context_digest != expected {
-            bail!("work-link snapshot context_digest does not match its title and context");
+            bail!(
+                "work-link snapshot context_digest does not match its title, description, and acceptance criteria"
+            );
         }
         Ok(())
     }
@@ -289,10 +302,10 @@ pub(crate) fn attach_work_link(
     ctx: &RepoContext,
     request: &WorkLinkRequest,
 ) -> Result<WorkLinkRecordV1> {
-    if !crate::context::supports_tracker_journals(ctx.contract_version()) {
+    if !crate::context::supports_work_links(ctx.contract_version()) {
         bail!(
             "work-link writes require repository contract epoch {} (found {})",
-            crate::context::TRACKER_JOURNAL_CONTRACT_VERSION,
+            crate::context::WORK_LINK_CONTRACT_VERSION,
             ctx.contract_version()
         );
     }
@@ -355,7 +368,8 @@ fn validate_event_id(id: &str) -> Result<()> {
 fn validate_snapshot_text(
     observed_at_ms: u64,
     title: &str,
-    acceptance_context: &str,
+    description: &str,
+    acceptance_criteria: &str,
 ) -> Result<()> {
     if observed_at_ms == 0 {
         bail!("work-link snapshot observed_at_ms must be greater than zero");
@@ -363,20 +377,27 @@ fn validate_snapshot_text(
     if title.is_empty() || title.len() > MAX_TITLE_BYTES || title.contains('\0') {
         bail!("work-link snapshot title must contain 1 through {MAX_TITLE_BYTES} bytes and no NUL");
     }
-    if acceptance_context.len() > MAX_ACCEPTANCE_CONTEXT_BYTES || acceptance_context.contains('\0')
+    if description.len() > MAX_DESCRIPTION_BYTES || description.contains('\0') {
+        bail!(
+            "work-link description must contain at most {MAX_DESCRIPTION_BYTES} bytes and no NUL"
+        );
+    }
+    if acceptance_criteria.len() > MAX_ACCEPTANCE_CRITERIA_BYTES
+        || acceptance_criteria.contains('\0')
     {
         bail!(
-            "work-link acceptance context must contain at most {MAX_ACCEPTANCE_CONTEXT_BYTES} bytes and no NUL"
+            "work-link acceptance criteria must contain at most {MAX_ACCEPTANCE_CRITERIA_BYTES} bytes and no NUL"
         );
     }
     Ok(())
 }
 
-fn snapshot_context_digest(title: &str, acceptance_context: &str) -> String {
+fn snapshot_context_digest(title: &str, description: &str, acceptance_criteria: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(SNAPSHOT_DIGEST_DOMAIN);
     hash_field(&mut digest, title.as_bytes());
-    hash_field(&mut digest, acceptance_context.as_bytes());
+    hash_field(&mut digest, description.as_bytes());
+    hash_field(&mut digest, acceptance_criteria.as_bytes());
     format!("sha256:{:x}", digest.finalize())
 }
 

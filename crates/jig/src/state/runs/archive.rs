@@ -376,19 +376,7 @@ fn validate_published_run_archive(
     }
 }
 
-#[cfg(test)]
 pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Result<Value> {
-    crate::state::tracker_operations::with_tracker_operations_coordination_lock(ctx, |roots| {
-        runs_archive_with_retention_roots(ctx, before, dry_run, roots)
-    })
-}
-
-pub(crate) fn runs_archive_with_retention_roots(
-    ctx: &RepoContext,
-    before: &str,
-    dry_run: bool,
-    tracker_roots: &crate::state::tracker_operations::PendingTrackerRetentionRoots,
-) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let before_ms = crate::state::receipts::parse_archive_before_ms(before)?;
     let runs_path = ctx.state_file(RUNS_FILE);
@@ -400,11 +388,10 @@ pub(crate) fn runs_archive_with_retention_roots(
     } else {
         reconcile_abandoned_runs_before_archive(ctx, &runs_path)?
     };
-    let mut protected_plan_ids = crate::state::open_plan_summaries(ctx)?
+    let open_plan_ids = crate::state::open_plan_summaries(ctx)?
         .into_iter()
         .filter_map(|plan| plan["plan_id"].as_str().map(str::to_owned))
         .collect::<BTreeSet<_>>();
-    protected_plan_ids.extend(tracker_roots.plan_ids.iter().cloned());
     let mut recovery_hint = None;
     let mut archive_hint = None;
     let result = with_jsonl_write_lock(&runs_path, |guard| {
@@ -435,11 +422,10 @@ pub(crate) fn runs_archive_with_retention_roots(
                 .completed_at_ms
                 .is_some_and(|ended| ended < before_ms)
             {
-                if tracker_roots.run_ids.contains(run_id)
-                    || lifecycle
-                        .work_plan_id
-                        .as_ref()
-                        .is_some_and(|plan_id| protected_plan_ids.contains(plan_id))
+                if lifecycle
+                    .work_plan_id
+                    .as_ref()
+                    .is_some_and(|plan_id| open_plan_ids.contains(plan_id))
                 {
                     protected_runs_retained = protected_runs_retained.saturating_add(1);
                 } else if !run_lease_is_idle(ctx, run_id)? {
@@ -551,8 +537,6 @@ pub(crate) fn runs_archive_with_retention_roots(
             "runs_archived": runs_archived,
             "runs_retained": runs_retained,
             "protected_runs_retained": protected_runs_retained,
-            "tracker_pending_plan_roots": tracker_roots.plan_ids.len(),
-            "tracker_pending_run_roots": tracker_roots.run_ids.len(),
             "active_run_leases_retained": active_run_leases_retained,
             "abandoned_runs_reconciled": abandoned_runs_reconciled,
             "run_leases_pruned": run_leases_pruned,

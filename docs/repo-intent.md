@@ -123,8 +123,6 @@ The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig sta
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
 - `work-links.jsonl`: immutable joins from Jig plans to portable external-work
   identities and their observed task snapshots
-- `tracker-operations.jsonl`: retry-stable facts about pending and completed
-  external-tracker operations
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
 validated whole-file rewrites: session compaction creates an exact recovery
@@ -135,10 +133,11 @@ as separate compressed cold streams under ignored
 go only to the caller-selected path. None of these operations rewrite Git
 history.
 
-Work-link and tracker-operation journals are not maintenance rewrite targets.
-Their committed records are newline-terminated, and unknown versions are retained
-as raw history without acquiring mutation authority. Archive treats pending
-tracker operations as retention roots for their plans and referenced evidence.
+The work-link journal is not a maintenance rewrite target. Its committed records
+are newline-terminated, and unknown versions are retained as raw history without
+acquiring link authority. Beads task definitions come from a bounded read-only
+JSONL snapshot; Jig does not invoke `br`, inspect its SQLite store, or mutate task
+data in the current milestone.
 
 The current session pointer is cache state, not part of the durable JSONL record model.
 

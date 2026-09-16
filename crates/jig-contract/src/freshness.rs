@@ -26,7 +26,7 @@ pub const SOURCE_STATE_IDENTITY_CONTRACT_VERSION: u32 = 10;
 pub const fn supported_freshness_epoch(epoch: u32) -> bool {
     // v9 and v10 were never released. Keep their already-recorded local
     // receipts readable after the 0.4.0 v8 consolidation. Repository contract
-    // v11 is reserved for tracker journals, and its receipts retain the v8
+    // v11 is reserved for durable work links, and its receipts retain the v8
     // freshness contract with source-state authority.
     matches!(epoch, TARGET_FRESHNESS_CONTRACT_VERSION..=11)
 }
@@ -45,7 +45,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tracker_journal_repository_receipts_retain_supported_freshness_authority() {
+    fn work_link_repository_receipts_retain_supported_freshness_authority() {
         for epoch in 8..=11 {
             assert!(supported_freshness_epoch(epoch));
         }

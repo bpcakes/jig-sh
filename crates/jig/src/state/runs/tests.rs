@@ -3,11 +3,8 @@ use jig_contract::{
 };
 use tempfile::tempdir;
 
-use super::archive::runs_archive;
 use super::*;
 use crate::test_env::TestRepoBuilder;
-
-mod tracker_operations;
 
 fn context() -> (tempfile::TempDir, RepoContext) {
     let temp = tempdir().unwrap();

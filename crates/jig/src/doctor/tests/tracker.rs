@@ -2,31 +2,30 @@ use super::*;
 
 const WORKSPACE_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
-fn configured_repo(root: &Path) {
+fn configured_repo(root: &Path, extra_config: &str) {
     TestRepoBuilder::new(root)
         .config(format!(
-            "[work.tracker]\nkind = \"beads\"\nworkspace_id = \"{WORKSPACE_ID}\"\n"
+            "[work.tracker]\nkind = \"beads\"\nworkspace_id = \"{WORKSPACE_ID}\"\n{extra_config}"
         ))
         .write();
     fs::create_dir(root.join(".beads")).unwrap();
-    fs::write(root.join(".beads/beads.db"), b"database fixture").unwrap();
-    fs::write(root.join(".beads/issues.jsonl"), b"jsonl fixture\n").unwrap();
+}
+
+fn write_issue(root: &Path, relative: &str) {
+    fs::write(
+        root.join(relative),
+        r#"{"id":"example-123","title":"Example task","description":"Example context","acceptance_criteria":"Example result","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-02T03:04:05Z","updated_at":"2026-01-03T04:05:06Z","future_field":{"preserved":true}}
+"#,
+    )
+    .unwrap();
 }
 
 #[test]
-fn unconfigured_tracker_does_not_probe_path_or_existing_store() {
-    let _env = lock_env();
+fn unconfigured_tracker_does_not_inspect_an_existing_store() {
     let temp = tempdir().unwrap();
-    let bin = temp.path().join("bin");
-    fs::create_dir(&bin).unwrap();
-    let marker = temp.path().join("called");
-    write_test_executable(
-        &bin.join("br"),
-        &format!("#!/bin/sh\nprintf called > {}\nexit 99\n", marker.display()),
-    );
     TestRepoBuilder::new(temp.path()).write();
     fs::create_dir(temp.path().join(".beads")).unwrap();
-    let _br = crate::tracker::TestBrOverride::set(Some(&bin.join("br")));
+    fs::write(temp.path().join(".beads/issues.jsonl"), b"not JSON").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let result = super::super::tracker::tracker_check(
@@ -37,141 +36,46 @@ fn unconfigured_tracker_does_not_probe_path_or_existing_store() {
     assert!(result.ok);
     assert!(!result.required);
     assert_eq!(result.status, "not configured");
-    assert!(!marker.exists());
 }
 
 #[test]
-fn configured_tracker_reports_a_missing_external_binary() {
-    let _env = lock_env();
+fn configured_tracker_reads_jsonl_without_process_availability() {
     let temp = tempdir().unwrap();
-    let root = temp.path().join("repo");
-    fs::create_dir(&root).unwrap();
-    configured_repo(&root);
-    let _br = crate::tracker::TestBrOverride::set(None);
-    let ctx = RepoContext::load_from(&root).unwrap();
+    configured_repo(temp.path(), "");
+    write_issue(temp.path(), ".beads/issues.jsonl");
+    fs::write(temp.path().join(".beads/beads.db"), b"ignored database").unwrap();
+    let database_before = fs::read(temp.path().join(".beads/beads.db")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let process_control = DoctorProcessControl {
+        cancellation: None,
+        unavailable_reason: Some("process probes are unavailable"),
+    };
 
-    let result = super::super::tracker::tracker_check(
-        &ctx,
-        DoctorProcessControl::allowed_without_signal_session(),
-    );
+    let result = super::super::tracker::tracker_check(&ctx, process_control);
 
-    assert!(!result.ok);
+    assert!(result.ok, "{}", result.detail);
     assert!(result.required);
-    assert_eq!(result.status, "missing");
-    assert_eq!(result.data["configured"], true);
-    assert_eq!(result.data["root"], ".beads");
-    assert!(result.fix.unwrap().contains("Install supported `br 0.5.7`"));
-    assert!(!result.detail.contains(root.to_string_lossy().as_ref()));
-}
-
-#[test]
-fn transient_tracker_failures_do_not_prescribe_installation_or_store_repair() {
-    for error in [
-        crate::tracker::TrackerError::TimedOut {
-            operation: crate::tracker::TrackerOperation::Version,
-        },
-        crate::tracker::TrackerError::CancelledBeforeStart {
-            operation: crate::tracker::TrackerOperation::Version,
-        },
-    ] {
-        let result = super::super::tracker::tracker_error(error, None);
-
-        assert!(!result.ok);
-        assert!(result.fix.is_none());
-    }
-}
-
-#[test]
-fn hard_linked_tracker_authority_has_specific_recovery() {
-    let result = super::super::tracker::tracker_error(
-        crate::tracker::TrackerError::InvalidWorkspace {
-            reason: crate::tracker::InvalidWorkspaceReason::HardLinkedAuthority,
-        },
-        None,
+    assert_eq!(result.status, "ready");
+    assert_eq!(result.data["profile"], crate::tracker::INPUT_PROFILE);
+    assert_eq!(result.data["export"], ".beads/issues.jsonl");
+    assert_eq!(result.data["issues"], 1);
+    assert_eq!(
+        result.data["supported_operations"][0],
+        "read_issue_snapshot"
     );
-
-    assert_eq!(result.status, "invalid workspace");
-    assert!(result.detail.contains("multiple hard links"));
-    assert!(
-        result
-            .fix
-            .unwrap()
-            .contains("hard-linked tracker authority")
+    assert_eq!(result.data["write_authority"], false);
+    assert_eq!(
+        fs::read(temp.path().join(".beads/beads.db")).unwrap(),
+        database_before
     );
 }
 
 #[test]
-fn unsupported_tracker_platform_has_platform_specific_recovery() {
-    let result = super::super::tracker::tracker_error(
-        crate::tracker::TrackerError::UnsupportedPlatform,
-        None,
-    );
-
-    assert!(!result.ok);
-    assert!(result.required);
-    assert_eq!(result.status, "unsupported platform");
-    assert!(result.fix.unwrap().contains("Linux or macOS"));
-}
-
-#[test]
-fn unsafe_tracker_temporary_directory_has_specific_recovery() {
-    let result = super::super::tracker::tracker_error(
-        crate::tracker::TrackerError::UnsafeTemporaryDirectory {
-            operation: crate::tracker::TrackerOperation::SyncStatus,
-        },
-        None,
-    );
-
-    assert!(!result.ok);
-    assert!(result.required);
-    assert_eq!(result.status, "unsafe temporary directory");
-    let fix = result.fix.unwrap();
-    assert!(fix.contains("`TMPDIR`"));
-    assert!(fix.contains("outside the repository"));
-}
-
-#[test]
-fn configured_tracker_reports_supported_read_only_profile() {
-    let _env = lock_env();
+fn configured_tracker_accepts_the_legacy_export_name() {
     let temp = tempdir().unwrap();
-    let root = temp.path().join("repo");
-    let bin = temp.path().join("bin");
-    fs::create_dir(&root).unwrap();
-    fs::create_dir(&bin).unwrap();
-    let root = root.canonicalize().unwrap();
-    let bin = bin.canonicalize().unwrap();
-    configured_repo(&root);
-    let log = temp.path().join("calls.log");
-    let beads_dir = serde_json::to_string(&root.join(".beads")).unwrap();
-    let database = serde_json::to_string(&root.join(".beads/beads.db")).unwrap();
-    let jsonl = serde_json::to_string(&root.join(".beads/issues.jsonl")).unwrap();
-    write_test_executable(
-        &bin.join("br"),
-        &format!(
-            r#"#!/bin/sh
-printf '%s\n' "$*" >> {log}
-case " $* " in
-  *" version "*) [ "${{BD_NO_DB-}}" = true ] || exit 92; printf '%s' '{{"version":"0.5.7"}}' ;;
-  *" --no-db where "*) [ "${{BD_NO_DB-}}" = true ] || exit 92; printf '%s' '{{"path":{beads_dir},"database_path":{database},"jsonl_path":{jsonl}}}' ;;
-  *" sync --allow-external-jsonl --status "*) [ "${{BD_NO_DB-}}" = false ] || exit 92; printf '%s' '{{"jsonl_newer":false,"db_newer":false,"coverage_drift":false,"workspace_health":"healthy","reliability_audit":{{"source":"sync.status","health":"healthy","anomaly_count":0,"anomalies":[]}}}}' ;;
-  *) exit 91 ;;
-esac
-"#,
-            log = log.display(),
-        ),
-    );
-    let _br = crate::tracker::TestBrOverride::set(Some(&bin.join("br")));
-    let ctx = RepoContext::load_from(&root).unwrap();
-    let database_before = fs::read(root.join(".beads/beads.db")).unwrap();
-    let database_modified_before = fs::metadata(root.join(".beads/beads.db"))
-        .unwrap()
-        .modified()
-        .unwrap();
-    let jsonl_before = fs::read(root.join(".beads/issues.jsonl")).unwrap();
-    let jsonl_modified_before = fs::metadata(root.join(".beads/issues.jsonl"))
-        .unwrap()
-        .modified()
-        .unwrap();
+    configured_repo(temp.path(), "");
+    write_issue(temp.path(), ".beads/beads.jsonl");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let result = super::super::tracker::tracker_check(
         &ctx,
@@ -179,75 +83,63 @@ esac
     );
 
     assert!(result.ok, "{}", result.detail);
-    assert!(result.required);
-    assert_eq!(result.status, "ready");
-    assert_eq!(result.data["version"], "0.5.7");
-    assert_eq!(result.data["profile"], "beads_0_5_7");
-    assert_eq!(
-        result.data["supported_operations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        5
+    assert_eq!(result.data["export"], ".beads/beads.jsonl");
+}
+
+#[test]
+fn missing_and_ambiguous_exports_have_actionable_failures() {
+    let temp = tempdir().unwrap();
+    configured_repo(temp.path(), "");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let missing = super::super::tracker::tracker_check(
+        &ctx,
+        DoctorProcessControl::allowed_without_signal_session(),
     );
-    let calls = fs::read_to_string(log).unwrap();
-    assert!(
-        calls
-            .lines()
-            .all(|line| { line.contains("--no-auto-import") && line.contains("--no-auto-flush") })
+    assert!(!missing.ok);
+    assert_eq!(missing.status, "missing export");
+    assert!(missing.fix.unwrap().contains(".beads/issues.jsonl"));
+
+    write_issue(temp.path(), ".beads/issues.jsonl");
+    write_issue(temp.path(), ".beads/beads.jsonl");
+    let ambiguous = super::super::tracker::tracker_check(
+        &ctx,
+        DoctorProcessControl::allowed_without_signal_session(),
     );
-    assert!(calls.contains(" version"));
-    assert!(calls.contains(" --no-db where"));
-    assert!(calls.contains(" sync --allow-external-jsonl --status"));
-    assert!(!calls.contains(" show "));
-    assert!(!calls.contains(" comments "));
-    assert!(!calls.contains(" update "));
-    assert!(!calls.contains(" close "));
-    let sync_call = calls.lines().find(|line| line.contains(" sync ")).unwrap();
-    assert!(!sync_call.contains(root.to_string_lossy().as_ref()));
-    assert_eq!(
-        fs::read(root.join(".beads/beads.db")).unwrap(),
-        database_before
+    assert!(!ambiguous.ok);
+    assert_eq!(ambiguous.status, "ambiguous export");
+    assert!(ambiguous.detail.contains("both .beads/issues.jsonl"));
+}
+
+#[test]
+fn configured_manual_export_guidance_is_used_for_recovery() {
+    let temp = tempdir().unwrap();
+    configured_repo(
+        temp.path(),
+        "manual_export_guidance = \"Run the repository privacy-safe export helper.\"\n",
     );
-    assert_eq!(
-        fs::metadata(root.join(".beads/beads.db"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        database_modified_before
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let result = super::super::tracker::tracker_check(
+        &ctx,
+        DoctorProcessControl::allowed_without_signal_session(),
     );
+
     assert_eq!(
-        fs::read(root.join(".beads/issues.jsonl")).unwrap(),
-        jsonl_before
-    );
-    assert_eq!(
-        fs::metadata(root.join(".beads/issues.jsonl"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        jsonl_modified_before
+        result.fix.as_deref(),
+        Some("Run the repository privacy-safe export helper.")
     );
 }
 
 #[test]
-fn configured_unknown_profile_stops_before_workspace_or_issue_operations() {
-    let _env = lock_env();
+fn invalid_export_reports_structure_without_task_body_content() {
     let temp = tempdir().unwrap();
-    let root = temp.path().join("repo");
-    let bin = temp.path().join("bin");
-    fs::create_dir(&root).unwrap();
-    fs::create_dir(&bin).unwrap();
-    configured_repo(&root);
-    let log = temp.path().join("calls.log");
-    write_test_executable(
-        &bin.join("br"),
-        &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nprintf '%s' '{{\"version\":\"0.6.0\"}}'\n",
-            log.display()
-        ),
-    );
-    let _br = crate::tracker::TestBrOverride::set(Some(&bin.join("br")));
-    let ctx = RepoContext::load_from(&root).unwrap();
+    configured_repo(temp.path(), "");
+    fs::write(
+        temp.path().join(".beads/issues.jsonl"),
+        "{\"id\":\"private-task\",\"description\":\"private body\"}\n",
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let result = super::super::tracker::tracker_check(
         &ctx,
@@ -255,8 +147,28 @@ fn configured_unknown_profile_stops_before_workspace_or_issue_operations() {
     );
 
     assert!(!result.ok);
-    assert!(result.required);
-    assert_eq!(result.status, "unsupported");
-    assert_eq!(result.data["version"], "0.6.0");
-    assert_eq!(fs::read_to_string(log).unwrap().lines().count(), 1);
+    assert_eq!(result.status, "invalid export");
+    assert!(result.detail.contains("line 1"));
+    assert!(!result.detail.contains("private"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_export_is_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    configured_repo(temp.path(), "");
+    let outside = temp.path().join("outside.jsonl");
+    fs::write(&outside, "").unwrap();
+    symlink(&outside, temp.path().join(".beads/issues.jsonl")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let result = super::super::tracker::tracker_check(
+        &ctx,
+        DoctorProcessControl::allowed_without_signal_session(),
+    );
+
+    assert!(!result.ok);
+    assert_eq!(result.status, "unsafe export");
 }

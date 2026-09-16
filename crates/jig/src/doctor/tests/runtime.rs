@@ -577,7 +577,7 @@ fn damaged_contract_manifest_recommends_full_update_not_launcher_repair() {
 
 #[test]
 fn inactive_or_newer_contract_does_not_recommend_downgrade_repair() {
-    for version in [crate::context::TRACKER_JOURNAL_CONTRACT_VERSION, 99] {
+    for version in [crate::context::WORK_LINK_CONTRACT_VERSION, 99] {
         let temp = tempdir().unwrap();
         fs::create_dir_all(temp.path().join("scripts")).unwrap();
         fs::write(

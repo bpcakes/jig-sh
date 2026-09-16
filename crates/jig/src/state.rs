@@ -32,8 +32,6 @@ pub(crate) use receipts::metadata_time;
 #[cfg(test)]
 pub(crate) use receipts::receipt_append_may_have_landed_for_test;
 pub(crate) use receipts::receipt_diff_summary;
-#[cfg(test)]
-pub(crate) use receipts::receipts_archive;
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ReusableWorkCheckEvidence, ReusableWorkCheckQuery,
     TargetReceiptStatus, ToolReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence,
@@ -50,7 +48,7 @@ pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
     record_receipt_with_cancellation, record_receipt_with_cancellation_until,
 };
-pub(crate) use receipts::{StateArchiveRequest, receipts_export};
+pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
 pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
 pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
@@ -105,11 +103,8 @@ mod session_compaction;
 mod sessions;
 mod support;
 mod tracker_identity;
-// T1 establishes these state contracts before T3 exposes their lifecycle
-// entrypoints. Archive already consumes the retention projection; the writer
-// APIs become production-reachable at that coordinated cutover.
-#[allow(dead_code)]
-pub(crate) mod tracker_operations;
+// The next delivery milestone exposes the lifecycle entrypoints built on this
+// portable, Jig-owned link authority.
 #[allow(dead_code)]
 pub(crate) mod work_links;
 
@@ -122,26 +117,15 @@ pub(crate) fn state_archive(
     ctx: &RepoContext,
     request: crate::command::StateArchiveRequest,
 ) -> Result<Value> {
-    tracker_operations::with_tracker_operations_coordination_lock(ctx, |roots| {
-        state_archive_with_retention_roots(ctx, request, roots)
-    })
-}
-
-fn state_archive_with_retention_roots(
-    ctx: &RepoContext,
-    request: crate::command::StateArchiveRequest,
-    tracker_roots: &tracker_operations::PendingTrackerRetentionRoots,
-) -> Result<Value> {
     // Validate receipts before an applying invocation rewrites the run stream.
     // The run apply performs its own lifecycle validation under its write lock.
     if request.include_runs && !request.dry_run {
-        receipts::receipts_archive_with_retention_roots(
+        receipts_archive(
             ctx,
             StateArchiveRequest {
                 before: request.before.clone(),
                 dry_run: true,
             },
-            tracker_roots,
         )?;
     }
 
@@ -150,22 +134,14 @@ fn state_archive_with_retention_roots(
     // the already-completed run backup/artifact paths for the operator.
     let runs = request
         .include_runs
-        .then(|| {
-            runs::runs_archive_with_retention_roots(
-                ctx,
-                &request.before,
-                request.dry_run,
-                tracker_roots,
-            )
-        })
+        .then(|| runs::runs_archive(ctx, &request.before, request.dry_run))
         .transpose()?;
-    let mut output = receipts::receipts_archive_with_retention_roots(
+    let mut output = receipts_archive(
         ctx,
         StateArchiveRequest {
             before: request.before.clone(),
             dry_run: request.dry_run,
         },
-        tracker_roots,
     )
     .map_err(|error| decorate_receipt_archive_failure(error, runs.as_ref(), request.dry_run))?;
     let output_object = output

@@ -38,13 +38,10 @@ pub(crate) use originals::OriginalReceiptIndex;
 pub(crate) use validity::{effective_time_from_value, metadata_time, receipt_effective_time};
 mod target_evidence;
 pub(super) use archive::parse_archive_before_ms;
-#[cfg(test)]
-pub(crate) use archive::receipts_archive;
 use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
 use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
-pub(crate) use archive::{StateArchiveRequest, receipts_export};
-pub(super) use archive::{receipts_archive_with_retention_roots, tracker_protected_receipt_ids};
+pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
 #[cfg(test)]
 pub(crate) use journal::receipt_append_may_have_landed_for_test;
 pub(crate) use journal::{

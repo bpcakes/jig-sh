@@ -519,7 +519,7 @@ fn capability_probe_can_use_launcher_contract_when_manifest_is_malformed() {
     })
     .unwrap();
 
-    for unsupported in [9, 10, crate::context::TRACKER_JOURNAL_CONTRACT_VERSION, 999] {
+    for unsupported in [9, 10, crate::context::WORK_LINK_CONTRACT_VERSION, 999] {
         let error = run_runtime_compatible(RuntimeCompatibleOpts {
             profile: RuntimeCompatibilityProfile::Runtime,
             capability_only: true,
@@ -543,7 +543,7 @@ fn capability_probe_can_use_launcher_contract_when_manifest_is_malformed() {
 fn capability_probe_without_explicit_version_rejects_inactive_epoch() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
-        .contract_version(crate::context::TRACKER_JOURNAL_CONTRACT_VERSION)
+        .contract_version(crate::context::WORK_LINK_CONTRACT_VERSION)
         .write();
 
     let error = run_runtime_compatible(RuntimeCompatibleOpts {

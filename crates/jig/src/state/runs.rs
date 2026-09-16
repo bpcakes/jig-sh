@@ -829,7 +829,7 @@ fn target_result_mut<'a>(
 }
 
 mod archive;
-pub(super) use archive::runs_archive_with_retention_roots;
+pub(crate) use archive::runs_archive;
 pub(super) use archive::{ensure_run_stream_replaceable, validate_run_stream};
 
 #[cfg(test)]

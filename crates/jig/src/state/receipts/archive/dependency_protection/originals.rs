@@ -27,20 +27,14 @@ struct Location {
 /// full payloads, and keep the writer lock alive throughout indexed traversal.
 pub(super) struct ArchiveOriginalIndex<'a> {
     _guard: &'a JsonlWriteGuard,
-    file: Option<File>,
+    file: File,
     locations: BTreeMap<String, Location>,
     pub(super) loaded_bytes: u64,
 }
 
 impl<'a> ArchiveOriginalIndex<'a> {
     pub(super) fn open(guard: &'a JsonlWriteGuard, path: &Path) -> Result<Self> {
-        let mut file = match File::open(path) {
-            Ok(file) => Some(file),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(error).context("Cannot open archive original receipt journal");
-            }
-        };
+        let mut file = File::open(path).context("Cannot open archive original receipt journal")?;
         let mut locations: BTreeMap<String, Location> = BTreeMap::new();
         let scan = scan_jsonl_raw_locked(guard, path, &|| false, |record| {
             #[cfg(test)]
@@ -54,11 +48,8 @@ impl<'a> ArchiveOriginalIndex<'a> {
             };
             if let Some(previous) = locations.get_mut(&receipt.id) {
                 if !previous.conflicting && previous.digest != location.digest {
-                    let original: serde_json::Value = serde_json::from_slice(&read_at(
-                        file.as_mut()
-                            .context("Original receipt journal disappeared")?,
-                        previous,
-                    )?)?;
+                    let original: serde_json::Value =
+                        serde_json::from_slice(&read_at(&mut file, previous)?)?;
                     let current: serde_json::Value = serde_json::from_slice(record.bytes)?;
                     // Formatting changes are equivalent; any actual conflict
                     // permanently invalidates this ID, including unknown fields.
@@ -82,39 +73,25 @@ impl<'a> ArchiveOriginalIndex<'a> {
     }
 
     pub(super) fn get(&mut self, id: &str) -> Result<TargetReceiptStatus> {
-        let receipt = self.get_receipt(id)?;
-        let target = receipt
-            .target
-            .as_ref()
+        let location = self
+            .locations
+            .get(id)
             .context("Cannot archive while an original dependency receipt is missing")?;
-        Ok(target_receipt_status(&receipt, target))
-    }
-
-    pub(super) fn get_receipt(&mut self, id: &str) -> Result<ReceiptRecord> {
-        self.find_receipt(id)?
-            .context("Cannot archive while an original dependency receipt is missing")
-    }
-
-    pub(super) fn find_receipt(&mut self, id: &str) -> Result<Option<ReceiptRecord>> {
-        let Some(location) = self.locations.get(id) else {
-            return Ok(None);
-        };
         ensure!(
             !location.conflicting,
             "Required original receipt has conflicting duplicate IDs"
         );
-        let receipt: ReceiptRecord = serde_json::from_slice(&read_at(
-            self.file
-                .as_mut()
-                .context("Original receipt journal disappeared")?,
-            location,
-        )?)?;
+        let receipt: ReceiptRecord = serde_json::from_slice(&read_at(&mut self.file, location)?)?;
         self.loaded_bytes = self.loaded_bytes.saturating_add(location.length as u64);
         ensure!(
             receipt.id == id,
             "Original dependency receipt changed during archive protection"
         );
-        Ok(Some(receipt))
+        let target = receipt
+            .target
+            .as_ref()
+            .context("Cannot archive while an original dependency receipt is missing")?;
+        Ok(target_receipt_status(&receipt, target))
     }
 }
 

@@ -2,14 +2,11 @@ use serde_json::json;
 
 use super::{DoctorCheck, DoctorProcessControl, check};
 use crate::context::RepoContext;
-use crate::tracker::{
-    BeadsAdapter, TrackerCapability, TrackerDiscovery, TrackerError, TrackerProcessPolicy,
-    TrackerProfile,
-};
+use crate::tracker::{BeadsExport, BeadsJsonlError, INPUT_PROFILE, LEGACY_EXPORT, PRIMARY_EXPORT};
 
 pub(super) fn tracker_check(
     ctx: &RepoContext,
-    process_control: DoctorProcessControl<'_>,
+    _process_control: DoctorProcessControl<'_>,
 ) -> DoctorCheck {
     let Some(config) = ctx.work_tracker() else {
         return check(
@@ -18,202 +15,88 @@ pub(super) fn tracker_check(
             false,
             true,
             "not configured",
-            "no external work tracker is configured",
+            "no task snapshot is configured",
         )
         .with_data(json!({ "configured": false }));
     };
 
-    if let Some(reason) = process_control.unavailable_reason {
-        return tracker_failure(
-            "unavailable",
-            format!("configured Beads diagnostics are unavailable because {reason}"),
-            None,
+    match BeadsExport::open(ctx.root(), config.workspace_id()) {
+        Ok(export) => check(
+            "tracker",
+            "Work tracker",
+            true,
+            true,
+            "ready",
+            format!("configured Beads JSONL snapshot is readable through profile {INPUT_PROFILE}"),
         )
-        .with_fix(
-            "Rerun `scripts/jig doctor` in a session where subprocess diagnostics are available.",
-        );
+        .with_data(json!({
+            "configured": true,
+            "root": config.root(),
+            "export": export.relative_path(),
+            "profile": INPUT_PROFILE,
+            "issues": export.len(),
+            "supported_operations": ["read_issue_snapshot"],
+            "write_authority": false,
+        })),
+        Err(error) => tracker_error(error, config.manual_export_guidance()),
     }
+}
 
-    let mut cancelled = || {
-        process_control
-            .cancellation
-            .is_some_and(|cancelled| cancelled())
-    };
-    let (adapter, discovery) = match BeadsAdapter::discover(
-        ctx.root(),
-        config.workspace_id(),
-        TrackerProcessPolicy::default(),
-        &mut cancelled,
-    ) {
-        Ok(discovery) => discovery,
-        Err(error) => return tracker_error(error, None),
-    };
-
-    if discovery.profile == TrackerProfile::Unsupported {
-        return tracker_failure(
-            "unsupported",
+fn tracker_error(error: BeadsJsonlError, manual_guidance: Option<&str>) -> DoctorCheck {
+    let (status, default_fix) = match error {
+        BeadsJsonlError::MissingExport => (
+            "missing export",
             format!(
-                "configured Beads version {} has no supported Jig adapter profile",
-                discovery.version
+                "Create exactly one current Beads export at `{PRIMARY_EXPORT}` (or the legacy `{LEGACY_EXPORT}`), then rerun `scripts/jig doctor`."
             ),
-            Some(&discovery),
-        )
-        .with_fix(
-            "Install supported `br 0.5.7`, or remove `[work.tracker]` if this repository no longer uses Beads, then rerun `scripts/jig doctor`.",
-        );
-    }
-
-    if let Err(error) = adapter.check_storage_readiness(&mut cancelled) {
-        return tracker_error(error, Some(&discovery));
-    }
-
+        ),
+        BeadsJsonlError::AmbiguousExport => (
+            "ambiguous export",
+            format!(
+                "Keep only the current Beads export at `{PRIMARY_EXPORT}` or `{LEGACY_EXPORT}`, then rerun `scripts/jig doctor`."
+            ),
+        ),
+        BeadsJsonlError::InvalidWorkspace | BeadsJsonlError::UnsafeExport => (
+            "unsafe export",
+            "Repair the repository-local `.beads` directory and JSONL export so they are real, private files rather than links, then rerun `scripts/jig doctor`.".to_string(),
+        ),
+        BeadsJsonlError::ChangedDuringRead => (
+            "export busy",
+            "Wait for the Beads export to finish changing, then rerun `scripts/jig doctor`.".to_string(),
+        ),
+        BeadsJsonlError::ExportTooLarge
+        | BeadsJsonlError::LineTooLong { .. }
+        | BeadsJsonlError::TooManyIssues => (
+            "export too large",
+            "Reduce or partition the Beads export to the supported bounded profile, then rerun `scripts/jig doctor`.".to_string(),
+        ),
+        BeadsJsonlError::InvalidUtf8
+        | BeadsJsonlError::InvalidRecord { .. }
+        | BeadsJsonlError::DuplicateIssueId { .. } => (
+            "invalid export",
+            "Regenerate or repair the Beads JSONL export, then rerun `scripts/jig doctor`.".to_string(),
+        ),
+        BeadsJsonlError::InvalidIssueId
+        | BeadsJsonlError::IssueMissing
+        | BeadsJsonlError::IssueTombstoned => (
+            "invalid export",
+            "Regenerate or repair the Beads JSONL export, then rerun `scripts/jig doctor`.".to_string(),
+        ),
+    };
+    let fix = manual_guidance.unwrap_or(&default_fix);
     check(
         "tracker",
         "Work tracker",
         true,
-        true,
-        "ready",
-        format!(
-            "configured Beads workspace is readable through profile {}",
-            profile_label(discovery.profile)
-        ),
-    )
-    .with_data(discovery_data(&discovery))
-}
-
-pub(super) fn tracker_error(
-    error: TrackerError,
-    discovery: Option<&TrackerDiscovery>,
-) -> DoctorCheck {
-    let fix = match &error {
-        TrackerError::BinaryMissing | TrackerError::UnsupportedBinary { .. } => {
-            Some("Install supported `br 0.5.7`, then rerun `scripts/jig doctor`.")
-        }
-        TrackerError::ExecutableCandidateInvalid => Some(
-            "Remove or repair the earlier unusable `br` candidate on `PATH`, or install supported `br 0.5.7`, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::ExecutableSnapshotUnavailable => Some(
-            "Run Jig in an environment that permits private immutable executable snapshots, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::UnsupportedPlatform => Some(
-            "Run the configured Beads adapter on Linux or macOS, or remove `[work.tracker]` on this host.",
-        ),
-        TrackerError::StoreChangedDuringSnapshot => {
-            Some("Wait for concurrent Beads activity to finish, then rerun `scripts/jig doctor`.")
-        }
-        TrackerError::StoreSnapshotTimedOut => Some(
-            "Quiesce Beads activity or reduce the repository-local tracker store, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::ExecutableChanged => Some(
-            "Restore the discovered `br` executable or rerun `scripts/jig doctor` to establish a new trusted executable snapshot.",
-        ),
-        TrackerError::InvalidWorkspace {
-            reason: crate::tracker::InvalidWorkspaceReason::HardLinkedAuthority,
-        } => Some(
-            "Replace the hard-linked tracker authority file with an independent repository-local file, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::InvalidWorkspace { .. } => Some(
-            "Repair the repository-local `.beads` workspace boundary, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::StaleStorage => Some(
-            "Reconcile the repository-local Beads database and JSONL export, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::StoreSnapshotTooLarge { .. } => Some(
-            "Reduce the repository-local tracker store below the supported snapshot limit, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::UnsafeTemporaryDirectory { .. } => Some(
-            "Set `TMPDIR` to a private directory outside the repository, then rerun `scripts/jig doctor`.",
-        ),
-        TrackerError::InvalidInput { .. }
-        | TrackerError::UnsupportedResponse { .. }
-        | TrackerError::IssueMissing { .. }
-        | TrackerError::IssueTombstoned { .. }
-        | TrackerError::BlockedTransition { .. }
-        | TrackerError::AssignmentConflict { .. }
-        | TrackerError::AmbiguousIssueId { .. }
-        | TrackerError::TimedOut { .. }
-        | TrackerError::CancelledBeforeStart { .. }
-        | TrackerError::Cancelled { .. }
-        | TrackerError::OutputLimit { .. }
-        | TrackerError::ProcessFailure { .. }
-        | TrackerError::IndeterminateWrite { .. } => None,
-    };
-    let status = match &error {
-        TrackerError::BinaryMissing => "missing",
-        TrackerError::ExecutableCandidateInvalid => "invalid executable",
-        TrackerError::ExecutableSnapshotUnavailable => "unsupported environment",
-        TrackerError::ExecutableChanged => "changed binary",
-        TrackerError::UnsupportedBinary { .. } => "unsupported",
-        TrackerError::UnsupportedPlatform => "unsupported platform",
-        TrackerError::InvalidWorkspace { .. } => "invalid workspace",
-        TrackerError::StaleStorage => "stale storage",
-        TrackerError::StoreSnapshotTooLarge { .. } => "snapshot too large",
-        TrackerError::StoreChangedDuringSnapshot => "store busy",
-        TrackerError::StoreSnapshotTimedOut => "snapshot timed out",
-        TrackerError::UnsafeTemporaryDirectory { .. } => "unsafe temporary directory",
-        TrackerError::TimedOut { .. } => "timed out",
-        TrackerError::CancelledBeforeStart { .. } | TrackerError::Cancelled { .. } => "cancelled",
-        TrackerError::OutputLimit { .. } => "output limit",
-        TrackerError::UnsupportedResponse { .. } => "unsupported response",
-        TrackerError::InvalidInput { .. }
-        | TrackerError::IssueMissing { .. }
-        | TrackerError::IssueTombstoned { .. }
-        | TrackerError::BlockedTransition { .. }
-        | TrackerError::AssignmentConflict { .. }
-        | TrackerError::AmbiguousIssueId { .. }
-        | TrackerError::ProcessFailure { .. }
-        | TrackerError::IndeterminateWrite { .. } => "error",
-    };
-    let check = tracker_failure(
+        false,
         status,
-        format!("configured Beads diagnostics failed: {error}"),
-        discovery,
-    );
-    if let Some(fix) = fix {
-        check.with_fix(fix)
-    } else {
-        check
-    }
-}
-
-fn tracker_failure(
-    status: &str,
-    detail: String,
-    discovery: Option<&TrackerDiscovery>,
-) -> DoctorCheck {
-    check("tracker", "Work tracker", true, false, status, detail).with_data(discovery.map_or_else(
-        || json!({ "configured": true, "root": ".beads" }),
-        discovery_data,
-    ))
-}
-
-fn discovery_data(discovery: &TrackerDiscovery) -> serde_json::Value {
-    json!({
+        format!("configured Beads JSONL diagnostics failed: {error}"),
+    )
+    .with_data(json!({
         "configured": true,
         "root": ".beads",
-        "version": discovery.version,
-        "profile": profile_label(discovery.profile),
-        "supported_operations": discovery
-            .capabilities
-            .iter()
-            .map(|capability| capability_label(*capability))
-            .collect::<Vec<_>>(),
-    })
-}
-
-const fn profile_label(profile: TrackerProfile) -> &'static str {
-    match profile {
-        TrackerProfile::Beads0_5_7 => "beads_0_5_7",
-        TrackerProfile::Unsupported => "unsupported",
-    }
-}
-
-const fn capability_label(capability: TrackerCapability) -> &'static str {
-    match capability {
-        TrackerCapability::ShowIssue => "show_issue",
-        TrackerCapability::ListComments => "list_comments",
-        TrackerCapability::AddComment => "add_comment",
-        TrackerCapability::ClaimIssue => "claim_issue",
-        TrackerCapability::CloseIssue => "close_issue",
-    }
+        "profile": INPUT_PROFILE,
+        "write_authority": false,
+    }))
+    .with_fix(fix)
 }

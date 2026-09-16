@@ -25,7 +25,6 @@ fn diagnose_missing_state_is_strictly_read_only() {
     assert_eq!(output["totals"]["stream_bytes"], 0);
     assert_eq!(output["sessions"]["projected_shallow_bytes"], 0);
     assert_eq!(output["work_links"]["authority"], "empty");
-    assert_eq!(output["tracker_operations"]["authority"], "empty");
     assert_eq!(before, fixture_paths(temp.path()));
     assert!(!ctx.state_dir().exists());
     assert!(!temp.path().join(".git").exists());
@@ -41,33 +40,17 @@ fn deep_diagnose_uses_journal_authority_while_shallow_remains_generic() {
         b"{\"id\":\"work-link_future\",\"schema_version\":2,\"plan_id\":\"plan_example\"}\n",
     )
     .unwrap();
-    fs::write(
-        ctx.state_file("tracker-operations.jsonl"),
-        b"{\"schema_version\":99}\n",
-    )
-    .unwrap();
-
     let shallow = state_diagnose(&ctx, StateDiagnoseRequest { deep: false });
     assert!(shallow["work_links"].is_null());
-    assert!(shallow["tracker_operations"].is_null());
     assert_eq!(shallow["streams"]["work_links"]["records"], 1);
-    assert_eq!(shallow["streams"]["tracker_operations"]["records"], 1);
 
     let unsupported = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
     assert_eq!(unsupported["work_links"]["authority"], "unsupported");
     assert_eq!(unsupported["work_links"]["unsupported_plans"], 1);
-    assert_eq!(
-        unsupported["tracker_operations"]["authority"],
-        "unsupported"
-    );
-    assert_eq!(unsupported["tracker_operations"]["error_count"], 1);
-
     fs::write(ctx.state_file("work-links.jsonl"), b"{").unwrap();
-    fs::write(ctx.state_file("tracker-operations.jsonl"), b"{").unwrap();
     let torn = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
     assert_eq!(torn["work_links"]["authority"], "torn");
     assert_eq!(torn["work_links"]["torn_tail"], true);
-    assert_eq!(torn["tracker_operations"]["authority"], "torn");
 }
 
 #[test]
@@ -80,12 +63,6 @@ fn journal_stream_diagnostics_enforce_semantic_record_limits() {
         vec![b'x'; super::super::work_links::MAX_WORK_LINK_RECORD_BYTES + 1],
     )
     .unwrap();
-    fs::write(
-        ctx.state_file(super::super::tracker_operations::TRACKER_OPERATIONS_FILE),
-        vec![b'x'; super::super::tracker_operations::MAX_RECORD_BYTES + 1],
-    )
-    .unwrap();
-
     for deep in [false, true] {
         let output = state_diagnose(&ctx, StateDiagnoseRequest { deep });
         assert!(
@@ -94,15 +71,8 @@ fn journal_stream_diagnostics_enforce_semantic_record_limits() {
                 .unwrap()
                 .contains("dashboard read limit")
         );
-        assert!(
-            output["streams"]["tracker_operations"]["scan_error"]
-                .as_str()
-                .unwrap()
-                .contains("dashboard read limit")
-        );
         if deep {
             assert_eq!(output["work_links"]["authority"], "corrupt");
-            assert_eq!(output["tracker_operations"]["authority"], "corrupt");
         }
     }
 }

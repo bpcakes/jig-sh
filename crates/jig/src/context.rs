@@ -28,10 +28,10 @@ pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
 use runtime::non_empty_legacy_jig_version;
 pub(crate) use runtime::{
     CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX, RepoConfigProbe,
-    RuntimeCacheProfile, TRACKER_JOURNAL_CONTRACT_VERSION, active_contract_versions,
+    RuntimeCacheProfile, WORK_LINK_CONTRACT_VERSION, active_contract_versions,
     active_contract_versions_label, is_active_contract_version, is_supported_contract_version,
     runtime_cache_base, runtime_profile_cache_name, runtime_profile_cache_path,
-    supports_tracker_journals,
+    supports_work_links,
 };
 #[cfg(test)]
 pub(crate) use runtime::{

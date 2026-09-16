@@ -1,745 +1,442 @@
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+//! Pure, bounded reads of repository-local Beads JSONL exports.
+//!
+//! JSONL is the task-data boundary. This module never invokes `br`, opens its
+//! database, imports or exports state, or mutates the tracker workspace.
 
-use jig_owned_process::ProcessOutputLimits;
+use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek};
+use std::path::{Path, PathBuf};
+
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-mod path;
-mod process;
-#[cfg(test)]
-pub(crate) use process::TestBrOverride;
-#[allow(
-    dead_code,
-    reason = "T3/T4/T6/T7 consume the staged issue and mutation profile"
-)]
-mod profile_0_5_7;
+pub(crate) const INPUT_PROFILE: &str = "beads-rust-jsonl-v1";
+pub(crate) const PRIMARY_EXPORT: &str = ".beads/issues.jsonl";
+pub(crate) const LEGACY_EXPORT: &str = ".beads/beads.jsonl";
 
-#[cfg(test)]
-mod tests;
-
-#[allow(dead_code, reason = "T3 consumes the staged issue semantic revision")]
+const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+const MAX_ISSUES: usize = 10_000;
+const MAX_JSON_DEPTH: usize = 64;
+const MAX_ID_BYTES: usize = 256;
+const MAX_TITLE_CHARS: usize = 500;
+const MAX_TEXT_BYTES: usize = 256 * 1024;
 const SEMANTIC_REVISION_DOMAIN: &[u8] = b"jig.tracker.issue.semantic.v1\0";
-const SUPPORTED_VERSION: &str = "0.5.7";
-const MAX_TRACKER_ACTOR_BYTES: usize = 256;
-const MAX_TRACKER_MUTATION_TEXT_BYTES: usize = 64 * 1024;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(
-    dead_code,
-    reason = "T3/T4/T6/T7 consume the staged issue and mutation operations"
-)]
-pub(crate) enum TrackerOperation {
-    Version,
-    Info,
-    ShowIssue,
-    ListComments,
-    SyncStatus,
-    AddComment,
-    ClaimIssue,
-    CloseIssue,
-}
-
-impl TrackerOperation {
-    const fn uses_database(self) -> bool {
-        !matches!(self, Self::Version | Self::Info)
-    }
-
-    const fn is_mutation(self) -> bool {
-        matches!(self, Self::AddComment | Self::ClaimIssue | Self::CloseIssue)
-    }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Version => "version discovery",
-            Self::Info => "workspace discovery",
-            Self::ShowIssue => "issue read",
-            Self::ListComments => "comment read",
-            Self::SyncStatus => "storage-readiness check",
-            Self::AddComment => "comment addition",
-            Self::ClaimIssue => "issue claim",
-            Self::CloseIssue => "issue close",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TrackerOutputStream {
-    Stdout,
-    Stderr,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum InvalidWorkspaceReason {
-    RepositoryRoot,
-    TrackerStore,
-    Routing,
-    Database,
-    JsonlExport,
-    HardLinkedAuthority,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-#[allow(
-    dead_code,
-    reason = "T3/T4/T6/T7 consume the staged issue and mutation errors"
-)]
-pub(crate) enum TrackerError {
-    InvalidInput {
-        field: &'static str,
-    },
-    BinaryMissing,
-    ExecutableCandidateInvalid,
-    ExecutableSnapshotUnavailable,
-    ExecutableChanged,
-    UnsupportedBinary {
-        version: String,
-    },
-    UnsupportedPlatform,
-    InvalidWorkspace {
-        reason: InvalidWorkspaceReason,
-    },
-    UnsupportedResponse {
-        operation: TrackerOperation,
-    },
-    IssueMissing {
-        issue_id: String,
-    },
-    IssueTombstoned {
-        issue_id: String,
-    },
-    BlockedTransition {
-        issue_id: String,
-    },
-    AssignmentConflict {
-        issue_id: String,
-    },
-    AmbiguousIssueId {
-        issue_id: String,
-    },
-    StaleStorage,
-    StoreSnapshotTooLarge {
-        limit_bytes: u64,
-    },
-    StoreChangedDuringSnapshot,
-    StoreSnapshotTimedOut,
-    UnsafeTemporaryDirectory {
-        operation: TrackerOperation,
-    },
-    TimedOut {
-        operation: TrackerOperation,
-    },
-    CancelledBeforeStart {
-        operation: TrackerOperation,
-    },
-    Cancelled {
-        operation: TrackerOperation,
-    },
-    OutputLimit {
-        operation: TrackerOperation,
-        stream: TrackerOutputStream,
-    },
-    ProcessFailure {
-        operation: TrackerOperation,
-        exit_code: Option<i32>,
-    },
-    IndeterminateWrite {
-        operation: TrackerOperation,
-    },
-}
-
-impl std::fmt::Display for TrackerError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidInput { field } => write!(formatter, "invalid tracker {field}"),
-            Self::BinaryMissing => {
-                formatter.write_str("the configured Beads executable is unavailable")
-            }
-            Self::ExecutableCandidateInvalid => formatter.write_str(
-                "a Beads executable candidate could not be captured safely",
-            ),
-            Self::ExecutableSnapshotUnavailable => formatter.write_str(
-                "this environment cannot retain an immutable Beads executable snapshot",
-            ),
-            Self::ExecutableChanged => formatter
-                .write_str("the configured Beads executable changed after profile discovery"),
-            Self::UnsupportedBinary { version } => {
-                write!(
-                    formatter,
-                    "Beads version {version} has no supported Jig profile"
-                )
-            }
-            Self::UnsupportedPlatform => formatter.write_str(
-                "the configured Beads adapter is unsupported on this operating system",
-            ),
-            Self::InvalidWorkspace {
-                reason: InvalidWorkspaceReason::HardLinkedAuthority,
-            } => formatter.write_str(
-                "the configured Beads workspace contains a tracker authority file with multiple hard links",
-            ),
-            Self::InvalidWorkspace { reason } => write!(
-                formatter,
-                "the configured Beads workspace failed its {reason:?} boundary check"
-            ),
-            Self::UnsupportedResponse { operation } => {
-                write!(
-                    formatter,
-                    "Beads returned an unsupported response for {}",
-                    operation.label()
-                )
-            }
-            Self::IssueMissing { issue_id } => {
-                write!(formatter, "Beads issue {issue_id} was not found")
-            }
-            Self::IssueTombstoned { issue_id } => {
-                write!(formatter, "Beads issue {issue_id} is tombstoned")
-            }
-            Self::BlockedTransition { issue_id } => write!(
-                formatter,
-                "Beads rejected the transition for issue {issue_id}"
-            ),
-            Self::AssignmentConflict { issue_id } => write!(
-                formatter,
-                "Beads issue {issue_id} cannot be assigned to this actor"
-            ),
-            Self::AmbiguousIssueId { issue_id } => {
-                write!(formatter, "Beads issue ID {issue_id} is ambiguous")
-            }
-            Self::StaleStorage => formatter.write_str("Beads storage is stale or conflicted"),
-            Self::StoreSnapshotTooLarge { limit_bytes } => write!(
-                formatter,
-                "the private Beads store snapshot exceeds its {limit_bytes}-byte limit"
-            ),
-            Self::StoreChangedDuringSnapshot => formatter.write_str(
-                "the Beads store changed while Jig was creating a private snapshot; retry after concurrent tracker activity settles",
-            ),
-            Self::StoreSnapshotTimedOut => formatter.write_str(
-                "the private Beads store snapshot did not complete within the operation deadline",
-            ),
-            Self::UnsafeTemporaryDirectory { operation } => write!(
-                formatter,
-                "the tracker {} refused a repository-local temporary directory",
-                operation.label()
-            ),
-            Self::TimedOut { operation } => {
-                write!(formatter, "the tracker {} timed out", operation.label())
-            }
-            Self::CancelledBeforeStart { operation } => write!(
-                formatter,
-                "the tracker {} was cancelled before start",
-                operation.label()
-            ),
-            Self::Cancelled { operation } => {
-                write!(formatter, "the tracker {} was cancelled", operation.label())
-            }
-            Self::OutputLimit { operation, stream } => write!(
-                formatter,
-                "the tracker {} exceeded its {stream:?} output limit",
-                operation.label()
-            ),
-            Self::ProcessFailure {
-                operation,
-                exit_code,
-            } => match exit_code {
-                Some(code) => write!(
-                    formatter,
-                    "the tracker {} failed with exit status {code}",
-                    operation.label()
-                ),
-                None => write!(formatter, "the tracker {} failed", operation.label()),
-            },
-            Self::IndeterminateWrite { operation } => write!(
-                formatter,
-                "the tracker {} may have been applied; reconcile before retrying",
-                operation.label()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for TrackerError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TrackerProcessPolicy {
-    pub discovery_timeout: Duration,
-    pub read_timeout: Duration,
-    pub mutation_timeout: Duration,
-    pub output_limits: ProcessOutputLimits,
-}
-
-impl Default for TrackerProcessPolicy {
-    fn default() -> Self {
-        Self {
-            discovery_timeout: Duration::from_secs(5),
-            read_timeout: Duration::from_secs(10),
-            mutation_timeout: Duration::from_secs(15),
-            output_limits: ProcessOutputLimits {
-                stdout: 1024 * 1024,
-                stderr: 64 * 1024,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TrackerProfile {
-    Beads0_5_7,
-    Unsupported,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TrackerCapability {
-    ShowIssue,
-    ListComments,
-    AddComment,
-    ClaimIssue,
-    CloseIssue,
-}
-
-const PROFILE_CAPABILITIES: &[TrackerCapability] = &[
-    TrackerCapability::ShowIssue,
-    TrackerCapability::ListComments,
-    TrackerCapability::AddComment,
-    TrackerCapability::ClaimIssue,
-    TrackerCapability::CloseIssue,
-];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TrackerDiscovery {
-    pub version: String,
-    pub profile: TrackerProfile,
-    pub capabilities: &'static [TrackerCapability],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "T3 consumes the staged normalized issue")]
+#[allow(
+    dead_code,
+    reason = "the next delivery milestone consumes exact issue snapshots"
+)]
 pub(crate) struct TrackerIssue {
-    pub provider: &'static str,
-    pub workspace_id: String,
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub acceptance_criteria: String,
-    pub status: String,
-    pub assignee: Option<String>,
-    pub provider_revision: Option<String>,
-    pub semantic_revision: String,
+    pub(crate) provider: &'static str,
+    pub(crate) workspace_id: String,
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) acceptance_criteria: String,
+    pub(crate) status: String,
+    pub(crate) assignee: Option<String>,
+    pub(crate) provider_revision: String,
+    pub(crate) semantic_revision: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "T4 consumes the staged normalized comment")]
-pub(crate) struct TrackerComment {
-    pub id: String,
-    pub issue_id: String,
-    pub author: String,
-    pub text: String,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(
-    dead_code,
-    reason = "T6/T7 consume the staged normalized mutation result"
-)]
-pub(crate) struct TrackerMutation {
-    pub issue_id: String,
-    pub status: Option<String>,
-    pub assignee: Option<String>,
-    pub provider_revision: Option<String>,
+enum ExportIssue {
+    Live(Box<TrackerIssue>),
+    Tombstone,
 }
 
 #[derive(Debug)]
-pub(crate) struct BeadsAdapter {
-    root: PathBuf,
-    executable: process::ResolvedExecutable,
-    version: String,
+pub(crate) struct BeadsExport {
+    relative_path: PathBuf,
+    issues: BTreeMap<String, ExportIssue>,
+}
+
+impl BeadsExport {
+    pub(crate) fn open(root: &Path, workspace_id: &str) -> Result<Self, BeadsJsonlError> {
+        validate_workspace_id(workspace_id)?;
+        crate::repository_path::validate_repository_directory_path(root, Path::new(".beads"))
+            .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
+        let relative_path = select_export(root)?;
+        let bytes = read_stable_export(root, &relative_path)?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| BeadsJsonlError::InvalidUtf8)?;
+        let issues = parse_export(text, workspace_id)?;
+        Ok(Self {
+            relative_path,
+            issues,
+        })
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.issues.len()
+    }
+
+    pub(crate) fn relative_path(&self) -> &Path {
+        &self.relative_path
+    }
+
     #[allow(
         dead_code,
-        reason = "T3/T4/T6/T7 consume the staged workspace-bound operations"
+        reason = "the next delivery milestone consumes exact issue snapshots"
     )]
-    workspace_id: String,
-    store: Option<process::RetainedStore>,
-    profile: TrackerProfile,
-    policy: TrackerProcessPolicy,
-}
-
-#[cfg(test)]
-type AfterProfiledProcessHook = Box<dyn FnMut(TrackerOperation)>;
-
-#[cfg(test)]
-thread_local! {
-    static TEST_AFTER_PROFILED_PROCESS_HOOK:
-        std::cell::RefCell<Option<AfterProfiledProcessHook>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-struct TestAfterProfiledProcessHook {
-    previous: Option<AfterProfiledProcessHook>,
-}
-
-#[cfg(test)]
-impl TestAfterProfiledProcessHook {
-    fn set(hook: impl FnMut(TrackerOperation) + 'static) -> Self {
-        let previous =
-            TEST_AFTER_PROFILED_PROCESS_HOOK.with(|value| value.replace(Some(Box::new(hook))));
-        Self { previous }
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestAfterProfiledProcessHook {
-    fn drop(&mut self) {
-        let previous = self.previous.take();
-        TEST_AFTER_PROFILED_PROCESS_HOOK.with(|value| {
-            value.replace(previous);
-        });
-    }
-}
-
-#[cfg(test)]
-fn run_test_after_profiled_process_hook(operation: TrackerOperation) {
-    TEST_AFTER_PROFILED_PROCESS_HOOK.with(|value| {
-        if let Some(hook) = value.borrow_mut().as_mut() {
-            hook(operation);
+    pub(crate) fn issue(&self, exact_id: &str) -> Result<&TrackerIssue, BeadsJsonlError> {
+        validate_issue_id(exact_id)?;
+        match self.issues.get(exact_id) {
+            Some(ExportIssue::Live(issue)) => Ok(issue),
+            Some(ExportIssue::Tombstone) => Err(BeadsJsonlError::IssueTombstoned),
+            None => Err(BeadsJsonlError::IssueMissing),
         }
-    });
+    }
 }
 
-#[cfg(not(test))]
-fn run_test_after_profiled_process_hook(_operation: TrackerOperation) {}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BeadsJsonlError {
+    InvalidWorkspace,
+    MissingExport,
+    AmbiguousExport,
+    UnsafeExport,
+    ExportTooLarge,
+    ChangedDuringRead,
+    InvalidUtf8,
+    LineTooLong { line: usize },
+    TooManyIssues,
+    InvalidRecord { line: usize, reason: &'static str },
+    DuplicateIssueId { line: usize },
+    InvalidIssueId,
+    IssueMissing,
+    IssueTombstoned,
+}
 
-impl BeadsAdapter {
-    pub(crate) fn discover(
-        root: &Path,
-        workspace_id: &str,
-        policy: TrackerProcessPolicy,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<(Self, TrackerDiscovery), TrackerError> {
-        validate_workspace_id(workspace_id)?;
-        let budget = process::OperationBudget::new(policy.discovery_timeout);
-        budget.checkpoint_before_spawn(TrackerOperation::Version, cancelled)?;
-        let root = path::canonical_repository_root(root)?;
-        budget.checkpoint_before_spawn(TrackerOperation::Version, cancelled)?;
-        path::validate_store(&root)?;
-        budget.checkpoint_before_spawn(TrackerOperation::Version, cancelled)?;
-        let executable = process::resolve_br(&root, budget, TrackerOperation::Version, cancelled)?;
-        let runner = process::ProcessRunner::new(&root, &executable, None, policy);
-        let version_value = runner.run_json_with_budget(
-            TrackerOperation::Version,
-            &["version"],
-            budget,
-            cancelled,
-        )?;
-        let version = profile_0_5_7::parse_version(&version_value)?;
-        let profile = if version == SUPPORTED_VERSION {
-            TrackerProfile::Beads0_5_7
-        } else {
-            TrackerProfile::Unsupported
-        };
-
-        if profile == TrackerProfile::Unsupported {
-            let discovery = TrackerDiscovery {
-                version,
-                profile,
-                capabilities: &[],
-            };
-            return Ok((
-                Self {
-                    root,
-                    executable,
-                    version: discovery.version.clone(),
-                    workspace_id: workspace_id.into(),
-                    store: None,
-                    profile,
-                    policy,
-                },
-                discovery,
-            ));
-        }
-
-        let info_value = runner.run_json_with_budget(
-            TrackerOperation::Info,
-            &["--no-db", "where"],
-            budget,
-            cancelled,
-        )?;
-        let info = profile_0_5_7::parse_info(&info_value)?;
-        let (database_path, jsonl_path) = path::validate_discovered_paths(&root, &info)?;
-        let store = process::RetainedStore::capture(
-            database_path,
-            jsonl_path,
-            budget,
-            TrackerOperation::Info,
-            cancelled,
-        )?;
-        let discovery = TrackerDiscovery {
-            version,
-            profile,
-            capabilities: PROFILE_CAPABILITIES,
-        };
-        Ok((
-            Self {
-                root,
-                executable,
-                version: discovery.version.clone(),
-                workspace_id: workspace_id.into(),
-                store: Some(store),
-                profile,
-                policy,
-            },
-            discovery,
-        ))
-    }
-
-    #[allow(dead_code, reason = "T3 consumes the staged issue read")]
-    pub(crate) fn show_issue(
-        &self,
-        issue_id: &str,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<TrackerIssue, TrackerError> {
-        validate_issue_id(issue_id)?;
-        let value = self.run_profiled(
-            TrackerOperation::ShowIssue,
-            &["show", "--", issue_id],
-            cancelled,
-        )?;
-        profile_0_5_7::parse_issue(&value, &self.workspace_id, issue_id)
-    }
-
-    #[allow(dead_code, reason = "T4 consumes the staged comment read")]
-    pub(crate) fn list_comments(
-        &self,
-        issue_id: &str,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<Vec<TrackerComment>, TrackerError> {
-        validate_issue_id(issue_id)?;
-        let value = self.run_profiled(
-            TrackerOperation::ListComments,
-            &["comments", "list", "--", issue_id],
-            cancelled,
-        )?;
-        profile_0_5_7::parse_comments(&value, issue_id)
-    }
-
-    #[allow(dead_code, reason = "T4 consumes the staged comment mutation")]
-    pub(crate) fn add_comment(
-        &self,
-        issue_id: &str,
-        actor: &str,
-        message: &str,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<TrackerComment, TrackerError> {
-        validate_issue_id(issue_id)?;
-        validate_argument("actor", actor, MAX_TRACKER_ACTOR_BYTES)?;
-        validate_argument("comment", message, MAX_TRACKER_MUTATION_TEXT_BYTES)?;
-        let budget = process::OperationBudget::new(self.policy.mutation_timeout);
-        self.check_storage_readiness_with_budget(budget, cancelled)?;
-        let actor_argument = format!("--actor={actor}");
-        let message_argument = format!("--message={message}");
-        let value = self.run_profiled_with_budget(
-            TrackerOperation::AddComment,
-            &[
-                "comments",
-                "add",
-                &actor_argument,
-                &message_argument,
-                "--",
-                issue_id,
-            ],
-            budget,
-            cancelled,
-        )?;
-        profile_0_5_7::parse_comment(&value, issue_id, actor, message)
-            .map_err(|error| mutation_response_error(error, TrackerOperation::AddComment))
-    }
-
-    #[allow(dead_code, reason = "T6 consumes the staged claim mutation")]
-    pub(crate) fn claim_issue(
-        &self,
-        issue_id: &str,
-        actor: &str,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<TrackerMutation, TrackerError> {
-        validate_issue_id(issue_id)?;
-        validate_argument("actor", actor, MAX_TRACKER_ACTOR_BYTES)?;
-        let budget = process::OperationBudget::new(self.policy.mutation_timeout);
-        self.check_storage_readiness_with_budget(budget, cancelled)?;
-        let actor_argument = format!("--actor={actor}");
-        let value = self.run_profiled_with_budget(
-            TrackerOperation::ClaimIssue,
-            &["update", "--claim", &actor_argument, "--", issue_id],
-            budget,
-            cancelled,
-        )?;
-        profile_0_5_7::parse_claim(&value, issue_id, actor)
-            .map_err(|error| mutation_response_error(error, TrackerOperation::ClaimIssue))
-    }
-
-    #[allow(dead_code, reason = "T7 consumes the staged close mutation")]
-    pub(crate) fn close_issue(
-        &self,
-        issue_id: &str,
-        actor: &str,
-        reason: &str,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<TrackerMutation, TrackerError> {
-        validate_issue_id(issue_id)?;
-        validate_argument("actor", actor, MAX_TRACKER_ACTOR_BYTES)?;
-        validate_argument("close reason", reason, MAX_TRACKER_MUTATION_TEXT_BYTES)?;
-        let budget = process::OperationBudget::new(self.policy.mutation_timeout);
-        self.check_storage_readiness_with_budget(budget, cancelled)?;
-        let actor_argument = format!("--actor={actor}");
-        let reason_argument = format!("--reason={reason}");
-        let value = self.run_profiled_with_budget(
-            TrackerOperation::CloseIssue,
-            &["close", &actor_argument, &reason_argument, "--", issue_id],
-            budget,
-            cancelled,
-        )?;
-        profile_0_5_7::parse_close(&value, issue_id)
-            .map_err(|error| mutation_response_error(error, TrackerOperation::CloseIssue))
-    }
-
-    fn run_profiled(
-        &self,
-        operation: TrackerOperation,
-        args: &[&str],
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<serde_json::Value, TrackerError> {
-        let budget = process::OperationBudget::new(self.operation_timeout(operation));
-        self.run_profiled_with_budget(operation, args, budget, cancelled)
-    }
-
-    fn run_profiled_with_budget(
-        &self,
-        operation: TrackerOperation,
-        args: &[&str],
-        budget: process::OperationBudget,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<serde_json::Value, TrackerError> {
-        budget.checkpoint_before_spawn(operation, cancelled)?;
-        self.require_supported()?;
-        self.revalidate_workspace_with_budget(operation, budget, cancelled)?;
-        let store = self
-            .store
-            .as_ref()
-            .ok_or(TrackerError::UnsupportedResponse { operation })?;
-        let result =
-            process::ProcessRunner::new(&self.root, &self.executable, Some(store), self.policy)
-                .run_json_with_budget(operation, args, budget, cancelled);
-        run_test_after_profiled_process_hook(operation);
-        let workspace = self.revalidate_workspace();
-        match (result, workspace) {
-            (Ok(value), Ok(())) => Ok(value),
-            (Err(error), Ok(())) => Err(error),
-            (_, Err(_)) if operation.is_mutation() => {
-                Err(TrackerError::IndeterminateWrite { operation })
+impl std::fmt::Display for BeadsJsonlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidWorkspace => {
+                formatter.write_str("the .beads workspace is not a safe repository-local directory")
             }
-            (_, Err(error)) => Err(error),
-        }
-    }
-
-    pub(crate) fn check_storage_readiness(
-        &self,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<(), TrackerError> {
-        let budget = process::OperationBudget::new(self.policy.read_timeout);
-        self.check_storage_readiness_with_budget(budget, cancelled)
-    }
-
-    fn check_storage_readiness_with_budget(
-        &self,
-        budget: process::OperationBudget,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<(), TrackerError> {
-        budget.checkpoint_before_spawn(TrackerOperation::SyncStatus, cancelled)?;
-        self.require_supported()?;
-        self.revalidate_workspace_with_budget(TrackerOperation::SyncStatus, budget, cancelled)?;
-        let value = self.run_profiled_with_budget(
-            TrackerOperation::SyncStatus,
-            &["sync", "--allow-external-jsonl", "--status"],
-            budget,
-            cancelled,
-        )?;
-        profile_0_5_7::require_mutation_ready(&value)?;
-        self.revalidate_workspace()
-    }
-
-    fn require_supported(&self) -> Result<(), TrackerError> {
-        if self.profile == TrackerProfile::Beads0_5_7 {
-            Ok(())
-        } else {
-            Err(TrackerError::UnsupportedBinary {
-                version: self.version.clone(),
-            })
-        }
-    }
-
-    fn revalidate_workspace(&self) -> Result<(), TrackerError> {
-        let store = self.store.as_ref().ok_or(TrackerError::InvalidWorkspace {
-            reason: InvalidWorkspaceReason::Database,
-        })?;
-        path::revalidate_paths(&self.root, store.database_path(), store.jsonl_path())?;
-        store.verify_paths()
-    }
-
-    fn revalidate_workspace_with_budget(
-        &self,
-        operation: TrackerOperation,
-        budget: process::OperationBudget,
-        cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<(), TrackerError> {
-        budget.checkpoint_before_spawn(operation, cancelled)?;
-        self.revalidate_workspace()
-    }
-
-    const fn operation_timeout(&self, operation: TrackerOperation) -> Duration {
-        match operation {
-            TrackerOperation::Version | TrackerOperation::Info => self.policy.discovery_timeout,
-            operation if operation.is_mutation() => self.policy.mutation_timeout,
-            _ => self.policy.read_timeout,
+            Self::MissingExport => formatter.write_str("no supported Beads JSONL export exists"),
+            Self::AmbiguousExport => {
+                formatter.write_str("both .beads/issues.jsonl and .beads/beads.jsonl exist")
+            }
+            Self::UnsafeExport => formatter
+                .write_str("the Beads JSONL export is not a safe regular repository-local file"),
+            Self::ExportTooLarge => write!(
+                formatter,
+                "the Beads JSONL export exceeds the {MAX_INPUT_BYTES}-byte limit"
+            ),
+            Self::ChangedDuringRead => {
+                formatter.write_str("the Beads JSONL export changed while it was being read")
+            }
+            Self::InvalidUtf8 => formatter.write_str("the Beads JSONL export is not UTF-8"),
+            Self::LineTooLong { line } => write!(
+                formatter,
+                "Beads JSONL line {line} exceeds the {MAX_LINE_BYTES}-byte limit"
+            ),
+            Self::TooManyIssues => write!(
+                formatter,
+                "the Beads JSONL export exceeds the {MAX_ISSUES}-issue limit"
+            ),
+            Self::InvalidRecord { line, reason } => {
+                write!(formatter, "Beads JSONL line {line} is invalid: {reason}")
+            }
+            Self::DuplicateIssueId { line } => {
+                write!(formatter, "Beads JSONL line {line} repeats an issue ID")
+            }
+            Self::InvalidIssueId => formatter.write_str("the exact Beads issue ID is invalid"),
+            Self::IssueMissing => formatter.write_str("the exact Beads issue ID was not found"),
+            Self::IssueTombstoned => formatter.write_str("the exact Beads issue ID is tombstoned"),
         }
     }
 }
 
-fn validate_workspace_id(workspace_id: &str) -> Result<(), TrackerError> {
-    let parsed = ulid::Ulid::from_string(workspace_id).map_err(|_| TrackerError::InvalidInput {
-        field: "workspace_id",
-    })?;
-    if parsed.to_string() != workspace_id {
-        return Err(TrackerError::InvalidInput {
-            field: "workspace_id",
+impl std::error::Error for BeadsJsonlError {}
+
+fn select_export(root: &Path) -> Result<PathBuf, BeadsJsonlError> {
+    let primary = Path::new(PRIMARY_EXPORT);
+    let legacy = Path::new(LEGACY_EXPORT);
+    let primary_exists = entry_exists(root.join(primary))?;
+    let legacy_exists = entry_exists(root.join(legacy))?;
+    match (primary_exists, legacy_exists) {
+        (true, true) => Err(BeadsJsonlError::AmbiguousExport),
+        (true, false) => Ok(primary.to_path_buf()),
+        (false, true) => Ok(legacy.to_path_buf()),
+        (false, false) => Err(BeadsJsonlError::MissingExport),
+    }
+}
+
+fn entry_exists(path: PathBuf) -> Result<bool, BeadsJsonlError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(BeadsJsonlError::UnsafeExport),
+    }
+}
+
+fn read_stable_export(root: &Path, relative: &Path) -> Result<Vec<u8>, BeadsJsonlError> {
+    let path = root.join(relative);
+    let named = fs::symlink_metadata(&path).map_err(|_| BeadsJsonlError::UnsafeExport)?;
+    if named.file_type().is_symlink() || !named.is_file() || has_multiple_links(&named) {
+        return Err(BeadsJsonlError::UnsafeExport);
+    }
+    if named.len() > MAX_INPUT_BYTES as u64 {
+        return Err(BeadsJsonlError::ExportTooLarge);
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|_| BeadsJsonlError::UnsafeExport)?;
+    let opened = file.metadata().map_err(|_| BeadsJsonlError::UnsafeExport)?;
+    if !opened.is_file()
+        || has_multiple_links(&opened)
+        || !same_file_state(&named, &opened)
+        || opened.len() > MAX_INPUT_BYTES as u64
+    {
+        return Err(if opened.len() > MAX_INPUT_BYTES as u64 {
+            BeadsJsonlError::ExportTooLarge
+        } else {
+            BeadsJsonlError::UnsafeExport
         });
     }
-    Ok(())
-}
 
-#[allow(dead_code, reason = "T3/T4/T6/T7 consume the staged issue operations")]
-fn validate_issue_id(issue_id: &str) -> Result<(), TrackerError> {
-    if issue_id.is_empty()
-        || issue_id.len() > 256
-        || issue_id.contains('\0')
-        || issue_id.chars().any(char::is_control)
-    {
-        return Err(TrackerError::InvalidInput { field: "issue id" });
+    let first = read_capped(&mut file)?;
+    file.rewind()
+        .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
+    let second = read_capped(&mut file)?;
+    let after = file
+        .metadata()
+        .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
+    if first != second || !same_file_state(&opened, &after) {
+        return Err(BeadsJsonlError::ChangedDuringRead);
     }
-    Ok(())
+    Ok(first)
 }
 
-#[allow(dead_code, reason = "T4/T6/T7 consume the staged mutation operations")]
-fn validate_argument(
-    field: &'static str,
-    value: &str,
-    max_bytes: usize,
-) -> Result<(), TrackerError> {
-    if value.is_empty() || value.len() > max_bytes || value.contains('\0') {
-        Err(TrackerError::InvalidInput { field })
+fn read_capped(file: &mut File) -> Result<Vec<u8>, BeadsJsonlError> {
+    let mut bytes = Vec::new();
+    file.take((MAX_INPUT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| BeadsJsonlError::UnsafeExport)?;
+    if bytes.len() > MAX_INPUT_BYTES {
+        Err(BeadsJsonlError::ExportTooLarge)
+    } else {
+        Ok(bytes)
+    }
+}
+
+#[cfg(unix)]
+fn has_multiple_links(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    metadata.nlink() != 1
+}
+
+#[cfg(not(unix))]
+const fn has_multiple_links(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn same_file_state(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    before.dev() == after.dev()
+        && before.ino() == after.ino()
+        && before.len() == after.len()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_file_state(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    before.len() == after.len() && before.modified().ok() == after.modified().ok()
+}
+
+fn parse_export(
+    input: &str,
+    workspace_id: &str,
+) -> Result<BTreeMap<String, ExportIssue>, BeadsJsonlError> {
+    let mut issues = BTreeMap::new();
+    for (index, raw_line) in input.split_terminator('\n').enumerate() {
+        let line_number = index + 1;
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if line.len() > MAX_LINE_BYTES {
+            return Err(BeadsJsonlError::LineTooLong { line: line_number });
+        }
+        if line.is_empty() {
+            return Err(invalid(line_number, "blank record"));
+        }
+        if issues.len() == MAX_ISSUES {
+            return Err(BeadsJsonlError::TooManyIssues);
+        }
+        let value = crate::strict_json::from_slice(line.as_bytes())
+            .map_err(|_| invalid(line_number, "malformed JSON or duplicate object key"))?;
+        validate_json_value(&value, 1, line_number)?;
+        let (id, issue) = parse_issue(value, workspace_id, line_number)?;
+        if issues.insert(id, issue).is_some() {
+            return Err(BeadsJsonlError::DuplicateIssueId { line: line_number });
+        }
+    }
+    Ok(issues)
+}
+
+fn validate_json_value(value: &Value, depth: usize, line: usize) -> Result<(), BeadsJsonlError> {
+    if depth > MAX_JSON_DEPTH {
+        return Err(invalid(line, "JSON nesting exceeds the supported limit"));
+    }
+    match value {
+        Value::String(text) if text.len() > MAX_TEXT_BYTES => {
+            Err(invalid(line, "a text field exceeds the supported limit"))
+        }
+        Value::Array(values) => values
+            .iter()
+            .try_for_each(|value| validate_json_value(value, depth + 1, line)),
+        Value::Object(values) => values
+            .values()
+            .try_for_each(|value| validate_json_value(value, depth + 1, line)),
+        _ => Ok(()),
+    }
+}
+
+fn parse_issue(
+    value: Value,
+    workspace_id: &str,
+    line: usize,
+) -> Result<(String, ExportIssue), BeadsJsonlError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid(line, "record is not an object"))?;
+    let id = required_text(object, "id", line)?;
+    validate_issue_id(id).map_err(|_| invalid(line, "invalid issue identity"))?;
+    let title = required_text(object, "title", line)?;
+    if title.trim().is_empty() || title.chars().count() > MAX_TITLE_CHARS {
+        return Err(invalid(line, "invalid issue title"));
+    }
+    let status = required_text(object, "status", line)?;
+    if !matches!(
+        status,
+        "open"
+            | "in_progress"
+            | "blocked"
+            | "deferred"
+            | "draft"
+            | "closed"
+            | "tombstone"
+            | "pinned"
+    ) {
+        return Err(invalid(line, "unsupported issue status"));
+    }
+    if !matches!(
+        required_text(object, "issue_type", line)?,
+        "task" | "bug" | "feature" | "epic" | "chore" | "docs" | "question"
+    ) {
+        return Err(invalid(line, "unsupported issue type"));
+    }
+    if !object
+        .get("priority")
+        .and_then(Value::as_u64)
+        .is_some_and(|priority| priority <= 4)
+    {
+        return Err(invalid(line, "invalid issue priority"));
+    }
+    let created_at = required_text(object, "created_at", line)?;
+    let updated_at = required_text(object, "updated_at", line)?;
+    validate_timestamp(created_at, line)?;
+    validate_timestamp(updated_at, line)?;
+    let deleted_at = optional_text(object, "deleted_at", line)?;
+    if let Some(timestamp) = deleted_at {
+        validate_timestamp(timestamp, line)?;
+    }
+    let id = id.to_string();
+    if status == "tombstone" || deleted_at.is_some() {
+        return Ok((id, ExportIssue::Tombstone));
+    }
+
+    let description = optional_text(object, "description", line)?
+        .unwrap_or_default()
+        .to_string();
+    let acceptance_criteria = optional_text(object, "acceptance_criteria", line)?
+        .unwrap_or_default()
+        .to_string();
+    let assignee = optional_text(object, "assignee", line)?.map(str::to_string);
+    let semantic_revision =
+        semantic_revision(workspace_id, &id, title, &description, &acceptance_criteria);
+    Ok((
+        id.clone(),
+        ExportIssue::Live(Box::new(TrackerIssue {
+            provider: "beads",
+            workspace_id: workspace_id.to_string(),
+            id,
+            title: title.to_string(),
+            description,
+            acceptance_criteria,
+            status: status.to_string(),
+            assignee,
+            provider_revision: updated_at.to_string(),
+            semantic_revision,
+        })),
+    ))
+}
+
+fn required_text<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+    line: usize,
+) -> Result<&'a str, BeadsJsonlError> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.contains('\0'))
+        .ok_or_else(|| invalid(line, "missing or invalid required field"))
+}
+
+fn optional_text<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+    line: usize,
+) -> Result<Option<&'a str>, BeadsJsonlError> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.contains('\0') => Ok(Some(value)),
+        Some(_) => Err(invalid(line, "invalid optional field")),
+    }
+}
+
+fn validate_timestamp(value: &str, line: usize) -> Result<(), BeadsJsonlError> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|_| ())
+        .map_err(|_| invalid(line, "invalid RFC3339 timestamp"))
+}
+
+fn validate_workspace_id(workspace_id: &str) -> Result<(), BeadsJsonlError> {
+    let parsed = workspace_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
+    if workspace_id.len() == 26 && parsed.to_string() == workspace_id {
+        Ok(())
+    } else {
+        Err(BeadsJsonlError::InvalidWorkspace)
+    }
+}
+
+fn validate_issue_id(issue_id: &str) -> Result<(), BeadsJsonlError> {
+    if issue_id.is_empty()
+        || issue_id.len() > MAX_ID_BYTES
+        || !issue_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        Err(BeadsJsonlError::InvalidIssueId)
     } else {
         Ok(())
     }
 }
 
-#[allow(dead_code, reason = "T3 consumes the staged issue read")]
 fn semantic_revision(
     workspace_id: &str,
     issue_id: &str,
@@ -762,11 +459,9 @@ fn semantic_revision(
     format!("sha256:{:x}", digest.finalize())
 }
 
-#[allow(dead_code, reason = "T4/T6/T7 consume the staged mutation operations")]
-fn mutation_response_error(error: TrackerError, operation: TrackerOperation) -> TrackerError {
-    if matches!(error, TrackerError::UnsupportedResponse { .. }) {
-        TrackerError::IndeterminateWrite { operation }
-    } else {
-        error
-    }
+const fn invalid(line: usize, reason: &'static str) -> BeadsJsonlError {
+    BeadsJsonlError::InvalidRecord { line, reason }
 }
+
+#[cfg(test)]
+mod tests;

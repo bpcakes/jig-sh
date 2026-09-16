@@ -14,7 +14,7 @@ fn context() -> (TempDir, RepoContext) {
     let temp = TempDir::new().unwrap();
     crate::test_env::TestRepoBuilder::new(temp.path())
         .repo_name("ExampleProject")
-        .contract_version(crate::context::TRACKER_JOURNAL_CONTRACT_VERSION)
+        .contract_version(crate::context::WORK_LINK_CONTRACT_VERSION)
         .config(
             r#"[repository]
 default_check_profile = "verify"
@@ -38,12 +38,23 @@ fn request(plan_id: &str, issue_id: &str) -> WorkLinkRequest {
         WorkLinkSnapshotV1::new(
             1_700_000_000_000,
             "Example issue",
+            "Describe the example work.",
             "Acceptance: preserve the historical plan.",
         )
         .unwrap(),
         WorkLinkEstablishedBy::Attach,
     )
     .unwrap()
+}
+
+#[test]
+fn snapshot_preserves_description_and_acceptance_criteria_as_distinct_fields() {
+    let first = WorkLinkSnapshotV1::new(1, "Example", "ab", "c").unwrap();
+    let second = WorkLinkSnapshotV1::new(1, "Example", "a", "bc").unwrap();
+
+    assert_eq!(first.description, "ab");
+    assert_eq!(first.acceptance_criteria, "c");
+    assert_ne!(first.context_digest, second.context_digest);
 }
 
 fn seed_plan(ctx: &RepoContext, plan_id: &str) {
@@ -137,7 +148,13 @@ fn same_issue_retry_ignores_a_fresh_historical_snapshot() {
     let refreshed = WorkLinkRequest::new(
         "plan_example",
         original.issue,
-        WorkLinkSnapshotV1::new(1_700_000_000_001, "Updated title", "Updated acceptance").unwrap(),
+        WorkLinkSnapshotV1::new(
+            1_700_000_000_001,
+            "Updated title",
+            "Updated description",
+            "Updated acceptance",
+        )
+        .unwrap(),
         WorkLinkEstablishedBy::Start,
     )
     .unwrap();
@@ -155,7 +172,13 @@ fn union_merged_same_issue_links_choose_one_deterministic_snapshot() {
     let second_request = WorkLinkRequest::new(
         "plan_example",
         first_request.issue.clone(),
-        WorkLinkSnapshotV1::new(1_700_000_000_001, "Updated title", "Updated acceptance").unwrap(),
+        WorkLinkSnapshotV1::new(
+            1_700_000_000_001,
+            "Updated title",
+            "Updated description",
+            "Updated acceptance",
+        )
+        .unwrap(),
         WorkLinkEstablishedBy::Start,
     )
     .unwrap();
@@ -288,7 +311,7 @@ fn corruption_for_one_plan_blocks_writes_but_not_reads_for_another_plan() {
     fs::create_dir_all(ctx.state_dir()).unwrap();
     let path = ctx.state_file(WORK_LINKS_FILE);
     let corrupt = concat!(
-        r#"{"id":"work-link_corrupt","schema_version":1,"plan_id":"plan_damaged","issue":{"provider":"beads","workspace_id":"bad/workspace","issue_id":"example-123","tracker_root":".beads"},"snapshot":{"observed_at_ms":1,"title":"Example","acceptance_context":"","context_digest":"invalid"},"established_by":"attach"}"#,
+        r#"{"id":"work-link_corrupt","schema_version":1,"plan_id":"plan_damaged","issue":{"provider":"beads","workspace_id":"bad/workspace","issue_id":"example-123","tracker_root":".beads"},"snapshot":{"observed_at_ms":1,"title":"Example","description":"","acceptance_criteria":"","context_digest":"invalid"},"established_by":"attach"}"#,
         "\n"
     );
     fs::write(&path, corrupt).unwrap();

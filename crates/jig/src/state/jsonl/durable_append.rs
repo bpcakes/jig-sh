@@ -40,7 +40,7 @@ pub(in crate::state) fn append_jsonl_locked<T: Serialize>(
 
 /// Append a record and durably publish the journal name before returning.
 ///
-/// Tracker authority uses this stronger boundary before external side effects.
+/// Durable link authority uses this stronger boundary before returning success.
 /// Other state streams retain their historical file-sync-only behavior.
 pub(in crate::state) fn append_jsonl_durable_locked<T: Serialize>(
     guard: &JsonlWriteGuard,
@@ -78,7 +78,7 @@ fn append_jsonl_locked_with_durability<T: Serialize>(
     Ok(file.metadata()?.len())
 }
 
-/// Re-confirm an already visible tracker record after an ambiguous prior append.
+/// Re-confirm an already visible durable record after an ambiguous prior append.
 pub(in crate::state) fn confirm_jsonl_durable_locked(
     _guard: &JsonlWriteGuard,
     path: &Path,

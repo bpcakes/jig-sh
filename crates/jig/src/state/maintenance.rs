@@ -25,8 +25,6 @@ use super::session_compaction::{
 };
 use super::support::now_ms;
 
-mod restore_protection;
-
 const BACKUP_MANIFEST_VERSION: u32 = 1;
 const SESSIONS_STREAM: &str = "sessions";
 const SESSIONS_SOURCE_PATH: &str = ".agent/state/sessions.jsonl";
@@ -210,111 +208,79 @@ pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) ->
         .context("Failed to sync restored state")?;
 
     let mut recovery_hint = None;
-    let unchanged_value = |before: &super::compression::GzipReadReport| {
-        json!({
+    let result = with_jsonl_write_lock(&state_path, |guard| {
+        let before = sha256_file_or_empty(&state_path)?;
+        if before.uncompressed_bytes == report.uncompressed_bytes
+            && before.uncompressed_sha256 == report.uncompressed_sha256
+        {
+            return Ok(json!({
+                "ok": true,
+                "command": "state restore",
+                "stream": stream.name,
+                "backup_path": backup_dir.display().to_string(),
+                "source_path": stream.source_path,
+                "changed": false,
+                "bytes_restored": report.uncompressed_bytes,
+                "sha256_restored": report.uncompressed_sha256,
+                "replaced_bytes": before.uncompressed_bytes,
+                "replaced_sha256": before.uncompressed_sha256,
+                "recovery_backup_path": null,
+                "writer_coordination_note": MAINTENANCE_WRITER_COORDINATION_NOTE,
+            }));
+        }
+        if stream.name == RUNS_STREAM {
+            super::runs::ensure_run_stream_replaceable(ctx, &state_path, guard)?;
+        }
+        let recovery_dir = if state_path.exists() {
+            Some(
+                create_state_backup(
+                    ctx,
+                    &state_path,
+                    &format!("{}-restore-recovery", stream.name),
+                    stream,
+                    Some((before.uncompressed_bytes, &before.uncompressed_sha256)),
+                )?
+                .0,
+            )
+        } else {
+            None
+        };
+        recovery_hint = recovery_dir.clone();
+        restored
+            .persist(&state_path)
+            .map_err(|error| error.error)
+            .with_context(|| {
+                let recovery = recovery_dir.as_ref().map_or_else(
+                    || "no prior state existed".into(),
+                    |path| format!("current state is backed up at {}", path.display()),
+                );
+                format!("Failed to restore {}; {recovery}", state_path.display())
+            })?;
+        sync_directory(parent).with_context(|| {
+            let recovery = recovery_dir.as_ref().map_or_else(
+                || "no prior state existed".into(),
+                |path| format!("replaced state is backed up at {}", path.display()),
+            );
+            format!(
+                "Restored {} but failed to sync its directory; {recovery}",
+                state_path.display()
+            )
+        })?;
+        Ok(json!({
             "ok": true,
             "command": "state restore",
             "stream": stream.name,
             "backup_path": backup_dir.display().to_string(),
             "source_path": stream.source_path,
-            "changed": false,
+            "changed": true,
             "bytes_restored": report.uncompressed_bytes,
             "sha256_restored": report.uncompressed_sha256,
             "replaced_bytes": before.uncompressed_bytes,
             "replaced_sha256": before.uncompressed_sha256,
-            "recovery_backup_path": null,
+            "recovery_backup_path": recovery_dir.map(|path| path.display().to_string()),
             "writer_coordination_note": MAINTENANCE_WRITER_COORDINATION_NOTE,
-        })
-    };
-    let restore_stream =
-        |tracker_roots: Option<&super::tracker_operations::PendingTrackerRetentionRoots>| {
-            with_jsonl_write_lock(&state_path, |guard| {
-                let before = sha256_file_or_empty(&state_path)?;
-                if before.uncompressed_bytes == report.uncompressed_bytes
-                    && before.uncompressed_sha256 == report.uncompressed_sha256
-                {
-                    return Ok(unchanged_value(&before));
-                }
-                if let Some(roots) = tracker_roots {
-                    restore_protection::ensure_restored_stream_preserves_tracker_roots(
-                        ctx,
-                        stream.name,
-                        &state_path,
-                        restored.path(),
-                        guard,
-                        roots,
-                    )?;
-                }
-                if stream.name == RUNS_STREAM {
-                    super::runs::ensure_run_stream_replaceable(ctx, &state_path, guard)?;
-                }
-                let recovery_dir = if state_path.exists() {
-                    Some(
-                        create_state_backup(
-                            ctx,
-                            &state_path,
-                            &format!("{}-restore-recovery", stream.name),
-                            stream,
-                            Some((before.uncompressed_bytes, &before.uncompressed_sha256)),
-                        )?
-                        .0,
-                    )
-                } else {
-                    None
-                };
-                recovery_hint = recovery_dir.clone();
-                restored
-                    .persist(&state_path)
-                    .map_err(|error| error.error)
-                    .with_context(|| {
-                        let recovery = recovery_dir.as_ref().map_or_else(
-                            || "no prior state existed".into(),
-                            |path| format!("current state is backed up at {}", path.display()),
-                        );
-                        format!("Failed to restore {}; {recovery}", state_path.display())
-                    })?;
-                sync_directory(parent).with_context(|| {
-                    let recovery = recovery_dir.as_ref().map_or_else(
-                        || "no prior state existed".into(),
-                        |path| format!("replaced state is backed up at {}", path.display()),
-                    );
-                    format!(
-                        "Restored {} but failed to sync its directory; {recovery}",
-                        state_path.display()
-                    )
-                })?;
-                Ok(json!({
-                    "ok": true,
-                    "command": "state restore",
-                    "stream": stream.name,
-                    "backup_path": backup_dir.display().to_string(),
-                    "source_path": stream.source_path,
-                    "changed": true,
-                    "bytes_restored": report.uncompressed_bytes,
-                    "sha256_restored": report.uncompressed_sha256,
-                    "replaced_bytes": before.uncompressed_bytes,
-                    "replaced_sha256": before.uncompressed_sha256,
-                    "recovery_backup_path": recovery_dir.map(|path| path.display().to_string()),
-                    "writer_coordination_note": MAINTENANCE_WRITER_COORDINATION_NOTE,
-                }))
-            })
-        };
-    if matches!(stream.name, RECEIPTS_STREAM | RUNS_STREAM)
-        && let Some(before) = restore_protection::unchanged_stream_snapshot(
-            &state_path,
-            report.uncompressed_bytes,
-            &report.uncompressed_sha256,
-        )?
-    {
-        return Ok(unchanged_value(&before));
-    }
-    let result = if matches!(stream.name, RECEIPTS_STREAM | RUNS_STREAM) {
-        super::tracker_operations::with_tracker_operations_coordination_lock(ctx, |roots| {
-            restore_stream(Some(roots))
-        })
-    } else {
-        restore_stream(None)
-    };
+        }))
+    });
     result.map_err(|error| {
         let recovery = recovery_hint.as_ref().map_or_else(
             || "no replaced-state recovery backup was needed or completed".into(),
@@ -534,7 +500,6 @@ fn sha256_file_or_empty(path: &Path) -> Result<super::compression::GzipReadRepor
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
     use std::fs;
 
     use serde_json::json;
@@ -543,33 +508,6 @@ mod tests {
     use crate::test_env::TestRepoBuilder;
 
     use super::*;
-
-    fn write_tracker_repo(root: &Path) -> RepoContext {
-        TestRepoBuilder::new(root)
-            .repo_name("ExampleProject")
-            .contract_version(crate::context::TRACKER_JOURNAL_CONTRACT_VERSION)
-            .config(
-                r#"[repository]
-default_check_profile = "verify"
-components = []
-actions = []
-profiles = []"#,
-            )
-            .write();
-        let contract_path = root.join(".agent/jig-contract.json");
-        let mut contract: Value =
-            serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
-        contract["default_check_profile"] = json!("verify");
-        fs::write(contract_path, serde_json::to_vec_pretty(&contract).unwrap()).unwrap();
-        RepoContext::load_from(root).unwrap()
-    }
-
-    fn backup_entries(ctx: &RepoContext) -> BTreeSet<PathBuf> {
-        fs::read_dir(ctx.root().join(".agent/.cache/state-backups"))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect()
-    }
 
     fn write_recursive_sessions(ctx: &RepoContext) -> Vec<u8> {
         fs::create_dir_all(ctx.state_dir()).unwrap();
@@ -668,125 +606,5 @@ profiles = []"#,
             fs::read(ctx.state_file("sessions.jsonl")).unwrap(),
             current_with_append
         );
-    }
-
-    #[test]
-    fn receipt_restore_must_preserve_pending_tracker_evidence() {
-        let temp = tempdir().unwrap();
-        let ctx = write_tracker_repo(temp.path());
-        fs::create_dir_all(ctx.state_dir()).unwrap();
-        let receipts_path = ctx.state_file("receipts.jsonl");
-        fs::write(&receipts_path, b"").unwrap();
-        let (missing_backup, _) =
-            create_receipts_backup(&ctx, &receipts_path, "receipts-missing-test", None).unwrap();
-        super::super::plans::seed_open_plan_for_test(&ctx, "plan_example", "Example plan", "Body")
-            .unwrap();
-        super::super::plans::plans_close(
-            &ctx,
-            super::super::plans::PlanCloseRequest {
-                plan_id: "plan_example".into(),
-                resolution: Some("Example implementation completed".into()),
-            },
-        )
-        .unwrap();
-
-        let original_receipts = fs::read(&receipts_path).unwrap();
-        let receipt: Value = serde_json::from_slice(
-            original_receipts
-                .split(|byte| *byte == b'\n')
-                .find(|line| !line.is_empty())
-                .unwrap(),
-        )
-        .unwrap();
-        let receipt_id = receipt["id"].as_str().unwrap().to_string();
-        let (preserving_backup, _) =
-            create_receipts_backup(&ctx, &receipts_path, "receipts-test", None).unwrap();
-
-        let issue =
-            super::super::work_links::WorkLinkIssueV1::beads("01EXAMPLEWORKSPACE", "example-123")
-                .unwrap();
-        let snapshot = super::super::work_links::WorkLinkSnapshotV1::new(
-            1_700_000_000_000,
-            "Example issue",
-            "Acceptance: preserve pending evidence.",
-        )
-        .unwrap();
-        let link = super::super::work_links::WorkLinkRequest::new(
-            "plan_example",
-            issue,
-            snapshot,
-            super::super::work_links::WorkLinkEstablishedBy::Attach,
-        )
-        .unwrap();
-        super::super::work_links::attach_work_link(&ctx, &link).unwrap();
-
-        let mut intent = super::super::tracker_operations::TrackerOperationEventV1::new(
-            "tracker-operation-restore-safety",
-            "plan_example",
-            super::super::tracker_operations::PortableTrackerIssueRef {
-                provider: "beads".into(),
-                workspace_id: "01EXAMPLEWORKSPACE".into(),
-                issue_id: "example-123".into(),
-                tracker_root: ".beads".into(),
-            },
-            super::super::tracker_operations::TrackerOperationKind::Claim,
-            super::super::tracker_operations::TrackerOperationPhase::Intent,
-            1_700_000_000_001,
-        );
-        intent.receipt_ids.push(receipt_id);
-        super::super::tracker_operations::append_tracker_operation_event(&ctx, &intent).unwrap();
-
-        super::super::plans::seed_open_plan_for_test(
-            &ctx,
-            "plan_other",
-            "Other example plan",
-            "Body",
-        )
-        .unwrap();
-        super::super::plans::plans_close(
-            &ctx,
-            super::super::plans::PlanCloseRequest {
-                plan_id: "plan_other".into(),
-                resolution: Some("Other example implementation completed".into()),
-            },
-        )
-        .unwrap();
-
-        let current_receipts = fs::read(&receipts_path).unwrap();
-        assert_ne!(current_receipts, original_receipts);
-        let work_links_path = ctx.state_file(super::super::work_links::WORK_LINKS_FILE);
-        let operations_path =
-            ctx.state_file(super::super::tracker_operations::TRACKER_OPERATIONS_FILE);
-        let work_links_before = fs::read(&work_links_path).unwrap();
-        let operations_before = fs::read(&operations_path).unwrap();
-        let backups_before = backup_entries(&ctx);
-
-        let error = restore_backup(
-            &ctx,
-            StateRestoreRequest {
-                backup: missing_backup,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("backup omits"));
-        assert_eq!(fs::read(&receipts_path).unwrap(), current_receipts);
-        assert_eq!(fs::read(&work_links_path).unwrap(), work_links_before);
-        assert_eq!(fs::read(&operations_path).unwrap(), operations_before);
-        assert_eq!(backup_entries(&ctx), backups_before);
-
-        let restored = restore_backup(
-            &ctx,
-            StateRestoreRequest {
-                backup: preserving_backup,
-            },
-        )
-        .unwrap();
-        assert_eq!(restored["changed"], true);
-        assert_eq!(fs::read(&receipts_path).unwrap(), original_receipts);
-        assert_eq!(fs::read(&work_links_path).unwrap(), work_links_before);
-        assert_eq!(fs::read(&operations_path).unwrap(), operations_before);
-        assert_eq!(backup_entries(&ctx).len(), backups_before.len() + 1);
     }
 }

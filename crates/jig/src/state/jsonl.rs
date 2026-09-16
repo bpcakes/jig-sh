@@ -27,7 +27,6 @@ pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
 thread_local! {
     static DASHBOARD_SCAN_COUNTS: std::cell::RefCell<std::collections::BTreeMap<PathBuf, usize>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-    static PARENT_DIRECTORY_SYNC_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -38,16 +37,6 @@ pub(crate) fn reset_dashboard_scan_counts() {
 #[cfg(test)]
 pub(crate) fn dashboard_scan_count(path: &Path) -> usize {
     DASHBOARD_SCAN_COUNTS.with(|counts| counts.borrow().get(path).copied().unwrap_or(0))
-}
-
-#[cfg(test)]
-pub(crate) fn reset_parent_directory_sync_count() {
-    PARENT_DIRECTORY_SYNC_COUNT.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-pub(crate) fn parent_directory_sync_count() -> usize {
-    PARENT_DIRECTORY_SYNC_COUNT.with(std::cell::Cell::get)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -317,8 +306,6 @@ fn validate_replacement_record(bytes: &[u8], line_number: u64, path: &Path) -> R
 }
 
 fn sync_parent_directory(parent: &Path) -> Result<()> {
-    #[cfg(test)]
-    PARENT_DIRECTORY_SYNC_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     #[cfg(unix)]
     {
         File::open(parent)

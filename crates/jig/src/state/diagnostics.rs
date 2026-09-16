@@ -27,14 +27,13 @@ use deep::{
     analyze_session_record,
 };
 
-const STATE_STREAMS: [(&str, &str); 7] = [
+const STATE_STREAMS: [(&str, &str); 6] = [
     ("sessions", "sessions.jsonl"),
     ("plans", "plans.jsonl"),
     ("receipts", "receipts.jsonl"),
     ("decisions", "decisions.jsonl"),
     ("runs", "runs.jsonl"),
     ("work_links", "work-links.jsonl"),
-    ("tracker_operations", "tracker-operations.jsonl"),
 ];
 const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
 const RECEIPT_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
@@ -69,11 +68,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
             &ctx.state_file(super::work_links::WORK_LINKS_FILE),
         )
     });
-    let tracker_operations = request.deep.then(|| {
-        super::tracker_operations::tracker_operation_journal_diagnostics_from_path(
-            &ctx.state_file(super::tracker_operations::TRACKER_OPERATIONS_FILE),
-        )
-    });
     let totals = state_totals(&streams, &legacy_archive, &maintenance_cache);
     let recommendations = recommendations(
         request.deep,
@@ -95,7 +89,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         "sessions": request.deep.then_some(session_compaction),
         "receipts": request.deep.then_some(receipt_payload),
         "work_links": work_links,
-        "tracker_operations": tracker_operations,
         "legacy_archive": legacy_archive,
         "maintenance_cache": maintenance_cache,
         "git": git,
@@ -191,12 +184,6 @@ fn inspect_stream(
             path,
             &|| false,
             super::work_links::MAX_WORK_LINK_RECORD_BYTES,
-            &mut visit,
-        ),
-        Some(super::tracker_operations::TRACKER_OPERATIONS_FILE) => scan_jsonl_raw_bounded(
-            path,
-            &|| false,
-            super::tracker_operations::MAX_RECORD_BYTES,
             &mut visit,
         ),
         _ => scan_jsonl_raw(path, &|| false, &mut visit),

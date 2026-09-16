@@ -141,7 +141,7 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
 - `execution`: supervision limits for long-running configured commands and workers
-- `[work.tracker]`: optional external issue-tracker authority. Current source accepts
+- `[work.tracker]`: optional read-only task-snapshot authority. Current source accepts
   only `kind = "beads"`, requires a portable canonical ULID `workspace_id`, fixes the
   store at the repository-root `.beads/`, and defaults `export` to `"manual"`.
 
@@ -571,9 +571,9 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 
 The `work` block declares agent workflow defaults without adding repo-local launcher scripts:
 
-### Optional Beads tracker authority
+### Optional Beads task snapshots
 
-Current source can opt a repository into an external Beads workspace explicitly:
+A repository can opt into a Beads-compatible JSONL task snapshot explicitly:
 
 ```toml
 [work.tracker]
@@ -583,137 +583,19 @@ export = "manual"
 manual_export_guidance = "Run the repository's documented Beads export step."
 ```
 
-`workspace_id` is a stable, canonical uppercase ULID copied with the repository. It is
-not inferred from a checkout directory, Git remote, machine path, or Beads issue prefix.
-The only supported root is the exact repository-local `.beads/` directory; arbitrary or
-parent workspaces are rejected. `export` may be omitted and currently has only the
-conservative `manual` value. `manual_export_guidance` is bounded display text, not a
-command, and Jig never executes it.
+`workspace_id` is a stable, canonical uppercase ULID copied with the repository. It is not inferred from a checkout directory, Git remote, machine path, or issue prefix. The supported tracker root is the exact repository-local `.beads/` directory. `export` may be omitted and currently has only the conservative `manual` value. `manual_export_guidance` is bounded display text used in Doctor recovery instructions; Jig never executes it.
 
-Omitting `[work.tracker]` disables the adapter completely. An unconfigured repository
-does not need `br`, and Doctor does not probe for it merely because a `.beads/` directory
-exists. For a configured repository, current source supports the tested external
-`br 0.5.7` command/JSON profile on Linux and macOS. Other hosts receive an explicit
-unsupported-platform diagnosis. Doctor runs bounded read-only discovery and storage
-diagnostics with automatic import/export disabled. Workspace discovery uses `--no-db where`,
-version and workspace discovery both force `BD_NO_DB=true`, and storage status runs against
-a private copy of the complete database family, including
-the dot-suffixed FrankenSQLite migration-state marker, the legacy health lock with its
-source timestamp, and a private read-only JSONL snapshot. SQLite's rebuildable `-shm`
-coordination file is deliberately omitted; the private provider regenerates it beside the
-copied database and WAL. An absent configured JSONL export becomes an empty private file.
-Provider recovery, lock, WAL, or shared-memory activity therefore stays in temporary
-storage; Doctor never initializes Beads or changes issues,
-comments, configuration, the repository database family, or JSONL export. Unknown versions
-remain unsupported rather than inheriting mutation support from a newer version number.
+JSONL is Jig's task-data boundary. A configured repository must contain exactly one supported export: current `.beads/issues.jsonl` or legacy `.beads/beads.jsonl`. Having both is an error because one may be a stale snapshot. The export and `.beads/` path must be real repository-local files and directories rather than symlinks; on Unix the export must not have another hard link. Jig reads the file twice through one no-follow descriptor and rejects a snapshot that changes during the read.
 
-Discovery is no-DB from the first provider invocation: both the version probe and the
-workspace-path probe force `BD_NO_DB=true`. Store-backed operations force database-backed
-mode even if user or project Beads configuration asks for `no-db`, disable Beads startup
-caching, and remove ambient `BD_*`, `BR_*`, `BEADS_*`, and `TOON_*` configuration before
-restoring only actor/session attribution variables and its explicit profile values. This
-prevents newly added provider configuration names from silently bypassing the boundary
-while retaining ordinary caller identity. Cross-project Beads routing is outside this authority: a local `.beads/routes.jsonl`
-or `.beads/redirect`, or an active ancestor town route table, makes the configured
-workspace invalid. Remove that routing layer or use
-Beads directly when cross-project routing is intentional. Jig also binds the discovered
-database, every present recognized database sidecar (including live `-shm`), the legacy
-lock, fixed provider locks, and the existing JSONL export to
-standalone regular files: a hard-linked alias outside `.beads/` makes the workspace
-invalid and Doctor reports the hard-link condition with its specific repair. Only absolute `PATH` entries outside the
-repository may supply the external `br` executable; empty, relative, and
-repository-owned entries are ignored rather than promoting checkout-controlled bytes
-into provider authority. An external candidate that exists but cannot be captured safely
-is skipped so a later valid installation remains discoverable; if none remains, Jig
-reports that invalid-candidate state separately from a missing binary. Failure of the
-host's execution-snapshot primitive is a separate environment error and does not continue
-searching equivalent candidates. Discovery validates and copies the discovered executable's
-bounded bytes once into a sealed anonymous Linux snapshot or a private read-only named
-macOS snapshot; later calls revalidate the named source file's metadata identity and
-launch that retained snapshot with every inherited `LD_*`
-and `DYLD_*` loader-control variable removed. Shell startup, option, trace, directory,
-and exported-function controls are removed as well, while ordinary identity variables
-remain inherited. Tracker executable, database, JSONL, recognized sidecar, legacy-lock,
-and fixed provider-lock inputs
-are opened nonblocking and without following the leaf symlink before regular-file identity
-validation, so a FIFO cannot escape the operation deadline. Storage-status checks use
-private snapshots of every validated 0.5.7
-file-state health input and the JSONL export and opt into the
-external JSONL snapshot only for the provider's `sync --status` command; issue operations
-do not consult ambient JSONL paths. Issue and comment reads use the private database-family
-snapshot as well, preventing provider read-open housekeeping from changing the source
-store. Mutations receive the validated canonical database pathname because `br 0.5.7`
-derives adjacent database-family locks and sidecars from that namespace; `/dev/fd` cannot
-represent the family portably on macOS. Jig retains the opened database descriptor as an
-identity witness and validates the recognized live family at capture, immediately before
-spawn, and after completion. Provider locks serialize cooperating processes, while
-persistent database replacement and unsafe sidecar type, symlink, or hard-link state are
-caught by Jig's before/after boundary checks.
-Readiness and mutation are necessarily separate `br 0.5.7` invocations:
-the external CLI exposes no generation precondition or inherited-lock handoff, so another
-provider writer can complete between them. The staged mutation primitives therefore do
-not claim a serializable readiness epoch; the linked workflows that later expose them must
-persist intent, reread the issue, and reconcile export state after every attempted write.
-This profile also does not claim protection from an uncooperative same-user
-filesystem writer that swaps and restores the database or a sidecar during that handoff;
-a detected post-spawn authority change makes the mutation indeterminate. Store snapshot work,
-readiness, and the write share the public operation's timeout and cancellation budget
-until each provider process is terminal. A strictly decoded terminal response plus
-successful final authority validation wins over cancellation observed after exit. If the
-database or WAL changes while Jig copies it, Jig discards that generation and retries the
-whole snapshot up to three times with short bounded backoff inside the same budget;
-exhaustion reports transient
-tracker activity rather than workspace corruption. Each private store snapshot is also
-capped at 512 MiB of aggregate
-logical source bytes before copying, so a large or sparse store fails with a typed size error
-instead of expanding without a disk bound. A fresh private generation is materialized for
-each issue read, comment read, or readiness check because `br 0.5.7` may modify the private
-database it opens and the next operation must observe current source state. Snapshot cost
-is therefore linear in the current database-family size. The 512 MiB limit is a hard
-resource ceiling, not a latency guarantee; a smaller store can still exhaust the operation
-deadline on sufficiently slow storage. Snapshot deadline exhaustion is reported separately
-from a timeout in the external provider, so remediation can target store activity or size.
-Private readiness and macOS executable
-snapshots use the canonical ambient temporary root only when it is outside the repository;
-a repo-local `TMPDIR` fails before the provider starts. Replacing or upgrading the named binary
-requires fresh discovery.
+The `beads-rust-jsonl-v1` reader is pure and read-only. It invokes no `br` executable, opens no SQLite database, imports or exports no data, and has no platform-specific process dependency. It validates the whole export before exposing exact issue IDs: at most 16 MiB, 1 MiB per record, 10,000 issues, 64 JSON container levels, unique JSON object keys, unique issue IDs, bounded strings, supported required task fields, and RFC 3339 timestamps. Unknown fields are accepted within those bounds so a newer producer can add data without breaking read-only linking. Errors identify structure and line number without echoing task bodies.
 
-The pinned close profile also preserves the real 0.5.7 nonzero response framing. A close
-whose only issue was skipped is typed only when stdout contains exactly the skipped-result
-document followed by the matching `NOTHING_TO_DO` error document and stderr is empty;
-the result must contain only empty `closed` and `warnings` arrays plus one matching
-two-field `skipped` entry. Extra, malformed, or conflicting output remains an
-indeterminate write.
-Other recognized mutation rejections likewise require one strict, sole-top-level-error
-document with every 0.5.7 envelope field, whitespace only in the other stream, and the
-profile-defined retryability for that code. Missing fields, conflicting success data, or
-additional output are indeterminate. A strict `AMBIGUOUS_ID` envelope is a definitive
-issue-resolution error rather than an indeterminate write. Successful mutations likewise require whitespace-only
-stderr. Comment success objects and the raw one-item claim/close arrays must contain no
-`error` member; version, workspace, issue, and comment success shapes reject the same
-contradiction. Unobserved claim/close wrapper objects are indeterminate. Free-form mutation
-option values use single-token `--name=value` arguments so values beginning with `-` remain
-values. Actor values are limited to 256 bytes and comment or close-reason values to 64 KiB
-before any readiness check or provider spawn.
+Omitting `[work.tracker]` disables task-snapshot inspection. Doctor then reports the tracker as not configured even if `.beads/` exists. With configuration present, Doctor validates the JSONL snapshot and reports its selected relative path, profile, issue count, and the sole current capability, `read_issue_snapshot`. It does not require `br` on `PATH` and does not inspect whether a Beads SQLite database contains newer, unexported edits.
 
-The one permitted manual-export readiness state is exact: the database is newer, the
-JSONL export and coverage are not, both health fields are `degraded`, and the reliability
-audit contains exactly one `db_newer` anomaly whose severity is `degraded`. Duplicate or
-severity-inconsistent anomalies fail closed as stale storage. A readiness result carrying
-a top-level `error` is unsupported even when its health fields otherwise look safe.
+Because this repository may deliberately disable automatic Beads flush and use a privacy-cleaning helper such as `scripts/beads-sync.py`, `manual` means the exported file is an explicit snapshot. Before handing task-writing ownership from `br` to a future Jig writer, complete and export pending `br` edits. Before handing ownership back, let `br` import and verify Jig's result. Ordinary automatic import is not treated as a general conflict merge when both the database and JSONL changed.
 
-The tracker section is execution authority, so changing its workspace identity or policy
-changes the repository authority digest. Existing update/readoption flows preserve an
-already valid section independently of unrelated configuration validity, but do not
-generate one. If existing tracker or receipt-metadata authority is malformed, both
-`jig update` and write-mode readoption refuse to proceed and name the invalid field rather
-than silently deleting it; explicit setup integration belongs to a
-later release task. Current T2 source exposes no linked `work start`, claim, comment, or
-close command yet.
+Current source does not mutate Beads JSONL, claim tasks, publish backlinks, add comments, or close tasks. Those operations require a separate native-writer milestone. Its compatibility gate must prove a serialized handoff through create/update and export in `br`, Jig's atomic snapshot edit, an ordinary `br` import, re-export, unknown-field preservation, disabled-auto-import behavior, divergent edits, and explicit conflict reporting. Compatibility with Beads data does not imply behavioral equivalence with every `br` command.
 
-Tracker configuration is independent of `work.receipt_metadata = ["beads"]`. The former
-selects external task authority; the latter separately declares that `.beads/` content is
-irrelevant to configured check freshness. Enable either only for its documented purpose.
+The tracker section contributes to repository authority, so changing its workspace identity or export policy changes the authority digest. Existing update/readoption flows preserve an already valid section independently of unrelated configuration validity, but do not generate one. Malformed tracker or receipt-metadata authority makes write-mode update/readoption fail rather than silently deleting it.
 
 ### Gates
 
