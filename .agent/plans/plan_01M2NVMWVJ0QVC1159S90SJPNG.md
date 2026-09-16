@@ -22,8 +22,8 @@ The observable result in this PR is a smaller and platform-neutral authority bou
 - [x] (2026-09-16) Removed the staged external tracker-operation journal and the archive/restore/retention logic whose purpose was mutation recovery.
 - [x] (2026-09-16) Retained and revalidated the portable work-link journal, structured task snapshot model, durable append primitive, configuration preservation, and deep diagnostics relevant to those retained streams.
 - [x] (2026-09-16) Updated public contract, configuration, repository intent, delivery plan, and Beads issue descriptions so they describe JSONL-first ownership and defer native writes.
-- [ ] (2026-09-16) Built the final development binary and passed all five required Jig targets on the final source tree (4,120 tests); macOS validation and final diff inspection remain.
-- [ ] Commit, push, and verify that PR #38 points at the tested commit.
+- [x] (2026-09-16) Built the final development binary, passed all five required Jig targets on the final source tree (4,120 tests), inspected the final diff, and passed the 31-test tracker suite on macOS arm64.
+- [x] (2026-09-16) Committed and pushed the implementation as `6a8c0acb42808a03d567b54efc0f65b11e2d3af8`; verified that open PR #38 points at that commit.
 
 ## Surprises & Discoveries
 
@@ -191,6 +191,8 @@ Names may vary to fit the crate, but the boundary must stay pure and read-only. 
 
 ## Outcomes & Retrospective
 
-The architectural cutover is implemented. The branch removes the live `br` executable/SQLite provider and the speculative tracker-operation recovery stream, replacing them with a 467-line pure JSONL boundary and focused cross-platform tests. The retained work-link snapshot now preserves title, description, and acceptance criteria as distinct fields. On the final Linux source tree, required targets `api:clippy`, `api:fmt`, `api:test`, `repo:contract`, and `repo:file-budget` passed; `api:test` ran 4,120 tests with 3 skipped. Validation receipt: `receipt_01M2P07WW4DQPP6JVB16XJVX6Y`.
+The architectural cutover is complete. The branch removes the live `br` executable/SQLite provider and the speculative tracker-operation recovery stream, replacing them with a 467-line pure JSONL boundary and focused cross-platform tests. The retained work-link snapshot now preserves title, description, and acceptance criteria as distinct fields. The implementation commit deletes 11,947 lines while adding 1,411 lines across code, tests, documentation, and durable work records.
 
-macOS validation, the final commit identifier, PR-head verification, and the resulting handoff status remain to be recorded before this plan is complete.
+On Linux, required targets `api:clippy`, `api:fmt`, `api:test`, `repo:contract`, and `repo:file-budget` passed; `api:test` ran 4,120 tests with 3 skipped. After commit, the commit-bound targets were refreshed successfully under validation receipt `receipt_01M2P1D9C4S9RFK3FHRB71V6GR`. On macOS arm64, a clean temporary checkout of exact commit `6a8c0acb42808a03d567b54efc0f65b11e2d3af8` passed all 31 tracker-filtered tests, including Unix file-identity defenses and Doctor behavior without a process provider; that checkout was removed afterward. Open PR #38 includes the tested implementation commit; the final evidence-only follow-up changes only `.agent` plan and state records. Jig then closed structured work plan `plan_01M2NVMWVJ0QVC1159S90SJPNG` successfully.
+
+The deliberate remaining boundary is product scope rather than recovery debt: this PR exposes Doctor as the only public reader. T3 adds read-only linking against the normalized snapshot. Native JSONL writes, serialized `br` handoff, and their real interoperability matrix remain deferred until a concrete task mutation is required.
