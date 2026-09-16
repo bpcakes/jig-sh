@@ -153,3 +153,77 @@ fn bounded_acknowledgements_collectively_resolve_more_than_one_record_can_name()
         Some(TrackerOperationOutcome::Applied)
     );
 }
+
+#[test]
+fn merged_acknowledgement_tail_requires_reconciliation_evidence_before_resolution() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join(TRACKER_OPERATIONS_FILE);
+    let intent = event(
+        "tracker-event-intent",
+        "tracker-operation-merged-tail",
+        TrackerOperationPhase::Intent,
+    );
+    let attempt = event(
+        "tracker-event-branch-attempt",
+        "tracker-operation-merged-tail",
+        TrackerOperationPhase::Attempt,
+    );
+    let mut branch_acknowledgement = event(
+        "tracker-event-branch-acknowledgement",
+        "tracker-operation-merged-tail",
+        TrackerOperationPhase::Acknowledgement,
+    );
+    branch_acknowledgement.outcome = Some(TrackerOperationOutcome::NoEffect);
+    for fact in [&intent, &attempt, &branch_acknowledgement] {
+        append_line(&path, &serde_json::to_value(fact).unwrap());
+    }
+    assert!(
+        tracker_operation_projection_from_path(&path, &|| false)
+            .unwrap()
+            .operations["tracker-operation-merged-tail"]
+            .is_pending()
+    );
+
+    let mut unsupported_resolution = event(
+        "tracker-event-unsupported-resolution",
+        "tracker-operation-merged-tail",
+        TrackerOperationPhase::Acknowledgement,
+    );
+    unsupported_resolution.outcome = Some(TrackerOperationOutcome::NoEffect);
+    unsupported_resolution.resolves_event_ids = vec![attempt.event_id.clone()];
+    let bytes_before = fs::read(&path).unwrap();
+
+    let error = append_tracker_operation_event_at_path(&path, &unsupported_resolution)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("without observation or error evidence"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes_before);
+    tracker_operation_projection_from_path(&path, &|| false).unwrap();
+
+    let observation = event(
+        "tracker-event-reconciliation-observation",
+        "tracker-operation-merged-tail",
+        TrackerOperationPhase::Observation,
+    );
+    append_tracker_operation_event_at_path(&path, &observation).unwrap();
+    let mut final_acknowledgement = event(
+        "tracker-event-final-acknowledgement",
+        "tracker-operation-merged-tail",
+        TrackerOperationPhase::Acknowledgement,
+    );
+    final_acknowledgement.outcome = Some(TrackerOperationOutcome::NoEffect);
+    final_acknowledgement.resolves_event_ids = vec![attempt.event_id, observation.event_id];
+    append_tracker_operation_event_at_path(&path, &final_acknowledgement).unwrap();
+
+    assert_eq!(
+        tracker_operation_projection_from_path(&path, &|| false)
+            .unwrap()
+            .operations["tracker-operation-merged-tail"]
+            .terminal_outcome,
+        Some(TrackerOperationOutcome::NoEffect)
+    );
+}

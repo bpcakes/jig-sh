@@ -79,6 +79,17 @@ fn protect_explicit(records: Option<&[Value]>, root_ids: &[&str]) -> Result<BTre
     Ok(protected)
 }
 
+fn targetless_receipt(id: &str, tool_name: &str, args: Value, evidence: Value) -> Value {
+    let mut value = receipt(99, None);
+    value["id"] = json!(id);
+    value["tool_name"] = json!(tool_name);
+    value["args"] = args;
+    value["evidence"] = evidence;
+    value.as_object_mut().unwrap().remove("target");
+    value.as_object_mut().unwrap().remove("target_freshness");
+    value
+}
+
 #[test]
 fn deep_chain_reads_journal_once_and_each_required_original_once() {
     const DEPTH: usize = 1_000;
@@ -191,6 +202,59 @@ fn expired_explicit_tracker_root_still_pins_its_dependency_proof() {
     assert_eq!(
         protected,
         BTreeSet::from(["receipt_example_0".into(), "receipt_example_1".into()])
+    );
+}
+
+#[test]
+fn explicit_targetless_aggregates_pin_all_supported_backing_receipts() {
+    let batch = targetless_receipt(
+        "receipt_batch",
+        tool::WORK_CHECK,
+        json!({"receipt_ids": ["receipt_example_1"]}),
+        json!({
+            "schema": WORK_CHECK_EVIDENCE_SCHEMA,
+            "gates": [{
+                "gate_id": "removed-gate",
+                "tool": "jig.test",
+                "status": "passed",
+                "applicability": "applicable",
+                "gate_signature": "signature",
+                "reason": "historical evidence",
+                "tool_receipt_id": "receipt_example_2",
+                "source_batch_receipt_id": "receipt_example_3",
+                "source_tool_receipt_id": "receipt_example_4"
+            }]
+        }),
+    );
+    let review = targetless_receipt(
+        "receipt_review",
+        tool::WORK_REVIEW,
+        json!({}),
+        json!({"worker_receipt_id": "receipt_example_5"}),
+    );
+    let records = [
+        receipt(1, None),
+        receipt(2, None),
+        receipt(3, None),
+        receipt(4, None),
+        receipt(5, None),
+        batch,
+        review,
+    ];
+
+    let protected = protect_explicit(Some(&records), &["receipt_batch", "receipt_review"]).unwrap();
+
+    assert_eq!(
+        protected,
+        BTreeSet::from([
+            "receipt_batch".into(),
+            "receipt_example_1".into(),
+            "receipt_example_2".into(),
+            "receipt_example_3".into(),
+            "receipt_example_4".into(),
+            "receipt_example_5".into(),
+            "receipt_review".into(),
+        ])
     );
 }
 

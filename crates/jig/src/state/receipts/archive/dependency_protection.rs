@@ -7,8 +7,13 @@ use jig_contract::freshness::{
     TargetFreshnessStateV1, supported_freshness_epoch,
 };
 
-use super::{JsonlWriteGuard, target_receipt_status};
+use super::{
+    JsonlWriteGuard, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, receipt_arg_strings,
+    target_receipt_status,
+};
+use crate::state::records::ReceiptRecord;
 use crate::state::{TargetReceiptStatus, time_validity_is_current};
+use crate::tool_defs::tool;
 use originals::ArchiveOriginalIndex;
 
 /// Maintenance must be able to shrink journals larger than inspection limits.
@@ -122,6 +127,7 @@ pub(super) fn protect_receipt_ids(
             };
             visited.insert(id.clone());
             protected.insert(id);
+            pending.extend(aggregate_receipt_references(&receipt)?);
             let Some(target) = receipt.target.as_ref() else {
                 continue;
             };
@@ -165,6 +171,46 @@ pub(super) fn protect_receipt_ids(
         pending.retain(|id| !visited.contains(id));
     }
     Ok(())
+}
+
+/// Follow receipt-to-receipt authority that is independent of target
+/// freshness. Pending tracker operations pin historical evidence, so their
+/// aggregate children remain required even when the corresponding gate is no
+/// longer configured or the aggregate has no target of its own.
+fn aggregate_receipt_references(receipt: &ReceiptRecord) -> Result<BTreeSet<String>> {
+    let mut references = BTreeSet::new();
+    if receipt.tool_name == tool::WORK_CHECK {
+        references.extend(receipt_arg_strings(receipt, "receipt_ids").map(str::to_string));
+        if let Some(evidence) = receipt.evidence.as_ref()
+            && evidence.get("schema").and_then(serde_json::Value::as_str)
+                == Some(WORK_CHECK_EVIDENCE_SCHEMA)
+        {
+            let evidence = serde_json::from_value::<WorkCheckBatchEvidence>(evidence.clone())
+                .context(
+                    "Cannot protect a pending tracker operation's supported work-check evidence",
+                )?;
+            for gate in evidence.gates {
+                references.extend(
+                    [
+                        gate.tool_receipt_id,
+                        gate.source_batch_receipt_id,
+                        gate.source_tool_receipt_id,
+                    ]
+                    .into_iter()
+                    .flatten(),
+                );
+            }
+        }
+    } else if receipt.tool_name == tool::WORK_REVIEW
+        && let Some(worker_receipt_id) = receipt
+            .evidence
+            .as_ref()
+            .and_then(|evidence| evidence.get("worker_receipt_id"))
+            .and_then(serde_json::Value::as_str)
+    {
+        references.insert(worker_receipt_id.to_string());
+    }
+    Ok(references)
 }
 
 mod originals;

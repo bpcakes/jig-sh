@@ -383,6 +383,92 @@ tool = "jig.test"
 }
 
 #[test]
+fn pending_tracker_root_preserves_targetless_work_check_children_after_gate_removal() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    seed_open_plan_for_test(&ctx, "plan_example", "Example plan", "# Example plan\n").unwrap();
+    append_jsonl(
+        &ctx.state_file("plans.jsonl"),
+        &PlanEvent::close(
+            "plan-event-close-example".into(),
+            "plan_example".into(),
+            2,
+            Some("done".into()),
+        ),
+    )
+    .unwrap();
+    let mut child = receipt_record(
+        "receipt_removed_gate_child",
+        tool::TEST,
+        0,
+        DiffStat::default(),
+    );
+    child.plan_id = Some("plan_example".into());
+    child.ended_at_ms = 10;
+    let mut batch = receipt_record(
+        "receipt_pending_work_check",
+        tool::WORK_CHECK,
+        0,
+        DiffStat::default(),
+    );
+    batch.plan_id = Some("plan_example".into());
+    batch.ended_at_ms = 20;
+    batch.args = json!({
+        "gates": ["removed-gate"],
+        "tools": [tool::TEST],
+        "receipt_ids": ["receipt_removed_gate_child"]
+    });
+    let mut unrelated = receipt_record(
+        "receipt_unrelated_old",
+        tool::CLIPPY,
+        0,
+        DiffStat::default(),
+    );
+    unrelated.plan_id = Some("plan_example".into());
+    unrelated.ended_at_ms = 30;
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &child).unwrap();
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &batch).unwrap();
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &unrelated).unwrap();
+    append_jsonl(
+        &ctx.state_file("tracker-operations.jsonl"),
+        &tracker_operation_fact(
+            "tracker-event-intent",
+            "tracker-operation-export",
+            "plan_example",
+            "intent",
+            None,
+            &["receipt_pending_work_check"],
+        ),
+    )
+    .unwrap();
+
+    let archived = receipts_archive(
+        &ctx,
+        StateArchiveRequest {
+            before: "1000".into(),
+            dry_run: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(archived["receipts_archived"], 1);
+    assert_eq!(archived["protected_receipts_retained"], 2);
+    let retained = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))
+        .unwrap()
+        .into_iter()
+        .map(|receipt| receipt.id)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        retained,
+        BTreeSet::from([
+            "receipt_pending_work_check".into(),
+            "receipt_removed_gate_child".into(),
+        ])
+    );
+}
+
+#[test]
 fn missing_pending_tracker_receipt_root_does_not_block_active_archive() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

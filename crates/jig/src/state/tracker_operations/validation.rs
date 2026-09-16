@@ -212,9 +212,15 @@ pub(super) fn validate_append_transition(
                 | TrackerOperationPhase::Acknowledgement
                 | TrackerOperationPhase::Error
         ),
-        TrackerOperationPhase::Acknowledgement => {
-            next.phase == TrackerOperationPhase::Acknowledgement
-        }
+        // A union merge can place an acknowledgement at the physical tail
+        // while leaving a concurrent attempt unresolved. Permit evidence that
+        // reconciles that pending attempt, but never another write attempt.
+        TrackerOperationPhase::Acknowledgement => matches!(
+            next.phase,
+            TrackerOperationPhase::Observation
+                | TrackerOperationPhase::Acknowledgement
+                | TrackerOperationPhase::Error
+        ),
     };
     ensure!(
         allowed,

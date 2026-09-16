@@ -468,6 +468,10 @@ fn append_tracker_operation_event_locked(
     // this check afterward would let caller-controlled timestamps reorder the
     // lifecycle used by the next append.
     validate_append_transition(builder.operations.get(&event.operation_id), event)?;
+    // The durable write must never make a previously readable journal fail
+    // replay. Validate the same candidate-inclusive union projection that the
+    // next reader will observe before appending any bytes.
+    builder.observe_value(raw, None, path)?;
     builder.finish()?;
     append_jsonl_durable_locked(guard, path, event)?;
     Ok(TrackerOperationAppendOutcome::Appended)

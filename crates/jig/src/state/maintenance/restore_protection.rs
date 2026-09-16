@@ -176,6 +176,7 @@ mod tests {
     use crate::command::StateRestoreRequest;
     use crate::context::RepoContext;
     use crate::test_env::TestRepoBuilder;
+    use crate::tool_defs::tool;
 
     fn target_receipt(
         id: &str,
@@ -245,6 +246,28 @@ mod tests {
             "changed_paths": [],
             "diff_stat": {"files": 0, "insertions": 0, "deletions": 0},
             "target_freshness": target_freshness,
+        })
+    }
+
+    fn work_check_receipt(id: &str, plan_id: &str, child_id: &str) -> Value {
+        json!({
+            "id": id,
+            "session_id": "session_example",
+            "plan_id": plan_id,
+            "tool_name": tool::WORK_CHECK,
+            "args": {
+                "gates": ["removed-gate"],
+                "tools": ["jig.test"],
+                "receipt_ids": [child_id],
+            },
+            "started_at_ms": 1,
+            "ended_at_ms": 2,
+            "exit_status": 0,
+            "stdout_preview": "",
+            "stderr_preview": "",
+            "findings": [],
+            "changed_paths": [],
+            "diff_stat": {"files": 0, "insertions": 0, "deletions": 0},
         })
     }
 
@@ -397,5 +420,71 @@ mod tests {
         .unwrap();
         assert_eq!(restored["changed"], true);
         assert_eq!(fs::read(&receipts_path).unwrap(), protected_bytes);
+    }
+
+    #[test]
+    fn receipt_restore_rejects_backup_missing_explicit_work_check_child() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        fs::create_dir_all(ctx.state_dir()).unwrap();
+        let receipts_path = ctx.state_file("receipts.jsonl");
+        let child = target_receipt(
+            "receipt_removed_gate_child",
+            "plan_tracker",
+            "example:removed-gate",
+            None,
+        );
+        let batch = work_check_receipt(
+            "receipt_pending_work_check",
+            "plan_tracker",
+            "receipt_removed_gate_child",
+        );
+
+        write_receipts(&receipts_path, &[&batch]);
+        let (missing_backup, _) = super::super::create_receipts_backup(
+            &ctx,
+            &receipts_path,
+            "receipts-missing-work-check-child",
+            None,
+        )
+        .unwrap();
+        write_receipts(&receipts_path, &[&child, &batch]);
+        let current_bytes = fs::read(&receipts_path).unwrap();
+        fs::write(
+            ctx.state_file("tracker-operations.jsonl"),
+            format!(
+                "{}\n",
+                json!({
+                    "schema_version": 1,
+                    "event_id": "tracker-event-restore-work-check",
+                    "operation_id": "tracker-operation-restore-work-check",
+                    "plan_id": "plan_tracker",
+                    "issue": {
+                        "provider": "beads",
+                        "workspace_id": "ExampleProject",
+                        "issue_id": "example-123",
+                        "tracker_root": ".beads",
+                    },
+                    "kind": "export",
+                    "phase": "intent",
+                    "timestamp_ms": 1,
+                    "receipt_ids": ["receipt_pending_work_check"],
+                })
+            ),
+        )
+        .unwrap();
+
+        let error = super::super::restore_backup(
+            &ctx,
+            StateRestoreRequest {
+                backup: missing_backup,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("backup omits"), "unexpected error: {error}");
+        assert_eq!(fs::read(&receipts_path).unwrap(), current_bytes);
     }
 }
