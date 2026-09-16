@@ -6,7 +6,10 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
-use crate::model::{App, ExitState, Focus, Inspection, Projection, unix_timestamp_now};
+use crate::model::{
+    App, ExitState, FleetAssessment, FleetOutcome, Focus, Inspection, Projection,
+    unix_timestamp_now,
+};
 
 mod configuration;
 
@@ -59,14 +62,15 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
         ])
         .split(area);
     let best = app.best_projection_index_at(now);
-    draw_header(frame, outer[0], app);
+    let fleet = app.fleet_assessment_at(now);
+    draw_header(frame, outer[0], app, fleet.as_ref(), now);
     if area.width >= 96 {
         let content = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
             .split(outer[1]);
         draw_list(frame, content[0], app, now, best);
-        draw_details(frame, content[1], app, now, best);
+        draw_details(frame, content[1], app, now, best, fleet.as_ref());
     } else {
         let list_height = stacked_list_height(outer[1].height);
         let content = Layout::default()
@@ -74,12 +78,18 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
             .constraints([Constraint::Length(list_height), Constraint::Min(0)])
             .split(outer[1]);
         draw_list(frame, content[0], app, now, best);
-        draw_details(frame, content[1], app, now, best);
+        draw_details(frame, content[1], app, now, best, fleet.as_ref());
     }
     draw_footer(frame, outer[2], app);
 }
 
-fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_header(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    fleet: Option<&FleetAssessment>,
+    now: u64,
+) {
     let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let working = !app.inspection_finished;
     let failed = app.inspection_finished
@@ -156,17 +166,38 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(GOOD),
         )
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!(" {} ", app.title()),
-                Style::default().fg(Color::Black).bg(ACCENT).bold(),
-            ),
-            Span::raw("  "),
-            Span::styled(status, status_style),
-        ])),
-        area,
-    );
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!(" {} ", app.title()),
+            Style::default().fg(Color::Black).bg(ACCENT).bold(),
+        ),
+        Span::raw("  "),
+        Span::styled(status, status_style),
+    ])];
+    if app.exit_state.is_none()
+        && let Some(fleet) = fleet
+    {
+        lines.push(Line::from(Span::styled(
+            format!(" {}", fleet.summary_label_at(now)),
+            fleet_style(fleet),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn fleet_style(fleet: &FleetAssessment) -> Style {
+    if fleet.is_stale() {
+        return Style::default().fg(MUTED);
+    }
+    match fleet.outcome() {
+        FleetOutcome::BlockedNow { .. } => Style::default().fg(BAD),
+        FleetOutcome::GapRisk { .. } => Style::default().fg(WARN),
+        FleetOutcome::NoGap {
+            burn_observed: true,
+        } if fleet.coverage().is_complete() => Style::default().fg(GOOD),
+        FleetOutcome::NoGap { .. } => Style::default().fg(WARN),
+        FleetOutcome::Collecting | FleetOutcome::Unsupported(_) => Style::default().fg(MUTED),
+    }
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
@@ -342,7 +373,14 @@ fn inspection_row_style(inspection: &Inspection) -> Style {
     }
 }
 
-fn draw_details(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
+fn draw_details(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    now: u64,
+    best: Option<usize>,
+    fleet: Option<&FleetAssessment>,
+) {
     if app.selected_row().is_none() {
         app.set_detail_scroll_limit(0);
         frame.render_widget(
@@ -351,7 +389,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option
         );
         return;
     }
-    let lines = detail_lines(app, now, best);
+    let lines = detail_lines(app, now, best, fleet);
     let sizing_paragraph = Paragraph::new(lines.clone())
         .block(panel(detail_title(app)))
         .wrap(Wrap { trim: false });
@@ -369,7 +407,12 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option
     );
 }
 
-fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> {
+fn detail_lines(
+    app: &App,
+    now: u64,
+    best: Option<usize>,
+    fleet: Option<&FleetAssessment>,
+) -> Vec<Line<'static>> {
     let Some(row) = app.selected_row() else {
         return Vec::new();
     };
@@ -457,12 +500,29 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                         )));
                     }
                 }
-                if let Some(error) = &details.inspection_error {
-                    lines.push(error_line("Inspection", error));
-                }
-                if let Some(error) = &details.usage_error {
-                    lines.push(error_line("Usage", error));
-                }
+            }
+        }
+        // The fleet result describes the whole account pool, so it stays identical for
+        // every selected or filtered row.
+        if let Some(fleet) = fleet {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Codex fleet forecast",
+                Style::default().fg(ACCENT).bold(),
+            )));
+            lines.extend(
+                fleet
+                    .detail_lines_at(now)
+                    .iter()
+                    .map(|(label, value)| key_value(label, value)),
+            );
+        }
+        if let Inspection::Ready(details) = row.inspection() {
+            if let Some(error) = &details.inspection_error {
+                lines.push(error_line("Inspection", error));
+            }
+            if let Some(error) = &details.usage_error {
+                lines.push(error_line("Usage", error));
             }
         }
     }

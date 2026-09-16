@@ -1,8 +1,15 @@
-use std::{cell::Cell, collections::HashSet};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+};
 
 use jig_tui::{ListViewportState, PreparedFuzzyText, sanitize_text};
 
-use super::{Details, ExitState, Focus, HomeRow, Inspection, unix_timestamp_now};
+use super::{
+    Details, ExitState, Focus, HomeRow, Inspection,
+    fleet::{self, CODEX_SUBSCRIPTION_BUCKET, FleetAssessment, FleetForecast},
+    unix_timestamp_now,
+};
 use crate::{Home, HomeUpdate};
 
 #[derive(Clone, Debug)]
@@ -10,6 +17,9 @@ pub(crate) struct App {
     pub(crate) subscription_buckets: Vec<String>,
     pub(crate) configuration_title: Option<String>,
     pub(crate) static_configuration: bool,
+    /// Opted into explicitly by the Codex picker. Other providers and configuration views
+    /// keep their existing per-account presentation unchanged.
+    pub(crate) codex_fleet_forecast: bool,
     pub(crate) rows: Vec<HomeRow>,
     pub(crate) selected: Option<usize>,
     pub(crate) filter: String,
@@ -25,6 +35,10 @@ pub(crate) struct App {
     pub(crate) discovery_warnings: Vec<String>,
     pub(crate) tick: usize,
     pub(crate) exit_state: Option<ExitState>,
+    /// Bumped whenever inspection changes the row set's usage facts, so the fleet forecast
+    /// is recomputed once per generation instead of once per frame.
+    fleet_generation: usize,
+    fleet_forecast: RefCell<Option<(usize, FleetForecast)>>,
 }
 
 impl App {
@@ -34,9 +48,10 @@ impl App {
             .position(|home| home.current)
             .or((!homes.is_empty()).then_some(0));
         Self {
-            subscription_buckets: vec!["codex".into(), "claude".into()],
+            subscription_buckets: vec![CODEX_SUBSCRIPTION_BUCKET.into(), "claude".into()],
             configuration_title: None,
             static_configuration: false,
+            codex_fleet_forecast: true,
             rows: homes.into_iter().map(HomeRow::new).collect(),
             selected,
             filter: String::new(),
@@ -55,6 +70,8 @@ impl App {
                 .collect(),
             tick: 0,
             exit_state: None,
+            fleet_generation: 0,
+            fleet_forecast: RefCell::new(None),
         }
     }
 
@@ -97,6 +114,33 @@ impl App {
         best.map(|(index, _)| index)
     }
 
+    /// Whether this picker forecasts a collective Codex quota outlook.
+    ///
+    /// Only a Codex subscription picker opts in. Claude, static configurations, and
+    /// providers without subscription semantics keep their existing presentation.
+    pub(crate) fn fleet_forecast_enabled(&self) -> bool {
+        self.codex_fleet_forecast && !self.static_configuration
+    }
+
+    /// Collective quota forecast across every discovered home.
+    ///
+    /// This deliberately reads `rows` rather than `visible_indices()`: a search filter
+    /// changes what is displayed, never the account pool being forecast. `now` only affects
+    /// freshness and countdown presentation, never the modeled timeline.
+    pub(crate) fn fleet_assessment_at(&self, now: u64) -> Option<FleetAssessment> {
+        if !self.fleet_forecast_enabled() {
+            return None;
+        }
+        let mut cached = self.fleet_forecast.borrow_mut();
+        if cached
+            .as_ref()
+            .is_none_or(|(generation, _)| *generation != self.fleet_generation)
+        {
+            *cached = Some((self.fleet_generation, fleet::forecast(&self.rows)));
+        }
+        cached.as_ref().map(|(_, forecast)| forecast.assess_at(now))
+    }
+
     pub(crate) fn apply_update(&mut self, update: HomeUpdate) {
         self.apply_update_at(update, unix_timestamp_now());
     }
@@ -117,6 +161,7 @@ impl App {
             observed_at,
             &self.subscription_buckets,
         )));
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
         self.reconcile_selection();
     }
 
@@ -130,6 +175,7 @@ impl App {
                 row.set_inspection(Inspection::Unavailable);
             }
         }
+        self.fleet_generation = self.fleet_generation.wrapping_add(1);
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
