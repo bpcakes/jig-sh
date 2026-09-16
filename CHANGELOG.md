@@ -6,6 +6,18 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 
 ### Added
 
+- Add a reset-aware collective quota forecast to the `jig codex launch` picker. It
+  answers whether the modeled pool of Codex accounts reaches a period in which no
+  account can accept work, assuming the estimated aggregate pace and work that can
+  move between accounts. The forecast covers every discovered home rather than the
+  current search results, counts distinct quota pools rather than directories,
+  keeps a separate budget per account window, and replaces one window's allowance
+  at each reset. Coverage, the window-average pace basis, the equal-capacity
+  assumption, the periodic-reset approximation, and the finite horizon are all
+  reported, and mixed or unreported plan capacities stay explicitly unsupported
+  rather than being treated as equal. Existing per-account usage, projections, and
+  recommendations are unchanged, and Claude and configuration pickers gain nothing.
+
 - Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
   literal-argv, explicit-shell, target-freshness, and working-file-authority
   changes. Bind repeatable `jig run --arg TARGET:NAME=VALUE` or MCP

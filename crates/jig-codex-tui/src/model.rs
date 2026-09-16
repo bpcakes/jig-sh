@@ -10,11 +10,13 @@ use crate::Home;
 
 mod app;
 mod configuration;
+mod fleet;
 mod projection;
 
 pub(crate) use crate::usage::WindowRole;
 use crate::usage::{self, remaining_percent};
 pub(crate) use app::App;
+pub(crate) use fleet::{FleetAssessment, FleetOutcome};
 pub(crate) use projection::{Projection, UsageSnapshotAssessment};
 use projection::{UsageSnapshotFreshness, WindowProjection};
 
