@@ -1,5 +1,13 @@
 #[cfg(unix)]
 fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorContextChecks) {
+    if ctx.work_tracker().is_some() && checks.tracker.ok {
+        checks.tracker.ok = false;
+        checks.tracker.status = "unverified".to_string();
+        checks.tracker.detail.push_str(
+            "; tracker verification is incomplete because the process-wide doctor signal session could not retire safely",
+        );
+        checks.tracker.fix = Some("Run `scripts/jig doctor` again before linked work.".into());
+    }
     if ctx.sqlx_enabled()
         && ctx
             .required_commands()

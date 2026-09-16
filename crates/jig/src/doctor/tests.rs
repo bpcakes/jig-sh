@@ -54,3 +54,5 @@ mod root;
 mod runtime;
 #[cfg(unix)]
 mod sqlx_versions;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod tracker;

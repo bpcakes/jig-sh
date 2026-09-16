@@ -6,6 +6,11 @@ use globset::GlobBuilder;
 use jig_contract::{ProfileId, TargetId};
 use serde::{Deserialize, Serialize};
 
+mod tracker;
+pub(crate) use tracker::WorkTrackerConfig;
+#[allow(unused_imports)]
+pub(crate) use tracker::WorkTrackerExport;
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkConfig {
@@ -13,6 +18,8 @@ pub(crate) struct WorkConfig {
     /// consumed by checked application, test, build, or policy commands.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     receipt_metadata: Vec<ReceiptMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tracker: Option<WorkTrackerConfig>,
     #[serde(default)]
     checks: Vec<String>,
     #[serde(default)]
@@ -133,6 +140,11 @@ impl super::RepoContext {
     pub(crate) fn work_receipt_metadata_paths(&self) -> Vec<&'static str> {
         self.config.work.receipt_metadata_paths()
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn work_tracker(&self) -> Option<&WorkTrackerConfig> {
+        self.config.work.tracker()
+    }
 }
 
 impl WorkConfig {
@@ -143,6 +155,11 @@ impl WorkConfig {
                 ReceiptMetadata::Beads => ".beads",
             })
             .collect()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn tracker(&self) -> Option<&WorkTrackerConfig> {
+        self.tracker.as_ref()
     }
 
     pub(crate) fn gates(&self) -> Vec<WorkGate> {
@@ -198,6 +215,10 @@ impl WorkConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(tracker) = &self.tracker {
+            tracker.validate()?;
+        }
+
         let mut gate_ids = HashSet::new();
         for gate in &self.gates {
             if !gate_ids.insert(gate.id.as_str()) {
@@ -392,6 +413,7 @@ pub(crate) fn parse_work_gate(value: &toml::Value) -> Result<WorkGate> {
     let gate = value.clone().try_into::<WorkGateConfig>()?;
     let config = WorkConfig {
         receipt_metadata: Vec::new(),
+        tracker: None,
         checks: Vec::new(),
         gates: vec![gate.clone()],
         refinements: Vec::new(),

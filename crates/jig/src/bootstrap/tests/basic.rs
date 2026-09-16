@@ -215,10 +215,31 @@ fn add_project_runtime_tables(repo: &Path) {
         .unwrap()
         .as_table_mut()
         .unwrap()
-        .insert(
-            "checks".into(),
-            toml::Value::Array(vec![toml::Value::String("jig.fmt_check".into())]),
-        );
+        .extend([
+            (
+                "receipt_metadata".into(),
+                toml::Value::Array(vec![toml::Value::String("beads".into())]),
+            ),
+            (
+                "tracker".into(),
+                toml::Value::Table(toml::Table::from_iter([
+                    ("kind".into(), toml::Value::String("beads".into())),
+                    (
+                        "workspace_id".into(),
+                        toml::Value::String("01ARZ3NDEKTSV4RRFFQ69G5FAV".into()),
+                    ),
+                    ("export".into(), toml::Value::String("manual".into())),
+                    (
+                        "manual_export_guidance".into(),
+                        toml::Value::String("Run the ExampleProject export helper.".into()),
+                    ),
+                ])),
+            ),
+            (
+                "checks".into(),
+                toml::Value::Array(vec![toml::Value::String("jig.fmt_check".into())]),
+            ),
+        ]);
 
     let mut workflow = toml::Table::new();
     workflow.insert("id".into(), toml::Value::String("project-status".into()));
@@ -239,6 +260,7 @@ fn assert_project_runtime_tables(config: &toml::Value) {
         Some("just release")
     );
     assert_eq!(config["work"]["checks"][0].as_str(), Some("jig.fmt_check"));
+    assert_optional_work_authority(config);
     assert_eq!(
         config["loop"]["workflows"][0]["id"].as_str(),
         Some("project-status")
@@ -246,6 +268,23 @@ fn assert_project_runtime_tables(config: &toml::Value) {
     assert_eq!(
         config["loop"]["workflows"][0]["kind"].as_str(),
         Some("noop_status")
+    );
+}
+
+fn assert_optional_work_authority(config: &toml::Value) {
+    assert_eq!(
+        config["work"]["receipt_metadata"][0].as_str(),
+        Some("beads")
+    );
+    assert_eq!(config["work"]["tracker"]["kind"].as_str(), Some("beads"));
+    assert_eq!(
+        config["work"]["tracker"]["workspace_id"].as_str(),
+        Some("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    );
+    assert_eq!(config["work"]["tracker"]["export"].as_str(), Some("manual"));
+    assert_eq!(
+        config["work"]["tracker"]["manual_export_guidance"].as_str(),
+        Some("Run the ExampleProject export helper.")
     );
 }
 

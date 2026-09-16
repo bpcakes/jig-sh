@@ -343,7 +343,7 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
     fs::write(
             &config_path,
             format!(
-                "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\n",
+                "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\n\n[work.tracker]\nkind = \"beads\"\nworkspace_id = \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n",
                 fs::read_to_string(&config_path).unwrap().replace(
                     "[agent_tooling.codex]\nmarketplaces = []",
                     "[[agent_tooling.codex.marketplaces]]\nid = \"test-skills\"\nsource = \"example/test-skills\"",
@@ -387,6 +387,7 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             "compatible",
             "compatible",
         )),
+        tracker: check("tracker", "Work tracker", true, true, "ready", "ready"),
         agent: check(
             "agent_skills",
             "Agent skills",
@@ -424,6 +425,9 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
         assert_eq!(process_check.status, "error");
         assert!(process_check.detail.contains("could not retire safely"));
     }
+    assert!(!checks.tracker.ok);
+    assert_eq!(checks.tracker.status, "unverified");
+    assert!(checks.tracker.detail.contains("could not retire safely"));
 }
 
 #[cfg(unix)]

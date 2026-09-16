@@ -101,3 +101,12 @@ marketplaces = []
         fs::set_permissions(root.join("scripts/jig"), fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
+
+fn check_by_id<'a>(output: &'a Value, id: &str) -> &'a Value {
+    output["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == id)
+        .unwrap()
+}

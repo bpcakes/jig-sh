@@ -84,6 +84,19 @@ The current explicit acknowledgement flags, including `--accept-trust-scope` and
 
 Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are rejected so local typos fail fast. New optional keys in `[work]`, `[loop]`, `[[loop.workflows]]`, `[execution]`, `[agent_tooling]`, `[agent_tooling.codex]`, `[dev]`, or app tables require a Jig runtime/template update and a documented migration note. The `[execution]` keys are backward-compatible in contract v4 through v6: omission defaults `command_timeout_seconds` to 1,800 seconds and `command_output_limit_bytes` to 67,108,864 bytes for configured commands. Internal protocol commands and Codex worker transcripts retain separate fixed limits. Any addition or change that makes an existing repository unreadable or changes generated behavior incompatibly requires a contract bump. Loop workflow keys `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, and `checkout`, the compiled `codex_task` kind, and the `loop dispatch` CLI are additive runtime behavior for supported legacy repositories; no generated MCP tool is added. A `pr_manager` or `codex_task` workflow may set `codex_home` to choose the exact `CODEX_HOME` for its unattended `codex exec` worker; omission inherits the caller environment for compatibility. Bare names resolve only to their conventional home-directory locations, while non-conventional homes require explicit paths. Same-contract-epoch loop JSON preserves the input as `codex_home_configured`; repair-attempt and task-worker actions and receipts report the canonical worker directory as `codex_home_resolved` when resolved, while actions that do not attempt work omit that field.
 
+Current source accepts an optional strict `[work.tracker]` extension with
+`kind = "beads"`, a required canonical portable ULID `workspace_id`, fixed root
+`.beads`, manual export, and optional display-only manual guidance. Omission preserves
+all existing configuration and installation behavior and does not require `br`. The
+section is part of execution authority, while `work.receipt_metadata = ["beads"]`
+remains the independent check-freshness declaration. Existing current-epoch templates
+do not generate the tracker section, and T2 adds no linked lifecycle command; the later
+epoch-11 lifecycle cutover owns journal writes. An older strict runtime rejects a newly
+configured tracker instead of silently discarding its authority. Update and write-mode
+readoption preserve valid tracker and receipt-metadata authority independently of unrelated
+configuration validity; malformed optional authority blocks refresh with a field-specific
+diagnosis.
+
 ## Contract Version
 
 `.agent/jig-contract.json` has these schema versions:
@@ -543,6 +556,115 @@ epochs. A repository below epoch 11 can read absent or existing journal state bu
 cannot append tracker authority. Until epoch 11 becomes the generated current epoch,
 the launcher capability probe does not advertise it as cache-compatible; this keeps
 an epoch-8 runtime from being reused after the later configuration cutover.
+
+The crate-private external Beads adapter is selected only by explicit tracker
+configuration. It executes a resolved external `br` binary directly—never through a
+shell—with repository-root cwd, finite timeout/output limits, fatal truncation, and
+owned descendant cleanup. Current source release-supports exactly the fixture-backed
+`br 0.5.7` profile on Linux and macOS; other hosts receive an explicit unsupported-platform
+diagnosis. Discovery requires its reported database and JSONL export to remain
+inside the exact repository `.beads/` store; subsequent calls pass the validated database
+explicitly and disable automatic import and flush. Version and workspace discovery force
+no-DB mode from the first provider invocation. Store-backed calls force database-backed
+mode, disable the provider startup cache, and
+remove ambient `BD_*`, `BR_*`, `BEADS_*`, and `TOON_*` configuration, restoring only the
+actor/session attribution variables and explicit profile values it owns. Local routes/redirects
+and active ancestor town routing are rejected before
+the provider starts and rechecked around profiled calls. Ambient Beads database,
+directory, JSONL, cache, and no-DB settings cannot redirect this boundary. Unknown binary
+profiles cannot reach a write-capable invocation. The database, every present recognized
+database sidecar (including live `-shm`), the legacy lock, fixed provider locks, and an
+existing JSONL export must each have exactly one filesystem
+link on supported hosts, preventing an outside hard-link alias from sharing the configured
+store authority. Discovery considers
+only absolute `PATH` entries whose resolved executable is outside the repository; empty,
+relative, and repository-owned entries cannot become provider authority. A candidate-local
+capture failure does not mask a later valid installation, while inability to create the
+required execution snapshot is a distinct host-environment failure. It validates and
+copies the resolved executable's bounded bytes once into a sealed anonymous Linux snapshot
+or a private read-only named macOS snapshot. Each later call revalidates the named source
+file's metadata identity and
+launches the retained snapshot after removing
+the inherited `LD_*` and `DYLD_*` dynamic-loader namespaces plus Bash startup, option,
+trace, directory, and exported-function controls, so in-place modification or an inherited
+loader or shell hook cannot change the invoked program. Ordinary identity variables remain
+inherited. Authority files are opened nonblocking
+and without following the leaf symlink before regular-file identity validation, so special
+files cannot stall preprocessing beyond the public deadline. Workspace discovery
+uses `br --no-db where`; storage-status checks receive private copies of the validated
+database family (including the dot-suffixed FrankenSQLite migration-state marker), the
+timestamp-preserved legacy health lock, and JSONL export, with the
+profile's explicit external-JSONL option. The rebuildable SQLite `-shm` file is omitted,
+and an absent export becomes an empty private read-only file, so
+provider recovery and lock artifacts cannot change the source store during Doctor or
+readiness diagnosis. Issue and comment reads use the same private database-family copy and
+cannot consult an ambient JSONL path, so provider read-open housekeeping remains outside
+the repository. Mutations receive the validated canonical database pathname because the
+0.5.7 provider derives adjacent database-family locks and sidecars from that namespace;
+descriptor pseudo-paths cannot represent that family portably. Jig retains the opened
+database descriptor as an identity witness, validates the recognized live family at
+capture, immediately before spawn, and after completion. The boundary rejects persistent pre/post path
+changes and relies on those provider locks for cooperating writers. Readiness and mutation
+remain separate provider invocations because the pinned external CLI exposes neither a
+generation precondition nor an inherited-lock handoff. The adapter therefore does not
+promise a serializable readiness epoch across that gap; later linked workflows must persist
+intent and reconcile issue and export state after every mutation attempt. A database or WAL
+change during private copying discards that generation and retries the whole snapshot up
+to three times with short bounded backoff inside the same budget; repeated drift is a
+transient busy-store diagnostic,
+not workspace corruption. The boundary does not promise
+race-free mutation against an uncooperative same-user process that swaps and restores the
+database pathname or a sidecar during the cross-process handoff. A detected authority
+change after a spawn makes a mutation indeterminate. Snapshot preparation, readiness, and write execution
+consume one finite public-operation timeout and cancellation budget until the provider is
+terminal. Once strict response decoding and final authority validation establish a result,
+later deadline or cancellation observation cannot revoke that known completion. Each issue
+read, comment read, and readiness check receives a fresh private generation: the supported
+provider may mutate a private database it opens, and reusing that generation could return
+contaminated or stale state. Snapshot work is therefore linear in the current
+database-family size. Every private store snapshot rejects more than 512 MiB of aggregate
+logical source bytes before copying, including sparse extents; this is a hard resource
+ceiling rather than a latency guarantee, and the operation deadline still applies below
+it. Deadline exhaustion during snapshot preparation is distinct from an external-provider
+timeout. A canonical ambient temporary root inside the
+repository is rejected before readiness or macOS executable snapshot creation. Executable
+replacement observed before a later call fails instead of inheriting the selected profile.
+
+The adapter exposes normalized internal issue/comment/transition values, not upstream
+JSON or database rows. Its semantic issue revision covers exact provider/workspace/issue
+identity plus task description and acceptance content, while excluding comments,
+assignment/status transitions, audit timestamps, and provider update time. Failures
+distinguish unsupported protocol, absent/tombstoned issue, ambiguous issue ID, rejected
+transition, bounded process failure, and an indeterminate post-spawn mutation. A strict
+profile-matching `AMBIGUOUS_ID` envelope proves resolution failed before mutation and is
+therefore definitive. It never automatically retries
+an indeterminate write. Successful mutation responses must correlate the requested issue
+and transition, including exact comment author and text; a mismatch is indeterminate.
+For the pinned 0.5.7 close no-op, the adapter accepts only the exact two-document stdout
+sequence (one skipped result followed by `NOTHING_TO_DO`) with empty stderr; ambiguous or
+additional documents remain indeterminate. The skipped result itself contains only empty
+`closed` and `warnings` arrays plus one matching two-field `skipped` entry.
+Other definitive mutation rejections require one strict, sole-top-level-error document
+with every 0.5.7 envelope field, whitespace only in the other stream, and the
+profile-defined retryability for the recognized code. Missing fields, conflicting success
+data, or additional output remain indeterminate. Successful mutations also require
+whitespace-only stderr; version, workspace, issue, comment, and raw one-item claim/close
+success shapes cannot carry an `error` member, and unobserved claim/close wrapper objects
+remain indeterminate. Free-form mutation option values use single-token `--name=value`
+arguments so leading hyphens cannot become provider options; actor values are capped at
+256 bytes and comment or close-reason values at 64 KiB before readiness or process
+creation.
+Before mutation, structured read-only sync status may accept a
+manual-export state only when the reliability audit contains exactly one degraded
+`db_newer` anomaly and only the database is newer; it rejects duplicate or mismatched
+anomalies, a top-level `error`, JSONL-newer, conflict, or unhealthy authority.
+
+Doctor is the only T2 user-facing consumer. Without configuration it performs no Beads
+probe. With configuration it reports the observed version/profile and supported adapter
+operations using no-DB workspace discovery and storage status against a private store
+snapshot. It does not initialize, import, export, show or change an issue, publish
+comments, or permit provider recovery to alter the source store, and it does not disclose
+absolute store paths or raw issue contents in its structured diagnostic.
 
 Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, normalized `findings`, complete `finding_count`/`findings_truncated`/`findings_digest` metadata, `evaluated_at_ms`, and `valid_until_ms`; older records deserialize with those fields absent. A validity boundary is fresh only while `now_ms < valid_until_ms`, so equality is expired. That boundary is enforced, not merely displayed, by direct target status, work-check batch and scoped evidence, reusable and latest evidence, and archive protection. Historical receipts without the field retain their prior semantics, except new file-budget evidence proving active waivers without a required boundary is unknown rather than indefinitely fresh. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Configured-command timeout, await, cleanup, and capture failures use `evidence.kind = "supervised_command"`, `status = "error"`, and retain the diagnostic in the failed stderr preview. Cancellation after spawn uses the same evidence kind with `status = "cancelled"`; cancellation before spawn records no child receipt, and a work-check batch references only children that actually started. Older receipts without the new evidence or path-summary fields remain readable. A Codex worker receipt uses its separately bounded last-message file as authoritative `stdout_preview`; provider stdout is diagnostic transcript data in additive `evidence.provider_stdout_preview`. `provider_stdout_preview_truncated` reports bounding of that evidence preview, and `provider_stdout_truncated` reports truncation by the process supervisor. The legacy additive `stdout_truncated` evidence field remains an alias for provider-transcript truncation, while `stderr_truncated` continues to describe provider stderr. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
 
