@@ -322,6 +322,61 @@ fn nonzero_usage_inside_the_warmup_window_collects_instead_of_reporting_zero_bur
 }
 
 #[test]
+fn a_warming_sibling_does_not_hide_an_already_blocked_pool() {
+    // The 5h window is exhausted, so the account cannot serve work whatever its weekly pace
+    // turns out to be. Warmup limits confidence in future consumption; it must not erase
+    // observed unavailability.
+    let rows = [row(
+        "solo",
+        account(
+            "a@example.com",
+            "pro",
+            vec![paced(100.0, FIVE_HOUR, 0.5), paced(2.0, WEEKLY, 0.05)],
+        ),
+    )];
+
+    let forecast = forecast(&rows);
+
+    let FleetOutcome::BlockedNow {
+        recovers_at,
+        limiting,
+    } = &forecast.outcome
+    else {
+        panic!("expected a blocked fleet, got {:?}", forecast.outcome);
+    };
+    assert_eq!(limiting, &vec![WindowRole::FiveHour]);
+    // Recovery follows the reported 5h reset and needs no pace estimate.
+    assert_near(
+        recovers_at.expect("the 5h reset restores capacity"),
+        ORIGIN + 9_000,
+    );
+    // The unusable pace estimate stays visible rather than being implied trustworthy.
+    assert!(
+        forecast
+            .assess_at(ORIGIN)
+            .detail_lines_at(ORIGIN)
+            .contains(&(
+                "Pace evidence".to_owned(),
+                "still collecting · a participating window is inside its warmup".to_owned()
+            ))
+    );
+}
+
+#[test]
+fn a_warming_sibling_still_withholds_a_forecast_when_quota_remains() {
+    let rows = [row(
+        "solo",
+        account(
+            "a@example.com",
+            "pro",
+            vec![paced(60.0, FIVE_HOUR, 0.5), paced(2.0, WEEKLY, 0.05)],
+        ),
+    )];
+
+    assert_eq!(forecast(&rows).outcome, FleetOutcome::Collecting);
+}
+
+#[test]
 fn unusable_window_metadata_excludes_an_account_without_inventing_quota() {
     for primary in [
         json!({ "used_percent": null, "duration_minutes": WEEKLY, "resets_at": ORIGIN + 1 }),

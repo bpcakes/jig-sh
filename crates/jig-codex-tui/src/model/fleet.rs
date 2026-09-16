@@ -59,6 +59,7 @@ pub(crate) enum FleetExclusion {
     UnknownCapacityClass,
     UnknownIdentity,
     SharedQuotaPool,
+    ConflictingSamples,
 }
 
 impl FleetExclusion {
@@ -76,6 +77,7 @@ impl FleetExclusion {
             Self::UnknownCapacityClass => "unknown plan capacity",
             Self::UnknownIdentity => "unknown account identity",
             Self::SharedQuotaPool => "shared quota pool",
+            Self::ConflictingSamples => "conflicting samples for one account",
         }
     }
 }
@@ -180,6 +182,9 @@ pub(crate) struct FleetForecast {
     expires_at: Option<u64>,
     capacity_class: Option<String>,
     windows: Vec<WindowRole>,
+    /// Whether a participating window is still inside its warmup. Reported alongside an
+    /// observed outcome so a blocked pool never implies a trusted consumption estimate.
+    pace_collecting: bool,
 }
 
 /// A forecast paired with the freshness of the samples it was built from.
@@ -313,6 +318,14 @@ impl FleetAssessment {
         if let Some(limiting) = self.limiting_label() {
             lines.push(("Limiting windows".to_owned(), limiting));
         }
+        // An observed outcome reported while a window is warming must still say that its
+        // consumption estimate is not yet trustworthy.
+        if forecast.pace_collecting && !matches!(forecast.outcome, FleetOutcome::Collecting) {
+            lines.push((
+                "Pace evidence".to_owned(),
+                "still collecting · a participating window is inside its warmup".to_owned(),
+            ));
+        }
         lines.push((
             "Scenario".to_owned(),
             "work transferable between accounts · earliest reset used first".to_owned(),
@@ -408,37 +421,126 @@ struct Candidate {
     warming: bool,
 }
 
+impl Candidate {
+    /// Whether two homes reported the same quota state for the same account.
+    ///
+    /// Compares the observed facts rather than derived rates, which are a function of those
+    /// facts and a shared observation time.
+    fn describes_same_quota(&self, other: &Self) -> bool {
+        self.capacity_class == other.capacity_class
+            && self.account.windows.len() == other.account.windows.len()
+            && self
+                .account
+                .windows
+                .iter()
+                .zip(&other.account.windows)
+                .all(|(left, right)| {
+                    left.duration == right.duration
+                        && left.used_percent == right.used_percent
+                        && left.resets_at == right.resets_at
+                })
+    }
+}
+
+/// What one quota pool retained across the homes that reported it.
+enum Pool {
+    Sample(Candidate),
+    /// Homes disagreed about the same account at the same observation time, so no sample can
+    /// be called the freshest. `observed_at` is retained so a later sample can still resolve
+    /// the disagreement.
+    Conflicted {
+        observed_at: u64,
+    },
+}
+
+struct PoolEntry {
+    pool: Pool,
+    homes: usize,
+}
+
+impl PoolEntry {
+    fn new(candidate: Candidate) -> Self {
+        Self {
+            pool: Pool::Sample(candidate),
+            homes: 1,
+        }
+    }
+
+    /// Folds another home's report of the same account into this pool.
+    ///
+    /// Observation timestamps have one-second resolution, so two homes inspected in the same
+    /// second can tie. Retaining whichever home was discovered first would let row order pick
+    /// between disagreeing readings, and that choice can change the forecast rather than only
+    /// its presentation. A genuine tie is therefore unresolved, not silently decided.
+    fn merge(&mut self, candidate: Candidate) {
+        self.homes += 1;
+        let incoming = candidate.account.observed_at;
+        let retained = match &self.pool {
+            Pool::Sample(existing) => existing.account.observed_at,
+            Pool::Conflicted { observed_at } => *observed_at,
+        };
+        if incoming > retained {
+            self.pool = Pool::Sample(candidate);
+            return;
+        }
+        if incoming < retained {
+            return;
+        }
+        if let Pool::Sample(existing) = &self.pool
+            && existing.describes_same_quota(&candidate)
+        {
+            return;
+        }
+        self.pool = Pool::Conflicted {
+            observed_at: retained,
+        };
+    }
+}
+
 /// Builds the cohort from every discovered row and forecasts it.
 ///
 /// Callers must pass the complete row set, never a filtered view: typing a search must not
 /// change the fleet being forecast.
 pub(super) fn forecast(rows: &[HomeRow]) -> FleetForecast {
     let mut exclusions: BTreeMap<FleetExclusion, usize> = BTreeMap::new();
-    let mut pools: BTreeMap<String, Candidate> = BTreeMap::new();
+    let mut pools: BTreeMap<String, PoolEntry> = BTreeMap::new();
     for row in rows {
         match candidate(row) {
             Err(exclusion) => *exclusions.entry(exclusion).or_default() += 1,
+            // Duplicate supplied identities are conservatively one quota pool. Home paths and
+            // display labels are not proof of independence, so a pool is never counted twice.
             Ok(candidate) => match pools.get_mut(&candidate.account.identity) {
-                // Duplicate supplied identities are conservatively one quota pool. Home
-                // paths and display labels are not proof of independence, so the pool must
-                // not be counted twice; the collapse stays visible as an exclusion.
-                Some(existing) => {
-                    *exclusions
-                        .entry(FleetExclusion::SharedQuotaPool)
-                        .or_default() += 1;
-                    if candidate.account.observed_at > existing.account.observed_at {
-                        *existing = candidate;
-                    }
-                }
+                Some(entry) => entry.merge(candidate),
                 None => {
-                    pools.insert(candidate.account.identity.clone(), candidate);
+                    pools.insert(
+                        candidate.account.identity.clone(),
+                        PoolEntry::new(candidate),
+                    );
                 }
             },
         }
     }
 
     let homes = rows.len();
-    let candidates = pools.into_values().collect::<Vec<_>>();
+    let mut candidates = Vec::with_capacity(pools.len());
+    for entry in pools.into_values() {
+        match entry.pool {
+            Pool::Sample(candidate) => {
+                if let Some(collapsed) = entry.homes.checked_sub(1).filter(|count| *count > 0) {
+                    *exclusions
+                        .entry(FleetExclusion::SharedQuotaPool)
+                        .or_default() += collapsed;
+                }
+                candidates.push(candidate);
+            }
+            // An unresolved disagreement is missing data for that pool, not a reason to guess.
+            Pool::Conflicted { .. } => {
+                *exclusions
+                    .entry(FleetExclusion::ConflictingSamples)
+                    .or_default() += entry.homes;
+            }
+        }
+    }
     let still_loading = exclusions.contains_key(&FleetExclusion::Loading);
     let coverage = FleetCoverage {
         included: candidates.len(),
@@ -507,18 +609,6 @@ pub(super) fn forecast(rows: &[HomeRow]) -> FleetForecast {
         .unwrap_or_default();
     let horizon_at = origin.saturating_add(longest_window);
 
-    if warming {
-        return FleetForecast {
-            outcome: FleetOutcome::Collecting,
-            coverage,
-            origin,
-            horizon_at,
-            expires_at,
-            capacity_class,
-            windows,
-        };
-    }
-
     let accounts = candidates
         .into_iter()
         .map(|candidate| candidate.account)
@@ -546,6 +636,15 @@ pub(super) fn forecast(rows: &[HomeRow]) -> FleetForecast {
             limiting,
         },
     };
+    // A window inside its warmup bounds confidence in future consumption, but it must not
+    // erase quota that is already gone. Whether every account is blocked now, and which
+    // reported resets end that block, are both independent of the warming pace estimate:
+    // blocking follows from observed remaining quota, and no work is served during a gap.
+    let outcome = if warming && !matches!(outcome, FleetOutcome::BlockedNow { .. }) {
+        FleetOutcome::Collecting
+    } else {
+        outcome
+    };
     FleetForecast {
         outcome,
         coverage,
@@ -554,6 +653,7 @@ pub(super) fn forecast(rows: &[HomeRow]) -> FleetForecast {
         expires_at,
         capacity_class,
         windows,
+        pace_collecting: warming,
     }
 }
 
@@ -566,6 +666,7 @@ fn unsupported(reason: FleetUnsupported, coverage: FleetCoverage) -> FleetForeca
         expires_at: None,
         capacity_class: None,
         windows: Vec::new(),
+        pace_collecting: false,
     }
 }
 
@@ -578,6 +679,7 @@ fn collecting(coverage: FleetCoverage) -> FleetForecast {
         expires_at: None,
         capacity_class: None,
         windows: Vec::new(),
+        pace_collecting: false,
     }
 }
 
@@ -651,8 +753,17 @@ fn all_durations_distinct(windows: &[RateLimitWindow]) -> bool {
 fn capacity_class(details: &Details, bucket: &RateLimitBucket) -> Option<String> {
     [details.plan.as_str(), bucket.plan.as_str()]
         .into_iter()
-        .find(|plan| *plan != UNKNOWN)
+        .find(|plan| reports_capacity(plan))
         .map(str::to_owned)
+}
+
+/// Whether a plan label carries capacity information at all.
+///
+/// `UNKNOWN` is this crate's placeholder for a missing or empty field, while a provider can
+/// also report an explicit unknown plan. Neither names a quota size, so neither may become a
+/// capacity class or shadow a sibling field that does report one.
+fn reports_capacity(plan: &str) -> bool {
+    plan != UNKNOWN && !plan.eq_ignore_ascii_case("unknown")
 }
 
 /// Extracts one window's budget and pace, reusing the per-account validation and warmup

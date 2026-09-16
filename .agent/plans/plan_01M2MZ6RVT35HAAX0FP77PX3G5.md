@@ -63,6 +63,21 @@ relocation, then the feature.
    exclusion variant tripped it on substring alone. `crates/jig/tests/supported_host_surface.rs`
    asserts singular `Window` stays allowed, so the fix was renaming the variant to
    `DuplicateWindowDurations`, which also names the condition it detects more precisely.
+9. Review found that rejecting only the `-` presentation placeholder left the literal plan
+   string `unknown` usable as a capacity class, so two accounts reporting it were pooled as
+   comparable. The same `find` order let an account-level `unknown` shadow a valid bucket-level
+   plan. Note the repository treats `planType` as an opaque pass-through value and enumerates
+   no plan set, so this is sentinel hardening rather than a protocol-derived rule.
+10. Review found that duplicate-identity resolution depended on row order. Replacing the
+    retained sample only on a strictly newer `observed_at` left one-second ties decided by
+    discovery order, and that choice changes the forecast rather than only its presentation. A
+    scratch experiment against the pre-fix code confirmed it exactly: two homes reporting the
+    same account at the same second with 49% and 51% weekly usage produced `NoGap` in one row
+    order and a gap at 290,541 s in the other.
+11. Review found that the warmup early return preempted observed blocking. An account with an
+    exhausted five-hour window and a warming weekly window reported `collecting pace evidence`
+    instead of blocked, even though present unavailability and the reset that ends it are both
+    independent of the pace estimate.
 
 ## Decision Log
 
@@ -101,6 +116,20 @@ Decisions below were made on September 16, 2026. None are superseded.
   timeline.
   Rationale: Redrawing is not a new provider sample. Only freshness and countdowns may move
   between frames.
+- Decision: Treat a plan reported as `unknown`, in any letter case, as missing capacity
+  information alongside the `-` placeholder.
+  Rationale: Per discovery 9, neither value names a quota size, so neither may found an
+  equal-capacity class or shadow a sibling field that does report one.
+- Decision: Withhold a quota pool whose homes disagree at the same observation second, as
+  `conflicting samples for one account`, and let a strictly newer sample resolve it.
+  Rationale: Per discovery 10, the alternative is a forecast that depends on discovery order.
+  Choosing the optimistic reading would understate risk, and choosing the pessimistic one would
+  synthesize a reading no home reported.
+- Decision: Separate current availability from forecast confidence, so warmup withholds only
+  the consumption forecast.
+  Rationale: Per discovery 11, exhausted quota is observed, and gap recovery consumes nothing,
+  so neither result depends on the warming estimate. The detail pane still states that pace
+  evidence is collecting.
 
 ## Outcomes & Retrospective
 
@@ -118,12 +147,18 @@ Delivered against the acceptance criteria:
 - Presentation uses the header's previously unused second row, so the supported 46x12
   minimum and the wide and stacked layouts are unchanged.
 
-Verification evidence: 116 `jig-codex-tui` tests pass, including analytically checked cases
+Verification evidence: 122 `jig-codex-tui` tests pass, including analytically checked cases
 for pooled demand, staggered resets, allowance replacement, complementary cross-window
 exhaustion, depletion exactly at a restoring reset, row-order invariance, and retained
 demand from an exhausted account. All five required gates passed under this plan, with
 `api:test` covering 4110 workspace tests. A 64-account cohort forecasts a full weekly
 horizon of five-hour resets in roughly 10 ms in a debug build.
+
+Review of the pull request found three input-classification and outcome-selection defects,
+recorded as discoveries 9 through 11 and fixed with six regressions. Each regression was
+confirmed to fail against the pre-fix code before the fix was restored, so none is a
+tautology. The allocation policy, consumption estimator, and periodic-reset model were not
+changed; the review agreed those are disclosed modeling assumptions rather than defects.
 
 Remaining gaps, stated rather than closed:
 

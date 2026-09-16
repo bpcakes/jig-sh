@@ -177,6 +177,75 @@ fn duplicate_identities_collapse_into_one_quota_pool() {
 }
 
 #[test]
+fn tied_conflicting_duplicate_samples_are_unresolved_in_either_row_order() {
+    // Observation timestamps have one-second resolution, so two homes reporting the same
+    // account can tie. These two readings straddle the runway boundary: 49% used survives the
+    // next weekly reset, 51% used runs out about 290_541s before it. Letting discovery order
+    // pick between them would change the forecast, not just its presentation.
+    let optimistic = row_at(
+        "first",
+        ORIGIN,
+        account("a@example.com", "pro", vec![paced(49.0, WEEKLY, 0.5)]),
+    );
+    let pessimistic = row_at(
+        "second",
+        ORIGIN,
+        account("a@example.com", "pro", vec![paced(51.0, WEEKLY, 0.5)]),
+    );
+
+    for rows in [
+        [optimistic.clone(), pessimistic.clone()],
+        [pessimistic, optimistic],
+    ] {
+        let forecast = forecast(&rows);
+
+        assert_eq!(forecast.coverage.included, 0);
+        assert_eq!(
+            forecast.coverage.exclusions,
+            vec![(FleetExclusion::ConflictingSamples, 2)]
+        );
+        assert_eq!(
+            forecast.outcome,
+            FleetOutcome::Unsupported(FleetUnsupported::NoEligibleAccount)
+        );
+    }
+}
+
+#[test]
+fn a_strictly_newer_duplicate_sample_resolves_a_tied_disagreement() {
+    let rows = [
+        row_at(
+            "first",
+            ORIGIN,
+            account("a@example.com", "pro", vec![paced(49.0, WEEKLY, 0.5)]),
+        ),
+        row_at(
+            "second",
+            ORIGIN,
+            account("a@example.com", "pro", vec![paced(51.0, WEEKLY, 0.5)]),
+        ),
+        row_at(
+            "newest",
+            ORIGIN + 1,
+            account("a@example.com", "pro", vec![paced(90.0, WEEKLY, 0.5)]),
+        ),
+    ];
+
+    let forecast = forecast(&rows);
+
+    assert_eq!(forecast.coverage.included, 1);
+    assert_eq!(
+        forecast.coverage.exclusions,
+        vec![(FleetExclusion::SharedQuotaPool, 2)]
+    );
+    // The freshest reading governs: 10% remaining at 90% per 302_400s lasts 33_600s.
+    let FleetOutcome::GapRisk { gap_at, .. } = forecast.outcome else {
+        panic!("expected gap risk, got {:?}", forecast.outcome);
+    };
+    assert_near(gap_at, ORIGIN + 33_601);
+}
+
+#[test]
 fn an_unknown_account_identity_keeps_coverage_incomplete() {
     let mut details = account("a@example.com", "pro", vec![paced(20.0, WEEKLY, 0.5)]);
     details["account"]["email"] = Value::Null;
@@ -224,6 +293,43 @@ fn an_unknown_capacity_class_is_excluded_instead_of_assumed_equal() {
         forecast(&rows).coverage.exclusions,
         vec![(FleetExclusion::UnknownCapacityClass, 1)]
     );
+}
+
+#[test]
+fn a_reported_unknown_plan_is_missing_capacity_rather_than_a_capacity_class() {
+    // A provider can report an unknown plan explicitly. That value names no quota size, so
+    // two accounts sharing it must not be pooled as though their capacities are comparable.
+    let rows = ["a@example.com", "b@example.com"].map(|email| {
+        row(
+            email,
+            account(email, "unknown", vec![paced(20.0, WEEKLY, 0.5)]),
+        )
+    });
+
+    let forecast = forecast(&rows);
+
+    assert!(forecast.coverage.included == 0, "{:?}", forecast.coverage);
+    assert_eq!(
+        forecast.coverage.exclusions,
+        vec![(FleetExclusion::UnknownCapacityClass, 2)]
+    );
+    assert_eq!(
+        forecast.outcome,
+        FleetOutcome::Unsupported(FleetUnsupported::NoEligibleAccount)
+    );
+}
+
+#[test]
+fn an_unknown_account_plan_does_not_shadow_a_reported_bucket_plan() {
+    let mut details = account("a@example.com", "pro", vec![paced(20.0, WEEKLY, 0.5)]);
+    details["account"]["plan_type"] = json!("unknown");
+    let rows = [row("solo", details)];
+
+    let forecast = forecast(&rows);
+
+    assert_eq!(forecast.coverage.included, 1);
+    assert_eq!(forecast.coverage.exclusions, Vec::new());
+    assert_eq!(forecast.capacity_class.as_deref(), Some("pro"));
 }
 
 #[test]

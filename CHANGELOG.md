@@ -15,7 +15,11 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   at each reset. Coverage, the window-average pace basis, the equal-capacity
   assumption, the periodic-reset approximation, and the finite horizon are all
   reported, and mixed or unreported plan capacities stay explicitly unsupported
-  rather than being treated as equal. Existing per-account usage, projections, and
+  rather than being treated as equal. A plan the provider reports as unknown counts
+  as unreported, homes that disagree about one shared account at the same
+  observation second withhold that pool instead of letting discovery order decide,
+  and a window inside its warmup withholds a consumption forecast without hiding an
+  already exhausted window. Existing per-account usage, projections, and
   recommendations are unchanged, and Claude and configuration pickers gain nothing.
 
 - Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
