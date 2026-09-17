@@ -1,11 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::mpsc::{self, Sender};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
@@ -15,13 +9,12 @@ use ulid::Ulid;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
+use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, RenewalWorker, renewal_interval};
 #[cfg(test)]
-use super::renewal::retry_delay as renewal_retry_delay;
-use super::renewal::{RenewalAttemptError, RenewalOwnershipLost, renewal_interval, run_with_wait};
+use super::renewal::{retry_delay as renewal_retry_delay, run_with_wait};
 
 mod attention;
 mod claim;
-mod guard_renewal;
 mod history;
 mod manual;
 mod persistence;
@@ -29,9 +22,6 @@ mod transition;
 mod worktree;
 
 pub(super) use claim::OccurrenceAttentionScope;
-use guard_renewal::run_occurrence_renewal;
-#[cfg(test)]
-use guard_renewal::run_occurrence_renewal_with_wait;
 use history::prune_history;
 use manual::MANUAL_OCCURRENCE_SCHEDULED_AT_MS;
 use persistence::SchedulePersistence;
@@ -192,9 +182,7 @@ pub(super) struct OccurrenceGuard {
     store: OccurrenceStore,
     occurrence_id: String,
     owner: String,
-    stop: Option<Sender<()>>,
-    renewal: Option<JoinHandle<Result<()>>>,
-    renewal_failed: Arc<AtomicBool>,
+    renewal: RenewalWorker,
 }
 
 pub(super) struct OccurrenceFinalization {
@@ -233,51 +221,40 @@ impl OccurrenceGuard {
         ttl_seconds: u64,
         interval: Duration,
     ) -> Result<Self> {
-        let (stop, receiver) = mpsc::channel();
         let mut renewal_store = store.clone();
         let occurrence_id = occurrence.occurrence_id.clone();
         let renewal_occurrence_id = occurrence_id.clone();
         let owner = occurrence.owner.clone();
         let renewal_owner = owner.clone();
-        let renewal_failed = Arc::new(AtomicBool::new(false));
-        let renewal_failed_in_thread = Arc::clone(&renewal_failed);
         let claim_expires_at_ms = occurrence.claim_expires_at_ms;
-        let renewal = thread::Builder::new()
-            .name(format!("jig-loop-occurrence-{owner}"))
-            .spawn(move || {
-                run_occurrence_renewal(
-                    &receiver,
-                    interval,
-                    claim_expires_at_ms,
-                    &renewal_failed_in_thread,
-                    |deadline| {
-                        renewal_store
-                            .renew_for_guard(
-                                &renewal_occurrence_id,
-                                &renewal_owner,
-                                ttl_seconds,
-                                deadline,
-                            )
-                            .map(|renewed| renewed.claim_expires_at_ms)
-                    },
-                    now_ms,
-                )
-            })
-            .map_err(|error| {
-                anyhow::anyhow!("Failed to start occurrence renewal thread: {error}")
-            })?;
+        let renewal = RenewalWorker::spawn(
+            format!("jig-loop-occurrence-{owner}"),
+            "Occurrence renewal thread panicked",
+            interval,
+            claim_expires_at_ms,
+            move |deadline| {
+                renewal_store
+                    .renew_for_guard(
+                        &renewal_occurrence_id,
+                        &renewal_owner,
+                        ttl_seconds,
+                        deadline,
+                    )
+                    .map(|renewed| renewed.claim_expires_at_ms)
+            },
+            now_ms,
+        )
+        .map_err(|error| anyhow::anyhow!("Failed to start occurrence renewal thread: {error}"))?;
         Ok(Self {
             store,
             occurrence_id,
             owner,
-            stop: Some(stop),
-            renewal: Some(renewal),
-            renewal_failed,
+            renewal,
         })
     }
 
     pub(super) fn renewal_failed(&self) -> bool {
-        self.renewal_failed.load(Ordering::Acquire)
+        self.renewal.failed()
     }
 
     pub(super) fn finish(self, finish: OccurrenceFinish<'_>) -> Result<OccurrenceFinalization> {
@@ -297,7 +274,7 @@ impl OccurrenceGuard {
         mut self,
         transition: impl FnOnce(&mut OccurrenceStore, &str, &str) -> Result<ScheduleOccurrence>,
     ) -> Result<OccurrenceFinalization> {
-        let renewal_error = self.stop_renewal().err();
+        let renewal_error = self.renewal.shutdown().err();
         let renewal_ownership_lost = renewal_error
             .as_ref()
             .is_some_and(|error| error.downcast_ref::<RenewalOwnershipLost>().is_some());
@@ -317,24 +294,6 @@ impl OccurrenceGuard {
             ))),
             (Err(error), None) => Err(error),
         }
-    }
-
-    fn stop_renewal(&mut self) -> Result<()> {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(renewal) = self.renewal.take() {
-            renewal
-                .join()
-                .map_err(|_| anyhow::anyhow!("Occurrence renewal thread panicked"))??;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for OccurrenceGuard {
-    fn drop(&mut self) {
-        let _ = self.stop_renewal();
     }
 }
 
