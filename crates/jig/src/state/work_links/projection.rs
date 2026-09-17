@@ -22,12 +22,12 @@ pub(super) const MAX_WORK_LINK_UNIQUE_EVENTS: usize = 100_000;
 pub(super) const MAX_WORK_LINK_KNOWN_PLANS: usize = 100_000;
 
 #[derive(Clone, Copy)]
-struct ProjectionLimits {
-    unique_events: usize,
-    known_plans: usize,
+pub(super) struct ProjectionLimits {
+    pub(super) unique_events: usize,
+    pub(super) known_plans: usize,
 }
 
-const PRODUCTION_LIMITS: ProjectionLimits = ProjectionLimits {
+pub(super) const PRODUCTION_LIMITS: ProjectionLimits = ProjectionLimits {
     unique_events: MAX_WORK_LINK_UNIQUE_EVENTS,
     known_plans: MAX_WORK_LINK_KNOWN_PLANS,
 };
@@ -109,6 +109,7 @@ pub(super) struct JournalProjection {
     global_conflicts: DiagnosticSummary,
     global_corruption: DiagnosticSummary,
     torn_tail: bool,
+    next_line_number: u64,
 }
 
 impl JournalProjection {
@@ -123,10 +124,12 @@ impl JournalProjection {
             global_conflicts: DiagnosticSummary::default(),
             global_corruption: DiagnosticSummary::default(),
             torn_tail: false,
+            next_line_number: 1,
         }
     }
 
     fn observe(&mut self, raw: RawJsonlRecord<'_>) -> Result<()> {
+        self.next_line_number = self.next_line_number.max(raw.line_number.saturating_add(1));
         if !raw.terminated {
             // Strict readers never give an unterminated record authority. The
             // scan statistics add one journal-level diagnostic after the scan.
@@ -376,6 +379,19 @@ impl JournalProjection {
         Ok(())
     }
 
+    /// Admit the exact candidate bytes to the in-memory authority before the
+    /// caller makes them durable. This applies every projection invariant,
+    /// including aggregate identity limits, under the caller's write lock.
+    pub(super) fn admit_candidate(&mut self, encoded: &[u8]) -> Result<()> {
+        self.observe(RawJsonlRecord {
+            line_number: self.next_line_number,
+            start_offset: 0,
+            bytes: encoded,
+            terminated: true,
+        })?;
+        self.ensure_authoritative_write_safe()
+    }
+
     pub(super) fn ensure_authoritative_write_safe(&self) -> Result<()> {
         let diagnostics = self.diagnostics();
         if matches!(
@@ -578,8 +594,9 @@ pub(super) fn scan_journal_locked(
     guard: &JsonlWriteGuard,
     path: &Path,
     selected_plan: Option<&str>,
+    limits: ProjectionLimits,
 ) -> Result<JournalProjection> {
-    let mut journal = JournalProjection::new(selected_plan, PRODUCTION_LIMITS);
+    let mut journal = JournalProjection::new(selected_plan, limits);
     let stats = scan_jsonl_raw_locked_bounded(
         guard,
         path,

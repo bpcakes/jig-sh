@@ -91,6 +91,64 @@ fn exact_retry_returns_original_event_without_appending() {
 }
 
 #[test]
+fn append_refuses_candidate_that_would_exceed_projection_identity_limits() {
+    for (limits, exhausted_dimension) in [
+        (
+            projection::ProjectionLimits {
+                unique_events: 1,
+                known_plans: 2,
+            },
+            "unique-event",
+        ),
+        (
+            projection::ProjectionLimits {
+                unique_events: 2,
+                known_plans: 1,
+            },
+            "known-plan",
+        ),
+    ] {
+        let (_temp, ctx) = context();
+        seed_plan(&ctx, "plan_existing");
+        seed_plan(&ctx, "plan_candidate");
+        let existing_request = request("plan_existing", "example-existing");
+        let existing =
+            WorkLinkRecordV1::from_request("work-link_existing".into(), &existing_request);
+        fs::create_dir_all(ctx.state_dir()).unwrap();
+        let path = ctx.state_file(WORK_LINKS_FILE);
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&existing).unwrap()),
+        )
+        .unwrap();
+        let before = fs::read(&path).unwrap();
+
+        let error = attach_work_link_with_limits(
+            &ctx,
+            &request("plan_candidate", "example-candidate"),
+            limits,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains(exhausted_dimension), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(matches!(
+            project_work_link(&ctx, "plan_existing").unwrap(),
+            WorkLinkProjection::Supported(_)
+        ));
+        assert_eq!(
+            project_work_link(&ctx, "plan_candidate").unwrap(),
+            WorkLinkProjection::Unlinked
+        );
+
+        let retried = attach_work_link_with_limits(&ctx, &existing_request, limits).unwrap();
+        assert_eq!(retried.id, existing.id);
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
 fn exact_retry_reconfirms_durability_after_each_ambiguous_sync_failure() {
     for failure in [
         DurableAppendFailurePoint::BeforeFileSync,

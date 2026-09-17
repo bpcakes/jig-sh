@@ -130,13 +130,70 @@ fn replacing_tracker_directory_cannot_redirect_a_pinned_snapshot() {
     )
     .unwrap();
 
-    let result = BeadsExport::open_with_hook(&repository, WORKSPACE_ID, || {
-        fs::rename(repository.join(".beads"), repository.join(".beads-pinned")).unwrap();
-        symlink(&outside, repository.join(".beads")).unwrap();
-    });
+    let result = BeadsExport::open_with_hooks(
+        &repository,
+        WORKSPACE_ID,
+        || {
+            fs::rename(repository.join(".beads"), repository.join(".beads-pinned")).unwrap();
+            symlink(&outside, repository.join(".beads")).unwrap();
+        },
+        || {},
+    );
 
     assert_eq!(result.unwrap_err(), BeadsJsonlError::MissingExport);
     assert!(repository.join(PRIMARY_EXPORT).is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn replacing_validated_export_with_fifo_is_nonblocking_and_rejected() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    let repository = temp.path().join("repository");
+    write_export(&repository, PRIMARY_EXPORT, &[issue("example-123")]);
+    let fifo = repository.join(PRIMARY_EXPORT);
+    let worker_repository = repository;
+    let worker_fifo = fifo.clone();
+    let (hook_sender, hook_receiver) = mpsc::channel();
+    let (result_sender, result_receiver) = mpsc::channel();
+
+    let worker = std::thread::spawn(move || {
+        let result = BeadsExport::open_with_hooks(
+            &worker_repository,
+            WORKSPACE_ID,
+            || {},
+            || {
+                fs::remove_file(&worker_fifo).unwrap();
+                let fifo_path = CString::new(worker_fifo.as_os_str().as_bytes()).unwrap();
+                // SAFETY: `fifo_path` is a live NUL-terminated string and the
+                // mode contains only ordinary permission bits.
+                assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+                hook_sender.send(()).unwrap();
+            },
+        );
+        result_sender.send(result).unwrap();
+    });
+
+    hook_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    let result = match result_receiver.recv_timeout(Duration::from_secs(2)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Unblock a regressed blocking read-open so the test can cleanly
+            // join its worker before reporting the failure.
+            let _writer = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+            let _ = result_receiver.recv_timeout(Duration::from_secs(2));
+            worker.join().unwrap();
+            panic!("opening a post-validation FIFO blocked instead of failing promptly");
+        }
+        Err(error) => panic!("tracker worker disconnected: {error}"),
+    };
+    worker.join().unwrap();
+
+    assert_eq!(result.unwrap_err(), BeadsJsonlError::UnsafeExport);
 }
 
 #[test]

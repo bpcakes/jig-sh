@@ -62,13 +62,14 @@ pub(crate) struct BeadsExport {
 
 impl BeadsExport {
     pub(crate) fn open(root: &Path, workspace_id: &str) -> Result<Self, BeadsJsonlError> {
-        Self::open_with_hook(root, workspace_id, || {})
+        Self::open_with_hooks(root, workspace_id, || {}, || {})
     }
 
-    fn open_with_hook(
+    fn open_with_hooks(
         root: &Path,
         workspace_id: &str,
         after_directory_open: impl FnOnce(),
+        before_export_open: impl FnOnce(),
     ) -> Result<Self, BeadsJsonlError> {
         validate_workspace_id(workspace_id)?;
         let repository = Dir::open_ambient_dir(root, ambient_authority())
@@ -85,7 +86,7 @@ impl BeadsExport {
         after_directory_open();
 
         let export_name = select_export(&tracker)?;
-        let bytes = read_stable_export(&tracker, export_name)?;
+        let bytes = read_stable_export(&tracker, export_name, before_export_open)?;
         let confirmed_name =
             select_export(&tracker).map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
         if confirmed_name != export_name {
@@ -201,7 +202,11 @@ fn entry_exists(directory: &Dir, name: &str) -> Result<bool, BeadsJsonlError> {
     }
 }
 
-fn read_stable_export(directory: &Dir, name: &str) -> Result<Vec<u8>, BeadsJsonlError> {
+fn read_stable_export(
+    directory: &Dir,
+    name: &str,
+    before_open: impl FnOnce(),
+) -> Result<Vec<u8>, BeadsJsonlError> {
     let named = directory
         .symlink_metadata(name)
         .map_err(|_| BeadsJsonlError::UnsafeExport)?;
@@ -211,13 +216,14 @@ fn read_stable_export(directory: &Dir, name: &str) -> Result<Vec<u8>, BeadsJsonl
     if named.len() > MAX_INPUT_BYTES as u64 {
         return Err(BeadsJsonlError::ExportTooLarge);
     }
+    before_open();
 
     let mut options = OpenOptions::new();
     options.read(true).follow(FollowSymlinks::No);
     #[cfg(unix)]
     {
         use cap_std::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let mut file = directory
         .open_with(name, &options)

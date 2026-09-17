@@ -301,6 +301,14 @@ pub(crate) fn attach_work_link(
     ctx: &RepoContext,
     request: &WorkLinkRequest,
 ) -> Result<WorkLinkRecordV1> {
+    attach_work_link_with_limits(ctx, request, projection::PRODUCTION_LIMITS)
+}
+
+fn attach_work_link_with_limits(
+    ctx: &RepoContext,
+    request: &WorkLinkRequest,
+    limits: projection::ProjectionLimits,
+) -> Result<WorkLinkRecordV1> {
     if !crate::context::supports_work_links(ctx.contract_version()) {
         bail!(
             "work-link writes require repository contract epoch {} (found {})",
@@ -313,7 +321,7 @@ pub(crate) fn attach_work_link(
 
     let path = ctx.state_file(WORK_LINKS_FILE);
     with_jsonl_write_lock(&path, |guard| {
-        let journal = scan_journal_locked(guard, &path, Some(&request.plan_id))?;
+        let mut journal = scan_journal_locked(guard, &path, Some(&request.plan_id), limits)?;
         journal.ensure_authoritative_write_safe()?;
         match journal.for_plan(&request.plan_id) {
             WorkLinkProjection::Unlinked => {
@@ -324,6 +332,7 @@ pub(crate) fn attach_work_link(
                 if encoded.len() > MAX_WORK_LINK_RECORD_BYTES {
                     bail!("work-link record exceeds the {MAX_WORK_LINK_RECORD_BYTES}-byte limit");
                 }
+                journal.admit_candidate(&encoded)?;
                 append_jsonl_durable_locked(guard, &path, &record)?;
                 Ok(record)
             }
