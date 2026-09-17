@@ -40,6 +40,7 @@ pub(super) fn tracker_check(ctx: &RepoContext) -> DoctorCheck {
 }
 
 fn tracker_error(error: BeadsJsonlError, manual_guidance: Option<&str>) -> DoctorCheck {
+    let missing_export = error == BeadsJsonlError::MissingExport;
     let (status, default_fix) = match error {
         BeadsJsonlError::MissingExport => (
             "missing export",
@@ -80,7 +81,11 @@ fn tracker_error(error: BeadsJsonlError, manual_guidance: Option<&str>) -> Docto
             "Regenerate or repair the Beads JSONL export, then rerun `scripts/jig doctor`.".to_string(),
         ),
     };
-    let fix = manual_guidance.unwrap_or(&default_fix);
+    let fix = if missing_export {
+        manual_guidance.unwrap_or(&default_fix)
+    } else {
+        &default_fix
+    };
     check(
         "tracker",
         "Work tracker",

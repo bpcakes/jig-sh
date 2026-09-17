@@ -62,7 +62,7 @@ The current reader:
 - validates the whole bounded export before returning an issue;
 - requires exact issue IDs and distinguishes missing from tombstoned records;
 - rejects duplicate object keys and duplicate issue IDs;
-- validates known task fields while tolerating bounded unknown fields;
+- validates known task fields while tolerating unknown fields within the record, export, and nesting bounds;
 - pins the real `.beads` directory and performs selection and stable no-follow file reads relative to that directory capability, acquiring the Unix leaf nonblocking before descriptor validation;
 - invokes no process, reads no SQLite database, and writes no task data.
 

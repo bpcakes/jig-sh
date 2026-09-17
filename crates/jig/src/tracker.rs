@@ -25,9 +25,10 @@ const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_ISSUES: usize = 10_000;
 const MAX_JSON_DEPTH: usize = 64;
-const MAX_ID_BYTES: usize = 256;
+const MAX_BEADS_ID_PREFIX_BYTES: usize = 64;
+const MAX_BEADS_ID_HASH_BYTES: usize = 40;
+const MAX_BEADS_ID_BYTES: usize = MAX_BEADS_ID_PREFIX_BYTES + 1 + MAX_BEADS_ID_HASH_BYTES;
 const MAX_TITLE_CHARS: usize = 500;
-const MAX_TEXT_BYTES: usize = 256 * 1024;
 const SEMANTIC_REVISION_DOMAIN: &[u8] = b"jig.tracker.issue.semantic.v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,7 +63,7 @@ pub(crate) struct BeadsExport {
 
 impl BeadsExport {
     pub(crate) fn open(root: &Path, workspace_id: &str) -> Result<Self, BeadsJsonlError> {
-        Self::open_with_hooks(root, workspace_id, || {}, || {})
+        Self::open_with_hooks(root, workspace_id, || {}, || {}, || {})
     }
 
     fn open_with_hooks(
@@ -70,6 +71,7 @@ impl BeadsExport {
         workspace_id: &str,
         after_directory_open: impl FnOnce(),
         before_export_open: impl FnOnce(),
+        before_final_witness: impl FnOnce(),
     ) -> Result<Self, BeadsJsonlError> {
         validate_workspace_id(workspace_id)?;
         let repository = Dir::open_ambient_dir(root, ambient_authority())
@@ -86,7 +88,12 @@ impl BeadsExport {
         after_directory_open();
 
         let export_name = select_export(&tracker)?;
-        let bytes = read_stable_export(&tracker, export_name, before_export_open)?;
+        let bytes = read_stable_export(
+            &tracker,
+            export_name,
+            before_export_open,
+            before_final_witness,
+        )?;
         let confirmed_name =
             select_export(&tracker).map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
         if confirmed_name != export_name {
@@ -206,6 +213,7 @@ fn read_stable_export(
     directory: &Dir,
     name: &str,
     before_open: impl FnOnce(),
+    before_final_witness: impl FnOnce(),
 ) -> Result<Vec<u8>, BeadsJsonlError> {
     let named = directory
         .symlink_metadata(name)
@@ -245,6 +253,7 @@ fn read_stable_export(
     file.rewind()
         .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
     let second = read_capped(&mut file)?;
+    before_final_witness();
     let after = file
         .metadata()
         .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
@@ -252,6 +261,8 @@ fn read_stable_export(
         .symlink_metadata(name)
         .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
     if first != second
+        || has_multiple_links(&after)
+        || has_multiple_links(&named_after)
         || !same_file_state(&opened, &after)
         || !same_file_state(&opened, &named_after)
     {
@@ -331,9 +342,6 @@ fn validate_json_value(value: &Value, depth: usize, line: usize) -> Result<(), B
         return Err(invalid(line, "JSON nesting exceeds the supported limit"));
     }
     match value {
-        Value::String(text) if text.len() > MAX_TEXT_BYTES => {
-            Err(invalid(line, "a text field exceeds the supported limit"))
-        }
         Value::Array(values) => values
             .iter()
             .try_for_each(|value| validate_json_value(value, depth + 1, line)),
@@ -414,7 +422,7 @@ fn required_text<'a>(
     object
         .get(field)
         .and_then(Value::as_str)
-        .filter(|value| value.len() <= MAX_TEXT_BYTES && !value.contains('\0'))
+        .filter(|value| !value.contains('\0'))
         .ok_or_else(|| invalid(line, "missing or invalid required field"))
 }
 
@@ -448,16 +456,49 @@ fn validate_workspace_id(workspace_id: &str) -> Result<(), BeadsJsonlError> {
 }
 
 fn validate_issue_id(issue_id: &str) -> Result<(), BeadsJsonlError> {
-    if issue_id.is_empty()
-        || issue_id.len() > MAX_ID_BYTES
-        || !issue_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-    {
-        Err(BeadsJsonlError::InvalidIssueId)
-    } else {
+    if is_valid_beads_issue_id(issue_id) {
         Ok(())
+    } else {
+        Err(BeadsJsonlError::InvalidIssueId)
     }
+}
+
+/// Mirrors the bounded `beads_rust` prefix/hash parser used for exported issue IDs.
+pub(crate) fn is_valid_beads_issue_id(issue_id: &str) -> bool {
+    if issue_id.is_empty() || issue_id.len() > MAX_BEADS_ID_BYTES {
+        return false;
+    }
+    let Some((prefix, remainder)) = issue_id.rsplit_once('-') else {
+        return false;
+    };
+    if prefix.is_empty()
+        || prefix.len() > MAX_BEADS_ID_PREFIX_BYTES
+        || !prefix.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'_' | b'-' | b'.' | b':' | b'#')
+        })
+    {
+        return false;
+    }
+
+    let mut parts = remainder.split('.');
+    let Some(hash) = parts.next() else {
+        return false;
+    };
+    if hash.is_empty()
+        || hash.len() > MAX_BEADS_ID_HASH_BYTES
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        return false;
+    }
+    parts.all(|part| {
+        !part.is_empty()
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+            && part.parse::<u32>().is_ok()
+    })
 }
 
 fn semantic_revision(

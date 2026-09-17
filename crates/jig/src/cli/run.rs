@@ -588,6 +588,7 @@ fn validate_repository_runtime_compatibility(
         }
     }
     let ctx = RepoContext::load_from_root(repo_root)?;
+    request.validate_active_contract_version(ctx.contract_version())?;
     crate::policy::validate_contract(&ctx)?;
     request.validate_profile()?;
     Ok(ctx)

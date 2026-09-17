@@ -58,6 +58,27 @@ fn reads_current_export_and_returns_exact_normalized_issue() {
 }
 
 #[test]
+fn reads_br_generated_exports_with_colon_and_hash_prefixes() {
+    for (fixture, expected_id) in [
+        (
+            include_str!("test_fixtures/br-0.5.7-colon-prefix.jsonl"),
+            "team:api-r89",
+        ),
+        (
+            include_str!("test_fixtures/br-0.5.7-hash-prefix.jsonl"),
+            "gh#123-583",
+        ),
+    ] {
+        let temp = tempdir().unwrap();
+        fs::create_dir(temp.path().join(".beads")).unwrap();
+        fs::write(temp.path().join(PRIMARY_EXPORT), fixture).unwrap();
+
+        let export = BeadsExport::open(temp.path(), WORKSPACE_ID).unwrap();
+        assert_eq!(export.issue(expected_id).unwrap().id, expected_id);
+    }
+}
+
+#[test]
 fn accepts_bounded_producer_defined_status_and_issue_type() {
     let temp = tempdir().unwrap();
     let mut record = issue("example-123");
@@ -153,6 +174,7 @@ fn replacing_tracker_directory_cannot_redirect_a_pinned_snapshot() {
             symlink(&outside, repository.join(".beads")).unwrap();
         },
         || {},
+        || {},
     );
 
     assert_eq!(result.unwrap_err(), BeadsJsonlError::MissingExport);
@@ -189,6 +211,7 @@ fn replacing_validated_export_with_fifo_is_nonblocking_and_rejected() {
                 assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
                 hook_sender.send(()).unwrap();
             },
+            || {},
         );
         result_sender.send(result).unwrap();
     });
@@ -209,6 +232,26 @@ fn replacing_validated_export_with_fifo_is_nonblocking_and_rejected() {
     worker.join().unwrap();
 
     assert_eq!(result.unwrap_err(), BeadsJsonlError::UnsafeExport);
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_link_created_after_reads_is_rejected_by_final_witness() {
+    let temp = tempdir().unwrap();
+    let repository = temp.path().join("repository");
+    write_export(&repository, PRIMARY_EXPORT, &[issue("example-123")]);
+    let export = repository.join(PRIMARY_EXPORT);
+    let alias = repository.join("export-alias.jsonl");
+
+    let result = BeadsExport::open_with_hooks(
+        &repository,
+        WORKSPACE_ID,
+        || {},
+        || {},
+        || fs::hard_link(&export, &alias).unwrap(),
+    );
+
+    assert_eq!(result.unwrap_err(), BeadsJsonlError::ChangedDuringRead);
 }
 
 #[test]
@@ -317,12 +360,14 @@ fn record_count_line_size_and_depth_are_bounded() {
     ));
 
     let mut record = issue("example-123");
-    record["status"] = json!("x".repeat(MAX_TEXT_BYTES + 1));
+    record["description"] = json!("x".repeat(600_000));
+    record["future_large_text"] = json!("y".repeat(300_000));
     write_export(temp.path(), PRIMARY_EXPORT, &[record]);
-    assert!(matches!(
-        BeadsExport::open(temp.path(), WORKSPACE_ID),
-        Err(BeadsJsonlError::InvalidRecord { .. })
-    ));
+    let export = BeadsExport::open(temp.path(), WORKSPACE_ID).unwrap();
+    assert_eq!(
+        export.issue("example-123").unwrap().description.len(),
+        600_000
+    );
 
     let records = (0..=MAX_ISSUES)
         .map(|index| issue(&format!("example-{index}")))

@@ -110,6 +110,32 @@ fn configured_manual_export_guidance_is_used_for_recovery() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn configured_manual_export_guidance_does_not_hide_unsafe_export_repair() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    configured_repo(
+        temp.path(),
+        "manual_export_guidance = \"Run the repository privacy-safe export helper.\"\n",
+    );
+    let outside = temp.path().join("outside.jsonl");
+    fs::write(&outside, "").unwrap();
+    symlink(&outside, temp.path().join(".beads/issues.jsonl")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let result = super::super::tracker::tracker_check(&ctx);
+
+    assert_eq!(result.status, "unsafe export");
+    let fix = result.fix.unwrap();
+    assert!(
+        fix.contains("real, private files rather than links"),
+        "{fix}"
+    );
+    assert!(!fix.contains("privacy-safe export helper"), "{fix}");
+}
+
 #[test]
 fn invalid_export_reports_structure_without_task_body_content() {
     let temp = tempdir().unwrap();

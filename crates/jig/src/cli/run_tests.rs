@@ -562,6 +562,40 @@ fn capability_probe_without_explicit_version_rejects_inactive_epoch() {
 }
 
 #[test]
+fn repository_probe_without_explicit_version_rejects_inactive_epoch() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(crate::context::WORK_LINK_CONTRACT_VERSION)
+        .config(
+            r#"[repository]
+default_check_profile = "verify"
+components = []
+actions = []
+profiles = []"#,
+        )
+        .write();
+    let contract_path = temp.path().join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&contract_path).unwrap()).unwrap();
+    contract["default_check_profile"] = json!("verify");
+    std::fs::write(contract_path, serde_json::to_vec_pretty(&contract).unwrap()).unwrap();
+
+    let error = run_runtime_compatible(RuntimeCompatibleOpts {
+        profile: RuntimeCompatibilityProfile::Runtime,
+        capability_only: false,
+        contract_version: None,
+        repo_root: temp.path().to_path_buf(),
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Inactive Jig contract version 11"),
+        "{error}"
+    );
+}
+
+#[test]
 fn repository_probe_rejects_launcher_manifest_contract_drift() {
     let temp = tempdir().unwrap();
     write_compatible_runtime_repo(temp.path(), 4);

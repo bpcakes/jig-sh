@@ -3,7 +3,6 @@ use anyhow::{Result, bail};
 pub(super) const PROVIDER_BEADS: &str = "beads";
 pub(super) const TRACKER_ROOT_BEADS: &str = ".beads";
 pub(super) const MAX_WORKSPACE_ID_BYTES: usize = 128;
-pub(super) const MAX_ISSUE_ID_BYTES: usize = 256;
 
 pub(super) fn validate_portable_tracker_issue(
     provider: &str,
@@ -15,7 +14,9 @@ pub(super) fn validate_portable_tracker_issue(
         bail!("unsupported tracker provider {provider:?}");
     }
     validate_portable_identifier("tracker workspace id", workspace_id, MAX_WORKSPACE_ID_BYTES)?;
-    validate_portable_identifier("issue id", issue_id, MAX_ISSUE_ID_BYTES)?;
+    if !crate::tracker::is_valid_beads_issue_id(issue_id) {
+        bail!("issue id must be a valid bounded Beads prefix-hash identifier");
+    }
     let normalized = crate::repository_path::normalize_portable_repository_directory(
         tracker_root,
         "tracker root",

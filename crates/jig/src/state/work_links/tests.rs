@@ -57,6 +57,19 @@ fn snapshot_preserves_description_and_acceptance_criteria_as_distinct_fields() {
     assert_ne!(first.context_digest, second.context_digest);
 }
 
+#[test]
+fn work_links_accept_ids_from_br_generated_special_prefix_exports() {
+    for fixture in [
+        include_str!("../../tracker/test_fixtures/br-0.5.7-colon-prefix.jsonl"),
+        include_str!("../../tracker/test_fixtures/br-0.5.7-hash-prefix.jsonl"),
+    ] {
+        let record: Value = serde_json::from_str(fixture).unwrap();
+        let issue_id = record["id"].as_str().unwrap();
+        let issue = WorkLinkIssueV1::beads("01EXAMPLEWORKSPACE", issue_id).unwrap();
+        assert_eq!(issue.issue_id, issue_id);
+    }
+}
+
 fn seed_plan(ctx: &RepoContext, plan_id: &str) {
     super::super::plans::seed_open_plan_for_test(ctx, plan_id, "Example plan", "Body").unwrap();
 }
