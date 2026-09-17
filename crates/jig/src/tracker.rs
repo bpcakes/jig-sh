@@ -76,9 +76,13 @@ impl BeadsExport {
         validate_workspace_id(workspace_id)?;
         let repository = Dir::open_ambient_dir(root, ambient_authority())
             .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
-        let tracker = repository
-            .open_dir_nofollow(".beads")
-            .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
+        let tracker =
+            repository
+                .open_dir_nofollow(".beads")
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::NotFound => BeadsJsonlError::MissingExport,
+                    _ => BeadsJsonlError::InvalidWorkspace,
+                })?;
         let tracker_metadata = tracker
             .dir_metadata()
             .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;

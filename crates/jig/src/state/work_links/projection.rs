@@ -363,7 +363,7 @@ impl JournalProjection {
         if stats.unterminated_final_record {
             self.torn_tail = true;
             self.global_corruption.push(diagnostic(
-                stats.max_line_number,
+                Some(stats.physical_lines),
                 None,
                 "final work-link JSONL record is not newline-terminated",
             ));

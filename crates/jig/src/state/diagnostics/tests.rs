@@ -54,6 +54,79 @@ fn deep_diagnose_uses_journal_authority_while_shallow_remains_generic() {
 }
 
 #[test]
+fn deep_diagnose_reports_the_final_physical_line_for_a_torn_work_link() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture_context(temp.path());
+    fs::create_dir_all(ctx.state_dir()).unwrap();
+    // A valid future-version record is longer than the torn final line.
+    let record =
+        b"{\"id\":\"work-link_future\",\"schema_version\":2,\"plan_id\":\"plan_example\"}\n";
+    for blank_lines in [0, 2] {
+        let mut bytes = record.to_vec();
+        bytes.extend(std::iter::repeat_n(b'\n', blank_lines));
+        bytes.push(b'{');
+        fs::write(ctx.state_file("work-links.jsonl"), bytes).unwrap();
+
+        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
+
+        assert_eq!(output["work_links"]["authority"], "torn");
+        assert_eq!(
+            output["work_links"]["errors"][0]["line_number"],
+            2 + blank_lines
+        );
+    }
+}
+
+#[test]
+fn unsupported_lock_deep_diagnosis_preserves_torn_work_link_authority() {
+    use crate::state::work_links::{
+        WorkLinkEstablishedBy, WorkLinkIssueV1, WorkLinkProjection, WorkLinkRecordV1,
+        WorkLinkSnapshotV1, project_work_link,
+    };
+
+    let temp = tempdir().unwrap();
+    let ctx = fixture_context(temp.path());
+    fs::create_dir_all(ctx.state_dir()).unwrap();
+    let path = ctx.state_file("work-links.jsonl");
+    let mut completed = serde_json::to_vec(&WorkLinkRecordV1 {
+        id: "work-link_example".into(),
+        schema_version: 1,
+        plan_id: "plan_example".into(),
+        issue: WorkLinkIssueV1::beads("01EXAMPLEWORKSPACE", "example-123").unwrap(),
+        snapshot: WorkLinkSnapshotV1::new(1, "Example", "Description", "Acceptance").unwrap(),
+        established_by: WorkLinkEstablishedBy::Attach,
+    })
+    .unwrap();
+    completed.extend_from_slice(b"\n{");
+
+    for (bytes, final_line) in [(vec![b'{'], 1), (completed, 2)] {
+        fs::write(&path, &bytes).unwrap();
+        let locked = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
+        let unlocked = super::super::jsonl::with_unsupported_scan_lock(|| {
+            assert!(matches!(
+                project_work_link(&ctx, "plan_example").unwrap(),
+                WorkLinkProjection::Corrupt(_)
+            ));
+            state_diagnose(&ctx, StateDiagnoseRequest { deep: true })
+        });
+
+        assert_eq!(unlocked["work_links"], locked["work_links"]);
+        assert_eq!(unlocked["work_links"]["authority"], "torn");
+        assert_eq!(
+            unlocked["work_links"]["errors"][0]["line_number"],
+            final_line
+        );
+        assert_eq!(
+            unlocked["streams"]["work_links"],
+            locked["streams"]["work_links"]
+        );
+        assert_eq!(unlocked["streams"]["work_links"]["torn_tail"], true);
+        assert_eq!(unlocked["streams"]["work_links"]["records"], final_line);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
 fn journal_stream_diagnostics_enforce_semantic_record_limits() {
     let temp = tempdir().unwrap();
     let ctx = fixture_context(temp.path());

@@ -704,7 +704,7 @@ struct RepositoryExecutionAuthority<'a> {
     schema_dump_enabled: bool,
     commands: BTreeMap<String, &'a str>,
     frontend_apps: &'a [FrontendAppConfig],
-    work: &'a WorkConfig,
+    work: work_config::WorkExecutionAuthority<'a>,
     execution: &'a ExecutionConfig,
 }
 
@@ -781,7 +781,7 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         schema_dump_enabled: *schema_dump_enabled,
         commands: effective_commands,
         frontend_apps,
-        work,
+        work: work.execution_authority(),
         execution,
     };
     let encoded = serde_json::to_vec(&authority)

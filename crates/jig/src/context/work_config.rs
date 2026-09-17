@@ -6,6 +6,8 @@ use globset::GlobBuilder;
 use jig_contract::{ProfileId, TargetId};
 use serde::{Deserialize, Serialize};
 
+mod authority;
+pub(super) use authority::WorkExecutionAuthority;
 mod tracker;
 pub(crate) use tracker::WorkTrackerConfig;
 #[allow(unused_imports)]

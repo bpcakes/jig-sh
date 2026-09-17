@@ -24,6 +24,36 @@ fn observe(journal: &mut JournalProjection, line: u64, bytes: &[u8]) -> Result<(
 }
 
 #[test]
+fn unsupported_lock_preserves_torn_work_link_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("work-links.jsonl");
+    let mut completed = record("plan_example", "work-link_example", "example-123");
+    completed.push(b'\n');
+
+    let mut conflicting = record("plan_example", "work-link_conflicting", "example-456");
+    conflicting.pop();
+    completed.extend(conflicting);
+
+    for (bytes, final_line) in [(vec![b'{'], 1), (completed, 2)] {
+        std::fs::write(&path, &bytes).unwrap();
+        let journal = crate::state::jsonl::with_unsupported_scan_lock(|| {
+            scan_journal(&path, Some("plan_example")).unwrap()
+        });
+
+        let diagnostics = journal.diagnostics();
+        assert_eq!(diagnostics.authority, WorkLinkJournalAuthority::Torn);
+        assert!(diagnostics.torn_tail);
+        assert_eq!(diagnostics.errors[0].line_number, Some(final_line));
+        assert!(matches!(
+            journal.for_plan("plan_example"),
+            WorkLinkProjection::Corrupt(_)
+        ));
+        assert!(journal.ensure_authoritative_write_safe().is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
 fn projection_retains_full_record_only_for_the_selected_plan() {
     let mut journal = JournalProjection::new(
         Some("plan_selected"),

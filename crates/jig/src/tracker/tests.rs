@@ -110,6 +110,10 @@ fn reads_legacy_export_only_when_selection_is_unambiguous() {
 #[test]
 fn missing_export_and_unsafe_workspace_fail_closed() {
     let temp = tempdir().unwrap();
+    assert_eq!(
+        BeadsExport::open(temp.path(), WORKSPACE_ID).unwrap_err(),
+        BeadsJsonlError::MissingExport
+    );
     fs::create_dir(temp.path().join(".beads")).unwrap();
     assert_eq!(
         BeadsExport::open(temp.path(), WORKSPACE_ID).unwrap_err(),
@@ -122,6 +126,26 @@ fn missing_export_and_unsafe_workspace_fail_closed() {
         BeadsExport::open(other.path(), WORKSPACE_ID).unwrap_err(),
         BeadsJsonlError::InvalidWorkspace
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_tracker_directory_is_unsafe_even_when_its_target_is_missing() {
+    use std::os::unix::fs::symlink;
+
+    for target_exists in [false, true] {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("example-store");
+        if target_exists {
+            fs::create_dir(&target).unwrap();
+        }
+        symlink(&target, temp.path().join(".beads")).unwrap();
+
+        assert_eq!(
+            BeadsExport::open(temp.path(), WORKSPACE_ID).unwrap_err(),
+            BeadsJsonlError::InvalidWorkspace
+        );
+    }
 }
 
 #[cfg(unix)]

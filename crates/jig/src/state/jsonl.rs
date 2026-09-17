@@ -20,6 +20,11 @@ use crate::cancellation::ensure_status_collection_active;
 
 use super::records::ReceiptRecord;
 
+#[cfg(test)]
+mod test_lock;
+#[cfg(test)]
+pub(super) use test_lock::with_unsupported_scan_lock;
+
 const JSONL_READ_CHUNK: usize = 16 * 1024;
 pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
 
@@ -488,13 +493,21 @@ pub(super) fn scan_jsonl_raw(
     scan_jsonl_raw_with_limit(path, cancelled, None, visitor)
 }
 
+/// Bounded authority scans preserve torn tails even when locking is unsupported.
 pub(super) fn scan_jsonl_raw_bounded(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
     max_record_bytes: usize,
     visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
 ) -> Result<JsonlScanStats> {
-    scan_jsonl_raw_with_limit(path, cancelled, Some(max_record_bytes), visitor)
+    scan_jsonl_raw_with_limit_and_lock(
+        path,
+        cancelled,
+        Some(max_record_bytes),
+        false,
+        visitor,
+        try_scan_lock_shared,
+    )
 }
 
 pub(crate) fn scan_dashboard_jsonl_raw(
@@ -541,9 +554,18 @@ fn scan_jsonl_raw_with_limit(
         path,
         cancelled,
         max_record_bytes,
+        true,
         visitor,
-        FileExt::try_lock_shared,
+        try_scan_lock_shared,
     )
+}
+
+fn try_scan_lock_shared(file: &File) -> io::Result<bool> {
+    #[cfg(test)]
+    if test_lock::unsupported() {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
+    FileExt::try_lock_shared(file)
 }
 
 #[cfg(test)]
@@ -557,6 +579,7 @@ fn scan_dashboard_jsonl_raw_with_lock(
         path,
         cancelled,
         Some(DASHBOARD_JSONL_RECORD_BYTES),
+        true,
         visitor,
         lock_data,
     )
@@ -566,6 +589,7 @@ fn scan_jsonl_raw_with_limit_and_lock(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
     max_record_bytes: Option<usize>,
+    allow_unterminated_final: bool,
     mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
     lock_data: impl FnMut(&File) -> io::Result<bool>,
 ) -> Result<JsonlScanStats> {
@@ -586,7 +610,7 @@ fn scan_jsonl_raw_with_limit_and_lock(
                     path,
                     cancelled,
                     max_record_bytes,
-                    true,
+                    allow_unterminated_final,
                     &mut visitor,
                 )
             }

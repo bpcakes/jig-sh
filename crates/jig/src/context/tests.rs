@@ -626,6 +626,7 @@ include!("tests_parts/part_02.rs");
 
 mod runtime;
 mod strict_config;
+mod tracker_authority;
 
 include!("tests_parts/part_01.rs");
 

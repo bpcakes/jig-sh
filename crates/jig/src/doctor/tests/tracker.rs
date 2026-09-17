@@ -110,6 +110,27 @@ fn configured_manual_export_guidance_is_used_for_recovery() {
     );
 }
 
+#[test]
+fn missing_tracker_directory_uses_manual_export_guidance_without_creating_it() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(format!(
+            "[work.tracker]\nkind = \"beads\"\nworkspace_id = \"{WORKSPACE_ID}\"\nmanual_export_guidance = \"Run the ExampleProject export helper.\"\n"
+        ))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let result = super::super::tracker::tracker_check(&ctx);
+
+    assert!(!result.ok);
+    assert_eq!(result.status, "missing export");
+    assert_eq!(
+        result.fix.as_deref(),
+        Some("Run the ExampleProject export helper.")
+    );
+    assert!(!temp.path().join(".beads").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn configured_manual_export_guidance_does_not_hide_unsafe_export_repair() {
