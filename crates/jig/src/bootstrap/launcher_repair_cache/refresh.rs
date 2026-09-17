@@ -120,7 +120,7 @@ pub(in crate::bootstrap) fn retire_launcher_repair_seeded_caches_best_effort(
 pub(in crate::bootstrap) fn retire_supported_launcher_repair_seeded_caches_best_effort(
     destination: &Path,
 ) -> usize {
-    (crate::context::MIN_SUPPORTED_CONTRACT_VERSION..=crate::context::CURRENT_CONTRACT_VERSION)
+    crate::context::active_contract_versions()
         .map(|contract_version| {
             retire_launcher_repair_seeded_caches_best_effort(destination, contract_version)
         })

@@ -148,6 +148,7 @@ fn full_with_web_retires_web_paths_when_switching_to_minimal() {
     let mut full = footprint_adopt_opts(&repo, template.path(), false, false);
     full.answers.frontend_apps = vec![frontend_app()];
     run_adopt(full).unwrap();
+    add_project_runtime_tables(&repo);
     let config_path = repo.join(".jig.toml");
     let mut config =
         toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
@@ -189,6 +190,8 @@ fn full_with_web_retires_web_paths_when_switching_to_minimal() {
     assert!(!config.contains("typescript_coverage_command"));
     assert!(!config.contains("tool = \"jig.typescript_"));
     assert!(config.contains("release_command = \"just release\""));
+    let config = toml::from_str::<toml::Value>(&config).unwrap();
+    assert_project_runtime_tables(&config);
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
     assert!(!contract.contains("typescript_"));
     assert!(
@@ -380,7 +383,7 @@ fn forced_minimal_adoption_with_invalid_prior_config_preserves_omitted_paths() {
 }
 
 #[test]
-fn invalid_runtime_config_is_not_preserved_by_readoption_or_update() {
+fn invalid_runtime_config_is_repaired_without_dropping_optional_work_authority() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -389,6 +392,7 @@ fn invalid_runtime_config_is_not_preserved_by_readoption_or_update() {
         let repo = temp.path().join(if update { "update" } else { "readopt" });
         fs::create_dir_all(&repo).unwrap();
         run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+        add_project_runtime_tables(&repo);
 
         let config_path = repo.join(".jig.toml");
         let mut config =
@@ -411,7 +415,38 @@ fn invalid_runtime_config_is_not_preserved_by_readoption_or_update() {
                 .unwrap();
         assert!(repaired["commands"].as_table().is_some());
         assert!(repaired["commands"]["api_test_command"].as_str().is_some());
+        assert_optional_work_authority(&repaired);
         crate::context::RepoContext::load_from(&repo).unwrap();
+    }
+}
+
+#[test]
+fn missing_rendered_config_fails_before_optional_authority_reconciliation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+
+    for refresh in ["update", "readopt"] {
+        let template = materialize_template_worktree();
+        let repo = temp.path().join(refresh);
+        fs::create_dir_all(&repo).unwrap();
+        run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+        add_project_runtime_tables(&repo);
+        let config_path = repo.join(".jig.toml");
+        let config_before = fs::read(&config_path).unwrap();
+        fs::remove_file(template.path().join("templates/project/.jig.toml.jinja")).unwrap();
+
+        let error = if refresh == "update" {
+            run_update(update_opts(&repo, template.path(), false)).unwrap_err()
+        } else {
+            run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap_err()
+        };
+        let error = format!("{error:#}");
+
+        assert!(
+            error.contains("Staging render did not produce .jig.toml"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&config_path).unwrap(), config_before);
     }
 }
 
@@ -467,6 +502,84 @@ fn update_preserves_project_runtime_tables_for_minimal_and_full_harnesses() {
                 Some(if minimal { "minimal" } else { "full" })
             );
             crate::context::RepoContext::load_from(&repo).unwrap();
+        }
+    }
+}
+
+#[test]
+fn update_does_not_enable_tracker_ownership_when_work_metadata_is_absent() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+
+    for minimal in [true, false] {
+        let repo = temp.path().join(if minimal { "minimal" } else { "full" });
+        fs::create_dir_all(&repo).unwrap();
+        run_adopt(footprint_adopt_opts(&repo, template.path(), minimal, false)).unwrap();
+
+        run_update(update_opts(&repo, template.path(), false)).unwrap();
+
+        let config =
+            toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
+                .unwrap();
+        let work = config["work"].as_table().unwrap();
+        assert!(!work.contains_key("tracker"));
+        assert!(!work.contains_key("receipt_metadata"));
+        crate::context::RepoContext::load_from(&repo).unwrap();
+    }
+}
+
+#[test]
+fn update_and_readoption_refuse_to_delete_invalid_optional_work_authority() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    for refresh in ["update", "readopt"] {
+        for (name, minimal, field, value) in [
+            (
+                "full-tracker",
+                false,
+                "tracker",
+                toml::Value::Table(toml::Table::from_iter([
+                    ("kind".into(), toml::Value::String("beads".into())),
+                    (
+                        "workspace_id".into(),
+                        toml::Value::String("not-a-canonical-ulid".into()),
+                    ),
+                ])),
+            ),
+            (
+                "minimal-receipt-metadata",
+                true,
+                "receipt_metadata",
+                toml::Value::Integer(7),
+            ),
+        ] {
+            let repo = temp.path().join(format!("{refresh}-{name}"));
+            fs::create_dir_all(&repo).unwrap();
+            run_adopt(footprint_adopt_opts(&repo, template.path(), minimal, false)).unwrap();
+            let config_path = repo.join(".jig.toml");
+            let mut config =
+                toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+            config["work"]
+                .as_table_mut()
+                .unwrap()
+                .insert(field.into(), value);
+            let authored = toml::to_string_pretty(&config).unwrap();
+            fs::write(&config_path, &authored).unwrap();
+
+            let error = if refresh == "update" {
+                run_update(update_opts(&repo, template.path(), false)).unwrap_err()
+            } else {
+                run_adopt(footprint_adopt_opts(&repo, template.path(), minimal, true)).unwrap_err()
+            };
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("existing [work].{field} is invalid"))
+            );
+            assert_eq!(fs::read_to_string(config_path).unwrap(), authored);
         }
     }
 }

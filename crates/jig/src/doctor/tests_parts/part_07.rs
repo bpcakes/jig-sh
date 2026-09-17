@@ -336,14 +336,14 @@ fn doctor_reuses_one_signal_generation_per_batch_and_allows_later_batches() {
 
 #[cfg(unix)]
 #[test]
-fn signal_retirement_failure_invalidates_every_configured_process_check() {
+fn signal_retirement_failure_preserves_the_process_independent_tracker_check() {
     let temp = tempdir().unwrap();
     write_sqlx_doctor_fixture_with_command(temp.path(), "sqlx prepare -D sqlite:retirement.db");
     let config_path = temp.path().join(".jig.toml");
     fs::write(
             &config_path,
             format!(
-                "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\n",
+                "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\n\n[work.tracker]\nkind = \"beads\"\nworkspace_id = \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n",
                 fs::read_to_string(&config_path).unwrap().replace(
                     "[agent_tooling.codex]\nmarketplaces = []",
                     "[[agent_tooling.codex.marketplaces]]\nid = \"test-skills\"\nsource = \"example/test-skills\"",
@@ -387,6 +387,7 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             "compatible",
             "compatible",
         )),
+        tracker: check("tracker", "Work tracker", true, true, "ready", "ready"),
         agent: check(
             "agent_skills",
             "Agent skills",
@@ -424,6 +425,9 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
         assert_eq!(process_check.status, "error");
         assert!(process_check.detail.contains("could not retire safely"));
     }
+    assert!(checks.tracker.ok);
+    assert_eq!(checks.tracker.status, "ready");
+    assert_eq!(checks.tracker.detail, "ready");
 }
 
 #[cfg(unix)]

@@ -102,6 +102,11 @@ mod runs;
 mod session_compaction;
 mod sessions;
 mod support;
+mod tracker_identity;
+// The next delivery milestone exposes the lifecycle entrypoints built on this
+// portable, Jig-owned link authority.
+#[allow(dead_code)]
+pub(crate) mod work_links;
 
 pub(super) const MAINTENANCE_WRITER_COORDINATION_NOTE: &str = "Before applying a state rewrite, stop Jig processes launched with older runtimes that wrote through a pre-opened state-file handle. Current runtimes coordinate through the repository state lock.";
 

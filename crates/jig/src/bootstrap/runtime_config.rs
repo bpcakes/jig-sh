@@ -31,6 +31,89 @@ const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
     ),
 ];
 
+const OPTIONAL_WORK_AUTHORITY_FIELDS: [&str; 2] = ["receipt_metadata", "tracker"];
+
+#[derive(Default)]
+struct OptionalWorkAuthority(BTreeMap<String, toml::Value>);
+
+impl OptionalWorkAuthority {
+    fn capture(config: &toml::Table) -> Result<Self> {
+        let Some(work) = config.get("work") else {
+            return Ok(Self::default());
+        };
+        let work = work
+            .as_table()
+            .ok_or_else(|| anyhow::anyhow!("Existing [work] is not a TOML table"))?;
+        let mut authority = BTreeMap::new();
+        for field in OPTIONAL_WORK_AUTHORITY_FIELDS {
+            let Some(value) = work.get(field) else {
+                continue;
+            };
+            if !schema_valid_work_field(field, value.clone()) {
+                bail!(
+                    "existing [work].{field} is invalid; repair it before refreshing the Jig harness"
+                );
+            }
+            authority.insert(field.into(), value.clone());
+        }
+        Ok(Self(authority))
+    }
+
+    fn apply(self, config: &mut toml::Table) -> Result<()> {
+        if self.0.is_empty() {
+            return Ok(());
+        }
+        let work = config
+            .entry("work")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("Rendered [work] is not a TOML table"))?;
+        work.extend(self.0);
+        Ok(())
+    }
+}
+
+pub(super) fn reconcile_optional_work_authority(
+    seed_repo_path: Option<&Path>,
+    destination: &Path,
+) -> Result<()> {
+    let Some(seed_repo_path) = seed_repo_path else {
+        return Ok(());
+    };
+    let existing_path = seed_repo_path.join(ANSWERS_FILE);
+    let existing_text = match fs::read_to_string(&existing_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read {}", existing_path.display()));
+        }
+    };
+    let existing = toml::from_str::<toml::Value>(&existing_text)
+        .with_context(|| format!("Failed to parse {}", existing_path.display()))?;
+    let existing = existing
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("{} is not a TOML table", existing_path.display()))?;
+    let authority = OptionalWorkAuthority::capture(existing)?;
+    if authority.0.is_empty() {
+        return Ok(());
+    }
+
+    let rendered_path = destination.join(ANSWERS_FILE);
+    let rendered_text = fs::read_to_string(&rendered_path)
+        .with_context(|| format!("Failed to read {}", rendered_path.display()))?;
+    let mut rendered = toml::from_str::<toml::Value>(&rendered_text)
+        .with_context(|| format!("Failed to parse {}", rendered_path.display()))?;
+    let rendered = rendered
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("{} is not a TOML table", rendered_path.display()))?;
+    authority.apply(rendered)?;
+    let serialized = toml::to_string_pretty(rendered)
+        .with_context(|| format!("Failed to serialize {}", rendered_path.display()))?;
+    fs::write(&rendered_path, serialized)
+        .with_context(|| format!("Failed to write {}", rendered_path.display()))
+}
+
 pub(super) fn reconcile_runtime_config(
     seed_repo_path: Option<&Path>,
     destination: &Path,
@@ -530,8 +613,12 @@ fn reconcile_work_refinements(existing: &toml::Table, rendered: &mut toml::Table
 }
 
 fn schema_valid_work_entry(field: &str, entry: &toml::Value) -> bool {
+    schema_valid_work_field(field, toml::Value::Array(vec![entry.clone()]))
+}
+
+fn schema_valid_work_field(field: &str, value: toml::Value) -> bool {
     let mut work = toml::Table::new();
-    work.insert(field.into(), toml::Value::Array(vec![entry.clone()]));
+    work.insert(field.into(), value);
     toml::Value::Table(work)
         .try_into::<crate::context::WorkConfig>()
         .is_ok_and(|config| config.validate().is_ok())

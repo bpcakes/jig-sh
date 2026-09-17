@@ -8,26 +8,32 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
 use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
 
-use super::json_scan::{first_non_whitespace, skip_json_string, skip_json_value, skip_whitespace};
-use super::jsonl::scan_jsonl_raw;
+use super::jsonl::{scan_jsonl_raw, scan_jsonl_raw_bounded};
 
-const STATE_STREAMS: [(&str, &str); 5] = [
+mod deep;
+
+use deep::{
+    ReceiptPayloadDiagnostics, SessionCompactionDiagnostics, analyze_receipt_record,
+    analyze_session_record,
+};
+
+const STATE_STREAMS: [(&str, &str); 6] = [
     ("sessions", "sessions.jsonl"),
     ("plans", "plans.jsonl"),
     ("receipts", "receipts.jsonl"),
     ("decisions", "decisions.jsonl"),
     ("runs", "runs.jsonl"),
+    ("work_links", "work-links.jsonl"),
 ];
 const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
 const RECEIPT_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
@@ -57,6 +63,11 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
     );
     let maintenance_cache = inspect_maintenance_cache(ctx.root(), MAX_DIAGNOSTIC_SAMPLES);
     let git = inspect_git_facts(ctx.root());
+    let work_links = request.deep.then(|| {
+        super::work_links::work_link_journal_diagnostics_from_path(
+            &ctx.state_file(super::work_links::WORK_LINKS_FILE),
+        )
+    });
     let totals = state_totals(&streams, &legacy_archive, &maintenance_cache);
     let recommendations = recommendations(
         request.deep,
@@ -77,6 +88,7 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         "streams": streams,
         "sessions": request.deep.then_some(session_compaction),
         "receipts": request.deep.then_some(receipt_payload),
+        "work_links": work_links,
         "legacy_archive": legacy_archive,
         "maintenance_cache": maintenance_cache,
         "git": git,
@@ -98,7 +110,7 @@ fn inspect_stream(
     let mut deep_analysis_error_lines = Vec::new();
     let mut deep_analysis_error_count = 0u64;
 
-    let result = scan_jsonl_raw(path, &|| false, |raw| {
+    let mut visit = |raw: super::jsonl::RawJsonlRecord<'_>| {
         let line_number = raw.line_number;
         let record = raw.bytes;
         report.records += 1;
@@ -166,7 +178,16 @@ fn inspect_stream(
             );
         }
         Ok(())
-    });
+    };
+    let result = match path.file_name().and_then(|name| name.to_str()) {
+        Some(super::work_links::WORK_LINKS_FILE) => scan_jsonl_raw_bounded(
+            path,
+            &|| false,
+            super::work_links::MAX_WORK_LINK_RECORD_BYTES,
+            &mut visit,
+        ),
+        _ => scan_jsonl_raw(path, &|| false, &mut visit),
+    };
 
     match result {
         Ok(scan) => {
@@ -245,186 +266,6 @@ struct MalformedRecordSample {
 struct RecordSizeSample {
     line: u64,
     bytes: u64,
-}
-
-#[derive(Debug, Default, serde::Serialize)]
-struct SessionCompactionDiagnostics {
-    source_bytes: u64,
-    analyzed_records: u64,
-    recursive_session_records: u64,
-    recursive_summary_values: u64,
-    projected_shallow_bytes: u64,
-    estimated_reclaimable_bytes: u64,
-    growth_bytes: u64,
-}
-
-#[derive(Debug, Default)]
-struct SessionRecordProjection {
-    recursive_summary_values: u64,
-    projected_record_bytes: u64,
-    reclaimable_bytes: u64,
-    growth_bytes: u64,
-}
-
-fn analyze_session_record(record: &[u8]) -> Result<SessionRecordProjection> {
-    let mut projection = SessionRecordProjection {
-        projected_record_bytes: record.len() as u64,
-        ..SessionRecordProjection::default()
-    };
-    visit_object_members(record, 0..record.len(), &mut |key, value| {
-        if key != "summary" || first_non_whitespace(record, &value) != Some(b'{') {
-            return Ok(());
-        }
-        visit_object_members(record, value, &mut |key, value| {
-            if key != "recent_sessions" || first_non_whitespace(record, &value) != Some(b'[') {
-                return Ok(());
-            }
-            visit_array_values(record, value, &mut |reference| {
-                if first_non_whitespace(record, &reference) != Some(b'{') {
-                    return Ok(());
-                }
-                visit_object_members(record, reference, &mut |key, nested_summary| {
-                    if key == "summary" && record[nested_summary.clone()] != *b"null" {
-                        projection.recursive_summary_values += 1;
-                        let original_bytes = nested_summary.len() as u64;
-                        projection.projected_record_bytes = projection
-                            .projected_record_bytes
-                            .saturating_sub(original_bytes)
-                            .saturating_add(4);
-                        if original_bytes > 4 {
-                            projection.reclaimable_bytes += original_bytes - 4;
-                        } else {
-                            projection.growth_bytes += 4 - original_bytes;
-                        }
-                    }
-                    Ok(())
-                })
-            })
-        })
-    })?;
-    Ok(projection)
-}
-
-#[derive(Debug, Default, serde::Serialize)]
-struct ReceiptPayloadDiagnostics {
-    analyzed_records: u64,
-    args_bytes: u64,
-    stdout_preview_bytes: u64,
-    stderr_preview_bytes: u64,
-    output_preview_bytes: u64,
-    evidence_bytes: u64,
-    changed_paths_bytes: u64,
-    diff_stat_bytes: u64,
-    other_top_level_value_bytes: u64,
-    total_top_level_value_bytes: u64,
-}
-
-fn analyze_receipt_record(
-    record: &[u8],
-    diagnostics: &mut ReceiptPayloadDiagnostics,
-) -> Result<()> {
-    visit_object_members(record, 0..record.len(), &mut |key, value| {
-        let bytes = value.len() as u64;
-        diagnostics.total_top_level_value_bytes = diagnostics
-            .total_top_level_value_bytes
-            .saturating_add(bytes);
-        match key {
-            "args" => diagnostics.args_bytes = diagnostics.args_bytes.saturating_add(bytes),
-            "stdout_preview" => {
-                diagnostics.stdout_preview_bytes =
-                    diagnostics.stdout_preview_bytes.saturating_add(bytes);
-                diagnostics.output_preview_bytes =
-                    diagnostics.output_preview_bytes.saturating_add(bytes);
-            }
-            "stderr_preview" => {
-                diagnostics.stderr_preview_bytes =
-                    diagnostics.stderr_preview_bytes.saturating_add(bytes);
-                diagnostics.output_preview_bytes =
-                    diagnostics.output_preview_bytes.saturating_add(bytes);
-            }
-            "evidence" => {
-                diagnostics.evidence_bytes = diagnostics.evidence_bytes.saturating_add(bytes);
-            }
-            "changed_paths" => {
-                diagnostics.changed_paths_bytes =
-                    diagnostics.changed_paths_bytes.saturating_add(bytes);
-            }
-            "diff_stat" => {
-                diagnostics.diff_stat_bytes = diagnostics.diff_stat_bytes.saturating_add(bytes);
-            }
-            _ => {
-                diagnostics.other_top_level_value_bytes = diagnostics
-                    .other_top_level_value_bytes
-                    .saturating_add(bytes);
-            }
-        }
-        Ok(())
-    })
-}
-
-fn visit_object_members(
-    input: &[u8],
-    range: Range<usize>,
-    visitor: &mut impl FnMut(&str, Range<usize>) -> Result<()>,
-) -> Result<()> {
-    let mut cursor = skip_whitespace(input, range.start, range.end);
-    if input.get(cursor) != Some(&b'{') {
-        return Ok(());
-    }
-    cursor += 1;
-    loop {
-        cursor = skip_whitespace(input, cursor, range.end);
-        match input.get(cursor) {
-            Some(b'}') => return Ok(()),
-            Some(b'"') => {}
-            _ => bail!("Expected object key at byte {cursor}"),
-        }
-        let key_start = cursor;
-        cursor = skip_json_string(input, cursor, range.end)?;
-        let key: String = serde_json::from_slice(&input[key_start..cursor])
-            .context("Failed to decode JSON object key")?;
-        cursor = skip_whitespace(input, cursor, range.end);
-        if input.get(cursor) != Some(&b':') {
-            bail!("Expected ':' after object key at byte {cursor}");
-        }
-        cursor = skip_whitespace(input, cursor + 1, range.end);
-        let value_start = cursor;
-        cursor = skip_json_value(input, cursor, range.end)?;
-        visitor(&key, value_start..cursor)?;
-        cursor = skip_whitespace(input, cursor, range.end);
-        match input.get(cursor) {
-            Some(b',') => cursor += 1,
-            Some(b'}') => return Ok(()),
-            _ => bail!("Expected ',' or '}}' at byte {cursor}"),
-        }
-    }
-}
-
-fn visit_array_values(
-    input: &[u8],
-    range: Range<usize>,
-    visitor: &mut impl FnMut(Range<usize>) -> Result<()>,
-) -> Result<()> {
-    let mut cursor = skip_whitespace(input, range.start, range.end);
-    if input.get(cursor) != Some(&b'[') {
-        return Ok(());
-    }
-    cursor += 1;
-    loop {
-        cursor = skip_whitespace(input, cursor, range.end);
-        if input.get(cursor) == Some(&b']') {
-            return Ok(());
-        }
-        let value_start = cursor;
-        cursor = skip_json_value(input, cursor, range.end)?;
-        visitor(value_start..cursor)?;
-        cursor = skip_whitespace(input, cursor, range.end);
-        match input.get(cursor) {
-            Some(b',') => cursor += 1,
-            Some(b']') => return Ok(()),
-            _ => bail!("Expected ',' or ']' at byte {cursor}"),
-        }
-    }
 }
 
 #[derive(Debug, Default, serde::Serialize)]

@@ -78,6 +78,7 @@ mod test_env;
 mod test_process;
 mod text;
 mod tool_defs;
+mod tracker;
 mod ui;
 
 // Shared protocol between generated optional Cargo command defaults and

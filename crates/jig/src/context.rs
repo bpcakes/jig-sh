@@ -17,21 +17,21 @@ use crate::repository_path::{
     normalize_repo_relative_path, validate_repository_directory_path,
 };
 
-pub(crate) use execution_config::{
-    CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
-};
-
 pub(crate) use defaults::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_PLUGINS,
     DEFAULT_CODEX_MARKETPLACE_SOURCE, SUPPORTED_WEB_PACKAGE_MANAGERS,
 };
+pub(crate) use execution_config::{
+    CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
+};
 pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
 use runtime::non_empty_legacy_jig_version;
 pub(crate) use runtime::{
-    CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX,
-    MIN_SUPPORTED_CONTRACT_VERSION, RepoConfigProbe, RuntimeCacheProfile,
-    is_supported_contract_version, runtime_cache_base, runtime_profile_cache_name,
-    runtime_profile_cache_path,
+    CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX, RepoConfigProbe,
+    RuntimeCacheProfile, WORK_LINK_CONTRACT_VERSION, active_contract_versions,
+    active_contract_versions_label, is_active_contract_version, is_supported_contract_version,
+    runtime_cache_base, runtime_profile_cache_name, runtime_profile_cache_path,
+    supports_work_links,
 };
 #[cfg(test)]
 pub(crate) use runtime::{
@@ -704,7 +704,7 @@ struct RepositoryExecutionAuthority<'a> {
     schema_dump_enabled: bool,
     commands: BTreeMap<String, &'a str>,
     frontend_apps: &'a [FrontendAppConfig],
-    work: &'a WorkConfig,
+    work: work_config::WorkExecutionAuthority<'a>,
     execution: &'a ExecutionConfig,
 }
 
@@ -781,7 +781,7 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         schema_dump_enabled: *schema_dump_enabled,
         commands: effective_commands,
         frontend_apps,
-        work,
+        work: work.execution_authority(),
         execution,
     };
     let encoded = serde_json::to_vec(&authority)
@@ -809,7 +809,7 @@ pub(crate) use repository_root::{find_repo_root_from, find_repo_root_from_or_env
 // Keep launcher protocol constants in this module shell: repository tooling
 // reads their declarations directly without compiling the Rust include tree.
 pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 8;
-pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = CURRENT_CONTRACT_VERSION;
+pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 11;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";

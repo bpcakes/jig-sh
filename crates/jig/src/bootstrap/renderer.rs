@@ -103,6 +103,13 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         None,
         request.contract_version,
     ))?;
+    let answers_path = destination.join(ANSWERS_FILE);
+    if !answers_path.exists() {
+        request
+            .progress
+            .blocked(format!("staging render did not produce {ANSWERS_FILE}"));
+        bail!("Staging render did not produce {ANSWERS_FILE}");
+    }
     let authored_seed_paths = take_authored_seed_paths(&mut active_paths, request.answers);
     if !request.answers.is_minimal_footprint() {
         request
@@ -140,6 +147,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
             &request.preferred_rendered_commands,
         )?;
     }
+    super::runtime_config::reconcile_optional_work_authority(request.seed_repo_path, &destination)?;
 
     active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
     request
@@ -159,17 +167,6 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         );
     }
 
-    let answers_path = destination.join(ANSWERS_FILE);
-    if !answers_path.exists() {
-        request
-            .progress
-            .blocked(format!("staging render did not produce {ANSWERS_FILE}"));
-        bail!(
-            "Staging render did not produce {} in {}",
-            ANSWERS_FILE,
-            destination.display()
-        );
-    }
     let staged_context = crate::context::RepoContext::load_from_root(destination.clone())
         .with_context(|| {
             format!(

@@ -84,6 +84,19 @@ The current explicit acknowledgement flags, including `--accept-trust-scope` and
 
 Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are rejected so local typos fail fast. New optional keys in `[work]`, `[loop]`, `[[loop.workflows]]`, `[execution]`, `[agent_tooling]`, `[agent_tooling.codex]`, `[dev]`, or app tables require a Jig runtime/template update and a documented migration note. The `[execution]` keys are backward-compatible in contract v4 through v6: omission defaults `command_timeout_seconds` to 1,800 seconds and `command_output_limit_bytes` to 67,108,864 bytes for configured commands. Internal protocol commands and Codex worker transcripts retain separate fixed limits. Any addition or change that makes an existing repository unreadable or changes generated behavior incompatibly requires a contract bump. Loop workflow keys `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, and `checkout`, the compiled `codex_task` kind, and the `loop dispatch` CLI are additive runtime behavior for supported legacy repositories; no generated MCP tool is added. A `pr_manager` or `codex_task` workflow may set `codex_home` to choose the exact `CODEX_HOME` for its unattended `codex exec` worker; omission inherits the caller environment for compatibility. Bare names resolve only to their conventional home-directory locations, while non-conventional homes require explicit paths. Same-contract-epoch loop JSON preserves the input as `codex_home_configured`; repair-attempt and task-worker actions and receipts report the canonical worker directory as `codex_home_resolved` when resolved, while actions that do not attempt work omit that field.
 
+Current source accepts an optional strict `[work.tracker]` extension with
+`kind = "beads"`, a required canonical portable ULID `workspace_id`, fixed root
+`.beads`, manual export, and optional display-only manual guidance. Omission preserves
+all existing configuration and installation behavior and does not require `br`. The
+section is part of execution authority, while `work.receipt_metadata = ["beads"]`
+remains the independent check-freshness declaration. Existing current-epoch templates
+do not generate the tracker section, and T2 adds no linked lifecycle command; the later
+epoch-11 lifecycle cutover owns journal writes. An older strict runtime rejects a newly
+configured tracker instead of silently discarding its authority. Update and write-mode
+readoption preserve valid tracker and receipt-metadata authority independently of unrelated
+configuration validity; malformed optional authority blocks refresh with a field-specific
+diagnosis.
+
 ## Contract Version
 
 `.agent/jig-contract.json` has these schema versions:
@@ -466,6 +479,7 @@ Current JSONL state files:
 - `receipts.jsonl`
 - `decisions.jsonl`
 - `runs.jsonl`
+- `work-links.jsonl`
 
 State readers should tolerate missing files by treating them as empty. JSONL readers should ignore blank lines and fail loudly on malformed nonblank records. Session-start records retain their durable write-time summary, but `summary.recent_sessions` contains shallow event references whose nested `summary` is `null`; historical records that recursively embedded older summaries remain readable. Canonical session readers collapse duplicate IDs with identical event envelopes, as can arise after a line-union merge, and reject the same ID with a conflicting envelope.
 
@@ -511,6 +525,24 @@ Structured work commands use the `jig.work_*` CLI and MCP namespace, but state-o
 - `jig.plans_append`
 - `jig.plans_close`
 - `jig.decisions_add`
+
+`work-links.jsonl` is an additive, versioned join and does not change the legacy plan journal. A version-1 record names its event and plan, the `beads` provider, a portable tracker-workspace identity, an exact issue ID, tracker root `.beads`, observation time, and bounded title, description, and acceptance-criteria fields. The snapshot retains those task fields separately and covers them with one domain-separated digest; it does not collapse them into an ambiguous presentation string. The record also identifies whether the link was created at plan start or attached later. A plan has at most one distinct link. Exact retries are idempotent. Line-union records for the same plan and issue converge on the lowest event ID as the canonical immutable snapshot; a different issue or a repeated event ID with different semantic JSON is a conflict, never last-write-wins. Snapshot text is historical context rather than synchronized issue authority. Absolute database, checkout, and source paths are invalid durable fields.
+
+A work-link record is committed only when its physical line ends in a newline. Appends sync file data and the containing directory before returning. A malformed or unterminated record blocks authoritative writes; an exact visible retry re-confirms both durability boundaries. Readers enforce the 2-MiB record ceiling while streaming, and state diagnosis uses that ceiling before semantic inspection. Projection retains a fixed semantic fingerprint rather than the full JSON value for each unique event, folds each plan to compact authority state, bounds stored diagnostic samples, and retains a full canonical record only for the one requested plan. At most 100,000 unique event identities and 100,000 known plan identities may participate in one projection. A writer admits its candidate to the same in-memory projection under the journal lock before appending, so crossing either ceiling is unsupported authority and blocks the write without modifying the journal. Exact retries at a ceiling remain successful because they add no identity. Unknown schema or provider data remains inspectable history within those limits but cannot authorize a link. Maintenance does not compact, archive, or restore this journal and must preserve its unknown bytes.
+
+Snapshot conversion preserves the normalized issue's title, description, and acceptance criteria exactly, including text above 256 KiB. Description and acceptance criteria have no separate field-size ceiling narrower than the serialized journal record. The Beads reader's 1-MiB record limit leaves room for the work-link metadata within the 2-MiB journal limit. The writer checks the complete serialized record, including JSON escaping, and rejects overflow without truncating requirements or appending partial history. Exact retries continue to return the original snapshot after the exported issue changes.
+
+Repository contract epoch 11 is reserved for work-link writes. The runtime can read that capability while generated repositories remain at current epoch 8 until the public linking workflow is complete. Epochs 9 and 10 remain reserved historical receipt-freshness semantics and are not valid manifest epochs. A repository below epoch 11 can diagnose absent or existing link history but cannot append it. Until epoch 11 becomes current, launcher compatibility does not advertise it as active.
+
+### Beads-compatible task snapshot
+
+The optional `[work.tracker]` configuration selects a repository-local, read-only Beads JSONL snapshot. Jig's task-data contract is the export format, not a `br` executable or SQLite schema. Current `.beads/issues.jsonl` and legacy `.beads/beads.jsonl` are supported only when exactly one exists. The reader opens the repository, then opens `.beads` once without following a link, and performs export selection, leaf opening, and final identity witnessing relative to that pinned directory capability. On Unix the leaf is acquired with no-follow and nonblocking flags before descriptor type validation, so replacing a validated regular file with a FIFO cannot hang the reader. Replacing the `.beads` pathname cannot redirect an in-progress read outside the repository. A non-regular or changing leaf, or an export selection that becomes ambiguous during the observation, is rejected rather than combined across generations.
+
+The `beads-rust-jsonl-v1` profile validates the entire bounded export, rejects duplicate JSON keys and duplicate issue IDs, and exposes exact-ID normalized issue snapshots. Required known fields retain strict type, Beads prefix/hash identity, timestamp, and title-size checks; `:` and `#` are valid issue-prefix characters. Long producer text and additional string fields are accepted up to the profile's record and export ceilings, while consumed text remains NUL-free. Status and issue-type values are NUL-free producer-owned strings; workflow-specific operations may interpret particular values, but the read boundary does not reject an export merely because the producer extended either vocabulary. Tombstoned and missing IDs remain distinct lookup failures. The normalized semantic revision covers workspace and issue identity plus title, description, and acceptance criteria; mutable status, assignment, and update time remain observations.
+
+Doctor is the only public consumer in this foundation milestone. It validates JSONL without spawning a process, locating `br`, opening SQLite, importing, exporting, or writing task data. Tracker configuration alone does not start Doctor's process-wide signal session, and process-session retirement cannot invalidate a completed tracker result. Configured tracker results include `freshness: "not_checked"`; `ready` means that the export is readable, not that it contains the latest tracker edits. A configured manual export can therefore be stale relative to a local Beads database; the repository's documented export handoff remains responsible for freshness and privacy cleanup.
+
+Native task mutation is intentionally absent. A later `jig beads` writer must preserve fields it does not own, publish a complete snapshot atomically, serialize ownership handoff with `br`, and report divergent state instead of assuming ordinary auto-import performs a three-way merge. Claim, backlink, comment, and close behavior will be Jig operations with their own acceptance policy; they are not promised to emulate every `br` behavior.
 
 ## Work Gates
 
