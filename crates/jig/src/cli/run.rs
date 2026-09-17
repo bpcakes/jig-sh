@@ -235,34 +235,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
                 }
-                let output = crate::repository::freshness::adoption::preview(
-                    &RepoContext::load()?,
-                    &crate::repository::freshness::adoption::Request {
-                        targets: freshness.targets.clone(),
-                        assert_worktree: freshness.assert_worktree,
-                        assert_exhaustive: freshness.assert_exhaustive,
-                        inputs: freshness.inputs.clone(),
-                        patch: freshness.patch,
-                    },
-                )?;
-                if json_output {
-                    print_json(&output)?;
-                } else if freshness.patch {
-                    write!(
-                        std::io::stdout().lock(),
-                        "{}",
-                        output["patch"]
-                            .as_str()
-                            .context("freshness preview omitted its patch")?
-                    )?;
-                } else {
-                    writeln!(
-                        std::io::stdout().lock(),
-                        "{}",
-                        crate::repository::freshness::adoption::format_report(&output)
-                    )?;
-                }
-                return Ok(());
+                return freshness::run(freshness, json_output);
             }
             if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
                 if opts.commands {
@@ -792,6 +765,7 @@ fn dispatch_runtime_command(
 }
 
 mod argument_parsing;
+mod freshness;
 pub(super) use argument_parsing::*;
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;
