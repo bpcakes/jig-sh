@@ -75,10 +75,9 @@ pub(crate) use runs::{
 pub(crate) use runs::{start_run, start_run_with_event_cursor};
 #[cfg(test)]
 use sessions::build_summary;
-pub(crate) use sessions::current_session;
 pub(crate) use sessions::{
-    SessionEndIfCurrent, public_source_path, session_end_if_current, session_start, state_summary,
-    state_summary_with_cancellation,
+    SessionEndIfCurrent, current_session, current_session_with_cancellation, public_source_path,
+    session_end_if_current, session_start, state_summary, state_summary_with_cancellation,
 };
 #[cfg(test)]
 pub(crate) use sessions::{SessionEndRequest, session_end};
@@ -96,6 +95,7 @@ mod json_scan;
 mod jsonl;
 mod maintenance;
 mod plan_files;
+mod session_pointer;
 pub(crate) use plan_files::validate_plan_id;
 mod plans;
 mod privacy;

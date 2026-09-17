@@ -232,6 +232,78 @@ fn state_summary_on_uninitialized_repo_creates_nothing() {
     assert!(!temp.path().join(".agent/plans").exists());
 }
 
+#[test]
+fn current_session_reads_a_legacy_pointer_without_creating_a_lock() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let pointer_path = ctx.current_session_path();
+    fs::create_dir_all(pointer_path.parent().unwrap()).unwrap();
+    fs::write(&pointer_path, "session_legacy\n").unwrap();
+    let lock_path = state_lock_path(&pointer_path);
+    assert!(!lock_path.exists());
+
+    assert_eq!(
+        current_session(&ctx).unwrap().as_deref(),
+        Some("session_legacy")
+    );
+    assert!(!lock_path.exists());
+}
+
+#[test]
+fn cancellable_current_session_stops_while_a_writer_holds_the_lock() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    session_start(&ctx).unwrap();
+    let lock_path = state_lock_path(&ctx.current_session_path());
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+
+    let reader_ctx = ctx;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let reader_cancelled = Arc::clone(&cancelled);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result = current_session_with_cancellation(&reader_ctx, &|| {
+            reader_cancelled.load(Ordering::SeqCst)
+        });
+        result_tx.send(result).unwrap();
+    });
+
+    started_rx.recv().unwrap();
+    assert!(result_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    cancelled.store(true, Ordering::SeqCst);
+    let result = match result_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(result) => result,
+        Err(error) => {
+            FileExt::unlock(&lock).unwrap();
+            reader.join().unwrap();
+            panic!("current-session read stayed blocked after cancellation: {error}");
+        }
+    };
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "status collection was cancelled"
+    );
+    FileExt::unlock(&lock).unwrap();
+    reader.join().unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn state_summary_reads_existing_read_only_state() {
@@ -248,6 +320,7 @@ fn state_summary_reads_existing_read_only_state() {
         ctx.state_file("sessions.jsonl"),
         ctx.state_file("receipts.jsonl"),
         ctx.current_session_path(),
+        state_lock_path(&ctx.current_session_path()),
         lock_dir.join("sessions.jsonl.lock"),
         lock_dir.join("receipts.jsonl.lock"),
     ] {

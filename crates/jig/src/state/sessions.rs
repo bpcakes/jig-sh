@@ -1,12 +1,9 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, File, OpenOptions};
-use std::io;
 use std::path::Path;
 
 #[cfg(test)]
 use anyhow::anyhow;
 use anyhow::{Context, Result, bail};
-use fs4::fs_std::FileExt;
 #[cfg(test)]
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -15,7 +12,6 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
-use super::jsonl::state_lock_path;
 use super::jsonl::{
     append_jsonl, read_dashboard_jsonl, read_jsonl, scan_dashboard_jsonl_raw, scan_jsonl_raw,
 };
@@ -25,6 +21,8 @@ use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_
 use super::records::{
     DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, SessionEventEnvelope,
 };
+use super::session_pointer::write_locked as write_current_session_locked;
+use super::session_pointer::{read_unlocked as read_current_session_unlocked, with_write_lock};
 use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
@@ -60,7 +58,7 @@ pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
         now_ms(),
         summary.clone(),
     );
-    with_current_session_lock(ctx, FileExt::lock_exclusive, || {
+    with_write_lock(ctx, || {
         append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
         write_current_session_locked(ctx, Some(&session_id))
     })?;
@@ -90,7 +88,7 @@ pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
 pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let outcome = request.outcome;
-    let event = with_current_session_lock(ctx, FileExt::lock_exclusive, || {
+    let event = with_write_lock(ctx, || {
         let current = read_current_session_unlocked(ctx)?;
         let session_id = request
             .session_id
@@ -115,7 +113,7 @@ pub(crate) fn session_end_if_current(
     outcome: Option<String>,
 ) -> Result<SessionEndIfCurrent> {
     ensure_state_layout(ctx)?;
-    let transition = with_current_session_lock(ctx, FileExt::lock_exclusive, || {
+    let transition = with_write_lock(ctx, || {
         let current = read_current_session_unlocked(ctx)?;
         if current.as_deref() != Some(expected_session_id) {
             return Ok(Err(current));
@@ -171,29 +169,14 @@ fn record_session_end(
 }
 
 pub(crate) fn current_session(ctx: &RepoContext) -> Result<Option<String>> {
-    let pointer_path = ctx.current_session_path();
-    // Inspection of a never-initialized repository is strictly read-only.
-    // Once either session artifact exists, use the shared lock so readers do
-    // not observe a pointer transition in progress.
-    if !pointer_path.exists() && !state_lock_path(&pointer_path).exists() {
-        return Ok(None);
-    }
-    with_current_session_lock(ctx, FileExt::lock_shared, || {
-        read_current_session_unlocked(ctx)
-    })
+    super::session_pointer::read(ctx)
 }
 
-fn read_current_session_unlocked(ctx: &RepoContext) -> Result<Option<String>> {
-    let path = ctx.current_session_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-    let value = fs::read_to_string(path)?.trim().to_string();
-    if value.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(value))
-    }
+pub(crate) fn current_session_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<String>> {
+    super::session_pointer::read_with_cancellation(ctx, cancelled)
 }
 
 pub(super) fn read_session_events(path: &Path) -> Result<Vec<SessionEvent>> {
@@ -357,7 +340,11 @@ fn state_summary_impl(
     let session_count = sessions.iter().filter(|session| session.is_start()).count();
     let plan_count = plans.iter().filter(|plan| plan.is_open()).count();
     ensure_state_summary_active(cancelled)?;
-    let current_session_id = current_session(ctx)?;
+    let current_session_id = if bounded {
+        super::session_pointer::read_with_cancellation(ctx, cancelled)?
+    } else {
+        super::session_pointer::read(ctx)?
+    };
     ensure_state_summary_active(cancelled)?;
 
     Ok(json!({
@@ -499,64 +486,6 @@ fn decision_summary(decision: &DecisionRecord) -> Value {
         "session_id": decision.session_id,
         "timestamp_ms": decision.timestamp_ms,
     })
-}
-
-fn write_current_session_locked(ctx: &RepoContext, session_id: Option<&str>) -> Result<()> {
-    let path = ctx.current_session_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    match session_id {
-        Some(value) => fs::write(path, format!("{value}\n"))?,
-        None => {
-            if path.exists() {
-                fs::remove_file(path)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn with_current_session_lock<T>(
-    ctx: &RepoContext,
-    lock: fn(&File) -> io::Result<()>,
-    operation: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let pointer_path = ctx.current_session_path();
-    let lock_path = state_lock_path(&pointer_path);
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| {
-            format!(
-                "Failed to open current-session lock {}",
-                lock_path.display()
-            )
-        })?;
-    lock(&lock_file).with_context(|| {
-        format!(
-            "Failed to lock current-session state {}",
-            lock_path.display()
-        )
-    })?;
-    let result = operation();
-    let unlock = FileExt::unlock(&lock_file).with_context(|| {
-        format!(
-            "Failed to unlock current-session state {}",
-            lock_path.display()
-        )
-    });
-    match (result, unlock) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
-    }
 }
 
 #[cfg(test)]
