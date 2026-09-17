@@ -743,6 +743,35 @@ pub(super) fn format_work_finish_summary(value: &serde_json::Value) -> String {
     .join("\n")
 }
 
+pub(super) fn format_work_retire_summary(value: &serde_json::Value) -> String {
+    let plan = &value["plan"];
+    let retirement = &plan["retirement"];
+    let mut lines = vec![
+        format!(
+            "Work retire: retired ({})",
+            value_str(retirement, "disposition").unwrap_or("unknown")
+        ),
+        format!(
+            "  Plan: {}",
+            value_str(plan, "plan_id").unwrap_or("<unknown>")
+        ),
+        format!(
+            "  Reason: {}",
+            concise_preview(value_str(retirement, "reason").unwrap_or(""), 180)
+        ),
+    ];
+    if let Some(superseded_by) = value_str(retirement, "superseded_by") {
+        lines.push(format!("  Superseded by: {superseded_by}"));
+    }
+    let session = &value["session_status"];
+    lines.push(format!(
+        "  Session: {}",
+        value_str(session, "detail").unwrap_or("no session change")
+    ));
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
 fn receipt_preview(receipt: &serde_json::Value) -> Option<String> {
     value_str(receipt, "stderr_preview")
         .filter(|preview| !preview.trim().is_empty())

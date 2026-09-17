@@ -13,6 +13,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
 - For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
 - A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
+- Retire an open plan that will not be delivered with `scripts/jig work retire --plan-id ID --disposition <cancelled|superseded|duplicate|obsolete> --reason "..."`. It claims no success and runs no required gates; `work finish` stays evidence-gated.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 

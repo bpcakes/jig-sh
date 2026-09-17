@@ -728,6 +728,38 @@ PY
 
     scripts/jig work finish --plan-id "$plan_id" --resolution "fixture complete" --outcome success >/dev/null
 
+    # Non-success retirement closes a plan with no gate evidence at all.
+    retired_plan_id="$(scripts/jig work start --title "Retired fixture work" --body "Superseded validation plan." --print-plan-id)"
+    retire_json="$(scripts/jig work retire --json --plan-id "$retired_plan_id" \
+      --disposition superseded \
+      --reason "Superseded by the primary fixture plan." \
+      --superseded-by "$plan_id")"
+    RETIRE_JSON="$retire_json" PLAN_ID="$plan_id" python3 <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["RETIRE_JSON"])
+retirement = payload["plan"]["retirement"]
+if retirement["disposition"] != "superseded":
+    raise SystemExit(f"Unexpected retirement disposition: {retirement['disposition']}")
+if retirement["superseded_by"] != os.environ["PLAN_ID"]:
+    raise SystemExit("Retirement did not record the superseding plan reference")
+if payload["session_status"]["action"] not in {"ended", "left_active", "none"}:
+    raise SystemExit(f"Unexpected session action: {payload['session_status']['action']}")
+PY
+
+    gates_json="$(scripts/jig work gates --json --plan-id "$retired_plan_id")"
+    RETIRED_GATES_JSON="$gates_json" python3 <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["RETIRED_GATES_JSON"])
+if payload["plan_state"] != "closed":
+    raise SystemExit("Retired plan did not project as closed")
+if payload["plan_retirement"]["disposition"] != "superseded":
+    raise SystemExit("Retired plan did not project its disposition")
+PY
+
     [[ -f ".agent/plans/${plan_id}.md" ]]
     grep -q "Runtime validation" ".agent/plans/${plan_id}.md"
     [[ -f .agent/state/receipts.jsonl ]]

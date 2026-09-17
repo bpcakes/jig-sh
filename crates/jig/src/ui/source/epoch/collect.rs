@@ -133,6 +133,7 @@ pub(super) fn collect_plans(
                 plan_id,
                 timestamp_ms,
                 resolution,
+                retirement,
             } => {
                 if !facts.distinct.contains_key(&plan_id)
                     && facts.distinct.len() == MAX_AGGREGATION_KEYS
@@ -145,9 +146,17 @@ pub(super) fn collect_plans(
                 info.closed = true;
                 info.closed_at_ms = Some(timestamp_ms);
                 info.resolution.clone_from(&resolution);
+                // A retired plan is still closed, but the timeline must not
+                // read as a successful completion. The event label carries the
+                // distinction; `resolution` keeps the historical free text.
+                let event_name = if retirement.is_some() {
+                    "retire"
+                } else {
+                    "close"
+                };
                 (
                     id,
-                    "close".to_string(),
+                    event_name.to_string(),
                     plan_id,
                     timestamp_ms,
                     None,

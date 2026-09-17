@@ -700,6 +700,7 @@ const fn work_human_output(command: &WorkCommand) -> HumanOutput {
         WorkCommand::Receipts(_) => HumanOutput::WorkReceipts,
         WorkCommand::Status => HumanOutput::WorkStatus,
         WorkCommand::Finish(_) => HumanOutput::WorkFinish,
+        WorkCommand::Retire(_) => HumanOutput::WorkRetire,
     }
 }
 

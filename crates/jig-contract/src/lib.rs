@@ -62,6 +62,7 @@ pub mod tool {
     pub const WORK_EVIDENCE: &str = "jig.work_evidence";
     pub const WORK_GOAL: &str = "jig.work_goal";
     pub const WORK_REFINE: &str = "jig.work_refine";
+    pub const WORK_RETIRE: &str = "jig.work_retire";
     pub const WORK_REVIEW: &str = "jig.work_review";
     pub const WORK_RECEIPTS: &str = "jig.work_receipts";
     pub const WORK_START: &str = "jig.work_start";

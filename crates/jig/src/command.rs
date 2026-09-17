@@ -55,7 +55,7 @@ pub(crate) use vault::{
 pub(crate) use work::{
     DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckRequest, WorkCommand,
     WorkDecisionRequest, WorkEvidenceRequest, WorkFinishRequest, WorkGatesRequest, WorkGoalRequest,
-    WorkReceiptsRequest, WorkRefineRequest, WorkReviewRequest, WorkStartRequest,
+    WorkReceiptsRequest, WorkRefineRequest, WorkRetireRequest, WorkReviewRequest, WorkStartRequest,
 };
 
 #[derive(Debug)]
@@ -129,6 +129,7 @@ impl RuntimeCommand {
                 | WorkCommand::Start(_)
                 | WorkCommand::Append(_)
                 | WorkCommand::Decide(_)
+                | WorkCommand::Retire(_)
                 | WorkCommand::Receipts(_) => Native,
             },
             Self::Loop(command) => match command {
@@ -193,6 +194,12 @@ mod tests {
     fn unsupported_observer_paths_keep_native_signal_handling() {
         let native_commands = [
             RuntimeCommand::Check(CheckCommand::AgentGuides),
+            RuntimeCommand::Work(WorkCommand::Retire(WorkRetireRequest {
+                plan_id: "plan_1".into(),
+                disposition: "superseded".into(),
+                reason: "Replaced by a redesign.".into(),
+                superseded_by: None,
+            })),
             RuntimeCommand::Work(WorkCommand::Receipts(WorkReceiptsRequest {
                 session_id: None,
                 plan_id: None,

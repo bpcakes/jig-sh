@@ -4,6 +4,10 @@ pub(super) struct GateReport {
     pub(super) recovery: Option<recovery::Recovery>,
     pub(super) plan_id: String,
     pub(super) plan_state: &'static str,
+    /// Structured non-success closure metadata, when the plan was retired
+    /// rather than completed. `plan_state` stays `open`/`closed` so existing
+    /// readers keep their meaning.
+    pub(super) plan_retirement: Option<crate::state::PlanRetirement>,
     pub(super) plan_baseline: Option<PlanBaseline>,
     pub(super) current_worktree_fingerprint: Option<String>,
     pub(super) current_worktree_fingerprint_error: Option<String>,
@@ -24,6 +28,7 @@ impl GateReport {
             "gates_ok": gates_ok,
             "plan_id": self.plan_id,
             "plan_state": self.plan_state,
+            "plan_retirement": self.plan_retirement.as_ref().map(crate::state::PlanRetirement::to_value),
             "plan_baseline": self.plan_baseline,
             "overall": if gates_ok { "passed" } else { "blocked" },
             "current_worktree_fingerprint": self.current_worktree_fingerprint,

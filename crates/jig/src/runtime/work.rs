@@ -4,16 +4,16 @@ use serde_json::{Value, json};
 
 use crate::command::{
     WorkAppendRequest, WorkCheckRequest, WorkCommand, WorkDecisionRequest, WorkEvidenceRequest,
-    WorkFinishRequest, WorkGatesRequest, WorkReceiptsRequest, WorkRefineRequest, WorkReviewRequest,
-    WorkStartRequest,
+    WorkFinishRequest, WorkGatesRequest, WorkReceiptsRequest, WorkRefineRequest, WorkRetireRequest,
+    WorkReviewRequest, WorkStartRequest,
 };
 use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 use crate::state::{
-    DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
-    SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
-    plans_open_prepared, prepare_plan_open, receipts_list, session_end, session_start,
-    state_summary_with_cancellation,
+    DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanDisposition, PlanOpenRequest,
+    PlanRetireRequest, ReceiptListFilter, SessionEndRequest, current_session, decisions_add,
+    plan_owner_session, plans_append, plans_close, plans_open_prepared, plans_retire,
+    prepare_plan_open, receipts_list, session_end, session_start, state_summary_with_cancellation,
 };
 
 mod check_schedule;
@@ -107,6 +107,7 @@ pub(super) fn dispatch_with_observer(
             })
         }
         WorkCommand::Finish(opts) => finish_with_cancellation(ctx, opts, &|| observer.cancelled()),
+        WorkCommand::Retire(opts) => retire(ctx, opts),
     }
 }
 
@@ -253,6 +254,131 @@ fn ensure_finish_config_is_current(ctx: &RepoContext, current: &RepoContext) -> 
         );
     }
     Ok(())
+}
+
+/// Retire an open work plan that will not be delivered.
+///
+/// This is deliberately not a `work finish` variant: it evaluates no required
+/// gates, writes no gate evidence, and never relaxes the completion authority
+/// that `finish` enforces. It reuses the plan-close lease and linked-run
+/// rejection so an open plan cannot be retired out from under a live run.
+pub(super) fn retire(ctx: &RepoContext, opts: WorkRetireRequest) -> Result<Value> {
+    let disposition = parse_disposition(&opts.disposition)?;
+    let reason = opts.reason.trim();
+    anyhow::ensure!(
+        !reason.is_empty(),
+        "Work plan retirement requires a nonblank --reason explaining why the plan is not being delivered"
+    );
+    let superseded_by = match opts.superseded_by.as_deref().map(str::trim) {
+        Some("") => {
+            anyhow::bail!("--superseded-by must name a plan or issue reference when it is provided")
+        }
+        other => other.map(str::to_string),
+    };
+
+    let plan = plans_retire(
+        ctx,
+        PlanRetireRequest {
+            plan_id: opts.plan_id.clone(),
+            disposition: disposition.as_str(),
+            reason: reason.to_string(),
+            superseded_by,
+        },
+    )?;
+    let (session, session_status) = end_owning_session(ctx, &opts.plan_id, disposition)?;
+
+    Ok(json!({
+        "ok": true,
+        "plan": plan,
+        "session": session,
+        "session_status": session_status,
+    }))
+}
+
+fn parse_disposition(requested: &str) -> Result<PlanDisposition> {
+    PlanDisposition::ALL
+        .iter()
+        .copied()
+        .find(|disposition| disposition.as_str() == requested.trim())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unknown work plan disposition '{requested}'; expected one of: {}",
+                PlanDisposition::ALL
+                    .iter()
+                    .map(|disposition| disposition.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
+/// End the current session only when durable state proves it opened this plan.
+///
+/// The plan-open receipt is the durable ownership record. Without a match, an
+/// unrelated current session stays untouched and the caller is told why.
+fn end_owning_session(
+    ctx: &RepoContext,
+    plan_id: &str,
+    disposition: PlanDisposition,
+) -> Result<(Option<Value>, Value)> {
+    let owner = plan_owner_session(ctx, plan_id)?;
+    let current = current_session(ctx)?;
+    match (owner.as_deref(), current.as_deref()) {
+        (Some(owner_id), Some(current_id)) if owner_id == current_id => {
+            let session = session_end(
+                ctx,
+                SessionEndRequest {
+                    session_id: Some(owner_id.to_string()),
+                    outcome: Some(disposition.as_str().to_string()),
+                },
+            )?;
+            Ok((
+                Some(session),
+                json!({
+                    "action": "ended",
+                    "owner_session_id": owner,
+                    "current_session_id": current,
+                    "detail": format!("ended owning session {owner_id}"),
+                }),
+            ))
+        }
+        (Some(owner_id), Some(current_id)) => Ok((
+            None,
+            json!({
+                "action": "left_active",
+                "owner_session_id": owner,
+                "current_session_id": current,
+                "detail": format!(
+                    "left current session {current_id} active; plan {plan_id} is owned by session {owner_id}"
+                ),
+            }),
+        )),
+        (Some(owner_id), None) => Ok((
+            None,
+            json!({
+                "action": "none",
+                "owner_session_id": owner,
+                "current_session_id": Value::Null,
+                "detail": format!("owning session {owner_id} is not the current session"),
+            }),
+        )),
+        (None, current) => Ok((
+            None,
+            json!({
+                "action": "left_active",
+                "owner_session_id": Value::Null,
+                "current_session_id": current,
+                "detail": format!(
+                    "no durable record proves which session opened plan {plan_id}; no session was ended"
+                ),
+            }),
+        )),
+    }
+}
+
+pub(super) fn retire_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+    let request: WorkRetireRequest = request_from_args(args)?;
+    retire(ctx, request)
 }
 
 pub(super) fn start_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
