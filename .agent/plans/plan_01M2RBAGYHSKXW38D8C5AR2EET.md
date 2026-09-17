@@ -60,3 +60,19 @@ The living plan is stored in the structured work plan body at `.agent/plans/plan
 Verification logs: `/tmp/jig-cross-plan-proof-final.log` (19 proof tests), `/tmp/jig-cross-plan-evidence.log` (60 evidence tests), `/tmp/jig-cross-plan-receipts.log` (36 receipt tests), `/tmp/jig-cross-plan-tests.log` (10 cross-plan-filtered tests), `/tmp/jig-cross-plan-gates.log` (initial gates), `/tmp/jig-cross-plan-final-checks.log` (final four non-test gates). Final review of native eligibility, selection races and archive agreement found no remaining actionable issue.
 
 Final evidence: `/tmp/jig-cross-plan-final-test.log`, `/tmp/jig-cross-plan-final-work-check.log`, `/tmp/jig-cross-plan-final-gates.json`, `/tmp/jig-cross-plan-final-evidence.json`, `/tmp/jig-cross-plan-final-receipts.json`, and `/tmp/jig-cross-plan-finish.log`. No unresolved implementation findings remain. Native runners and their transitive dependents intentionally retain plan-local evidence, and cross-worktree reuse remains outside this scope.
+
+
+## PR #41 follow-up: default inspection budget and finish revalidation
+
+2026-09-17: Compared base `a5e20d7c` and PR head `9e071c9c` using the same toolchain/debug profile, checkout, and 28,017,614-byte journal containing 7,511 receipts. Ran four sequential alternating-order base/head pairs for each of `work gates` and `work evidence`, both at the default budget and with `--freshness-timeout-ms 30000`, without concurrent builds/checks. Hashes of tracked contents (including journals) matched before/after, and selected receipt IDs matched in every pair.
+
+| Command | Default-budget median wall time, base/head | Expanded-budget median wall time, base/head | Expanded-budget median freshness time, base/head |
+| --- | --- | --- | --- |
+| work gates | 2,615.5 / 2,628.1 ms | 3,334.0 / 3,366.2 ms | 2,721.7 / 2,737.4 ms |
+| work evidence | 2,613.4 / 2,631.2 ms | 3,328.8 / 3,348.4 ms | 2,714.5 / 2,719.3 ms |
+
+Both revisions exhausted the default deadline in all eight inspections each. All expanded-budget inspections completed without a collection limit and classified the originals as stale against the current checkout; completion is not a passing gate. Original-proof work accounted for roughly 1.5 seconds and worktree collection roughly 0.8 seconds on both revisions. This small, local debug-profile sample demonstrates an existing default-budget limitation, not a regression attributable to this PR; it does not establish release-build, cold-cache, or tail-latency behavior. Track optimization and representative valid-evidence/release measurements in Bead `jig-sh-9y3b`. Keep fail-closed behavior and resource ceilings intact.
+
+Added `cross_plan_finish_rejects_newer_foreign_failure_after_successful_reuse`: plan B successfully reuses plan A's original, a newer failure from another plan is appended, and finishing B must fail while B remains open and its plan journal is unchanged. The gate report must identify the newer failing receipt. This joins the existing reuse and blocker cases as additional workflow assurance; no production defect was demonstrated.
+
+Follow-up validation: the focused finish regression passed; the rebuilt head binary passed `scripts/jig check api:fmt api:clippy repo:file-budget`; final `scripts/jig check test` passed all 4,207 tests with 3 skipped. Beads export privacy and diff whitespace checks passed. Benchmark measurements and raw reports are retained locally under `/tmp/jig-evidence-perf/`; no production behavior or budget was changed.

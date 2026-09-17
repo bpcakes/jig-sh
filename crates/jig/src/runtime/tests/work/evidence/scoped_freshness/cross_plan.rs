@@ -128,6 +128,61 @@ fn cross_plan_live_reuse_preserves_originals_and_binds_validation_to_consumer() 
 }
 
 #[test]
+fn cross_plan_finish_rejects_newer_foreign_failure_after_successful_reuse() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture(temp.path(), false, false);
+    let first = check(&ctx, "plan_1");
+    assert_eq!(first["ok"], true, "{first:#}");
+    let next = open_plan(&ctx);
+    let reused = check(&ctx, &next);
+    assert_eq!(reused["ok"], true, "{reused:#}");
+    assert!(reused["run"].is_null(), "{reused:#}");
+    assert_reused_original(&first["target_evidence"][0], &reused["target_evidence"][0]);
+
+    let foreign = open_plan(&ctx);
+    let mut failure = target_receipts(&journal(&ctx)).pop().unwrap();
+    failure["id"] = json!("receipt_example_newer_failure");
+    failure["run_id"] = json!("run_example_newer_failure");
+    failure["plan_id"] = json!(foreign);
+    failure["ended_at_ms"] = json!(failure["ended_at_ms"].as_u64().unwrap() + 1);
+    failure["exit_status"] = json!(1);
+    append(&ctx, [failure.clone()]);
+    let plans_before = fs::read(ctx.state_file("plans.jsonl")).unwrap();
+    // Finish must independently recheck originals, not trust B's passing batch.
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Finish(
+            crate::cli::WorkFinishOpts {
+                plan_id: next.clone(),
+                resolution: Some("Example checks complete".into()),
+                outcome: Some("success".into()),
+            },
+        )),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Required work gates are not satisfied"),
+        "{error:#}"
+    );
+    crate::state::ensure_plan_is_open(&ctx, &next).unwrap();
+    assert_eq!(
+        plans_before,
+        fs::read(ctx.state_file("plans.jsonl")).unwrap()
+    );
+    let report = gates(&ctx, &next);
+    assert_eq!(
+        report["gates"][0]["targets"][0]["status"], "failed",
+        "{report:#}"
+    );
+    assert_eq!(
+        report["gates"][0]["targets"][0]["receipt_id"],
+        failure["id"]
+    );
+}
+
+#[test]
 fn cross_plan_changed_inputs_rerun_only_affected_independent_target() {
     let temp = tempdir().unwrap();
     let ctx = fixture(temp.path(), false, true);
