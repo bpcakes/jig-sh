@@ -5,16 +5,18 @@ Reduce repeated gate execution after staging, commits, and edits outside an owne
 ## Progress
 
 - [x] Create feature branch and epic with four dependent tasks.
-- [ ] `jig-sh-0zi8.1`: conservative policy recommendations.
+- [x] `jig-sh-0zi8.1`: conservative policy recommendations.
 - [ ] `jig-sh-0zi8.2`: read-only preview and synchronized adoption patch.
 - [ ] `jig-sh-0zi8.3`: qualified generated defaults.
 - [ ] `jig-sh-0zi8.4`: behavioral validation and documentation.
 
-Restart checkpoint: implement task 1 on `feat/agent-velocity-improvements`. Initial checkout was clean at `bed5af6e`. Jig plan: `plan_01M2QP69RTD9RQAPBWC2RYZXPH`, baseline `bed5af6e`. No blocking dependency outside this epic. Build dev runtime before harness commands and set `JIG_DEV_BIN=target/debug/jig`.
+Restart checkpoint: implement task 2 on `feat/agent-velocity-improvements`. Initial checkout was clean at `bed5af6e`. Jig plan: `plan_01M2QP69RTD9RQAPBWC2RYZXPH`, baseline `bed5af6e`. No blocking dependency outside this epic. Build dev runtime before harness commands and set `JIG_DEV_BIN=target/debug/jig`.
 
 ## Surprises & Discoveries
 
 Existing Rust action inputs are affected-selection hints shared by formatting, clippy and tests. They cannot prove exhaustive formatter inputs: Cargo targets and Rust modules can use arbitrary extensions. A one-time repository scan does not establish durable coverage after future edits.
+
+The first review caught an authored-presence bug: validation accepts explicit default policies in source with omitted defaults in the manifest. Recommendations now use the loaded authored snapshot, with regression coverage in both directions.
 
 ## Decision Log
 
@@ -24,7 +26,7 @@ Existing Rust action inputs are affected-selection hints shared by formatting, c
 
 ## Outcomes & Retrospective
 
-Implementation and verification remain unfinished. Qualification intentionally promises repository input ownership, not hermetic toolchain/environment attestation.
+Task 1 delivered `info freshness` with conservative recommendations. Five focused qualification/report tests and CLI parsing pass. The backend suite passed 4,095 tests (3 skipped); the initial 4,094-test run also passed its tests but its receipt was correctly rejected because source changed during execution. The stable rerun passed Jig validation. A subsequent report-presence repair passed all five focused tests. Codex-only review converged after two complete passes and one repair round; no exclusions, complete matching fingerprints, final `d26abdb014c86fe57cb72d0f7eb1f5192127615b159533db418c079b6e8a69db`. No unresolved findings. Remaining milestones are unimplemented. Qualification promises repository input ownership, not hermetic toolchain/environment attestation.
 
 ## Context and interfaces
 

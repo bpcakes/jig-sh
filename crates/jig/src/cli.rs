@@ -504,6 +504,8 @@ pub(crate) struct InfoOpts {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum InfoCommand {
+    /// Preview freshness policies and conservative adoption recommendations.
+    Freshness,
     /// Print the highest Go module toolchain selector used by managed CI.
     #[command(name = "go-version", hide = true)]
     GoVersion,

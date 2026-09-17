@@ -41,4 +41,14 @@ fn parses_top_level_info_command_and_explain_alias() {
 
     let rejected = Cli::try_parse_from(["jig", "info", "--summary"]);
     assert!(rejected.is_err());
+
+    let freshness = Cli::try_parse_from(["jig", "info", "freshness", "--json"]).unwrap();
+    assert!(freshness.json);
+    assert!(matches!(
+        freshness.command,
+        CommandKind::Info(InfoOpts {
+            subject: Some(InfoCommand::Freshness),
+            ..
+        })
+    ));
 }

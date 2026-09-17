@@ -231,6 +231,22 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
+            if matches!(opts.subject.as_ref(), Some(super::InfoCommand::Freshness)) {
+                if opts.commands {
+                    bail!("--commands cannot be combined with an info subject");
+                }
+                let output = crate::repository::freshness::adoption::report(&RepoContext::load()?)?;
+                if json_output {
+                    print_json(&output)?;
+                } else {
+                    writeln!(
+                        std::io::stdout().lock(),
+                        "{}",
+                        crate::repository::freshness::adoption::format_report(&output)
+                    )?;
+                }
+                return Ok(());
+            }
             if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
@@ -249,7 +265,9 @@ fn run_command(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let request = opts.subject.map(|subject| match subject {
-                super::InfoCommand::GoVersion => unreachable!("handled above"),
+                super::InfoCommand::GoVersion | super::InfoCommand::Freshness => {
+                    unreachable!("handled above")
+                }
                 super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
                 super::InfoCommand::Components => crate::repository::InspectRequest::Components,
                 super::InfoCommand::Component { id } => {
