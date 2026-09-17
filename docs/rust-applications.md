@@ -36,14 +36,16 @@ Paths below use `example-app` as the normalized package name.
 | `crates/example-app-runtime` | Startup, listeners, signals, owned tasks, native resource cleanup, finite database setup |
 | `crates/example-app` | Typed `AppConfig`, application state, and use cases; no Batter supervision in state |
 | `crates/example-app-http` | Public routes, probes, and OpenAPI assembly |
-| `crates/example-app-http-common` | Request IDs, tracing, deadlines, admission, and common errors |
+| `crates/example-app-http-common` | Typed request correlation, tracing, deadlines, admission, and common errors |
 | `crates/example-app-db` (optional) | SQLx pool and migrations |
 | `apps/example-app-admin-api` and `crates/example-app-admin-http` (optional) | Separate privileged listener and authorization boundary |
 
-Production entrypoints use `router_with_shutdown` with the runtime's handle.
-The convenience `router` creates an independent ready handle for in-process tests;
-it does not connect a server to the production shutdown lifecycle. In-memory
-`TestApp` tests do not prove signal handling or native resource cleanup.
+Production entrypoints use `router_with_lifecycle` with read-only lifecycle status
+and readiness-gated operation admission captured from the runtime supervisor. Root
+shutdown control stays in the runtime. The convenience `router` creates and consumes
+an independent one-shot readiness approval for in-process tests; it does not connect
+a server to the production shutdown lifecycle. In-memory `TestApp` tests do not prove
+signal handling or native resource cleanup.
 
 ## Lifecycle and HTTP policy
 
@@ -55,10 +57,15 @@ pool closure is owned before later fallible startup work. Initialization failure
 cancellation therefore retains the same cleanup owner; it does not make native
 resource acquisition asynchronous RAII.
 
-Business requests pass through Batter admission and a 10-second request deadline.
-The deadline ends at response construction; it does not bound streaming bodies or
-WebSocket sessions. Middleware failures retain the API error envelope with
-`code`, `message`, and `request_id`.
+Business requests pass through Batter admission and a validated 10-second
+response-construction budget. The generated HTTP boundary retains that witness
+before assembling the infallible request policy. The deadline ends at response
+construction; it does not bound streaming bodies or WebSocket sessions.
+Middleware failures retain the API error envelope with `code`, `message`, and
+`request_id`. Batter's outer operational middleware replaces any inbound
+`x-request-id`, installs a typed server-generated correlation ID for inner handlers
+and failure renderers, and writes the same ID to the response. Client headers are
+never the identity witness for error bodies or telemetry.
 
 Both public and admin listeners expose `/health/live` and `/health/ready` outside
 request admission. Admin probes are also outside authorization. Readiness requires
@@ -69,8 +76,10 @@ migrations. Keep probes reachable during draining without admitting new business
 
 Admin business routes under `/admin-api` remain fail-closed with
 `DenyAllAdminAuthorizer`. Supply the real authorizer through the production
-`router_with_shutdown` wiring and keep the admin listener private at the network
-layer. Probe reachability does not grant access to privileged operations.
+`router_with_lifecycle` wiring and keep the admin listener private at the network
+layer. Probe reachability does not grant access to privileged operations. Batter's
+browser credential transport primitives do not supply an account, session,
+authorization, CORS, or CSRF model; adopting them remains application-owned work.
 
 Shutdown allows 10 seconds for drain, 2 seconds for cancellation, and 1 second for
 abort/reap. These phases share the first-stop clock; scheduling delays consume

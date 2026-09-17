@@ -48,7 +48,7 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 [% endif %]
-    runtime::serve(config, app_http_crate::router_with_shutdown).await
+    runtime::serve(config, app_http_crate::router_with_lifecycle).await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,8 +88,7 @@ fn init_tracing() {
         // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
         "<<[ module_name ]>>=info,",
         "<<[ module_name ]>>_api=info,",
-        "tower_http=info",
-        ",batter=info,batter_axum=info",
+        "batter=info,batter_axum=info",
     );
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -127,7 +126,7 @@ mod tests {
             let config = app_crate::AppConfig::from_env().expect("test bind address is valid");
             let result = tokio::time::timeout(
                 Duration::from_secs(2),
-                runtime::serve(config, app_http_crate::router_with_shutdown),
+                runtime::serve(config, app_http_crate::router_with_lifecycle),
             )
             .await
             .expect("serve should fail the occupied bind instead of hanging");

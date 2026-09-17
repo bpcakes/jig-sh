@@ -6,7 +6,7 @@
 
 ## Key entrypoints
 
-- `src/lib.rs`: standard API error responses and request-ID extraction.
+- `src/lib.rs`: standard API error responses and typed correlation extraction.
 - `src/requests.rs`: Batter admission and request deadlines, with application error rendering.
 
 ## Edit here for X
@@ -17,7 +17,7 @@
 ## Invariants
 
 - Error messages returned to clients are safe to disclose and never contain internal error chains, credentials, SQL, or filesystem paths.
-- Every JSON API error includes a stable machine-readable code, a safe message, and the propagated request ID.
+- Every JSON API error includes a stable machine-readable code, a safe message, and Batter's server-generated typed correlation ID. Never use an inbound header as the identity witness.
 - This crate remains independent of both deployable HTTP surfaces.
 - Apply admission to application routes before merging probes. Startup and resource cleanup belong to the runtime crate.
 

@@ -22,7 +22,8 @@ source-owned, not `.jig.toml` or generated environment settings.
 ## Invariants
 
 Use `Startup::scoped` with `with_unix_signals` and `register_http_in`; capture the
-shutdown handle before moving the supervisor and pass that handle to the router.
+read-only lifecycle status and operation admission before moving the supervisor and
+pass only those purpose-qualified capabilities to the router.
 The protected scope exposes stage metadata, cleanup reservation, and supported
 registration adapters, not full supervisor control. Register cleanup before any
 subsequent fallible startup step. Keep the startup owner alive and await its result.

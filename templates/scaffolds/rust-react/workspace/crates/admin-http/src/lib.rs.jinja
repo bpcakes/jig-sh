@@ -1,7 +1,6 @@
 use ::<<[ module_name ]>>::AppState;
 use ::<<[ module_name ]>>_http_common::ApiError;
 use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
-use ::<<[ module_name ]>>_http_common::REQUEST_ID_HEADER;
 use ::<<[ module_name ]>>_http_common::not_found;
 use ::<<[ module_name ]>>_http_common::requests;
 use async_trait::async_trait;
@@ -12,9 +11,9 @@ use axum::{
     middleware::{self, Next},
     response::Response,
 };
-use batter::lifecycle::ShutdownHandle;
+use batter::lifecycle::{LifecycleStatus, OperationAdmission, ShutdownHandle};
+use batter_axum::CorrelationId;
 use serde::Serialize;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use utoipa::{OpenApi, ToSchema, openapi::OpenApi as OpenApiDocument};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -111,12 +110,15 @@ async fn require_admin_authorization<A: AdminAuthorizer>(
     next: Next,
 ) -> Result<Response, ApiError> {
     let context = AdminRequestContext::from(&request);
+    let correlation_id = request.extensions().get::<CorrelationId>().cloned();
     authorizer
         .authorize(&context)
         .await
         .map_err(|error| match error {
-            AdminAuthorizationError::Unauthorized => ApiError::unauthorized(request.headers()),
-            AdminAuthorizationError::Forbidden => ApiError::forbidden(request.headers()),
+            AdminAuthorizationError::Unauthorized => {
+                ApiError::unauthorized(correlation_id.as_ref())
+            }
+            AdminAuthorizationError::Forbidden => ApiError::forbidden(correlation_id.as_ref()),
         })?;
     Ok(next.run(request).await)
 }
@@ -126,43 +128,51 @@ fn router_from_routes<A: AdminAuthorizer>(
     authorizer: A,
     protected_routes: Router<AppState>,
 ) -> Router {
-    let shutdown = ShutdownHandle::new();
-    shutdown.mark_ready();
-    operational_router(state, authorizer, protected_routes, shutdown)
+    let (shutdown, approval) = ShutdownHandle::new_with_readiness_approval();
+    let lifecycle = shutdown.status();
+    let admission = shutdown.operation_admission();
+    approval.approve();
+    operational_router(state, authorizer, protected_routes, lifecycle, admission)
 }
 
 fn operational_router<A: AdminAuthorizer>(
     state: AppState,
     authorizer: A,
     protected_routes: Router<AppState>,
-    shutdown: ShutdownHandle,
+    lifecycle: LifecycleStatus,
+    admission: OperationAdmission,
 ) -> Router {
     let protected_routes = requests::guard(
         protected_routes.layer(middleware::from_fn_with_state(
             authorizer,
             require_admin_authorization::<A>,
         )),
-        shutdown.clone(),
+        admission,
     );
     let probes = Router::new()
         .route("/health/live", axum::routing::get(batter_axum::liveness))
         .route("/health/ready", axum::routing::get(batter_axum::readiness))
-        .with_state(shutdown);
+        .with_state(lifecycle);
     protected_routes
         .fallback(not_found)
         .with_state(state)
         .merge(probes)
-        .layer(middleware::from_fn(batter_axum::observe_http))
-        .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
-        .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
+        .layer(middleware::from_fn(batter_axum::operational_http))
 }
 
-pub fn router_with_shutdown<A: AdminAuthorizer>(
+pub fn router_with_lifecycle<A: AdminAuthorizer>(
     state: AppState,
     authorizer: A,
-    shutdown: ShutdownHandle,
+    lifecycle: LifecycleStatus,
+    admission: OperationAdmission,
 ) -> Router {
-    operational_router(state, authorizer, Router::from(routes()), shutdown)
+    operational_router(
+        state,
+        authorizer,
+        Router::from(routes()),
+        lifecycle,
+        admission,
+    )
 }
 
 pub fn router<A: AdminAuthorizer>(state: AppState, authorizer: A) -> Router {
@@ -225,7 +235,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let response_request_id = response
             .headers()
-            .get(&REQUEST_ID_HEADER)
+            .get("x-request-id")
             .unwrap()
             .to_str()
             .unwrap()

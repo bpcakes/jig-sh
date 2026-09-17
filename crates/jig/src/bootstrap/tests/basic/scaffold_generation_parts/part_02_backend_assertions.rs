@@ -227,7 +227,7 @@ fn assert_api_entrypoint(destination: &Path) {
             "use ::my_app_http as app_http_crate;",
             "load_dotenv();",
             "warning: failed to load .env",
-            "runtime::serve(config, app_http_crate::router_with_shutdown).await",
+            "runtime::serve(config, app_http_crate::router_with_lifecycle).await",
             "app_crate::AppConfig::from_env()",
             "--bootstrap-database",
             "    let command = parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
@@ -240,7 +240,7 @@ fn assert_api_entrypoint(destination: &Path) {
             "let default_filter = concat!(",
             "\"my_app=info,\",",
             "\"my_app_api=info,\",",
-            "\"tower_http=info\",",
+            "\"batter=info,batter_axum=info\",",
         ],
     );
     assert_contains_none(
@@ -255,7 +255,8 @@ fn assert_api_entrypoint(destination: &Path) {
             "register_http_in",
             ".with_unix_signals(\"signals\")",
             "let supervisor = Supervisor::new(budget);",
-            "let shutdown = supervisor.handle();",
+            "let lifecycle = supervisor.status();",
+            "let admission = supervisor.operation_admission();",
             "ProtectedStartupScope",
             "check_shutdown",
             "reserve_cleanup(\"database.close\")",
@@ -280,7 +281,7 @@ fn assert_generated_dev_config(destination: &Path) {
     assert!(!jig_toml.contains("port = 3000"));
     assert_eq!(
         fs::read_to_string(destination.join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,my_app_admin_api=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,my_app_admin_api=info,batter=info,batter_axum=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
     );
 }
 
@@ -297,7 +298,7 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
     for package in ["batter", "batter-axum", "batter-sqlx"] {
         assert!(workspace_cargo.contains(&format!(
-            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"f5824cf836c9d1146d67d7b0dc99d011921bd02f\" }}"
+            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"abbe6f5c27887db9c5cbc7b7bd1fb6dd9967b00f\" }}"
         )));
     }
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
@@ -360,12 +361,20 @@ fn assert_application_and_public_http_crates(destination: &Path) {
         &http_lib,
         &[
             "pub fn router(state: AppState) -> Router",
-            "batter_axum::observe_http",
-            "SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid)",
-            "public::operational_routes(shutdown).fallback(not_found)",
+            "batter_axum::operational_http",
+            "pub fn router_with_lifecycle(",
+            "public::operational_routes(lifecycle, admission).fallback(not_found)",
         ],
     );
-    assert_contains_none(&http_lib, &["admin"]);
+    assert_contains_none(
+        &http_lib,
+        &[
+            "admin",
+            "SetRequestIdLayer",
+            "PropagateRequestIdLayer",
+            "router_with_shutdown",
+        ],
+    );
 }
 
 fn assert_admin_http_crate(destination: &Path) {
@@ -385,6 +394,66 @@ fn assert_admin_http_crate(destination: &Path) {
     );
     assert!(admin_http_lib.contains("let expected_ready = state.is_ready();"));
     assert!(admin_http_lib.contains("assert_eq!(body[\"ready\"], expected_ready);"));
+    assert_contains_all(
+        &admin_http_lib,
+        &[
+            "pub fn router_with_lifecycle<A: AdminAuthorizer>(",
+            "lifecycle: LifecycleStatus,",
+            "admission: OperationAdmission,",
+            "request.extensions().get::<CorrelationId>()",
+            "ApiError::unauthorized(correlation_id.as_ref())",
+            "ApiError::forbidden(correlation_id.as_ref())",
+            concat!(
+                "let protected_routes = requests::guard(\n",
+                "        protected_routes.layer(middleware::from_fn_with_state(\n",
+                "            authorizer,\n",
+                "            require_admin_authorization::<A>,\n",
+                "        )),\n",
+                "        admission,\n",
+                "    );"
+            ),
+            ".with_state(lifecycle);",
+            concat!(
+                "operational_router(\n",
+                "        state,\n",
+                "        authorizer,\n",
+                "        Router::from(routes()),\n",
+                "        lifecycle,\n",
+                "        admission,\n",
+                "    )"
+            ),
+            ".layer(middleware::from_fn(batter_axum::operational_http))",
+        ],
+    );
+    assert_contains_none(
+        &admin_http_lib,
+        &[
+            "REQUEST_ID_HEADER",
+            "SetRequestIdLayer",
+            "PropagateRequestIdLayer",
+            "router_with_shutdown",
+            "observe_http",
+            "ApiError::unauthorized(request.headers())",
+            "ApiError::forbidden(request.headers())",
+        ],
+    );
+    let admin_api_main =
+        fs::read_to_string(destination.join("apps/my-app-admin-api/src/main.rs")).unwrap();
+    assert_contains_all(
+        &admin_api_main,
+        &[
+            "runtime::serve(config, |state, lifecycle, admission| {",
+            concat!(
+                "admin_http_crate::router_with_lifecycle(\n",
+                "            state,\n",
+                "            admin_http_crate::DenyAllAdminAuthorizer,\n",
+                "            lifecycle,\n",
+                "            admission,\n",
+                "        )"
+            ),
+        ],
+    );
+    assert_contains_none(&admin_api_main, &["router_with_shutdown"]);
 }
 
 fn assert_workspace_and_backend_crates(destination: &Path) {
@@ -398,6 +467,52 @@ fn assert_public_http_contract(destination: &Path) {
         fs::read_to_string(destination.join("crates/my-app-http-common/src/lib.rs")).unwrap();
     assert!(http_common_lib.contains("pub struct ApiErrorResponse"));
     assert!(http_common_lib.contains("pub request_id: String"));
+    assert_contains_all(
+        &http_common_lib,
+        &[
+            "use batter_axum::CorrelationId;",
+            "correlation_id: Option<&CorrelationId>",
+            "request_id: request_id(correlation_id)",
+            "pub async fn not_found(Extension(correlation_id): Extension<CorrelationId>)",
+            "ApiError::not_found(Some(&correlation_id))",
+            "fn request_id(correlation_id: Option<&CorrelationId>) -> String",
+            ".map(CorrelationId::as_str)",
+        ],
+    );
+    assert_contains_none(
+        &http_common_lib,
+        &[
+            "REQUEST_ID_HEADER",
+            "HeaderMap",
+            "request_id(headers",
+            "request.headers()",
+        ],
+    );
+    let requests =
+        fs::read_to_string(destination.join("crates/my-app-http-common/src/requests.rs")).unwrap();
+    assert_contains_all(
+        &requests,
+        &[
+            "ResponseConstructionBudget::new(Duration::from_secs(10))",
+            "RequestPolicy::new(admission, request_budget)",
+            ".with_failure_renderer(|failure, parts|",
+            concat!(
+                "crate::ApiError::new(\n",
+                "                failure.status(),\n",
+                "                failure.code(),\n",
+                "                \"The request could not be completed\",\n",
+                "                parts.extensions.get::<CorrelationId>(),\n",
+                "            )"
+            ),
+        ],
+    );
+    assert_contains_none(
+        &requests,
+        &[
+            "RequestPolicy::new(shutdown",
+            "RequestPolicy::new(admission, Duration::from_secs(10))",
+        ],
+    );
     let public_http =
         fs::read_to_string(destination.join("crates/my-app-http/src/public.rs")).unwrap();
     for handler in ["health", "live", "ready", "version", "status"] {
@@ -409,6 +524,31 @@ fn assert_public_http_contract(destination: &Path) {
     assert!(public_http.contains(r#"path = "/api/status""#));
     assert!(public_http.contains("body = ApiErrorResponse"));
     assert!(public_http.contains(r#""dependency_unavailable""#));
+    assert!(public_http.contains(concat!(
+        "async fn ready(\n",
+        "    State(state): State<AppState>,\n",
+        "    Extension(lifecycle): Extension<LifecycleStatus>,\n",
+        "    Extension(correlation_id): Extension<CorrelationId>,\n",
+        ") -> Result<StatusCode, ApiError>"
+    )));
+    assert_eq!(
+        public_http
+            .matches("Extension(lifecycle): Extension<LifecycleStatus>")
+            .count(),
+        1
+    );
+    assert_eq!(
+        public_http
+            .matches("Extension(correlation_id): Extension<CorrelationId>")
+            .count(),
+        1
+    );
+    assert!(public_http.contains("if lifecycle.readiness() != Readiness::Ready"));
+    assert_eq!(public_http.matches("Some(&correlation_id)").count(), 2);
+    assert_contains_none(
+        &public_http,
+        &["HeaderMap", "ShutdownHandle", "&headers"],
+    );
 }
 
 fn assert_http_test_support(destination: &Path) {

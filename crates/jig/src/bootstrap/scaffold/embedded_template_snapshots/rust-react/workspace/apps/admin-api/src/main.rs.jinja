@@ -33,11 +33,12 @@ async fn run() -> anyhow::Result<()> {
         anyhow::bail!("unexpected admin API argument {argument:?}");
     }
     let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
-    runtime::serve(config, |state, shutdown| {
-        admin_http_crate::router_with_shutdown(
+    runtime::serve(config, |state, lifecycle, admission| {
+        admin_http_crate::router_with_lifecycle(
             state,
             admin_http_crate::DenyAllAdminAuthorizer,
-            shutdown,
+            lifecycle,
+            admission,
         )
     })
     .await
@@ -49,8 +50,7 @@ fn init_tracing() {
         // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
         "<<[ module_name ]>>=info,",
         "<<[ module_name ]>>_admin_api=info,",
-        "tower_http=info",
-        ",batter=info,batter_axum=info",
+        "batter=info,batter_axum=info",
     );
     tracing_subscriber::fmt()
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| default_filter.into()))

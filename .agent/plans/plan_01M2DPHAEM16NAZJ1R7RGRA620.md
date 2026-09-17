@@ -1,0 +1,1 @@
+Update the Rust application generator to the current Batter revision, reconcile generated APIs and guidance, validate scaffold snapshots, and compile generated database variants.

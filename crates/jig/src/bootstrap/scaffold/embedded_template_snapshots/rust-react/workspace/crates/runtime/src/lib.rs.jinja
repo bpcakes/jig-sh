@@ -7,7 +7,7 @@ use ::<<[ module_name ]>> as app_crate;
 use axum::Router;
 use batter::{
     cleanup::CleanupBudget,
-    lifecycle::{ShutdownBudget, ShutdownHandle, Supervisor},
+    lifecycle::{LifecycleStatus, OperationAdmission, ShutdownBudget, Supervisor},
     operation::OperationContext,
     startup::{ProtectedStartupScope, Startup},
 };
@@ -16,7 +16,7 @@ use batter::{
 /// registered until the HTTP task has joined; incomplete cleanup is an error.
 pub async fn serve<F>(config: app_crate::AppConfig, router: F) -> anyhow::Result<()>
 where
-    F: FnOnce(app_crate::AppState, ShutdownHandle) -> Router + Send + 'static,
+    F: FnOnce(app_crate::AppState, LifecycleStatus, OperationAdmission) -> Router + Send + 'static,
 {
     let cleanup = CleanupBudget::new(
         Duration::from_secs(5),
@@ -30,20 +30,20 @@ where
         cleanup,
     )?;
     let supervisor = Supervisor::new(budget);
-    let shutdown = supervisor.handle();
+    let lifecycle = supervisor.status();
+    let admission = supervisor.operation_admission();
     let mut starting = Startup::scoped(
         supervisor,
         OperationContext::new(Duration::from_secs(30))?,
         cleanup,
         move |scope| {
-            let shutdown = shutdown.clone();
             Box::pin(async move {
                 let initialize_service = async {
                     scope.stage("application.initialize")?;
                     let addr = config.bind_addr();
                     let state = initialize(config, scope).await?;
                     scope.stage("http.bind")?;
-                    let application = router(state, shutdown);
+                    let application = router(state, lifecycle, admission);
                     let listener = tokio::net::TcpListener::bind(addr).await?;
                     let bound_addr = listener.local_addr()?;
                     tracing::info!(%bound_addr, "listening");
@@ -260,7 +260,7 @@ mod tests {
         let closed = Arc::new(AtomicUsize::new(0));
         let count = closed.clone();
         let supervisor = Supervisor::new(shutdown_budget());
-        let handle = supervisor.handle();
+        let lifecycle = supervisor.status();
         let starting = Startup::scoped(
             supervisor,
             OperationContext::new(Duration::from_secs(10)).unwrap(),
@@ -300,6 +300,6 @@ mod tests {
         assert!(report.cleanup.is_success());
         assert_eq!(report.cleanup.records.len(), 1);
         assert_eq!(closed.load(Ordering::SeqCst), 1);
-        assert_eq!(handle.readiness(), Readiness::Draining);
+        assert_eq!(lifecycle.readiness(), Readiness::Draining);
     }
 }

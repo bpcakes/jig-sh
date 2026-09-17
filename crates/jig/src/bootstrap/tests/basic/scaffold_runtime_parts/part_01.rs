@@ -37,7 +37,7 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     let dependencies = &manifest["workspace"]["dependencies"];
     for package in ["batter", "batter-axum"] {
         assert_eq!(dependencies[package]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-        assert_eq!(dependencies[package]["rev"].as_str(), Some("f5824cf836c9d1146d67d7b0dc99d011921bd02f"));
+        assert_eq!(dependencies[package]["rev"].as_str(), Some("abbe6f5c27887db9c5cbc7b7bd1fb6dd9967b00f"));
     }
     assert!(dependencies.get("batter-sqlx").is_none());
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
@@ -58,7 +58,7 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert_eq!(
         env_example,
         format!(
-            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,tower_http=info\n"
+            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,batter=info,batter_axum=info\n"
         )
     );
     let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
