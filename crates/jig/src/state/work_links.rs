@@ -157,12 +157,6 @@ impl WorkLinkRecordV1 {
     fn same_link(&self, request: &WorkLinkRequest) -> bool {
         self.plan_id == request.plan_id && self.issue == request.issue
     }
-
-    fn same_link_record(&self, other: &Self) -> bool {
-        self.schema_version == other.schema_version
-            && self.plan_id == other.plan_id
-            && self.issue == other.issue
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -263,7 +257,7 @@ pub(crate) struct WorkLinkJournalDiagnosticSample {
 /// Return bounded semantic facts from the same fail-closed projection used by
 /// work-link readers. Missing journals remain an empty, read-only authority.
 pub(crate) fn work_link_journal_diagnostics_from_path(path: &Path) -> WorkLinkJournalDiagnostics {
-    match scan_journal(path) {
+    match scan_journal(path, None) {
         Ok(journal) => journal.diagnostics(),
         Err(error) => WorkLinkJournalDiagnostics {
             authority: if error
@@ -271,6 +265,11 @@ pub(crate) fn work_link_journal_diagnostics_from_path(path: &Path) -> WorkLinkJo
                 .is_some()
             {
                 WorkLinkJournalAuthority::Corrupt
+            } else if error
+                .downcast_ref::<projection::WorkLinkProjectionLimit>()
+                .is_some()
+            {
+                WorkLinkJournalAuthority::Unsupported
             } else {
                 WorkLinkJournalAuthority::Unreadable
             },
@@ -290,7 +289,7 @@ pub(crate) fn work_link_journal_diagnostics_from_path(path: &Path) -> WorkLinkJo
 pub(crate) fn project_work_link(ctx: &RepoContext, plan_id: &str) -> Result<WorkLinkProjection> {
     super::plan_files::validate_plan_id(plan_id)?;
     let path = ctx.state_file(WORK_LINKS_FILE);
-    let journal = scan_journal(&path)?;
+    let journal = scan_journal(&path, Some(plan_id))?;
     Ok(journal.for_plan(plan_id))
 }
 
@@ -314,7 +313,7 @@ pub(crate) fn attach_work_link(
 
     let path = ctx.state_file(WORK_LINKS_FILE);
     with_jsonl_write_lock(&path, |guard| {
-        let journal = scan_journal_locked(guard, &path)?;
+        let journal = scan_journal_locked(guard, &path, Some(&request.plan_id))?;
         journal.ensure_authoritative_write_safe()?;
         match journal.for_plan(&request.plan_id) {
             WorkLinkProjection::Unlinked => {

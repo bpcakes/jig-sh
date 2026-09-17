@@ -63,12 +63,12 @@ The current reader:
 - requires exact issue IDs and distinguishes missing from tombstoned records;
 - rejects duplicate object keys and duplicate issue IDs;
 - validates known task fields while tolerating bounded unknown fields;
-- reads through a stable, no-follow repository-local file;
+- pins the real `.beads` directory and performs selection and stable no-follow file reads relative to that directory capability;
 - invokes no process, reads no SQLite database, and writes no task data.
 
 Doctor validates this snapshot. It deliberately cannot prove that a local `br` database has no unexported edits.
 
-The existing `work-links.jsonl` design remains staged. It stores portable plan/task identity plus an immutable historical context snapshot whose title, description, and acceptance criteria remain distinct. It never stores an absolute checkout or database path. It is Jig-owned append-only evidence, not another task store.
+The existing `work-links.jsonl` design remains staged. It stores portable plan/task identity plus an immutable historical context snapshot whose title, description, and acceptance criteria remain distinct. It never stores an absolute checkout or database path. It is Jig-owned append-only evidence, not another task store. Projection streams the journal with fixed per-record, unique-event, and known-plan ceilings; it retains compact semantic fingerprints globally and one full canonical record only for the plan being requested.
 
 ## Handoff with br
 

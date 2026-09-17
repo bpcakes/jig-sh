@@ -4,16 +4,22 @@
 //! database, imports or exports state, or mutates the tracker workspace.
 
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, File, Metadata, OpenOptions},
+};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 pub(crate) const INPUT_PROFILE: &str = "beads-rust-jsonl-v1";
 pub(crate) const PRIMARY_EXPORT: &str = ".beads/issues.jsonl";
 pub(crate) const LEGACY_EXPORT: &str = ".beads/beads.jsonl";
+const PRIMARY_EXPORT_NAME: &str = "issues.jsonl";
+const LEGACY_EXPORT_NAME: &str = "beads.jsonl";
 
 const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -56,15 +62,39 @@ pub(crate) struct BeadsExport {
 
 impl BeadsExport {
     pub(crate) fn open(root: &Path, workspace_id: &str) -> Result<Self, BeadsJsonlError> {
+        Self::open_with_hook(root, workspace_id, || {})
+    }
+
+    fn open_with_hook(
+        root: &Path,
+        workspace_id: &str,
+        after_directory_open: impl FnOnce(),
+    ) -> Result<Self, BeadsJsonlError> {
         validate_workspace_id(workspace_id)?;
-        crate::repository_path::validate_repository_directory_path(root, Path::new(".beads"))
+        let repository = Dir::open_ambient_dir(root, ambient_authority())
             .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
-        let relative_path = select_export(root)?;
-        let bytes = read_stable_export(root, &relative_path)?;
+        let tracker = repository
+            .open_dir_nofollow(".beads")
+            .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
+        let tracker_metadata = tracker
+            .dir_metadata()
+            .map_err(|_| BeadsJsonlError::InvalidWorkspace)?;
+        if !tracker_metadata.is_dir() {
+            return Err(BeadsJsonlError::InvalidWorkspace);
+        }
+        after_directory_open();
+
+        let export_name = select_export(&tracker)?;
+        let bytes = read_stable_export(&tracker, export_name)?;
+        let confirmed_name =
+            select_export(&tracker).map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
+        if confirmed_name != export_name {
+            return Err(BeadsJsonlError::ChangedDuringRead);
+        }
         let text = std::str::from_utf8(&bytes).map_err(|_| BeadsJsonlError::InvalidUtf8)?;
         let issues = parse_export(text, workspace_id)?;
         Ok(Self {
-            relative_path,
+            relative_path: Path::new(".beads").join(export_name),
             issues,
         })
     }
@@ -152,30 +182,29 @@ impl std::fmt::Display for BeadsJsonlError {
 
 impl std::error::Error for BeadsJsonlError {}
 
-fn select_export(root: &Path) -> Result<PathBuf, BeadsJsonlError> {
-    let primary = Path::new(PRIMARY_EXPORT);
-    let legacy = Path::new(LEGACY_EXPORT);
-    let primary_exists = entry_exists(root.join(primary))?;
-    let legacy_exists = entry_exists(root.join(legacy))?;
+fn select_export(directory: &Dir) -> Result<&'static str, BeadsJsonlError> {
+    let primary_exists = entry_exists(directory, PRIMARY_EXPORT_NAME)?;
+    let legacy_exists = entry_exists(directory, LEGACY_EXPORT_NAME)?;
     match (primary_exists, legacy_exists) {
         (true, true) => Err(BeadsJsonlError::AmbiguousExport),
-        (true, false) => Ok(primary.to_path_buf()),
-        (false, true) => Ok(legacy.to_path_buf()),
+        (true, false) => Ok(PRIMARY_EXPORT_NAME),
+        (false, true) => Ok(LEGACY_EXPORT_NAME),
         (false, false) => Err(BeadsJsonlError::MissingExport),
     }
 }
 
-fn entry_exists(path: PathBuf) -> Result<bool, BeadsJsonlError> {
-    match fs::symlink_metadata(path) {
+fn entry_exists(directory: &Dir, name: &str) -> Result<bool, BeadsJsonlError> {
+    match directory.symlink_metadata(name) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(_) => Err(BeadsJsonlError::UnsafeExport),
     }
 }
 
-fn read_stable_export(root: &Path, relative: &Path) -> Result<Vec<u8>, BeadsJsonlError> {
-    let path = root.join(relative);
-    let named = fs::symlink_metadata(&path).map_err(|_| BeadsJsonlError::UnsafeExport)?;
+fn read_stable_export(directory: &Dir, name: &str) -> Result<Vec<u8>, BeadsJsonlError> {
+    let named = directory
+        .symlink_metadata(name)
+        .map_err(|_| BeadsJsonlError::UnsafeExport)?;
     if named.file_type().is_symlink() || !named.is_file() || has_multiple_links(&named) {
         return Err(BeadsJsonlError::UnsafeExport);
     }
@@ -184,14 +213,14 @@ fn read_stable_export(root: &Path, relative: &Path) -> Result<Vec<u8>, BeadsJson
     }
 
     let mut options = OpenOptions::new();
-    options.read(true);
+    options.read(true).follow(FollowSymlinks::No);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
+        use cap_std::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
     }
-    let mut file = options
-        .open(&path)
+    let mut file = directory
+        .open_with(name, &options)
         .map_err(|_| BeadsJsonlError::UnsafeExport)?;
     let opened = file.metadata().map_err(|_| BeadsJsonlError::UnsafeExport)?;
     if !opened.is_file()
@@ -213,7 +242,13 @@ fn read_stable_export(root: &Path, relative: &Path) -> Result<Vec<u8>, BeadsJson
     let after = file
         .metadata()
         .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
-    if first != second || !same_file_state(&opened, &after) {
+    let named_after = directory
+        .symlink_metadata(name)
+        .map_err(|_| BeadsJsonlError::ChangedDuringRead)?;
+    if first != second
+        || !same_file_state(&opened, &after)
+        || !same_file_state(&opened, &named_after)
+    {
         return Err(BeadsJsonlError::ChangedDuringRead);
     }
     Ok(first)
@@ -232,19 +267,19 @@ fn read_capped(file: &mut File) -> Result<Vec<u8>, BeadsJsonlError> {
 }
 
 #[cfg(unix)]
-fn has_multiple_links(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
+fn has_multiple_links(metadata: &Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
     metadata.nlink() != 1
 }
 
 #[cfg(not(unix))]
-const fn has_multiple_links(_metadata: &fs::Metadata) -> bool {
+const fn has_multiple_links(_metadata: &Metadata) -> bool {
     false
 }
 
 #[cfg(unix)]
-fn same_file_state(before: &fs::Metadata, after: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
+fn same_file_state(before: &Metadata, after: &Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
     before.dev() == after.dev()
         && before.ino() == after.ino()
         && before.len() == after.len()
@@ -253,7 +288,7 @@ fn same_file_state(before: &fs::Metadata, after: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(unix))]
-fn same_file_state(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+fn same_file_state(before: &Metadata, after: &Metadata) -> bool {
     before.len() == after.len() && before.modified().ok() == after.modified().ok()
 }
 

@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::super::jsonl::{
     JsonlScanStats, JsonlWriteGuard, RawJsonlRecord, scan_jsonl_raw_bounded,
@@ -15,27 +16,116 @@ use super::{
     WorkLinkRecordV1, validate_event_id,
 };
 
+const EVENT_SEMANTICS_DOMAIN: &[u8] = b"jig-work-link-event-semantics-v1\0";
+const LINK_IDENTITY_DOMAIN: &[u8] = b"jig-work-link-identity-v1\0";
+pub(super) const MAX_WORK_LINK_UNIQUE_EVENTS: usize = 100_000;
+pub(super) const MAX_WORK_LINK_KNOWN_PLANS: usize = 100_000;
+
+#[derive(Clone, Copy)]
+struct ProjectionLimits {
+    unique_events: usize,
+    known_plans: usize,
+}
+
+const PRODUCTION_LIMITS: ProjectionLimits = ProjectionLimits {
+    unique_events: MAX_WORK_LINK_UNIQUE_EVENTS,
+    known_plans: MAX_WORK_LINK_KNOWN_PLANS,
+};
+
+#[derive(Debug)]
+pub(super) struct WorkLinkProjectionLimit {
+    dimension: &'static str,
+    limit: usize,
+}
+
+impl std::fmt::Display for WorkLinkProjectionLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "work-link journal exceeds the supported {} limit of {}",
+            self.dimension, self.limit
+        )
+    }
+}
+
+impl std::error::Error for WorkLinkProjectionLimit {}
+
 #[derive(Clone, Debug)]
 struct SeenEvent {
-    value: Value,
+    semantic_digest: [u8; 32],
     line_number: u64,
     plan_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct DiagnosticSummary {
+    count: u64,
+    sample: Option<Box<WorkLinkDiagnostic>>,
+}
+
+impl DiagnosticSummary {
+    fn push(&mut self, mut detail: WorkLinkDiagnostic) {
+        self.count = self.count.saturating_add(1);
+        if self.sample.is_none() {
+            detail.message = super::super::support::truncate(&detail.message);
+            self.sample = Some(Box::new(detail));
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    fn samples(&self) -> Vec<WorkLinkDiagnostic> {
+        self.sample
+            .iter()
+            .map(|sample| sample.as_ref().clone())
+            .collect()
+    }
+}
+
+struct SelectedPlanState {
+    canonical_record: WorkLinkRecordV1,
+    event_ids: Vec<String>,
+}
+
 #[derive(Default)]
+struct PlanState {
+    link_identity_digest: Option<[u8; 32]>,
+    selected: Option<Box<SelectedPlanState>>,
+    replayed_records: u64,
+    conflicts: DiagnosticSummary,
+    unsupported: DiagnosticSummary,
+    corruption: DiagnosticSummary,
+}
+
 pub(super) struct JournalProjection {
+    selected_plan: Option<String>,
+    limits: ProjectionLimits,
     seen_events: BTreeMap<String, SeenEvent>,
-    records_by_plan: BTreeMap<String, Vec<WorkLinkRecordV1>>,
-    replayed_by_event: BTreeMap<String, u64>,
-    conflicts_by_plan: BTreeMap<String, Vec<WorkLinkDiagnostic>>,
-    unsupported_by_plan: BTreeMap<String, Vec<WorkLinkDiagnostic>>,
-    corrupt_by_plan: BTreeMap<String, Vec<WorkLinkDiagnostic>>,
-    global_conflicts: Vec<WorkLinkDiagnostic>,
-    global_corruption: Vec<WorkLinkDiagnostic>,
+    plans: BTreeMap<String, PlanState>,
+    supported_records: u64,
+    replayed_records: u64,
+    global_conflicts: DiagnosticSummary,
+    global_corruption: DiagnosticSummary,
     torn_tail: bool,
 }
 
 impl JournalProjection {
+    fn new(selected_plan: Option<&str>, limits: ProjectionLimits) -> Self {
+        Self {
+            selected_plan: selected_plan.map(str::to_owned),
+            limits,
+            seen_events: BTreeMap::new(),
+            plans: BTreeMap::new(),
+            supported_records: 0,
+            replayed_records: 0,
+            global_conflicts: DiagnosticSummary::default(),
+            global_corruption: DiagnosticSummary::default(),
+            torn_tail: false,
+        }
+    }
+
     fn observe(&mut self, raw: RawJsonlRecord<'_>) -> Result<()> {
         if !raw.terminated {
             // Strict readers never give an unterminated record authority. The
@@ -72,13 +162,21 @@ impl JournalProjection {
                     None,
                     "missing or invalid work-link event id",
                 ),
-            );
+            )?;
             return Ok(());
         };
 
+        if let Some(plan_id) = plan_id.as_deref() {
+            self.ensure_plan(plan_id)?;
+        }
+        let semantic_digest = event_semantics_digest(&value)?;
         if let Some(previous) = self.seen_events.get(&event_id).cloned() {
-            if previous.value == value {
-                *self.replayed_by_event.entry(event_id).or_default() += 1;
+            if previous.semantic_digest == semantic_digest {
+                self.replayed_records = self.replayed_records.saturating_add(1);
+                if let Some(plan_id) = previous.plan_id {
+                    let state = self.plan_mut(&plan_id)?;
+                    state.replayed_records = state.replayed_records.saturating_add(1);
+                }
                 return Ok(());
             }
             let detail = diagnostic(
@@ -91,32 +189,30 @@ impl JournalProjection {
             );
             match (&previous.plan_id, &plan_id) {
                 (Some(left), Some(right)) => {
-                    self.conflicts_by_plan
-                        .entry(left.clone())
-                        .or_default()
-                        .push(detail.clone());
+                    self.plan_mut(left)?.conflicts.push(detail.clone());
                     if right != left {
-                        self.conflicts_by_plan
-                            .entry(right.clone())
-                            .or_default()
-                            .push(detail);
+                        self.plan_mut(right)?.conflicts.push(detail);
                     }
                 }
                 (Some(plan_id), None) | (None, Some(plan_id)) => {
-                    self.conflicts_by_plan
-                        .entry(plan_id.clone())
-                        .or_default()
-                        .push(detail.clone());
+                    self.plan_mut(plan_id)?.conflicts.push(detail.clone());
                     self.global_conflicts.push(detail);
                 }
                 (None, None) => self.global_conflicts.push(detail),
             }
             return Ok(());
         }
+        if self.seen_events.len() >= self.limits.unique_events {
+            return Err(WorkLinkProjectionLimit {
+                dimension: "unique-event",
+                limit: self.limits.unique_events,
+            }
+            .into());
+        }
         self.seen_events.insert(
             event_id.clone(),
             SeenEvent {
-                value: value.clone(),
+                semantic_digest,
                 line_number: raw.line_number,
                 plan_id: plan_id.clone(),
             },
@@ -133,14 +229,11 @@ impl JournalProjection {
         let schema_version = value.get("schema_version").and_then(Value::as_u64);
         match schema_version {
             Some(version) if version > u64::from(WORK_LINK_SCHEMA_VERSION) => {
-                self.unsupported_by_plan
-                    .entry(plan_id)
-                    .or_default()
-                    .push(diagnostic(
-                        Some(raw.line_number),
-                        Some(event_id),
-                        format!("unsupported work-link schema version {version}"),
-                    ));
+                self.plan_mut(&plan_id)?.unsupported.push(diagnostic(
+                    Some(raw.line_number),
+                    Some(event_id),
+                    format!("unsupported work-link schema version {version}"),
+                ));
                 return Ok(());
             }
             Some(version) if version == u64::from(WORK_LINK_SCHEMA_VERSION) => {}
@@ -152,7 +245,7 @@ impl JournalProjection {
                         Some(event_id),
                         "missing or invalid work-link schema_version",
                     ),
-                );
+                )?;
                 return Ok(());
             }
         }
@@ -164,14 +257,11 @@ impl JournalProjection {
         {
             Some(PROVIDER_BEADS) => {}
             Some(provider) => {
-                self.unsupported_by_plan
-                    .entry(plan_id)
-                    .or_default()
-                    .push(diagnostic(
-                        Some(raw.line_number),
-                        Some(event_id),
-                        format!("unsupported work-link provider {provider:?}"),
-                    ));
+                self.plan_mut(&plan_id)?.unsupported.push(diagnostic(
+                    Some(raw.line_number),
+                    Some(event_id),
+                    format!("unsupported work-link provider {provider:?}"),
+                ));
                 return Ok(());
             }
             None => {
@@ -182,7 +272,7 @@ impl JournalProjection {
                         Some(event_id),
                         "missing or invalid work-link provider",
                     ),
-                );
+                )?;
                 return Ok(());
             }
         }
@@ -197,7 +287,7 @@ impl JournalProjection {
                         Some(event_id),
                         format!("invalid work-link v1 record: {error}"),
                     ),
-                );
+                )?;
                 return Ok(());
             }
         };
@@ -209,14 +299,61 @@ impl JournalProjection {
                     Some(record.id),
                     format!("invalid work-link v1 record: {error:#}"),
                 ),
-            );
+            )?;
             return Ok(());
         }
-        self.records_by_plan
-            .entry(plan_id)
-            .or_default()
-            .push(record);
+
+        self.supported_records = self.supported_records.saturating_add(1);
+        let identity_digest = link_identity_digest(&record);
+        let selected = self.selected_plan.as_deref() == Some(plan_id.as_str());
+        let state = self.plan_mut(&plan_id)?;
+        if let Some(previous) = state.link_identity_digest {
+            if previous != identity_digest {
+                state.conflicts.push(diagnostic(
+                    Some(raw.line_number),
+                    Some(record.id.clone()),
+                    format!("plan {plan_id} has multiple distinct immutable work links"),
+                ));
+            }
+        } else {
+            state.link_identity_digest = Some(identity_digest);
+        }
+        if selected {
+            if let Some(selected) = state.selected.as_mut() {
+                selected.event_ids.push(record.id.clone());
+                if record.id < selected.canonical_record.id {
+                    selected.canonical_record = record;
+                }
+            } else {
+                state.selected = Some(Box::new(SelectedPlanState {
+                    event_ids: vec![record.id.clone()],
+                    canonical_record: record,
+                }));
+            }
+        }
         Ok(())
+    }
+
+    fn ensure_plan(&mut self, plan_id: &str) -> Result<()> {
+        if !self.plans.contains_key(plan_id) {
+            if self.plans.len() >= self.limits.known_plans {
+                return Err(WorkLinkProjectionLimit {
+                    dimension: "known-plan",
+                    limit: self.limits.known_plans,
+                }
+                .into());
+            }
+            self.plans.insert(plan_id.to_owned(), PlanState::default());
+        }
+        Ok(())
+    }
+
+    fn plan_mut(&mut self, plan_id: &str) -> Result<&mut PlanState> {
+        self.ensure_plan(plan_id)?;
+        Ok(self
+            .plans
+            .get_mut(plan_id)
+            .expect("ensured work-link plan state exists"))
     }
 
     fn finish(&mut self, stats: JsonlScanStats) {
@@ -230,15 +367,13 @@ impl JournalProjection {
         }
     }
 
-    fn push_corrupt(&mut self, plan_id: Option<&str>, detail: WorkLinkDiagnostic) {
+    fn push_corrupt(&mut self, plan_id: Option<&str>, detail: WorkLinkDiagnostic) -> Result<()> {
         if let Some(plan_id) = plan_id {
-            self.corrupt_by_plan
-                .entry(plan_id.into())
-                .or_default()
-                .push(detail);
+            self.plan_mut(plan_id)?.corruption.push(detail);
         } else {
             self.global_corruption.push(detail);
         }
+        Ok(())
     }
 
     pub(super) fn ensure_authoritative_write_safe(&self) -> Result<()> {
@@ -261,100 +396,50 @@ impl JournalProjection {
     }
 
     pub(super) fn for_plan(&self, plan_id: &str) -> WorkLinkProjection {
-        let mut corruption = self.global_corruption.clone();
-        corruption.extend(
-            self.corrupt_by_plan
-                .get(plan_id)
-                .cloned()
-                .unwrap_or_default(),
-        );
-        if !corruption.is_empty() {
-            return WorkLinkProjection::Corrupt(corruption);
+        if !self.global_corruption.is_empty() {
+            return WorkLinkProjection::Corrupt(self.global_corruption.samples());
         }
-
-        let mut conflicts = self.global_conflicts.clone();
-        conflicts.extend(
-            self.conflicts_by_plan
-                .get(plan_id)
-                .cloned()
-                .unwrap_or_default(),
-        );
-        let records = self
-            .records_by_plan
-            .get(plan_id)
-            .cloned()
-            .unwrap_or_default();
-        if records
-            .windows(2)
-            .any(|pair| !pair[0].same_link_record(&pair[1]))
-        {
-            conflicts.push(diagnostic(
-                None,
-                None,
-                format!("plan {plan_id} has multiple distinct immutable work links"),
-            ));
-        }
-        if !conflicts.is_empty() {
-            return WorkLinkProjection::Conflict(conflicts);
-        }
-
-        if let Some(unsupported) = self.unsupported_by_plan.get(plan_id)
-            && !unsupported.is_empty()
-        {
-            return WorkLinkProjection::Unsupported(unsupported.clone());
-        }
-        let Some(mut record) = records.into_iter().next() else {
+        let Some(state) = self.plans.get(plan_id) else {
+            if !self.global_conflicts.is_empty() {
+                return WorkLinkProjection::Conflict(self.global_conflicts.samples());
+            }
             return WorkLinkProjection::Unlinked;
         };
-        let mut event_ids = self
-            .records_by_plan
-            .get(plan_id)
-            .into_iter()
-            .flatten()
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
-        event_ids.sort();
-        if let Some(first) = event_ids.first()
-            && first != &record.id
-            && let Some(first_record) = self
-                .records_by_plan
-                .get(plan_id)
-                .and_then(|records| records.iter().find(|candidate| &candidate.id == first))
-        {
-            record = first_record.clone();
+        if !state.corruption.is_empty() {
+            return WorkLinkProjection::Corrupt(state.corruption.samples());
         }
-        let replayed_records = event_ids
-            .iter()
-            .filter_map(|event_id| self.replayed_by_event.get(event_id))
-            .copied()
-            .sum();
+        if !self.global_conflicts.is_empty() || !state.conflicts.is_empty() {
+            let mut conflicts = self.global_conflicts.samples();
+            conflicts.extend(state.conflicts.samples());
+            return WorkLinkProjection::Conflict(conflicts);
+        }
+        if !state.unsupported.is_empty() {
+            return WorkLinkProjection::Unsupported(state.unsupported.samples());
+        }
+        if state.link_identity_digest.is_none() {
+            return WorkLinkProjection::Unlinked;
+        }
+        let Some(selected) = state.selected.as_ref() else {
+            return WorkLinkProjection::Corrupt(vec![diagnostic(
+                None,
+                None,
+                "selected work-link projection did not retain its canonical record",
+            )]);
+        };
+        let mut event_ids = selected.event_ids.clone();
+        event_ids.sort();
         WorkLinkProjection::Supported(Box::new(SupportedWorkLink {
-            record,
+            record: selected.canonical_record.clone(),
             event_ids,
-            replayed_records,
+            replayed_records: state.replayed_records,
         }))
     }
 
     pub(super) fn diagnostics(&self) -> WorkLinkJournalDiagnostics {
-        let mut plan_ids = BTreeSet::new();
-        plan_ids.extend(self.records_by_plan.keys().cloned());
-        plan_ids.extend(self.conflicts_by_plan.keys().cloned());
-        plan_ids.extend(self.unsupported_by_plan.keys().cloned());
-        plan_ids.extend(self.corrupt_by_plan.keys().cloned());
-        plan_ids.extend(
-            self.seen_events
-                .values()
-                .filter_map(|event| event.plan_id.clone()),
-        );
-
         let mut report = WorkLinkJournalDiagnostics {
-            known_plans: plan_ids.len() as u64,
-            supported_records: self
-                .records_by_plan
-                .values()
-                .map(|records| records.len() as u64)
-                .sum(),
-            replayed_records: self.replayed_by_event.values().copied().sum(),
+            known_plans: self.plans.len() as u64,
+            supported_records: self.supported_records,
+            replayed_records: self.replayed_records,
             torn_tail: self.torn_tail,
             ..WorkLinkJournalDiagnostics::default()
         };
@@ -365,22 +450,30 @@ impl JournalProjection {
             report.conflicting_plans = report.known_plans;
             append_journal_diagnostics(&mut report, None, &self.global_conflicts);
         } else {
-            for plan_id in &plan_ids {
-                match self.for_plan(plan_id) {
-                    WorkLinkProjection::Unlinked => {}
-                    WorkLinkProjection::Supported(_) => report.supported_plans += 1,
-                    WorkLinkProjection::Unsupported(errors) => {
-                        report.unsupported_plans += 1;
-                        append_journal_diagnostics(&mut report, Some(plan_id.as_str()), &errors);
-                    }
-                    WorkLinkProjection::Conflict(errors) => {
-                        report.conflicting_plans += 1;
-                        append_journal_diagnostics(&mut report, Some(plan_id.as_str()), &errors);
-                    }
-                    WorkLinkProjection::Corrupt(errors) => {
-                        report.corrupt_plans += 1;
-                        append_journal_diagnostics(&mut report, Some(plan_id.as_str()), &errors);
-                    }
+            for (plan_id, state) in &self.plans {
+                if !state.corruption.is_empty() {
+                    report.corrupt_plans += 1;
+                    append_journal_diagnostics(
+                        &mut report,
+                        Some(plan_id.as_str()),
+                        &state.corruption,
+                    );
+                } else if !state.conflicts.is_empty() {
+                    report.conflicting_plans += 1;
+                    append_journal_diagnostics(
+                        &mut report,
+                        Some(plan_id.as_str()),
+                        &state.conflicts,
+                    );
+                } else if !state.unsupported.is_empty() {
+                    report.unsupported_plans += 1;
+                    append_journal_diagnostics(
+                        &mut report,
+                        Some(plan_id.as_str()),
+                        &state.unsupported,
+                    );
+                } else if state.link_identity_digest.is_some() {
+                    report.supported_plans += 1;
                 }
             }
         }
@@ -405,13 +498,13 @@ impl JournalProjection {
 fn append_journal_diagnostics(
     report: &mut WorkLinkJournalDiagnostics,
     plan_id: Option<&str>,
-    diagnostics: &[WorkLinkDiagnostic],
+    diagnostics: &DiagnosticSummary,
 ) {
-    report.error_count = report.error_count.saturating_add(diagnostics.len() as u64);
-    for diagnostic in diagnostics {
-        if report.errors.len() >= MAX_JOURNAL_DIAGNOSTIC_SAMPLES {
-            break;
-        }
+    report.error_count = report.error_count.saturating_add(diagnostics.count);
+    if report.errors.len() >= MAX_JOURNAL_DIAGNOSTIC_SAMPLES {
+        return;
+    }
+    if let Some(diagnostic) = diagnostics.sample.as_deref() {
         report.errors.push(WorkLinkJournalDiagnosticSample {
             plan_id: plan_id.map(str::to_owned),
             line_number: diagnostic.line_number,
@@ -433,6 +526,32 @@ fn diagnostic(
     }
 }
 
+fn event_semantics_digest(value: &Value) -> Result<[u8; 32]> {
+    let encoded = serde_json::to_vec(value).context("Failed to canonicalize work-link JSON")?;
+    let mut digest = Sha256::new();
+    digest.update(EVENT_SEMANTICS_DOMAIN);
+    digest.update((encoded.len() as u64).to_be_bytes());
+    digest.update(encoded);
+    Ok(digest.finalize().into())
+}
+
+fn link_identity_digest(record: &WorkLinkRecordV1) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(LINK_IDENTITY_DOMAIN);
+    digest.update(record.schema_version.to_be_bytes());
+    for field in [
+        record.plan_id.as_str(),
+        record.issue.provider.as_str(),
+        record.issue.workspace_id.as_str(),
+        record.issue.issue_id.as_str(),
+        record.issue.tracker_root.as_str(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    digest.finalize().into()
+}
+
 fn valid_event_id_from_value(value: &Value) -> Option<String> {
     let id = value.get("id")?.as_str()?;
     validate_event_id(id).is_ok().then(|| id.to_string())
@@ -445,8 +564,8 @@ fn valid_plan_id_from_value(value: &Value) -> Option<String> {
         .then(|| plan_id.to_string())
 }
 
-pub(super) fn scan_journal(path: &Path) -> Result<JournalProjection> {
-    let mut journal = JournalProjection::default();
+pub(super) fn scan_journal(path: &Path, selected_plan: Option<&str>) -> Result<JournalProjection> {
+    let mut journal = JournalProjection::new(selected_plan, PRODUCTION_LIMITS);
     let stats = scan_jsonl_raw_bounded(path, &|| false, super::MAX_WORK_LINK_RECORD_BYTES, |raw| {
         journal.observe(raw)
     })
@@ -458,8 +577,9 @@ pub(super) fn scan_journal(path: &Path) -> Result<JournalProjection> {
 pub(super) fn scan_journal_locked(
     guard: &JsonlWriteGuard,
     path: &Path,
+    selected_plan: Option<&str>,
 ) -> Result<JournalProjection> {
-    let mut journal = JournalProjection::default();
+    let mut journal = JournalProjection::new(selected_plan, PRODUCTION_LIMITS);
     let stats = scan_jsonl_raw_locked_bounded(
         guard,
         path,
@@ -471,3 +591,6 @@ pub(super) fn scan_journal_locked(
     journal.finish(stats);
     Ok(journal)
 }
+
+#[cfg(test)]
+mod tests;

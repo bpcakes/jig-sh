@@ -113,6 +113,32 @@ fn symlinked_and_hard_linked_exports_are_not_repository_authority() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn replacing_tracker_directory_cannot_redirect_a_pinned_snapshot() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let repository = temp.path().join("repository");
+    let outside = temp.path().join("outside");
+    fs::create_dir(&repository).unwrap();
+    fs::create_dir(repository.join(".beads")).unwrap();
+    fs::create_dir(&outside).unwrap();
+    fs::write(
+        outside.join("issues.jsonl"),
+        format!("{}\n", issue("outside-123")),
+    )
+    .unwrap();
+
+    let result = BeadsExport::open_with_hook(&repository, WORKSPACE_ID, || {
+        fs::rename(repository.join(".beads"), repository.join(".beads-pinned")).unwrap();
+        symlink(&outside, repository.join(".beads")).unwrap();
+    });
+
+    assert_eq!(result.unwrap_err(), BeadsJsonlError::MissingExport);
+    assert!(repository.join(PRIMARY_EXPORT).is_file());
+}
+
 #[test]
 fn unknown_fields_are_validated_for_bounds_but_otherwise_tolerated() {
     let temp = tempdir().unwrap();
