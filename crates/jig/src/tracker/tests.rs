@@ -58,6 +58,21 @@ fn reads_current_export_and_returns_exact_normalized_issue() {
 }
 
 #[test]
+fn accepts_bounded_producer_defined_status_and_issue_type() {
+    let temp = tempdir().unwrap();
+    let mut record = issue("example-123");
+    record["status"] = json!("awaiting_external_system");
+    record["issue_type"] = json!("molecule");
+    write_export(temp.path(), PRIMARY_EXPORT, &[record]);
+
+    let export = BeadsExport::open(temp.path(), WORKSPACE_ID).unwrap();
+    assert_eq!(
+        export.issue("example-123").unwrap().status,
+        "awaiting_external_system"
+    );
+}
+
+#[test]
 fn reads_legacy_export_only_when_selection_is_unambiguous() {
     let temp = tempdir().unwrap();
     write_export(temp.path(), LEGACY_EXPORT, &[issue("example-123")]);
@@ -259,8 +274,8 @@ fn exact_lookup_distinguishes_missing_and_tombstoned_issues() {
 fn malformed_known_fields_fail_without_echoing_private_values() {
     for (field, value) in [
         ("priority", json!(9)),
-        ("status", json!("private-invalid-status")),
-        ("issue_type", json!("private-invalid-type")),
+        ("status", json!("private\0invalid-status")),
+        ("issue_type", json!("private\0invalid-type")),
         ("updated_at", json!("private-invalid-time")),
         ("assignee", json!(17)),
     ] {
@@ -295,6 +310,14 @@ fn record_count_line_size_and_depth_are_bounded() {
         nested = json!([nested]);
     }
     record["future_field"] = nested;
+    write_export(temp.path(), PRIMARY_EXPORT, &[record]);
+    assert!(matches!(
+        BeadsExport::open(temp.path(), WORKSPACE_ID),
+        Err(BeadsJsonlError::InvalidRecord { .. })
+    ));
+
+    let mut record = issue("example-123");
+    record["status"] = json!("x".repeat(MAX_TEXT_BYTES + 1));
     write_export(temp.path(), PRIMARY_EXPORT, &[record]);
     assert!(matches!(
         BeadsExport::open(temp.path(), WORKSPACE_ID),

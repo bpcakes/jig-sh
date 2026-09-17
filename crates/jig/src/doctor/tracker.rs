@@ -1,13 +1,10 @@
 use serde_json::json;
 
-use super::{DoctorCheck, DoctorProcessControl, check};
+use super::{DoctorCheck, check};
 use crate::context::RepoContext;
 use crate::tracker::{BeadsExport, BeadsJsonlError, INPUT_PROFILE, LEGACY_EXPORT, PRIMARY_EXPORT};
 
-pub(super) fn tracker_check(
-    ctx: &RepoContext,
-    _process_control: DoctorProcessControl<'_>,
-) -> DoctorCheck {
+pub(super) fn tracker_check(ctx: &RepoContext) -> DoctorCheck {
     let Some(config) = ctx.work_tracker() else {
         return check(
             "tracker",

@@ -359,25 +359,7 @@ fn parse_issue(
         return Err(invalid(line, "invalid issue title"));
     }
     let status = required_text(object, "status", line)?;
-    if !matches!(
-        status,
-        "open"
-            | "in_progress"
-            | "blocked"
-            | "deferred"
-            | "draft"
-            | "closed"
-            | "tombstone"
-            | "pinned"
-    ) {
-        return Err(invalid(line, "unsupported issue status"));
-    }
-    if !matches!(
-        required_text(object, "issue_type", line)?,
-        "task" | "bug" | "feature" | "epic" | "chore" | "docs" | "question"
-    ) {
-        return Err(invalid(line, "unsupported issue type"));
-    }
+    let _issue_type = required_text(object, "issue_type", line)?;
     if !object
         .get("priority")
         .and_then(Value::as_u64)
@@ -432,7 +414,7 @@ fn required_text<'a>(
     object
         .get(field)
         .and_then(Value::as_str)
-        .filter(|value| !value.contains('\0'))
+        .filter(|value| value.len() <= MAX_TEXT_BYTES && !value.contains('\0'))
         .ok_or_else(|| invalid(line, "missing or invalid required field"))
 }
 

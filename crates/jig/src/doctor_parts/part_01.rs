@@ -637,7 +637,7 @@ fn doctor_context_checks_with_process_control(
     let go_runtime = go_runtime_check(ctx, environment, process_control);
     let node_runtime = node_runtime_check(ctx, environment, process_control);
     let sqlx_cli = sqlx_cli_version_check(ctx, environment, process_control);
-    let tracker = tracker::tracker_check(ctx, process_control);
+    let tracker = tracker::tracker_check(ctx);
     let agent = agent_check(ctx, process_control);
     let proxy = proxy_check_with_process_control(ctx, process_control);
     DoctorContextChecks {
@@ -663,7 +663,6 @@ fn doctor_process_session_required(ctx: &RepoContext) -> bool {
         || rust_runtime_probe_required(ctx)
         || go_runtime_probe_required(ctx)
         || node_runtime_probe_required(ctx)
-        || ctx.work_tracker().is_some()
         || !ctx.codex_marketplaces().is_empty()
         || proxy_configured(ctx)
 }

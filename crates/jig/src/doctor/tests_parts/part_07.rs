@@ -336,7 +336,7 @@ fn doctor_reuses_one_signal_generation_per_batch_and_allows_later_batches() {
 
 #[cfg(unix)]
 #[test]
-fn signal_retirement_failure_invalidates_every_configured_process_check() {
+fn signal_retirement_failure_preserves_the_process_independent_tracker_check() {
     let temp = tempdir().unwrap();
     write_sqlx_doctor_fixture_with_command(temp.path(), "sqlx prepare -D sqlite:retirement.db");
     let config_path = temp.path().join(".jig.toml");
@@ -425,9 +425,9 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
         assert_eq!(process_check.status, "error");
         assert!(process_check.detail.contains("could not retire safely"));
     }
-    assert!(!checks.tracker.ok);
-    assert_eq!(checks.tracker.status, "unverified");
-    assert!(checks.tracker.detail.contains("could not retire safely"));
+    assert!(checks.tracker.ok);
+    assert_eq!(checks.tracker.status, "ready");
+    assert_eq!(checks.tracker.detail, "ready");
 }
 
 #[cfg(unix)]
