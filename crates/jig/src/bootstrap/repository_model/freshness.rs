@@ -3,6 +3,7 @@ use super::*;
 impl RepositoryRenderModel {
     pub(in crate::bootstrap) fn prepare_freshness_epoch(&mut self, epoch: u32) -> Result<()> {
         for action in &mut self.actions {
+            infer_missing_source_policy(action, epoch, &self.commands);
             prepare_action_inputs_policy(action, epoch)?;
         }
         Ok(())
@@ -11,12 +12,23 @@ impl RepositoryRenderModel {
 
 /// Compare generated projections across explicit-shell and freshness cutovers.
 /// An authored policy or provenance remains distinct from a generated default.
-pub(super) fn matches_generated_actions(expected: &[ActionSpec], authored: &[ActionSpec]) -> bool {
+pub(super) fn matches_generated_actions(
+    expected: &[ActionSpec],
+    authored: &[ActionSpec],
+    commands: &BTreeMap<String, String>,
+) -> bool {
     expected.len() == authored.len()
         && expected.iter().zip(authored).all(|(expected, authored)| {
             let mut expected = expected.clone();
             let mut authored = authored.clone();
+            // Missing fields can take current generated defaults. Saved values,
+            // including inferred Git policies, must remain distinguishable.
             for action in [&mut expected, &mut authored] {
+                infer_missing_source_policy(
+                    action,
+                    crate::context::CURRENT_CONTRACT_VERSION,
+                    commands,
+                );
                 super::runners::make_shell_explicit(&mut action.runner);
                 if prepare_action_inputs_policy(action, crate::context::CURRENT_CONTRACT_VERSION)
                     .is_err()
@@ -26,6 +38,29 @@ pub(super) fn matches_generated_actions(expected: &[ActionSpec], authored: &[Act
             }
             expected == authored
         })
+}
+
+fn infer_missing_source_policy(
+    action: &mut ActionSpec,
+    epoch: u32,
+    commands: &BTreeMap<String, String>,
+) {
+    if action.source_state.is_some() {
+        return;
+    }
+    let command = match &action.runner {
+        ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
+            commands.get(command).map(String::as_str)
+        }
+        _ => None,
+    };
+    let recommendation = crate::repository::freshness::adoption::recommend(epoch, action, command);
+    if recommendation.reason == crate::repository::freshness::adoption::Reason::KnownFormatter {
+        action.source_state = Some(recommendation.proposed.source_state);
+        action
+            .provenance
+            .insert("source_state".into(), FieldProvenance::Inferred);
+    }
 }
 
 /// Default generated and inherited actions conservatively. An explicit authored

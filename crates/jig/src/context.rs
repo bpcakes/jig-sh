@@ -382,15 +382,6 @@ impl RepoContext {
         &self.manifest.actions
     }
 
-    /// Authoring presence matters to migrations even when omitted defaults are
-    /// equivalent in the resolved manifest. Keep this tied to the loaded snapshot.
-    pub(crate) fn authored_action_specs(&self) -> Option<&[ActionSpec]> {
-        self.config
-            .repository
-            .as_ref()
-            .map(|source| source.actions.as_slice())
-    }
-
     pub(crate) fn profile_specs(&self) -> &[ProfileSpec] {
         &self.manifest.profiles
     }

@@ -123,7 +123,14 @@ fn known_formatter(action: &ActionSpec, command: Option<&str>) -> bool {
         } => {
             root_directory(working_directory.as_deref())
                 && environment.is_empty()
-                && command == Some("cargo fmt --all -- --check")
+                && command.is_some_and(|command| {
+                    command == "cargo fmt --all -- --check"
+                        || command
+                            == crate::shell::optional_cargo_command(
+                                "cargo fmt --all -- --check",
+                                "fmt",
+                            )
+                })
         }
         ActionRunner::Argv {
             program,

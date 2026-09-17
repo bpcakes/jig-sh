@@ -173,3 +173,24 @@ fn literal_argv_and_existing_exhaustive_policy_keep_separate_meanings() {
     }
     assert_eq!(recommend(8, &action, None).reason, Reason::UnknownCommand);
 }
+
+#[test]
+fn exact_generated_cargo_guard_is_qualified_but_altered_branches_are_not() {
+    let action = formatter();
+    let guarded = crate::shell::optional_cargo_command("cargo fmt --all -- --check", "fmt");
+    assert_eq!(
+        recommend(8, &action, Some(&guarded)).reason,
+        Reason::KnownFormatter
+    );
+    for command in [
+        guarded.replace("printf", "git status; printf"),
+        guarded.replace("cargo fmt", "git diff; cargo fmt"),
+        format!("{guarded}; git status"),
+        guarded.replace("Cargo.toml", ".git/index"),
+    ] {
+        assert_eq!(
+            recommend(8, &action, Some(&command)).reason,
+            Reason::UnknownCommand
+        );
+    }
+}

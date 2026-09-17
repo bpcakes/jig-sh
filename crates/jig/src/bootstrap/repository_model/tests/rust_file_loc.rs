@@ -176,44 +176,71 @@ fn authored_file_budget_action_alias_and_profile_choices_survive_model_round_tri
 
 #[test]
 fn exact_generated_legacy_action_upgrades_to_native_file_budget() {
-    let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let mut legacy = RepositoryRenderModel::from_answers(&initial).unwrap();
-    let budget_target = target_id("repo", "file-budget").unwrap();
-    let legacy_target = target_id("repo", "rust-file-loc").unwrap();
-    legacy
-        .actions
-        .retain(|action| action.target != budget_target);
-    legacy
-        .actions
-        .push(generated_legacy_rust_file_loc_action().unwrap());
-    legacy
-        .actions
-        .sort_by(|left, right| left.target.cmp(&right.target));
-    for profile in &mut legacy.profiles {
-        profile.targets.retain(|target| target != &budget_target);
-        profile.targets.push(legacy_target.clone());
-        profile.targets.sort();
-        profile.targets.dedup();
-    }
-    legacy.commands.insert(
-        RUST_FILE_LOC_COMMAND_KEY.into(),
-        "scripts/check-rust-file-loc.sh main".into(),
-    );
+    for persisted in [false, true] {
+        let initial = answers("rust_crate_roots = [\"crates\"]\n");
+        let mut legacy = RepositoryRenderModel::from_answers(&initial).unwrap();
+        let budget_target = target_id("repo", "file-budget").unwrap();
+        let legacy_target = target_id("repo", "rust-file-loc").unwrap();
+        legacy
+            .actions
+            .retain(|action| action.target != budget_target);
+        legacy
+            .actions
+            .push(generated_legacy_rust_file_loc_action().unwrap());
+        legacy
+            .actions
+            .sort_by(|left, right| left.target.cmp(&right.target));
+        for profile in &mut legacy.profiles {
+            profile.targets.retain(|target| target != &budget_target);
+            profile.targets.push(legacy_target.clone());
+            profile.targets.sort();
+            profile.targets.dedup();
+        }
+        legacy.commands.insert(
+            RUST_FILE_LOC_COMMAND_KEY.into(),
+            "scripts/check-rust-file-loc.sh main".into(),
+        );
 
-    let upgraded = reload_managed_model(&legacy);
-    assert!(
-        upgraded
-            .actions
-            .iter()
-            .any(|action| action == &generated_file_budget_action().unwrap())
-    );
-    assert!(
-        upgraded
-            .actions
-            .iter()
-            .all(|action| action.target != legacy_target)
-    );
-    assert!(!upgraded.commands.contains_key(RUST_FILE_LOC_COMMAND_KEY));
+        if persisted {
+            for action in &mut legacy.actions {
+                action.source_state = Some(jig_contract::ActionSourceState::Git);
+                action
+                    .provenance
+                    .insert("source_state".into(), FieldProvenance::Inferred);
+            }
+            legacy.prepare_runner_epoch(8).unwrap();
+            legacy.prepare_freshness_epoch(8).unwrap();
+        }
+        let upgraded = reload_managed_model(&legacy);
+        if persisted {
+            for saved in legacy
+                .actions
+                .iter()
+                .filter(|action| action.target != legacy_target)
+            {
+                assert_eq!(
+                    upgraded
+                        .actions
+                        .iter()
+                        .find(|action| action.target == saved.target),
+                    Some(saved)
+                );
+            }
+        }
+        assert!(
+            upgraded
+                .actions
+                .iter()
+                .any(|action| action == &generated_file_budget_action().unwrap())
+        );
+        assert!(
+            upgraded
+                .actions
+                .iter()
+                .all(|action| action.target != legacy_target)
+        );
+        assert!(!upgraded.commands.contains_key(RUST_FILE_LOC_COMMAND_KEY));
+    }
 }
 
 #[test]

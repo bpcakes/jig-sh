@@ -2,7 +2,7 @@ use super::*;
 use crate::context::RepoContext;
 
 #[test]
-fn freshness_epoch_defaults_conservatively_and_preserves_authored_assertions() {
+fn freshness_epoch_qualifies_formatting_and_preserves_authored_assertions() {
     let template = live_template_source();
     let answers = rust_render_answers(RepositoryProjectionHint::RustWorkspace);
     let previous = render_context(&template, &answers, Some(7)).unwrap();
@@ -21,7 +21,12 @@ fn freshness_epoch_defaults_conservatively_and_preserves_authored_assertions() {
             .unwrap()
             .iter()
             .all(|action| action["inputs_policy"] == "whole_repository"
-                && action["source_state"] == "git")
+                && action["source_state"]
+                    == if action["target"]["action"] == "fmt" {
+                        "worktree"
+                    } else {
+                        "git"
+                    })
     );
     let current = render_context(&template, &answers, None).unwrap();
     assert_eq!(current["_jig"]["contract_version"], 8);
@@ -32,7 +37,12 @@ fn freshness_epoch_defaults_conservatively_and_preserves_authored_assertions() {
             .iter()
             .all(|action| action["inputs_policy"] == "whole_repository"
                 && action["provenance"]["inputs_policy"] == "inferred"
-                && action["source_state"] == "git"
+                && action["source_state"]
+                    == if action["target"]["action"] == "fmt" {
+                        "worktree"
+                    } else {
+                        "git"
+                    }
                 && action["provenance"]["source_state"] == "inferred")
     );
     let source: toml::Value = toml::from_str(current["repository_toml"].as_str().unwrap()).unwrap();
@@ -152,7 +162,10 @@ fn epoch_eight_loader_normalizes_omitted_source_state_but_rejects_disagreement()
         .as_array()
         .unwrap()
         .iter()
-        .position(|action| action["runner"]["kind"].as_str() == Some("shell"))
+        .position(|action| {
+            action["runner"]["kind"].as_str() == Some("shell")
+                && action["source_state"].as_str() == Some("git")
+        })
         .unwrap();
     source["repository"]["actions"].as_array_mut().unwrap()[index]
         .as_table_mut()

@@ -111,8 +111,25 @@ struct AuthoredCommands<'a> {
 impl RepositoryRenderModel {
     pub(super) fn from_answers(answers: &RenderAnswers) -> Result<Self> {
         if let Some(authored) = answers.authored_repository() {
+            if authored
+                .actions
+                .iter()
+                .any(|action| action.target.to_string() == "repo:rust-file-loc")
+                && let Ok(generated) = Self::from_generated_answers(answers)
+                && let Some((upgraded, commands)) = file_budget::upgrade_saved_legacy_projection(
+                    &generated,
+                    authored,
+                    answers.authored_repository_commands(),
+                )
+            {
+                return Self::from_authored(answers, &upgraded, &commands);
+            }
             return Self::from_authored(answers, authored, answers.authored_repository_commands());
         }
+        Self::from_generated_answers(answers)
+    }
+
+    fn from_generated_answers(answers: &RenderAnswers) -> Result<Self> {
         let mut builder = ModelBuilder::new(answers)?;
         builder.add_repository_component()?;
         match answers.repository_projection_hint() {
@@ -123,70 +140,6 @@ impl RepositoryRenderModel {
         builder.finish()
     }
 
-    fn from_authored(
-        answers: &RenderAnswers,
-        authored: &AuthoredRepositoryModel,
-        authored_commands: &BTreeMap<String, String>,
-    ) -> Result<Self> {
-        let mut commands = authored_commands.clone();
-        refresh_managed_rust_file_loc_command(
-            &authored.actions,
-            &mut commands,
-            answers.default_branch(),
-        );
-        let mut required_commands = BTreeSet::new();
-        let mut tools = BTreeMap::new();
-        for action in &authored.actions {
-            let (kind, command_key) = match &action.runner {
-                ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
-                    let value = authored_commands.get(command.as_str()).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "authored target '{}' references missing command '{}'",
-                            action.target,
-                            command
-                        )
-                    })?;
-                    if value.trim().is_empty() {
-                        bail!(
-                            "authored target '{}' references empty command '{}'",
-                            action.target,
-                            command
-                        );
-                    }
-                    required_commands.insert(command.clone());
-                    (kind::COMMAND, Some(command.as_str()))
-                }
-                ActionRunner::Native { .. } => (kind::NATIVE, None),
-                ActionRunner::Argv { .. } => (kind::COMMAND, None),
-            };
-            for alias in &action.legacy_aliases {
-                let mut tool = ManifestTool::new(
-                    alias,
-                    kind,
-                    action
-                        .description
-                        .as_deref()
-                        .unwrap_or("Compatibility alias for a repository target."),
-                );
-                tool.command = command_key.map(str::to_owned);
-                if tools.insert(alias.clone(), tool).is_some() {
-                    bail!("authored repository model contains duplicate legacy alias '{alias}'");
-                }
-            }
-        }
-
-        Ok(Self {
-            affected_ignore: authored.affected_ignore.clone(),
-            components: authored.components.clone(),
-            actions: authored.actions.clone(),
-            profiles: authored.profiles.clone(),
-            default_check_profile: authored.default_check_profile.clone(),
-            required_commands: required_commands.into_iter().collect(),
-            tools: tools.into_values().collect(),
-            commands,
-        })
-    }
-
     pub(super) fn matches_authored_projection(
         &self,
         authored: &AuthoredRepositoryModel,
@@ -194,7 +147,11 @@ impl RepositoryRenderModel {
     ) -> bool {
         let current = self.affected_ignore == authored.affected_ignore
             && self.components == authored.components
-            && freshness::matches_generated_actions(&self.actions, &authored.actions)
+            && freshness::matches_generated_actions(
+                &self.actions,
+                &authored.actions,
+                &self.commands,
+            )
             && self.profiles == authored.profiles
             && self.default_check_profile == authored.default_check_profile
             && self
