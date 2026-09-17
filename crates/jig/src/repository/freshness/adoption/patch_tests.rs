@@ -171,8 +171,12 @@ fn paired_patch_is_read_only_deterministic_applicable_and_idempotent() {
         );
         let before = fixture.contents();
         let ctx = fixture.context();
-        let result = preview(&ctx, &request()).unwrap();
-        assert_eq!(result, preview(&ctx, &request()).unwrap());
+        let request = Request {
+            assert_worktree: true,
+            ..request()
+        };
+        let result = preview(&ctx, &request).unwrap();
+        assert_eq!(result, preview(&ctx, &request).unwrap());
         assert_eq!(fixture.contents(), before);
         assert!(!fixture.temp.path().join(".agent/state").exists());
         assert_eq!(result["changed_targets"].as_array().unwrap().len(), 1);
@@ -187,7 +191,7 @@ fn paired_patch_is_read_only_deterministic_applicable_and_idempotent() {
             config["commands"]["unrelated_command"].as_str(),
             Some("echo preserved")
         );
-        let repeated = preview(&fixture.context(), &request()).unwrap();
+        let repeated = preview(&fixture.context(), &request).unwrap();
         assert_eq!(repeated["patch"], "");
         assert_eq!(repeated["changed_targets"], json!([]));
         assert_eq!(fixture.contents(), after);
@@ -255,7 +259,7 @@ fn automatic_preview_preserves_explicit_conservative_policies() {
 }
 
 #[test]
-fn automatic_patch_can_select_all_targets_without_owner_assertions() {
+fn automatic_patch_does_not_promote_cargo_formatters_without_owner_assertions() {
     let action = formatter();
     let fixture = Fixture::new(
         "cargo fmt --all -- --check",
@@ -268,9 +272,12 @@ fn automatic_patch_can_select_all_targets_without_owner_assertions() {
         ..Default::default()
     };
     let result = preview(&fixture.context(), &request).unwrap();
-    assert_eq!(result["changed_targets"].as_array().unwrap().len(), 1);
-    fixture.apply(result["patch"].as_str().unwrap());
-    assert_eq!(preview(&fixture.context(), &request).unwrap()["patch"], "");
+    assert_eq!(result["changed_targets"], json!([]));
+    assert_eq!(result["patch"], "");
+    assert_eq!(
+        result["targets"][0]["reason"],
+        "formatter_requires_assertion"
+    );
 }
 
 #[test]

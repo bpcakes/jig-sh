@@ -13,8 +13,8 @@ new epoch's identity. Existing epoch 2–7 repositories keep their prior rules;
 upgrading does not rewrite receipts.
 
 Omitted policies mean `inputs_policy = "whole_repository"` and
-`source_state = "git"`. Newly generated, recognized Cargo formatting checks
-receive `source_state = "worktree"`; generated actions never infer exhaustive inputs. The first declaration controls path coverage; the second
+`source_state = "git"`. Generated checks keep these conservative defaults,
+including Cargo formatters. The first declaration controls path coverage; the second
 controls whether Git placement itself is an input. Opt into `exhaustive` only
 after auditing the entire input and dependency closure. Opt into `worktree` only
 for commands whose results depend on working files without depending on HEAD,
@@ -45,16 +45,22 @@ scripts/jig info freshness --target api:fmt --json
 Selectors are exact `component:action` addresses from `info targets`; repeat
 `--target` to select several actions. The report separates current/proposed
 source state and input policy, lists inputs, and gives a reason for each decision.
-Automatic worktree recommendations recognize only root `cargo fmt --all -- --check`
-with no configured environment or action arguments, its literal argv equivalent,
-and Jig's exact generated optional-Cargo guard. Custom scripts, `just`/`make`
-wrappers, tests and lints require owner assessment. Native checks retain their Git
-comparison authority. An explicit saved source policy is not automatically replaced.
+Command spelling does not prove Git independence: Cargo aliases can redirect even
+`cargo fmt --all -- --check` to an implementation that reads the index or HEAD.
+Cargo formatters, custom scripts, `just`/`make` wrappers, tests and lints all
+require owner assessment. Native checks retain their Git comparison authority.
+Owner-declared policies are preserved. Updates retract the superseded unreleased
+Cargo formatter inference: a saved `worktree` policy with `inferred` provenance
+returns to `git` when its runner still matches the old formatter shape. This
+also keeps otherwise generated repository models eligible for ordinary updates.
+If the runner was subsequently customized, audit its policy explicitly.
 
-For an eligible recommendation, produce a patch:
+After auditing the formatter's effective command and Cargo configuration, assert
+Git independence explicitly to produce a patch:
 
 ```sh
-scripts/jig info freshness --target api:fmt --patch > /tmp/jig-freshness.patch
+scripts/jig info freshness --target api:fmt --assert-worktree \
+  --patch > /tmp/jig-freshness.patch
 ```
 
 This updates `.jig.toml` and `.agent/jig-contract.json` together in the patch.
@@ -91,11 +97,11 @@ and deliberately replaces the selected policy with declared provenance.
 `--input` requires `--assert-exhaustive` and appends deduplicated patterns to
 existing inputs; it never removes them. Either assertion can be used separately.
 
-Audit Cargo manifests, lockfiles, toolchain and formatter configuration, custom
+Audit Cargo aliases, manifests, lockfiles, toolchain and formatter configuration, custom
 runner scripts, fixtures, generated inputs and transitive dependencies. Cargo
 target paths and Rust `#[path]` modules can use extensions other than `.rs`, so
 `**/*.rs` and existing affected-selection hints do not prove completeness. Keep
-the declaration current when the command's read set changes. Installed tools,
+the declaration current when command resolution, Git dependencies or the read set changes. Installed tools,
 ambient environment and live services are not attested by these policies.
 
 After applying and reviewing the paired files, record new evidence:
@@ -264,10 +270,9 @@ input/configuration, policy, and native prepared-authority checks. Epoch 8 also
 require complete original freshness proof and effective validity. A scoped
 gate pass alone cannot authorize either operation.
 
-Generated actions retain `whole_repository` input coverage. Qualified Cargo
-formatting checks receive inferred `worktree` source state; other generated
-checks retain `git`. Recopy preserves saved policies and explicit exhaustive
-declarations. Enabling epoch 8 alone does not establish input completeness;
+Generated actions retain `whole_repository` input coverage and `git` source
+state, including Cargo formatting checks. Recopy preserves owner policies and explicit exhaustive declarations, while
+retracting the superseded inferred formatter policy described above. Enabling epoch 8 alone does not establish input completeness;
 review the entire dependency closure before opting in. Original execution
 safety remains unchanged even for worktree receipts.
 

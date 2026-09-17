@@ -1,5 +1,5 @@
-//! Conservative recommendations, shared by inspection and generation.
-//! Recognizing a command's Git independence does not prove its input coverage.
+//! Conservative adoption guidance. Command spelling does not prove Git independence
+//! or input coverage: even Cargo formatters can dispatch repository-owned aliases.
 
 use jig_contract::{
     ActionEffect, ActionInputsPolicy, ActionIntent, ActionRunner, ActionSourceState, ActionSpec,
@@ -36,7 +36,7 @@ pub(crate) enum Reason {
     NotReadOnlyCheck,
     AuthoredSourcePolicy,
     AlreadyWorktree,
-    KnownFormatter,
+    FormatterRequiresAssertion,
     UnknownCommand,
     OwnerAssertion,
 }
@@ -68,15 +68,12 @@ pub(crate) fn recommend(
         Reason::AlreadyWorktree
     } else if is_authored(action, "source_state", action.source_state.is_some()) {
         Reason::AuthoredSourcePolicy
-    } else if known_formatter(action, resolved_command) {
-        Reason::KnownFormatter
+    } else if cargo_formatter(action, resolved_command) {
+        Reason::FormatterRequiresAssertion
     } else {
         Reason::UnknownCommand
     };
-    let mut proposed = current.clone();
-    if reason == Reason::KnownFormatter {
-        proposed.source_state = ActionSourceState::Worktree;
-    }
+    let proposed = current.clone();
     Recommendation {
         target: action.target.clone(),
         exhaustive_requires_owner_assertion: current.inputs_policy
@@ -106,7 +103,7 @@ pub(crate) fn is_read_only_check(action: &ActionSpec) -> bool {
             .all(|effect| matches!(effect, ActionEffect::ReadOnly | ActionEffect::Process))
 }
 
-fn known_formatter(action: &ActionSpec, command: Option<&str>) -> bool {
+pub(crate) fn cargo_formatter(action: &ActionSpec, command: Option<&str>) -> bool {
     if !action.arguments.is_empty() {
         return false;
     }

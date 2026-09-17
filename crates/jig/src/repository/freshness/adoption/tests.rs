@@ -50,7 +50,7 @@ fn report_preserves_authored_presence_across_normalized_manifest_defaults() {
             if authored_explicit {
                 "authored_source_policy"
             } else {
-                "known_formatter"
+                "formatter_requires_assertion"
             }
         );
         assert_eq!(fs::read_to_string(config_path).unwrap(), original);
@@ -71,14 +71,11 @@ fn formatter() -> ActionSpec {
 }
 
 #[test]
-fn known_formatter_only_recommends_git_independence() {
+fn cargo_formatter_requires_an_owner_assertion_for_git_independence() {
     let action = formatter();
     let recommendation = recommend(8, &action, Some("cargo fmt --all -- --check"));
-    assert_eq!(recommendation.reason, Reason::KnownFormatter);
-    assert_eq!(
-        recommendation.proposed.source_state,
-        ActionSourceState::Worktree
-    );
+    assert_eq!(recommendation.reason, Reason::FormatterRequiresAssertion);
+    assert_eq!(recommendation.proposed.source_state, ActionSourceState::Git);
     assert_eq!(
         recommendation.proposed.inputs_policy,
         ActionInputsPolicy::WholeRepository
@@ -111,7 +108,7 @@ fn authored_conservative_policy_and_legacy_epochs_are_preserved() {
         .insert("source_state".into(), FieldProvenance::Inferred);
     assert_eq!(
         recommend(8, &action, Some("cargo fmt --all -- --check")).reason,
-        Reason::KnownFormatter
+        Reason::FormatterRequiresAssertion
     );
     assert_eq!(
         recommend(7, &action, Some("cargo fmt --all -- --check")).reason,
@@ -162,7 +159,7 @@ fn literal_argv_and_existing_exhaustive_policy_keep_separate_meanings() {
     };
     action.inputs_policy = Some(ActionInputsPolicy::Exhaustive);
     let result = recommend(8, &action, None);
-    assert_eq!(result.reason, Reason::KnownFormatter);
+    assert_eq!(result.reason, Reason::FormatterRequiresAssertion);
     assert_eq!(
         result.proposed.inputs_policy,
         ActionInputsPolicy::Exhaustive
@@ -175,12 +172,12 @@ fn literal_argv_and_existing_exhaustive_policy_keep_separate_meanings() {
 }
 
 #[test]
-fn exact_generated_cargo_guard_is_qualified_but_altered_branches_are_not() {
+fn generated_cargo_guard_also_requires_an_owner_assertion() {
     let action = formatter();
     let guarded = crate::shell::optional_cargo_command("cargo fmt --all -- --check", "fmt");
     assert_eq!(
         recommend(8, &action, Some(&guarded)).reason,
-        Reason::KnownFormatter
+        Reason::FormatterRequiresAssertion
     );
     for command in [
         guarded.replace("printf", "git status; printf"),

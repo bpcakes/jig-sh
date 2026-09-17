@@ -62,12 +62,6 @@ pub(crate) fn preview(ctx: &RepoContext, request: &Request) -> Result<serde_json
         };
         let mut recommendation = recommend(ctx.contract_version(), action, command);
         let mut proposed = action.clone();
-        if recommendation.current.source_state != recommendation.proposed.source_state {
-            proposed.source_state = Some(recommendation.proposed.source_state);
-            proposed
-                .provenance
-                .insert("source_state".into(), FieldProvenance::Declared);
-        }
         if assertion {
             ensure!(
                 is_read_only_check(action) && !matches!(action.runner, ActionRunner::Native { .. }),
@@ -116,7 +110,7 @@ pub(crate) fn preview(ctx: &RepoContext, request: &Request) -> Result<serde_json
         "contract_version": ctx.contract_version(), "targets": recommendations,
         "changed_targets": changes.iter().map(|(_, action)| &action.target).collect::<Vec<_>>(),
         "input_ownership": "Exhaustive inputs require owner review of every repository file the action reads, including nonstandard source paths, configuration, fixtures and toolchain pins. Command recognition alone does not establish completeness.",
-        "source_ownership": "Worktree freshness asserts that staging, commits and branch placement cannot change the command result. Explicit assertions replace selected policies; they do not attest installed tools, ambient environment or live services.",
+        "source_ownership": "Worktree freshness asserts that staging, commits and branch placement cannot change the command result. Cargo formatters require an owner assertion because Cargo aliases can redirect the command to a Git-dependent implementation. Explicit assertions replace selected policies; they do not attest installed tools, ambient environment or live services.",
         "next_step": "Preview only. Use --patch to print a paired patch, review it, then apply with git apply. Regenerate the preview after concurrent edits."
     });
     if request.patch {
@@ -142,10 +136,7 @@ pub(crate) fn format_report(value: &serde_json::Value) -> String {
                 target["proposed"]["inputs_policy"].as_str().unwrap_or("?"),
                 target["reason"].as_str().unwrap_or("?")
             ));
-            if matches!(
-                target["reason"].as_str(),
-                Some("known_formatter" | "owner_assertion")
-            ) {
+            if matches!(target["reason"].as_str(), Some("owner_assertion")) {
                 let inputs = target["proposed_inputs"]
                     .as_array()
                     .map(|values| {

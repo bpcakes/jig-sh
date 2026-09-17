@@ -1,6 +1,7 @@
 use super::*;
 
 mod adoption;
+mod cargo_alias;
 
 fn worktree_fixture(root: &Path, policy: &str, api_source: Option<&str>) -> (RepoContext, String) {
     let ctx = fixture(root, false, true);

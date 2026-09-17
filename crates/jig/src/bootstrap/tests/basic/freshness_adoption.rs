@@ -118,6 +118,50 @@ fn update_and_recopy_preserve_saved_git_policy_for_every_provenance() {
 }
 
 #[test]
+fn update_and_recopy_retract_only_superseded_formatter_inference() {
+    let _guard = lock_env();
+    let template = materialize_template_worktree();
+    for custom_model in [false, true] {
+        for provenance in [FieldProvenance::Inferred, FieldProvenance::Declared] {
+            let temp = tempdir().unwrap();
+            let repo = temp.path().join("ExampleProject");
+            fs::create_dir_all(&repo).unwrap();
+            run_adopt(options(&repo, template.path(), false, false)).unwrap();
+            let mut old = saved_formatter(&repo);
+            old.source_state = Some(ActionSourceState::Worktree);
+            old.provenance.insert("source_state".into(), provenance);
+            if custom_model {
+                old.description = Some("Example owner description".into());
+            }
+            let mut expected = old.clone();
+            if provenance == FieldProvenance::Inferred {
+                expected.source_state = Some(ActionSourceState::Git);
+            }
+            for recopy in [false, true] {
+                save_formatter(&repo, &old, None);
+                run_update(UpdateOpts {
+                    path: repo.clone(),
+                    template: Some(template.path().display().to_string()),
+                    template_mode: None,
+                    recopy,
+                    launcher_only: false,
+                    force: true,
+                    vcs_ref: None,
+                    defaults: true,
+                    no_input: true,
+                })
+                .unwrap();
+                assert_eq!(
+                    saved_formatter(&repo),
+                    expected,
+                    "custom_model={custom_model}, recopy={recopy}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn footprint_and_capability_refresh_preserve_owned_freshness_and_its_command() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -167,6 +211,50 @@ fn footprint_and_capability_refresh_preserve_owned_freshness_and_its_command() {
         _ => unreachable!(),
     };
     assert_eq!(ctx.command_for_key(key).unwrap(), "scripts/check-format.sh");
+}
+
+#[test]
+fn generated_cargo_formatter_stays_git_with_aliases_added_before_or_after_adoption() {
+    use crate::repository::freshness::adoption::{Request, preview};
+
+    let _guard = lock_env();
+    let template = materialize_template_worktree();
+    for alias_before_adoption in [false, true] {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("ExampleProject");
+        fs::create_dir_all(repo.join("src")).unwrap();
+        fs::create_dir_all(repo.join(".cargo")).unwrap();
+        fs::write(
+            repo.join("Cargo.toml"),
+            "[package]\nname = \"example-project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(repo.join("src/lib.rs"), "").unwrap();
+        let alias = "[alias]\nfmt = [\"run\", \"--bin\", \"format-check\", \"--\"]\n";
+        if alias_before_adoption {
+            fs::write(repo.join(".cargo/config.toml"), alias).unwrap();
+        }
+        run_adopt(options(&repo, template.path(), false, false)).unwrap();
+        let original = saved_formatter(&repo);
+        assert_eq!(original.source_state, Some(ActionSourceState::Git));
+        fs::write(repo.join(".cargo/config.toml"), alias).unwrap();
+        let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+        let report = preview(
+            &ctx,
+            &Request {
+                targets: vec![original.target.clone()],
+                patch: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            report["targets"][0]["reason"],
+            "formatter_requires_assertion"
+        );
+        assert_eq!(report["patch"], "");
+        assert_eq!(saved_formatter(&repo), original);
+    }
 }
 
 #[test]

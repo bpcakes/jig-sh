@@ -3,7 +3,7 @@ use super::*;
 impl RepositoryRenderModel {
     pub(in crate::bootstrap) fn prepare_freshness_epoch(&mut self, epoch: u32) -> Result<()> {
         for action in &mut self.actions {
-            infer_missing_source_policy(action, epoch, &self.commands);
+            retract_formatter_inference(action, epoch, &self.commands);
             prepare_action_inputs_policy(action, epoch)?;
         }
         Ok(())
@@ -21,10 +21,10 @@ pub(super) fn matches_generated_actions(
         && expected.iter().zip(authored).all(|(expected, authored)| {
             let mut expected = expected.clone();
             let mut authored = authored.clone();
-            // Missing fields can take current generated defaults. Saved values,
-            // including inferred Git policies, must remain distinguishable.
+            // Missing fields take conservative generated defaults; authored
+            // policies and their provenance must remain distinguishable.
             for action in [&mut expected, &mut authored] {
-                infer_missing_source_policy(
+                retract_formatter_inference(
                     action,
                     crate::context::CURRENT_CONTRACT_VERSION,
                     commands,
@@ -40,12 +40,22 @@ pub(super) fn matches_generated_actions(
         })
 }
 
-fn infer_missing_source_policy(
+/// An unreleased generator inferred Git independence from Cargo command spelling.
+/// Retract that inference on update, including when unrelated edits keep the
+/// model authored. Explicit owner policies and changed implementations stay intact.
+fn retract_formatter_inference(
     action: &mut ActionSpec,
     epoch: u32,
     commands: &BTreeMap<String, String>,
 ) {
-    if action.source_state.is_some() {
+    use crate::repository::freshness::adoption::{cargo_formatter, is_read_only_check};
+    use jig_contract::ActionSourceState;
+
+    if epoch < jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION
+        || action.source_state != Some(ActionSourceState::Worktree)
+        || action.provenance.get("source_state") != Some(&FieldProvenance::Inferred)
+        || !is_read_only_check(action)
+    {
         return;
     }
     let command = match &action.runner {
@@ -54,12 +64,8 @@ fn infer_missing_source_policy(
         }
         _ => None,
     };
-    let recommendation = crate::repository::freshness::adoption::recommend(epoch, action, command);
-    if recommendation.reason == crate::repository::freshness::adoption::Reason::KnownFormatter {
-        action.source_state = Some(recommendation.proposed.source_state);
-        action
-            .provenance
-            .insert("source_state".into(), FieldProvenance::Inferred);
+    if cargo_formatter(action, command) {
+        action.source_state = Some(ActionSourceState::Git);
     }
 }
 
