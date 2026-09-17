@@ -82,7 +82,7 @@ fn current_worktree_fingerprint_from_result_for_receipt(
 }
 
 pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
-    record_receipt_inner(ctx, input, None, None)
+    record_receipt_inner(ctx, input, None, None, ReceiptPublication::Finalize)
 }
 
 pub(crate) fn record_target_receipt(
@@ -90,77 +90,67 @@ pub(crate) fn record_target_receipt(
     input: ReceiptInput<'_>,
     target: TargetReceiptMetadata,
 ) -> Result<String> {
-    record_receipt_inner(ctx, input, Some(target), None)
+    record_receipt_inner(ctx, input, Some(target), None, ReceiptPublication::Finalize)
 }
 
+/// Cancellation stops optional enrichment; publication still gets a bounded
+/// chance to persist the outcome, including the cancellation itself.
 pub(crate) fn record_receipt_with_cancellation(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    record_receipt_inner(ctx, input, None, Some(cancelled))
+    record_receipt_inner(ctx, input, None, Some(cancelled), ReceiptPublication::Finalize)
 }
 
+/// For rollback-sensitive operations, cancellation aborts publication too.
 pub(crate) fn record_receipt_with_cancellation_until(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
     cancelled: &dyn Fn() -> bool,
     deadline: std::time::Instant,
 ) -> Result<String> {
-    record_receipt_inner_until(ctx, input, None, Some(cancelled), deadline, cancelled)
+    record_receipt_inner(
+        ctx,
+        input,
+        None,
+        Some(cancelled),
+        ReceiptPublication::Cancellable { deadline, cancelled },
+    )
+}
+
+enum ReceiptPublication<'a> {
+    Finalize,
+    Cancellable {
+        deadline: std::time::Instant,
+        cancelled: &'a dyn Fn() -> bool,
+    },
+}
+
+impl ReceiptPublication<'_> {
+    fn lock_budget(&self) -> (std::time::Instant, &dyn Fn() -> bool) {
+        match self {
+            Self::Finalize => (
+                std::time::Instant::now() + journal::RECEIPT_LOCK_TIMEOUT,
+                &|| false,
+            ),
+            Self::Cancellable { deadline, cancelled } => (*deadline, *cancelled),
+        }
+    }
 }
 
 fn record_receipt_inner(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
     target: Option<TargetReceiptMetadata>,
-    cancelled: Option<&dyn Fn() -> bool>,
-) -> Result<String> {
-    record_receipt_inner_with_writer(
-        ctx,
-        input,
-        target,
-        cancelled,
-        || current_session(ctx),
-        |receipt| with_receipt_journal_writer(ctx, |writer| writer.append(receipt)),
-    )
-}
-
-fn record_receipt_inner_until(
-    ctx: &RepoContext,
-    input: ReceiptInput<'_>,
-    target: Option<TargetReceiptMetadata>,
-    cancelled: Option<&dyn Fn() -> bool>,
-    deadline: std::time::Instant,
-    lock_cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    record_receipt_inner_with_writer(
-        ctx,
-        input,
-        target,
-        cancelled,
-        || super::session_pointer::read_with_cancellation_until(ctx, lock_cancelled, deadline),
-        |receipt| {
-            with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
-                writer.append(receipt)
-            })
-        },
-    )
-}
-
-fn record_receipt_inner_with_writer(
-    ctx: &RepoContext,
-    input: ReceiptInput<'_>,
-    target: Option<TargetReceiptMetadata>,
-    cancelled: Option<&dyn Fn() -> bool>,
-    current_session: impl FnOnce() -> Result<Option<String>>,
-    append: impl FnOnce(&ReceiptRecord) -> Result<()>,
+    enrichment_cancelled: Option<&dyn Fn() -> bool>,
+    publication: ReceiptPublication<'_>,
 ) -> Result<String> {
     let mut git_metadata = receipt_git_metadata(
         ctx,
         input.collect_git_metadata,
         input.collect_worktree_fingerprint,
-        cancelled,
+        enrichment_cancelled,
     );
     if let Some(override_result) = input.worktree_fingerprint_override {
         match override_result {
@@ -224,12 +214,19 @@ fn record_receipt_inner_with_writer(
         },
     );
     let root_spellings = repository_root_spellings(ctx.root());
+    // All publication locks share one budget. Ordinary finalization starts it
+    // after optional enrichment; transactions retain their caller's deadline.
+    let (deadline, lock_cancelled) = publication.lock_budget();
     let receipt = ReceiptRecord {
         target_freshness,
         id: new_id("receipt"),
         session_id: match input.session_override {
             Some(session_id) => Some(session_id),
-            None => current_session()?,
+            None => super::session_pointer::read_with_cancellation_until(
+                ctx,
+                lock_cancelled,
+                deadline,
+            )?,
         },
         plan_id: input.plan_id,
         tool_name: input.tool_name.to_string(),
@@ -276,7 +273,9 @@ fn record_receipt_inner_with_writer(
             .map(|value| redact_repository_root(&value, &root_spellings)),
     };
     let receipt_id = receipt.id.clone();
-    append(&receipt)?;
+    with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
+        writer.append(&receipt)
+    })?;
     Ok(receipt_id)
 }
 

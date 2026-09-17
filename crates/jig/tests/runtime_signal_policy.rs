@@ -11,6 +11,9 @@ use wait_timeout::ChildExt;
 
 use fs4::fs_std::FileExt;
 
+#[path = "runtime_signal_policy/receipt.rs"]
+mod receipt;
+
 #[test]
 fn state_diagnose_keeps_native_sigint_instead_of_installing_an_unused_observer() {
     let temp = tempdir().unwrap();
