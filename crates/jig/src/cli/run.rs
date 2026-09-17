@@ -231,6 +231,12 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
+            if let Some(super::InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
+                if opts.commands {
+                    bail!("--commands cannot be combined with an info subject");
+                }
+                return freshness::run(freshness, json_output);
+            }
             if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
@@ -249,7 +255,9 @@ fn run_command(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let request = opts.subject.map(|subject| match subject {
-                super::InfoCommand::GoVersion => unreachable!("handled above"),
+                super::InfoCommand::GoVersion | super::InfoCommand::Freshness(_) => {
+                    unreachable!("handled above")
+                }
                 super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
                 super::InfoCommand::Components => crate::repository::InspectRequest::Components,
                 super::InfoCommand::Component { id } => {
@@ -757,6 +765,7 @@ fn dispatch_runtime_command(
 }
 
 mod argument_parsing;
+mod freshness;
 pub(super) use argument_parsing::*;
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;

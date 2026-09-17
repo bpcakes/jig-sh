@@ -49,6 +49,19 @@ pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+pub(crate) fn optional_cargo_command(command: &str, label: &str) -> String {
+    let skip_prefix = crate::CARGO_SKIP_OUTPUT_PREFIX;
+    let skip_message = quote(&format!("{skip_prefix}{label}."));
+    // Runtime command dispatch sets CWD to the repo root, so this guard checks
+    // for a root Cargo workspace without blocking harness-only repos.
+    format!(
+        "{}{command}{}printf '%s\\n' {skip_message}{}",
+        crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
+        crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
+        crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
+    )
+}
+
 pub(crate) fn optional_cargo_command_branches(command: &str) -> Option<(&str, &str)> {
     let body = command.strip_prefix(OPTIONAL_CARGO_COMMAND_PREFIX)?;
     let body = body.strip_suffix(OPTIONAL_CARGO_COMMAND_SUFFIX)?;

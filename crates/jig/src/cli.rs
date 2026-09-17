@@ -504,6 +504,8 @@ pub(crate) struct InfoOpts {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum InfoCommand {
+    /// Preview freshness policies and conservative adoption recommendations.
+    Freshness(FreshnessOpts),
     /// Print the highest Go module toolchain selector used by managed CI.
     #[command(name = "go-version", hide = true)]
     GoVersion,
@@ -521,6 +523,25 @@ pub(crate) enum InfoCommand {
     Profiles,
     /// Inspect one checked-in profile.
     Profile { id: String },
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct FreshnessOpts {
+    /// Limit the preview to an exact component:action target (repeatable).
+    #[arg(long = "target")]
+    pub(crate) targets: Vec<jig_contract::TargetId>,
+    /// Assert selected command checks are independent of staging, commits and branches.
+    #[arg(long, requires = "targets")]
+    pub(crate) assert_worktree: bool,
+    /// Assert the reviewed inputs cover every repository file selected checks read.
+    #[arg(long, requires = "targets")]
+    pub(crate) assert_exhaustive: bool,
+    /// Add a repository-relative input glob to each explicitly selected check.
+    #[arg(long = "input", requires = "assert_exhaustive")]
+    pub(crate) inputs: Vec<String>,
+    /// Print a paired unified patch; with --json, include it in the report.
+    #[arg(long)]
+    pub(crate) patch: bool,
 }
 
 #[derive(Args, Debug)]

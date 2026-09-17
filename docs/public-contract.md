@@ -50,6 +50,22 @@ Existing complete authored models remain authoritative during readoption and
 update; selection flags on those models fail with guidance to edit `.jig.toml`.
 
 
+`scripts/jig info freshness` is a read-only CLI adoption preview with runtime-owned
+`schema_version: 1` JSON. Each `targets` entry has `target`, `current`, `proposed`,
+`reason`, `inputs`, `proposed_inputs` and `exhaustive_requires_owner_assertion`;
+`changed_targets` identifies proposed authority changes. Repeat exact `--target
+component:action` selectors to narrow the report. `--assert-worktree` and
+`--assert-exhaustive` require explicit targets and record selected owner assertions
+as declared policy; `--input` requires the exhaustive assertion and appends unique
+patterns. Assertions are restricted to read-only non-native checks. No assertion
+proves installed tools, ambient environment or live services. `--patch` emits a
+paired unified diff for `.jig.toml` and `.agent/jig-contract.json` (an empty diff
+for a no-op); with `--json`, it adds the string `patch` to the report. The preview
+executes no configured action and writes no repository files. Patch generation
+and assertions require epoch 8 or later. Existing inspection projections and MCP
+tools are unchanged. See [freshness adoption](target-freshness-integration.md#adopt-scoped-freshness)
+for qualification boundaries and the review/apply workflow.
+
 Agent-guide check JSON keeps `missing_guides` as an empty compatibility field in this contract version and includes `missing_guides_note` to explain that placeholder backend-level `AGENTS.md` files are no longer required. Existing Rust crate and Go package guide files are validated when present. Consumers should stop treating `missing_guides` as the guide-coverage gate; use `missing_sections` and `missing_entry_ref` for existing-guide quality issues.
 
 Dev proxy and vault JSON are also runtime-owned. Proxy status may include machine-local health fields such as `pid`, `pid_alive`, `pid_observation`, `health_pid`, `handshake_ok`, `pid_matches_proxy`, `running`, listener addresses, and route URLs; `pid_alive` means positively observed alive while `pid_observation` preserves an `alive`, `absent`, or `uncertain` result. Status and listing commands may perform a loopback HTTP health probe to populate those fields. Strict cross-machine automation should rely on the stable generated command contract instead of treating those runtime diagnostics as a contract schema.
@@ -596,8 +612,11 @@ unreleased freshness and source-state work into one release epoch.
 ### Contract epoch 8: working-file receipt reuse
 
 Epoch 8 adds optional `ActionSpec.source_state` with values `git` and `worktree`.
-Omission means `git`; generated and inherited actions explicitly retain this
-conservative default with ordinary field provenance. Authored configuration and
+Omission means `git`. Newly generated exact root Cargo formatting checks
+(including Jig’s canonical optional-Cargo guard) receive inferred `worktree`
+policy; unknown commands retain `git`. Input coverage remains `whole_repository`
+unless explicitly owned as exhaustive. Existing saved Git policies remain
+unchanged by ordinary update/recopy; use `info freshness` to preview adoption. Authored configuration and
 the resolved manifest must agree on the defaulted value. Recopy preserves an
 explicit authored value and its provenance. Both values are rejected in pre-8
 source and manifest actions, including an explicitly written `git` default.

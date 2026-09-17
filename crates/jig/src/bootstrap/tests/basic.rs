@@ -1,4 +1,6 @@
 use super::*;
+
+mod freshness_adoption;
 use crate::test_env::CurrentDirGuard;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

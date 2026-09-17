@@ -2,7 +2,7 @@ use super::*;
 use crate::context::RepoContext;
 
 #[test]
-fn freshness_epoch_defaults_conservatively_and_preserves_authored_assertions() {
+fn freshness_epoch_keeps_git_defaults_and_preserves_authored_assertions() {
     let template = live_template_source();
     let answers = rust_render_answers(RepositoryProjectionHint::RustWorkspace);
     let previous = render_context(&template, &answers, Some(7)).unwrap();
@@ -152,7 +152,10 @@ fn epoch_eight_loader_normalizes_omitted_source_state_but_rejects_disagreement()
         .as_array()
         .unwrap()
         .iter()
-        .position(|action| action["runner"]["kind"].as_str() == Some("shell"))
+        .position(|action| {
+            action["runner"]["kind"].as_str() == Some("shell")
+                && action["source_state"].as_str() == Some("git")
+        })
         .unwrap();
     source["repository"]["actions"].as_array_mut().unwrap()[index]
         .as_table_mut()
