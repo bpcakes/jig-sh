@@ -116,9 +116,14 @@ fn record_receipt_inner(
     target: Option<TargetReceiptMetadata>,
     cancelled: Option<&dyn Fn() -> bool>,
 ) -> Result<String> {
-    record_receipt_inner_with_writer(ctx, input, target, cancelled, |receipt| {
-        with_receipt_journal_writer(ctx, |writer| writer.append(receipt))
-    })
+    record_receipt_inner_with_writer(
+        ctx,
+        input,
+        target,
+        cancelled,
+        || current_session(ctx),
+        |receipt| with_receipt_journal_writer(ctx, |writer| writer.append(receipt)),
+    )
 }
 
 fn record_receipt_inner_until(
@@ -129,11 +134,18 @@ fn record_receipt_inner_until(
     deadline: std::time::Instant,
     lock_cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    record_receipt_inner_with_writer(ctx, input, target, cancelled, |receipt| {
-        with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
-            writer.append(receipt)
-        })
-    })
+    record_receipt_inner_with_writer(
+        ctx,
+        input,
+        target,
+        cancelled,
+        || super::session_pointer::read_with_cancellation_until(ctx, lock_cancelled, deadline),
+        |receipt| {
+            with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
+                writer.append(receipt)
+            })
+        },
+    )
 }
 
 fn record_receipt_inner_with_writer(
@@ -141,6 +153,7 @@ fn record_receipt_inner_with_writer(
     input: ReceiptInput<'_>,
     target: Option<TargetReceiptMetadata>,
     cancelled: Option<&dyn Fn() -> bool>,
+    current_session: impl FnOnce() -> Result<Option<String>>,
     append: impl FnOnce(&ReceiptRecord) -> Result<()>,
 ) -> Result<String> {
     let mut git_metadata = receipt_git_metadata(
@@ -216,7 +229,7 @@ fn record_receipt_inner_with_writer(
         id: new_id("receipt"),
         session_id: match input.session_override {
             Some(session_id) => Some(session_id),
-            None => current_session(ctx)?,
+            None => current_session()?,
         },
         plan_id: input.plan_id,
         tool_name: input.tool_name.to_string(),

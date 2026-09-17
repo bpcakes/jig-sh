@@ -265,6 +265,15 @@ wait
 
 #[test]
 fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
+    assert_loop_attempt_repair_cancels_at_lock(false);
+}
+
+#[test]
+fn loop_attempt_repair_cancels_while_waiting_for_session_pointer() {
+    assert_loop_attempt_repair_cancels_at_lock(true);
+}
+
+fn assert_loop_attempt_repair_cancels_at_lock(session_pointer: bool) {
     let temp = tempdir().unwrap();
     write_loop_signal_fixture(temp.path());
     let cache = temp.path().join(".agent/.cache/loop");
@@ -293,12 +302,19 @@ fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
     let state = temp.path().join(".agent/state");
     fs::create_dir_all(&state).unwrap();
     let receipts_path = state.join("receipts.jsonl");
+    fs::write(&receipts_path, b"").unwrap();
+    let lock_path = if session_pointer {
+        temp.path()
+            .join(".agent/.cache/jig-current-session.txt.lock")
+    } else {
+        receipts_path.clone()
+    };
     let receipt_lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&receipts_path)
+        .open(&lock_path)
         .unwrap();
     receipt_lock.lock_exclusive().unwrap();
 
@@ -339,7 +355,7 @@ fn loop_attempt_repair_rolls_back_before_redelivering_sigint() {
         panic!("loop clear-attempt did not commit provisional attempt state");
     }
 
-    // SAFETY: `child.id()` is the live Jig process blocked at the receipt lock.
+    // SAFETY: `child.id()` is the live Jig process blocked during receipt publication.
     assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
     let status = child
         .wait_timeout(Duration::from_secs(3))

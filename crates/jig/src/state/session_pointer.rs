@@ -2,9 +2,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
 
 use crate::cancellation::ensure_status_collection_active;
@@ -22,12 +22,28 @@ pub(super) fn read_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<String>> {
+    read_inner(ctx, cancelled, None)
+}
+
+pub(super) fn read_with_cancellation_until(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+    deadline: Instant,
+) -> Result<Option<String>> {
+    read_inner(ctx, cancelled, Some(deadline))
+}
+
+fn read_inner(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+    deadline: Option<Instant>,
+) -> Result<Option<String>> {
     let pointer_path = ctx.current_session_path();
     let lock_path = state_lock_path(&pointer_path);
-    ensure_status_collection_active(cancelled)?;
+    ensure_read_active(cancelled, deadline)?;
 
     if let Some(lock_file) = open_read_lock(&lock_path)? {
-        return read_locked(ctx, lock_file, &lock_path, cancelled);
+        return read_locked(ctx, lock_file, &lock_path, cancelled, deadline);
     }
 
     // Legacy repositories can have a pointer without the sibling lock. Read
@@ -36,9 +52,9 @@ pub(super) fn read_with_cancellation(
     // pointer, so a lock that appeared during the read sends us through the
     // synchronized path; otherwise the pre-transition snapshot is coherent.
     let current = read_unlocked(ctx)?;
-    ensure_status_collection_active(cancelled)?;
+    ensure_read_active(cancelled, deadline)?;
     if let Some(lock_file) = open_read_lock(&lock_path)? {
-        return read_locked(ctx, lock_file, &lock_path, cancelled);
+        return read_locked(ctx, lock_file, &lock_path, cancelled, deadline);
     }
     Ok(current)
 }
@@ -116,12 +132,15 @@ fn read_locked(
     lock_file: File,
     lock_path: &Path,
     cancelled: &dyn Fn() -> bool,
+    deadline: Option<Instant>,
 ) -> Result<Option<String>> {
     loop {
-        ensure_status_collection_active(cancelled)?;
+        ensure_read_active(cancelled, deadline)?;
         match FileExt::try_lock_shared(&lock_file) {
             Ok(true) => break,
-            Ok(false) => thread::sleep(LOCK_RETRY_DELAY),
+            Ok(false) => thread::sleep(deadline.map_or(LOCK_RETRY_DELAY, |deadline| {
+                LOCK_RETRY_DELAY.min(deadline.saturating_duration_since(Instant::now()))
+            })),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => {
                 return Err(error).with_context(|| {
@@ -133,8 +152,16 @@ fn read_locked(
             }
         }
     }
-    ensure_status_collection_active(cancelled)?;
+    ensure_read_active(cancelled, deadline)?;
     finish_locked(read_unlocked(ctx), &lock_file, lock_path)
+}
+
+fn ensure_read_active(cancelled: &dyn Fn() -> bool, deadline: Option<Instant>) -> Result<()> {
+    ensure_status_collection_active(cancelled)?;
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        bail!("Timed out waiting for current-session lock before its operation deadline");
+    }
+    Ok(())
 }
 
 fn finish_locked<T>(result: Result<T>, lock_file: &File, lock_path: &Path) -> Result<T> {
