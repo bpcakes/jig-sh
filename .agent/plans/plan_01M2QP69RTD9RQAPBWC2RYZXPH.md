@@ -1,0 +1,1 @@
+Implement conservative qualification, synchronized adoption preview/patch, qualified generated defaults, and behavioral reuse validation. Epic jig-sh-0zi8; plan docs/plans/scoped-freshness-adoption.md.
