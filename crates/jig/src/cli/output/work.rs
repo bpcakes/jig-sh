@@ -79,8 +79,12 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             value_str(value, "target_validation_receipt_id").unwrap_or("none")
         ));
         for target in target_evidence {
+            let origin = value_str(target, "original_plan_id")
+                .filter(|original| *original != plan_id)
+                .map(|original| format!(", original plan {original}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "  - {}:{}: {} ({}), receipt {}, run {}",
+                "  - {}:{}: {} ({}), receipt {}, run {}{origin}",
                 value_str(&target["target"], "component").unwrap_or("?"),
                 value_str(&target["target"], "action").unwrap_or("?"),
                 value_str(target, "status").unwrap_or("unknown"),

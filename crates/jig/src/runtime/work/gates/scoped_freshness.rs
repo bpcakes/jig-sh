@@ -60,13 +60,14 @@ impl ScopedGateFreshness {
             let proof_started = std::time::Instant::now();
             let invocations =
                 default_invocations(ctx, catalog, &required, plan_id, baseline, budget)?;
-            let originals = OriginalReceiptIndex::open_for_plan(
+            let originals = OriginalReceiptIndex::open_for_work_reuse(
                 &ctx.state_file("receipts.jsonl"),
                 plan_id,
+                &crate::repository::plan_independent_targets(catalog, &required),
                 budget,
             )?;
             let mut validator =
-                OriginalProofValidator::new(originals, plan_id, crate::state::now_ms());
+                OriginalProofValidator::for_work_reuse(originals, crate::state::now_ms());
             let mut targets = BTreeMap::new();
             for target in &required {
                 budget.ensure_active()?;

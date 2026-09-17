@@ -19,6 +19,7 @@ struct TargetEvidenceEvaluation {
     scoped: Option<TargetFreshness>,
     target: TargetId,
     run_id: Option<String>,
+    original_plan_id: Option<String>,
     started_at_ms: Option<u64>,
     outcome: GateOutcome,
     receipt: EvaluatedReceipt,
@@ -49,6 +50,7 @@ impl TargetEvidenceEvaluation {
             "status": self.outcome.as_str(),
             "receipt_id": receipt.receipt_id,
             "run_id": self.run_id,
+            "original_plan_id": self.original_plan_id,
             "exit_status": receipt.exit_status,
             "started_at_ms": self.started_at_ms,
             "ended_at_ms": receipt.ended_at_ms,
@@ -82,6 +84,7 @@ impl TargetEvidenceEvaluation {
             status: self.outcome.as_str().to_string(),
             receipt_id: receipt.receipt_id.clone(),
             run_id: self.run_id.clone(),
+            original_plan_id: self.original_plan_id.clone(),
             exit_status: receipt.exit_status,
             ended_at_ms: receipt.ended_at_ms,
             config_digest: self.config_digest.clone(),
@@ -166,6 +169,7 @@ impl EvidenceGateEvaluation {
                 scoped: scoped_target,
                 target,
                 run_id: receipt.and_then(|receipt| receipt.run_id.clone()),
+                original_plan_id: receipt.and_then(|receipt| receipt.plan_id.clone()),
                 started_at_ms: receipt.map(|receipt| receipt.started_at_ms),
                 outcome,
                 receipt: evaluated_receipt,
@@ -595,7 +599,7 @@ fn aggregate_evidence_freshness(targets: &[TargetEvidenceEvaluation]) -> GateFre
 const fn evidence_freshness_reason(freshness: GateFreshness) -> &'static str {
     match freshness {
         GateFreshness::Fresh => "all required target receipts match current inputs",
-        GateFreshness::Missing => "one or more required targets have no receipt in this work plan",
+        GateFreshness::Missing => "one or more required targets have no eligible receipt",
         GateFreshness::Stale => "one or more required target receipts are stale",
         GateFreshness::Unknown => "freshness is unknown for one or more required targets",
         GateFreshness::Unsupported => {
@@ -672,9 +676,7 @@ fn scoped_freshness_reason(result: &TargetFreshness) -> &'static str {
         TargetFreshnessStatus::Fresh => {
             "original receipt matches current target authority and valid dependency proof"
         }
-        TargetFreshnessStatus::Missing => {
-            "no original receipt exists for this target in this work plan"
-        }
+        TargetFreshnessStatus::Missing => "no eligible original receipt exists for this target",
         TargetFreshnessStatus::Unsupported => {
             "receipt authority requires a compatible freshness reader"
         }

@@ -1152,28 +1152,41 @@ originals needed to prevent exposing an older pass. Repositories still on pre-`E
 epochs retain their existing time rules; an old consumer must reject epoch `E` rather than silently
 ignore inherited validity. `.4.3` must exercise each listed consumer.
 
-For each required gate target, select its latest original receipt within the
-exact same work plan, using qh4's deterministic receipt ordering. Select before
-testing validity or success: a newer failure, unknown/stale/expired receipt, or
-unusable authority must block instead of exposing an older pass. Cross-plan
-receipts are ineligible.
-Uncertain journal ordering, conflicting IDs required by selected or dependency
-originals, or exhausted receipt index bounds also block. Evaluate each selected receipt against current authority
-and time separately; a profile passes when all required targets pass. Never
-require one complete run, invent a shared run ID, copy a pass into a retry receipt,
-or make a reuse chain the source of proof. Report the original receipt/run IDs
-per target. A summary shared run ID is absent when the selected runs differ.
+For each required plan-independent gate target on epoch 8 and later, select its latest
+original receipt across the repository using deterministic `(ended_at_ms, receipt_id)`
+ordering. The execution's work-plan ID is provenance, not the consuming plan's
+identity. Select before testing validity or success: a newer failure,
+unknown/stale/expired receipt, or unusable authority must block instead of exposing an
+older pass. Receipts from other or closed plans are eligible only when their complete
+original proof and current required authority match. Pre-8 target selection remains
+plan-local. Uncertain journal ordering, conflicting IDs required by selected or
+dependency originals, or exhausted receipt index bounds also block. Evaluate each
+selected receipt against current authority and time separately; a profile passes when
+all required targets pass. Never require one complete run, invent a shared run ID,
+copy a pass into a retry receipt, or make a reuse chain the source of proof. Report
+the original receipt/run IDs per target, together with `original_plan_id`. A summary
+shared run ID is absent when the selected runs differ. A work-check validation batch
+belongs to the consuming plan and references those originals; it never copies an
+executed pass. Dependency references still attest the original execution plan, and all
+edges within an original dependency proof retain their same-plan requirement. Native
+runners and their transitive dependents keep plan-local selection. Their prepared
+authority (including file-budget comparison and work-plan ID) is unchanged, and a
+foreign native result cannot displace a current local result. Existing receipt schemas
+and history are unchanged; older readers retain plan-local reuse.
 
-For example, independent `api:lint` and `web:test` targets run in `R1` under work
-plan `P`: lint passes, test fails. An unchanged-input targeted retry of test in
-`R2` succeeds. The profile may use lint's original `R1` receipt and test's original
-`R2` receipt under `P`, if both identities and time boundaries remain valid.
-A later test failure in `R3` blocks the profile. Retrying under another plan does
-not repair `P`. A dependency's source or runner change invalidates the dependent
-receipt even when that dependency's own repair succeeds; the dependent needs
-fresh execution too. Archive must retain the selected originals, applicable
-dependency execution/reuse evidence, and newer blocking evidence needed to
-preserve selection; archiving cannot reveal an older pass or manufacture a common run.
+For example, independent `api:lint` and `web:test` targets run in `R1` under work plan
+`P`: lint passes, test fails. An unchanged-input targeted retry of test in `R2`
+succeeds. The profile may use lint's original `R1` receipt and test's original `R2`
+receipt under `P`, if both identities and time boundaries remain valid. A later test
+failure in `R3`, including one under another plan, blocks the profile. A later
+successful retry under another plan can repair `P` only if it proves the same
+currently required authority and validity. A dependency's source or runner change
+invalidates the dependent receipt even when that dependency's own repair succeeds; the
+dependent needs fresh execution too. Archive must retain repository-wide newest
+configured plan-independent target outcomes even when no plan is open, plus existing
+open-plan protections, applicable dependency execution/reuse evidence, and newer
+blocking evidence needed to preserve selection; archiving cannot reveal an older pass
+or manufacture a common run.
 
 Whole-repository execution safety is unchanged. Submitted plans still bind and
 revalidate the complete repository source and execution authority; any source
@@ -1234,7 +1247,7 @@ receipts:
 | Exceed collection limits, cancel, race source reads, fail Git enumeration, or require ignored/unobservable inputs | Unknown, without a digest of partial results |
 | Read an old receipt or a newer unsupported identity schema | Readable legacy metadata is unknown; unsupported identity is unsupported; rerun with a compatible runtime |
 | Read a pre-`E` receipt without new metadata in an epoch-`E` repository, even with matching legacy digests | Unknown with `legacy_metadata`; only a repository still on a pre-`E` epoch may use legacy comparison rules |
-| Retry one independent failed target successfully under the same plan with unchanged authority | Profile passes from original mixed-run receipts; newer failures/unknowns and cross-plan retries still block |
+| Retry one independent failed target successfully under any plan with unchanged authority | Profile passes from original mixed-run receipts; newer failures/unknowns still block, and native prepared plan authority must match |
 | A dependency not explicitly required by the gate has a newer failed receipt with unchanged authority | Its dependent's original successful execution/reuse proof remains eligible; if that proof is absent the dependent is unknown |
 | The same dependency is also a required gate target | Its latest missing/failed/unknown receipt blocks the gate, independently of its dependent's receipt |
 | A dependency proof entry has no original receipt, or names a failed original | The dependent is unknown with `dependency_proof_missing` or `dependency_proof_invalid`; matching dependency digests cannot supply proof |

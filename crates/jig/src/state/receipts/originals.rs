@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, Metadata};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -26,6 +26,8 @@ struct OriginalLocation {
 /// loads each required original once and charges its repeated read explicitly.
 pub(crate) struct OriginalReceiptIndex {
     selection_plan: Option<String>,
+    reusable_targets: BTreeSet<jig_contract::TargetId>,
+    require_latest: bool,
     latest: BTreeMap<jig_contract::TargetId, (u64, String)>,
     path: PathBuf,
     file: Option<File>,
@@ -35,20 +37,34 @@ pub(crate) struct OriginalReceiptIndex {
 
 impl OriginalReceiptIndex {
     pub(crate) fn open(path: &Path, budget: &mut CollectionBudget<'_>) -> CollectionResult<Self> {
-        Self::open_inner(path, None, budget)
+        Self::open_inner(path, None, &BTreeSet::new(), false, budget)
     }
 
+    /// Work reuse selects global outcomes only for plan-independent targets;
+    /// other targets keep the consuming plan's latest outcome.
+    pub(crate) fn open_for_work_reuse(
+        path: &Path,
+        plan_id: &str,
+        reusable_targets: &BTreeSet<jig_contract::TargetId>,
+        budget: &mut CollectionBudget<'_>,
+    ) -> CollectionResult<Self> {
+        Self::open_inner(path, Some(plan_id), reusable_targets, true, budget)
+    }
+
+    #[cfg(test)]
     pub(crate) fn open_for_plan(
         path: &Path,
         plan_id: &str,
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<Self> {
-        Self::open_inner(path, Some(plan_id), budget)
+        Self::open_inner(path, Some(plan_id), &BTreeSet::new(), true, budget)
     }
 
     fn open_inner(
         path: &Path,
         plan_id: Option<&str>,
+        reusable_targets: &BTreeSet<jig_contract::TargetId>,
+        require_latest: bool,
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<Self> {
         budget.ensure_active()?;
@@ -57,6 +73,8 @@ impl OriginalReceiptIndex {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
                     selection_plan: plan_id.map(str::to_owned),
+                    reusable_targets: reusable_targets.clone(),
+                    require_latest,
                     latest: BTreeMap::new(),
                     path: path.into(),
                     file: None,
@@ -120,8 +138,10 @@ impl OriginalReceiptIndex {
                         "original receipt journal contains an empty receipt ID",
                     ));
                 }
-                if (plan_id.is_none() || envelope.plan_id.as_deref() == plan_id)
-                    && let Some(target) = envelope.target
+                if let Some(target) = envelope.target
+                    && (plan_id.is_none()
+                        || envelope.plan_id.as_deref() == plan_id
+                        || reusable_targets.contains(&target))
                 {
                     let candidate = (envelope.ended_at_ms, envelope.id.clone());
                     if latest
@@ -165,6 +185,8 @@ impl OriginalReceiptIndex {
         }
         let index = Self {
             selection_plan: plan_id.map(str::to_owned),
+            reusable_targets: reusable_targets.clone(),
+            require_latest,
             latest,
             path: path.into(),
             file: Some(reader.into_inner()),
@@ -178,11 +200,14 @@ impl OriginalReceiptIndex {
     pub(crate) fn selected_is_current(&self, receipt: &TargetReceiptStatus) -> bool {
         self.selection_plan.as_deref().is_none_or(|plan| {
             receipt.plan_id.as_deref() == Some(plan)
-                && self
-                    .latest
-                    .get(&receipt.target)
-                    .is_some_and(|(_, id)| id == &receipt.receipt_id)
-        })
+                || self.reusable_targets.contains(&receipt.target)
+        }) && (!self.require_latest
+            || self
+                .latest
+                .get(&receipt.target)
+                .is_some_and(|(ended_at_ms, id)| {
+                    *ended_at_ms == receipt.ended_at_ms && id == &receipt.receipt_id
+                }))
     }
 
     fn get_record(
