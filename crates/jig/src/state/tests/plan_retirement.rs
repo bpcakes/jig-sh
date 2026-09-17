@@ -200,9 +200,79 @@ fn plan_owner_session_is_proven_by_the_plan_open_receipt() {
         .as_str()
         .unwrap()
         .to_string();
-    let owned = open_plan(&ctx, "Opened inside a session");
+    let prepared = prepare_plan_open(
+        &ctx,
+        PlanOpenRequest {
+            title: "Opened inside a session".into(),
+            body: Some("Initial body".into()),
+            body_file: None,
+            base: None,
+        },
+    )
+    .unwrap();
+    let owned = plans_open_prepared(&ctx, prepared, Some(session_id.clone())).unwrap()["plan_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     assert_eq!(plan_owner_session(&ctx, &unowned).unwrap(), None);
     assert_eq!(plan_owner_session(&ctx, &owned).unwrap(), Some(session_id));
     assert_eq!(plan_owner_session(&ctx, "plan_missing").unwrap(), None);
+}
+
+#[test]
+fn prepared_plan_open_uses_its_explicit_owner_not_the_ambient_session() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let prepared = prepare_plan_open(
+        &ctx,
+        PlanOpenRequest {
+            title: "Explicit ownership".into(),
+            body: Some("Initial body".into()),
+            body_file: None,
+            base: None,
+        },
+    )
+    .unwrap();
+    let owner = session_start(&ctx).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ambient = session_start(&ctx).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let opened = plans_open_prepared(&ctx, prepared, Some(owner.clone())).unwrap();
+    let plan_id = opened["plan_id"].as_str().unwrap();
+
+    assert_ne!(owner, ambient);
+    assert_eq!(current_session(&ctx).unwrap(), Some(ambient));
+    assert_eq!(plan_owner_session(&ctx, plan_id).unwrap(), Some(owner));
+}
+
+#[test]
+fn conditional_session_end_preserves_a_replacement_current_session() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let expected = session_start(&ctx).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let replacement = session_start(&ctx).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let result = session_end_if_current(&ctx, &expected, Some("cancelled".into())).unwrap();
+
+    assert!(matches!(
+        result,
+        SessionEndIfCurrent::NotCurrent(Some(ref current)) if current == &replacement
+    ));
+    assert_eq!(current_session(&ctx).unwrap(), Some(replacement));
 }

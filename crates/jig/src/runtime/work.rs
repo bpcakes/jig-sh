@@ -11,9 +11,9 @@ use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 use crate::state::{
     DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanDisposition, PlanOpenRequest,
-    PlanRetireRequest, ReceiptListFilter, SessionEndRequest, current_session, decisions_add,
-    plan_owner_session, plans_append, plans_close, plans_open_prepared, plans_retire,
-    prepare_plan_open, receipts_list, session_end, session_start, state_summary_with_cancellation,
+    PlanRetireRequest, ReceiptListFilter, SessionEndIfCurrent, decisions_add, plan_owner_session,
+    plans_append, plans_close, plans_open_prepared, plans_retire, prepare_plan_open, receipts_list,
+    session_end_if_current, session_start, state_summary_with_cancellation,
 };
 
 mod check_schedule;
@@ -131,7 +131,11 @@ pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     // MCP and other runtime callers from leaving an orphan session on failure.
     let plan = prepare_plan_open(ctx, plan)?;
     let session = session_start(ctx)?;
-    let plan = plans_open_prepared(ctx, plan)?;
+    let session_id = session["session_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("session start did not return a session id"))?
+        .to_string();
+    let plan = plans_open_prepared(ctx, plan, Some(session_id))?;
 
     Ok(json!({
         "ok": true,
@@ -191,18 +195,14 @@ pub(in crate::runtime) fn finish_after_required_gates_passed(
     );
     crate::cancellation::ensure_status_collection_active(cancelled)?;
     let plan = plans_close(ctx, (&opts).into())?;
-    let session = match current_session(ctx)? {
-        Some(_) => Some(session_end(
-            ctx,
-            session_end_request_for_finish(opts.outcome.or(opts.resolution)),
-        )?),
-        None => None,
-    };
+    let (session, session_status) =
+        end_owning_session(ctx, &opts.plan_id, opts.outcome.or(opts.resolution))?;
 
     Ok(json!({
         "ok": true,
         "plan": plan,
         "session": session,
+        "session_status": session_status,
     }))
 }
 
@@ -285,7 +285,8 @@ pub(super) fn retire(ctx: &RepoContext, opts: WorkRetireRequest) -> Result<Value
             superseded_by,
         },
     )?;
-    let (session, session_status) = end_owning_session(ctx, &opts.plan_id, disposition)?;
+    let (session, session_status) =
+        end_owning_session(ctx, &opts.plan_id, Some(disposition.as_str().to_string()))?;
 
     Ok(json!({
         "ok": true,
@@ -319,50 +320,12 @@ fn parse_disposition(requested: &str) -> Result<PlanDisposition> {
 fn end_owning_session(
     ctx: &RepoContext,
     plan_id: &str,
-    disposition: PlanDisposition,
+    outcome: Option<String>,
 ) -> Result<(Option<Value>, Value)> {
     let owner = plan_owner_session(ctx, plan_id)?;
-    let current = current_session(ctx)?;
-    match (owner.as_deref(), current.as_deref()) {
-        (Some(owner_id), Some(current_id)) if owner_id == current_id => {
-            let session = session_end(
-                ctx,
-                SessionEndRequest {
-                    session_id: Some(owner_id.to_string()),
-                    outcome: Some(disposition.as_str().to_string()),
-                },
-            )?;
-            Ok((
-                Some(session),
-                json!({
-                    "action": "ended",
-                    "owner_session_id": owner,
-                    "current_session_id": current,
-                    "detail": format!("ended owning session {owner_id}"),
-                }),
-            ))
-        }
-        (Some(owner_id), Some(current_id)) => Ok((
-            None,
-            json!({
-                "action": "left_active",
-                "owner_session_id": owner,
-                "current_session_id": current,
-                "detail": format!(
-                    "left current session {current_id} active; plan {plan_id} is owned by session {owner_id}"
-                ),
-            }),
-        )),
-        (Some(owner_id), None) => Ok((
-            None,
-            json!({
-                "action": "none",
-                "owner_session_id": owner,
-                "current_session_id": Value::Null,
-                "detail": format!("owning session {owner_id} is not the current session"),
-            }),
-        )),
-        (None, current) => Ok((
+    let Some(owner_id) = owner.as_deref() else {
+        let current = crate::state::current_session(ctx)?;
+        return Ok((
             None,
             json!({
                 "action": "left_active",
@@ -371,6 +334,38 @@ fn end_owning_session(
                 "detail": format!(
                     "no durable record proves which session opened plan {plan_id}; no session was ended"
                 ),
+            }),
+        ));
+    };
+
+    match session_end_if_current(ctx, owner_id, outcome)? {
+        SessionEndIfCurrent::Ended(session) => Ok((
+            Some(session),
+            json!({
+                "action": "ended",
+                "owner_session_id": owner,
+                "current_session_id": owner,
+                "detail": format!("ended owning session {owner_id}"),
+            }),
+        )),
+        SessionEndIfCurrent::NotCurrent(Some(current_id)) => Ok((
+            None,
+            json!({
+                "action": "left_active",
+                "owner_session_id": owner,
+                "current_session_id": current_id,
+                "detail": format!(
+                    "left current session {current_id} active; plan {plan_id} is owned by session {owner_id}"
+                ),
+            }),
+        )),
+        SessionEndIfCurrent::NotCurrent(None) => Ok((
+            None,
+            json!({
+                "action": "none",
+                "owner_session_id": owner,
+                "current_session_id": Value::Null,
+                "detail": format!("owning session {owner_id} is not the current session"),
             }),
         )),
     }
@@ -452,11 +447,4 @@ where
     T: DeserializeOwned,
 {
     serde_json::from_value(args).context("Invalid work tool arguments")
-}
-
-const fn session_end_request_for_finish(outcome: Option<String>) -> SessionEndRequest {
-    SessionEndRequest {
-        session_id: None,
-        outcome,
-    }
 }

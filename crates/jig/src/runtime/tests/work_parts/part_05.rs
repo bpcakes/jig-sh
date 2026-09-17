@@ -198,6 +198,71 @@ fn work_retire_ends_only_a_session_that_durable_state_proves_owns_the_plan() {
 }
 
 #[test]
+fn work_finish_also_leaves_an_unrelated_current_session_active() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let first = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Start(crate::cli::WorkStartOpts {
+            title: "ExampleProject plan A".into(),
+            body: Some("A".into()),
+            body_file: None,
+            base: None,
+            print_plan_id: false,
+        })),
+    )
+    .unwrap();
+    let first_plan = first["plan"]["plan_id"].as_str().unwrap().to_string();
+    let first_session = first["session"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let second = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Start(crate::cli::WorkStartOpts {
+            title: "ExampleProject plan B".into(),
+            body: Some("B".into()),
+            body_file: None,
+            base: None,
+            print_plan_id: false,
+        })),
+    )
+    .unwrap();
+    let second_session = second["session"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let output = crate::runtime::work::finish_after_required_gates_passed(
+        &ctx,
+        crate::command::WorkFinishRequest {
+            plan_id: first_plan,
+            resolution: Some("Delivered.".into()),
+            outcome: Some("success".into()),
+        },
+        crate::runtime::work::RequiredGateProof::default(),
+        &|| false,
+    )
+    .unwrap();
+
+    assert_eq!(output["session"], Value::Null);
+    assert_eq!(output["session_status"]["action"], "left_active");
+    assert_eq!(output["session_status"]["owner_session_id"], first_session);
+    assert_eq!(
+        output["session_status"]["current_session_id"],
+        second_session
+    );
+    assert_eq!(
+        crate::state::current_session(&ctx).unwrap(),
+        Some(second_session)
+    );
+}
+
+#[test]
 fn work_retire_appends_a_backward_compatible_close_event_and_receipt() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

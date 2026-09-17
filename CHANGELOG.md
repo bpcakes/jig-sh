@@ -14,7 +14,8 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   plan-close lease, open-state recheck, and linked-run rejection, appends an
   additive `retirement` object to the existing append-only `close` plan event and
   its state receipt, and ends a session only when the plan's open receipt proves
-  that session owns the plan. `work finish` stays evidence-gated and unchanged.
+  that session owns the plan. `work finish` stays evidence-gated and uses the
+  same ownership-safe session teardown.
 
 - Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
   literal-argv, explicit-shell, target-freshness, and working-file-authority

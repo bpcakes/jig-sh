@@ -1,8 +1,13 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io;
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow, bail};
+#[cfg(test)]
+use anyhow::anyhow;
+use anyhow::{Context, Result, bail};
+use fs4::fs_std::FileExt;
+#[cfg(test)]
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -10,6 +15,7 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
+use super::jsonl::state_lock_path;
 use super::jsonl::{
     append_jsonl, read_dashboard_jsonl, read_jsonl, scan_dashboard_jsonl_raw, scan_jsonl_raw,
 };
@@ -27,10 +33,21 @@ pub(crate) fn public_source_path(ctx: &RepoContext) -> String {
     redact_repository_root(ctx.source_path(), &repository_root_spellings(ctx.root()))
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 pub(crate) struct SessionEndRequest {
     pub(crate) session_id: Option<String>,
     pub(crate) outcome: Option<String>,
+}
+
+/// Result of ending a session only if it still owns the current-session slot.
+///
+/// The observed non-matching session is returned from the same locked snapshot
+/// as the comparison, so callers never need to assemble a racy read/check/end
+/// sequence themselves.
+pub(crate) enum SessionEndIfCurrent {
+    Ended(Value),
+    NotCurrent(Option<String>),
 }
 
 pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
@@ -43,8 +60,10 @@ pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
         now_ms(),
         summary.clone(),
     );
-    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
-    write_current_session(ctx, Some(&session_id))?;
+    with_current_session_lock(ctx, FileExt::lock_exclusive, || {
+        append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
+        write_current_session_locked(ctx, Some(&session_id))
+    })?;
 
     let receipt_id = record_successful_state_tool(
         ctx,
@@ -67,22 +86,67 @@ pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Result<Value> {
     ensure_state_layout(ctx)?;
-    let session_id = match request.session_id {
-        Some(id) => id,
-        None => current_session(ctx)?.ok_or_else(|| anyhow!("No active session."))?,
-    };
-    let event = SessionEvent::end(
-        new_id("session-event"),
-        session_id.clone(),
-        now_ms(),
-        request.outcome.clone(),
-    );
-    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
-    if current_session(ctx)?.as_deref() == Some(session_id.as_str()) {
-        write_current_session(ctx, None)?;
+    let outcome = request.outcome;
+    let event = with_current_session_lock(ctx, FileExt::lock_exclusive, || {
+        let current = read_current_session_unlocked(ctx)?;
+        let session_id = request
+            .session_id
+            .clone()
+            .or_else(|| current.clone())
+            .ok_or_else(|| anyhow!("No active session."))?;
+        let event = append_session_end(ctx, session_id, outcome.clone())?;
+        if current.as_deref() == Some(event.session_id()) {
+            write_current_session_locked(ctx, None)?;
+        }
+        Ok(event)
+    })?;
+
+    record_session_end(ctx, event, outcome)
+}
+
+/// End `expected_session_id` iff it is still current, as one synchronized
+/// compare-and-clear transition shared with every current-session writer.
+pub(crate) fn session_end_if_current(
+    ctx: &RepoContext,
+    expected_session_id: &str,
+    outcome: Option<String>,
+) -> Result<SessionEndIfCurrent> {
+    ensure_state_layout(ctx)?;
+    let transition = with_current_session_lock(ctx, FileExt::lock_exclusive, || {
+        let current = read_current_session_unlocked(ctx)?;
+        if current.as_deref() != Some(expected_session_id) {
+            return Ok(Err(current));
+        }
+        let event = append_session_end(ctx, expected_session_id.to_string(), outcome.clone())?;
+        write_current_session_locked(ctx, None)?;
+        Ok(Ok(event))
+    })?;
+
+    match transition {
+        Ok(event) => record_session_end(ctx, event, outcome).map(SessionEndIfCurrent::Ended),
+        Err(current) => Ok(SessionEndIfCurrent::NotCurrent(current)),
     }
+}
+
+fn append_session_end(
+    ctx: &RepoContext,
+    session_id: String,
+    outcome: Option<String>,
+) -> Result<SessionEvent> {
+    let event = SessionEvent::end(new_id("session-event"), session_id, now_ms(), outcome);
+    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
+    Ok(event)
+}
+
+fn record_session_end(
+    ctx: &RepoContext,
+    event: SessionEvent,
+    outcome: Option<String>,
+) -> Result<Value> {
+    let session_id = event.session_id().to_string();
 
     let receipt_id = record_successful_state_tool(
         ctx,
@@ -91,7 +155,7 @@ pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Resu
             args: json!({
                 args::OPERATION: "session_end",
                 "session_id": session_id,
-                "outcome": request.outcome,
+                "outcome": outcome,
             }),
             started_at_ms: event.timestamp_ms(),
             plan_id: None,
@@ -107,6 +171,19 @@ pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Resu
 }
 
 pub(crate) fn current_session(ctx: &RepoContext) -> Result<Option<String>> {
+    let pointer_path = ctx.current_session_path();
+    // Inspection of a never-initialized repository is strictly read-only.
+    // Once either session artifact exists, use the shared lock so readers do
+    // not observe a pointer transition in progress.
+    if !pointer_path.exists() && !state_lock_path(&pointer_path).exists() {
+        return Ok(None);
+    }
+    with_current_session_lock(ctx, FileExt::lock_shared, || {
+        read_current_session_unlocked(ctx)
+    })
+}
+
+fn read_current_session_unlocked(ctx: &RepoContext) -> Result<Option<String>> {
     let path = ctx.current_session_path();
     if !path.exists() {
         return Ok(None);
@@ -424,7 +501,7 @@ fn decision_summary(decision: &DecisionRecord) -> Value {
     })
 }
 
-fn write_current_session(ctx: &RepoContext, session_id: Option<&str>) -> Result<()> {
+fn write_current_session_locked(ctx: &RepoContext, session_id: Option<&str>) -> Result<()> {
     let path = ctx.current_session_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -438,6 +515,48 @@ fn write_current_session(ctx: &RepoContext, session_id: Option<&str>) -> Result<
         }
     }
     Ok(())
+}
+
+fn with_current_session_lock<T>(
+    ctx: &RepoContext,
+    lock: fn(&File) -> io::Result<()>,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let pointer_path = ctx.current_session_path();
+    let lock_path = state_lock_path(&pointer_path);
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "Failed to open current-session lock {}",
+                lock_path.display()
+            )
+        })?;
+    lock(&lock_file).with_context(|| {
+        format!(
+            "Failed to lock current-session state {}",
+            lock_path.display()
+        )
+    })?;
+    let result = operation();
+    let unlock = FileExt::unlock(&lock_file).with_context(|| {
+        format!(
+            "Failed to unlock current-session state {}",
+            lock_path.display()
+        )
+    });
+    match (result, unlock) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
 }
 
 #[cfg(test)]

@@ -77,9 +77,11 @@ pub(crate) use runs::{start_run, start_run_with_event_cursor};
 use sessions::build_summary;
 pub(crate) use sessions::current_session;
 pub(crate) use sessions::{
-    SessionEndRequest, public_source_path, session_end, session_start, state_summary,
+    SessionEndIfCurrent, public_source_path, session_end_if_current, session_start, state_summary,
     state_summary_with_cancellation,
 };
+#[cfg(test)]
+pub(crate) use sessions::{SessionEndRequest, session_end};
 pub(crate) use support::now_ms;
 #[cfg(test)]
 pub(crate) use support::set_test_now_ms;

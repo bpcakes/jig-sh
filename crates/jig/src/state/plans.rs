@@ -83,7 +83,7 @@ pub(crate) enum PlanStatus {
 
 #[cfg(test)]
 pub(crate) fn plans_open(ctx: &RepoContext, request: PlanOpenRequest) -> Result<Value> {
-    plans_open_prepared(ctx, prepare_plan_open(ctx, request)?)
+    plans_open_prepared(ctx, prepare_plan_open(ctx, request)?, None)
 }
 
 pub(crate) fn prepare_plan_open(
@@ -98,7 +98,11 @@ pub(crate) fn prepare_plan_open(
     })
 }
 
-pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) -> Result<Value> {
+pub(crate) fn plans_open_prepared(
+    ctx: &RepoContext,
+    request: PreparedPlanOpen,
+    owner_session_id: Option<String>,
+) -> Result<Value> {
     let plan_id = new_id("plan");
     let plan_path = create_plan_body(ctx, &plan_id, &request.body)?;
 
@@ -123,7 +127,11 @@ pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) 
             }),
             started_at_ms: event.timestamp_ms(),
             plan_id: Some(plan_id.clone()),
-            session_override: None,
+            // A work start already knows the session it created. Never infer
+            // this ownership edge from the mutable repository-global pointer:
+            // another concurrent start may have replaced it by the time the
+            // plan-open receipt is appended.
+            session_override: owner_session_id,
         },
     )?;
 
