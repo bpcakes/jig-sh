@@ -26,8 +26,6 @@ use super::tracker_identity::{
 const SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"jig-work-link-snapshot-v1\0";
 const MAX_EVENT_ID_BYTES: usize = 128;
 const MAX_TITLE_BYTES: usize = 16 * 1024;
-const MAX_DESCRIPTION_BYTES: usize = 256 * 1024;
-const MAX_ACCEPTANCE_CRITERIA_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_WORK_LINK_RECORD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_JOURNAL_DIAGNOSTIC_SAMPLES: usize = 20;
 
@@ -385,17 +383,22 @@ fn validate_snapshot_text(
     if title.is_empty() || title.len() > MAX_TITLE_BYTES || title.contains('\0') {
         bail!("work-link snapshot title must contain 1 through {MAX_TITLE_BYTES} bytes and no NUL");
     }
-    if description.len() > MAX_DESCRIPTION_BYTES || description.contains('\0') {
-        bail!(
-            "work-link description must contain at most {MAX_DESCRIPTION_BYTES} bytes and no NUL"
-        );
+    if description.contains('\0') {
+        bail!("work-link description must contain no NUL");
     }
-    if acceptance_criteria.len() > MAX_ACCEPTANCE_CRITERIA_BYTES
-        || acceptance_criteria.contains('\0')
+    if acceptance_criteria.contains('\0') {
+        bail!("work-link acceptance criteria must contain no NUL");
+    }
+    // Reject text that cannot possibly fit before hashing it. The writer also
+    // checks the full serialized record, including JSON escaping and metadata.
+    // Separate field limits must not reject content from a supported Beads record.
+    if title
+        .len()
+        .saturating_add(description.len())
+        .saturating_add(acceptance_criteria.len())
+        > MAX_WORK_LINK_RECORD_BYTES
     {
-        bail!(
-            "work-link acceptance criteria must contain at most {MAX_ACCEPTANCE_CRITERIA_BYTES} bytes and no NUL"
-        );
+        bail!("work-link snapshot text exceeds the {MAX_WORK_LINK_RECORD_BYTES}-byte record limit");
     }
     Ok(())
 }

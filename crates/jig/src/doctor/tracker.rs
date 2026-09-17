@@ -34,6 +34,7 @@ pub(super) fn tracker_check(ctx: &RepoContext) -> DoctorCheck {
             "issues": export.len(),
             "supported_operations": ["read_issue_snapshot"],
             "write_authority": false,
+            "freshness": "not_checked",
         })),
         Err(error) => tracker_error(error, config.manual_export_guidance()),
     }
@@ -99,6 +100,7 @@ fn tracker_error(error: BeadsJsonlError, manual_guidance: Option<&str>) -> Docto
         "root": ".beads",
         "profile": INPUT_PROFILE,
         "write_authority": false,
+        "freshness": "not_checked",
     }))
     .with_fix(fix)
 }

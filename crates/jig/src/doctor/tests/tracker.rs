@@ -56,6 +56,7 @@ fn configured_tracker_reads_jsonl_without_process_control() {
         "read_issue_snapshot"
     );
     assert_eq!(result.data["write_authority"], false);
+    assert_eq!(result.data["freshness"], "not_checked");
     assert_eq!(
         fs::read(temp.path().join(".beads/beads.db")).unwrap(),
         database_before
@@ -83,6 +84,7 @@ fn missing_and_ambiguous_exports_have_actionable_failures() {
     let missing = super::super::tracker::tracker_check(&ctx);
     assert!(!missing.ok);
     assert_eq!(missing.status, "missing export");
+    assert_eq!(missing.data["freshness"], "not_checked");
     assert!(missing.fix.unwrap().contains(".beads/issues.jsonl"));
 
     write_issue(temp.path(), ".beads/issues.jsonl");

@@ -10,6 +10,8 @@ use crate::state::jsonl::{
     DurableAppendFailurePoint, JsonlRecordTooLarge, fail_next_durable_append_at,
 };
 
+mod snapshot_compatibility;
+
 fn context() -> (TempDir, RepoContext) {
     let temp = TempDir::new().unwrap();
     crate::test_env::TestRepoBuilder::new(temp.path())
