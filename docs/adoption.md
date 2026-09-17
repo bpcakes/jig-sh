@@ -16,6 +16,17 @@
 
 Before publishing a generated repo contract or wiring long-lived MCP clients to it, review [Public Contract](./public-contract.md) for the stable CLI, MCP, and manifest guarantees.
 
+### Review freshness policy
+
+Use `scripts/jig info freshness` to inspect conservative recommendations and
+`--patch` to preview paired authoring/manifest changes. New recognized Cargo
+formatters use worktree freshness, which survives staging and commits of the
+checked bytes. Existing saved Git policies remain unchanged by ordinary updates.
+Narrow reuse after unrelated edits requires explicit exhaustive input ownership;
+Jig never infers that assertion from affected-file hints. See
+[Adopt scoped freshness](target-freshness-integration.md#adopt-scoped-freshness)
+for exact target selection, custom inputs, review/apply commands and limitations.
+
 ### Review component ownership
 
 The preview lists each component candidate's relative root, proposed ID, evidence,

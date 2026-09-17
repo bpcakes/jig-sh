@@ -12,8 +12,9 @@ to record new evidence. Earlier receipts remain readable but cannot satisfy the
 new epoch's identity. Existing epoch 2–7 repositories keep their prior rules;
 upgrading does not rewrite receipts.
 
-Actions default to `inputs_policy = "whole_repository"` and
-`source_state = "git"`. The first declaration controls path coverage; the second
+Omitted policies mean `inputs_policy = "whole_repository"` and
+`source_state = "git"`. Newly generated, recognized Cargo formatting checks
+receive `source_state = "worktree"`; generated actions never infer exhaustive inputs. The first declaration controls path coverage; the second
 controls whether Git placement itself is an input. Opt into `exhaustive` only
 after auditing the entire input and dependency closure. Opt into `worktree` only
 for commands whose results depend on working files without depending on HEAD,
@@ -31,6 +32,93 @@ includes committed/index state plus HEAD commit and symbolic branch identity.
 Native checks retain Git and prepared comparison authority and reject worktree
 policy. See the [source-state contract](public-contract.md#contract-epoch-8-working-file-receipt-reuse)
 for declaration and compatibility details.
+
+## Adopt scoped freshness
+
+Inspect current and proposed policies without running checks or writing repository files:
+
+```sh
+scripts/jig info freshness
+scripts/jig info freshness --target api:fmt --json
+```
+
+Selectors are exact `component:action` addresses from `info targets`; repeat
+`--target` to select several actions. The report separates current/proposed
+source state and input policy, lists inputs, and gives a reason for each decision.
+Automatic worktree recommendations recognize only root `cargo fmt --all -- --check`
+with no configured environment or action arguments, its literal argv equivalent,
+and Jig's exact generated optional-Cargo guard. Custom scripts, `just`/`make`
+wrappers, tests and lints require owner assessment. Native checks retain their Git
+comparison authority. An explicit saved source policy is not automatically replaced.
+
+For an eligible recommendation, produce a patch:
+
+```sh
+scripts/jig info freshness --target api:fmt --patch > /tmp/jig-freshness.patch
+```
+
+This updates `.jig.toml` and `.agent/jig-contract.json` together in the patch.
+Nothing is applied by Jig. Human-mode `--patch` emits only the unified diff;
+`--json --patch` includes it in the report's `patch` field. An empty patch means
+there is nothing to apply. For a nonempty patch, review it and apply from the
+repository root:
+
+```sh
+git apply --check /tmp/jig-freshness.patch
+git apply /tmp/jig-freshness.patch
+```
+
+Normal `git apply` fails without applying either file when a hunk conflicts.
+Regenerate the preview after concurrent authority edits; do not use partial
+application to split the pair. Repeating the same adoption is a no-op.
+
+To claim narrower reuse for an audited custom check, select its target and make
+the ownership assertions explicitly. For example, after verifying a formatter's
+complete read set, append any missing patterns:
+
+```sh
+scripts/jig info freshness --target api:fmt \
+  --assert-worktree --assert-exhaustive \
+  --input 'scripts/check-format.sh' --input 'fixtures/**/*.source' \
+  --patch > /tmp/jig-freshness.patch
+```
+
+These example patterns are additions, not a universal Rust input list.
+`--assert-worktree` declares independence from Git placement;
+`--assert-exhaustive` declares that the resulting input patterns cover every
+repository file read by the action. Each assertion requires explicit targets
+and deliberately replaces the selected policy with declared provenance.
+`--input` requires `--assert-exhaustive` and appends deduplicated patterns to
+existing inputs; it never removes them. Either assertion can be used separately.
+
+Audit Cargo manifests, lockfiles, toolchain and formatter configuration, custom
+runner scripts, fixtures, generated inputs and transitive dependencies. Cargo
+target paths and Rust `#[path]` modules can use extensions other than `.rs`, so
+`**/*.rs` and existing affected-selection hints do not prove completeness. Keep
+the declaration current when the command's read set changes. Installed tools,
+ambient environment and live services are not attested by these policies.
+
+After applying and reviewing the paired files, record new evidence:
+
+```sh
+scripts/jig work check --plan-id PLAN_ID
+scripts/jig work gates --plan-id PLAN_ID
+scripts/jig work evidence --plan-id PLAN_ID
+```
+
+The configuration change invalidates earlier evidence once; receipts are never
+rewritten. Subsequent staging and commits of unchanged checked files preserve
+worktree evidence. Unrelated source edits preserve it only with exhaustive input
+ownership; whole-repository worktree checks still observe those edits. Included
+content, additions, removals, renames, configuration, runners and dependencies
+still invalidate affected proof. Global configuration authority and the existing
+before/after execution mutation guard remain in force. Required ignored or
+unobservable inputs remain unknown, rather than becoming reusable passes.
+
+Ordinary update/recopy preserves saved Git policies, including old inferred
+values. Missing generated fields may receive current defaults. Explicit policy
+assertions retain the owning action and runner through footprint/capability
+refresh; use this preview to migrate existing saved actions deliberately.
 
 ## Recording and inspection
 
@@ -176,11 +264,12 @@ input/configuration, policy, and native prepared-authority checks. Epoch 8 also
 require complete original freshness proof and effective validity. A scoped
 gate pass alone cannot authorize either operation.
 
-Generated and inherited actions default to `whole_repository` and `git` with
-ordinary field provenance. Recopy preserves explicit exhaustive and worktree
-declarations. Enabling epoch 8 alone asserts neither input completeness nor
-independence from Git state; review the entire dependency closure before opting
-in. Original execution safety remains unchanged even for worktree receipts.
+Generated actions retain `whole_repository` input coverage. Qualified Cargo
+formatting checks receive inferred `worktree` source state; other generated
+checks retain `git`. Recopy preserves saved policies and explicit exhaustive
+declarations. Enabling epoch 8 alone does not establish input completeness;
+review the entire dependency closure before opting in. Original execution
+safety remains unchanged even for worktree receipts.
 
 Archive maintenance streams the required dependency frontier under its existing
 writer lock. It does not spend source inspection quotas, so reaching an

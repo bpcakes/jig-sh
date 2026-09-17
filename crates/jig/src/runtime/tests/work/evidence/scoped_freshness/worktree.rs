@@ -1,5 +1,7 @@
 use super::*;
 
+mod adoption;
+
 fn worktree_fixture(root: &Path, policy: &str, api_source: Option<&str>) -> (RepoContext, String) {
     let ctx = fixture(root, false, true);
     let config_path = root.join(".jig.toml");
