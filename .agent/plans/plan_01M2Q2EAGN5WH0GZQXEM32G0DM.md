@@ -16,9 +16,12 @@ After this work, every work-link scan uses memory bounded by explicit unique-eve
 - [x] (2026-09-17) Replaced ambient tracker child paths with one pinned `.beads` directory capability and descriptor-relative selection/open/re-witness operations.
 - [x] (2026-09-17) Added focused limit, folding, semantic-fingerprint, diagnostic-truncation, and parent-replacement race tests; updated the public resource and filesystem authority contracts.
 - [x] (2026-09-17) Built the development binary and passed the required Linux test, Clippy, formatting, contract, and file-budget gates against the complete implementation worktree.
-- [ ] Validate the exact implementation commit on macOS, update PR #38, and commit/push the final evidence.
+- [x] (2026-09-17) Validated exact implementation commit `09ba9d5e` on macOS 26 arm64: all 32 tracker-filtered tests passed, including the directory-replacement race regression.
+- [x] (2026-09-17) Re-ran the required gates against committed source authority: 4,126 tests, strict Clippy, formatting, contract, and file-budget checks passed.
+- [x] (2026-09-17) Closed structured work successfully after confirming all required evidence was fresh.
+- [x] (2026-09-17) Prepared the final evidence-only closure commit after all implementation acceptance criteria passed.
 
-Restart checkpoint: implementation, focused Linux validation, and the full required work check are complete. The 23 work-link tests, 32 tracker-filtered tests, strict all-target Clippy, formatting, contract, file-budget, and full configured test gate pass. Next, commit/push and validate the exact implementation commit on macOS.
+Restart checkpoint: implementation commit `09ba9d5e` is pushed. Focused Linux and macOS validation and the full required committed-source work check pass, structured work is closed successfully, and the final evidence is ready for delivery.
 
 ## Surprises & Discoveries
 
@@ -53,7 +56,7 @@ Restart checkpoint: implementation, focused Linux validation, and the full requi
 
 ## Outcomes & Retrospective
 
-Implementation is complete. Focused Linux tests and all required repository gates pass; exact-commit macOS validation, commit/push, and PR metadata remain pending.
+The two findings shared a missing-authority-model root cause rather than isolated coding mistakes. Journal projection had record-size bounds but no aggregate state contract; tracker reads validated path text but did not preserve the validated parent identity. The resulting implementation folds the journal under explicit cardinality ceilings and makes `.beads` an opened directory capability for the complete read. Implementation commit `09ba9d5e` passes 4,126 repository tests and all other required gates on Linux, plus all 32 tracker-filtered tests on macOS 26 arm64. The structured work item closed successfully with fresh required evidence.
 
 ## Context and Orientation
 
