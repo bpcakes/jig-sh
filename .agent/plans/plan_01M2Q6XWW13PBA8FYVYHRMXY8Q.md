@@ -14,7 +14,9 @@ Complete the JSONL authority boundary before the staged linking workflow builds 
 - [x] Added nonblocking Unix export acquisition and a deterministic metadata-to-open FIFO replacement regression.
 - [x] Restored the complete pre-rework Runtime State contract, then added only the new work-link and Beads sections.
 - [x] Passed focused work-link and tracker suites, formatting, whitespace validation, and strict all-target Clippy.
-- [ ] Run required repository gates, exact-commit macOS tracker validation, and finish delivery.
+- [x] Passed all required gates against implementation commit `0acdd70e`: 4,132 tests, strict Clippy, formatting, contract, and file budget.
+- [x] Passed all 33 tracker-filtered tests from a clean checkout of `0acdd70e` on macOS 26 arm64, including the FIFO replacement race.
+- [x] Confirmed fresh required evidence and closed structured work successfully; final evidence is ready to push.
 
 ## Decisions
 
@@ -26,3 +28,7 @@ Complete the JSONL authority boundary before the staged linking workflow builds 
 ## Validation
 
 Focused acceptance requires 24 work-link tests and 33 tracker-filtered tests to pass. The FIFO regression must replace a regular export only after the production metadata check and must remain bounded if nonblocking acquisition regresses. Final acceptance also requires formatting, strict all-target Clippy, configured Jig gates, macOS tracker validation, a clean diff, and an updated PR.
+
+## Outcome
+
+The writer now applies the complete projection to candidate bytes while holding the append lock, before durable publication. The tracker now makes leaf acquisition nonblocking before descriptor validation. The documentation fix restores the complete `origin/master` Runtime State section and layers only the new work-link and Beads contracts onto it. Implementation commit `0acdd70e` satisfies all focused, cross-platform, and repository-wide validation.
