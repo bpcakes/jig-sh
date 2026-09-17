@@ -17,12 +17,11 @@ tests must pass.
 - [x] Move producer vocabulary policy out of JSONL structural validation.
 - [x] Remove tracker validation from process-control and signal-retirement ownership.
 - [x] Add regressions and align the public contract.
-- [ ] Run focused and configured checks on Linux and focused tests on macOS.
-- [ ] Commit, push, inspect the PR head, and close structured work.
+- [x] Run focused and configured checks on Linux and focused tests on macOS.
+- [x] Commit, push, inspect the PR head, and close structured work.
 
-Restart checkpoint: implementation and focused Linux validation are complete. Commit the
-implementation, validate that exact commit with configured gates and macOS, then finish
-structured work. There are no blockers.
+Restart checkpoint: all implementation and validation work is complete. Structured work is
+closed; commit and push only the resulting plan/evidence state. There are no blockers.
 
 ## Surprises & Discoveries
 
@@ -50,9 +49,12 @@ structured work. There are no blockers.
 
 ## Outcomes & Retrospective
 
-The parser and Doctor ownership fixes are implemented. The 36 focused tracker tests,
-including both regressions, pass on Linux; strict Clippy and formatting also pass. Full
-configured gates and macOS validation remain unfinished.
+The parser and Doctor ownership fixes are implemented. On Linux, all configured gates
+passed: 4,134 tests, strict Clippy, formatting, contract, and file-budget checks. The 36
+focused tracker tests also passed from a clean detached checkout of the exact implementation
+commit on macOS arm64. Required evidence was fresh at closure. PR #38 was open and mergeable
+at the exact implementation commit, and structured work closed successfully. No functional
+or validation gaps remain.
 
 ## Context and plan of work
 
