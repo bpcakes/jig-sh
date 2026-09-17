@@ -47,8 +47,46 @@ fn parses_top_level_info_command_and_explain_alias() {
     assert!(matches!(
         freshness.command,
         CommandKind::Info(InfoOpts {
-            subject: Some(InfoCommand::Freshness),
+            subject: Some(InfoCommand::Freshness(_)),
             ..
         })
     ));
+}
+
+#[test]
+fn freshness_assertions_require_explicit_targets_and_input_ownership() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "info",
+        "freshness",
+        "--target",
+        "workspace:fmt",
+        "--assert-worktree",
+        "--assert-exhaustive",
+        "--input",
+        "assets/**",
+        "--patch",
+        "--json",
+    ])
+    .unwrap();
+    assert!(cli.json);
+    let CommandKind::Info(InfoOpts {
+        subject: Some(InfoCommand::Freshness(opts)),
+        ..
+    }) = cli.command
+    else {
+        panic!("expected freshness preview");
+    };
+    assert_eq!(opts.targets[0].to_string(), "workspace:fmt");
+    assert!(opts.assert_worktree && opts.assert_exhaustive && opts.patch);
+    assert_eq!(opts.inputs, ["assets/**"]);
+    for args in [
+        vec!["--assert-worktree"],
+        vec!["--assert-exhaustive"],
+        vec!["--target", "workspace:fmt", "--input", "assets/**"],
+        vec!["--target", "workspace:*"],
+    ] {
+        assert!(Cli::try_parse_from(["jig", "info", "freshness"].into_iter().chain(args)).is_err());
+    }
+    assert!(Cli::try_parse_from(["jig", "info", "freshness", "--patch"]).is_ok());
 }

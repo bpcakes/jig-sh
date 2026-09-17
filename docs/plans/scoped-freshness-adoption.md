@@ -6,11 +6,11 @@ Reduce repeated gate execution after staging, commits, and edits outside an owne
 
 - [x] Create feature branch and epic with four dependent tasks.
 - [x] `jig-sh-0zi8.1`: conservative policy recommendations.
-- [ ] `jig-sh-0zi8.2`: read-only preview and synchronized adoption patch.
+- [x] `jig-sh-0zi8.2`: read-only preview and synchronized adoption patch.
 - [ ] `jig-sh-0zi8.3`: qualified generated defaults.
 - [ ] `jig-sh-0zi8.4`: behavioral validation and documentation.
 
-Restart checkpoint: implement task 2 on `feat/agent-velocity-improvements`. Initial checkout was clean at `bed5af6e`. Jig plan: `plan_01M2QP69RTD9RQAPBWC2RYZXPH`, baseline `bed5af6e`. No blocking dependency outside this epic. Build dev runtime before harness commands and set `JIG_DEV_BIN=target/debug/jig`.
+Restart checkpoint: implement task 3 on `feat/agent-velocity-improvements`. Initial checkout was clean at `bed5af6e`. Jig plan: `plan_01M2QP69RTD9RQAPBWC2RYZXPH`, baseline `bed5af6e`. No blocking dependency outside this epic. Build dev runtime before harness commands and set `JIG_DEV_BIN=target/debug/jig`.
 
 ## Surprises & Discoveries
 
@@ -26,7 +26,7 @@ The first review caught an authored-presence bug: validation accepts explicit de
 
 ## Outcomes & Retrospective
 
-Task 1 delivered `info freshness` with conservative recommendations. Five focused qualification/report tests and CLI parsing pass. The backend suite passed 4,095 tests (3 skipped); the initial 4,094-test run also passed its tests but its receipt was correctly rejected because source changed during execution. The stable rerun passed Jig validation. A subsequent report-presence repair passed all five focused tests. Codex-only review converged after two complete passes and one repair round; no exclusions, complete matching fingerprints, final `d26abdb014c86fe57cb72d0f7eb1f5192127615b159533db418c079b6e8a69db`. No unresolved findings. Remaining milestones are unimplemented. Qualification promises repository input ownership, not hermetic toolchain/environment attestation.
+Task 1 delivered `info freshness` with conservative recommendations. Five focused qualification/report tests and CLI parsing pass. The backend suite passed 4,095 tests (3 skipped); the initial 4,094-test run also passed its tests but its receipt was correctly rejected because source changed during execution. The stable rerun passed Jig validation. A subsequent report-presence repair passed all five focused tests. Codex-only review converged after two complete passes and one repair round; no exclusions, complete matching fingerprints, final `d26abdb014c86fe57cb72d0f7eb1f5192127615b159533db418c079b6e8a69db`. No unresolved findings. Task 2 added exact `--target` selection, explicit `--assert-worktree` / `--assert-exhaustive` ownership, appended `--input` patterns and `--patch` output to `info freshness`. Fourteen adoption tests, two CLI tests, Clippy and the Jig fmt check pass. The patch preserves TOML comments and unrelated fields, validates both projections, rejects stale loaded authority, applies with git apply, and is idempotent. The paired-conflict regression proves no partial application. One complete Codex review converged with no findings; fingerprint `21b0f2f288e63bbcd1cf28e164e36b447d604563c10af1c888c800b6609e9702`, no exclusions. Remaining milestones are unimplemented. Qualification promises repository input ownership, not hermetic toolchain/environment attestation.
 
 ## Context and interfaces
 

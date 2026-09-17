@@ -7,56 +7,11 @@ use jig_contract::{
 };
 use serde::Serialize;
 
-pub(crate) fn report(ctx: &crate::context::RepoContext) -> anyhow::Result<serde_json::Value> {
-    let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
-    let recommendations = catalog
-        .actions()
-        .map(|action| {
-            let action = ctx
-                .authored_action_specs()
-                .and_then(|actions| actions.iter().find(|source| source.target == action.target))
-                .unwrap_or(action);
-            let command = match &action.runner {
-                ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
-                    Some(ctx.command_for_key(command)?)
-                }
-                _ => None,
-            };
-            Ok(recommend(ctx.contract_version(), action, command))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "command": "info freshness",
-        "schema_version": 1,
-        "contract_version": ctx.contract_version(),
-        "targets": recommendations,
-        "input_ownership": "Exhaustive inputs require owner review of every repository file the action reads, including nonstandard source paths, configuration, fixtures and toolchain pins. Command recognition alone does not establish completeness."
-    }))
-}
-
-pub(crate) fn format_report(value: &serde_json::Value) -> String {
-    let mut lines = vec![format!(
-        "Jig freshness (contract v{})",
-        value["contract_version"]
-    )];
-    if let Some(targets) = value["targets"].as_array() {
-        for target in targets {
-            lines.push(format!(
-                "  {}:{}: {} / {} -> {} / {} ({})",
-                target["target"]["component"].as_str().unwrap_or("?"),
-                target["target"]["action"].as_str().unwrap_or("?"),
-                target["current"]["source_state"].as_str().unwrap_or("?"),
-                target["current"]["inputs_policy"].as_str().unwrap_or("?"),
-                target["proposed"]["source_state"].as_str().unwrap_or("?"),
-                target["proposed"]["inputs_policy"].as_str().unwrap_or("?"),
-                target["reason"].as_str().unwrap_or("?")
-            ));
-        }
-    }
-    lines.push(value["input_ownership"].as_str().unwrap_or_default().into());
-    lines.join("\n")
-}
+mod patch;
+mod report;
+#[cfg(test)]
+use report::report;
+pub(crate) use report::{Request, format_report, preview};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Policy {
@@ -83,6 +38,7 @@ pub(crate) enum Reason {
     AlreadyWorktree,
     KnownFormatter,
     UnknownCommand,
+    OwnerAssertion,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +48,7 @@ pub(crate) struct Recommendation {
     pub(crate) proposed: Policy,
     pub(crate) reason: Reason,
     pub(crate) inputs: Vec<String>,
+    pub(crate) proposed_inputs: Vec<String>,
     pub(crate) exhaustive_requires_owner_assertion: bool,
 }
 
@@ -128,6 +85,7 @@ pub(crate) fn recommend(
         proposed,
         reason,
         inputs: action.inputs.clone(),
+        proposed_inputs: action.inputs.clone(),
     }
 }
 
@@ -190,3 +148,6 @@ fn root_directory(directory: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod patch_tests;
