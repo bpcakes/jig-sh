@@ -1,8 +1,6 @@
 # Changelog
 
-## Unreleased
-
-These changes postdate the published v0.3.0 release of September 5, 2026. They are available in current `master` and are not part of the crates.io 0.3.0 package.
+## v0.4.0 - 2026-09-18
 
 ### Added
 
