@@ -27,6 +27,24 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   Preserve released v7 file-budget configuration and v6/v7 native
   migration-name compatibility.
 
+- Add `jig info freshness` to inspect conservative target policies and preview a
+  paired `.jig.toml` / `.agent/jig-contract.json` adoption patch. Worktree and
+  exhaustive opt-ins require explicit target selection and owner assertions.
+  Generated checks stay on Git freshness, including Cargo formatters.
+
+- Reuse compatible original receipts across work plans for plan-independent v8+
+  targets. Newer failed, expired, or incompatible outcomes block older passes.
+  Native runners and their transitive dependents stay plan-local.
+
+- Add `jig claude homes` and `jig claude launch` with the shared searchable
+  picker, optional subscription usage, and dry-run JSON. Existing repositories
+  need `scripts/jig update --recopy` so Claude launches preserve the invocation
+  directory.
+
+- Share one internal agent-provider workflow across Claude and Codex for
+  preflight, inspection, picker selection, dry-run, and execution. Cursor
+  support is prepared but not shipped.
+
 ### Fixed
 
 - Keep machine-local Beads paths out of exports through the repository sync
@@ -41,17 +59,23 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 - Preserve custom command-backed migration aliases across v8 update and recopy,
   including their existing `NAME` environment interface. Keep the new 200-byte
   native migration-name bound scoped to v8; v6/v7 retain their previous validation.
+- Fix dev-app cleanup after launcher loss, including macOS races where the child
+  exits during group signaling.
+- Keep concurrent receipt-journal creation race-safe and bound receipt
+  publication across session and journal locks.
 
 ### Changed
 
 - Breaking: remove the `jig prompt` library CLI (`get`, `copy`, `add`, `edit`, `remove`, `list`, `search`, `export`, `import`), its user/repo/pack file registry, MiniJinja rendering, clipboard helpers, and `JIG_PROMPT_HOME` override. Named prompt packs are no longer a Jig surface. This is a runtime-owned CLI removal and does not require a new contract epoch.
-- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. The hidden `--port` parser returns a migration error and may be removed in 0.4.0. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. This dashboard change leaves generated launcher scope and the append-only state format unchanged and does not itself require a new contract epoch.
+- Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. A hidden `--port` parser returns a migration error and may be removed in a later release. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. This dashboard change leaves generated launcher scope and the append-only state format unchanged and does not itself require a new contract epoch.
 - Breaking: remove the external status-provider subsystem, its configuration, protocol DTOs and schemas, process execution, and Packages and Blockers dashboard views. `[status]` and `[[status.providers]]` are now rejected as unknown configuration, `jig ui --status-refresh-seconds` is rejected as an unknown option, and `jig status --json` advances to schema version 2 with only local repository, work, loop, and collection-error fields. The terminal dashboard has one completion-relative local refresh domain.
 - Breaking: stop publishing the internal `jig-status-tui` crate after moving both terminal-dashboard entrypoints into `jig-ui`; previously published versions remain available but neither internal crate is a supported cross-version integration boundary.
+- Make Beads integration JSONL-first. Doctor validates the bounded export without invoking `br` or opening SQLite. The work-link journal preserves historical issue snapshots and rejects corrupt, conflicting, unsupported, or torn authority before an append becomes durable.
 
 ### Documentation
 
 - Add an end-to-end scheduled Codex task guide covering checkout selection, mutating prompt requirements, nested receipt boundaries, and cron, launchd, and systemd dispatchers.
+- Clarify ExecPlan authoring and execution guidance.
 
 ## v0.3.0 - 2026-09-05
 

@@ -14,17 +14,17 @@
 
     <details>
       <summary>Is jig opinionated? <span class="plus">+</span></summary>
-      <div class="a">Yes — intentionally. The Rust path (Cargo workspaces, <code>cargo fmt</code>, <code>cargo clippy</code>, optional SQLx, and migration checks) is the most fleshed-out today. JavaScript/TypeScript web apps are supported via Bun (<code>lint</code>, <code>typecheck</code>, <code>build:bundle</code>, <code>test:coverage</code>). Other stacks land as the modular language adapters are extracted — if your stack isn't on either path yet, jig is currently the wrong tool, but the architecture is built so it doesn't have to stay that way.</div>
+      <div class="a">Yes — intentionally. The published presets are <code>harness-only</code>, <code>rust-library</code>, <code>rust-cli</code>, <code>rust-react</code>, and <code>go-react</code>. JavaScript/TypeScript web apps are supported via <code>lint</code>, <code>typecheck</code>, <code>build:bundle</code>, and <code>test:coverage</code>. If your stack is not one of those shapes, jig is currently the wrong tool.</div>
     </details>
 
     <details>
       <summary>What languages and stacks does jig support today? <span class="plus">+</span></summary>
-      <div class="a"><b>Rust</b> is the primary path — Cargo workspaces with optional SQLx for Postgres or SQLite, schema checks when a dump command is configured, and migration policy checks. <b>JavaScript / TypeScript web apps</b> ship as a first-class secondary path via the <code>frontend_apps</code> config, with <code>lint</code>, <code>typecheck</code>, <code>build:bundle</code>, and <code>test:coverage</code> scripts run through Bun by default. The <code>rust-react</code> preset can scaffold a Rust API plus Vite React and Astro apps; the dev proxy, vault, receipts, gates, and CI workflows are <span class="acid">stack-agnostic</span>.</div>
+      <div class="a"><b>Rust</b> covers Cargo workspaces with optional SQLx for Postgres or SQLite. <b>Go</b> covers a chi/Huma API with optional PostgreSQL. <b>JavaScript / TypeScript web apps</b> ship through <code>frontend_apps</code>, with <code>lint</code>, <code>typecheck</code>, <code>build:bundle</code>, and <code>test:coverage</code> scripts run through Bun by default. The <code>rust-react</code> and <code>go-react</code> presets can scaffold an API plus Vite React and Astro apps; the dev proxy, vault, receipts, gates, and CI workflows are <span class="acid">stack-agnostic</span>.</div>
     </details>
 
     <details>
       <summary>What does jig <em>not</em> generate? <span class="plus">+</span></summary>
-      <div class="a">By default, application code, crate-level <code>AGENTS.md</code> files, your schema dump implementation, and the bulk of your repo remain project-owned. The harness template stays narrow on purpose. When you opt into <code>--preset rust-react</code>, Jig also writes starter Rust backend crates and frontend apps as a greenfield scaffold.</div>
+      <div class="a">By default, application code, crate-level <code>AGENTS.md</code> files, your schema dump implementation, and the bulk of your repo remain project-owned. The harness template stays narrow on purpose. When you opt into <code>--preset rust-react</code> or <code>--preset go-react</code>, Jig also writes starter backend and frontend apps as a greenfield scaffold.</div>
     </details>
 
     <details>
@@ -59,6 +59,6 @@
 
     <details>
       <summary>How are releases done? <span class="plus">+</span></summary>
-      <div class="a">Through the generated <code>Release</code> GitHub Actions workflow. It prepares the release commit, updates <code>CHANGELOG.md</code> from conventional-commit prefixes, tags, publishes <code>jig-sh</code> to crates.io via trusted publishing, and creates a GitHub Release. A local release script remains the entry point for local validation and manual recovery.</div>
+      <div class="a">Through the <code>Release</code> GitHub Actions workflow. It prepares the release commit, promotes curated <code>CHANGELOG.md</code> notes when present, tags, publishes the workspace crates to crates.io via trusted publishing, and creates a GitHub Release. A local release script remains the entry point for local validation and manual recovery.</div>
     </details>
   </section>

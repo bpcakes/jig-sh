@@ -192,7 +192,7 @@ fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
     let developer_ux = document(documents, "docs/developer-ux.md");
     assert!(developer_ux.contains("## Terminal Dashboard"));
     assert!(developer_ux.contains("108 by 24"));
-    assert!(developer_ux.contains("may stop parsing in 0.4.0"));
+    assert!(developer_ux.contains("may stop parsing in a later release"));
     assert!(developer_ux.contains("public-contract.md#dashboard-and-status-output"));
     assert!(developer_ux.contains("one cancellable worker"));
     assert!(developer_ux.contains("schema version 2"));

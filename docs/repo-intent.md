@@ -20,7 +20,7 @@ In short: `jig.sh` is a harness for making agentic software work repeatable, ins
 
 ## What Is Certain
 
-The README says this repo is a "Reusable harness for making Rust application repos operable by coding agents, including SQLx/Postgres backends and tooling-only Rust repos, with optional web apps."
+The README says this repo is a harness that keeps coding agents on contract across supported Rust, Go, and TypeScript repository shapes.
 
 The harness was extracted from the durable parts of an existing application workflow. The extracted pieces are generic agent guidance, a stable command contract, repo policy scripts, GitHub Actions workflows, a template sync flow, and the Rust `jig` runtime.
 
@@ -51,7 +51,7 @@ The root `AGENTS.md` is block-managed during adoption and update. Existing repo-
 
 Crate-level `AGENTS.md` files are project-owned. `jig.sh` validates required sections for crate guides that exist, but it does not require or generate placeholder crate guides.
 
-The template deliberately avoids generating application code, crate guides, or schema dump implementations. Those remain owned by the consumer repository.
+The harness template does not generate application code unless a scaffold preset is selected. Crate-level `AGENTS.md` files and schema dump implementations remain project-owned.
 
 The repo dogfoods itself. This checkout is both the `jig` source tree and an adopted `jig` harness repo, and the root `AGENTS.md` instructs agents to validate runtime changes by building a dev binary and running through `scripts/jig` with `JIG_DEV_BIN`.
 
@@ -164,11 +164,11 @@ aliases, or profile membership.
 
 **Dogfooding matters.** Runtime changes are expected to be validated through the same `scripts/jig` launcher, MCP contract, and receipt paths generated repos use.
 
-**Rust-first, but not only backend code.** The current scope is Cargo workspaces, Rust checks, optional SQLx/Postgres behavior, and optional Bun-based web apps.
+**Supported stacks, not a universal framework.** Generated defaults cover Cargo workspaces, Go modules, optional SQLx/Postgres or Goose, and Bun-based web apps for the configured presets.
 
 ## What This Repo Is Not Trying To Be
 
-It is not an application framework. It does not generate app code or domain models.
+It is not an application framework. Scaffold presets write starter code once; that code becomes project-owned and Jig does not migrate domain models.
 
 It is not a project task runner monopoly. Existing project scripts remain project-owned; Jig standardizes the agent-facing command surface.
 
@@ -176,7 +176,7 @@ It is not a global agent memory system. The state is repo-local and runtime-owne
 
 It is not trying to centralize business ownership. Crate-level guidance and application-specific commands stay project-owned.
 
-It is not currently a general polyglot generated harness. The generated defaults assume Cargo workspaces, Rust formatting/clippy/tests, optional SQLx, and Bun for configured web apps.
+It is not a universal application framework. Generated defaults cover the published presets: Cargo workspaces, Go modules, optional SQLx or Goose, and Bun for configured web apps.
 
 ## How Agents Should Approach This Repo
 

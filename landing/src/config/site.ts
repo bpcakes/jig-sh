@@ -2,7 +2,7 @@ export const site = {
   name: "JIG.SH",
   title: "JIG.SH — Agentic Harness for Your Repos",
   description:
-    "Jig is a reusable harness that turns a repository into an operating environment for coding agents. A schema-defined contract, MCP runtime, receipts, gates, dev proxy, and a sealed local vault. Built for Rust app repos with React / TypeScript web apps alongside; modular adapters for other stacks in flight.",
+    "Jig is a reusable harness that turns a repository into an operating environment for coding agents. A schema-defined contract, MCP runtime, receipts, gates, dev proxy, and a sealed local vault. Built for Rust and Go app repos with React / TypeScript web apps alongside.",
   ogDescription:
     "A reusable harness that turns a repository into an operating environment for coding agents.",
   repoUrl: "https://github.com/bpcakes/jig-sh",

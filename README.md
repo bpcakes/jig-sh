@@ -29,7 +29,7 @@ Agents should not have to infer how to operate a repository from scattered scrip
 - **Append-only receipts** under `.agent/state/` for checks, plans, decisions, and runs.
 - **Affected checks and file budgets** so agents can select work from checked-in component policy and enforce repository-owned source limits.
 - **A bounded MCP runtime** for repository inspection, immutable planning, execution, and cancellation.
-- **Local runtime tools** for orchestration loops, status dashboards, reusable prompts, development hostnames, and encrypted local secrets.
+- **Local runtime tools** for orchestration loops, a terminal dashboard, development hostnames, and encrypted local secrets.
 - **Conservative template updates** that preserve project-owned application code and refuse to overwrite customized managed files without `--force`.
 
 ## Supported project shapes
@@ -51,7 +51,7 @@ Linux and macOS are supported hosts. See [Platform Support](docs/platform-suppor
 
 Jig is pre-1.0. The current source renders contract v8; contracts v2 through v7 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
 
-This README and the linked guides describe current `master`. The published `0.3.0` release (September 5, 2026) still includes the browser dashboard and external status providers. The unified terminal dashboard, provider removal, and new dashboard/status JSON formats described below are **unreleased changes after 0.3.0**. See the [Unreleased changelog](CHANGELOG.md#unreleased) for those changes or the [0.3.0 documentation](https://github.com/bpcakes/jig-sh/tree/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs) for the published release.
+This README describes the 0.4.0 line on current `master`. Upgrading from 0.3.0 replaces the browser dashboard and external status providers with the unified terminal dashboard below. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -135,13 +135,13 @@ Inspect the current evidence with `scripts/jig work status`, `scripts/jig work e
 
 `.agent/jig-contract.json` is the stable repository authority. Current contract v8 describes components, actions, targets, profiles, adapter provenance, native file-budget policy, target-local affected selection, declared bounded string arguments, literal argv runners, and explicit shell execution.
 
-Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, prompts, local status, or secrets outside the generated command catalog.
+Contract v6 and later expose four bounded MCP repository operations: inspect, plan, execute, and cancel. Contracts v2 through v5 retain their declared command tools through the legacy projection. Runtime-owned commands manage local workflow state, processes, scheduled task prompts, local status, or secrets outside the generated command catalog.
 
 | Surface | Stable contract? | Records receipts? | Machine-local? |
 | --- | --- | --- | --- |
 | `check` / `run` | yes | yes | no |
 | `work` / `loop` | runtime-owned | yes | no |
-| `state` / `prompt` | runtime-owned | no | partly |
+| `state` | runtime-owned | no | partly |
 | `status` / `ui` | runtime-owned | no | partly |
 | `dev` / `proxy` | runtime-owned | no | yes |
 | `vault` | runtime-owned | no | yes |
@@ -235,7 +235,7 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 ### Structured work, affected checks, and file budgets
 
-`work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence. `work finish` refuses to close a plan until every required gate has current evidence.
+`work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence across staging, unrelated edits, and, on contract v8, compatible original receipts from other plans. `work finish` refuses to close a plan until every required gate has current evidence. `work retire` closes a plan that will not be delivered without running gates.
 
 Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Worktree policy preserves evidence through staging and commits; audited exhaustive inputs also avoid reruns after unrelated edits.
 
@@ -262,7 +262,7 @@ The four tabs are Status, Work, Timeline, and Health. Collection failures remain
 
 `jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive.
 
-The unreleased dashboard cutover after 0.3.0 removes the browser server and URL endpoints. In current `master`, the hidden `--port` parser exits with a migration diagnostic and may stop parsing in 0.4.0. Use the terminal dashboard or one-shot JSON with this source version. The published 0.3.0 release retains the browser transport.
+The 0.3.0 browser server and URL endpoints are gone. A hidden `--port` parser exits with a migration diagnostic and may stop parsing in a later release. Use the terminal dashboard or one-shot JSON.
 
 Use `scripts/jig state diagnose` to inspect receipt and session growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
@@ -314,6 +314,8 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Configuration](docs/configuration.md): `.jig.toml`, presets, package managers, and runtime options
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
 - [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, receipts, runs, and state
+- [Target freshness](docs/target-freshness-integration.md): scoped receipts and adoption preview
+- [Scheduled Codex Tasks](docs/codex-task-operations.md): unattended `codex_task` workflows
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
 - [`examples/`](examples/): visible `.jig.toml` answer files
 

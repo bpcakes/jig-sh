@@ -216,7 +216,7 @@ jobs:
           # If a publish step fails, rerun this workflow with the explicit version.
           missing_crates=()
           if [[ "$TAG_EXISTS" == "true" ]]; then
-            for crate in jig-dev-proxy jig-sh; do
+            for crate in jig-contract jig-core jig-file-budget jig-owned-process jig-rust jig-sqlx jig-typescript jig-go jig-features jig-vault jig-dev-proxy jig-tui jig-vault-tui jig-codex-tui jig-ui jig-sh; do
               status=""
               for attempt in 1 2; do
                 status="$(curl --max-time 20 -sS -o "/tmp/${crate}-crate-version.json" -w '%{http_code}' \

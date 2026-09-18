@@ -34,7 +34,7 @@
 - Change session, plan, receipt, or decision persistence: `src/state.rs`.
 - Change the data exposed by the unified dashboard: `src/ui/source/`.
 - Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.
-- Change status provider execution or aggregate facts: `src/status.rs` and `src/status/`.
+- Change local status aggregation: `src/status.rs` and `src/status/`.
 - Change terminal status navigation, refresh runtime, or rendering: `crates/jig-ui/src/terminal/`.
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: `src/process.rs` and
