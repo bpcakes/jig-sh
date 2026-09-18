@@ -33,15 +33,32 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert!(!has_db_crate);
     let cargo_toml = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
     assert_text_contains_none(&cargo_toml, &["sqlx ="]);
+    let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
+    let dependencies = &manifest["workspace"]["dependencies"];
+    for package in ["batter", "batter-axum"] {
+        assert_eq!(dependencies[package]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
+        assert_eq!(dependencies[package]["rev"].as_str(), Some("f4f90c9166ff255a91298c75cc020136f632d758"));
+    }
+    assert!(dependencies.get("batter-sqlx").is_none());
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
-    assert!(cargo_toml.ends_with('\n'));
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");
+    let runtime = fs::read_to_string(temp.path().join(format!("crates/{repo_name}-runtime/src/lib.rs"))).unwrap();
+    assert_text_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "register_http_in",
+            ".with_unix_signals(\"signals\")",
+            "check_shutdown",
+        ],
+    );
+    assert_text_contains_none(&runtime, &["Startup::new", "scope.supervisor()", "install_signals"]);
     let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
     assert_eq!(
         env_example,
         format!(
-            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,tower_http=info\n"
+            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,batter=info,batter_axum=info\n"
         )
     );
     let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();

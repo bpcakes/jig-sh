@@ -4,6 +4,12 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 [% endif %]
+[% if sqlx_driver == "postgres" %]
+use std::str::FromStr;
+
+use batter::cleanup::CleanupSlot;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+[% endif %]
 use std::time::Duration;
 
 use anyhow::Context;
@@ -167,7 +173,30 @@ impl Db {
         Ok(Self { pool })
 [% endif %]
     }
+[% if sqlx_driver == "postgres" %]
+    /// Construct a lazy PostgreSQL pool, register its owner before the first
+    /// connectivity check, and verify connectivity within the supplied bound.
+    pub async fn connect_in(database_url: &str, cleanup: CleanupSlot<'_>) -> anyhow::Result<Self> {
+        Self::connect_in_with_timeout(database_url, DEFAULT_DB_TIMEOUT, cleanup).await
+    }
 
+    pub async fn connect_in_with_timeout(
+        database_url: &str,
+        timeout_after: Duration,
+        cleanup: CleanupSlot<'_>,
+    ) -> anyhow::Result<Self> {
+        let options = PgConnectOptions::from_str(database_url)
+            .context("Could not parse PostgreSQL database URL")?;
+        let pool = batter_sqlx::pool_in(cleanup, PgPoolOptions::new(), options);
+        tokio::time::timeout(timeout_after, sqlx::query("SELECT 1").execute(&pool))
+            .await
+            .with_context(|| {
+                format!("Timed out connecting to database after {timeout_after:?}")
+            })??;
+        Ok(Self { pool })
+    }
+
+[% endif %]
     pub fn pool(&self) -> &DbPool {
         &self.pool
     }
@@ -620,6 +649,69 @@ mod tests {
             .expect("the exclusively created SQLite file is connectable");
         database.pool().close().await;
         remove_database_artifacts(&database_file);
+    }
+}
+[% endif %]
+[% if sqlx_driver == "postgres" %]
+
+#[cfg(test)]
+mod tests {
+    use super::Db;
+    use batter::cleanup::{CleanupBudget, CleanupOutcome, CleanupStack};
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn failed_connectivity_check_keeps_the_pool_cleanup_owned() {
+        // Keep a listener on a dynamically assigned port so this test does not
+        // depend on any globally unused or privileged port. It deliberately
+        // does not speak PostgreSQL and closes the first connection.
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local test listener");
+        let port = listener
+            .local_addr()
+            .expect("read the local test listener address")
+            .port();
+        let acceptor = tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept the attempted PostgreSQL connection");
+            drop(stream);
+        });
+        let mut cleanup = CleanupStack::new();
+        let database_url = format!("postgres://postgres:postgres@127.0.0.1:{port}/example");
+        let error = Db::connect_in_with_timeout(
+            &database_url,
+            Duration::from_millis(250),
+            cleanup.reserve("database.close").unwrap(),
+        )
+        .await
+        .expect_err("the non-PostgreSQL listener must fail the connectivity check");
+        assert!(
+            !error.to_string().is_empty(),
+            "connectivity failure should be diagnosed"
+        );
+        tokio::time::timeout(Duration::from_secs(1), acceptor)
+            .await
+            .expect("the connectivity check should reach the retained listener")
+            .expect("the listener task should finish cleanly");
+
+        let report = cleanup
+            .close(
+                CleanupBudget::new(
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                    Duration::from_secs(1),
+                )
+                .unwrap(),
+            )
+            .await;
+        assert!(report.is_success());
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.records[0].name, "database.close");
+        assert_eq!(report.records[0].outcome, CleanupOutcome::Succeeded);
     }
 }
 [% endif %]

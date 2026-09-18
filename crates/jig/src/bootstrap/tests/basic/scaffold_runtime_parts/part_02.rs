@@ -541,7 +541,7 @@ fn run_init_sqlite_scaffold_keeps_sanitized_database_names_and_ignores_aligned()
     assert!(answers.contains("repo_name = \"app-123-type\""));
     assert_eq!(
         fs::read_to_string(destination.join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=app_123_type=info,app_123_type_api=info,tower_http=info\nDATABASE_URL=sqlite:app_123_type.db\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=app_123_type=info,app_123_type_api=info,batter=info,batter_axum=info\nDATABASE_URL=sqlite:app_123_type.db\n"
     );
     let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
     assert!(gitignore.contains("/app_123_type.db\n"));
@@ -592,7 +592,7 @@ fn assert_sqlite_scaffold_manifests(root: &Path) {
     assert!(cargo_toml.ends_with('\n'));
     assert_eq!(
         fs::read_to_string(root.join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=demo=info,demo_api=info,tower_http=info\nDATABASE_URL=sqlite:demo.db\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=demo=info,demo_api=info,batter=info,batter_axum=info\nDATABASE_URL=sqlite:demo.db\n"
     );
     let db_cargo = fs::read_to_string(root.join("crates/demo-db/Cargo.toml")).unwrap();
     assert_text_contains_all(

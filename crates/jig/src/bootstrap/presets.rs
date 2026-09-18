@@ -210,8 +210,9 @@ impl ScaffoldPreset {
         match self {
             Self::RustReact => ScaffoldPresetDescriptor {
                 name: "rust-react",
-                summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site.",
+                summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site. Batter owns service startup, request deadlines, and shutdown.",
                 defaults: &[
+                    "Batter and its Axum adapter use a pinned Git dependency; generated services target Unix.",
                     "Rust crate roots default to apps and crates.",
                     "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
                     "Frontends default to web when omitted.",
@@ -226,6 +227,7 @@ impl ScaffoldPreset {
                     "crates/<repo>-core",
                     "crates/<repo>",
                     "crates/<repo>-http",
+                    "crates/<repo>-runtime owns Batter startup, signals, and cleanup",
                     "crates/<repo>-test-support",
                     "crates/<repo>-db when --db postgres or --db sqlite is selected",
                 ],

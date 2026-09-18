@@ -1,0 +1,1 @@
+Inspect the upstream Batter changes after 23a50fa, advance all generated dependency pins together, adopt required validated operational witness APIs in generated HTTP code, and validate generated no-database, SQLite, and PostgreSQL workspaces.

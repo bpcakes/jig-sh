@@ -23,7 +23,7 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
     )
     .unwrap();
     assert_eq!(agent_map_check["ok"], true);
-    assert_eq!(agent_map_check["agents"], 7);
+    assert_eq!(agent_map_check["agents"], 8);
     assert!(
         agent_map_check["missing_agents"]
             .as_array()
@@ -39,7 +39,7 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
     let agent_guides_check =
         crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
     assert_eq!(agent_guides_check["ok"], true);
-    assert_eq!(agent_guides_check["guide_count"], 6);
+    assert_eq!(agent_guides_check["guide_count"], 7);
     assert!(
         agent_guides_check["missing_entry_ref"]
             .as_array()

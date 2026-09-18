@@ -45,6 +45,11 @@
 
 ### Fixed
 
+- Reject Rust-react application names that normalize to `batter` or
+  `batter-axum` before writing destination files, and reject `batter-sqlx` for
+  PostgreSQL Rust-react applications where that dependency is generated. Keep
+  SQLite, no-database, and rust-only names independent of the conditional
+  PostgreSQL dependency.
 - Keep machine-local Beads paths out of exports through the repository sync
   helper and CI guard. Continue Linux argv PATH searches past unavailable
   filesystem entries while preserving direct-executable errors.
@@ -64,6 +69,30 @@
 
 ### Changed
 
+- Generate all new `rust-react` applications with Batter-protected
+  `Startup::scoped` ownership, signal-aware shutdown, lifecycle-aware HTTP
+  admission, and finite database bootstrap commands. PostgreSQL registers its
+  SQLx pool through `batter-sqlx::pool_in` before the bounded connectivity check;
+  SQLite retains its native/manual cleanup path. These scaffolds require Rust
+  1.94 on Unix and pin all applicable unpublished Batter Git dependencies. Advance
+  those pins together to Batter revision `f4f90c9`, including retained validation
+  witnesses for HTTP budgets, protected SQLx verification requests, and exact-role
+  grant manifests. Generated HTTP policy now validates its response-construction
+  budget before infallible policy assembly and receives only purpose-qualified
+  operation admission; readiness receives read-only lifecycle status while root
+  shutdown control remains runtime-owned. Batter's operational HTTP wrapper replaces
+  inbound request IDs and supplies typed server-generated correlation to application
+  errors and telemetry. PostgreSQL verification policy remains application-owned and
+  is not synthesized for an empty starter schema; browser credential transport also
+  remains application-owned rather than becoming starter authentication policy.
+  That revision additionally offers an optional native quota adapter, quota-aware
+  operational HTTP observation, and an opaque request interruption responder for
+  nested adapters. Generated services keep the ordinary operational observer, which
+  allocates no quota record, and nest no adapter inside request admission, so
+  per-subject quota policy, its authentication closure, native subject keys, and a
+  quota backend remain application-owned rather than starter policy.
+  There is no legacy non-Batter application preset. Rust library and CLI presets
+  remain independent; `jig update` does not migrate existing application source.
 - Breaking: remove the `jig prompt` library CLI (`get`, `copy`, `add`, `edit`, `remove`, `list`, `search`, `export`, `import`), its user/repo/pack file registry, MiniJinja rendering, clipboard helpers, and `JIG_PROMPT_HOME` override. Named prompt packs are no longer a Jig surface. This is a runtime-owned CLI removal and does not require a new contract epoch.
 - Breaking: replace the loopback browser dashboard with one unified, read-only terminal application. `jig ui` starts on Work and `jig status --tui` starts on Status; both expose Status, Work, Timeline, and Health. `jig ui --json` now emits a bounded recorder schema-1 document directly, and `jig ui --plan PLAN_ID --json` emits a bounded plan schema-1 document, ending support for browser URLs and HTTP JSON endpoints. A hidden `--port` parser returns a migration error and may be removed in a later release. Dashboard/status readers now cap each logical sessions, plans, decisions, or receipts record at 1,048,576 bytes; oversized legacy records yield partial `record_too_large` observations and can be located with `jig state diagnose` before repair or compaction. This dashboard change leaves generated launcher scope and the append-only state format unchanged and does not itself require a new contract epoch.
 - Breaking: remove the external status-provider subsystem, its configuration, protocol DTOs and schemas, process execution, and Packages and Blockers dashboard views. `[status]` and `[[status.providers]]` are now rejected as unknown configuration, `jig ui --status-refresh-seconds` is rejected as an unknown option, and `jig status --json` advances to schema version 2 with only local repository, work, loop, and collection-error fields. The terminal dashboard has one completion-relative local refresh domain.
