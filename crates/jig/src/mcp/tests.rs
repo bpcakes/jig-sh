@@ -13,6 +13,50 @@ use super::{
 use crate::context::RepoContext;
 use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 use crate::test_env::TestRepoBuilder;
+
+#[test]
+fn work_retire_error_exposes_partial_completion_over_mcp() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .repo_name("ExampleProject")
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut writer = Vec::new();
+    let started = handle_tool_call(
+        &ctx,
+        Some(json!(1)),
+        json!({
+            "name": "jig.work_start", "arguments": {"title": "Example closure", "body": "Validate publication failure."}
+        }),
+        &mut writer,
+        MessageFraming::JsonLine,
+    );
+    let plan_id = started["result"]["structuredContent"]["plan"]["plan_id"]
+        .as_str()
+        .unwrap();
+    let lock_path = temp
+        .path()
+        .join(".agent/.cache/state-locks/receipts.jsonl.lock");
+    fs::remove_file(&lock_path).unwrap();
+    fs::create_dir(&lock_path).unwrap();
+    let response = handle_tool_call(
+        &ctx,
+        Some(json!(2)),
+        json!({
+            "name": "jig.work_retire", "arguments": {"plan_id": plan_id, "disposition": "obsolete", "reason": "No longer needed."}
+        }),
+        &mut writer,
+        MessageFraming::JsonLine,
+    );
+    assert_eq!(response["error"]["code"], -32000, "{response:#}");
+    let partial = &response["error"]["data"]["partial_completion"];
+    assert_eq!(partial["plan_id"], plan_id);
+    assert_eq!(partial["plan_state"], "closed");
+    assert_eq!(partial["receipt"]["status"], "not_recorded");
+    assert_eq!(partial["session_teardown"]["status"], "not_attempted");
+    assert!(partial["close_event_id"].is_string());
+    assert!(response["result"].is_null());
+}
 #[test]
 fn tools_list_refreshes_manifest_tools_after_server_start() {
     let temp = tempdir().unwrap();

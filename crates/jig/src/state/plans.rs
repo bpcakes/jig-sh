@@ -228,6 +228,7 @@ pub(crate) fn plans_close(ctx: &RepoContext, request: PlanCloseRequest) -> Resul
         "ok": true,
         "plan_id": event.plan_id(),
         "receipt_id": receipt_id,
+        "close_event_id": event.id(),
     }))
 }
 
@@ -262,6 +263,7 @@ pub(crate) fn plans_retire(ctx: &RepoContext, request: PlanRetireRequest) -> Res
         "ok": true,
         "plan_id": event.plan_id(),
         "receipt_id": receipt_id,
+        "close_event_id": event.id(),
         "retirement": retirement.to_value(),
     }))
 }
@@ -311,7 +313,8 @@ fn commit_plan_closure(
             plan_id: Some(event.plan_id().to_string()),
             session_override: None,
         },
-    )?;
+    )
+    .map_err(|error| super::PlanClosurePartialFailure::receipt(&event, error))?;
 
     Ok((event, receipt_id))
 }

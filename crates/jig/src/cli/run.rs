@@ -617,11 +617,11 @@ fn report_json_command_error(result: Result<()>) -> Result<()> {
             Err(json_reported_error(1))
         }
         Err(error) => {
-            print_json(&json_error_payload(
-                "command_failed",
-                &format!("{error:#}"),
-                1,
-            ))?;
+            let mut payload = json_error_payload("command_failed", &format!("{error:#}"), 1);
+            if let Some(partial) = error.downcast_ref::<crate::state::PlanClosurePartialFailure>() {
+                payload["partial_completion"] = partial.details();
+            }
+            print_json(&payload)?;
             Err(json_reported_error(1))
         }
     }

@@ -16,6 +16,7 @@ pub(crate) use jsonl::read_receipts_reverse_with_cancellation;
 pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl_raw};
 #[cfg(test)]
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
+pub(crate) use plan_closure_failure::PlanClosurePartialFailure;
 pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, plan_body_path, read_plan_body};
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanLifecycle, PlanOpenRequest, PlanRetireRequest,
@@ -94,6 +95,7 @@ mod execution_leases;
 mod json_scan;
 mod jsonl;
 mod maintenance;
+mod plan_closure_failure;
 mod plan_files;
 mod session_pointer;
 pub(crate) use plan_files::validate_plan_id;

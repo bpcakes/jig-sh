@@ -190,6 +190,15 @@ pub(crate) enum PlanEvent {
 }
 
 impl PlanEvent {
+    pub(super) fn id(&self) -> &str {
+        match self {
+            Self::Open { id, .. }
+            | Self::Append { id, .. }
+            | Self::Close { id, .. }
+            | Self::Unknown { id, .. } => id,
+        }
+    }
+
     pub(super) const fn open(
         id: String,
         plan_id: String,

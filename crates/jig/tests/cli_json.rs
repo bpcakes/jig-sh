@@ -652,6 +652,8 @@ fn info_commands_distinguishes_a_broken_repo_from_no_repo() {
 
 #[path = "cli_json_parts/info_commands_edge_cases.rs"]
 mod info_commands_edge_cases;
+#[path = "cli_json/plan_closure.rs"]
+mod plan_closure;
 mod support;
 use info_commands_edge_cases::*;
 

@@ -195,15 +195,7 @@ pub(in crate::runtime) fn finish_after_required_gates_passed(
     );
     crate::cancellation::ensure_status_collection_active(cancelled)?;
     let plan = plans_close(ctx, (&opts).into())?;
-    let (session, session_status) =
-        end_owning_session(ctx, &opts.plan_id, opts.outcome.or(opts.resolution))?;
-
-    Ok(json!({
-        "ok": true,
-        "plan": plan,
-        "session": session,
-        "session_status": session_status,
-    }))
+    complete_plan_closure(ctx, &opts.plan_id, plan, opts.outcome.or(opts.resolution))
 }
 
 fn ensure_finish_authority_is_current(
@@ -285,8 +277,22 @@ pub(super) fn retire(ctx: &RepoContext, opts: WorkRetireRequest) -> Result<Value
             superseded_by,
         },
     )?;
-    let (session, session_status) =
-        end_owning_session(ctx, &opts.plan_id, Some(disposition.as_str().to_string()))?;
+    complete_plan_closure(
+        ctx,
+        &opts.plan_id,
+        plan,
+        Some(disposition.as_str().to_string()),
+    )
+}
+
+fn complete_plan_closure(
+    ctx: &RepoContext,
+    plan_id: &str,
+    plan: Value,
+    outcome: Option<String>,
+) -> Result<Value> {
+    let (session, session_status) = end_owning_session(ctx, plan_id, outcome)
+        .map_err(|error| crate::state::PlanClosurePartialFailure::session(plan_id, &plan, error))?;
 
     Ok(json!({
         "ok": true,

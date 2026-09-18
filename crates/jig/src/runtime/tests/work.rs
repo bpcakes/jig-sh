@@ -636,6 +636,7 @@ fn work_goal_defaults_blank_title_to_generated_title() {
 }
 
 mod checks;
+mod closure_failures;
 mod evidence;
 mod gate_receipt_ordering;
 mod gates;
