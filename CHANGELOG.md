@@ -55,7 +55,7 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   SQLx pool through `batter-sqlx::pool_in` before the bounded connectivity check;
   SQLite retains its native/manual cleanup path. These scaffolds require Rust
   1.94 on Unix and pin all applicable unpublished Batter Git dependencies. Advance
-  those pins together to Batter revision `abbe6f5`, including retained validation
+  those pins together to Batter revision `f4f90c9`, including retained validation
   witnesses for HTTP budgets, protected SQLx verification requests, and exact-role
   grant manifests. Generated HTTP policy now validates its response-construction
   budget before infallible policy assembly and receives only purpose-qualified
@@ -65,6 +65,12 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
   errors and telemetry. PostgreSQL verification policy remains application-owned and
   is not synthesized for an empty starter schema; browser credential transport also
   remains application-owned rather than becoming starter authentication policy.
+  That revision additionally offers an optional native quota adapter, quota-aware
+  operational HTTP observation, and an opaque request interruption responder for
+  nested adapters. Generated services keep the ordinary operational observer, which
+  allocates no quota record, and nest no adapter inside request admission, so
+  per-subject quota policy, its authentication closure, native subject keys, and a
+  quota backend remain application-owned rather than starter policy.
   There is no legacy non-Batter application preset. Rust library and CLI presets
   remain independent; `jig update` does not migrate existing application source.
 - Breaking: remove the `jig prompt` library CLI (`get`, `copy`, `add`, `edit`, `remove`, `list`, `search`, `export`, `import`), its user/repo/pack file registry, MiniJinja rendering, clipboard helpers, and `JIG_PROMPT_HOME` override. Named prompt packs are no longer a Jig surface. This is a runtime-owned CLI removal and does not require a new contract epoch.

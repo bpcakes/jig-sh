@@ -298,7 +298,7 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
     for package in ["batter", "batter-axum", "batter-sqlx"] {
         assert!(workspace_cargo.contains(&format!(
-            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"abbe6f5c27887db9c5cbc7b7bd1fb6dd9967b00f\" }}"
+            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"f4f90c9166ff255a91298c75cc020136f632d758\" }}"
         )));
     }
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));

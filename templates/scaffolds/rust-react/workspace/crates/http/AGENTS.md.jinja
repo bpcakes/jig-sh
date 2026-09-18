@@ -21,6 +21,7 @@ Owns only the public Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, han
 - Keep observability middleware at this HTTP boundary.
 - Production entrypoints use `router_with_lifecycle` with the runtime's read-only lifecycle status and operation admission. The convenience `router` creates and consumes an independent readiness approval for in-process tests.
 - Keep `operational_http` around the assembled router so request IDs are server-generated typed correlation, never caller-selected headers.
+- Keep exactly one HTTP observer at this boundary. A quota adapter replaces it with `operational_http_with_quota` rather than nesting a second observer inside it.
 - Add business routes to `application_routes` and probes to `probe_routes`; both feed the runtime router and OpenAPI document. Keep probes outside request admission.
 - Preserve `/health/live` for process liveness and `/health/ready` for lifecycle readiness plus initialized application state. An initialized pool is not a continuous database connectivity check.
 - Never depend on `<<[ package_name ]>>-admin-http` or mount privileged routes here. Admin transport has a separate crate and binary deployment boundary.

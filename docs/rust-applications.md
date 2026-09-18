@@ -67,6 +67,13 @@ Middleware failures retain the API error envelope with `code`, `message`, and
 and failure renderers, and writes the same ID to the response. Client headers are
 never the identity witness for error bodies or telemetry.
 
+Generated services install the ordinary `operational_http` observer, which
+allocates no quota record, so HTTP completion events carry no `quota_outcome` or
+`quota_consumption` fields. Batter's admission boundary also installs an opaque
+interruption responder for a nested adapter to reuse; the generated boundary
+nests none and keeps rendering cancellation and deadline failures through its own
+request policy renderer.
+
 Both public and admin listeners expose `/health/live` and `/health/ready` outside
 request admission. Admin probes are also outside authorization. Readiness requires
 both Batter's ready lifecycle state and initialized application state; a configured
@@ -80,6 +87,13 @@ Admin business routes under `/admin-api` remain fail-closed with
 layer. Probe reachability does not grant access to privileged operations. Batter's
 browser credential transport primitives do not supply an account, session,
 authorization, CORS, or CSRF model; adopting them remains application-owned work.
+
+Batter's optional `batter-runlimit` quota adapter is not a generated dependency.
+Its protected quota execution and authenticated HTTP assembly require
+application-owned policies, an authentication closure, native opaque subject keys,
+and a Runlimit memory or PostgreSQL backend, so per-subject rate limiting stays
+project-owned work rather than starter policy. Adopt the quota-aware observation
+middleware together with that adapter; generated code installs neither.
 
 Shutdown allows 10 seconds for drain, 2 seconds for cancellation, and 1 second for
 abort/reap. These phases share the first-stop clock; scheduling delays consume

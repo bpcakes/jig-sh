@@ -37,7 +37,7 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     let dependencies = &manifest["workspace"]["dependencies"];
     for package in ["batter", "batter-axum"] {
         assert_eq!(dependencies[package]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-        assert_eq!(dependencies[package]["rev"].as_str(), Some("abbe6f5c27887db9c5cbc7b7bd1fb6dd9967b00f"));
+        assert_eq!(dependencies[package]["rev"].as_str(), Some("f4f90c9166ff255a91298c75cc020136f632d758"));
     }
     assert!(dependencies.get("batter-sqlx").is_none());
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
