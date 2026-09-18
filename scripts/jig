@@ -221,7 +221,7 @@ resolve_or_install_info_binary() {
   fi
   if ! bin_path="$(resolve_info_binary)"; then
     printf '%s\n' \
-      "Preparing a Jig runtime compatible with contract $CONTRACT_VERSION for help or version output; first run may install the repo-local runtime." >&2
+      "Preparing a Jig runtime compatible with contract $CONTRACT_VERSION for help or version output; first run may populate the repo-local runtime cache." >&2
     bin_path="$(run_installer --profile runtime)"
   fi
 }
@@ -257,7 +257,11 @@ resolve_mcp_binary() {
     "  scripts/jig check contract" \
     "" >&2
   printf '%s\n' \
-    "For the jig-sh source checkout, build and select the development binary explicitly:" \
+    "For the jig-sh source checkout, prepare the pinned release cache with:" \
+    "  scripts/jig --version" \
+    "To run the current source instead:" \
+    "  scripts/jig-dev mcp" \
+    "For historical source checkouts, build and select a development binary explicitly:" \
     "  cargo build -p jig-sh --bin jig" \
     "  JIG_DEV_BIN=target/debug/jig scripts/jig mcp" >&2
   exit 1

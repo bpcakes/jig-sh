@@ -12,6 +12,7 @@ on:
       - "clippy.toml"
       - ".config/nextest.toml"
       - ".jig.toml"
+      - ".jig/source-runtime-version"
       - ".agent/jig-contract.json"
       - "scripts/**"
       - "templates/project/**"
@@ -33,6 +34,7 @@ on:
       - "clippy.toml"
       - ".config/nextest.toml"
       - ".jig.toml"
+      - ".jig/source-runtime-version"
       - ".agent/jig-contract.json"
       - "scripts/**"
       - "templates/project/**"
@@ -63,6 +65,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Check launcher, installer, and contract parity
         run: bash scripts/check-launcher-template.sh
+      - name: Test source runtime selection and development entrypoint
+        run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
 
   rendered-fixtures:
     name: Validate rendered repository fixtures
@@ -213,6 +217,10 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
+      - name: Validate the current source runtime through the launcher
+        env:
+          JIG_DEV_BIN: target/debug/jig
+        run: scripts/jig check repo:source-runtime-check
 
   test-macos:
     name: scripts/jig check test-locked (macOS)
@@ -246,6 +254,10 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
+      - name: Validate the current source runtime through the launcher
+        env:
+          JIG_DEV_BIN: target/debug/jig
+        run: scripts/jig check repo:source-runtime-check
 
   msrv:
     name: cargo check --workspace --all-targets --all-features (MSRV 1.88)
@@ -335,6 +347,8 @@ jobs:
       - name: Check launcher parity with macOS Bash 3.2
         # This job uniquely exercises the installer's empty-array handoff on Apple's stock Bash.
         run: /bin/bash scripts/check-launcher-template.sh
+      - name: Test source runtime selection and development entrypoint
+        run: python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:

@@ -345,6 +345,40 @@ action = "file-budget"
 component = "repo"
 
 [[repository.actions]]
+description = "Build the current Jig runtime and validate its repository contract through the launcher."
+effects = ["read_only", "process"]
+inputs = [
+    "crates/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    ".jig.toml",
+    ".jig/**",
+    "templates/**",
+    "scripts/**",
+]
+source_state = "worktree"
+intent = "check"
+
+[repository.actions.provenance]
+effects = "declared"
+inputs = "declared"
+source_state = "declared"
+intent = "declared"
+runner = "declared"
+target = "declared"
+
+[repository.actions.runner]
+kind = "argv"
+program = "scripts/jig-dev"
+args = ["check", "contract", "--no-receipt"]
+
+[repository.actions.target]
+action = "source-runtime-check"
+component = "repo"
+
+[[repository.actions]]
 description = "Run the source repository's fast core Rust test partition."
 effects = [
     "read_only",
@@ -576,7 +610,7 @@ id = "verify"
 
 [repository.profiles.provenance]
 id = "inferred"
-targets = "inherited"
+targets = "overridden"
 
 [[repository.profiles.targets]]
 action = "clippy"
@@ -596,6 +630,10 @@ component = "repo"
 
 [[repository.profiles.targets]]
 action = "file-budget"
+component = "repo"
+
+[[repository.profiles.targets]]
+action = "source-runtime-check"
 component = "repo"
 
 [vault]

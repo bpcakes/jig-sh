@@ -1636,6 +1636,19 @@ if [[ "$SEED_DEV_BIN" == "1" ]]; then
   exit 2
 fi
 
+# Source development uses an explicitly pinned installed runtime. Keep this
+# before source-stamp checks and installation locks: routine source edits must
+# not rebuild the harness. Older checkouts without this policy retain their
+# existing selection behavior; explicit install roots remain lower-level calls.
+if [[ -z "$INSTALL_ROOT_ARG" ]] && is_jig_source_checkout "$ROOT_DIR" \
+  && { [[ -f "$ROOT_DIR/scripts/jig-source-runtime.py" ]] \
+    || [[ -f "$ROOT_DIR/.jig/source-runtime-version" ]]; }; then
+  require_python3
+  exec python3 -I "$ROOT_DIR/scripts/jig-source-runtime.py" \
+    --root "$ROOT_DIR" --contract-version "$CONTRACT_VERSION" \
+    --profile "$INSTALL_PROFILE" --resolve-only "$RESOLVE_ONLY" --refresh "$REFRESH_CACHE"
+fi
+
 if [[ "$CONFIG_FIELDS_VALID" != "1" ]]; then
   if CACHED_BIN="$(resolve_compatible_cached_without_answers)"; then
     if [[ "$RESOLVE_ONLY" == "0" ]]; then
