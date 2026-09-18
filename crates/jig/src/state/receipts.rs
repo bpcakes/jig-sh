@@ -47,8 +47,8 @@ pub(crate) use journal::{
     receipt_append_may_have_landed, receipt_record_id, with_receipt_journal_writer,
     with_receipt_journal_writer_until,
 };
-use target_evidence::IndexedTargetReceipts;
 pub(crate) use target_evidence::TargetReceiptStatus;
+use target_evidence::{IndexedTargetReceipts, cross_plan_receipt_is_eligible};
 
 const SUCCESSFUL_RECEIPT_PREVIEW_BYTES: usize = 512;
 

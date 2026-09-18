@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use jig_contract::freshness::FreshnessReasonCode;
 use sha2::{Digest, Sha256};
 
-use super::{TargetReceiptStatus, target_receipt_status};
+use super::{TargetReceiptStatus, cross_plan_receipt_is_eligible, target_receipt_status};
 use crate::repository::freshness::{CollectionBudget, CollectionFailure, CollectionResult};
 use crate::state::records::ReceiptRecord;
 
@@ -141,7 +141,8 @@ impl OriginalReceiptIndex {
                 if let Some(target) = envelope.target
                     && (plan_id.is_none()
                         || envelope.plan_id.as_deref() == plan_id
-                        || reusable_targets.contains(&target))
+                        || (reusable_targets.contains(&target)
+                            && cross_plan_receipt_is_eligible(envelope.plan_id.as_deref())))
                 {
                     let candidate = (envelope.ended_at_ms, envelope.id.clone());
                     if latest
@@ -200,7 +201,8 @@ impl OriginalReceiptIndex {
     pub(crate) fn selected_is_current(&self, receipt: &TargetReceiptStatus) -> bool {
         self.selection_plan.as_deref().is_none_or(|plan| {
             receipt.plan_id.as_deref() == Some(plan)
-                || self.reusable_targets.contains(&receipt.target)
+                || (self.reusable_targets.contains(&receipt.target)
+                    && cross_plan_receipt_is_eligible(receipt.plan_id.as_deref()))
         }) && (!self.require_latest
             || self
                 .latest

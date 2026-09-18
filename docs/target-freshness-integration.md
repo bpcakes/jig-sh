@@ -144,9 +144,11 @@ time boundary. The child must finish before its dependent starts and remain
 valid at that time. Reuse preserves those IDs; it does not fabricate another
 successful target receipt.
 
-For epoch 8 and later, a gate selects the latest receipt for each explicitly required
-plan-independent target across the repository, including receipts from closed or other
-work plans. Native runners and targets that depend on them keep plan-local selection.
+For epoch 8 and later, a gate selects the latest plan-bound receipt for each explicitly
+required plan-independent target across the repository, including receipts from closed
+or other work plans. Receipts produced without a work-plan ID remain direct check
+history; they neither satisfy nor block a structured work-plan gate. Native runners and
+targets that depend on them keep plan-local selection.
 An implicit dependency is verified from the original referenced receipt, so a later
 independent dependency failure does not erase a successful dependent execution. If
 that dependency is itself required by the gate, its latest outcome is checked

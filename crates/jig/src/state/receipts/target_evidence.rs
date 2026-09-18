@@ -2,6 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jig_contract::TargetId;
 
+pub(super) fn cross_plan_receipt_is_eligible(plan_id: Option<&str>) -> bool {
+    plan_id.is_some_and(|plan_id| !plan_id.is_empty())
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetReceiptStatus {
     pub(crate) receipt_id: String,
@@ -55,6 +59,12 @@ impl IndexedTargetReceipts {
         if replace {
             self.selected
                 .insert(receipt.target.clone(), receipt.clone());
+        }
+    }
+
+    pub(super) fn observe_cross_plan(&mut self, receipt: &TargetReceiptStatus) {
+        if cross_plan_receipt_is_eligible(receipt.plan_id.as_deref()) {
+            self.observe(receipt);
         }
     }
 

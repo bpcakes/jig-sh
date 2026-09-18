@@ -12,7 +12,7 @@ use time::{Date, Month};
 use ulid::Ulid;
 
 use crate::context::{RepoContext, WorkGate};
-use crate::repository::{RepositoryCatalog, resolve_evidence_targets};
+use crate::repository::{RepositoryCatalog, plan_independent_targets, resolve_evidence_targets};
 use crate::tool_defs::tool;
 
 use super::super::MAINTENANCE_WRITER_COORDINATION_NOTE;
@@ -42,6 +42,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
     let open_plan_ids =
         current_open_plan_ids(&read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?);
     let configured_evidence = configured_gate_evidence_keys(ctx)?;
+    let cross_plan_targets = configured_evidence.cross_plan_targets.clone();
     let receipts_path = ctx.state_file("receipts.jsonl");
     let source_path = receipts_path
         .strip_prefix(ctx.root())
@@ -54,7 +55,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
         let mut protection_index = ReceiptProtectionIndex::with_evidence(
             &open_plan_ids,
             &configured_evidence.targets,
-            crate::repository::cross_plan_evidence_targets(ctx, &configured_evidence.targets)?,
+            cross_plan_targets,
         );
         let protection_scan = scan_jsonl_raw_locked(guard, &receipts_path, &|| false, |record| {
             let receipt = parse_raw_receipt(record, &receipts_path)?;
@@ -488,6 +489,7 @@ struct ConfiguredGateEvidence {
     check_gate_ids: BTreeSet<String>,
     review_gate_ids: BTreeSet<String>,
     targets: BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
+    cross_plan_targets: BTreeSet<jig_contract::TargetId>,
 }
 
 fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvidence> {
@@ -496,6 +498,7 @@ fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvid
         check_gate_ids: BTreeSet::new(),
         review_gate_ids: BTreeSet::new(),
         targets: BTreeMap::new(),
+        cross_plan_targets: BTreeSet::new(),
     };
     let gates = ctx.work_gates();
     let repository = gates
@@ -522,6 +525,12 @@ fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvid
             }
             WorkGate::Unsupported(_) => {}
         }
+    }
+    if let Some(repository) = repository {
+        configured.cross_plan_targets = plan_independent_targets(
+            &repository,
+            &configured.targets.values().flatten().cloned().collect(),
+        );
     }
     Ok(configured)
 }

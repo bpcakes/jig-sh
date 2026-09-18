@@ -183,6 +183,60 @@ fn cross_plan_finish_rejects_newer_foreign_failure_after_successful_reuse() {
 }
 
 #[test]
+fn cross_plan_ignores_planless_outcomes_for_gates_and_archive() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture(temp.path(), false, false);
+    let original = original_records(&ctx)[&"web:test".parse().unwrap()].clone();
+    append(&ctx, [original.clone()]);
+    let next = open_plan(&ctx);
+
+    let mut planless_pass = original.clone();
+    planless_pass["id"] = json!("receipt_example_planless_pass");
+    planless_pass["run_id"] = json!("run_example_planless_pass");
+    planless_pass["plan_id"] = Value::Null;
+    planless_pass["ended_at_ms"] = json!(100);
+    append(&ctx, [planless_pass.clone()]);
+    let after_pass = gates(&ctx, &next);
+    assert_eq!(after_pass["overall"], "passed", "{after_pass:#}");
+    assert_eq!(
+        after_pass["gates"][0]["targets"][0]["receipt_id"],
+        original["id"]
+    );
+
+    let mut planless_failure = planless_pass.clone();
+    planless_failure["id"] = json!("receipt_example_planless_failure");
+    planless_failure["run_id"] = json!("run_example_planless_failure");
+    planless_failure["ended_at_ms"] = json!(101);
+    planless_failure["exit_status"] = json!(1);
+    append(&ctx, [planless_failure.clone()]);
+    let after_failure = gates(&ctx, &next);
+    assert_eq!(after_failure["overall"], "passed", "{after_failure:#}");
+    assert_eq!(
+        after_failure["gates"][0]["targets"][0]["receipt_id"],
+        original["id"]
+    );
+
+    crate::state::receipts_archive(
+        &ctx,
+        crate::state::StateArchiveRequest {
+            before: "1000".into(),
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    let archived = journal(&ctx);
+    assert!(archived.contains(&original));
+    for planless in [planless_pass, planless_failure] {
+        assert!(
+            archived
+                .iter()
+                .all(|receipt| receipt["id"] != planless["id"]),
+            "plan-less receipt should not be protected: {planless:#}"
+        );
+    }
+}
+
+#[test]
 fn cross_plan_changed_inputs_rerun_only_affected_independent_target() {
     let temp = tempdir().unwrap();
     let ctx = fixture(temp.path(), false, true);
@@ -259,6 +313,54 @@ fn cross_plan_newest_outcomes_block_older_passes_and_survive_archive() {
         "receipt_newest_4"
     );
     assert_eq!(after["gates"][0]["targets"][0]["status"], "stale");
+}
+
+#[test]
+fn cross_plan_archive_ignores_superseded_open_plan_local_root() {
+    let temp = tempdir().unwrap();
+    let ctx = fixture(temp.path(), false, false);
+    let original = original_records(&ctx)[&"web:test".parse().unwrap()].clone();
+    let mut older_local = original.clone();
+    older_local["id"] = json!("receipt_example_older_local");
+    older_local["run_id"] = json!("run_example_older_local");
+    older_local["ended_at_ms"] = json!(100);
+    older_local["target_freshness"] = json!({"schema_version": 99});
+    let mut newer_foreign = original;
+    newer_foreign["id"] = json!("receipt_example_newer_foreign");
+    newer_foreign["run_id"] = json!("run_example_newer_foreign");
+    newer_foreign["plan_id"] = json!("plan_other");
+    newer_foreign["ended_at_ms"] = json!(101);
+    append(&ctx, [older_local.clone(), newer_foreign.clone()]);
+
+    let before = gates(&ctx, "plan_1");
+    assert_eq!(before["overall"], "passed", "{before:#}");
+    assert_eq!(
+        before["gates"][0]["targets"][0]["receipt_id"],
+        newer_foreign["id"]
+    );
+
+    crate::state::receipts_archive(
+        &ctx,
+        crate::state::StateArchiveRequest {
+            before: "1000".into(),
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    let archived = journal(&ctx);
+    assert!(archived.contains(&newer_foreign));
+    assert!(
+        archived
+            .iter()
+            .all(|receipt| receipt["id"] != older_local["id"]),
+        "superseded local receipt should not be protected: {older_local:#}"
+    );
+    let after = gates(&ctx, "plan_1");
+    assert_eq!(after["overall"], "passed", "{after:#}");
+    assert_eq!(
+        after["gates"][0]["targets"][0]["receipt_id"],
+        newer_foreign["id"]
+    );
 }
 
 #[test]

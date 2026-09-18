@@ -17,24 +17,30 @@ impl ReceiptProtectionIndex {
         let target_evidence = open_plan_ids
             .iter()
             .flat_map(|plan_id| {
+                let cross_plan_targets = &cross_plan_targets;
                 evidence_targets.iter().map(move |(gate_id, targets)| {
                     (
                         (plan_id.clone(), gate_id.clone()),
-                        IndexedTargetReceipts::new(targets.clone()),
+                        IndexedTargetReceipts::new(
+                            targets.difference(cross_plan_targets).cloned().collect(),
+                        ),
                     )
                 })
             })
             .collect();
         Self {
             target_evidence,
-            shared_targets: (!cross_plan_targets.is_empty()).then(|| IndexedTargetReceipts::new(cross_plan_targets)),
+            shared_targets: (!cross_plan_targets.is_empty())
+                .then(|| IndexedTargetReceipts::new(cross_plan_targets)),
             now_ms: super::now_ms(),
             ..Self::default()
         }
     }
 
     fn target_roots(&self) -> impl Iterator<Item = &super::TargetReceiptStatus> {
-        self.target_evidence.values().chain(self.shared_targets.iter())
+        self.target_evidence
+            .values()
+            .chain(self.shared_targets.iter())
             .flat_map(|receipts| receipts.selected().values())
     }
 
@@ -47,7 +53,7 @@ impl ReceiptProtectionIndex {
         review_gate_ids: &BTreeSet<String>,
     ) {
         if let (Some(shared), Some(target)) = (&mut self.shared_targets, &receipt.target) {
-            shared.observe(&target_receipt_status(receipt, target));
+            shared.observe_cross_plan(&target_receipt_status(receipt, target));
         }
         let Some(plan_id) = receipt
             .plan_id

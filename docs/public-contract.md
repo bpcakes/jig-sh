@@ -1153,9 +1153,12 @@ epochs retain their existing time rules; an old consumer must reject epoch `E` r
 ignore inherited validity. `.4.3` must exercise each listed consumer.
 
 For each required plan-independent gate target on epoch 8 and later, select its latest
-original receipt across the repository using deterministic `(ended_at_ms, receipt_id)`
-ordering. The execution's work-plan ID is provenance, not the consuming plan's
-identity. Select before testing validity or success: a newer failure,
+plan-bound original receipt across the repository using deterministic
+`(ended_at_ms, receipt_id)` ordering. The execution's work-plan ID establishes
+cross-plan eligibility and records provenance; it is not the consuming plan's
+identity. Receipts produced outside a work plan remain available to direct check
+commands but cannot satisfy or block structured work-plan gates. Select before testing
+validity or success: a newer eligible failure,
 unknown/stale/expired receipt, or unusable authority must block instead of exposing an
 older pass. Receipts from other or closed plans are eligible only when their complete
 original proof and current required authority match. Pre-8 target selection remains

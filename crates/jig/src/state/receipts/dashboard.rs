@@ -61,7 +61,7 @@ impl WorkGateReceiptIndexes {
         // Eligible target execution provenance is independent of its consuming plan.
         // Legacy tools and review attestations below remain plan-local.
         if let (Some(shared), Some(target)) = (&mut self.shared_targets, &receipt.target) {
-            shared.observe(&target_receipt_status(receipt, target));
+            shared.observe_cross_plan(&target_receipt_status(receipt, target));
         }
         let Some(plan_id) = receipt.plan_id.as_deref() else {
             return;
