@@ -376,6 +376,8 @@ pub struct StatusEvidenceTarget {
     pub status: String,
     pub receipt_id: Option<String>,
     pub run_id: Option<String>,
+    #[serde(default)]
+    pub original_plan_id: Option<String>,
     pub exit_status: Option<i32>,
     pub ended_at_ms: Option<u64>,
     pub config_digest: Option<String>,

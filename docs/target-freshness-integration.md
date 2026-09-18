@@ -144,12 +144,34 @@ time boundary. The child must finish before its dependent starts and remain
 valid at that time. Reuse preserves those IDs; it does not fabricate another
 successful target receipt.
 
-A gate selects the latest receipt for each explicitly required target in its
-plan. An implicit dependency is verified from the original referenced receipt,
-so a later independent dependency failure does not erase a successful dependent
-execution. If that dependency is itself required by the gate, its latest outcome
-is checked separately. Failed, legacy, or unusable latest required receipts
-continue to block older passing receipts.
+For epoch 8 and later, a gate selects the latest plan-bound receipt for each explicitly
+required plan-independent target across the repository, including receipts from closed
+or other work plans. Receipts produced without a work-plan ID remain direct check
+history; they neither satisfy nor block a structured work-plan gate. Native runners and
+targets that depend on them keep plan-local selection.
+An implicit dependency is verified from the original referenced receipt, so a later
+independent dependency failure does not erase a successful dependent execution. If
+that dependency is itself required by the gate, its latest outcome is checked
+separately. Failed, legacy, or unusable latest required receipts continue to block
+older passing receipts.
+
+Opening a follow-up plan does not itself require executing unchanged checks. `work
+check --plan-id NEW_PLAN` validates the originals against the new plan's current
+requirements, reuses compatible passes, and records its ordinary validation batch
+under `NEW_PLAN`. Each target reports `original_plan_id` beside its unchanged
+`receipt_id` and `run_id`; the batch is a record of validation, not another target
+execution. `work gates` and `work evidence` discover the same evidence without writing
+receipts. `work finish` independently checks it again.
+
+This is repository-local reuse, not a cross-worktree cache. Configuration, arguments,
+runner authority, source policy, original dependency proof and expiry still have to
+match. Native runners and their transitive dependents remain plan-local because
+prepared inputs can carry work-plan and comparison authority. A new plan runs those
+checks without displacing another plan's valid native evidence; ordinary test receipts
+can still be reused. Pre-8 contracts keep plan-local target selection; legacy check
+and review gates retain their existing rules. Older Jig runtimes can read the
+unchanged original receipts but may rerun checks because they do not implement
+cross-plan target reuse.
 
 Inspection builds one bounded location index of the active receipt journal,
 validates original dependencies iteratively, and then observes current source.
@@ -257,13 +279,14 @@ gate and batch summaries, dashboard gates, and finish all carry this effective
 validity. Finish checks expiry again after its final global source/configuration
 verification and before closing the work plan.
 
-Archive retains each selected target's newest outcome, including blockers, and
-retains the original dependency closure of protected, time-current proofs. It
-does not recompute source identities. If required originals are missing or have
-unsupported metadata, archive stops before backup or journal mutation. A single
-location index resolves required originals without rescanning the journal for
-each dependency level. Archive has no inspection collection quotas, so it can
-still shrink journals that inspection refuses to collect.
+Archive retains each configured plan-independent target's repository-wide newest
+outcome, including blockers and receipts from closed plans, even between work plans.
+It also retains existing open-plan protections and the original dependency closure of
+protected, time-current proofs. It does not recompute source identities. If required
+originals are missing or have unsupported metadata, archive stops before backup or
+journal mutation. A single location index resolves required originals without
+rescanning the journal for each dependency level. Archive has no inspection collection
+quotas, so it can still shrink journals that inspection refuses to collect.
 
 File-budget adoption and update still require the original full-repository,
 input/configuration, policy, and native prepared-authority checks. Epoch 8 also

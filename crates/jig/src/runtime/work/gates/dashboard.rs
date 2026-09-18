@@ -63,6 +63,7 @@ pub(crate) fn gate_receipt_indexes(
         &check_tools,
         &review_gate_ids,
         &evidence_targets,
+        crate::repository::cross_plan_evidence_targets(ctx, &evidence_targets)?,
     ))
 }
 

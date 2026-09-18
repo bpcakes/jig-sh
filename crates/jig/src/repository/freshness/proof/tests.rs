@@ -7,6 +7,7 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod work_reuse;
 mod worktree;
 use crate::repository::freshness::CollectionLimits;
 

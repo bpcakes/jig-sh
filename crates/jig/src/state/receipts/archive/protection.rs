@@ -37,14 +37,7 @@ impl ReceiptProtectionIndex {
         }
         // Keep each target's newest outcome, even a failure or expired proof.
         // It prevents archiving from exposing an older passing receipt again.
-        for receipts in self.target_evidence.values() {
-            protected.extend(
-                receipts
-                    .selected()
-                    .values()
-                    .map(|receipt| receipt.receipt_id.clone()),
-            );
-        }
+        protected.extend(self.target_roots().map(|receipt| receipt.receipt_id.clone()));
         Ok(protected)
     }
 }

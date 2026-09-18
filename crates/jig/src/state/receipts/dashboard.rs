@@ -16,6 +16,7 @@ use crate::tool_defs::tool;
 pub(crate) struct WorkGateReceiptIndexes {
     indexes: BTreeMap<String, WorkGateReceiptIndex>,
     review_gate_ids: BTreeSet<String>,
+    shared_targets: Option<IndexedTargetReceipts>,
 }
 
 impl WorkGateReceiptIndexes {
@@ -24,6 +25,7 @@ impl WorkGateReceiptIndexes {
         check_tools: &BTreeSet<String>,
         review_gate_ids: &BTreeSet<String>,
         evidence_targets: &BTreeMap<String, BTreeSet<TargetId>>,
+        cross_plan_targets: BTreeSet<TargetId>,
     ) -> Self {
         let indexes = plan_ids
             .iter()
@@ -50,10 +52,17 @@ impl WorkGateReceiptIndexes {
         Self {
             indexes,
             review_gate_ids: review_gate_ids.clone(),
+            shared_targets: (!cross_plan_targets.is_empty())
+                .then(|| IndexedTargetReceipts::new(cross_plan_targets)),
         }
     }
 
     pub(crate) fn observe(&mut self, receipt: &ReceiptRecord) {
+        // Eligible target execution provenance is independent of its consuming plan.
+        // Legacy tools and review attestations below remain plan-local.
+        if let (Some(shared), Some(target)) = (&mut self.shared_targets, &receipt.target) {
+            shared.observe_cross_plan(&target_receipt_status(receipt, target));
+        }
         let Some(plan_id) = receipt.plan_id.as_deref() else {
             return;
         };
@@ -139,7 +148,16 @@ impl WorkGateReceiptIndexes {
         }
     }
 
-    pub(crate) fn into_indexes(self) -> BTreeMap<String, WorkGateReceiptIndex> {
+    pub(crate) fn into_indexes(mut self) -> BTreeMap<String, WorkGateReceiptIndex> {
+        if let Some(shared) = self.shared_targets {
+            for index in self.indexes.values_mut() {
+                for receipts in index.evidence.values_mut() {
+                    for receipt in shared.selected().values() {
+                        receipts.observe(receipt);
+                    }
+                }
+            }
+        }
         self.indexes
     }
 }

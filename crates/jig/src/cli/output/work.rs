@@ -7,7 +7,7 @@ use super::{concise_preview, status, value_bool, value_i64, value_str};
 mod check_targets;
 mod gate_recovery;
 mod plan_lifecycle;
-use check_targets::{TargetSummary, append_target_summary, target_summaries};
+use check_targets::{TargetSummary, append_target_summary, original_plan_suffix, target_summaries};
 use plan_lifecycle::append_plan_lifecycle;
 
 pub(super) fn format_work_start_plan_id(value: &serde_json::Value) -> Result<String> {
@@ -79,8 +79,9 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             value_str(value, "target_validation_receipt_id").unwrap_or("none")
         ));
         for target in target_evidence {
+            let origin = original_plan_suffix(target, plan_id);
             lines.push(format!(
-                "  - {}:{}: {} ({}), receipt {}, run {}",
+                "  - {}:{}: {} ({}), receipt {}, run {}{origin}",
                 value_str(&target["target"], "component").unwrap_or("?"),
                 value_str(&target["target"], "action").unwrap_or("?"),
                 value_str(target, "status").unwrap_or("unknown"),

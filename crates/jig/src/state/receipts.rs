@@ -47,8 +47,8 @@ pub(crate) use journal::{
     receipt_append_may_have_landed, receipt_record_id, with_receipt_journal_writer,
     with_receipt_journal_writer_until,
 };
-use target_evidence::IndexedTargetReceipts;
 pub(crate) use target_evidence::TargetReceiptStatus;
+use target_evidence::{IndexedTargetReceipts, cross_plan_receipt_is_eligible};
 
 const SUCCESSFUL_RECEIPT_PREVIEW_BYTES: usize = 512;
 
@@ -729,8 +729,13 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
 ) -> Result<BTreeMap<String, WorkGateReceiptIndex>> {
     ensure_receipt_scan_active(cancelled)?;
 
-    let mut indexes =
-        WorkGateReceiptIndexes::new(plan_ids, check_tools, review_gate_ids, evidence_targets);
+    let mut indexes = WorkGateReceiptIndexes::new(
+        plan_ids,
+        check_tools,
+        review_gate_ids,
+        evidence_targets,
+        crate::repository::cross_plan_evidence_targets(ctx, evidence_targets)?,
+    );
     if plan_ids.is_empty()
         || (check_tools.is_empty() && review_gate_ids.is_empty() && evidence_targets.is_empty())
     {
