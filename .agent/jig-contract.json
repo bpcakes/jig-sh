@@ -448,6 +448,47 @@
     }
   },
   {
+    "description": "Build the current Jig runtime and validate its repository contract through the launcher.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "crates/**",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain*",
+      ".cargo/**",
+      ".jig.toml",
+      ".jig/**",
+      "templates/**",
+      "scripts/**"
+    ],
+    "intent": "check",
+    "provenance": {
+      "effects": "declared",
+      "inputs": "declared",
+      "intent": "declared",
+      "runner": "declared",
+      "source_state": "declared",
+      "target": "declared"
+    },
+    "runner": {
+      "args": [
+        "check",
+        "contract",
+        "--no-receipt"
+      ],
+      "kind": "argv",
+      "program": "scripts/jig-dev"
+    },
+    "source_state": "worktree",
+    "target": {
+      "action": "source-runtime-check",
+      "component": "repo"
+    }
+  },
+  {
     "description": "Run the source repository's fast core Rust test partition.",
     "effects": [
       "read_only",
@@ -669,7 +710,7 @@
     "id": "verify",
     "provenance": {
       "id": "inferred",
-      "targets": "inherited"
+      "targets": "overridden"
     },
     "targets": [
       {
@@ -690,6 +731,10 @@
       },
       {
         "action": "file-budget",
+        "component": "repo"
+      },
+      {
+        "action": "source-runtime-check",
         "component": "repo"
       }
     ]

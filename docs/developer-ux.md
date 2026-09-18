@@ -430,6 +430,8 @@ The distinction matters for downstream repos because the harness is shared infra
 
 ## What Makes Jig Developer-Friendly
 
+In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or work commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. The required `repo:source-runtime-check` target in the `verify` profile performs this current-source validation automatically for applicable changes, and CI runs the same target.
+
 Jig's developer friendliness comes from a few consistent product choices:
 
 - It gives every repo a small, stable command vocabulary.
@@ -439,7 +441,7 @@ Jig's developer friendliness comes from a few consistent product choices:
 - It makes MCP and CLI use converge on the same runtime contract.
 - It keeps machine-local proxy and vault state out of repo history.
 - It makes broad trust changes explicit at the command line.
-- It supports dogfooding through `JIG_DEV_BIN` so Jig changes can be validated through the same launcher generated repos use.
+- It supports dogfooding through `scripts/jig-dev` while routine source-repository work uses a selected release.
 
 The intentional friction is part of the UX. Trusting a local CA, exposing a proxy on the LAN, installing Codex marketplace support, overwriting managed files, or injecting secrets into a child process all require explicit commands. Ordinary repo work stays quick; higher-blast-radius actions are visible and auditable.
 

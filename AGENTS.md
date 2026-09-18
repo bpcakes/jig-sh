@@ -89,12 +89,16 @@ When a backend package or crate has an `AGENTS.md`, use these sections:
 
 This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and receipt paths that generated repos use.
 
-When changing the `jig` runtime itself, build a dev binary and force the launcher to use it before running harness commands:
+In this source checkout, `scripts/jig` uses the released runtime selected by `.jig/source-runtime-version`. Routine checks and work commands remain available while the source is changing or does not compile. Rust tests still compile and exercise the edited source.
+
+Use the development entrypoint when validating behavior of the current `jig` implementation:
 
 ```sh
-cargo build -p jig-sh --bin jig
-export JIG_DEV_BIN=target/debug/jig
+scripts/jig-dev check contract
+scripts/jig-dev --json info
 ```
+
+`scripts/jig-dev` incrementally builds the workspace binary and passes the resulting executable through the normal launcher. It respects Cargo's configured target directory and fails if the build fails. No environment override is needed for routine development.
 
 For substantial work, open structured work, run configured gates, then inspect gate status and receipts:
 
@@ -108,7 +112,7 @@ scripts/jig work receipts --plan-id "$plan_id"
 scripts/jig work status
 ```
 
-Do not rely on the repo-local cached `jig` binary for runtime changes unless you have intentionally refreshed it. `JIG_DEV_BIN` is the expected local-development cutover.
+The required `verify` profile includes `repo:source-runtime-check`. For runtime, launcher, template, or build configuration changes, `work check` runs this target to build and validate the current implementation through the launcher before completion. Run `scripts/jig check repo:source-runtime-check` to request that validation directly. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
 
 <!-- bv-agent-instructions-v3 -->
 
