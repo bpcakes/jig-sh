@@ -11,7 +11,8 @@ Usage:
   scripts/release-notes.sh print [VERSION]
 
 Commands:
-  update    Generate or replace the CHANGELOG.md section for VERSION.
+  update    Promote ## Unreleased notes into the VERSION section when present;
+            otherwise generate notes from git history.
   print     Print the CHANGELOG.md section for VERSION.
 
 VERSION may be prefixed with v. It defaults to scripts/release.sh version.
@@ -144,7 +145,7 @@ update_changelog() {
     return 1
   fi
 
-  if ! python3 - "$CHANGELOG_PATH" "$tmp_section" "$version" <<'PY'
+  if ! python3 - "$CHANGELOG_PATH" "$tmp_section" "$version" "${RELEASE_DATE:-$(date -u +%F)}" <<'PY'
 import pathlib
 import re
 import sys
@@ -153,7 +154,8 @@ import os
 changelog_path = pathlib.Path(sys.argv[1])
 section_path = pathlib.Path(sys.argv[2])
 version = sys.argv[3]
-section = section_path.read_text().rstrip() + "\n"
+release_date = sys.argv[4]
+generated = section_path.read_text().rstrip() + "\n"
 
 if changelog_path.exists():
     text = changelog_path.read_text()
@@ -163,18 +165,40 @@ else:
 if not text.startswith("# Changelog"):
     raise SystemExit("CHANGELOG.md must start with '# Changelog'.")
 
-pattern = re.compile(
+unreleased_pattern = re.compile(
+    r"^## Unreleased\n+(.*?)(?=^## |\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+version_pattern = re.compile(
     rf"^## v{re.escape(version)} - .+?(?=^## |\Z)",
     re.MULTILINE | re.DOTALL,
 )
-section_exists = pattern.search(text)
-if section_exists and not bool(int(os.environ.get("RELEASE_NOTES_FORCE", "0"))):
+force = bool(int(os.environ.get("RELEASE_NOTES_FORCE", "0")))
+version_exists = version_pattern.search(text)
+if version_exists and not force:
     raise SystemExit(
         f"CHANGELOG.md already has a v{version} section. Set RELEASE_NOTES_FORCE=1 to replace it."
     )
 
-if section_exists:
-    text = pattern.sub(lambda _match: section.rstrip() + "\n\n", text)
+section = generated
+unreleased = unreleased_pattern.search(text)
+if unreleased:
+    body_lines = unreleased.group(1).strip().splitlines()
+    heading_idx = next(
+        (index for index, line in enumerate(body_lines) if line.startswith("### ")),
+        None,
+    )
+    curated = (
+        "\n".join(body_lines[heading_idx:]).strip()
+        if heading_idx is not None
+        else ""
+    )
+    if curated:
+        section = f"## v{version} - {release_date}\n\n{curated}\n"
+        text = unreleased_pattern.sub("", text, count=1)
+
+if version_pattern.search(text):
+    text = version_pattern.sub(lambda _match: section.rstrip() + "\n\n", text)
 else:
     lines = text.rstrip().splitlines()
     if len(lines) == 1:
@@ -182,7 +206,7 @@ else:
     else:
         text = lines[0] + "\n\n" + section + "\n" + "\n".join(lines[1:]).lstrip() + "\n"
 
-changelog_path.write_text(text.rstrip() + "\n")
+changelog_path.write_text(re.sub(r"\n{3,}", "\n\n", text).rstrip() + "\n")
 PY
   then
     rm -f "$tmp_section"

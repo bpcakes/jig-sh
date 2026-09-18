@@ -34,7 +34,7 @@
 - Change session, plan, receipt, or decision persistence: `src/state.rs`.
 - Change the data exposed by the unified dashboard: `src/ui/source/`.
 - Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.
-- Change status provider execution or aggregate facts: `src/status.rs` and `src/status/`.
+- Change local status aggregation: `src/status.rs` and `src/status/`.
 - Change terminal status navigation, refresh runtime, or rendering: `crates/jig-ui/src/terminal/`.
 - Change Vault TUI navigation, forms, or rendering: `crates/jig-vault-tui/`; keep scope, environment capture, external tools, and core calls in `src/runtime/vault/tui.rs`.
 - Change bounded owned-process execution or process-tree cleanup: `src/process.rs` and
@@ -62,7 +62,7 @@
 - Generated Rust/React source must be rustfmt-stable and pass its generated strict Clippy gate for every supported normalized package stem, database branch, and valid migration path. Validate the 216-byte Cargo artifact boundary before destination mutation, keep rendered identifiers behind fixed aliases, narrowly scope any lint acknowledgement required by intentional formatter-stability constructs, and keep long fallback API labels DNS-safe without changing short-name output.
 - Classify each `node_modules` install root independently: missing, empty, and exact ignored-only real roots share the absent proof, while any unknown/type-replaced/nested entry makes the root present and fully attested. Preserve package metadata, links, member receipt-like files, launcher bytes/modes, and the v5/v3/v2 receipt formats.
 - Rust/React scaffolds require Rust 1.94. Database-enabled variants pin SQLx 0.9 and use `.sqlx`; Doctor must enforce the active Rust floor and matching SQLx CLI minor line. PostgreSQL browser E2E owns its Linux service-container runner independently of the repository-wide runner; managed Rust workflow triggers and offline environments must follow configured migration and metadata authorities.
-- When editing the runtime, build `target/debug/jig` and dogfood through `JIG_DEV_BIN=target/debug/jig scripts/jig ...` so the cached repo-local binary cannot mask current code.
+- Use `scripts/jig` with the repository's selected release for routine checks and work commands. Validate edited runtime behavior with `scripts/jig-dev ...`, which incrementally builds the current source before invoking the launcher. The required `repo:source-runtime-check` target automates current-source contract validation at completion.
 
 ## Common commands
 
@@ -70,8 +70,8 @@
 - `cargo test -p jig-sh --test codex_launcher -- --nocapture` (requires a Unix PTY; set
   `JIG_ALLOW_PTY_TEST_SKIP=1` only when the environment is intentionally exempt)
 - `cargo test --workspace`
-- `cargo build -p jig-sh --bin jig`
-- `JIG_DEV_BIN=target/debug/jig scripts/jig work status`
-- `JIG_DEV_BIN=target/debug/jig scripts/jig check contract`
-- `JIG_DEV_BIN=target/debug/jig scripts/jig check agent-guides`
-- `JIG_DEV_BIN=target/debug/jig scripts/jig check agent-map`
+- `scripts/jig work status`
+- `scripts/jig check repo:source-runtime-check`
+- `scripts/jig-dev check contract`
+- `scripts/jig-dev check agent-guides`
+- `scripts/jig-dev check agent-map`

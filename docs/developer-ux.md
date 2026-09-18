@@ -155,12 +155,14 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
-- `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
+- `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, refuses to finish work without fresh required evidence, and can retire a plan that will not be delivered.
 - `scripts/jig status` collects local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
+- `scripts/jig claude homes` lists Claude Code configuration directories; `scripts/jig claude launch` opens the shared searchable picker or an explicit home. Add `--usage` for subscription limits.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
+- `scripts/jig info freshness` previews conservative target-freshness adoption without writing files.
 
 This is where Jig is most agent-friendly: repository targets, verification profiles, legacy checks, and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh.
 
@@ -282,9 +284,7 @@ Receipt retention is also local. `state archive --before <date>` compresses elig
 
 ## Terminal Dashboard
 
-This section describes the unreleased dashboard cutover after 0.3.0. The published 0.3.0 release still has separate browser and status dashboards with external status providers; see its [developer guide](https://github.com/bpcakes/jig-sh/blob/8629700b92cd9ab8b09f8ff86de4fc1573469c83/docs/developer-ux.md) for release-specific commands.
-
-`scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status.
+`scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status. Upgrading from 0.3.0 replaces the separate browser and status dashboards and their external status providers.
 
 ```sh
 scripts/jig ui                         # start on Work
@@ -305,7 +305,7 @@ The full layout is comfortable at 108 by 24 cells or larger and supported from 7
 
 The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 2.
 
-The unreleased cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. In current `master`, the old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in 0.4.0. Callers needing the browser transport can continue using the published 0.3.0 release. The cutover does not change generated launcher scope or itself require a new contract epoch because `ui` and `status` remain runtime-owned repository commands.
+The 0.3.0 cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in a later release. Callers needing the browser transport can continue using 0.3.0. The cutover does not change generated launcher scope or itself require a new contract epoch because `ui` and `status` remain runtime-owned repository commands.
 
 ## Dev Proxy
 
@@ -430,6 +430,8 @@ The distinction matters for downstream repos because the harness is shared infra
 
 ## What Makes Jig Developer-Friendly
 
+In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or work commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. The required `repo:source-runtime-check` target in the `verify` profile performs this current-source validation automatically for applicable changes, and CI runs the same target.
+
 Jig's developer friendliness comes from a few consistent product choices:
 
 - It gives every repo a small, stable command vocabulary.
@@ -439,7 +441,7 @@ Jig's developer friendliness comes from a few consistent product choices:
 - It makes MCP and CLI use converge on the same runtime contract.
 - It keeps machine-local proxy and vault state out of repo history.
 - It makes broad trust changes explicit at the command line.
-- It supports dogfooding through `JIG_DEV_BIN` so Jig changes can be validated through the same launcher generated repos use.
+- It supports dogfooding through `scripts/jig-dev` while routine source-repository work uses a selected release.
 
 The intentional friction is part of the UX. Trusting a local CA, exposing a proxy on the LAN, installing Codex marketplace support, overwriting managed files, or injecting secrets into a child process all require explicit commands. Ordinary repo work stays quick; higher-blast-radius actions are visible and auditable.
 
@@ -448,4 +450,6 @@ The intentional friction is part of the UX. Trusting a local CA, exposing a prox
 - [Adoption Guide](./adoption.md)
 - [Configuration Reference](./configuration.md)
 - [Public Contract](./public-contract.md)
+- [Target freshness](./target-freshness-integration.md)
+- [Scheduled Codex Tasks](./codex-task-operations.md)
 - [Repo Intent For Agents](./repo-intent.md)
