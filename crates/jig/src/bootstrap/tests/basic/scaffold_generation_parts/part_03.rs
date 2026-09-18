@@ -658,6 +658,7 @@ fn assert_rendered_scaffold_rust_is_formatted(plan: &scaffold::InitScaffoldPlan,
 
     assert!(!rust_paths.is_empty(), "{case}: scaffold rendered no Rust");
     let output = Command::new("rustfmt")
+        .current_dir(temp.path())
         .args([
             "--edition",
             "2024",

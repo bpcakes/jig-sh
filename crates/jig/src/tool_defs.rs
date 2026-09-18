@@ -23,6 +23,7 @@ pub(crate) mod args {
     pub(crate) const BODY: &str = "body";
     pub(crate) const BODY_FILE: &str = "body_file";
     pub(crate) const BASE: &str = "base";
+    pub(crate) const DISPOSITION: &str = "disposition";
     pub(crate) const FAILED_ONLY: &str = "failed_only";
     pub(crate) const LIMIT: &str = "limit";
     pub(crate) const NAME: &str = "name";
@@ -31,7 +32,9 @@ pub(crate) mod args {
     pub(crate) const OUTCOME: &str = "outcome";
     pub(crate) const PLAN_ID: &str = "plan_id";
     pub(crate) const RATIONALE: &str = "rationale";
+    pub(crate) const REASON: &str = "reason";
     pub(crate) const RESOLUTION: &str = "resolution";
+    pub(crate) const SUPERSEDED_BY: &str = "superseded_by";
     pub(crate) const SELECTED_OPTION: &str = "selected_option";
     pub(crate) const SESSION_ID: &str = "session_id";
     pub(crate) const SUCCESS: &str = "success";
@@ -171,6 +174,7 @@ pub(crate) mod cli_command {
     pub(crate) const WORK_GATES: &str = "gates";
     pub(crate) const WORK_GOAL: &str = "goal";
     pub(crate) const WORK_REFINE: &str = "refine";
+    pub(crate) const WORK_RETIRE: &str = "retire";
     pub(crate) const WORK_REVIEW: &str = "review";
     pub(crate) const WORK_RECEIPTS: &str = "receipts";
     pub(crate) const WORK_START: &str = "start";
@@ -194,6 +198,7 @@ pub(crate) enum MemoryTool {
     Receipts,
     Status,
     Finish,
+    Retire,
 }
 
 impl MemoryTool {
@@ -211,6 +216,7 @@ impl MemoryTool {
         Self::Receipts,
         Self::Status,
         Self::Finish,
+        Self::Retire,
     ];
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
@@ -228,6 +234,7 @@ impl MemoryTool {
             tool::WORK_RECEIPTS => Some(Self::Receipts),
             tool::WORK_STATUS => Some(Self::Status),
             tool::WORK_FINISH => Some(Self::Finish),
+            tool::WORK_RETIRE => Some(Self::Retire),
             _ => None,
         }
     }
@@ -263,6 +270,7 @@ impl MemoryTool {
             Self::Receipts => tool::WORK_RECEIPTS,
             Self::Status => tool::WORK_STATUS,
             Self::Finish => tool::WORK_FINISH,
+            Self::Retire => tool::WORK_RETIRE,
         }
     }
 
@@ -293,6 +301,9 @@ impl MemoryTool {
             Self::Receipts => "List structured work receipts.",
             Self::Status => "Summarize structured work state.",
             Self::Finish => "Close a structured work plan and active session.",
+            Self::Retire => {
+                "Retire an open work plan that will not be delivered. Requires a terminal disposition and a nonblank reason, evaluates no required gates, and claims no successful completion."
+            }
         }
     }
 
@@ -406,6 +417,24 @@ impl MemoryTool {
                     (args::OUTCOME, string_schema()),
                 ],
                 &[args::PLAN_ID],
+            ),
+            Self::Retire => object_schema(
+                &[
+                    (args::PLAN_ID, string_schema()),
+                    (
+                        args::DISPOSITION,
+                        json!({
+                            "type": "string",
+                            "enum": crate::state::PlanDisposition::ALL
+                                .iter()
+                                .map(|disposition| disposition.as_str())
+                                .collect::<Vec<_>>(),
+                        }),
+                    ),
+                    (args::REASON, nonblank_string_schema()),
+                    (args::SUPERSEDED_BY, nonblank_string_schema()),
+                ],
+                &[args::PLAN_ID, args::DISPOSITION, args::REASON],
             ),
         }
     }

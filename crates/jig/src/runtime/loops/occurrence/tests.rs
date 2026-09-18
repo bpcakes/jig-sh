@@ -1,4 +1,7 @@
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, RecvTimeoutError},
+};
 use tempfile::tempdir;
 
 use super::*;
@@ -513,7 +516,7 @@ fn occurrence_renewal_retries_transient_failure_before_claim_expiry() {
     let now_ms = Cell::new(0_u64);
     let waits = RefCell::new(Vec::new());
 
-    run_occurrence_renewal_with_wait(
+    run_with_wait(
         Duration::from_millis(300),
         900,
         &failed,
@@ -554,8 +557,7 @@ fn occurrence_renewal_latches_failure_at_claim_expiry() {
     let (_stop, receiver) = mpsc::channel();
     let failed = AtomicBool::new(false);
 
-    let error = run_occurrence_renewal(
-        &receiver,
+    let error = run_with_wait(
         Duration::from_millis(1),
         100,
         &failed,
@@ -565,6 +567,7 @@ fn occurrence_renewal_latches_failure_at_claim_expiry() {
             )))
         },
         || 100,
+        |wait| receiver.recv_timeout(wait),
     )
     .unwrap_err()
     .to_string();
@@ -578,8 +581,7 @@ fn occurrence_renewal_latches_failure_with_time_to_cancel_and_finish() {
     let (_stop, receiver) = mpsc::channel();
     let failed = AtomicBool::new(false);
 
-    let error = run_occurrence_renewal(
-        &receiver,
+    let error = run_with_wait(
         Duration::from_millis(100),
         1_000,
         &failed,
@@ -589,6 +591,7 @@ fn occurrence_renewal_latches_failure_with_time_to_cancel_and_finish() {
             )))
         },
         || 950,
+        |wait| receiver.recv_timeout(wait),
     )
     .unwrap_err()
     .to_string();
@@ -601,7 +604,7 @@ fn occurrence_renewal_latches_failure_with_time_to_cancel_and_finish() {
 fn occurrence_renewal_stop_latches_an_already_expired_claim() {
     let failed = AtomicBool::new(false);
 
-    run_occurrence_renewal_with_wait(
+    run_with_wait(
         Duration::from_millis(300),
         900,
         &failed,
@@ -655,11 +658,11 @@ fn guard_with_failed_renewal(
         store,
         occurrence_id: claim.occurrence_id.clone(),
         owner: claim.owner.clone(),
-        stop: None,
-        renewal: Some(std::thread::spawn(|| {
-            anyhow::bail!("injected renewal failure")
-        })),
-        renewal_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        renewal: RenewalWorker::from_test_handle(
+            std::thread::spawn(|| anyhow::bail!("injected renewal failure")),
+            true,
+            "Occurrence renewal thread panicked",
+        ),
     }
 }
 

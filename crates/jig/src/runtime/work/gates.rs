@@ -18,9 +18,9 @@ use crate::state::{
     WorkReviewReceiptEvidence, WorkReviewReceiptStatus, current_worktree_fingerprint,
     current_worktree_fingerprint_with_cancellation, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, open_plan_summaries,
-    open_plan_summaries_with_cancellation, plan_baselines_with_cancellation, plan_status,
-    plan_status_with_cancellation, work_gate_receipt_index,
-    work_gate_receipt_index_with_cancellation, work_gate_receipt_indexes_with_cancellation,
+    open_plan_summaries_with_cancellation, plan_baselines_with_cancellation,
+    work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
+    work_gate_receipt_indexes_with_cancellation,
 };
 
 use super::scope::{GateScopeEvaluation, PlanGateContext};
@@ -729,6 +729,7 @@ pub(super) fn open_plan_snapshots_with_cancellation(
             GateReportPlanInput {
                 plan_id,
                 plan_state: "open",
+                plan_retirement: None,
                 prepared_scope: plan_scope,
             },
             current_fingerprint.clone(),

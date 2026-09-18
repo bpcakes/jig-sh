@@ -45,7 +45,8 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
         "api-tests".to_string(),
         BTreeSet::from(["api:test".parse().unwrap()]),
     )]);
-    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+    let mut index =
+        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
     let mut target = test_receipt(
         "receipt_target",
         "plan_open",
@@ -118,7 +119,8 @@ fn receipt_archive_protection_keeps_latest_targets_after_many_runs() {
         "verify".to_string(),
         BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]),
     )]);
-    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+    let mut index =
+        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
 
     for sequence in 0..=1024 {
         let mut partial = test_receipt(
@@ -171,7 +173,8 @@ fn receipt_archive_protection_remains_bounded_across_incomplete_runs() {
         "verify".to_string(),
         BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]),
     )]);
-    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+    let mut index =
+        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
 
     for sequence in 0..=16 * 1024 {
         let mut partial = test_receipt(
@@ -205,7 +208,8 @@ fn archive_protection_keeps_expired_target_as_latest_outcome() {
         "verify".to_string(),
         BTreeSet::from(["repo:file-budget".parse().unwrap()]),
     )]);
-    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+    let mut index =
+        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
     let mut expired = test_receipt(
         "receipt_expired",
         "plan_open",
@@ -728,3 +732,6 @@ fn reusable_evidence_enforces_inherited_expiry_and_missing_effective_boundary() 
         Some(EffectiveTimeValidityV1::new(None, true))
     ));
 }
+
+mod cross_plan;
+mod session_pointer;

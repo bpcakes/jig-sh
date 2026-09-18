@@ -114,7 +114,7 @@ fn doctor_reports_unified_readiness_checks() {
 
     assert_eq!(output["command"], "doctor");
     assert_eq!(output["repo"]["name"], "demo");
-    assert_eq!(output["checks"].as_array().unwrap().len(), 8);
+    assert_eq!(output["checks"].as_array().unwrap().len(), 9);
     assert!(check_by_id(&output, "runtime")["ok"].as_bool().unwrap());
     assert!(check_by_id(&output, "config")["ok"].as_bool().unwrap());
     assert!(
@@ -134,6 +134,8 @@ fn doctor_reports_unified_readiness_checks() {
     assert_eq!(check_by_id(&output, "agent_skills")["required"], false);
     assert_eq!(check_by_id(&output, "proxy")["status"], "not configured");
     assert!(check_by_id(&output, "proxy")["ok"].as_bool().unwrap());
+    assert_eq!(check_by_id(&output, "tracker")["status"], "not configured");
+    assert!(check_by_id(&output, "tracker")["ok"].as_bool().unwrap());
     assert_eq!(check_by_id(&output, "vault")["required"], false);
 }
 
@@ -153,14 +155,21 @@ fn doctor_reports_all_checks_when_config_is_invalid() {
     let output = run().unwrap();
 
     assert_eq!(output["command"], "doctor");
-    assert_eq!(output["checks"].as_array().unwrap().len(), 8);
+    assert_eq!(output["checks"].as_array().unwrap().len(), 9);
     assert_eq!(check_by_id(&output, "config")["status"], "invalid");
     assert_eq!(check_by_id(&output, "contract")["status"], "blocked");
     assert_eq!(check_by_id(&output, "required_tools")["status"], "blocked");
     assert_eq!(check_by_id(&output, "agent_skills")["status"], "blocked");
     assert_eq!(check_by_id(&output, "proxy")["status"], "blocked");
+    assert_eq!(check_by_id(&output, "tracker")["status"], "blocked");
     assert_eq!(check_by_id(&output, "vault")["status"], "blocked");
-    for id in ["contract", "required_tools", "agent_skills", "proxy"] {
+    for id in [
+        "contract",
+        "required_tools",
+        "tracker",
+        "agent_skills",
+        "proxy",
+    ] {
         assert!(
             check_by_id(&output, id)["detail"]
                 .as_str()
@@ -961,13 +970,4 @@ fn write_doctor_fixture_with_bootstrap_command(root: &Path, command: &str) {
         &format!("bootstrap_command = {command:?}"),
     );
     fs::write(config_path, config).unwrap();
-}
-
-fn check_by_id<'a>(output: &'a Value, id: &str) -> &'a Value {
-    output["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|check| check["id"] == id)
-        .unwrap()
 }

@@ -13,6 +13,7 @@ use jig_contract::{
 use super::RepositoryCatalog;
 use crate::context::RepoContext;
 
+pub(crate) mod adoption;
 mod authority;
 mod budget;
 mod encoding;

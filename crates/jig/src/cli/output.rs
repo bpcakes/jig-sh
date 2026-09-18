@@ -22,8 +22,8 @@ use self::work::{
     format_work_append_summary, format_work_check_summary, format_work_decide_summary,
     format_work_evidence_summary, format_work_finish_summary, format_work_gates_summary,
     format_work_goal_summary, format_work_receipts_summary, format_work_refine_summary,
-    format_work_review_summary, format_work_start_plan_id, format_work_start_summary,
-    format_work_status_summary,
+    format_work_retire_summary, format_work_review_summary, format_work_start_plan_id,
+    format_work_start_summary, format_work_status_summary,
 };
 
 mod agent;
@@ -66,6 +66,7 @@ pub(super) enum HumanOutput {
     WorkAppend,
     WorkDecide,
     WorkFinish,
+    WorkRetire,
     WorkReceipts,
     WorkStatus,
     Check,
@@ -129,6 +130,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::WorkAppend => format_work_append_summary(value),
         HumanOutput::WorkDecide => format_work_decide_summary(value),
         HumanOutput::WorkFinish => format_work_finish_summary(value),
+        HumanOutput::WorkRetire => format_work_retire_summary(value),
         HumanOutput::WorkReceipts => format_work_receipts_summary(value),
         HumanOutput::WorkStatus => format_work_status_summary(value),
         HumanOutput::Check => format_check_output(value),

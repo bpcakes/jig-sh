@@ -107,7 +107,9 @@ fn parse_selector_part<T>(
 }
 
 mod evidence;
-pub(crate) use evidence::resolve_evidence_targets;
+pub(crate) use evidence::{
+    cross_plan_evidence_targets, plan_independent_targets, resolve_evidence_targets,
+};
 
 pub(crate) fn validate_read_only_check_closure<'a, 'b>(
     actions: impl IntoIterator<Item = &'a ActionSpec>,

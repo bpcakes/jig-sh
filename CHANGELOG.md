@@ -6,6 +6,17 @@ These changes postdate the published v0.3.0 release of September 5, 2026. They a
 
 ### Added
 
+- Add `jig work retire` and the `jig.work_retire` MCP tool for explicit
+  non-success retirement of an open work plan. Retirement requires a structured
+  disposition (`cancelled`, `superseded`, `duplicate`, `obsolete`) and a nonblank
+  reason, accepts an optional `--superseded-by` reference, evaluates no required
+  gates, and records no successful gate evidence. It reuses the existing
+  plan-close lease, open-state recheck, and linked-run rejection, appends an
+  additive `retirement` object to the existing append-only `close` plan event and
+  its state receipt, and ends a session only when the plan's open receipt proves
+  that session owns the plan. `work finish` stays evidence-gated and uses the
+  same ownership-safe session teardown.
+
 - Add the 0.4.0 contract v8 epoch, combining the unreleased bounded-argument,
   literal-argv, explicit-shell, target-freshness, and working-file-authority
   changes. Bind repeatable `jig run --arg TARGET:NAME=VALUE` or MCP

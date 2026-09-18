@@ -30,7 +30,7 @@ fn occurrence_renewal_preserves_the_first_unrecovered_error() {
     let now_ms = Cell::new(0_u64);
     let calls = Cell::new(0_u64);
 
-    let error = run_occurrence_renewal_with_wait(
+    let error = run_with_wait(
         Duration::from_millis(300),
         900,
         &failed,
@@ -65,7 +65,7 @@ fn stopping_before_the_failure_window_does_not_latch_a_pending_transient_error()
     let now_ms = Cell::new(0_u64);
     let waits = Cell::new(0_u64);
 
-    run_occurrence_renewal_with_wait(
+    run_with_wait(
         Duration::from_millis(300),
         900,
         &failed,
@@ -101,7 +101,7 @@ fn occurrence_renewal_stops_immediately_after_ownership_loss() {
     let failed = AtomicBool::new(false);
     let calls = Cell::new(0_u64);
 
-    let error = run_occurrence_renewal_with_wait(
+    let error = run_with_wait(
         Duration::from_millis(300),
         900,
         &failed,

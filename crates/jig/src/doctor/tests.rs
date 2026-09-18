@@ -54,3 +54,4 @@ mod root;
 mod runtime;
 #[cfg(unix)]
 mod sqlx_versions;
+mod tracker;

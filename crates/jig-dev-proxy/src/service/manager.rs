@@ -43,6 +43,10 @@ impl ServiceManagerStatus {
             value,
         }
     }
+
+    pub(super) const fn is_active(&self) -> bool {
+        self.loaded || self.enabled || self.running
+    }
 }
 
 pub(super) fn load_service(path: &Path) -> Value {
@@ -125,5 +129,29 @@ pub(super) fn service_manager_status(path: &Path) -> ServiceManagerStatus {
             "enabled": false,
             "running": false,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ServiceManagerStatus;
+
+    #[test]
+    fn service_is_active_when_any_manager_state_is_active() {
+        for (loaded, enabled, running, expected) in [
+            (false, false, false, false),
+            (true, false, false, true),
+            (false, true, false, true),
+            (false, false, true, true),
+        ] {
+            let status = ServiceManagerStatus::from_value(json!({
+                "loaded": loaded,
+                "enabled": enabled,
+                "running": running,
+            }));
+            assert_eq!(status.is_active(), expected);
+        }
     }
 }

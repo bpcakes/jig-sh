@@ -24,3 +24,14 @@ pub(super) fn load_config_snapshot(config_path: &Path) -> Result<LoadedConfig> {
 pub(super) fn load_config(config_path: &Path) -> Result<RepoConfig> {
     Ok(load_config_snapshot(config_path)?.config)
 }
+
+impl RepoContext {
+    /// Authoring presence matters to migrations even when omitted defaults are
+    /// equivalent in the resolved manifest. Keep this tied to the loaded snapshot.
+    pub(crate) fn authored_action_specs(&self) -> Option<&[ActionSpec]> {
+        self.config
+            .repository
+            .as_ref()
+            .map(|source| source.actions.as_slice())
+    }
+}

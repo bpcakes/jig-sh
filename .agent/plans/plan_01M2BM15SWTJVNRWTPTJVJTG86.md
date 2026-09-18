@@ -1,0 +1,1 @@
+Consolidate the renewal worker lifecycle, TUI list viewport state, JSON scan helper, and service activity predicate while preserving each caller contract. Validate focused tests plus repository gates.

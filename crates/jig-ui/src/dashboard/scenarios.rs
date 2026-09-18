@@ -342,6 +342,7 @@ fn status_gate_report() -> StatusGateReport {
         gates_ok: true,
         plan_id: "plan_example".to_string(),
         plan_state: "open".to_string(),
+        plan_retirement: None,
         plan_baseline: status_open_plan().baseline,
         current_worktree_fingerprint: Some("sha256:example".to_string()),
         current_worktree_fingerprint_error: None,

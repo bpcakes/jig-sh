@@ -4,16 +4,16 @@ use serde_json::{Value, json};
 
 use crate::command::{
     WorkAppendRequest, WorkCheckRequest, WorkCommand, WorkDecisionRequest, WorkEvidenceRequest,
-    WorkFinishRequest, WorkGatesRequest, WorkReceiptsRequest, WorkRefineRequest, WorkReviewRequest,
-    WorkStartRequest,
+    WorkFinishRequest, WorkGatesRequest, WorkReceiptsRequest, WorkRefineRequest, WorkRetireRequest,
+    WorkReviewRequest, WorkStartRequest,
 };
 use crate::context::RepoContext;
 use crate::execution::ExecutionControl;
 use crate::state::{
-    DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
-    SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
-    plans_open_prepared, prepare_plan_open, receipts_list, session_end, session_start,
-    state_summary_with_cancellation,
+    DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanDisposition, PlanOpenRequest,
+    PlanRetireRequest, ReceiptListFilter, SessionEndIfCurrent, decisions_add, plan_owner_session,
+    plans_append, plans_close, plans_open_prepared, plans_retire, prepare_plan_open, receipts_list,
+    session_end_if_current, session_start, state_summary_with_cancellation,
 };
 
 mod check_schedule;
@@ -107,6 +107,7 @@ pub(super) fn dispatch_with_observer(
             })
         }
         WorkCommand::Finish(opts) => finish_with_cancellation(ctx, opts, &|| observer.cancelled()),
+        WorkCommand::Retire(opts) => retire(ctx, opts),
     }
 }
 
@@ -130,7 +131,11 @@ pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     // MCP and other runtime callers from leaving an orphan session on failure.
     let plan = prepare_plan_open(ctx, plan)?;
     let session = session_start(ctx)?;
-    let plan = plans_open_prepared(ctx, plan)?;
+    let session_id = session["session_id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("session start did not return a session id"))?
+        .to_string();
+    let plan = plans_open_prepared(ctx, plan, Some(session_id))?;
 
     Ok(json!({
         "ok": true,
@@ -190,19 +195,7 @@ pub(in crate::runtime) fn finish_after_required_gates_passed(
     );
     crate::cancellation::ensure_status_collection_active(cancelled)?;
     let plan = plans_close(ctx, (&opts).into())?;
-    let session = match current_session(ctx)? {
-        Some(_) => Some(session_end(
-            ctx,
-            session_end_request_for_finish(opts.outcome.or(opts.resolution)),
-        )?),
-        None => None,
-    };
-
-    Ok(json!({
-        "ok": true,
-        "plan": plan,
-        "session": session,
-    }))
+    complete_plan_closure(ctx, &opts.plan_id, plan, opts.outcome.or(opts.resolution))
 }
 
 fn ensure_finish_authority_is_current(
@@ -253,6 +246,140 @@ fn ensure_finish_config_is_current(ctx: &RepoContext, current: &RepoContext) -> 
         );
     }
     Ok(())
+}
+
+/// Retire an open work plan that will not be delivered.
+///
+/// This is deliberately not a `work finish` variant: it evaluates no required
+/// gates, writes no gate evidence, and never relaxes the completion authority
+/// that `finish` enforces. It reuses the plan-close lease and linked-run
+/// rejection so an open plan cannot be retired out from under a live run.
+pub(super) fn retire(ctx: &RepoContext, opts: WorkRetireRequest) -> Result<Value> {
+    let disposition = parse_disposition(&opts.disposition)?;
+    let reason = opts.reason.trim();
+    anyhow::ensure!(
+        !reason.is_empty(),
+        "Work plan retirement requires a nonblank --reason explaining why the plan is not being delivered"
+    );
+    let superseded_by = match opts.superseded_by.as_deref().map(str::trim) {
+        Some("") => {
+            anyhow::bail!("--superseded-by must name a plan or issue reference when it is provided")
+        }
+        other => other.map(str::to_string),
+    };
+
+    let plan = plans_retire(
+        ctx,
+        PlanRetireRequest {
+            plan_id: opts.plan_id.clone(),
+            disposition: disposition.as_str(),
+            reason: reason.to_string(),
+            superseded_by,
+        },
+    )?;
+    complete_plan_closure(
+        ctx,
+        &opts.plan_id,
+        plan,
+        Some(disposition.as_str().to_string()),
+    )
+}
+
+fn complete_plan_closure(
+    ctx: &RepoContext,
+    plan_id: &str,
+    plan: Value,
+    outcome: Option<String>,
+) -> Result<Value> {
+    let (session, session_status) = end_owning_session(ctx, plan_id, outcome)
+        .map_err(|error| crate::state::PlanClosurePartialFailure::session(plan_id, &plan, error))?;
+
+    Ok(json!({
+        "ok": true,
+        "plan": plan,
+        "session": session,
+        "session_status": session_status,
+    }))
+}
+
+fn parse_disposition(requested: &str) -> Result<PlanDisposition> {
+    PlanDisposition::ALL
+        .iter()
+        .copied()
+        .find(|disposition| disposition.as_str() == requested.trim())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unknown work plan disposition '{requested}'; expected one of: {}",
+                PlanDisposition::ALL
+                    .iter()
+                    .map(|disposition| disposition.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
+/// End the current session only when durable state proves it opened this plan.
+///
+/// The plan-open receipt is the durable ownership record. Without a match, an
+/// unrelated current session stays untouched and the caller is told why.
+fn end_owning_session(
+    ctx: &RepoContext,
+    plan_id: &str,
+    outcome: Option<String>,
+) -> Result<(Option<Value>, Value)> {
+    let owner = plan_owner_session(ctx, plan_id)?;
+    let Some(owner_id) = owner.as_deref() else {
+        let current = crate::state::current_session(ctx)?;
+        return Ok((
+            None,
+            json!({
+                "action": "left_active",
+                "owner_session_id": Value::Null,
+                "current_session_id": current,
+                "detail": format!(
+                    "no durable record proves which session opened plan {plan_id}; no session was ended"
+                ),
+            }),
+        ));
+    };
+
+    match session_end_if_current(ctx, owner_id, outcome)? {
+        SessionEndIfCurrent::Ended(session) => Ok((
+            Some(session),
+            json!({
+                "action": "ended",
+                "owner_session_id": owner,
+                "current_session_id": owner,
+                "detail": format!("ended owning session {owner_id}"),
+            }),
+        )),
+        SessionEndIfCurrent::NotCurrent(Some(current_id)) => Ok((
+            None,
+            json!({
+                "action": "left_active",
+                "owner_session_id": owner,
+                "current_session_id": current_id,
+                "detail": format!(
+                    "left current session {current_id} active; plan {plan_id} is owned by session {owner_id}"
+                ),
+            }),
+        )),
+        SessionEndIfCurrent::NotCurrent(None) => Ok((
+            None,
+            json!({
+                "action": "none",
+                "owner_session_id": owner,
+                "current_session_id": Value::Null,
+                "detail": format!("owning session {owner_id} is not the current session"),
+            }),
+        )),
+    }
+}
+
+pub(super) fn retire_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+    let request: WorkRetireRequest = request_from_args(args)?;
+    retire(ctx, request)
 }
 
 pub(super) fn start_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
@@ -326,11 +453,4 @@ where
     T: DeserializeOwned,
 {
     serde_json::from_value(args).context("Invalid work tool arguments")
-}
-
-const fn session_end_request_for_finish(outcome: Option<String>) -> SessionEndRequest {
-    SessionEndRequest {
-        session_id: None,
-        outcome,
-    }
 }

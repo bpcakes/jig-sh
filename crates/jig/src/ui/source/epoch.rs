@@ -7,9 +7,9 @@ use sha2::{Digest, Sha256};
 use crate::context::RepoContext;
 use crate::state::{
     DashboardDecisionRecord, DashboardPlanEvent, DashboardReceiptRecord, DashboardSessionEvent,
-    JsonlRecordTooLarge, PlanFileError, PlanFileErrorKind, RawJsonlRecord, current_session,
-    read_plan_body, read_receipts_reverse_with_cancellation, receipt_diff_summary,
-    scan_dashboard_jsonl_raw,
+    JsonlRecordTooLarge, PlanFileError, PlanFileErrorKind, RawJsonlRecord,
+    current_session_with_cancellation, read_plan_body, read_receipts_reverse_with_cancellation,
+    receipt_diff_summary, scan_dashboard_jsonl_raw,
 };
 
 const STATUS_RECENT_ROWS: usize = 10;
@@ -141,18 +141,22 @@ impl LocalObservationEpoch {
                 .map_err(|error| collection_error_for(CollectionDomain::Gates, error, cancelled))?;
         let (receipts, gate_indexes) = collect_receipts(context, gate_indexes, cancelled)?;
         ensure_active(cancelled)?;
-        let (current_session_id, current_session_error) = match current_session(context) {
-            Ok(session) => (session, None),
-            Err(error) => (
-                None,
-                Some(SnapshotError::new(
-                    CollectionDomain::Sessions,
-                    SnapshotErrorCode::StreamReadFailed,
+        let (current_session_id, current_session_error) =
+            match current_session_with_cancellation(context, cancelled) {
+                Ok(session) => (session, None),
+                Err(error) if crate::cancellation::is_status_collection_cancellation(&error) => {
+                    return Err(SourceError::Cancelled);
+                }
+                Err(error) => (
                     None,
-                    format!("failed to read current session: {error:#}"),
-                )),
-            ),
-        };
+                    Some(SnapshotError::new(
+                        CollectionDomain::Sessions,
+                        SnapshotErrorCode::StreamReadFailed,
+                        None,
+                        format!("failed to read current session: {error:#}"),
+                    )),
+                ),
+            };
 
         let (loops, loop_error) = match crate::runtime::typed_loop_status_snapshot_with_cancellation(
             context, cancelled,

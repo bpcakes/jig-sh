@@ -66,6 +66,7 @@ fn contract_digest_uses_canonical_execution_authority() {
         "harness_footprint = \"minimal\"\n",
         "[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\n",
         "[work]\nchecks = [\"jig.contract_check\"]\n",
+        "[work.tracker]\nkind = \"beads\"\nworkspace_id = \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n",
     ] {
         fs::write(
             &config_path,
@@ -625,6 +626,7 @@ include!("tests_parts/part_02.rs");
 
 mod runtime;
 mod strict_config;
+mod tracker_authority;
 
 include!("tests_parts/part_01.rs");
 

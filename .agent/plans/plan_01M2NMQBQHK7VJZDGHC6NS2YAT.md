@@ -1,0 +1,1 @@
+Fix candidate-inclusive tracker-operation validation and recursive aggregate receipt retention for archive and restore. Add merge-order, archive, and restore regressions.

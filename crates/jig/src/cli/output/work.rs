@@ -6,7 +6,9 @@ use super::{concise_preview, status, value_bool, value_i64, value_str};
 
 mod check_targets;
 mod gate_recovery;
-use check_targets::{TargetSummary, append_target_summary, target_summaries};
+mod plan_lifecycle;
+use check_targets::{TargetSummary, append_target_summary, original_plan_suffix, target_summaries};
+use plan_lifecycle::append_plan_lifecycle;
 
 pub(super) fn format_work_start_plan_id(value: &serde_json::Value) -> Result<String> {
     let plan = value
@@ -77,8 +79,9 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             value_str(value, "target_validation_receipt_id").unwrap_or("none")
         ));
         for target in target_evidence {
+            let origin = original_plan_suffix(target, plan_id);
             lines.push(format!(
-                "  - {}:{}: {} ({}), receipt {}, run {}",
+                "  - {}:{}: {} ({}), receipt {}, run {}{origin}",
                 value_str(&target["target"], "component").unwrap_or("?"),
                 value_str(&target["target"], "action").unwrap_or("?"),
                 value_str(target, "status").unwrap_or("unknown"),
@@ -290,11 +293,9 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
     let plan_state = value_str(value, "plan_state").unwrap_or("open");
     let overall = value_str(value, "overall").unwrap_or("unknown");
     let gates = value["gates"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let mut lines = vec![
-        format!("Work gates: {overall}"),
-        format_work_plan_line(plan_id, plan_state),
-        format!("  Gates: {}", gates.len()),
-    ];
+    let mut lines = vec![format!("Work gates: {overall}")];
+    append_plan_lifecycle(&mut lines, value, plan_id, plan_state);
+    lines.push(format!("  Gates: {}", gates.len()));
 
     for gate in gates {
         let id = value_str(gate, "id").unwrap_or("<unknown>");
@@ -390,10 +391,8 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         .map(Vec::as_slice)
         .unwrap_or(&[]);
     let gates = value["gates"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let mut lines = vec![
-        format!("Work evidence: {overall}"),
-        format_work_plan_line(plan_id, plan_state),
-    ];
+    let mut lines = vec![format!("Work evidence: {overall}")];
+    append_plan_lifecycle(&mut lines, value, plan_id, plan_state);
 
     if latest.is_empty() {
         lines.push("Latest gate evidence per gate: none".into());
@@ -629,11 +628,16 @@ pub(super) fn format_work_receipts_summary(value: &serde_json::Value) -> String 
     for receipt in receipts {
         let id = value_str(receipt, "id").unwrap_or("<unknown>");
         let tool = value_str(receipt, "tool_name").unwrap_or("<unknown>");
+        let operation = value_str(&receipt["args"], "operation")
+            .map(|operation| format!(" [{operation}]"))
+            .unwrap_or_default();
         let exit_status = value_i64(receipt, "exit_status")
             .map(|status| status.to_string())
             .unwrap_or_else(|| "?".into());
         let diff = value_str(receipt, "diff_summary").unwrap_or("unknown diff");
-        lines.push(format!("  - {tool} ({id}): exit {exit_status}, {diff}"));
+        lines.push(format!(
+            "  - {tool}{operation} ({id}): exit {exit_status}, {diff}"
+        ));
 
         let plan = value_str(receipt, "plan_id").unwrap_or("none");
         let session = value_str(receipt, "session_id").unwrap_or("none");
@@ -733,14 +737,46 @@ pub(super) fn format_work_finish_summary(value: &serde_json::Value) -> String {
     let plan = &value["plan"];
     let session = &value["session"];
     let plan_id = value_str(plan, "plan_id").unwrap_or("<unknown>");
-    let session_id = value_str(session, "session_id").unwrap_or("none");
+    let session_summary = value_str(session, "session_id")
+        .map(str::to_string)
+        .or_else(|| value_str(&value["session_status"], "detail").map(str::to_string))
+        .unwrap_or_else(|| "none".into());
     [
         "Work finish: closed".into(),
         format!("  Plan: {plan_id}"),
-        format!("  Session: {session_id}"),
+        format!("  Session: {session_summary}"),
         "  full report: rerun with --json".into(),
     ]
     .join("\n")
+}
+
+pub(super) fn format_work_retire_summary(value: &serde_json::Value) -> String {
+    let plan = &value["plan"];
+    let retirement = &plan["retirement"];
+    let mut lines = vec![
+        format!(
+            "Work retire: retired ({})",
+            value_str(retirement, "disposition").unwrap_or("unknown")
+        ),
+        format!(
+            "  Plan: {}",
+            value_str(plan, "plan_id").unwrap_or("<unknown>")
+        ),
+        format!(
+            "  Reason: {}",
+            concise_preview(value_str(retirement, "reason").unwrap_or(""), 180)
+        ),
+    ];
+    if let Some(superseded_by) = value_str(retirement, "superseded_by") {
+        lines.push(format!("  Superseded by: {superseded_by}"));
+    }
+    let session = &value["session_status"];
+    lines.push(format!(
+        "  Session: {}",
+        value_str(session, "detail").unwrap_or("no session change")
+    ));
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
 }
 
 fn receipt_preview(receipt: &serde_json::Value) -> Option<String> {

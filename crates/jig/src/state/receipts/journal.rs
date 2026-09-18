@@ -18,7 +18,7 @@ use crate::context::RepoContext;
 
 use super::super::records::ReceiptRecord;
 
-const RECEIPT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const RECEIPT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const RECEIPT_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) struct ReceiptJournalWriter<'a> {
@@ -150,6 +150,9 @@ fn lock_exclusive_until(
     loop {
         if cancelled() {
             bail!("Execution was cancelled while waiting for {description} lock");
+        }
+        if Instant::now() >= deadline {
+            bail!("Timed out waiting for {description} lock before its operation deadline");
         }
         match file.try_lock_exclusive() {
             Ok(true) => return Ok(()),
@@ -369,9 +372,14 @@ mod tests {
         assert!(owner.try_lock_exclusive().unwrap());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-        let error = with_receipt_journal_writer_until(&ctx, Instant::now(), &|| false, |_| Ok(()))
-            .unwrap_err()
-            .to_string();
+        let error = with_receipt_journal_writer_until(
+            &ctx,
+            Instant::now() + Duration::from_millis(50),
+            &|| false,
+            |_| Ok(()),
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(
             error.contains("Timed out waiting for receipt journal lock"),

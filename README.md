@@ -248,6 +248,8 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 `work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence. `work finish` refuses to close a plan until every required gate has current evidence.
 
+Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Worktree policy preserves evidence through staging and commits; audited exhaustive inputs also avoid reruns after unrelated edits.
+
 Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
 ### Orchestration and terminal dashboard

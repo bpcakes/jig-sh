@@ -7,6 +7,7 @@ use jig_contract::{PlannedTarget, TargetId};
 use super::*;
 use crate::repository::freshness::{CollectionBudget, CollectionLimits, collect_target_identities};
 
+mod cross_plan;
 mod native;
 mod recovery;
 mod worktree;

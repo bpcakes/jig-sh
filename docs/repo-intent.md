@@ -121,6 +121,8 @@ The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig sta
 - `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
 - `decisions.jsonl`: structured decision records
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
+- `work-links.jsonl`: immutable joins from Jig plans to portable external-work
+  identities and their observed task snapshots
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
 validated whole-file rewrites: session compaction creates an exact recovery
@@ -130,6 +132,12 @@ as separate compressed cold streams under ignored
 `.agent/.cache/state-archives/`. Explicit receipt exports
 go only to the caller-selected path. None of these operations rewrite Git
 history.
+
+The work-link journal is not a maintenance rewrite target. Its committed records
+are newline-terminated, and unknown versions are retained as raw history without
+acquiring link authority. Beads task definitions come from a bounded read-only
+JSONL snapshot; Jig does not invoke `br`, inspect its SQLite store, or mutate task
+data in the current milestone.
 
 The current session pointer is cache state, not part of the durable JSONL record model.
 

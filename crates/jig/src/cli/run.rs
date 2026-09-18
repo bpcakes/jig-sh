@@ -231,6 +231,12 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
+            if let Some(super::InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
+                if opts.commands {
+                    bail!("--commands cannot be combined with an info subject");
+                }
+                return freshness::run(freshness, json_output);
+            }
             if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
@@ -249,7 +255,9 @@ fn run_command(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let request = opts.subject.map(|subject| match subject {
-                super::InfoCommand::GoVersion => unreachable!("handled above"),
+                super::InfoCommand::GoVersion | super::InfoCommand::Freshness(_) => {
+                    unreachable!("handled above")
+                }
                 super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
                 super::InfoCommand::Components => crate::repository::InspectRequest::Components,
                 super::InfoCommand::Component { id } => {
@@ -497,6 +505,16 @@ struct RuntimeCompatibilityRequest<'a> {
 }
 
 impl RuntimeCompatibilityRequest<'_> {
+    fn validate_active_contract_version(self, contract_version: u32) -> Result<()> {
+        if !crate::context::is_active_contract_version(contract_version) {
+            bail!(
+                "Inactive Jig contract version {contract_version}; this runtime cache supports active versions {}",
+                crate::context::active_contract_versions_label()
+            );
+        }
+        Ok(())
+    }
+
     fn canonical_repo_root(self) -> Result<std::path::PathBuf> {
         let repo_root = std::fs::canonicalize(self.repo_root).with_context(|| {
             format!(
@@ -504,14 +522,8 @@ impl RuntimeCompatibilityRequest<'_> {
                 self.repo_root.display()
             )
         })?;
-        if let Some(contract_version) = self.contract_version
-            && !crate::context::is_supported_contract_version(contract_version)
-        {
-            bail!(
-                "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
-                crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
-                crate::context::CURRENT_CONTRACT_VERSION
-            );
+        if let Some(contract_version) = self.contract_version {
+            self.validate_active_contract_version(contract_version)?;
         }
         Ok(repo_root)
     }
@@ -564,7 +576,8 @@ fn validate_capability_runtime_compatibility(
         // Keep direct/manual uses of the private probe useful. Generated
         // launchers and installers pass their rendered epoch explicitly so
         // repair paths do not depend on a readable manifest.
-        RepoContext::supported_contract_version_from_root(&repo_root)?;
+        let contract_version = RepoContext::supported_contract_version_from_root(&repo_root)?;
+        request.validate_active_contract_version(contract_version)?;
     }
     request.validate_profile()
 }
@@ -583,6 +596,7 @@ fn validate_repository_runtime_compatibility(
         }
     }
     let ctx = RepoContext::load_from_root(repo_root)?;
+    request.validate_active_contract_version(ctx.contract_version())?;
     crate::policy::validate_contract(&ctx)?;
     request.validate_profile()?;
     Ok(ctx)
@@ -603,11 +617,11 @@ fn report_json_command_error(result: Result<()>) -> Result<()> {
             Err(json_reported_error(1))
         }
         Err(error) => {
-            print_json(&json_error_payload(
-                "command_failed",
-                &format!("{error:#}"),
-                1,
-            ))?;
+            let mut payload = json_error_payload("command_failed", &format!("{error:#}"), 1);
+            if let Some(partial) = error.downcast_ref::<crate::state::PlanClosurePartialFailure>() {
+                payload["partial_completion"] = partial.details();
+            }
+            print_json(&payload)?;
             Err(json_reported_error(1))
         }
     }
@@ -686,6 +700,7 @@ const fn work_human_output(command: &WorkCommand) -> HumanOutput {
         WorkCommand::Receipts(_) => HumanOutput::WorkReceipts,
         WorkCommand::Status => HumanOutput::WorkStatus,
         WorkCommand::Finish(_) => HumanOutput::WorkFinish,
+        WorkCommand::Retire(_) => HumanOutput::WorkRetire,
     }
 }
 
@@ -751,6 +766,7 @@ fn dispatch_runtime_command(
 }
 
 mod argument_parsing;
+mod freshness;
 pub(super) use argument_parsing::*;
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;

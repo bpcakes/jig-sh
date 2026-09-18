@@ -105,7 +105,7 @@ For local git template checkouts, `jig init` / `jig adopt` use a committed sourc
   `ubuntu-latest` because service containers and the Docker daemon require Linux.
   Other generated jobs retain this configured runner and select Bash explicitly
   for repository-owned `run` steps.
-- `work.gates`: required work evidence gates evaluated before `scripts/jig work finish`
+- `work.gates`: required work evidence gates evaluated before `scripts/jig work finish` (never evaluated by `scripts/jig work retire`)
 - `agent_tooling`: agent-client tooling expected for this repository, including Jig Codex skills
 - `template_source_url`: optional canonical template source URL for portable recopy/update
 - `sqlx_enabled`: whether to generate SQLx and migration-specific contract pieces
@@ -141,6 +141,9 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
 - `execution`: supervision limits for long-running configured commands and workers
+- `[work.tracker]`: optional read-only task-snapshot authority. Current source accepts
+  only `kind = "beads"`, requires a portable canonical ULID `workspace_id`, fixes the
+  store at the repository-root `.beads/`, and defaults `export` to `"manual"`.
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
@@ -390,7 +393,9 @@ Nested accepted keys are:
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
-- `[work]`: `checks`, `gates`, `refinements`
+- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `refinements`
+- `[work.tracker]`: `kind`, `workspace_id`, `export`, `manual_export_guidance`; the
+  current `beads` kind accepts only manual export and no configurable store root
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
@@ -565,6 +570,34 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 ## `work` Shape
 
 The `work` block declares agent workflow defaults without adding repo-local launcher scripts:
+
+### Optional Beads task snapshots
+
+A repository can opt into a Beads-compatible JSONL task snapshot explicitly:
+
+```toml
+[work.tracker]
+kind = "beads"
+workspace_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+export = "manual"
+manual_export_guidance = "Run the repository's documented Beads export step."
+```
+
+`workspace_id` is a stable, canonical uppercase ULID copied with the repository. It is not inferred from a checkout directory, Git remote, machine path, or issue prefix. The supported tracker root is the exact repository-local `.beads/` directory. `export` may be omitted and currently has only the conservative `manual` value. `manual_export_guidance` is bounded display text used when Doctor reports a missing manual export, including an absent `.beads/` directory; Jig never executes it, and it never replaces safety- or structure-specific repair instructions. Tracker kind, workspace identity, and export policy participate in execution-authority hashing; changing only the guidance preserves the contract digest.
+
+JSONL is Jig's task-data boundary. A configured repository must contain exactly one supported export: current `.beads/issues.jsonl` or legacy `.beads/beads.jsonl`. Having both is an error because one may be a stale snapshot. The export and `.beads/` path must be real repository-local files and directories rather than symlinks; on Unix the export must not have another hard link. Jig pins the real `.beads` directory, performs both filename selection and the no-follow file open relative to that directory handle, acquires the Unix leaf nonblocking before validating its descriptor type, reads the file twice through one descriptor, and re-witnesses the selected leaf before accepting it. Concurrently replacing the `.beads` pathname therefore cannot redirect the read outside the repository, and replacing the validated leaf with a FIFO cannot hang the reader; a non-regular or changing leaf or selection fails closed.
+
+The `beads-rust-jsonl-v1` reader is pure and read-only. It invokes no `br` executable, opens no SQLite database, imports or exports no data, and has no platform-specific process dependency. It validates the whole export before exposing exact issue IDs: at most 16 MiB, 1 MiB per record, 10,000 issues, 64 JSON container levels, unique JSON object keys, unique issue IDs, Beads prefix/hash ID grammar (including `:` and `#` in prefixes), required field types, and RFC 3339 timestamps. Long producer text and unknown string fields are accepted up to the record and export ceilings; consumed text must be NUL-free, and titles retain Beads' 500-character limit. Status and issue-type values are NUL-free producer-owned strings rather than closed Jig enums; workflow-specific operations can enforce their own semantics when they act on those values. Unknown fields are accepted within the record and nesting bounds so a newer producer can add data without breaking read-only linking. Errors identify structure and line number without echoing task bodies.
+
+Omitting `[work.tracker]` disables task-snapshot inspection. Doctor then reports the tracker as not configured even if `.beads/` exists. With configuration present, Doctor validates the JSONL snapshot and reports its selected relative path, profile, issue count, and the sole current capability, `read_issue_snapshot`. Configured results include `freshness: "not_checked"`: a `ready` result confirms readable export data, not current tracker state. The pure tracker check neither requests Doctor's process-wide signal session nor depends on that session's retirement. It does not require `br` on `PATH` and does not inspect whether a Beads SQLite database contains newer, unexported edits.
+
+Because this repository may deliberately disable automatic Beads flush and use a privacy-cleaning helper such as `scripts/beads-sync.py`, `manual` means the exported file is an explicit snapshot. Before handing task-writing ownership from `br` to a future Jig writer, complete and export pending `br` edits. Before handing ownership back, let `br` import and verify Jig's result. Ordinary automatic import is not treated as a general conflict merge when both the database and JSONL changed.
+
+Current source does not mutate Beads JSONL, claim tasks, publish backlinks, add comments, or close tasks. Those operations require a separate native-writer milestone. Its compatibility gate must prove a serialized handoff through create/update and export in `br`, Jig's atomic snapshot edit, an ordinary `br` import, re-export, unknown-field preservation, disabled-auto-import behavior, divergent edits, and explicit conflict reporting. Compatibility with Beads data does not imply behavioral equivalence with every `br` command.
+
+The tracker section contributes to repository authority, so changing its workspace identity or export policy changes the authority digest. Existing update/readoption flows preserve an already valid section independently of unrelated configuration validity, but do not generate one. Malformed tracker or receipt-metadata authority makes write-mode update/readoption fail rather than silently deleting it.
+
+### Gates
 
 ```toml
 [[work.gates]]
@@ -1062,6 +1095,7 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig work status`
 - `scripts/jig work status --json`
 - `scripts/jig work finish --plan-id ...`
+- `scripts/jig work retire --plan-id ... --disposition <cancelled|superseded|duplicate|obsolete> --reason ...`
 - `scripts/jig state summary`
 - `scripts/jig state diagnose`
 - `scripts/jig state diagnose --deep`
@@ -1072,7 +1106,9 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`
 - `scripts/jig state archive --before YYYY-MM-DD`
 
-`work finish` closes the plan with `--resolution`. If an active session is also open, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`. Gate evaluation and plan closure hold a shared checkout lease as one decision window, so an effectful repository action cannot invalidate accepted evidence immediately before the close commit point.
+`work finish` closes the plan with `--resolution`. If the session proven to have opened that plan is still current, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`. An unrelated current session remains active. Gate evaluation and plan closure hold a shared checkout lease as one decision window, so an effectful repository action cannot invalidate accepted evidence immediately before the close commit point.
+
+`work retire` is the non-success counterpart. It closes an open plan that will not be delivered with a required structured `--disposition` (`cancelled`, `superseded`, `duplicate`, or `obsolete`), a required nonblank `--reason`, and an optional `--superseded-by` reference to the plan or issue that replaces the work. It evaluates no required gates and records no gate evidence, so it never weakens `work finish`; there is no force flag on either command. Retirement takes the same exclusive plan-close lease as `work finish`, so it rejects an unknown plan, an already-closed plan, and a plan with an active linked repository run. Like finish, it ends a session only when the plan's `jig.plans_open` receipt proves that session opened the plan; an unrelated current session stays active and the result's `session_status` reports what happened. `scripts/jig work gates` and `scripts/jig work evidence` report retirement disposition and reason in their default human output as well as `plan_state: "closed"` with a `plan_retirement` object in JSON; a completed plan keeps `plan_retirement: null`. Default `work receipts` output also shows each state receipt's `args.operation`, distinguishing `plan_retire` from `plan_close` while retaining the historical `jig.plans_close` tool name.
 
 Contract tools and work checks intentionally append receipts under `.agent/state/`.
 Read-only inspection commands such as `work status` and `work gates` do not add

@@ -259,6 +259,26 @@ fn work_finish_help_includes_examples() {
 }
 
 #[test]
+fn work_retire_help_documents_the_non_success_transition() {
+    let work_retire_help = rendered_help(&["work", "retire"]);
+    assert_help_contains(&work_retire_help, "jig work retire --plan-id plan_abc123");
+    assert_help_contains(&work_retire_help, "--disposition superseded");
+    assert_help_contains(&work_retire_help, "--superseded-by plan_def456");
+    assert_help_contains(&work_retire_help, "without claiming success");
+    assert_help_contains(&work_retire_help, "no gate evidence is written");
+    for disposition in ["cancelled", "superseded", "duplicate", "obsolete"] {
+        assert_help_contains(&work_retire_help, disposition);
+    }
+}
+
+#[test]
+fn work_help_lists_retire_next_to_finish() {
+    let work_help = rendered_help(&["work"]);
+    assert_help_contains(&work_help, "finish");
+    assert_help_contains(&work_help, "retire");
+}
+
+#[test]
 fn check_help_includes_examples() {
     let check_help = rendered_help(&["check"]);
     assert_help_contains(&check_help, "jig check fmt");

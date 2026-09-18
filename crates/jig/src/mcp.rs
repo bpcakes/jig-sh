@@ -171,14 +171,18 @@ fn handle_tool_call(
             "id": id,
             "result": result
         }),
-        Err(error) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {
-                "code": -32000,
-                "message": error.to_string()
+        Err(error) => {
+            let mut response = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32000, "message": error.to_string() }
+            });
+            if let Some(partial) = error.downcast_ref::<crate::state::PlanClosurePartialFailure>() {
+                response["error"]["message"] = json!(format!("{error:#}"));
+                response["error"]["data"] = json!({ "partial_completion": partial.details() });
             }
-        }),
+            response
+        }
     }
 }
 

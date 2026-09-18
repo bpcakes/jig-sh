@@ -66,6 +66,17 @@ Close a plan after required gates pass; use --outcome for a machine-readable res
 Examples:
   jig work finish --plan-id plan_abc123 --resolution \"Auth flow complete\" --outcome success";
 
+pub(super) const WORK_RETIRE_AFTER_HELP: &str = "\
+Close an open plan that will not be delivered, without claiming success.
+Required delivery gates are not evaluated and no gate evidence is written.
+The session is ended only when durable state proves it opened this plan.
+
+Dispositions: cancelled, superseded, duplicate, obsolete.
+
+Examples:
+  jig work retire --plan-id plan_abc123 --disposition cancelled --reason \"Delivery was cancelled.\"
+  jig work retire --plan-id plan_abc123 --disposition superseded --reason \"Replaced by the redesign.\" --superseded-by plan_def456";
+
 pub(super) const WORK_RECEIPTS_AFTER_HELP: &str = "\
 Human-readable output is the default. Pass --json for structured automation output.
 
@@ -136,6 +147,12 @@ pub(crate) enum WorkCommand {
         after_help = WORK_FINISH_AFTER_HELP
     )]
     Finish(WorkFinishOpts),
+    /// Retire an open work plan that will not be delivered.
+    #[command(
+        name = tool_defs::cli_command::WORK_RETIRE,
+        after_help = WORK_RETIRE_AFTER_HELP
+    )]
+    Retire(WorkRetireOpts),
 }
 
 #[derive(Args, Debug)]
@@ -274,6 +291,31 @@ pub(crate) struct WorkFinishOpts {
     #[arg(long, help = "Optional session outcome; defaults to the resolution")]
     pub(crate) outcome: Option<String>,
 }
+
+#[derive(Args, Debug)]
+pub(crate) struct WorkRetireOpts {
+    #[arg(long, help = "Open plan id to retire")]
+    pub(crate) plan_id: String,
+    #[arg(
+        long,
+        value_parser = crate::cli::work::PLAN_DISPOSITIONS,
+        help = "Terminal disposition explaining why the plan is not being delivered"
+    )]
+    pub(crate) disposition: String,
+    #[arg(long, help = "Nonblank human reason recorded with the retirement")]
+    pub(crate) reason: String,
+    #[arg(
+        long,
+        help = "Optional reference to the plan or issue that supersedes this work"
+    )]
+    pub(crate) superseded_by: Option<String>,
+}
+
+/// Clap-facing spelling of the accepted dispositions.
+///
+/// The runtime revalidates these so MCP callers are rejected identically.
+pub(super) const PLAN_DISPOSITIONS: [&str; 4] =
+    ["cancelled", "superseded", "duplicate", "obsolete"];
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkReceiptsOpts {

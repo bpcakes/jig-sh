@@ -25,7 +25,7 @@ use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::repository_path::{
     normalize_portable_repo_path, normalize_portable_repository_directory,
 };
-use crate::shell::quote as shell_quote;
+use crate::shell::{optional_cargo_command, quote as shell_quote};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -701,19 +701,6 @@ fn normalize_legacy_command_default(command: &mut Option<String>, legacy_default
     if command.as_deref() == Some(legacy_default) {
         *command = None;
     }
-}
-
-fn optional_cargo_command(command: &str, label: &str) -> String {
-    let skip_prefix = crate::CARGO_SKIP_OUTPUT_PREFIX;
-    let skip_message = shell_quote(&format!("{skip_prefix}{label}."));
-    // Runtime command dispatch sets CWD to the repo root, so this guard checks
-    // for a root Cargo workspace without blocking harness-only repos.
-    format!(
-        "{}{command}{}printf '%s\\n' {skip_message}{}",
-        crate::shell::OPTIONAL_CARGO_COMMAND_PREFIX,
-        crate::shell::OPTIONAL_CARGO_COMMAND_ELSE,
-        crate::shell::OPTIONAL_CARGO_COMMAND_SUFFIX,
-    )
 }
 
 include!("answers/frontend_validation.rs");

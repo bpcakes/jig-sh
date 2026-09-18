@@ -73,6 +73,95 @@ fn generated_freshness_defaults_remain_managed_but_declared_policies_are_preserv
 }
 
 #[test]
+fn superseded_formatter_inference_stays_managed_and_is_retracted_on_render() {
+    use jig_contract::ActionSourceState;
+
+    let generated =
+        RepositoryRenderModel::from_answers(&answers("rust_crate_roots = [\"crates\"]\n")).unwrap();
+    let mut previous = generated.clone();
+    previous.prepare_runner_epoch(8).unwrap();
+    previous.prepare_freshness_epoch(8).unwrap();
+    let formatter = previous
+        .actions
+        .iter_mut()
+        .find(|action| action.target.to_string() == "api:fmt")
+        .unwrap();
+    formatter.source_state = Some(ActionSourceState::Worktree);
+    assert_eq!(
+        formatter.provenance.get("source_state"),
+        Some(&FieldProvenance::Inferred)
+    );
+    // The obsolete inference must not turn an otherwise generated model custom.
+    assert_eq!(reload_managed_model(&previous).actions, generated.actions);
+
+    // Also retract when the caller deliberately keeps the authored projection.
+    let mut rendered = reload_authored_model(&previous);
+    rendered.prepare_freshness_epoch(8).unwrap();
+    let formatter = rendered
+        .actions
+        .iter()
+        .find(|action| action.target.to_string() == "api:fmt")
+        .unwrap();
+    assert_eq!(formatter.source_state, Some(ActionSourceState::Git));
+    assert_eq!(
+        formatter.provenance.get("source_state"),
+        Some(&FieldProvenance::Inferred)
+    );
+    let once = rendered.actions.clone();
+    rendered.prepare_freshness_epoch(8).unwrap();
+    assert_eq!(rendered.actions, once);
+}
+
+#[test]
+fn formatter_inference_migration_preserves_owner_policies_and_changed_runners() {
+    use jig_contract::ActionSourceState;
+
+    for (provenance, custom_command) in [
+        (Some(FieldProvenance::Declared), false),
+        (Some(FieldProvenance::Overridden), false),
+        (Some(FieldProvenance::Inherited), false),
+        (None, false),
+        (Some(FieldProvenance::Inferred), true),
+    ] {
+        let mut model =
+            RepositoryRenderModel::from_answers(&answers("rust_crate_roots = [\"crates\"]\n"))
+                .unwrap();
+        model.prepare_runner_epoch(8).unwrap();
+        model.prepare_freshness_epoch(8).unwrap();
+        let action = model
+            .actions
+            .iter_mut()
+            .find(|action| action.target.to_string() == "api:fmt")
+            .unwrap();
+        action.source_state = Some(ActionSourceState::Worktree);
+        if let Some(provenance) = provenance {
+            action.provenance.insert("source_state".into(), provenance);
+        } else {
+            action.provenance.remove("source_state");
+        }
+        if custom_command {
+            let ActionRunner::Shell { command, .. } = &action.runner else {
+                panic!("expected shell formatter")
+            };
+            model
+                .commands
+                .insert(command.clone(), "scripts/owned-format-check.sh".into());
+        }
+        let mut rendered = reload_managed_model(&model);
+        rendered.prepare_freshness_epoch(8).unwrap();
+        let action = rendered
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == "api:fmt")
+            .unwrap();
+        assert_eq!(action.source_state, Some(ActionSourceState::Worktree));
+        if let Some(provenance) = provenance {
+            assert_eq!(action.provenance.get("source_state"), Some(&provenance));
+        }
+    }
+}
+
+#[test]
 fn same_target_authored_file_budget_runner_survives_model_round_trip() {
     let initial = answers("rust_crate_roots = [\"crates\"]\n");
     let mut authored = RepositoryRenderModel::from_answers(&initial).unwrap();
@@ -176,44 +265,76 @@ fn authored_file_budget_action_alias_and_profile_choices_survive_model_round_tri
 
 #[test]
 fn exact_generated_legacy_action_upgrades_to_native_file_budget() {
-    let initial = answers("rust_crate_roots = [\"crates\"]\n");
-    let mut legacy = RepositoryRenderModel::from_answers(&initial).unwrap();
-    let budget_target = target_id("repo", "file-budget").unwrap();
-    let legacy_target = target_id("repo", "rust-file-loc").unwrap();
-    legacy
-        .actions
-        .retain(|action| action.target != budget_target);
-    legacy
-        .actions
-        .push(generated_legacy_rust_file_loc_action().unwrap());
-    legacy
-        .actions
-        .sort_by(|left, right| left.target.cmp(&right.target));
-    for profile in &mut legacy.profiles {
-        profile.targets.retain(|target| target != &budget_target);
-        profile.targets.push(legacy_target.clone());
-        profile.targets.sort();
-        profile.targets.dedup();
-    }
-    legacy.commands.insert(
-        RUST_FILE_LOC_COMMAND_KEY.into(),
-        "scripts/check-rust-file-loc.sh main".into(),
-    );
+    for persisted in [false, true] {
+        let initial = answers("rust_crate_roots = [\"crates\"]\n");
+        let mut legacy = RepositoryRenderModel::from_answers(&initial).unwrap();
+        let budget_target = target_id("repo", "file-budget").unwrap();
+        let legacy_target = target_id("repo", "rust-file-loc").unwrap();
+        legacy
+            .actions
+            .retain(|action| action.target != budget_target);
+        legacy
+            .actions
+            .push(generated_legacy_rust_file_loc_action().unwrap());
+        legacy
+            .actions
+            .sort_by(|left, right| left.target.cmp(&right.target));
+        for profile in &mut legacy.profiles {
+            profile.targets.retain(|target| target != &budget_target);
+            profile.targets.push(legacy_target.clone());
+            profile.targets.sort();
+            profile.targets.dedup();
+        }
+        legacy.commands.insert(
+            RUST_FILE_LOC_COMMAND_KEY.into(),
+            "scripts/check-rust-file-loc.sh main".into(),
+        );
 
-    let upgraded = reload_managed_model(&legacy);
-    assert!(
-        upgraded
-            .actions
-            .iter()
-            .any(|action| action == &generated_file_budget_action().unwrap())
-    );
-    assert!(
-        upgraded
-            .actions
-            .iter()
-            .all(|action| action.target != legacy_target)
-    );
-    assert!(!upgraded.commands.contains_key(RUST_FILE_LOC_COMMAND_KEY));
+        if persisted {
+            for action in &mut legacy.actions {
+                action.source_state = Some(jig_contract::ActionSourceState::Git);
+                action
+                    .provenance
+                    .insert("source_state".into(), FieldProvenance::Inferred);
+            }
+            legacy.prepare_runner_epoch(8).unwrap();
+            legacy.prepare_freshness_epoch(8).unwrap();
+        }
+        let upgraded = reload_managed_model(&legacy);
+        if persisted {
+            // Conservative saved defaults remain managed. Compare their final
+            // rendered policies, not the pre-epoch generated model.
+            let mut rendered = upgraded.clone();
+            rendered.prepare_runner_epoch(8).unwrap();
+            rendered.prepare_freshness_epoch(8).unwrap();
+            for saved in legacy
+                .actions
+                .iter()
+                .filter(|action| action.target != legacy_target)
+            {
+                assert_eq!(
+                    rendered
+                        .actions
+                        .iter()
+                        .find(|action| action.target == saved.target),
+                    Some(saved)
+                );
+            }
+        }
+        assert!(
+            upgraded
+                .actions
+                .iter()
+                .any(|action| action == &generated_file_budget_action().unwrap())
+        );
+        assert!(
+            upgraded
+                .actions
+                .iter()
+                .all(|action| action.target != legacy_target)
+        );
+        assert!(!upgraded.commands.contains_key(RUST_FILE_LOC_COMMAND_KEY));
+    }
 }
 
 #[test]

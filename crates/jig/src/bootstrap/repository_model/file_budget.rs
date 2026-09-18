@@ -91,7 +91,11 @@ pub(super) fn matches_legacy_projection(
         expected_actions.push(legacy);
     }
     expected_actions.sort_by(|left, right| left.target.cmp(&right.target));
-    if !super::freshness::matches_generated_actions(&expected_actions, &authored.actions) {
+    if !super::freshness::matches_generated_actions(
+        &expected_actions,
+        &authored.actions,
+        &current.commands,
+    ) {
         return false;
     }
 
@@ -123,6 +127,54 @@ pub(super) fn matches_legacy_projection(
             || authored_commands
                 .get(RUST_FILE_LOC_COMMAND_KEY)
                 .is_some_and(|command| is_generated_rust_file_loc_command(command)))
+}
+
+/// Upgrade only the legacy checker when saved generated Git policies keep the
+/// surrounding model authored. Matching must not discard those saved values.
+pub(super) fn upgrade_saved_legacy_projection(
+    current: &RepositoryRenderModel,
+    authored: &AuthoredRepositoryModel,
+    commands: &BTreeMap<String, String>,
+) -> Option<(AuthoredRepositoryModel, BTreeMap<String, String>)> {
+    let mut expected = current.clone();
+    for action in &mut expected.actions {
+        let saved = authored
+            .actions
+            .iter()
+            .find(|saved| saved.target == action.target);
+        if let Some(saved) = saved
+            && saved.source_state == Some(jig_contract::ActionSourceState::Git)
+            && saved.provenance.get("source_state") == Some(&FieldProvenance::Inferred)
+        {
+            action.source_state = saved.source_state;
+            action
+                .provenance
+                .insert("source_state".into(), FieldProvenance::Inferred);
+        }
+    }
+    if !matches_legacy_projection(&expected, authored, commands) {
+        return None;
+    }
+    let legacy = target_id(REPO_COMPONENT, "rust-file-loc").ok()?;
+    let replacement = generated_file_budget_action().ok()?;
+    let mut upgraded = authored.clone();
+    upgraded.actions.retain(|action| action.target != legacy);
+    for profile in &mut upgraded.profiles {
+        for target in &mut profile.targets {
+            if *target == legacy {
+                *target = replacement.target.clone();
+            }
+        }
+        profile.targets.sort();
+        profile.targets.dedup();
+    }
+    upgraded.actions.push(replacement);
+    upgraded
+        .actions
+        .sort_by(|left, right| left.target.cmp(&right.target));
+    let mut commands = commands.clone();
+    commands.remove(RUST_FILE_LOC_COMMAND_KEY);
+    Some((upgraded, commands))
 }
 
 pub(super) fn render_seed_policy(model: &RepositoryRenderModel) -> Result<Option<String>> {

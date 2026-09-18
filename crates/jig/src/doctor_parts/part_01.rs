@@ -102,6 +102,7 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
             if let Some(sqlx_cli) = context_checks.sqlx_cli {
                 checks.push(sqlx_cli);
             }
+            checks.push(context_checks.tracker);
             checks.push(context_checks.agent);
             checks.push(context_checks.proxy);
         }
@@ -132,6 +133,17 @@ fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Resul
                     format!("Skipped until repo context loads successfully: {context_error}"),
                 )
                 .with_fix("Run `scripts/jig check contract --no-receipt` first."),
+            );
+            checks.push(
+                check(
+                    "tracker",
+                    "Work tracker",
+                    true,
+                    false,
+                    "blocked",
+                    format!("Skipped until repo context loads successfully: {context_error}"),
+                )
+                .with_fix("Run `scripts/jig doctor` after fixing the contract issue."),
             );
             checks.push(
                 check(
@@ -547,6 +559,7 @@ struct DoctorContextChecks {
     go_runtime: Option<DoctorCheck>,
     node_runtime: Option<DoctorCheck>,
     sqlx_cli: Option<DoctorCheck>,
+    tracker: DoctorCheck,
     agent: DoctorCheck,
     proxy: DoctorCheck,
 }
@@ -624,6 +637,7 @@ fn doctor_context_checks_with_process_control(
     let go_runtime = go_runtime_check(ctx, environment, process_control);
     let node_runtime = node_runtime_check(ctx, environment, process_control);
     let sqlx_cli = sqlx_cli_version_check(ctx, environment, process_control);
+    let tracker = tracker::tracker_check(ctx);
     let agent = agent_check(ctx, process_control);
     let proxy = proxy_check_with_process_control(ctx, process_control);
     DoctorContextChecks {
@@ -632,6 +646,7 @@ fn doctor_context_checks_with_process_control(
         go_runtime,
         node_runtime,
         sqlx_cli,
+        tracker,
         agent,
         proxy,
     }

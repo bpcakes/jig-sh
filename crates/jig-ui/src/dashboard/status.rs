@@ -148,6 +148,17 @@ pub struct StatusPlanBaseline {
     pub error: Option<String>,
 }
 
+/// Structured non-success closure metadata for a retired work plan.
+///
+/// Absent for a plan that was completed rather than retired. `disposition` is a
+/// plain string so a value written by a newer runtime still decodes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StatusPlanRetirement {
+    pub disposition: String,
+    pub reason: String,
+    pub superseded_by: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StatusPlanGates {
     pub plan_id: String,
@@ -162,6 +173,8 @@ pub struct StatusGateReport {
     pub gates_ok: bool,
     pub plan_id: String,
     pub plan_state: String,
+    #[serde(default)]
+    pub plan_retirement: Option<StatusPlanRetirement>,
     pub plan_baseline: Option<StatusPlanBaseline>,
     pub current_worktree_fingerprint: Option<String>,
     pub current_worktree_fingerprint_error: Option<String>,
@@ -363,6 +376,8 @@ pub struct StatusEvidenceTarget {
     pub status: String,
     pub receipt_id: Option<String>,
     pub run_id: Option<String>,
+    #[serde(default)]
+    pub original_plan_id: Option<String>,
     pub exit_status: Option<i32>,
     pub ended_at_ms: Option<u64>,
     pub config_digest: Option<String>,

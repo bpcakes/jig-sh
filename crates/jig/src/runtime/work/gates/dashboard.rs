@@ -20,6 +20,7 @@ use crate::state::{
 pub(super) struct GateReportPlanInput<'a> {
     pub(super) plan_id: &'a str,
     pub(super) plan_state: &'static str,
+    pub(super) plan_retirement: Option<crate::state::PlanRetirement>,
     pub(super) prepared_scope: PlanGateContext,
 }
 
@@ -62,6 +63,7 @@ pub(crate) fn gate_receipt_indexes(
         &check_tools,
         &review_gate_ids,
         &evidence_targets,
+        crate::repository::cross_plan_evidence_targets(ctx, &evidence_targets)?,
     ))
 }
 
@@ -119,6 +121,8 @@ pub(crate) fn open_plan_reports_with_cancellation(
             GateReportPlanInput {
                 plan_id,
                 plan_state,
+                // Dashboard gate snapshots only cover open plans.
+                plan_retirement: None,
                 prepared_scope: plan_scope,
             },
             current_fingerprint.clone(),
@@ -176,6 +180,7 @@ impl GateReport {
             gates_ok: self.gates_ok(),
             plan_id: self.plan_id.clone(),
             plan_state: self.plan_state.to_string(),
+            plan_retirement: self.plan_retirement.clone().map(status_plan_retirement),
             plan_baseline: self.plan_baseline.clone().map(status_plan_baseline),
             current_worktree_fingerprint: self.current_worktree_fingerprint.clone(),
             current_worktree_fingerprint_error: self.current_worktree_fingerprint_error.clone(),
@@ -187,6 +192,16 @@ impl GateReport {
             unsupported_required: self.required_failures.unsupported.clone(),
             overall: if self.gates_ok() { "passed" } else { "blocked" }.to_string(),
         }
+    }
+}
+
+fn status_plan_retirement(
+    value: crate::state::PlanRetirement,
+) -> jig_ui::dashboard::StatusPlanRetirement {
+    jig_ui::dashboard::StatusPlanRetirement {
+        disposition: value.disposition,
+        reason: value.reason,
+        superseded_by: value.superseded_by,
     }
 }
 

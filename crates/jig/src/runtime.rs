@@ -590,6 +590,7 @@ pub(crate) fn call_tool_with_observer(
         Some(MemoryTool::Receipts) => work::receipts_from_args(ctx, args),
         Some(MemoryTool::Status) => crate::state::state_summary(memory_ctx),
         Some(MemoryTool::Finish) => work::finish_from_args(memory_ctx, args),
+        Some(MemoryTool::Retire) => work::retire_from_args(ctx, args),
         None => bail!("Unsupported tool: {name}"),
     }
 }
