@@ -8,6 +8,13 @@ pub(super) struct TargetSummary<'a> {
     pub(super) receipt: Option<&'a str>,
 }
 
+pub(super) fn original_plan_suffix(target: &Value, plan_id: &str) -> String {
+    value_str(target, "original_plan_id")
+        .filter(|original| *original != plan_id)
+        .map(|original| format!(", original plan {original}"))
+        .unwrap_or_default()
+}
+
 pub(super) fn target_summaries(value: &Value) -> Vec<TargetSummary<'_>> {
     // Durable target results include blocked and cancelled targets which may
     // never have started and therefore have no compatibility response.
