@@ -1,8 +1,10 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow, bail};
+#[cfg(test)]
+use anyhow::anyhow;
+use anyhow::{Context, Result, bail};
+#[cfg(test)]
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -19,6 +21,8 @@ use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_
 use super::records::{
     DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, SessionEventEnvelope,
 };
+use super::session_pointer::write_locked as write_current_session_locked;
+use super::session_pointer::{read_unlocked as read_current_session_unlocked, with_write_lock};
 use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
@@ -27,10 +31,21 @@ pub(crate) fn public_source_path(ctx: &RepoContext) -> String {
     redact_repository_root(ctx.source_path(), &repository_root_spellings(ctx.root()))
 }
 
+#[cfg(test)]
 #[derive(Deserialize)]
 pub(crate) struct SessionEndRequest {
     pub(crate) session_id: Option<String>,
     pub(crate) outcome: Option<String>,
+}
+
+/// Result of ending a session only if it still owns the current-session slot.
+///
+/// The observed non-matching session is returned from the same locked snapshot
+/// as the comparison, so callers never need to assemble a racy read/check/end
+/// sequence themselves.
+pub(crate) enum SessionEndIfCurrent {
+    Ended(Value),
+    NotCurrent(Option<String>),
 }
 
 pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
@@ -43,8 +58,10 @@ pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
         now_ms(),
         summary.clone(),
     );
-    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
-    write_current_session(ctx, Some(&session_id))?;
+    with_write_lock(ctx, || {
+        append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
+        write_current_session_locked(ctx, Some(&session_id))
+    })?;
 
     let receipt_id = record_successful_state_tool(
         ctx,
@@ -67,22 +84,67 @@ pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Result<Value> {
     ensure_state_layout(ctx)?;
-    let session_id = match request.session_id {
-        Some(id) => id,
-        None => current_session(ctx)?.ok_or_else(|| anyhow!("No active session."))?,
-    };
-    let event = SessionEvent::end(
-        new_id("session-event"),
-        session_id.clone(),
-        now_ms(),
-        request.outcome.clone(),
-    );
-    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
-    if current_session(ctx)?.as_deref() == Some(session_id.as_str()) {
-        write_current_session(ctx, None)?;
+    let outcome = request.outcome;
+    let event = with_write_lock(ctx, || {
+        let current = read_current_session_unlocked(ctx)?;
+        let session_id = request
+            .session_id
+            .clone()
+            .or_else(|| current.clone())
+            .ok_or_else(|| anyhow!("No active session."))?;
+        let event = append_session_end(ctx, session_id, outcome.clone())?;
+        if current.as_deref() == Some(event.session_id()) {
+            write_current_session_locked(ctx, None)?;
+        }
+        Ok(event)
+    })?;
+
+    record_session_end(ctx, event, outcome)
+}
+
+/// End `expected_session_id` iff it is still current, as one synchronized
+/// compare-and-clear transition shared with every current-session writer.
+pub(crate) fn session_end_if_current(
+    ctx: &RepoContext,
+    expected_session_id: &str,
+    outcome: Option<String>,
+) -> Result<SessionEndIfCurrent> {
+    ensure_state_layout(ctx)?;
+    let transition = with_write_lock(ctx, || {
+        let current = read_current_session_unlocked(ctx)?;
+        if current.as_deref() != Some(expected_session_id) {
+            return Ok(Err(current));
+        }
+        let event = append_session_end(ctx, expected_session_id.to_string(), outcome.clone())?;
+        write_current_session_locked(ctx, None)?;
+        Ok(Ok(event))
+    })?;
+
+    match transition {
+        Ok(event) => record_session_end(ctx, event, outcome).map(SessionEndIfCurrent::Ended),
+        Err(current) => Ok(SessionEndIfCurrent::NotCurrent(current)),
     }
+}
+
+fn append_session_end(
+    ctx: &RepoContext,
+    session_id: String,
+    outcome: Option<String>,
+) -> Result<SessionEvent> {
+    let event = SessionEvent::end(new_id("session-event"), session_id, now_ms(), outcome);
+    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
+    Ok(event)
+}
+
+fn record_session_end(
+    ctx: &RepoContext,
+    event: SessionEvent,
+    outcome: Option<String>,
+) -> Result<Value> {
+    let session_id = event.session_id().to_string();
 
     let receipt_id = record_successful_state_tool(
         ctx,
@@ -91,7 +153,7 @@ pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Resu
             args: json!({
                 args::OPERATION: "session_end",
                 "session_id": session_id,
-                "outcome": request.outcome,
+                "outcome": outcome,
             }),
             started_at_ms: event.timestamp_ms(),
             plan_id: None,
@@ -107,16 +169,14 @@ pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Resu
 }
 
 pub(crate) fn current_session(ctx: &RepoContext) -> Result<Option<String>> {
-    let path = ctx.current_session_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-    let value = fs::read_to_string(path)?.trim().to_string();
-    if value.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(value))
-    }
+    super::session_pointer::read(ctx)
+}
+
+pub(crate) fn current_session_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<String>> {
+    super::session_pointer::read_with_cancellation(ctx, cancelled)
 }
 
 pub(super) fn read_session_events(path: &Path) -> Result<Vec<SessionEvent>> {
@@ -280,7 +340,11 @@ fn state_summary_impl(
     let session_count = sessions.iter().filter(|session| session.is_start()).count();
     let plan_count = plans.iter().filter(|plan| plan.is_open()).count();
     ensure_state_summary_active(cancelled)?;
-    let current_session_id = current_session(ctx)?;
+    let current_session_id = if bounded {
+        super::session_pointer::read_with_cancellation(ctx, cancelled)?
+    } else {
+        super::session_pointer::read(ctx)?
+    };
     ensure_state_summary_active(cancelled)?;
 
     Ok(json!({
@@ -422,22 +486,6 @@ fn decision_summary(decision: &DecisionRecord) -> Value {
         "session_id": decision.session_id,
         "timestamp_ms": decision.timestamp_ms,
     })
-}
-
-fn write_current_session(ctx: &RepoContext, session_id: Option<&str>) -> Result<()> {
-    let path = ctx.current_session_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    match session_id {
-        Some(value) => fs::write(path, format!("{value}\n"))?,
-        None => {
-            if path.exists() {
-                fs::remove_file(path)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -1142,7 +1142,7 @@ fn work_receipts_summary_lists_multiple_receipts() {
     assert!(!summary.contains("No receipts matched"));
 }
 
-include!("output_tests_parts/part_01.rs");
+include!("output_tests_parts.rs");
 
 #[path = "output_tests/evidence.rs"]
 mod evidence;

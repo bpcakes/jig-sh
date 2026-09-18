@@ -69,8 +69,8 @@ pub(crate) use vault::{
 };
 pub(crate) use work::{
     WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
-    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
-    WorkStartOpts,
+    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkRetireOpts,
+    WorkReviewOpts, WorkStartOpts,
 };
 
 #[derive(Debug, Parser)]

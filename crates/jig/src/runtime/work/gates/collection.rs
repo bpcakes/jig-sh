@@ -1,11 +1,12 @@
 use super::*;
 
 pub(super) fn gate_report(ctx: &RepoContext, plan_id: &str, timeout_ms: u64) -> Result<GateReport> {
-    let plan_state = resolve_plan_state(ctx, plan_id)?;
+    let (plan_state, plan_retirement) = resolve_plan_state(ctx, plan_id)?;
     evaluate_gate_report(
         ctx,
         plan_id,
         plan_state,
+        plan_retirement,
         current_worktree_fingerprint(ctx),
         GateCollection::Blocking,
         timeout_ms,
@@ -19,7 +20,8 @@ pub(super) fn gate_report_with_cancellation(
     timeout_ms: u64,
 ) -> Result<GateReport> {
     ensure_gate_collection_active(cancelled)?;
-    let plan_state = resolve_plan_state_with_cancellation(ctx, plan_id, cancelled)?;
+    let (plan_state, plan_retirement) =
+        resolve_plan_state_with_cancellation(ctx, plan_id, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
     let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
@@ -27,6 +29,7 @@ pub(super) fn gate_report_with_cancellation(
         ctx,
         plan_id,
         plan_state,
+        plan_retirement,
         current_fingerprint,
         GateCollection::Cancellable(cancelled),
         timeout_ms,
@@ -37,6 +40,7 @@ fn evaluate_gate_report(
     ctx: &RepoContext,
     plan_id: &str,
     plan_state: &'static str,
+    plan_retirement: Option<crate::state::PlanRetirement>,
     current_fingerprint: crate::state::CurrentWorktreeFingerprint,
     collection: GateCollection<'_>,
     timeout_ms: u64,
@@ -104,6 +108,7 @@ fn evaluate_gate_report(
         GateReportPlanInput {
             plan_id,
             plan_state,
+            plan_retirement,
             prepared_scope: plan_scope,
         },
         current_fingerprint,
@@ -126,6 +131,7 @@ pub(super) fn evaluate_gate_report_from_index(
     let GateReportPlanInput {
         plan_id,
         plan_state,
+        plan_retirement,
         prepared_scope,
     } = plan;
     let mut gates = Vec::new();
@@ -175,6 +181,7 @@ pub(super) fn evaluate_gate_report_from_index(
         recovery: None,
         plan_id: plan_id.to_string(),
         plan_state,
+        plan_retirement,
         plan_baseline: plan_scope.baseline().cloned(),
         current_worktree_fingerprint: current_fingerprint.fingerprint,
         current_worktree_fingerprint_error: current_fingerprint.error,
@@ -183,4 +190,38 @@ pub(super) fn evaluate_gate_report_from_index(
     };
     report.recovery = recovery::from_report(&report, repository.as_ref());
     Ok(report)
+}
+
+/// Plan state and its structured closure metadata from one plan-stream pass.
+type PlanStateAndRetirement = (&'static str, Option<crate::state::PlanRetirement>);
+
+fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<PlanStateAndRetirement> {
+    plan_state_from_lifecycle(crate::state::plan_lifecycle(ctx, plan_id)?, plan_id)
+}
+
+fn resolve_plan_state_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<PlanStateAndRetirement> {
+    plan_state_from_lifecycle(
+        crate::state::plan_lifecycle_with_cancellation(ctx, plan_id, cancelled)?,
+        plan_id,
+    )
+}
+
+fn plan_state_from_lifecycle(
+    lifecycle: Option<crate::state::PlanLifecycle>,
+    plan_id: &str,
+) -> Result<PlanStateAndRetirement> {
+    match lifecycle {
+        Some(lifecycle) => Ok((
+            match lifecycle.status {
+                PlanStatus::Open => "open",
+                PlanStatus::Closed => "closed",
+            },
+            lifecycle.retirement,
+        )),
+        None => bail!("Plan not found: {plan_id}"),
+    }
 }

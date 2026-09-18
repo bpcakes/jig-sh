@@ -27,7 +27,6 @@ use super::privacy::{
     redact_repository_root, redact_repository_root_in_value, repository_root_spellings,
 };
 use super::records::ReceiptRecord;
-use super::sessions::current_session;
 use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
 mod archive;

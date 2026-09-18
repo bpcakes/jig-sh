@@ -20,6 +20,7 @@ pub(crate) enum WorkCommand {
     Receipts(WorkReceiptsRequest),
     Status,
     Finish(WorkFinishRequest),
+    Retire(WorkRetireRequest),
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +126,18 @@ pub(crate) struct WorkFinishRequest {
     pub(crate) plan_id: String,
     pub(crate) resolution: Option<String>,
     pub(crate) outcome: Option<String>,
+}
+
+/// Explicit non-success retirement of an open work plan.
+///
+/// `disposition` and `reason` are validated in the runtime so CLI and MCP
+/// callers reject the same inputs with the same messages.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WorkRetireRequest {
+    pub(crate) plan_id: String,
+    pub(crate) disposition: String,
+    pub(crate) reason: String,
+    pub(crate) superseded_by: Option<String>,
 }
 
 fn deserialize_freshness_timeout_ms<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>

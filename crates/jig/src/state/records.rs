@@ -106,6 +106,58 @@ pub(crate) struct PlanBaseline {
     pub(crate) error: Option<String>,
 }
 
+/// Structured non-success terminal disposition recorded on a plan close.
+///
+/// This is additive close metadata: a retired plan is still a closed plan for
+/// every existing reader, and a plain successful close keeps `None` here.
+/// `disposition` is stored as a string so a record written by a newer runtime
+/// with an unrecognized disposition still decodes; write paths validate against
+/// [`PlanDisposition`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PlanRetirement {
+    pub(crate) disposition: String,
+    pub(crate) reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) superseded_by: Option<String>,
+}
+
+impl PlanRetirement {
+    pub(crate) fn to_value(&self) -> Value {
+        serde_json::json!({
+            "disposition": self.disposition,
+            "reason": self.reason,
+            "superseded_by": self.superseded_by,
+        })
+    }
+}
+
+/// Terminal dispositions accepted when retiring a work plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlanDisposition {
+    Cancelled,
+    Superseded,
+    Duplicate,
+    Obsolete,
+}
+
+impl PlanDisposition {
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::Cancelled,
+        Self::Superseded,
+        Self::Duplicate,
+        Self::Obsolete,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Superseded => "superseded",
+            Self::Duplicate => "duplicate",
+            Self::Obsolete => "obsolete",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum PlanEvent {
     Open {
@@ -127,6 +179,7 @@ pub(crate) enum PlanEvent {
         plan_id: String,
         timestamp_ms: u64,
         resolution: Option<String>,
+        retirement: Option<PlanRetirement>,
     },
     Unknown {
         id: String,
@@ -137,6 +190,15 @@ pub(crate) enum PlanEvent {
 }
 
 impl PlanEvent {
+    pub(super) fn id(&self) -> &str {
+        match self {
+            Self::Open { id, .. }
+            | Self::Append { id, .. }
+            | Self::Close { id, .. }
+            | Self::Unknown { id, .. } => id,
+        }
+    }
+
     pub(super) const fn open(
         id: String,
         plan_id: String,
@@ -197,6 +259,23 @@ impl PlanEvent {
             plan_id,
             timestamp_ms,
             resolution,
+            retirement: None,
+        }
+    }
+
+    pub(super) const fn retire(
+        id: String,
+        plan_id: String,
+        timestamp_ms: u64,
+        resolution: Option<String>,
+        retirement: PlanRetirement,
+    ) -> Self {
+        Self::Close {
+            id,
+            plan_id,
+            timestamp_ms,
+            resolution,
+            retirement: Some(retirement),
         }
     }
 
@@ -232,6 +311,13 @@ impl PlanEvent {
     pub(super) fn baseline(&self) -> Option<&PlanBaseline> {
         match self {
             Self::Open { baseline, .. } => baseline.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn retirement(&self) -> Option<&PlanRetirement> {
+        match self {
+            Self::Close { retirement, .. } => retirement.as_ref(),
             _ => None,
         }
     }
@@ -348,6 +434,8 @@ struct LegacyPlanEvent {
     resolution: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline: Option<PlanBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retirement: Option<PlanRetirement>,
 }
 
 impl Serialize for PlanEvent {
@@ -372,6 +460,7 @@ impl Serialize for PlanEvent {
                 body_path: body_path.clone(),
                 resolution: None,
                 baseline: baseline.clone(),
+                retirement: None,
             },
             Self::Append {
                 id,
@@ -387,12 +476,14 @@ impl Serialize for PlanEvent {
                 body_path: body_path.clone(),
                 resolution: None,
                 baseline: None,
+                retirement: None,
             },
             Self::Close {
                 id,
                 plan_id,
                 timestamp_ms,
                 resolution,
+                retirement,
             } => LegacyPlanEvent {
                 id: id.clone(),
                 plan_id: plan_id.clone(),
@@ -402,6 +493,7 @@ impl Serialize for PlanEvent {
                 body_path: None,
                 resolution: resolution.clone(),
                 baseline: None,
+                retirement: retirement.clone(),
             },
             Self::Unknown {
                 id,
@@ -417,6 +509,7 @@ impl Serialize for PlanEvent {
                 body_path: None,
                 resolution: None,
                 baseline: None,
+                retirement: None,
             },
         };
         legacy.serialize(serializer)
@@ -453,12 +546,21 @@ impl<'de> Deserialize<'de> for PlanEvent {
                 legacy.timestamp_ms,
                 legacy.body_path,
             ),
-            "close" => Self::close(
-                legacy.id,
-                legacy.plan_id,
-                legacy.timestamp_ms,
-                legacy.resolution,
-            ),
+            "close" => match legacy.retirement {
+                Some(retirement) => Self::retire(
+                    legacy.id,
+                    legacy.plan_id,
+                    legacy.timestamp_ms,
+                    legacy.resolution,
+                    retirement,
+                ),
+                None => Self::close(
+                    legacy.id,
+                    legacy.plan_id,
+                    legacy.timestamp_ms,
+                    legacy.resolution,
+                ),
+            },
             _ => Self::Unknown {
                 id: legacy.id,
                 plan_id: legacy.plan_id,

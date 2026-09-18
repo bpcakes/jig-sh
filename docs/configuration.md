@@ -105,7 +105,7 @@ For local git template checkouts, `jig init` / `jig adopt` use a committed sourc
   `ubuntu-latest` because service containers and the Docker daemon require Linux.
   Other generated jobs retain this configured runner and select Bash explicitly
   for repository-owned `run` steps.
-- `work.gates`: required work evidence gates evaluated before `scripts/jig work finish`
+- `work.gates`: required work evidence gates evaluated before `scripts/jig work finish` (never evaluated by `scripts/jig work retire`)
 - `agent_tooling`: agent-client tooling expected for this repository, including Jig Codex skills
 - `template_source_url`: optional canonical template source URL for portable recopy/update
 - `sqlx_enabled`: whether to generate SQLx and migration-specific contract pieces
@@ -1093,6 +1093,7 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig work status`
 - `scripts/jig work status --json`
 - `scripts/jig work finish --plan-id ...`
+- `scripts/jig work retire --plan-id ... --disposition <cancelled|superseded|duplicate|obsolete> --reason ...`
 - `scripts/jig state summary`
 - `scripts/jig state diagnose`
 - `scripts/jig state diagnose --deep`
@@ -1103,7 +1104,9 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`
 - `scripts/jig state archive --before YYYY-MM-DD`
 
-`work finish` closes the plan with `--resolution`. If an active session is also open, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`. Gate evaluation and plan closure hold a shared checkout lease as one decision window, so an effectful repository action cannot invalidate accepted evidence immediately before the close commit point.
+`work finish` closes the plan with `--resolution`. If the session proven to have opened that plan is still current, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`. An unrelated current session remains active. Gate evaluation and plan closure hold a shared checkout lease as one decision window, so an effectful repository action cannot invalidate accepted evidence immediately before the close commit point.
+
+`work retire` is the non-success counterpart. It closes an open plan that will not be delivered with a required structured `--disposition` (`cancelled`, `superseded`, `duplicate`, or `obsolete`), a required nonblank `--reason`, and an optional `--superseded-by` reference to the plan or issue that replaces the work. It evaluates no required gates and records no gate evidence, so it never weakens `work finish`; there is no force flag on either command. Retirement takes the same exclusive plan-close lease as `work finish`, so it rejects an unknown plan, an already-closed plan, and a plan with an active linked repository run. Like finish, it ends a session only when the plan's `jig.plans_open` receipt proves that session opened the plan; an unrelated current session stays active and the result's `session_status` reports what happened. `scripts/jig work gates` and `scripts/jig work evidence` report retirement disposition and reason in their default human output as well as `plan_state: "closed"` with a `plan_retirement` object in JSON; a completed plan keeps `plan_retirement: null`. Default `work receipts` output also shows each state receipt's `args.operation`, distinguishing `plan_retire` from `plan_close` while retaining the historical `jig.plans_close` tool name.
 
 Contract tools and work checks intentionally append receipts under `.agent/state/`.
 Read-only inspection commands such as `work status` and `work gates` do not add

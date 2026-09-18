@@ -159,28 +159,6 @@ impl EvaluatedReceipt {
     }
 }
 
-fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<&'static str> {
-    Ok(match plan_status(ctx, plan_id)? {
-        Some(PlanStatus::Open) => "open",
-        Some(PlanStatus::Closed) => "closed",
-        None => bail!("Plan not found: {plan_id}"),
-    })
-}
-
-fn resolve_plan_state_with_cancellation(
-    ctx: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<&'static str> {
-    Ok(
-        match plan_status_with_cancellation(ctx, plan_id, cancelled)? {
-            Some(PlanStatus::Open) => "open",
-            Some(PlanStatus::Closed) => "closed",
-            None => bail!("Plan not found: {plan_id}"),
-        },
-    )
-}
-
 fn resolve_work_plan_id(ctx: &RepoContext, requested: Option<String>) -> Result<String> {
     if let Some(plan_id) = requested {
         ensure_plan_exists(ctx, &plan_id)?;
@@ -690,6 +668,7 @@ mod tests {
             recovery: None,
             plan_id: "plan-test".into(),
             plan_state: "open",
+            plan_retirement: None,
             plan_baseline: None,
             current_worktree_fingerprint: Some("fingerprint".into()),
             current_worktree_fingerprint_error: None,

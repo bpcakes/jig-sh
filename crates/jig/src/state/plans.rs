@@ -15,10 +15,10 @@ use crate::context::RepoContext;
 use crate::git_receipts::{resolve_empty_tree_for_unborn_repository, resolve_git_commit};
 use crate::tool_defs::{args, tool};
 
-use super::jsonl::{append_jsonl, read_dashboard_jsonl, read_jsonl};
+use super::jsonl::{append_jsonl, read_dashboard_jsonl, read_jsonl, read_receipts_reverse};
 use super::plan_files::{append_plan_body, create_plan_body, plan_body_path, validate_plan_id};
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
-use super::records::{PlanBaseline, PlanEvent};
+use super::records::{PlanBaseline, PlanEvent, PlanRetirement};
 use super::support::{AdvisoryLeaseFile, ensure_state_layout, new_id, now_ms, rel_path};
 
 const PLAN_EXECUTION_LEASE_DIR: &str = ".agent/.cache/plan-execution-leases";
@@ -63,6 +63,18 @@ pub(crate) struct PlanCloseRequest {
     pub(crate) resolution: Option<String>,
 }
 
+/// Explicit non-success closure of an open plan.
+///
+/// `disposition` is already validated by the caller; `reason` is already
+/// trimmed and known nonblank.
+#[derive(Debug)]
+pub(crate) struct PlanRetireRequest {
+    pub(crate) plan_id: String,
+    pub(crate) disposition: &'static str,
+    pub(crate) reason: String,
+    pub(crate) superseded_by: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlanStatus {
     Open,
@@ -71,7 +83,7 @@ pub(crate) enum PlanStatus {
 
 #[cfg(test)]
 pub(crate) fn plans_open(ctx: &RepoContext, request: PlanOpenRequest) -> Result<Value> {
-    plans_open_prepared(ctx, prepare_plan_open(ctx, request)?)
+    plans_open_prepared(ctx, prepare_plan_open(ctx, request)?, None)
 }
 
 pub(crate) fn prepare_plan_open(
@@ -86,7 +98,11 @@ pub(crate) fn prepare_plan_open(
     })
 }
 
-pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) -> Result<Value> {
+pub(crate) fn plans_open_prepared(
+    ctx: &RepoContext,
+    request: PreparedPlanOpen,
+    owner_session_id: Option<String>,
+) -> Result<Value> {
     let plan_id = new_id("plan");
     let plan_path = create_plan_body(ctx, &plan_id, &request.body)?;
 
@@ -111,7 +127,11 @@ pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) 
             }),
             started_at_ms: event.timestamp_ms(),
             plan_id: Some(plan_id.clone()),
-            session_override: None,
+            // A work start already knows the session it created. Never infer
+            // this ownership edge from the mutable repository-global pointer:
+            // another concurrent start may have replaced it by the time the
+            // plan-open receipt is appended.
+            session_override: owner_session_id,
         },
     )?;
 
@@ -192,42 +212,189 @@ pub(crate) fn plans_append(ctx: &RepoContext, request: PlanAppendRequest) -> Res
 }
 
 pub(crate) fn plans_close(ctx: &RepoContext, request: PlanCloseRequest) -> Result<Value> {
-    ensure_state_layout(ctx)?;
-    ensure_plan_is_open(ctx, &request.plan_id)?;
-    let _finish_lease = acquire_plan_finish_lease(ctx, &request.plan_id)?;
-    // A linked run that was waiting for the lease may have observed the plan
-    // before this closer won exclusivity. Recheck under the exclusive lease so
-    // no new linked run can cross the close transition.
-    ensure_plan_is_open(ctx, &request.plan_id)?;
-
-    let event = PlanEvent::close(
-        new_id("plan-event"),
-        request.plan_id.clone(),
-        now_ms(),
-        request.resolution.clone(),
-    );
-    append_jsonl(&ctx.state_file("plans.jsonl"), &event)?;
-
-    let receipt_id = record_successful_state_tool(
+    let (event, receipt_id) = commit_plan_closure(
         ctx,
-        StateToolReceipt {
-            tool_name: tool::PLANS_CLOSE,
-            args: json!({
-                args::OPERATION: "plan_close",
-                "plan_id": request.plan_id,
-                "resolution": request.resolution,
-            }),
-            started_at_ms: event.timestamp_ms(),
-            plan_id: Some(event.plan_id().to_string()),
-            session_override: None,
-        },
+        &request.plan_id,
+        request.resolution.clone(),
+        None,
+        json!({
+            args::OPERATION: "plan_close",
+            "plan_id": request.plan_id,
+            "resolution": request.resolution,
+        }),
     )?;
 
     Ok(json!({
         "ok": true,
         "plan_id": event.plan_id(),
         "receipt_id": receipt_id,
+        "close_event_id": event.id(),
     }))
+}
+
+/// Close an open plan without claiming delivery.
+///
+/// This deliberately shares every close-time safety primitive with
+/// [`plans_close`] and deliberately evaluates no work gates: retirement is a
+/// lifecycle transition, not evidence of completed work.
+pub(crate) fn plans_retire(ctx: &RepoContext, request: PlanRetireRequest) -> Result<Value> {
+    let retirement = PlanRetirement {
+        disposition: request.disposition.to_string(),
+        reason: request.reason.clone(),
+        superseded_by: request.superseded_by.clone(),
+    };
+    let (event, receipt_id) = commit_plan_closure(
+        ctx,
+        &request.plan_id,
+        // Keep the historical free-text close field populated so readers that
+        // only know `resolution` still see why the plan ended.
+        Some(format!("{}: {}", request.disposition, request.reason)),
+        Some(retirement.clone()),
+        json!({
+            args::OPERATION: "plan_retire",
+            "plan_id": request.plan_id,
+            "disposition": request.disposition,
+            "reason": request.reason,
+            "superseded_by": request.superseded_by,
+        }),
+    )?;
+
+    Ok(json!({
+        "ok": true,
+        "plan_id": event.plan_id(),
+        "receipt_id": receipt_id,
+        "close_event_id": event.id(),
+        "retirement": retirement.to_value(),
+    }))
+}
+
+/// Append the single append-only close event for a plan and its state receipt.
+///
+/// Both close paths share the exclusive plan-finish lease, the open-state
+/// recheck under that lease, and the linked-run rejection it implies.
+fn commit_plan_closure(
+    ctx: &RepoContext,
+    plan_id: &str,
+    resolution: Option<String>,
+    retirement: Option<PlanRetirement>,
+    receipt_args: Value,
+) -> Result<(PlanEvent, String)> {
+    ensure_state_layout(ctx)?;
+    ensure_plan_is_open(ctx, plan_id)?;
+    let _finish_lease = acquire_plan_finish_lease(ctx, plan_id)?;
+    // A linked run that was waiting for the lease may have observed the plan
+    // before this closer won exclusivity. Recheck under the exclusive lease so
+    // no new linked run can cross the close transition.
+    ensure_plan_is_open(ctx, plan_id)?;
+
+    let event = match retirement {
+        Some(retirement) => PlanEvent::retire(
+            new_id("plan-event"),
+            plan_id.to_string(),
+            now_ms(),
+            resolution,
+            retirement,
+        ),
+        None => PlanEvent::close(
+            new_id("plan-event"),
+            plan_id.to_string(),
+            now_ms(),
+            resolution,
+        ),
+    };
+    append_jsonl(&ctx.state_file("plans.jsonl"), &event)?;
+
+    let receipt_id = record_successful_state_tool(
+        ctx,
+        StateToolReceipt {
+            tool_name: tool::PLANS_CLOSE,
+            args: receipt_args,
+            started_at_ms: event.timestamp_ms(),
+            plan_id: Some(event.plan_id().to_string()),
+            session_override: None,
+        },
+    )
+    .map_err(|error| super::PlanClosurePartialFailure::receipt(&event, error))?;
+
+    Ok((event, receipt_id))
+}
+
+/// A plan's terminal state plus the structured retirement recorded on its
+/// close, resolved in a single pass over the plan stream.
+///
+/// A successful close keeps `retirement` at `None`, which is how existing
+/// closes retain their historical meaning.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanLifecycle {
+    pub(crate) status: PlanStatus,
+    pub(crate) retirement: Option<PlanRetirement>,
+}
+
+pub(crate) fn plan_lifecycle(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanLifecycle>> {
+    let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
+    Ok(plan_lifecycle_from_events(&events, plan_id))
+}
+
+pub(crate) fn plan_lifecycle_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<PlanLifecycle>> {
+    ensure_plan_scan_active(cancelled)?;
+    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    ensure_plan_scan_active(cancelled)?;
+    Ok(plan_lifecycle_from_events(&events, plan_id))
+}
+
+fn plan_lifecycle_from_events(events: &[PlanEvent], plan_id: &str) -> Option<PlanLifecycle> {
+    let mut opened = false;
+    let mut closed = false;
+    let mut retirement = None;
+
+    for event in events.iter().filter(|event| event.plan_id() == plan_id) {
+        match event {
+            PlanEvent::Open { .. } => {
+                opened = true;
+                closed = false;
+                retirement = None;
+            }
+            PlanEvent::Close { .. } => {
+                closed = true;
+                retirement = event.retirement().cloned();
+            }
+            _ => {}
+        }
+    }
+
+    match (opened, closed) {
+        (true, false) => Some(PlanLifecycle {
+            status: PlanStatus::Open,
+            retirement: None,
+        }),
+        (true, true) => Some(PlanLifecycle {
+            status: PlanStatus::Closed,
+            retirement,
+        }),
+        (false, _) => None,
+    }
+}
+
+/// The session that durably owns a plan, proven by the plan's open receipt.
+///
+/// Plan-open records its receipt after the owning session is current, so the
+/// receipt's session is the only durable proof of ownership. A plan opened
+/// without a session, or whose open receipt has been archived away, has no
+/// provable owner and must never end an unrelated session.
+pub(crate) fn plan_owner_session(ctx: &RepoContext, plan_id: &str) -> Result<Option<String>> {
+    let (receipts, _) = read_receipts_reverse(&ctx.state_file("receipts.jsonl"), 1, |receipt| {
+        receipt.tool_name == tool::PLANS_OPEN
+            && receipt.plan_id.as_deref() == Some(plan_id)
+            && receipt.session_id.is_some()
+    })?;
+    Ok(receipts
+        .into_iter()
+        .next()
+        .and_then(|receipt| receipt.session_id))
 }
 
 pub(super) fn acquire_active_plan_run_lease(

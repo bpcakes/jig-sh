@@ -728,3 +728,5 @@ fn reusable_evidence_enforces_inherited_expiry_and_missing_effective_boundary() 
         Some(EffectiveTimeValidityV1::new(None, true))
     ));
 }
+
+mod session_pointer;

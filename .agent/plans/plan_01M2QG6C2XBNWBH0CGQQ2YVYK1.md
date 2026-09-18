@@ -1,0 +1,1 @@
+Bind plan ownership explicitly, synchronize session teardown, render retirement metadata, and validate the regression fixes.

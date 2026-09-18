@@ -16,16 +16,18 @@ pub(crate) use jsonl::read_receipts_reverse_with_cancellation;
 pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl_raw};
 #[cfg(test)]
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
+pub(crate) use plan_closure_failure::PlanClosurePartialFailure;
 pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, plan_body_path, read_plan_body};
 pub(crate) use plans::{
-    PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
-    ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,
-    open_plan_summaries_with_cancellation, plan_baseline, plan_baseline_with_cancellation,
-    plan_baselines_with_cancellation, plan_status, plan_status_with_cancellation, plans_append,
-    plans_close, plans_open_prepared, prepare_plan_open,
+    PlanAppendRequest, PlanCloseRequest, PlanLifecycle, PlanOpenRequest, PlanRetireRequest,
+    PlanStatus, ensure_plan_exists, ensure_plan_exists_with_cancellation, ensure_plan_is_open,
+    open_plan_summaries, open_plan_summaries_with_cancellation, plan_baseline,
+    plan_baseline_with_cancellation, plan_baselines_with_cancellation, plan_lifecycle,
+    plan_lifecycle_with_cancellation, plan_owner_session, plans_append, plans_close,
+    plans_open_prepared, plans_retire, prepare_plan_open,
 };
 #[cfg(test)]
-pub(crate) use plans::{plans_open, seed_open_plan_for_test};
+pub(crate) use plans::{plan_status, plans_open, seed_open_plan_for_test};
 pub(crate) use receipts::effective_time_from_value;
 pub(crate) use receipts::evidence_requires_time_validity;
 pub(crate) use receipts::metadata_time;
@@ -57,11 +59,11 @@ pub(crate) use receipts::{
     reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,
 };
 use records::DecisionRecord;
-pub(crate) use records::PlanBaseline;
 pub(crate) use records::{
     DecisionRecord as DashboardDecisionRecord, PlanEvent as DashboardPlanEvent,
     ReceiptRecord as DashboardReceiptRecord, SessionEventEnvelope as DashboardSessionEvent,
 };
+pub(crate) use records::{PlanBaseline, PlanDisposition, PlanRetirement};
 #[cfg(test)]
 use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
@@ -74,11 +76,12 @@ pub(crate) use runs::{
 pub(crate) use runs::{start_run, start_run_with_event_cursor};
 #[cfg(test)]
 use sessions::build_summary;
-pub(crate) use sessions::current_session;
 pub(crate) use sessions::{
-    SessionEndRequest, public_source_path, session_end, session_start, state_summary,
-    state_summary_with_cancellation,
+    SessionEndIfCurrent, current_session, current_session_with_cancellation, public_source_path,
+    session_end_if_current, session_start, state_summary, state_summary_with_cancellation,
 };
+#[cfg(test)]
+pub(crate) use sessions::{SessionEndRequest, session_end};
 pub(crate) use support::now_ms;
 #[cfg(test)]
 pub(crate) use support::set_test_now_ms;
@@ -92,7 +95,9 @@ mod execution_leases;
 mod json_scan;
 mod jsonl;
 mod maintenance;
+mod plan_closure_failure;
 mod plan_files;
+mod session_pointer;
 pub(crate) use plan_files::validate_plan_id;
 mod plans;
 mod privacy;

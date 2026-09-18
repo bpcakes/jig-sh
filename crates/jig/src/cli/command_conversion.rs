@@ -16,7 +16,7 @@ use super::{
     StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
     StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
     WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
-    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    WorkRefineOpts, WorkRetireOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -291,6 +291,18 @@ impl From<WorkCommand> for command::WorkCommand {
             WorkCommand::Receipts(opts) => Self::Receipts(opts.into()),
             WorkCommand::Status => Self::Status,
             WorkCommand::Finish(opts) => Self::Finish(opts.into()),
+            WorkCommand::Retire(opts) => Self::Retire(opts.into()),
+        }
+    }
+}
+
+impl From<WorkRetireOpts> for command::WorkRetireRequest {
+    fn from(opts: WorkRetireOpts) -> Self {
+        Self {
+            plan_id: opts.plan_id,
+            disposition: opts.disposition,
+            reason: opts.reason,
+            superseded_by: opts.superseded_by,
         }
     }
 }
