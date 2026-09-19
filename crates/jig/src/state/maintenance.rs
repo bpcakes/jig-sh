@@ -78,6 +78,41 @@ struct StateBackupManifest {
     compressed_bytes: u64,
 }
 
+/// Manifest facts exposed only after the state-maintenance boundary has
+/// recognized an exact runs backup that `state restore` can accept.
+pub(in crate::state) struct ValidatedRunBackupManifest {
+    pub(in crate::state) compressed_file: String,
+    pub(in crate::state) created_at_ms: u64,
+    pub(in crate::state) original_bytes: u64,
+    pub(in crate::state) original_sha256: String,
+    pub(in crate::state) compressed_bytes: u64,
+}
+
+fn read_state_backup_manifest(path: &Path) -> Result<StateBackupManifest> {
+    let manifest_text =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    serde_json::from_str(&manifest_text)
+        .with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+pub(in crate::state) fn read_run_backup_manifest(
+    path: &Path,
+) -> Result<Option<ValidatedRunBackupManifest>> {
+    let manifest = read_state_backup_manifest(path)?;
+    if manifest.stream != RUNS_STREAM {
+        return Ok(None);
+    }
+    let stream = validate_manifest(&manifest)?;
+    debug_assert_eq!(stream.name, RUNS_STREAM);
+    Ok(Some(ValidatedRunBackupManifest {
+        compressed_file: manifest.compressed_file,
+        created_at_ms: manifest.created_at_ms,
+        original_bytes: manifest.original_bytes,
+        original_sha256: manifest.original_sha256,
+        compressed_bytes: manifest.compressed_bytes,
+    }))
+}
+
 pub(crate) fn compact_sessions(
     ctx: &RepoContext,
     request: StateCompactSessionsRequest,
@@ -157,10 +192,7 @@ pub(crate) fn compact_sessions(
 
 pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) -> Result<Value> {
     let manifest_path = resolve_manifest_path(&request.backup);
-    let manifest_text = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-    let manifest: StateBackupManifest = serde_json::from_str(&manifest_text)
-        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+    let manifest = read_state_backup_manifest(&manifest_path)?;
     let stream = validate_manifest(&manifest)?;
     let backup_dir = manifest_path
         .parent()

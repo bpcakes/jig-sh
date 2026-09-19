@@ -41,7 +41,8 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
         .as_u64()
         .unwrap_or_else(|| checkout_bytes.saturating_add(cache_bytes));
     let mut lines = vec![
-        "State diagnose: complete".to_string(),
+        "State diagnose: complete (command status; integrity is reported below)".to_string(),
+        format!("  Integrity: {}", integrity_verdict(value)),
         format!("  Total bytes: {total_bytes}"),
         format!("  State checkout bytes: {checkout_bytes}"),
         format!("  Maintenance cache bytes: {cache_bytes}"),
@@ -69,6 +70,7 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
         lines.push("  Session recursion: not analyzed (rerun with --deep)".into());
         lines.push("  Receipt payloads: not analyzed (rerun with --deep)".into());
     }
+    push_run_linkage_lines(&mut lines, &value["run_linkage"]);
     if let Some(recommendations) = value["recommendations"].as_array()
         && !recommendations.is_empty()
     {
@@ -86,6 +88,132 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
     }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+/// Summarizes integrity separately from command completion so a successful
+/// `state diagnose` never reads as a clean bill of health.
+fn integrity_verdict(value: &serde_json::Value) -> String {
+    let integrity = &value["integrity"];
+    let malformed = value_u64(integrity, "malformed_records")
+        .or_else(|| value_u64(&value["totals"], "malformed_records"))
+        .unwrap_or(0);
+    let torn = value_u64(integrity, "torn_streams")
+        .or_else(|| value_u64(&value["totals"], "torn_streams"))
+        .unwrap_or(0);
+    let scan_errors = value_u64(integrity, "scan_errors").unwrap_or(0);
+    let mut problems = Vec::new();
+    if malformed > 0 {
+        problems.push(format!("{malformed} malformed records"));
+    }
+    if torn > 0 {
+        problems.push(format!("{torn} torn streams"));
+    }
+    if scan_errors > 0 {
+        problems.push(format!("{scan_errors} stream scan errors"));
+    }
+    let linkage = match value_str(&value["run_linkage"], "verdict") {
+        Some("clean") => "run linkage clean".to_string(),
+        Some("findings") => format!(
+            "{} run linkage findings",
+            value_u64(&value["run_linkage"], "finding_count").unwrap_or(0)
+        ),
+        Some("incomplete") => "run linkage incomplete (no clean verdict)".to_string(),
+        _ => "run linkage not checked (rerun with --deep)".to_string(),
+    };
+    problems.push(linkage);
+    problems.join("; ")
+}
+
+fn push_run_linkage_lines(lines: &mut Vec<String>, linkage: &serde_json::Value) {
+    const MAX_FINDING_LINES: usize = 5;
+    match value_str(linkage, "verdict") {
+        Some("clean") => {
+            let runs = &linkage["runs"];
+            lines.push(format!(
+                "  Run linkage: clean ({} referenced runs: {} active, {} completed, {} archived)",
+                value_u64(linkage, "referenced_runs").unwrap_or(0),
+                value_u64(runs, "active").unwrap_or(0),
+                value_u64(runs, "completed").unwrap_or(0),
+                value_u64(runs, "archived_verified").unwrap_or(0),
+            ));
+        }
+        Some("findings") => {
+            let runs = &linkage["runs"];
+            let count = value_u64(linkage, "finding_count").unwrap_or(0);
+            let suffix = if value_bool(linkage, "complete").unwrap_or(false) {
+                ""
+            } else {
+                "; scan incomplete, more may exist"
+            };
+            lines.push(format!(
+                "  Run linkage: {count} finding(s) ({} missing, {} unverifiable, {} inconsistent, {} recoverable from backup){suffix}",
+                value_u64(runs, "missing").unwrap_or(0),
+                value_u64(runs, "unverifiable").unwrap_or(0),
+                value_u64(runs, "inconsistent").unwrap_or(0),
+                value_u64(runs, "recoverable_from_backup").unwrap_or(0),
+            ));
+            let findings = linkage["findings"].as_array().cloned().unwrap_or_default();
+            for finding in findings.iter().take(MAX_FINDING_LINES) {
+                lines.push(format!(
+                    "    {}: {}; receipts: {}; batch receipts: {}",
+                    value_str(finding, "run_id").unwrap_or("<unknown run>"),
+                    value_str(finding, "status").unwrap_or("unknown"),
+                    id_preview(&finding["receipt_ids"], value_u64(finding, "receipt_count")),
+                    id_preview(
+                        &finding["batch_receipt_ids"],
+                        value_u64(finding, "batch_receipt_count")
+                    ),
+                ));
+            }
+            let shown = findings.len().min(MAX_FINDING_LINES) as u64;
+            if count > shown {
+                lines.push(format!(
+                    "    ... {} more finding(s); rerun with --json for structured findings and truncation metadata",
+                    count - shown
+                ));
+            }
+        }
+        Some("incomplete") => {
+            let reasons = linkage["incomplete_reasons"]
+                .as_array()
+                .map(|reasons| {
+                    reasons
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .unwrap_or_default();
+            lines.push(format!(
+                "  Run linkage: incomplete; no clean verdict ({reasons})"
+            ));
+        }
+        _ => lines.push("  Run linkage: not checked (rerun with --deep)".into()),
+    }
+}
+
+fn id_preview(ids: &serde_json::Value, total: Option<u64>) -> String {
+    const MAX_IDS: usize = 3;
+    let ids = ids
+        .as_array()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return "none".into();
+    }
+    let total = total.unwrap_or(ids.len() as u64);
+    let shown_ids = ids.iter().take(MAX_IDS).copied().collect::<Vec<_>>();
+    let omitted = total.saturating_sub(shown_ids.len() as u64);
+    let shown = shown_ids.join(", ");
+    if omitted == 0 {
+        shown
+    } else {
+        format!("{shown} (+{omitted} more)")
+    }
 }
 
 pub(super) fn format_state_compact_summary(value: &serde_json::Value) -> String {

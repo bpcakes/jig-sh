@@ -3,6 +3,7 @@ use super::*;
 use crate::repository::{
     PlanRunRequest, plan_run_with_cancellation, validate_current_repository_authority,
 };
+use crate::state::work_check_targets_evidence;
 
 pub(super) fn check(
     ctx: &RepoContext,
@@ -91,7 +92,7 @@ pub(super) fn check(
             evidence
         })
         .collect();
-    let mut batch_evidence = json!({"schema": "jig.work_check_targets/v1", "targets": evidence});
+    let mut batch_evidence = work_check_targets_evidence(&evidence);
     let effective_time = (ctx.contract_version()
         >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
         .then(|| result_effective_time_validity(&batch_evidence));
