@@ -142,26 +142,37 @@ pub(in crate::state::diagnostics) fn recommendations(report: &RunLinkageReport) 
         .iter()
         .filter(|finding| finding.status != "recoverable_from_backup")
         .collect::<Vec<_>>();
-    let unavailable_total = report
+    let unavailable_count = report
         .runs
         .missing
         .saturating_add(report.runs.unverifiable)
         .saturating_add(report.runs.inconsistent);
-    if unavailable_total > 0 {
+    if unavailable_count > 0 {
+        let coverage_truncated = report.findings_truncated || report.reference_budget_exceeded;
         let receipt_total = unavailable
             .iter()
             .map(|finding| finding.receipt_count)
             .sum::<u64>();
+        let receipt_total = if coverage_truncated {
+            format!("At least {receipt_total} retained receipt(s)")
+        } else {
+            format!("{receipt_total} receipt(s)")
+        };
+        let unavailable_total = if coverage_truncated {
+            format!("at least {unavailable_count} retained run(s)")
+        } else {
+            format!("{unavailable_count} run(s)")
+        };
         let run_ids = unavailable.iter().map(|finding| &finding.run_id);
         recommendations.push(json!({
             "kind": "preserve_unlinked_receipt_evidence",
             "command": "jig state export receipts --before <YYYY-MM-DD> --output receipts-preserved.jsonl.gz",
             "alternative_command": "jig work decide --title \"Run history unavailable\" --selected-option \"Preserve receipts; record affected IDs\" --rationale \"<affected run and receipt IDs; run history unavailable>\"",
             "affected_run_ids": unavailable.iter().map(|finding| finding.run_id.clone()).collect::<Vec<_>>(),
-            "affected_run_ids_truncated": report.findings_truncated,
+            "affected_run_ids_truncated": coverage_truncated,
             "reason": format!(
-                "{receipt_total} receipt(s) reference {unavailable_total} run(s) whose lifecycle is unavailable or unverifiable in this checkout ({}). Existing receipts remain valid evidence: keep them, export them for retention, and append a decision naming the affected run and receipt IDs and this limitation. Rebuilding derived caches does not restore run events, a new check run is new evidence rather than restored history, and no queued, target_completed, or completed events may be fabricated.",
-                preview_ids(run_ids, unavailable_total)
+                "{receipt_total} reference {unavailable_total} whose lifecycle is unavailable or unverifiable in this checkout ({}). Existing receipts remain valid evidence: keep them, export them for retention, and append a decision naming the affected run and receipt IDs and this limitation. Rebuilding derived caches does not restore run events, a new check run is new evidence rather than restored history, and no queued, target_completed, or completed events may be fabricated.",
+                preview_ids(run_ids, unavailable_count)
             ),
         }));
     }

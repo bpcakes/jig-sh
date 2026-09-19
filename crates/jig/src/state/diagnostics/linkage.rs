@@ -8,24 +8,21 @@
 //! reported as uncertain rather than treated as healthy or as proof of loss.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Range;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::deep::{visit_array_values, visit_object_members};
 use super::{StreamDiagnostics, display_repo_path};
-use crate::state::json_scan::first_non_whitespace;
 use crate::state::records::RunEventRecord;
 use crate::state::runs::active_run_lease_ids;
 use crate::state::runs::lifecycle::{RunLifecycleValidator, is_recognized_run_event};
-use crate::state::{WORK_CHECK_EVIDENCE_SCHEMA, WORK_CHECK_TARGETS_SCHEMA};
 
+mod references;
 mod report;
 mod sources;
 
+pub(super) use references::analyze_receipt_linkage;
+use references::{BatchReference, collect_references};
 use report::{RunJournalFacts, RunLinkageCounts, guidance};
 pub(super) use report::{RunLinkageFinding, RunLinkageReport, recommendations};
 use sources::{HistorySources, SourceKind, scan_local_history_sources};
@@ -42,6 +39,7 @@ pub(super) const NOT_CHECKED_REASON: &str = "Run linkage is analyzed only with -
 /// physical record at a time; nothing is resolved until every stream is read.
 #[derive(Default)]
 pub(super) struct RunLinkageCollector {
+    receipt_ids: BTreeSet<String>,
     receipt_runs: BTreeMap<String, String>,
     batches: Vec<BatchReference>,
     receipts_with_run_id: u64,
@@ -55,32 +53,6 @@ pub(super) struct RunLinkageCollector {
     journal_events: u64,
     journal_unrecognized_events: u64,
     journal_unrecognized_records: u64,
-}
-
-struct BatchReference {
-    receipt_id: String,
-    children: Vec<BatchChild>,
-}
-
-struct BatchChild {
-    receipt_id: Option<String>,
-    run_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct TargetEvidenceEntry {
-    #[serde(default)]
-    receipt_id: Option<String>,
-    #[serde(default)]
-    run_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct GateEvidenceEntry {
-    #[serde(default)]
-    tool_receipt_id: Option<String>,
-    #[serde(default)]
-    source_tool_receipt_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,166 +154,6 @@ impl RunLinkageCollector {
             self.journal_unrecognized_events += 1;
         }
     }
-}
-
-/// Records the run references carried by one valid receipt record.
-pub(super) fn analyze_receipt_linkage(
-    record: &[u8],
-    collector: &mut RunLinkageCollector,
-) -> Result<()> {
-    let mut id = None;
-    let mut run_id = None;
-    let mut evidence = None;
-    visit_object_members(record, 0..record.len(), &mut |key, value| {
-        match key {
-            "id" => id = Some(decode_string(record, &value).context("receipt id")?),
-            "run_id" => {
-                run_id = decode_optional_string(record, &value).context("receipt run_id")?
-            }
-            "evidence" => evidence = Some(value),
-            _ => {}
-        }
-        Ok(())
-    })?;
-    let Some(id) = id else {
-        bail!("receipt record has no string id");
-    };
-    if let Some(run_id) = run_id {
-        collector.receipts_with_run_id += 1;
-        if collector.track_references(1) {
-            collector.receipt_runs.insert(id.clone(), run_id);
-        }
-    }
-    if let Some(evidence) = evidence
-        && first_non_whitespace(record, &evidence) == Some(b'{')
-    {
-        let children = batch_children(record, evidence)?;
-        if !children.is_empty() {
-            collector.batch_receipts += 1;
-            collector.batch_links = collector.batch_links.saturating_add(children.len() as u64);
-            if collector.track_references(children.len()) {
-                collector.batches.push(BatchReference {
-                    receipt_id: id,
-                    children,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChild>> {
-    let mut schema = None;
-    let mut targets = None;
-    let mut gates = None;
-    visit_object_members(record, evidence, &mut |key, value| {
-        match key {
-            "schema" => {
-                schema = decode_optional_string(record, &value).context("evidence schema")?
-            }
-            "targets" => targets = Some(value),
-            "gates" => gates = Some(value),
-            _ => {}
-        }
-        Ok(())
-    })?;
-    let mut children = Vec::new();
-    match (schema.as_deref(), targets, gates) {
-        (Some(WORK_CHECK_TARGETS_SCHEMA), Some(targets), _) => {
-            visit_array_values(record, targets, &mut |entry| {
-                let entry: TargetEvidenceEntry = serde_json::from_slice(&record[entry])
-                    .context("work-check target evidence entry")?;
-                if entry.receipt_id.is_some() || entry.run_id.is_some() {
-                    children.push(BatchChild {
-                        receipt_id: entry.receipt_id,
-                        run_id: entry.run_id,
-                    });
-                }
-                Ok(())
-            })?;
-        }
-        (Some(WORK_CHECK_EVIDENCE_SCHEMA), _, Some(gates)) => {
-            visit_array_values(record, gates, &mut |entry| {
-                let entry: GateEvidenceEntry = serde_json::from_slice(&record[entry])
-                    .context("work-check gate evidence entry")?;
-                for receipt_id in [entry.tool_receipt_id, entry.source_tool_receipt_id]
-                    .into_iter()
-                    .flatten()
-                {
-                    children.push(BatchChild {
-                        receipt_id: Some(receipt_id),
-                        run_id: None,
-                    });
-                }
-                Ok(())
-            })?;
-        }
-        _ => {}
-    }
-    Ok(children)
-}
-
-fn decode_string(record: &[u8], value: &Range<usize>) -> Result<String> {
-    serde_json::from_slice::<String>(&record[value.clone()]).context("expected a JSON string")
-}
-
-fn decode_optional_string(record: &[u8], value: &Range<usize>) -> Result<Option<String>> {
-    serde_json::from_slice::<Option<String>>(&record[value.clone()])
-        .context("expected a JSON string or null")
-}
-
-#[derive(Default)]
-struct RunReferences {
-    receipt_ids: BTreeSet<String>,
-    batch_receipt_ids: BTreeSet<String>,
-}
-
-#[derive(Default)]
-struct CollectedReferences {
-    runs: BTreeMap<String, RunReferences>,
-    unresolved_batch_links: u64,
-}
-
-fn collect_references(collector: &RunLinkageCollector) -> CollectedReferences {
-    let mut collected = CollectedReferences::default();
-    for (receipt_id, run_id) in &collector.receipt_runs {
-        collected
-            .runs
-            .entry(run_id.clone())
-            .or_default()
-            .receipt_ids
-            .insert(receipt_id.clone());
-    }
-    for batch in &collector.batches {
-        for child in &batch.children {
-            // Reused child evidence may belong to several runs. Record every
-            // run the supported evidence names and every run the child receipt
-            // itself carries; never infer one run for the whole batch.
-            let mut run_ids = BTreeSet::new();
-            if let Some(run_id) = &child.run_id {
-                run_ids.insert(run_id.clone());
-            }
-            let receipt_run_id = child
-                .receipt_id
-                .as_ref()
-                .and_then(|receipt_id| collector.receipt_runs.get(receipt_id));
-            if let Some(run_id) = receipt_run_id {
-                run_ids.insert(run_id.clone());
-            }
-            if child.receipt_id.is_some() && receipt_run_id.is_none() {
-                collected.unresolved_batch_links =
-                    collected.unresolved_batch_links.saturating_add(1);
-            }
-            for run_id in run_ids {
-                let entry = collected.runs.entry(run_id).or_default();
-                entry.batch_receipt_ids.insert(batch.receipt_id.clone());
-                if let Some(receipt_id) = &child.receipt_id {
-                    entry.receipt_ids.insert(receipt_id.clone());
-                }
-            }
-        }
-    }
-    collected
 }
 
 fn journal_facts(
@@ -451,7 +263,7 @@ fn incomplete_reasons(
     }
     if collector.reference_budget_exceeded {
         reasons.push(format!(
-            "more than {MAX_TRACKED_REFERENCES} receipt run references exist; later references were not tracked"
+            "more than {MAX_TRACKED_REFERENCES} receipt identities and batch-child references exist; later references were not tracked"
         ));
     }
     if collector.lifecycle_budget_exceeded {
@@ -727,7 +539,7 @@ pub(super) fn resolve(
     let collected_references = collect_references(&collector);
     if collected_references.unresolved_batch_links > 0 {
         incomplete_reasons.push(format!(
-            "{} supported batch child receipt link(s) could not be resolved to a run",
+            "{} supported batch child receipt link(s) reference missing receipt identities",
             collected_references.unresolved_batch_links
         ));
     }

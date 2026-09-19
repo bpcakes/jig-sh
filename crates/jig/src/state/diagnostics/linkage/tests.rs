@@ -15,11 +15,16 @@ use super::super::state_diagnose;
 use super::*;
 use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
+use crate::state::WORK_CHECK_EVIDENCE_SCHEMA;
 use crate::state::receipts::work_check_targets_evidence;
 use crate::state::runs::{
     complete_run, mark_run_running, mark_target_started, record_target_result, start_run,
 };
 use crate::test_env::TestRepoBuilder;
+
+mod damage;
+mod lifecycle;
+mod recovery;
 
 const RUN_A: &str = "run_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const RUN_B: &str = "run_01ARZ3NDEKTSV4RRFFQ69G5FB2";
@@ -293,7 +298,7 @@ fn unresolved_supported_batch_child_makes_linkage_incomplete() {
     assert_eq!(linkage["finding_count"], 0);
     assert_string_array_contains(
         &linkage["incomplete_reasons"],
-        "supported batch child receipt link(s) could not be resolved",
+        "supported batch child receipt link(s) reference missing receipt identities",
     );
 }
 
@@ -323,7 +328,7 @@ fn unresolved_v1_child_receipt_stays_incomplete_when_its_copied_run_id_resolves(
     assert_eq!(linkage["runs"]["completed"], 1);
     assert_string_array_contains(
         &linkage["incomplete_reasons"],
-        "supported batch child receipt link(s) could not be resolved",
+        "supported batch child receipt link(s) reference missing receipt identities",
     );
 }
 
@@ -415,718 +420,6 @@ fn assert_preservation_recommendation(output: &Value) {
 }
 
 #[test]
-fn an_arbitrary_event_with_a_matching_run_id_is_not_a_verified_lifecycle() {
-    let (_temp, ctx) = fixture_context();
-    write_orphan_batch(&ctx);
-    write_records(
-        &ctx.state_file("runs.jsonl"),
-        &[json!({"id": "run_event_note", "run_id": RUN_A, "event": "note", "timestamp_ms": 1})],
-    );
-
-    let output = diagnose(&ctx, true);
-
-    let finding = finding_for(&output, RUN_A);
-    assert_eq!(finding["status"], "unverifiable");
-    assert_eq!(finding["journal_events"], 1);
-    assert_eq!(output["run_linkage"]["runs"]["unverifiable"], 1);
-    assert_eq!(output["run_linkage"]["journal"]["unrecognized_events"], 1);
-}
-
-#[test]
-fn a_complete_lifecycle_with_an_unknown_event_is_unverifiable() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    append_record(
-        &ctx.state_file("runs.jsonl"),
-        &json!({
-            "id": "run_event_future_annotation",
-            "run_id": run_id,
-            "event": "future_annotation",
-            "timestamp_ms": 4,
-        }),
-    );
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let finding = finding_for(&output, &run_id);
-
-    assert_eq!(finding["status"], "unverifiable");
-    assert_eq!(output["run_linkage"]["journal"]["authority"], "damaged");
-    assert_eq!(output["run_linkage"]["journal"]["unrecognized_events"], 1);
-    assert_eq!(output["run_linkage"]["complete"], false);
-}
-
-#[test]
-fn unrelated_invalid_active_lifecycle_prevents_a_clean_verdict() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    append_record(
-        &ctx.state_file("runs.jsonl"),
-        &json!({
-            "id": "run_event_unrelated_completed",
-            "run_id": "run_unrelated",
-            "event": "completed",
-            "timestamp_ms": 5,
-            "conclusion": "success",
-        }),
-    );
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let linkage = &output["run_linkage"];
-
-    assert_eq!(linkage["verdict"], "incomplete");
-    assert_eq!(linkage["complete"], false);
-    assert_eq!(linkage["runs"]["completed"], 1);
-    assert_eq!(linkage["finding_count"], 0);
-    assert_eq!(linkage["journal"]["inconsistent_lifecycles"], 1);
-    assert_string_array_contains(
-        &linkage["incomplete_reasons"],
-        "lifecycle(s) rejected by authoritative validation",
-    );
-}
-
-#[test]
-fn unrelated_invalid_archive_lifecycle_makes_history_unverifiable() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    append_record(
-        &ctx.state_file("runs.jsonl"),
-        &json!({
-            "id": "run_event_unrelated_completed",
-            "run_id": "run_unrelated",
-            "event": "completed",
-            "timestamp_ms": 5,
-            "conclusion": "success",
-        }),
-    );
-    let archive = ctx
-        .root()
-        .join(".agent/.cache/state-archives/runs-before-10-EXAMPLE.jsonl.gz");
-    write_gzip(&archive, &fs::read(ctx.state_file("runs.jsonl")).unwrap());
-    fs::write(ctx.state_file("runs.jsonl"), b"").unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let finding = finding_for(&output, &run_id);
-
-    assert_eq!(finding["status"], "unverifiable");
-    assert_eq!(output["run_linkage"]["sources"]["archives_scanned"], 1);
-    assert_eq!(output["run_linkage"]["sources"]["error_count"], 1);
-    assert_string_array_contains(
-        &output["run_linkage"]["sources"]["errors"],
-        "run 'run_unrelated' has a completed event before queued",
-    );
-    assert_eq!(output["run_linkage"]["complete"], false);
-}
-
-#[test]
-fn events_before_queued_are_reported_as_inconsistent_not_healthy() {
-    let (_temp, ctx) = fixture_context();
-    write_orphan_batch(&ctx);
-    write_records(
-        &ctx.state_file("runs.jsonl"),
-        &[
-            json!({"id": "run_event_x", "run_id": RUN_A, "event": "completed", "timestamp_ms": 1, "conclusion": "success"}),
-        ],
-    );
-
-    let output = diagnose(&ctx, true);
-
-    let finding = finding_for(&output, RUN_A);
-    assert_eq!(finding["status"], "inconsistent");
-    assert_eq!(
-        finding["journal_anomalies"],
-        json!([format!("run '{RUN_A}' has a completed event before queued")])
-    );
-    assert_eq!(output["run_linkage"]["runs"]["inconsistent"], 1);
-    assert!(recommendation_kinds(&output).contains(&"preserve_unlinked_receipt_evidence"));
-}
-
-#[test]
-fn live_and_completed_lifecycles_written_by_the_runtime_are_not_orphans() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    mark_run_running(&ctx, &run_id).unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[
-            target_receipt("receipt_test", "jig.test", "api:test", Some(&run_id)),
-            work_check_targets_receipt("receipt_batch", &[("api:test", "receipt_test", &run_id)]),
-        ],
-    );
-
-    let active = diagnose(&ctx, true);
-    assert_eq!(active["run_linkage"]["verdict"], "clean");
-    assert_eq!(active["run_linkage"]["runs"]["active"], 1);
-    assert_eq!(active["run_linkage"]["finding_count"], 0);
-    assert_eq!(active["integrity"]["run_linkage"], "clean");
-    assert!(recommendation_kinds(&active).is_empty());
-
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    let completed = diagnose(&ctx, true);
-    assert_eq!(completed["run_linkage"]["verdict"], "clean");
-    assert_eq!(completed["run_linkage"]["runs"]["completed"], 1);
-    assert_eq!(completed["run_linkage"]["journal"]["lifecycles"], 1);
-}
-
-#[test]
-fn verified_archived_history_is_not_an_orphan() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    mark_run_running(&ctx, &run_id).unwrap();
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    let archived = crate::state::state_archive(
-        &ctx,
-        crate::command::StateArchiveRequest {
-            before: u64::MAX.to_string(),
-            include_runs: true,
-            dry_run: false,
-        },
-    )
-    .unwrap();
-    assert_eq!(archived["runs_archived"], 1);
-    assert_eq!(fs::read(ctx.state_file("runs.jsonl")).unwrap(), b"");
-    // Receipts written after the archive keep referencing the archived run.
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-
-    let linkage = &output["run_linkage"];
-    assert_eq!(linkage["verdict"], "clean");
-    assert_eq!(linkage["runs"]["archived_verified"], 1);
-    assert_eq!(linkage["runs"]["missing"], 0);
-    assert_eq!(linkage["sources"]["archives_scanned"], 1);
-    assert_eq!(
-        linkage["sources"]["backups_scanned"], 0,
-        "a verified archive resolves the wanted run before backup scanning"
-    );
-    assert_eq!(linkage["sources"]["error_count"], 0);
-    assert!(recommendation_kinds(&output).contains(&"review_maintenance_cache"));
-    assert!(!recommendation_kinds(&output).contains(&"preserve_unlinked_receipt_evidence"));
-}
-
-#[test]
-fn exact_state_backup_is_reported_as_recoverable_without_restoring_it() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    let runs_path = ctx.state_file("runs.jsonl");
-    let (backup_dir, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "example-recovery", None)
-            .unwrap();
-    let original = fs::read(&runs_path).unwrap();
-    fs::write(&runs_path, b"").unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-
-    let finding = finding_for(&output, &run_id);
-    assert_eq!(finding["status"], "recoverable_from_backup");
-    let backup_display = backup_dir
-        .strip_prefix(ctx.root())
-        .unwrap()
-        .display()
-        .to_string();
-    assert_eq!(finding["recovery"]["kind"], "exact_source_backup");
-    assert_eq!(finding["recovery"]["backup_path"], backup_display);
-    assert_eq!(finding["recovery"]["original_bytes"], original.len() as u64);
-    assert_eq!(finding["recovery"]["restore_replaces_whole_stream"], true);
-    assert_eq!(
-        finding["recovery"]["restore_eligibility"],
-        "manual_preflight_required"
-    );
-    assert_eq!(finding["recovery"]["restore_command_available"], false);
-    assert_eq!(finding["recovery"]["current_journal_events"], 0);
-    assert_eq!(
-        finding["recovery"]["current_journal_comparison_required"],
-        false
-    );
-    assert_eq!(finding["history_sources"][0]["kind"], "state_backup");
-    assert_eq!(output["run_linkage"]["runs"]["recoverable_from_backup"], 1);
-    let kinds = recommendation_kinds(&output);
-    assert!(kinds.contains(&"recover_run_history_from_backup"));
-    assert!(!kinds.contains(&"preserve_unlinked_receipt_evidence"));
-    let recovery = output["recommendations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["kind"] == "recover_run_history_from_backup")
-        .unwrap();
-    assert!(recovery["command"].is_null());
-    assert!(
-        recovery["reason"]
-            .as_str()
-            .unwrap()
-            .contains("cannot establish restore eligibility")
-    );
-    assert_eq!(
-        fs::read(&runs_path).unwrap(),
-        b"",
-        "diagnosis never restores"
-    );
-}
-
-#[test]
-fn backup_recovery_exposes_current_nonterminal_history_without_a_command() {
-    let (_temp, ctx) = fixture_context();
-    let (backed_up, backed_up_lease) = start_run(&ctx, plan(), None).unwrap();
-    let backed_up_id = backed_up.result.run_id;
-    complete_target(&ctx, &backed_up_id);
-    complete_run(&ctx, &backed_up_id, RunConclusion::Success).unwrap();
-    drop(backed_up_lease);
-    let runs_path = ctx.state_file("runs.jsonl");
-    crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "example-recovery", None)
-        .unwrap();
-
-    let (active, _active_lease) = start_run(&ctx, plan(), None).unwrap();
-    let active_id = active.result.run_id;
-    let active_records = fs::read_to_string(&runs_path)
-        .unwrap()
-        .lines()
-        .filter(|line| serde_json::from_str::<Value>(line).unwrap()["run_id"] == active_id.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    fs::write(&runs_path, active_records).unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&backed_up_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let finding = finding_for(&output, &backed_up_id);
-    let recommendation = output["recommendations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["kind"] == "recover_run_history_from_backup")
-        .unwrap();
-
-    assert_eq!(finding["status"], "recoverable_from_backup");
-    assert_eq!(finding["recovery"]["current_nonterminal_runs"], 1);
-    assert_eq!(
-        finding["recovery"]["current_journal_comparison_required"],
-        true
-    );
-    assert!(recommendation["command"].is_null());
-}
-
-#[test]
-fn backup_recovery_exposes_a_lease_only_restore_blocker() {
-    let (_temp, ctx) = fixture_context();
-    let (backed_up, backed_up_lease) = start_run(&ctx, plan(), None).unwrap();
-    let backed_up_id = backed_up.result.run_id;
-    complete_target(&ctx, &backed_up_id);
-    complete_run(&ctx, &backed_up_id, RunConclusion::Success).unwrap();
-    drop(backed_up_lease);
-    let runs_path = ctx.state_file("runs.jsonl");
-    crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "example-lease-recovery", None)
-        .unwrap();
-
-    let (active, _active_lease) = start_run(&ctx, plan(), None).unwrap();
-    let active_id = active.result.run_id;
-    fs::write(&runs_path, b"").unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&backed_up_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let finding = finding_for(&output, &backed_up_id);
-
-    assert_eq!(finding["status"], "recoverable_from_backup");
-    assert_eq!(finding["recovery"]["current_nonterminal_runs"], 0);
-    assert_eq!(finding["recovery"]["current_active_worker_leases"], 1);
-    assert_eq!(
-        finding["recovery"]["current_active_worker_lease_ids"],
-        json!([active_id])
-    );
-    assert_eq!(
-        finding["recovery"]["restore_eligibility"],
-        "blocked_destination_activity"
-    );
-    assert_eq!(
-        finding["recovery"]["restore_blockers"],
-        json!(["active_worker_leases"])
-    );
-    assert_eq!(finding["recovery"]["restore_command_available"], false);
-    assert!(
-        finding["detail"]
-            .as_str()
-            .unwrap()
-            .contains("1 active worker lease(s) currently block")
-    );
-}
-
-#[test]
-fn recovery_uses_newest_verified_complete_backup_not_a_newer_partial_one() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    let runs_path = ctx.state_file("runs.jsonl");
-    let (partial_dir, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "newer-partial", None)
-            .unwrap();
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    let (complete_dir, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "older-complete", None)
-            .unwrap();
-    set_backup_created_at(&partial_dir, 300);
-    set_backup_created_at(&complete_dir, 200);
-    fs::write(&runs_path, b"").unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let recovered = diagnose(&ctx, true);
-    let finding = finding_for(&recovered, &run_id);
-    assert_eq!(finding["status"], "recoverable_from_backup");
-    assert_eq!(
-        finding["recovery"]["backup_path"],
-        complete_dir
-            .strip_prefix(ctx.root())
-            .unwrap()
-            .display()
-            .to_string()
-    );
-    assert_eq!(recovered["run_linkage"]["sources"]["backups_scanned"], 2);
-
-    fs::remove_dir_all(&complete_dir).unwrap();
-    let partial_only = diagnose(&ctx, true);
-    assert_eq!(
-        finding_for(&partial_only, &run_id)["status"],
-        "unverifiable"
-    );
-    assert!(finding_for(&partial_only, &run_id)["recovery"].is_null());
-}
-
-#[test]
-fn recovery_skips_newer_backup_with_wrong_source_path() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    let runs_path = ctx.state_file("runs.jsonl");
-    let (older_valid, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "older-valid", None)
-            .unwrap();
-    let (newer_wrong_source, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "newer-wrong-source", None)
-            .unwrap();
-    set_backup_created_at(&older_valid, 200);
-    set_backup_created_at(&newer_wrong_source, 300);
-    let manifest_path = newer_wrong_source.join("manifest.json");
-    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["source_path"] = json!(".agent/state/not-runs.jsonl");
-    fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    fs::write(&runs_path, b"").unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let finding = finding_for(&output, &run_id);
-    assert_eq!(finding["status"], "unverifiable");
-    assert!(finding["recovery"].is_null());
-    assert_eq!(output["run_linkage"]["sources"]["backups_scanned"], 2);
-    assert_string_array_contains(
-        &output["run_linkage"]["sources"]["errors"],
-        "unsupported stream runs at .agent/state/not-runs.jsonl",
-    );
-}
-
-#[test]
-fn recovery_skips_newer_backup_with_unrelated_invalid_lifecycle() {
-    let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    complete_target(&ctx, &run_id);
-    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-    drop(lease);
-    let runs_path = ctx.state_file("runs.jsonl");
-    let (older_valid, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "older-valid", None)
-            .unwrap();
-    let mut bytes = fs::read(&runs_path).unwrap();
-    bytes.extend(
-        serde_json::to_vec(&json!({
-            "id": "run_event_unrelated_completed",
-            "run_id": "run_unrelated",
-            "event": "completed",
-            "timestamp_ms": 10,
-            "conclusion": "success",
-        }))
-        .unwrap(),
-    );
-    bytes.push(b'\n');
-    fs::write(&runs_path, bytes).unwrap();
-    let (newer_invalid, _) = crate::state::maintenance::create_runs_backup(
-        &ctx,
-        &runs_path,
-        "newer-invalid-lifecycle",
-        None,
-    )
-    .unwrap();
-    set_backup_created_at(&older_valid, 200);
-    set_backup_created_at(&newer_invalid, 300);
-    fs::write(&runs_path, b"").unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-    let finding = finding_for(&output, &run_id);
-    assert_eq!(finding["status"], "unverifiable");
-    assert!(finding["recovery"].is_null());
-    assert_eq!(output["run_linkage"]["sources"]["backups_scanned"], 2);
-    assert_string_array_contains(
-        &output["run_linkage"]["sources"]["errors"],
-        "run 'run_unrelated' has a completed event before queued",
-    );
-}
-
-#[test]
-fn tampered_backup_and_corrupt_archive_make_history_unverifiable_not_missing() {
-    let (_temp, ctx) = fixture_context();
-    write_orphan_batch(&ctx);
-    let archives = ctx.root().join(".agent/.cache/state-archives");
-    fs::create_dir_all(&archives).unwrap();
-    fs::write(archives.join("runs-before-1-EXAMPLE.jsonl.gz"), b"not gzip").unwrap();
-    fs::write(
-        archives.join("receipts-before-1-EXAMPLE.jsonl.gz"),
-        b"ignored",
-    )
-    .unwrap();
-
-    let output = diagnose(&ctx, true);
-
-    let finding = finding_for(&output, RUN_A);
-    assert_eq!(finding["status"], "unverifiable");
-    assert!(
-        finding["detail"]
-            .as_str()
-            .unwrap()
-            .contains("could not be verified")
-    );
-    assert_eq!(output["run_linkage"]["sources"]["archives_scanned"], 1);
-    assert_eq!(output["run_linkage"]["sources"]["error_count"], 1);
-    assert_eq!(output["run_linkage"]["runs"]["unverifiable"], 1);
-    assert_eq!(output["run_linkage"]["runs"]["missing"], 0);
-
-    // A backup whose bytes no longer match its manifest is not an exact source.
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-    let run_id = started.result.run_id;
-    drop(lease);
-    let runs_path = ctx.state_file("runs.jsonl");
-    let (backup_dir, _) =
-        crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "tampered", None).unwrap();
-    fs::write(&runs_path, b"").unwrap();
-    fs::remove_dir_all(&archives).unwrap();
-    let mut manifest: Value =
-        serde_json::from_slice(&fs::read(backup_dir.join("manifest.json")).unwrap()).unwrap();
-    manifest["original_sha256"] = json!("sha256:not-the-real-digest");
-    fs::write(
-        backup_dir.join("manifest.json"),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
-    write_records(
-        &ctx.state_file("receipts.jsonl"),
-        &[target_receipt(
-            "receipt_test",
-            "jig.test",
-            "api:test",
-            Some(&run_id),
-        )],
-    );
-
-    let output = diagnose(&ctx, true);
-
-    let finding = finding_for(&output, &run_id);
-    assert_eq!(finding["status"], "unverifiable");
-    assert_eq!(output["run_linkage"]["sources"]["backups_scanned"], 1);
-    assert_eq!(output["run_linkage"]["sources"]["error_count"], 1);
-    assert!(
-        output["run_linkage"]["sources"]["errors"][0]
-            .as_str()
-            .unwrap()
-            .contains("does not match its manifest")
-    );
-    assert!(!recommendation_kinds(&output).contains(&"recover_run_history_from_backup"));
-}
-
-#[test]
-fn damaged_journal_reports_absent_lifecycles_as_unverifiable() {
-    let (_temp, ctx) = fixture_context();
-    write_orphan_batch(&ctx);
-    fs::write(ctx.state_file("runs.jsonl"), b"{\"broken\":\n").unwrap();
-
-    let output = diagnose(&ctx, true);
-
-    assert_eq!(output["run_linkage"]["journal"]["authority"], "damaged");
-    assert_eq!(output["run_linkage"]["journal"]["malformed_records"], 1);
-    assert_eq!(finding_for(&output, RUN_A)["status"], "unverifiable");
-    assert_eq!(output["run_linkage"]["complete"], false);
-    assert!(
-        output["run_linkage"]["incomplete_reasons"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|reason| reason.as_str().unwrap().contains("run journal contains"))
-    );
-    assert!(recommendation_kinds(&output).contains(&"repair_malformed_state"));
-}
-
-#[test]
-fn structurally_unrecognized_run_records_make_linkage_incomplete() {
-    let (_temp, ctx) = fixture_context();
-    write_orphan_batch(&ctx);
-    write_records(
-        &ctx.state_file("runs.jsonl"),
-        &[json!({"id": "run_event_incomplete", "run_id": RUN_A, "event": "queued"})],
-    );
-
-    let output = diagnose(&ctx, true);
-
-    assert_eq!(output["run_linkage"]["journal"]["authority"], "damaged");
-    assert_eq!(output["run_linkage"]["journal"]["unrecognized_records"], 1);
-    assert_eq!(output["run_linkage"]["complete"], false);
-    assert_eq!(finding_for(&output, RUN_A)["status"], "unverifiable");
-}
-
-#[test]
-fn incomplete_scans_never_yield_a_clean_linkage_verdict() {
-    let (_temp, ctx) = fixture_context();
-    // A receipt whose id is not a string cannot be analyzed for references.
-    fs::write(
-        ctx.state_file("receipts.jsonl"),
-        b"{\"id\":5,\"run_id\":\"run_unknown\"}\n",
-    )
-    .unwrap();
-
-    let unanalyzed = diagnose(&ctx, true);
-    assert_eq!(unanalyzed["run_linkage"]["verdict"], "incomplete");
-    assert_eq!(unanalyzed["run_linkage"]["complete"], false);
-    assert_eq!(unanalyzed["run_linkage"]["finding_count"], 0);
-    assert_eq!(
-        unanalyzed["streams"]["receipts"]["deep_analysis_error_count"],
-        1
-    );
-    assert!(
-        unanalyzed["run_linkage"]["incomplete_reasons"][0]
-            .as_str()
-            .unwrap()
-            .contains("1 receipt records could not be analyzed")
-    );
-    assert!(recommendation_kinds(&unanalyzed).contains(&"complete_run_linkage_check"));
-
-    // An unreadable run journal is a failed scan, not an empty one.
-    fs::write(ctx.state_file("receipts.jsonl"), b"").unwrap();
-    fs::create_dir_all(ctx.state_file("runs.jsonl")).unwrap();
-    let unreadable = diagnose(&ctx, true);
-    assert_eq!(unreadable["run_linkage"]["verdict"], "incomplete");
-    assert_eq!(
-        unreadable["run_linkage"]["journal"]["authority"],
-        "unreadable"
-    );
-    assert!(unreadable["streams"]["runs"]["scan_error"].is_string());
-}
-
-#[test]
 fn reused_batch_evidence_may_reference_several_runs() {
     let (_temp, ctx) = fixture_context();
     let (started, lease) = start_run(&ctx, plan(), None).unwrap();
@@ -1175,6 +468,37 @@ fn gate_batch_evidence_links_tool_receipts_through_their_own_run_ids() {
     assert_eq!(finding["receipt_ids"], json!(["receipt_test"]));
     assert_eq!(finding["batch_receipt_ids"], json!(["receipt_gate_batch"]));
     assert_eq!(output["run_linkage"]["batch_receipts"], 1);
+}
+
+#[test]
+fn gate_batch_existing_no_run_receipts_are_not_unresolved() {
+    let (_temp, ctx) = fixture_context();
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[
+            target_receipt("receipt_tool", "jig.test", "api:test", None),
+            target_receipt("receipt_source", "jig.test", "api:test", None),
+            json!({
+                "id": "receipt_gate_batch",
+                "tool_name": "jig.work_check",
+                "evidence": {
+                    "schema": WORK_CHECK_EVIDENCE_SCHEMA,
+                    "gates": [{
+                        "tool_receipt_id": "receipt_tool",
+                        "source_tool_receipt_id": "receipt_source"
+                    }]
+                }
+            }),
+        ],
+    );
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+
+    assert_eq!(linkage["batch_links"], 2);
+    assert_eq!(linkage["unresolved_batch_links"], 0);
+    assert_eq!(linkage["referenced_runs"], 0);
+    assert_eq!(linkage["verdict"], "clean");
 }
 
 #[test]
@@ -1246,6 +570,13 @@ fn large_results_report_counts_and_truncation() {
     assert_eq!(
         output["recommendations"][0]["affected_run_ids_truncated"],
         true
+    );
+    assert!(
+        output["recommendations"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("At least "),
+        "truncated recommendations must mark the retained receipt count as a lower bound"
     );
 }
 
@@ -1402,4 +733,44 @@ fn receipt_reference_exhaustion_does_not_starve_journal_lifecycles() {
     assert!(collector.journal.contains_key(RUN_A));
     assert_eq!(collector.journal[RUN_A].status(), LifecycleStatus::Active);
     assert!(!collector.lifecycle_budget_exceeded);
+}
+
+#[test]
+fn reference_exhaustion_marks_preservation_recommendations_as_truncated() {
+    let report = RunLinkageReport {
+        checked: true,
+        complete: false,
+        reference_budget_exceeded: true,
+        runs: RunLinkageCounts {
+            missing: 1,
+            ..RunLinkageCounts::default()
+        },
+        findings: vec![RunLinkageFinding {
+            run_id: RUN_A.into(),
+            status: "missing".into(),
+            detail: "test fixture".into(),
+            receipt_ids: vec!["receipt_test".into()],
+            receipt_count: 1,
+            receipt_ids_truncated: false,
+            batch_receipt_ids: Vec::new(),
+            batch_receipt_count: 0,
+            batch_receipt_ids_truncated: false,
+            journal_events: 0,
+            journal_anomalies: Vec::new(),
+            lease_file_present: None,
+            history_sources: Vec::new(),
+            recovery: None,
+        }],
+        finding_count: 1,
+        ..RunLinkageReport::default()
+    };
+
+    let recommendation = &recommendations(&report)[0];
+    assert_eq!(recommendation["affected_run_ids_truncated"], true);
+    assert!(
+        recommendation["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("At least 1 retained receipt(s) reference at least 1 retained run(s)")
+    );
 }

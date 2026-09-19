@@ -7,12 +7,69 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
-use jig_contract::{RunStatus, TargetId};
+use jig_contract::{RunPlan, RunStatus, TargetId};
 
 use super::{
     EVENT_CANCEL_REQUESTED, EVENT_COMPLETED, EVENT_QUEUED, EVENT_RUNNING, EVENT_TARGET_COMPLETED,
-    EVENT_TARGET_STARTED, RunEventRecord, validate_run_id_for_lease, validate_run_plan_structure,
+    EVENT_TARGET_STARTED, RunEventRecord, validate_run_id_for_lease,
 };
+
+pub(super) fn validate_run_plan_structure(plan: &RunPlan) -> Result<()> {
+    let planned_targets = plan
+        .targets
+        .iter()
+        .map(|target| target.target.clone())
+        .collect::<BTreeSet<_>>();
+    if planned_targets.len() != plan.targets.len() {
+        bail!("run plan contains duplicate targets");
+    }
+
+    let mut target_layers = BTreeMap::<TargetId, usize>::new();
+    for (layer_index, layer) in plan.execution_layers.iter().enumerate() {
+        if layer.is_empty() {
+            bail!("run plan execution layer {layer_index} is empty");
+        }
+        for target in layer {
+            if !planned_targets.contains(target) {
+                bail!("run plan execution layers reference unknown target '{target}'");
+            }
+            if target_layers.insert(target.clone(), layer_index).is_some() {
+                bail!("run plan execution layers contain duplicate target '{target}'");
+            }
+        }
+    }
+
+    let missing = planned_targets
+        .iter()
+        .filter(|target| !target_layers.contains_key(*target))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "run plan execution layers omit planned target(s): {}",
+            missing.join(", ")
+        );
+    }
+
+    for target in &plan.targets {
+        let target_layer = target_layers[&target.target];
+        for dependency in &target.depends_on {
+            let dependency_layer = target_layers.get(dependency).ok_or_else(|| {
+                anyhow!(
+                    "run plan target '{}' depends on missing target '{dependency}'",
+                    target.target
+                )
+            })?;
+            if *dependency_layer >= target_layer {
+                bail!(
+                    "run plan target '{}' must execute after dependency '{dependency}'",
+                    target.target
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 pub(in crate::state) fn is_recognized_run_event(event: &str) -> bool {
     matches!(
