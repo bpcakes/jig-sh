@@ -156,6 +156,64 @@ fn start_run_rejects_execution_layers_that_do_not_cover_the_plan() {
 }
 
 #[test]
+fn archive_and_restore_reject_queued_plans_with_invalid_structure() {
+    let (_temp, ctx) = context();
+    let mut invalid = plan();
+    invalid.execution_layers.clear();
+    append_event(
+        &ctx,
+        RunEventRecord {
+            id: "run_event_invalid_plan".into(),
+            run_id: "run_invalid_plan".into(),
+            event: EVENT_QUEUED.into(),
+            timestamp_ms: 1,
+            work_plan_id: None,
+            plan: Some(invalid),
+            target: None,
+            result: None,
+            conclusion: None,
+        },
+    )
+    .unwrap();
+    let runs_path = ctx.state_file(RUNS_FILE);
+    let before = fs::read(&runs_path).unwrap();
+
+    let archive_error = super::super::state_archive(
+        &ctx,
+        crate::command::StateArchiveRequest {
+            before: u64::MAX.to_string(),
+            include_runs: true,
+            dry_run: true,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        archive_error
+            .to_string()
+            .contains("execution layers omit planned target(s): repo:test"),
+        "{archive_error:#}"
+    );
+    assert_eq!(fs::read(&runs_path).unwrap(), before);
+
+    let (backup, _) = super::super::maintenance::create_runs_backup(
+        &ctx,
+        &runs_path,
+        "invalid-plan-restore",
+        None,
+    )
+    .unwrap();
+    fs::write(&runs_path, b"").unwrap();
+    let restore_error =
+        super::super::restore_backup(&ctx, crate::command::StateRestoreRequest { backup })
+            .unwrap_err();
+    assert!(
+        format!("{restore_error:#}").contains("execution layers omit planned target(s): repo:test"),
+        "{restore_error:#}"
+    );
+    assert!(fs::read(&runs_path).unwrap().is_empty());
+}
+
+#[test]
 fn archive_removes_completed_runs_and_keeps_recovery_artifacts() {
     let (_temp, ctx) = context();
     let (completed, completed_lease) = start_run(&ctx, plan(), None).unwrap();

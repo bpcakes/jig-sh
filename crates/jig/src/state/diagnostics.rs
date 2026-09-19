@@ -21,11 +21,13 @@ use crate::context::RepoContext;
 use super::jsonl::{scan_jsonl_raw, scan_jsonl_raw_bounded};
 
 mod deep;
+mod linkage;
 
 use deep::{
     ReceiptPayloadDiagnostics, SessionCompactionDiagnostics, analyze_receipt_record,
     analyze_session_record,
 };
+use linkage::{RunLinkageCollector, RunLinkageReport, analyze_receipt_linkage};
 
 const STATE_STREAMS: [(&str, &str); 6] = [
     ("sessions", "sessions.jsonl"),
@@ -43,6 +45,7 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
     let mut streams = BTreeMap::new();
     let mut session_compaction = SessionCompactionDiagnostics::default();
     let mut receipt_payload = ReceiptPayloadDiagnostics::default();
+    let mut linkage_collector = RunLinkageCollector::default();
 
     for (stream_name, file_name) in STATE_STREAMS {
         let path = ctx.state_file(file_name);
@@ -52,9 +55,23 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
             request.deep.then_some(stream_name),
             &mut session_compaction,
             &mut receipt_payload,
+            &mut linkage_collector,
         );
         streams.insert(stream_name.to_string(), report);
     }
+    // Linkage joins references across streams, so it resolves only after every
+    // stream scan finished. Shallow mode reports the check as not performed
+    // instead of implying that receipt-to-run linkage was verified.
+    let run_linkage = if request.deep {
+        linkage::resolve(
+            ctx.root(),
+            linkage_collector,
+            streams.get("receipts"),
+            streams.get("runs"),
+        )
+    } else {
+        RunLinkageReport::not_checked()
+    };
 
     let legacy_archive = inspect_legacy_archive(
         ctx.root(),
@@ -76,12 +93,15 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         &receipt_payload,
         &legacy_archive,
         &maintenance_cache,
+        &run_linkage,
     );
+    let integrity = integrity_summary(&streams, &run_linkage);
 
     json!({
         "ok": true,
         "command": "state diagnose",
         "deep": request.deep,
+        "integrity": integrity,
         "state_dir": display_repo_path(ctx.root(), &ctx.state_dir()),
         "state_dir_exists": ctx.state_dir().is_dir(),
         "totals": totals,
@@ -89,6 +109,7 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         "sessions": request.deep.then_some(session_compaction),
         "receipts": request.deep.then_some(receipt_payload),
         "work_links": work_links,
+        "run_linkage": run_linkage.to_value(),
         "legacy_archive": legacy_archive,
         "maintenance_cache": maintenance_cache,
         "git": git,
@@ -102,6 +123,7 @@ fn inspect_stream(
     deep_stream: Option<&str>,
     session_compaction: &mut SessionCompactionDiagnostics,
     receipt_payload: &mut ReceiptPayloadDiagnostics,
+    linkage: &mut RunLinkageCollector,
 ) -> StreamDiagnostics {
     let mut report = StreamDiagnostics {
         path: display_repo_path(root, path),
@@ -163,6 +185,10 @@ fn inspect_stream(
             Some("receipts") => {
                 analyze_receipt_record(record, receipt_payload)?;
                 receipt_payload.analyzed_records += 1;
+                analyze_receipt_linkage(record, linkage)
+            }
+            Some("runs") => {
+                linkage.observe_run_event(record);
                 Ok(())
             }
             _ => Ok(()),
@@ -571,8 +597,9 @@ fn recommendations(
     receipts: &ReceiptPayloadDiagnostics,
     legacy_archive: &LegacyArchiveDiagnostics,
     maintenance_cache: &MaintenanceCacheDiagnostics,
+    run_linkage: &RunLinkageReport,
 ) -> Vec<Value> {
-    let mut recommendations = Vec::new();
+    let mut recommendations = linkage::recommendations(run_linkage);
     if deep && sessions.recursive_session_records > 0 {
         recommendations.push(json!({
             "kind": "compact_sessions",
@@ -653,6 +680,29 @@ fn recommendations(
         }));
     }
     recommendations
+}
+
+/// `ok` reports that diagnosis ran. Integrity findings live here, in
+/// `run_linkage`, and in `recommendations`, so a successful command never
+/// implies healthy state.
+fn integrity_summary(
+    streams: &BTreeMap<String, StreamDiagnostics>,
+    run_linkage: &RunLinkageReport,
+) -> Value {
+    json!({
+        "note": "`ok` reports command completion, not state integrity.",
+        "run_linkage": run_linkage.verdict,
+        "run_linkage_findings": run_linkage.finding_count,
+        "malformed_records": streams
+            .values()
+            .map(|stream| stream.malformed_records)
+            .sum::<u64>(),
+        "torn_streams": streams.values().filter(|stream| stream.torn_tail).count(),
+        "scan_errors": streams
+            .values()
+            .filter(|stream| stream.scan_error.is_some())
+            .count(),
+    })
 }
 
 fn display_repo_path(root: &Path, path: &Path) -> String {
