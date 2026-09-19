@@ -213,6 +213,13 @@ pub(crate) struct WorkReviewFinding {
 }
 
 pub(crate) const WORK_CHECK_EVIDENCE_SCHEMA: &str = "jig.work_check/v2";
+/// Schema emitted by the target-oriented `work check` path and consumed by
+/// receipt readers, including deep run-linkage diagnosis.
+pub(crate) const WORK_CHECK_TARGETS_SCHEMA: &str = "jig.work_check_targets/v1";
+
+pub(crate) fn work_check_targets_evidence(targets: &[Value]) -> Value {
+    json!({"schema": WORK_CHECK_TARGETS_SCHEMA, "targets": targets})
+}
 
 const fn usize_is_zero(value: &usize) -> bool {
     *value == 0
