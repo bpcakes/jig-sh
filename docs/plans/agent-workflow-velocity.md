@@ -21,9 +21,12 @@ Beads epic: `jig-sh-ndz2` (Remove remaining agent workflow friction).
 - [x] Export and verify one epic and its dependency graph.
 - [ ] Implement the delivery tasks; none has been implemented by this planning work.
 
-Execution checkpoint (2026-09-21): T-01 is complete in `0154477a`; all six gates
-passed and native Codex review reported no findings. T-02's compatible checkout
-diagnostics and validation-context tests are in progress; T-03 remains ready.
+Execution checkpoint (2026-09-21): T-01 is complete in `0154477a` and T-02 in
+`79290f75`; all six gates passed for each and native Codex review reported no
+findings. T-03's bounded matrices are complete; staged validation/review remain.
+The [measurement result](agent-workflow-velocity-measurements.md) selects Cargo
+admission, narrow opt-in browser endpoint ownership, and preservation of SQLx's
+existing per-invocation database connection guard rather than a duplicate preflight.
 The owner also authorized implementation
 of the external prerequisite chains needed by T-04 and T-05, retaining their
 existing issue ownership. Iteration selection (`fe13c657`) and Cargo discovery
