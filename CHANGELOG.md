@@ -75,7 +75,7 @@
   SQLx pool through `batter::sqlx::pool_in` before probing under the owning
   operation context. New application scaffolds support PostgreSQL or no database;
   SQLite is no longer a scaffold option. These scaffolds require Rust
-  1.94 on Unix and pin the unpublished Batter facade to revision `95252ad`,
+  1.94 on Unix and pin the unpublished Batter facade to revision `bd836a2`,
   enabling its `axum` feature and, for PostgreSQL, its `sqlx` feature. The facade
   preserves the foundation `batter::...` paths and exposes adapter namespaces
   such as `batter::axum` and `batter::sqlx`. Generated HTTP policy now validates

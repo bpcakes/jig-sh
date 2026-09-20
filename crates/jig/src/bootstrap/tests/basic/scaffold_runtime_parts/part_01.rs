@@ -36,7 +36,7 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
     let dependencies = &manifest["workspace"]["dependencies"];
     assert_eq!(dependencies["batter"]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("95252ad21fec3e6dc9dcf1023d2c417df3e8f2f8"));
+    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("bd836a29c9d484b96ee1ce0af0af84d58d3df1ee"));
     assert_eq!(dependencies["batter"]["features"][0].as_str(), Some("axum"));
     assert_eq!(dependencies["batter"]["features"].as_array().unwrap().len(), 1);
     assert_text_contains_none(&cargo_toml, &["batter-axum =", "batter-sqlx ="]);

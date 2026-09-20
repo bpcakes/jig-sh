@@ -272,7 +272,7 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
     assert!(workspace_cargo.contains(
-        "batter = { git = \"https://github.com/bpcakes/batter\", rev = \"95252ad21fec3e6dc9dcf1023d2c417df3e8f2f8\", features = [\"axum\", \"sqlx\"] }"
+        "batter = { git = \"https://github.com/bpcakes/batter\", rev = \"bd836a29c9d484b96ee1ce0af0af84d58d3df1ee\", features = [\"axum\", \"sqlx\"] }"
     ));
     assert!(!workspace_cargo.contains("batter-axum ="));
     assert!(!workspace_cargo.contains("batter-sqlx ="));
