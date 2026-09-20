@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Distinguish source builds from published releases: the workspace now carries the
+  next `-dev` package version between releases, and `jig --version` adds Git commit
+  distance, revision, and dirty state for builds from an unreleased checkout.
+- Advance the default branch to the next patch `-dev` version after a successful
+  automated release, while allowing the release workflow to promote the current
+  development version to its stable counterpart.
+
 ## v0.4.0 - 2026-09-18
 
 ### Added

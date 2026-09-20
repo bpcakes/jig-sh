@@ -63,6 +63,26 @@ fn emit_template_pin_policy(policy: TemplatePinPolicy) {
     );
 }
 
+fn emit_display_version(manifest_dir: &str, policy: TemplatePinPolicy) {
+    let package_version = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION is set by Cargo");
+    let display_version = if policy == TemplatePinPolicy::Unreleased {
+        git_development_provenance(manifest_dir).map_or_else(
+            || package_version.clone(),
+            |(commit_distance, revision)| {
+                build_identity::development_display_version(
+                    &package_version,
+                    &commit_distance,
+                    &revision,
+                    !git_tree_is_clean(manifest_dir),
+                )
+            },
+        )
+    } else {
+        package_version
+    };
+    println!("cargo:rustc-env=JIG_DISPLAY_VERSION={display_version}");
+}
+
 fn add_git_rerun_inputs(manifest_dir: &str, source_layout: &build_identity::BuildSourceLayout) {
     let mut paths = vec![
         Path::new(manifest_dir).join("build.rs"),
@@ -460,6 +480,19 @@ fn git_head_tags(manifest_dir: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn git_development_provenance(manifest_dir: &str) -> Option<(String, String)> {
+    let revision = git_output(manifest_dir, &["rev-parse", "--short=8", "HEAD"])?;
+    let nearest_tag = git_output(
+        manifest_dir,
+        &["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+    );
+    let range = nearest_tag
+        .as_deref()
+        .map_or_else(|| "HEAD".to_string(), |tag| format!("{tag}..HEAD"));
+    let commit_distance = git_output(manifest_dir, &["rev-list", "--count", &range])?;
+    Some((commit_distance, revision))
+}
+
 fn warn_ci_about_unreleased_policy(head_tags: &[String], clean: bool) {
     if env::var_os("CI").is_none() {
         return;
@@ -542,5 +575,6 @@ fn main() {
     };
 
     refresh_templates_and_emit_build_identity(&manifest_dir, &source_layout, policy);
+    emit_display_version(&manifest_dir, policy);
     emit_template_pin_policy(policy);
 }

@@ -48,6 +48,7 @@ print_usage() {
 Usage:
   scripts/release.sh check [VERSION]
   scripts/release.sh prepare [VERSION]
+  scripts/release.sh prepare-development VERSION
   scripts/release.sh notes [VERSION]
   scripts/release.sh stage
   scripts/release.sh tag [VERSION]
@@ -59,6 +60,9 @@ Usage:
 Commands:
   check     Run the full local release validation and cargo publish dry run.
   prepare   Update workspace package versions and CHANGELOG.md for VERSION.
+  prepare-development
+            Update workspace package versions to a VERSION ending in -dev without
+            changing CHANGELOG.md.
   notes     Generate or replace the CHANGELOG.md section for VERSION.
   stage     Stage files updated by release-prepare.
   tag       Run release validation, then create annotated tag vVERSION.
@@ -228,7 +232,8 @@ elif bump == "minor":
     minor += 1
     patch = 0
 elif bump == "patch":
-    patch += 1
+    if "-" not in version:
+        patch += 1
 else:
     raise SystemExit("Bump must be major, minor, or patch.")
 
@@ -522,6 +527,19 @@ release_prepare() {
   echo "Prepared release files for $PACKAGE_NAME v$version."
 }
 
+release_prepare_development() {
+  local version="$1"
+
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+    echo "Development version must be MAJOR.MINOR.PATCH-dev, got '$version'." >&2
+    exit 2
+  fi
+  update_version_files "$version"
+  run cargo metadata --format-version 1 --no-deps >/dev/null
+
+  echo "Prepared workspace development version $version."
+}
+
 release_github() {
   local version="$1"
   local tag="v$version"
@@ -791,6 +809,13 @@ case "$command" in
   prepare)
     version="$(release_version "$@")" || exit $?
     release_prepare "$version"
+    ;;
+  prepare-development)
+    if [[ $# -ne 1 ]]; then
+      usage
+    fi
+    version="$(normalize_version "$1")" || exit $?
+    release_prepare_development "$version"
     ;;
   notes)
     version="$(release_version "$@")" || exit $?

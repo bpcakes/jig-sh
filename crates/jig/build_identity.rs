@@ -61,6 +61,37 @@ pub(crate) fn cargo_rerun_environment_keys(
     keys.into_iter().collect()
 }
 
+pub(crate) fn development_display_version(
+    package_version: &str,
+    commit_distance: &str,
+    revision: &str,
+    dirty: bool,
+) -> String {
+    let (version, package_metadata) = package_version
+        .split_once('+')
+        .map_or((package_version, None), |(version, metadata)| {
+            (version, Some(metadata))
+        });
+    let mut display = version.to_string();
+    if version.contains('-') {
+        display.push('.');
+    } else {
+        display.push_str("-dev.");
+    }
+    display.push_str(commit_distance);
+    display.push('+');
+    if let Some(metadata) = package_metadata {
+        display.push_str(metadata);
+        display.push('.');
+    }
+    display.push('g');
+    display.push_str(revision);
+    if dirty {
+        display.push_str(".dirty");
+    }
+    display
+}
+
 pub(crate) fn configuration_from_environment(
     template_pin_policy: &str,
 ) -> Result<Vec<(String, String)>, String> {

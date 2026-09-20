@@ -22,7 +22,7 @@ During a release, the remote `vVERSION` tag is pushed after the crates publish s
 
 ## Release
 
-Use the GitHub Actions `Release` workflow for the lowest-touch release path. Leave `version` blank to publish the next patch version, or set it explicitly. The workflow prepares the release commit, updates `CHANGELOG.md`, creates a local tag, publishes the workspace crates in dependency order to crates.io through trusted publishing, pushes the tag to origin after every crate publishes, and creates the GitHub Release.
+Use the GitHub Actions `Release` workflow for the lowest-touch release path. The default branch carries the next patch as a `MAJOR.MINOR.PATCH-dev` workspace version. Leave `version` blank to release that patch version, choose a larger bump, or set the release version explicitly. The workflow prepares the release commit, updates `CHANGELOG.md`, creates a local tag, publishes the workspace crates in dependency order to crates.io through trusted publishing, pushes the tag to origin after every crate publishes, creates the GitHub Release, then advances the default branch to the following patch `-dev` version.
 
 Keep in-progress release notes under `## Unreleased`. `scripts/release.sh prepare` promotes that curated section to `## vVERSION` when it contains `###` headings; otherwise it generates notes from git history. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `build:`, `ci:`, `chore:`) drive the generated categories; unprefixed commits land in `Other`. Do not hand-edit an upcoming `## vVERSION` section before running the workflow.
 
@@ -39,6 +39,7 @@ scripts/release.sh check 0.1.1
 scripts/release.sh tag 0.1.1
 scripts/release.sh publish 0.1.1
 scripts/release.sh github 0.1.1
+scripts/release.sh prepare-development 0.1.2-dev
 ```
 
 - `prepare` — updates workspace package versions and regenerates `CHANGELOG.md`
@@ -46,6 +47,7 @@ scripts/release.sh github 0.1.1
 - `tag` — creates the annotated local `vVERSION` tag after the same checks
 - `publish` — requires the tag to point at `HEAD`, publishes every workspace crate in `scripts/release.sh` order, then pushes the tag to origin
 - `github` — creates the GitHub Release from the matching `CHANGELOG.md` section
+- `prepare-development` — advances workspace packages to the next `-dev` version without changing release notes
 
 ### crates.io trusted publishing setup
 

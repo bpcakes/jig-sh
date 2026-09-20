@@ -95,12 +95,15 @@ jobs:
           version="$RELEASE_VERSION_INPUT"
           if [[ -z "$version" ]]; then
             current_version="$(scripts/release.sh version)"
-            if ! git rev-parse --verify --quiet "refs/tags/v$current_version" >/dev/null; then
+            if [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+              version="$(scripts/release.sh next-version "$RELEASE_BUMP")"
+            elif ! git rev-parse --verify --quiet "refs/tags/v$current_version" >/dev/null; then
               echo "Cargo.toml is already prepared for untagged v$current_version." >&2
               echo "Rerun with version=$current_version to resume a prepared release, or tag/publish/restore it before auto-bumping." >&2
               exit 1
+            else
+              version="$(scripts/release.sh next-version "$RELEASE_BUMP")"
             fi
-            version="$(scripts/release.sh next-version "$RELEASE_BUMP")"
           else
             echo "Explicit version supplied; ignoring bump=$RELEASE_BUMP."
           fi
@@ -258,6 +261,18 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: scripts/release.sh github "$VERSION"
+
+      - name: Advance default branch to the next development version
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          next_version="$(scripts/release.sh next-version patch)-dev"
+          scripts/release.sh prepare-development "$next_version"
+          scripts/release.sh stage
+          git commit -m "Begin v$next_version development"
+          git push origin "HEAD:$DEFAULT_BRANCH"
 
   backfill-v0-1-0:
     name: Backfill v0.1.0 GitHub Release

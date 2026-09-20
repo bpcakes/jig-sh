@@ -306,7 +306,7 @@ fn ui_json_repository_failures_keep_the_command_identity() {
 
 #[test]
 fn product_version_is_independent_of_the_runner_contract_epoch() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.0");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.1-dev");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let contract: Value =
         serde_json::from_slice(&fs::read(root.join(".agent/jig-contract.json")).unwrap()).unwrap();

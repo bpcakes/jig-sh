@@ -188,6 +188,40 @@ mod build_identity_tests {
     }
 
     #[test]
+    fn development_display_version_adds_git_provenance() {
+        assert_eq!(
+            crate::build_identity::development_display_version(
+                "0.4.1-dev",
+                "16",
+                "0bd929d1",
+                false,
+            ),
+            "0.4.1-dev.16+g0bd929d1"
+        );
+        assert_eq!(
+            crate::build_identity::development_display_version("0.4.1-dev", "16", "0bd929d1", true,),
+            "0.4.1-dev.16+g0bd929d1.dirty"
+        );
+    }
+
+    #[test]
+    fn development_display_version_handles_stable_and_metadata_versions() {
+        assert_eq!(
+            crate::build_identity::development_display_version("0.4.1", "2", "abcdef12", false,),
+            "0.4.1-dev.2+gabcdef12"
+        );
+        assert_eq!(
+            crate::build_identity::development_display_version(
+                "0.4.1-dev+local",
+                "2",
+                "abcdef12",
+                false,
+            ),
+            "0.4.1-dev.2+local.gabcdef12"
+        );
+    }
+
+    #[test]
     fn packaged_layout_identity_uses_only_package_local_inputs() {
         let package = tempdir().unwrap();
         std::fs::create_dir_all(package.path().join("src/nested")).unwrap();
