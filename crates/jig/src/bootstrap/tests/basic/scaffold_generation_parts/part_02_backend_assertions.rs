@@ -1,5 +1,5 @@
 fn assert_admin_theme_contract(destination: &Path) {
-    let admin_index = fs::read_to_string(destination.join("admin-panel/index.html")).unwrap();
+    let admin_index = fs::read_to_string(destination.join("apps/admin-panel/index.html")).unwrap();
     let theme_storage_key = "admin-panel-theme";
     let theme_bootstrap = admin_index
         .find(&format!("const themeStorageKey = \"{theme_storage_key}\""))
@@ -17,7 +17,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let theme_provider =
-        fs::read_to_string(destination.join("admin-panel/src/components/theme-provider.tsx"))
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/theme-provider.tsx"))
             .unwrap();
     assert_contains_all(
         &theme_provider,
@@ -27,7 +27,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let providers =
-        fs::read_to_string(destination.join("admin-panel/src/app/providers.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/app/providers.tsx")).unwrap();
     assert!(providers.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
     assert_eq!(providers.matches(theme_storage_key).count(), 1);
     assert_contains_all(
@@ -38,7 +38,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let admin_router =
-        fs::read_to_string(destination.join("admin-panel/src/app/router.ts")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/app/router.ts")).unwrap();
     assert_contains_all(
         &admin_router,
         &[
@@ -50,7 +50,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let admin_shell =
-        fs::read_to_string(destination.join("admin-panel/src/app/shell.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/app/shell.tsx")).unwrap();
     assert_contains_all(
         &admin_shell,
         &[
@@ -60,7 +60,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let admin_sidebar =
-        fs::read_to_string(destination.join("admin-panel/src/components/app-sidebar.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/app-sidebar.tsx")).unwrap();
     assert_contains_all(
         &admin_sidebar,
         &[
@@ -72,7 +72,7 @@ fn assert_admin_theme_contract(destination: &Path) {
     );
     assert_eq!(admin_sidebar.matches("\"my-app\"").count(), 1);
     let admin_overview_test = fs::read_to_string(
-        destination.join("admin-panel/src/features/overview/overview-page.test.tsx"),
+        destination.join("apps/admin-panel/src/features/overview/overview-page.test.tsx"),
     )
     .unwrap();
     assert_contains_all(
@@ -88,7 +88,7 @@ fn assert_admin_theme_contract(destination: &Path) {
 
 fn assert_admin_component_sources(destination: &Path) {
     let admin_prettierignore =
-        fs::read_to_string(destination.join("admin-panel/.prettierignore")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/.prettierignore")).unwrap();
     assert_eq!(admin_prettierignore.matches("dist/\n").count(), 1);
     assert_eq!(admin_prettierignore.matches("pnpm-lock.yaml").count(), 1);
     assert_eq!(
@@ -98,30 +98,30 @@ fn assert_admin_component_sources(destination: &Path) {
     assert!(admin_prettierignore.contains("bun.lock\nbun.lockb\n"));
     assert!(admin_prettierignore.contains("src/routeTree.gen.ts"));
     let admin_empty =
-        fs::read_to_string(destination.join("admin-panel/src/components/ui/empty.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/ui/empty.tsx")).unwrap();
     assert!(admin_empty.contains(r#"import type { ComponentProps } from "react""#));
     assert!(!admin_empty.contains("React.ComponentProps"));
     let admin_skeleton =
-        fs::read_to_string(destination.join("admin-panel/src/components/ui/skeleton.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/ui/skeleton.tsx")).unwrap();
     assert!(admin_skeleton.contains(r#"import type { ComponentProps } from "react""#));
     assert!(!admin_skeleton.contains("React.ComponentProps"));
     let admin_sonner =
-        fs::read_to_string(destination.join("admin-panel/src/components/ui/sonner.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/ui/sonner.tsx")).unwrap();
     assert!(admin_sonner.contains(r#"import type { CSSProperties } from "react""#));
     assert!(!admin_sonner.contains("React.CSSProperties"));
-    let components = fs::read_to_string(destination.join("admin-panel/components.json")).unwrap();
+    let components = fs::read_to_string(destination.join("apps/admin-panel/components.json")).unwrap();
     assert!(components.contains(r#""style": "radix-nova""#));
     assert!(
         destination
-            .join("admin-panel/src/components/ui/sidebar.tsx")
+            .join("apps/admin-panel/src/components/ui/sidebar.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/features/overview/overview-page.tsx")
+            .join("apps/admin-panel/src/features/overview/overview-page.tsx")
             .exists()
     );
-    assert!(destination.join("admin-panel/src/lib/api.ts").exists());
+    assert!(destination.join("apps/admin-panel/src/lib/api.ts").exists());
 }
 
 fn assert_admin_theme_and_components(destination: &Path) {
@@ -130,48 +130,48 @@ fn assert_admin_theme_and_components(destination: &Path) {
 }
 
 fn assert_admin_data_and_routes(destination: &Path) {
-    let admin_api = fs::read_to_string(destination.join("admin-panel/src/lib/api.ts")).unwrap();
+    let admin_api = fs::read_to_string(destination.join("apps/admin-panel/src/lib/api.ts")).unwrap();
     assert!(admin_api.contains("getAdminStatusOptions"));
     assert!(admin_api.contains("adminStatusQueryOptions"));
     assert!(
         destination
-            .join("admin-panel/src/lib/query-client.ts")
+            .join("apps/admin-panel/src/lib/query-client.ts")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/app/router-context.ts")
+            .join("apps/admin-panel/src/app/router-context.ts")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routes/__root.tsx")
+            .join("apps/admin-panel/src/routes/__root.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routes/index.tsx")
+            .join("apps/admin-panel/src/routes/index.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routes/settings.tsx")
+            .join("apps/admin-panel/src/routes/settings.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routeTree.gen.ts")
+            .join("apps/admin-panel/src/routeTree.gen.ts")
             .exists()
     );
     let admin_index_route =
-        fs::read_to_string(destination.join("admin-panel/src/routes/index.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/routes/index.tsx")).unwrap();
     assert!(admin_index_route.contains(r#"createFileRoute("/")"#));
     assert!(admin_index_route.contains("context.queryClient.ensureQueryData"));
     let admin_query_client =
-        fs::read_to_string(destination.join("admin-panel/src/lib/query-client.ts")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/lib/query-client.ts")).unwrap();
     assert!(admin_query_client.contains("retry: 1"));
     let admin_overview =
-        fs::read_to_string(destination.join("admin-panel/src/features/overview/overview-page.tsx"))
+        fs::read_to_string(destination.join("apps/admin-panel/src/features/overview/overview-page.tsx"))
             .unwrap();
     assert!(admin_overview.contains("useSuspenseQuery(appStatusQueryOptions)"));
     assert!(admin_overview.contains("useQueryErrorResetBoundary()"));
@@ -654,7 +654,7 @@ fn assert_rendered_jig_answers(destination: &Path) {
             "web_package_manager = \"bun\"",
             "if [ -f Cargo.toml ]; then cargo fetch;",
             "name = \"web\"",
-            "dir = \"landing\"",
+            "dir = \"apps/landing\"",
             "kind = \"env-port\"",
             "name = \"admin-panel\"",
             "role = \"spa\"",

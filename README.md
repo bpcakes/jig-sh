@@ -214,6 +214,8 @@ The Rust-only presets create a virtual Rust 2024 workspace with one non-publisha
 
 The Rust/React preset generates a Cargo workspace plus source-owned shadcn Vite React, Astro, or admin applications. The Go/React preset generates a chi/Huma API, optional pgxpool/sqlc/Goose PostgreSQL support, and a Huma OpenAPI to Hey API TypeScript client. Generated application code becomes project-owned immediately; `jig update` does not migrate or overwrite it.
 
+New frontends live under `apps/<name>`: for example, `apps/web`, `apps/landing`, and `apps/admin-panel` (the `admin` shorthand). Rust API executables also live under `apps/`, Rust libraries under `crates/`, and shared TypeScript clients under `packages/`. Workspace manifests and lockfiles live at the repository root. Explicit frontend directories in answers or existing repositories are preserved; adoption and updates do not relocate applications.
+
 For an existing repository, preview before writing:
 
 ```sh

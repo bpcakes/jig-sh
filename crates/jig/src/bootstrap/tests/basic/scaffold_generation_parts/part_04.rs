@@ -41,7 +41,7 @@ tld = "Example.TEST"
     assert!(config.contains("proxy_port = 2455"));
     assert!(config.contains("https_port = 2443"));
     assert!(config.contains("tld = \"example.test\""));
-    let vite = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
+    let vite = fs::read_to_string(destination.join("apps/web/vite.config.ts")).unwrap();
     assert!(vite.contains("http://api.exampleproject.example.test:2455"));
     assert!(!vite.contains("localhost:1355"));
 }
@@ -263,7 +263,7 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         &["database.Bootstrap(ctx, databaseURL)"],
     );
     assert_contains_all(
-        rendered_contents(&rendered, "web/playwright.config.ts"),
+        rendered_contents(&rendered, "apps/web/playwright.config.ts"),
         &["go run ./cmd/api --bootstrap-database"],
     );
     let contracts = rendered_contents(&rendered, "scripts/contracts.mjs");

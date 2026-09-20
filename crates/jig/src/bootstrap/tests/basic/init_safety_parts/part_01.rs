@@ -29,7 +29,7 @@ fn scaffold_rejects_conflicting_file_unless_forced_and_reports_rerun() {
     let error = plan.write(preflight.path(), false).unwrap_err().to_string();
     assert!(error.contains("Cargo.toml"));
     assert!(
-        !preflight.path().join("web/package.json").exists(),
+        !preflight.path().join("apps/web/package.json").exists(),
         "scaffold conflict preflight should fail before writing later files"
     );
 
@@ -112,7 +112,8 @@ fn assert_broken_symlink_rejected(force: bool) {
 fn assert_symlinked_ancestor_rejected(force: bool) {
     let outside = tempdir().unwrap();
     let destination = tempdir().unwrap();
-    std::os::unix::fs::symlink(outside.path(), destination.path().join("web")).unwrap();
+    fs::create_dir(destination.path().join("apps")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), destination.path().join("apps/web")).unwrap();
     let error = symlink_test_plan(destination.path())
         .write(destination.path(), force)
         .unwrap_err()

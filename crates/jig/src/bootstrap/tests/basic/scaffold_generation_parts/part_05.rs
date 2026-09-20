@@ -107,7 +107,7 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
     );
     assert_contains_none(workflow, &[r#"- "cmd/**""#, r#"- "internal/**""#, r#"- "**""#]);
 
-    let playwright = contents("web/playwright.config.ts");
+    let playwright = contents("apps/web/playwright.config.ts");
     assert_contains_all(playwright, &[r#"path.resolve(repoRoot, "services/api")"#, "cwd: backendRoot"]);
     let contracts = contents("scripts/contracts.mjs");
     assert_contains_all(contracts, &[

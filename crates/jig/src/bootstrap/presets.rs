@@ -200,7 +200,7 @@ impl ScaffoldPreset {
 
     pub(crate) const fn reserved_backend_roots(self) -> &'static [&'static str] {
         match self {
-            Self::RustReact => &["apps", "crates"],
+            Self::RustReact => &["crates"],
             Self::GoReact => &["cmd", "internal"],
             Self::HarnessOnly | Self::RustLibrary | Self::RustCli => &[],
         }
@@ -215,7 +215,7 @@ impl ScaffoldPreset {
                     "Batter and its Axum adapter use a pinned Git dependency; generated services target Unix.",
                     "Rust crate roots default to apps and crates.",
                     "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
-                    "Frontends default to web when omitted.",
+                    "Frontends live under apps/<name> and default to apps/web when omitted.",
                     "Database scaffolding defaults to none; pass --db postgres when wanted.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
                     "Frontends share a pinned root workspace and install dependencies once during bootstrap.",
@@ -260,7 +260,7 @@ impl ScaffoldPreset {
                 summary: "Go 1.26 chi/Huma API plus a shadcn React product app and optional Astro site.",
                 defaults: &[
                     "A Go module is required; --defaults derives example.com/<repo>.",
-                    "Frontends default to web when omitted.",
+                    "Frontends live under apps/<name> and default to apps/web when omitted.",
                     "Database scaffolding defaults to none; PostgreSQL uses pgxpool, sqlc, and Goose.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
                 ],

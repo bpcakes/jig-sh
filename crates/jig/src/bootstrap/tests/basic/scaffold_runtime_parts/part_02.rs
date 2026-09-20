@@ -320,27 +320,39 @@ fn scaffold_rejects_mixed_scaffold_and_existing_frontend_app_inputs() {
 #[test]
 fn scaffold_rejects_frontend_dirs_reserved_for_rust_roots() {
     let temp = tempdir().unwrap();
-    let error = scaffold::InitScaffoldPlan::from_opts(
-        &ScaffoldOpts {
-            preset: Some(ScaffoldPreset::RustReact),
-            db: None,
-            frontends: vec![parse_scaffold_frontend("apps").unwrap()],
-            frontend_list: Vec::new(),
-        },
-        &AnswerOpts::default(),
-        temp.path(),
-    )
-    .unwrap_err()
-    .to_string();
+    for dir in ["apps", "apps/demo-api", "apps/demo-api/ui", "apps/demo-admin-api"] {
+        let error = scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: Vec::new(),
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                repo_name: Some("demo".into()),
+                frontend_apps: vec![FrontendApp {
+                    name: "web".into(),
+                    dir: dir.into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                }],
+                ..AnswerOpts::default()
+            },
+            temp.path(),
+        )
+        .unwrap_err()
+        .to_string();
 
-    assert!(error.contains("uses reserved directory 'apps'"));
+        assert!(error.contains(&format!("uses reserved directory '{dir}'")));
+    }
 }
 
 #[test]
-fn go_scaffold_rejects_direct_frontends_under_backend_roots() {
-    let temp = tempdir().unwrap();
+fn go_scaffold_places_backend_named_frontends_under_apps() {
     for dir in ["cmd", "internal"] {
-        let error = scaffold::InitScaffoldPlan::from_opts(
+        let temp = tempdir().unwrap();
+        let plan = scaffold::InitScaffoldPlan::from_opts(
             &ScaffoldOpts {
                 preset: Some(ScaffoldPreset::GoReact),
                 db: Some(ScaffoldDb::None),
@@ -353,10 +365,11 @@ fn go_scaffold_rejects_direct_frontends_under_backend_roots() {
             },
             temp.path(),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap()
+        .unwrap();
 
-        assert!(error.contains(&format!("uses reserved directory '{dir}'")));
+        let report = plan.write(temp.path(), false).unwrap();
+        assert_eq!(report["frontends"][0]["dir"], format!("apps/{dir}"));
     }
 }
 

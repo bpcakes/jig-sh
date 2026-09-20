@@ -144,7 +144,7 @@ fn vite_direct_fallback_uses_the_rendered_dev_proxy_authority() {
         .unwrap();
     let vite = files
         .iter()
-        .find(|file| file.relative == "web/vite.config.ts")
+        .find(|file| file.relative == "apps/web/vite.config.ts")
         .unwrap();
 
     assert!(
@@ -262,9 +262,9 @@ fn e2e_workflow_paths_have_one_role_and_database_aware_authority() {
         ".sqlx",
         &[spa.clone(), admin.clone(), astro.clone()],
     );
-    assert!(no_database.iter().any(|path| path == "web/**"));
-    assert!(!no_database.iter().any(|path| path == "admin/**"));
-    assert!(!no_database.iter().any(|path| path == "landing/**"));
+    assert!(no_database.iter().any(|path| path == "apps/web/**"));
+    assert!(!no_database.iter().any(|path| path == "apps/admin/**"));
+    assert!(!no_database.iter().any(|path| path == "apps/landing/**"));
     assert!(!no_database.iter().any(|path| path == "migrations/**"));
     assert!(!no_database.iter().any(|path| path == ".sqlx/**"));
     assert!(no_database.iter().any(|path| path == "rust-toolchain"));
@@ -277,7 +277,7 @@ fn e2e_workflow_paths_have_one_role_and_database_aware_authority() {
         "db/sqlx",
         &[spa, admin, astro],
     );
-    assert!(postgres.iter().any(|path| path == "web/**"));
+    assert!(postgres.iter().any(|path| path == "apps/web/**"));
     assert!(postgres.iter().any(|path| path == "db/migrations/**"));
     assert!(postgres.iter().any(|path| path == "db/sqlx/**"));
     assert_eq!(

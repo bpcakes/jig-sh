@@ -67,7 +67,7 @@ impl FrontendScaffold {
         let package_name = normalize_package_name(&spec.name)?;
         let (coverage_threshold, dev_kind) = scaffold_frontend_defaults(spec.kind);
         Ok(Self {
-            dir: spec.name.clone(),
+            dir: format!("apps/{}", spec.name),
             name: spec.name,
             kind: spec.kind,
             coverage_threshold,

@@ -471,6 +471,7 @@ impl InitScaffoldPlan {
             &frontends,
             &root_workspace_package_name,
             ScaffoldPreset::RustReact,
+            &package_name,
         )?;
         Ok(Self {
             project: ScaffoldProjectPlan::RustReact(RustReactScaffoldPlan {
@@ -569,6 +570,7 @@ impl InitScaffoldPlan {
             &frontends,
             &format!("{package_name}-workspace"),
             ScaffoldPreset::GoReact,
+            &package_name,
         )?;
         let component_root = go_component_root(answers)?.to_owned();
         let migration_dir = answers
@@ -724,6 +726,7 @@ fn validate_unique_frontends(
     frontends: &[FrontendScaffold],
     root_workspace_package_name: &str,
     preset: ScaffoldPreset,
+    package_name: &str,
 ) -> Result<()> {
     let mut names = HashSet::new();
     let mut dirs = HashSet::new();
@@ -754,7 +757,18 @@ fn validate_unique_frontends(
             );
         }
         let root_dir = frontend.dir.split('/').next().unwrap_or_default();
-        if preset.reserved_backend_roots().contains(&root_dir) {
+        let overlaps_rust_app = preset == ScaffoldPreset::RustReact
+            && [
+                format!("apps/{package_name}-api"),
+                format!("apps/{package_name}-admin-api"),
+            ]
+            .iter()
+            .any(|backend| {
+                frontend.dir == *backend
+                    || frontend.dir.starts_with(&format!("{backend}/"))
+                    || backend.starts_with(&format!("{}/", frontend.dir))
+            });
+        if preset.reserved_backend_roots().contains(&root_dir) || overlaps_rust_app {
             bail!(
                 "Scaffold frontend '{}' uses reserved directory '{}'",
                 frontend.name,

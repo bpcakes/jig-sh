@@ -244,7 +244,7 @@ fn existing_empty_default_init_succeeds_with_256_soft_handle_limit_helper() {
             .join("apps/rollback-demo-api/Cargo.toml")
             .is_file()
     );
-    assert!(destination.join("web/e2e/app.spec.ts").is_file());
+    assert!(destination.join("apps/web/e2e/app.spec.ts").is_file());
 }
 
 fn publish_existing_transaction_file(

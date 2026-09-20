@@ -191,7 +191,7 @@ fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {
             .join(format!("crates/{accepted_name}-test-support/Cargo.toml"))
             .is_file()
     );
-    let vite_config = fs::read_to_string(accepted_destination.join("web/vite.config.ts")).unwrap();
+    let vite_config = fs::read_to_string(accepted_destination.join("apps/web/vite.config.ts")).unwrap();
     let repo_label = vite_config
         .split_once("http://api.")
         .unwrap()

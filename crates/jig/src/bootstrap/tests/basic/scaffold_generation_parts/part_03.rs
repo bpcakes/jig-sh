@@ -97,7 +97,7 @@ fn generated_dependency_failure_names_the_exact_bootstrap_recovery_command() {
     assert_eq!(package_json["allowScripts"]["esbuild@0.28.2"], true);
 
     let output = Command::new("bash")
-        .args(["scripts/check-webapps.sh", "dependencies-install", "web"])
+        .args(["scripts/check-webapps.sh", "dependencies-install", "apps/web"])
         .current_dir(&destination)
         .output()
         .unwrap();
@@ -146,7 +146,7 @@ fn generated_spa_coverage_counts_uncovered_future_production_modules() {
     .unwrap();
 
     let dependencies = Command::new("scripts/check-webapps.sh")
-        .args(["dependencies-bootstrap", "web"])
+        .args(["dependencies-bootstrap", "apps/web"])
         .env("NODE_ENV", "production")
         .env("NPM_CONFIG_OMIT", "dev")
         .current_dir(&destination)
@@ -168,7 +168,7 @@ fn generated_spa_coverage_counts_uncovered_future_production_modules() {
     };
     let statement_coverage = || {
         serde_json::from_str::<serde_json::Value>(
-            &fs::read_to_string(destination.join("web/coverage/coverage-summary.json")).unwrap(),
+            &fs::read_to_string(destination.join("apps/web/coverage/coverage-summary.json")).unwrap(),
         )
         .unwrap()["total"]["statements"]["pct"]
             .as_f64()
@@ -194,7 +194,7 @@ fn generated_spa_coverage_counts_uncovered_future_production_modules() {
         .unwrap();
     }
     fs::write(
-        destination.join("web/src/uncovered-production.ts"),
+        destination.join("apps/web/src/uncovered-production.ts"),
         uncovered_module,
     )
     .unwrap();
@@ -244,7 +244,7 @@ fn rust_react_admin_dynamic_values_use_formatter_stable_boundaries() {
     })
     .unwrap();
 
-    let admin = destination.join(&frontend_name);
+    let admin = destination.join("apps").join(&frontend_name);
     let theme_storage_key = format!("{frontend_name}-theme");
     let index = fs::read_to_string(admin.join("index.html")).unwrap();
     assert!(index.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
