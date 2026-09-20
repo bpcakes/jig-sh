@@ -289,6 +289,66 @@ component, target, or profile records:
 Target identity is always an object with separate `component` and `action`
 fields in JSON. Human output renders its canonical `component:action` text.
 
+Catalog inspection has two explicitly selected response projections. Omitting
+the option, or selecting `--projection standard`, preserves the existing CLI
+JSON shape. The opt-in `--projection agent-v1` adds a typed
+`freshness_policy` object to every target returned by the workspace, component,
+targets, and target views. CLI use with another info view is rejected rather
+than silently ignoring the selection:
+
+```sh
+scripts/jig --json info target api:test --projection agent-v1
+scripts/jig --json info workspace --projection agent-v1
+```
+
+The object reports `contract_epoch`, a `mode` of `target_freshness_v1` or
+`legacy_global`, and separate `inputs_policy` and `source_state` records. Each
+policy record contains its effective value, a `defaulted` boolean, and nullable
+field `provenance`. Effective input values remain `whole_repository` or
+`exhaustive`; effective source-state values remain `git` or `worktree`.
+Generated epoch-8 defaults normally report `defaulted: true` with `inferred`
+provenance, while authored declarations report `defaulted: false` with
+`declared` provenance. A non-default effective value is never labeled defaulted,
+even if a stale provenance record calls it inferred. Pre-8 targets report
+`legacy_global`, the conservative effective defaults, and null provenance;
+policy provenance keys from an epoch that did not support those policies are
+not projected. Human output renders the same effective values and metadata.
+This is configuration inspection only: it does not evaluate receipts or claim
+that evidence is currently fresh.
+
+MCP uses the same typed projection. Starting the server with
+`scripts/jig mcp --surface agent-v1` advertises a matching strict output schema
+for `jig.inspect`; omitting the option, or selecting `standard`,
+keeps the baseline descriptor and response shapes. Surface selection is fixed
+for the process lifetime and is not negotiated through MCP `initialize`.
+Unknown projection or surface values fail during command parsing, before an
+inspection runs or an MCP server starts. A caller can roll back by omitting the
+option. The catalog schema remains version 1 because the baseline schema is
+unchanged and the additive shape is isolated behind an explicitly versioned
+projection.
+
+Input globs alone do not identify source authority. These otherwise identical
+policies have different reuse behavior:
+
+```json
+{
+  "inputs_policy": {"effective": "exhaustive", "defaulted": false, "provenance": "declared"},
+  "source_state": {"effective": "git", "defaulted": false, "provenance": "declared"}
+}
+```
+
+```json
+{
+  "inputs_policy": {"effective": "exhaustive", "defaulted": false, "provenance": "declared"},
+  "source_state": {"effective": "worktree", "defaulted": false, "provenance": "declared"}
+}
+```
+
+Both may describe the same `inputs`, but the first retains Git placement,
+HEAD, and branch identity while the second depends only on the checked working
+files. Current receipt evaluation remains on the work gate and evidence
+surfaces described below.
+
 `jig check --explain` returns `command: "check plan"`, `executed: false`, and a
 `plan` object without running a command or writing a receipt. A newly written
 plan uses run-plan schema version 3 and includes its derived `id`, configuration digest, source identity,

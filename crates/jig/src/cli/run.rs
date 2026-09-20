@@ -172,7 +172,7 @@ impl CommandKind {
             Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
             Self::AgentMap(_) => (tool_defs::cli_command::AGENT_MAP, Repository),
             Self::State(_) => (tool_defs::cli_command::STATE, Repository),
-            Self::Mcp => (tool_defs::cli_command::MCP, Repository),
+            Self::Mcp(_) => (tool_defs::cli_command::MCP, Repository),
             Self::RuntimeCompatible(_) => ("__runtime-compatible", CapabilityOnly),
         };
 
@@ -199,7 +199,7 @@ const fn should_report_json_command_errors(json_output: bool, command: &CommandK
     json_output
         && !matches!(
             command,
-            CommandKind::Mcp | CommandKind::RuntimeCompatible(_)
+            CommandKind::Mcp(_) | CommandKind::RuntimeCompatible(_)
         )
 }
 
@@ -211,9 +211,9 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Presets => run_presets_command(json_output),
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
         CommandKind::Update(opts) => run_update_command(opts, json_output),
-        CommandKind::Mcp => {
+        CommandKind::Mcp(opts) => {
             let ctx = RepoContext::load()?;
-            mcp::serve(&ctx)
+            mcp::serve(&ctx, opts.surface)
         }
         CommandKind::Ui(opts) => {
             let ctx = RepoContext::load().map_err(|error| {
@@ -231,6 +231,7 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
+            opts.validate_projection()?;
             if let Some(super::InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
@@ -270,7 +271,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     crate::repository::InspectRequest::Profile(id)
                 }
             });
-            let output = info::run(opts.commands, json_output, request)?;
+            let output = info::run(opts.commands, json_output, request, opts.projection)?;
             emit(json_output, HumanOutput::Info, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }

@@ -12,6 +12,7 @@ use super::{
 };
 use crate::context::RepoContext;
 use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
+use crate::surface::ResponseSurface;
 use crate::test_env::TestRepoBuilder;
 
 #[test]
@@ -30,6 +31,7 @@ fn work_retire_error_exposes_partial_completion_over_mcp() {
         }),
         &mut writer,
         MessageFraming::JsonLine,
+        ResponseSurface::Standard,
     );
     let plan_id = started["result"]["structuredContent"]["plan"]["plan_id"]
         .as_str()
@@ -47,6 +49,7 @@ fn work_retire_error_exposes_partial_completion_over_mcp() {
         }),
         &mut writer,
         MessageFraming::JsonLine,
+        ResponseSurface::Standard,
     );
     assert_eq!(response["error"]["code"], -32000, "{response:#}");
     let partial = &response["error"]["data"]["partial_completion"];
@@ -85,7 +88,7 @@ custom_check_command = "printf 'check\n'"
     )
     .unwrap();
 
-    let response = handle_tools_list(&ctx, Some(json!(1)));
+    let response = handle_tools_list(&ctx, Some(json!(1)), ResponseSurface::Standard);
     let names = response["result"]["tools"]
         .as_array()
         .unwrap()
@@ -174,6 +177,7 @@ fixture_check_command = "printf 'fixture tool failed\n' >&2; exit 7"
         }),
         &mut FailingProgressWriter,
         MessageFraming::JsonLine,
+        ResponseSurface::Standard,
     );
     let message = response["error"]["message"].as_str().unwrap();
 

@@ -16,7 +16,8 @@ use crate::context::{
 };
 
 pub(crate) use inspect::{
-    CatalogInspection, InspectRequest, inspect_repository, inspect_repository_data,
+    AgentCatalogInspection, CatalogInspection, InspectRequest, inspect_repository,
+    inspect_repository_data, inspect_repository_data_agent_v1,
 };
 pub(crate) use planner::{
     PlanRunRequest, plan_action_run_with_cancellation, plan_run_with_cancellation,

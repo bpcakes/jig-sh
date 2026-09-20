@@ -100,6 +100,9 @@ fn format_repository_info(value: &serde_json::Value) -> String {
             target["intent"].as_str().unwrap_or("?"),
             string_list(target["effects"].as_array()).join(", ")
         ));
+        if let Some(policy) = freshness_policy_text(target) {
+            lines.push(format!("  Freshness: {policy}"));
+        }
         if let Some(arguments) = target["arguments"].as_object() {
             for (name, spec) in arguments {
                 lines.push(format!(
@@ -122,7 +125,12 @@ fn format_repository_info(value: &serde_json::Value) -> String {
     if let Some(targets) = value["targets"].as_array() {
         lines.push(format!("  Targets: {}", targets.len()));
         for target in targets {
-            lines.push(format!("  - {}", target_text(&target["id"])));
+            let mut line = format!("  - {}", target_text(&target["id"]));
+            if let Some(policy) = freshness_policy_text(target) {
+                line.push_str(" · ");
+                line.push_str(&policy);
+            }
+            lines.push(line);
         }
     }
     if let Some(profiles) = value["profiles"].as_array() {
@@ -137,6 +145,28 @@ fn format_repository_info(value: &serde_json::Value) -> String {
     }
     lines.push("  full record: rerun with --json".into());
     lines.join("\n")
+}
+
+fn freshness_policy_text(target: &serde_json::Value) -> Option<String> {
+    let policy = target.get("freshness_policy")?;
+    Some(format!(
+        "inputs={} ({}) · source={} ({}) · mode={}",
+        policy["inputs_policy"]["effective"].as_str().unwrap_or("?"),
+        policy_field_metadata(&policy["inputs_policy"]),
+        policy["source_state"]["effective"].as_str().unwrap_or("?"),
+        policy_field_metadata(&policy["source_state"]),
+        policy["mode"].as_str().unwrap_or("?"),
+    ))
+}
+
+fn policy_field_metadata(field: &serde_json::Value) -> String {
+    format!(
+        "defaulted={}, provenance={}",
+        field["defaulted"]
+            .as_bool()
+            .map_or("?", |value| if value { "true" } else { "false" }),
+        field["provenance"].as_str().unwrap_or("unavailable")
+    )
 }
 
 fn target_text(value: &serde_json::Value) -> String {
@@ -179,5 +209,66 @@ fn string_list(values: Option<&Vec<serde_json::Value>>) -> Vec<String> {
             .map(str::to_string)
             .collect(),
         None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::format_info_summary;
+
+    #[test]
+    fn agent_target_policy_is_visible_in_human_output() {
+        let target = json!({
+            "id": {"component": "api", "action": "test"},
+            "intent": "check",
+            "effects": ["read_only"],
+            "arguments": {},
+            "freshness_policy": {
+                "contract_epoch": 8,
+                "mode": "target_freshness_v1",
+                "inputs_policy": {
+                    "effective": "exhaustive",
+                    "defaulted": false,
+                    "provenance": "declared"
+                },
+                "source_state": {
+                    "effective": "worktree",
+                    "defaulted": false,
+                    "provenance": "declared"
+                }
+            }
+        });
+        let summary = format_info_summary(&json!({
+            "command": "info target",
+            "workspace": {"name": "ExampleProject", "contract_version": 8},
+            "target": target
+        }));
+
+        assert!(
+            summary.contains("Freshness: inputs=exhaustive"),
+            "{summary}"
+        );
+        assert!(summary.contains("source=worktree"), "{summary}");
+        assert!(
+            summary.contains("defaulted=false, provenance=declared"),
+            "{summary}"
+        );
+        assert!(summary.contains("mode=target_freshness_v1"), "{summary}");
+    }
+
+    #[test]
+    fn standard_target_summary_remains_unchanged() {
+        let summary = format_info_summary(&json!({
+            "command": "info targets",
+            "workspace": {"name": "ExampleProject", "contract_version": 8},
+            "targets": [{"id": {"component": "api", "action": "test"}}]
+        }));
+
+        assert_eq!(
+            summary,
+            "Jig targets: ExampleProject (contract v8)\n  Targets: 1\n  - api:test\n  full record: rerun with --json"
+        );
     }
 }

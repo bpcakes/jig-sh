@@ -6,14 +6,14 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver, ExecutionStream};
 use crate::progress::combine_progress_delivery;
-use crate::runtime::call_tool_with_observer;
+use crate::surface::ResponseSurface;
 use crate::tool_defs;
 
 const MCP_PROGRESS_EVENT_LIMIT: usize = 64;
 const MCP_OUTPUT_PREVIEW_LIMIT: usize = 4 * 1024;
 
-pub fn serve(ctx: &RepoContext) -> Result<()> {
-    let result = serve_transport(ctx);
+pub fn serve(ctx: &RepoContext, surface: ResponseSurface) -> Result<()> {
+    let result = serve_transport(ctx, surface);
     // Repository runs are accepted as durable work before their response is
     // published. Keep the owning process alive after EOF or another transport
     // failure until every accepted worker for this repository terminalizes.
@@ -21,19 +21,20 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
     result
 }
 
-fn serve_transport(ctx: &RepoContext) -> Result<()> {
+fn serve_transport(ctx: &RepoContext, surface: ResponseSurface) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();
     let mut writer = stdout.lock();
 
-    serve_messages(ctx, &mut reader, &mut writer)
+    serve_messages(ctx, &mut reader, &mut writer, surface)
 }
 
 fn serve_messages(
     ctx: &RepoContext,
     reader: &mut dyn BufRead,
     writer: &mut dyn Write,
+    surface: ResponseSurface,
 ) -> Result<()> {
     loop {
         let Some((body, framing)) = read_frame(reader)? else {
@@ -87,8 +88,8 @@ fn serve_messages(
                 "id": id,
                 "result": {}
             })),
-            "tools/list" => Some(handle_tools_list(ctx, id)),
-            "tools/call" => Some(handle_tool_call(ctx, id, params, writer, framing)),
+            "tools/list" => Some(handle_tools_list(ctx, id, surface)),
+            "tools/call" => Some(handle_tool_call(ctx, id, params, writer, framing, surface)),
             other => Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -105,15 +106,16 @@ fn serve_messages(
     }
 }
 
-fn handle_tools_list(ctx: &RepoContext, id: Option<Value>) -> Value {
+fn handle_tools_list(ctx: &RepoContext, id: Option<Value>, surface: ResponseSurface) -> Value {
     match crate::runtime::refreshed_repository_context(ctx) {
         Ok(current) => json!({
             "jsonrpc": "2.0",
             "id": id,
             "result": {
-                "tools": tool_defs::tool_descriptors(
+                "tools": tool_defs::tool_descriptors_for_surface(
                     current.contract_version(),
                     current.tool_specs(),
+                    surface,
                 )
             }
         }),
@@ -134,6 +136,7 @@ fn handle_tool_call(
     params: Value,
     writer: &mut dyn Write,
     framing: MessageFraming,
+    surface: ResponseSurface,
 ) -> Value {
     let result = (|| -> Result<Value> {
         let name = params
@@ -150,7 +153,13 @@ fn handle_tool_call(
             .filter(|token| token.is_string() || token.is_number())
             .cloned();
         let mut observer = McpProgressObserver::new(writer, framing, progress_token);
-        let tool_result = call_tool_with_observer(ctx, name, args, &mut observer);
+        let tool_result = crate::runtime::call_tool_with_observer_on_surface(
+            ctx,
+            name,
+            args,
+            &mut observer,
+            surface,
+        );
         let progress_result = observer.flush();
         let tool_result = combine_tool_and_progress_results(tool_result, progress_result)?;
         Ok(json!({

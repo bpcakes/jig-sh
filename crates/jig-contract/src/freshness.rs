@@ -4,7 +4,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ActionInputsPolicy, ActionSourceState, TargetId};
+use crate::{ActionInputsPolicy, ActionSourceState, FieldProvenance, TargetId};
 
 mod evaluation;
 mod receipt;
@@ -39,6 +39,46 @@ pub const TARGET_IDENTITY_SCHEMA_VERSION: u32 = 1;
 pub const TARGET_IDENTITY_DOMAIN: &str = "jig-target-identity-v1";
 pub const MAX_FRESHNESS_REASON_PREVIEWS: usize = 100;
 pub const MAX_FRESHNESS_DIAGNOSTIC_BYTES: usize = 4_000;
+
+/// The receipt-reuse semantics available to an inspected target's contract
+/// epoch. This reports configured policy only; it does not evaluate a receipt.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetFreshnessPolicyModeV1 {
+    /// Contract epochs before target-scoped freshness use their conservative
+    /// global evidence rules.
+    LegacyGlobal,
+    /// The target-scoped freshness policy introduced in contract epoch 8.
+    TargetFreshnessV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspectedInputsPolicyV1 {
+    pub effective: ActionInputsPolicy,
+    pub defaulted: bool,
+    pub provenance: Option<FieldProvenance>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspectedSourceStateV1 {
+    pub effective: ActionSourceState,
+    pub defaulted: bool,
+    pub provenance: Option<FieldProvenance>,
+}
+
+/// Effective target policy exposed by catalog inspection. The policy explains
+/// which authority a later evidence evaluation would use; it never claims that
+/// any particular receipt is currently fresh.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetFreshnessPolicyInspectionV1 {
+    pub contract_epoch: u32,
+    pub mode: TargetFreshnessPolicyModeV1,
+    pub inputs_policy: InspectedInputsPolicyV1,
+    pub source_state: InspectedSourceStateV1,
+}
 
 #[cfg(test)]
 mod tests {

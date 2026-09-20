@@ -535,11 +535,38 @@ pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Va
     call_tool_with_observer(ctx, name, args, &mut NoopExecutionObserver)
 }
 
+#[cfg(test)]
+pub(crate) fn call_tool_on_surface(
+    ctx: &RepoContext,
+    name: &str,
+    args: Value,
+    surface: crate::surface::ResponseSurface,
+) -> Result<Value> {
+    call_tool_with_observer_on_surface(ctx, name, args, &mut NoopExecutionObserver, surface)
+}
+
+#[cfg(test)]
 pub(crate) fn call_tool_with_observer(
     ctx: &RepoContext,
     name: &str,
     args: Value,
     observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    call_tool_with_observer_on_surface(
+        ctx,
+        name,
+        args,
+        observer,
+        crate::surface::ResponseSurface::Standard,
+    )
+}
+
+pub(crate) fn call_tool_with_observer_on_surface(
+    ctx: &RepoContext,
+    name: &str,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+    surface: crate::surface::ResponseSurface,
 ) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
     let memory_tool = MemoryTool::from_name(name);
@@ -549,7 +576,7 @@ pub(crate) fn call_tool_with_observer(
     }
     if ctx.contract_version() >= 6 {
         if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
-            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled());
+            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled(), surface);
         }
     } else if memory_tool.is_none() {
         let current = refreshed_repository_context(ctx)?;

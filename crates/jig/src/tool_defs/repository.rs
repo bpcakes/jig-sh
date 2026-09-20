@@ -7,8 +7,9 @@ use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::repository::CatalogInspection;
+use crate::repository::{AgentCatalogInspection, CatalogInspection};
 use crate::state::DurableRun;
+use crate::surface::ResponseSurface;
 
 use super::tool;
 
@@ -64,11 +65,19 @@ impl RepositoryTool {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn descriptor(self) -> Value {
+        self.descriptor_for_surface(ResponseSurface::Standard)
+    }
+
+    pub(crate) fn descriptor_for_surface(self, surface: ResponseSurface) -> Value {
         let (input, output) = match self {
             Self::Inspect => (
                 schema_value::<RepositoryInspectArgs>(),
-                schema_value::<RepositoryInspectOutput>(),
+                match surface {
+                    ResponseSurface::Standard => schema_value::<RepositoryInspectOutput>(),
+                    ResponseSurface::AgentV1 => schema_value::<AgentRepositoryInspectOutput>(),
+                },
             ),
             Self::PlanRun => (
                 schema_value::<PlanRunArgs>(),
@@ -180,9 +189,25 @@ pub(crate) struct RepositoryInspectOutput {
 }
 
 #[derive(Clone, Debug, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentRepositoryInspectOutput {
+    pub(crate) ok: bool,
+    pub(crate) schema_version: u32,
+    pub(crate) kind: RepositoryInspectKind,
+    pub(crate) result: AgentRepositoryInspectResult,
+}
+
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 #[serde(untagged)]
 pub(crate) enum RepositoryInspectResult {
     Catalog(CatalogInspection),
+    Run(RunInspection),
+}
+
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[serde(untagged)]
+pub(crate) enum AgentRepositoryInspectResult {
+    Catalog(AgentCatalogInspection),
     Run(RunInspection),
 }
 

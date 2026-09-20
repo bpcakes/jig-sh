@@ -6,9 +6,9 @@ use serde_json::{Map, Value, json};
 mod repository;
 
 pub(crate) use repository::{
-    CancelRunArgs, CancelRunOutput, ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput,
-    RepositoryInspectArgs, RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool,
-    RunInspection,
+    AgentRepositoryInspectOutput, AgentRepositoryInspectResult, CancelRunArgs, CancelRunOutput,
+    ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput, RepositoryInspectArgs,
+    RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool, RunInspection,
 };
 
 pub(crate) const DEFAULT_RECEIPTS_LIMIT: usize = 20;
@@ -440,15 +440,28 @@ impl MemoryTool {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn tool_descriptors(
     contract_version: u32,
     manifest_tools: &[ManifestTool],
+) -> Vec<Value> {
+    tool_descriptors_for_surface(
+        contract_version,
+        manifest_tools,
+        crate::surface::ResponseSurface::Standard,
+    )
+}
+
+pub(crate) fn tool_descriptors_for_surface(
+    contract_version: u32,
+    manifest_tools: &[ManifestTool],
+    surface: crate::surface::ResponseSurface,
 ) -> Vec<Value> {
     let execution = if contract_version >= 6 {
         RepositoryTool::ALL
             .iter()
             .copied()
-            .map(RepositoryTool::descriptor)
+            .map(|tool| tool.descriptor_for_surface(surface))
             .collect::<Vec<_>>()
     } else {
         manifest_tools

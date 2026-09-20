@@ -128,6 +128,30 @@ refresh; use this preview to migrate existing saved actions deliberately.
 
 ## Recording and inspection
 
+Catalog inspection exposes the policy that would govern later freshness
+evaluation without reading the receipt journal. Use the opt-in agent projection
+to see the effective input and source-state policies, whether each value was
+defaulted, and its authored-model provenance:
+
+```sh
+scripts/jig --json info target api:test --projection agent-v1
+```
+
+The same projection is available to MCP clients when the server is started with
+`scripts/jig mcp --surface agent-v1`. Epoch-8 targets report
+the policy through a separately advertised schema. In the epoch-8 inspection
+fixture, serialized `jig.inspect` descriptors measure 29,584 bytes for standard
+and 31,431 bytes for agent-v1 (+1,847 bytes); all other tool descriptors are
+unchanged. The regression test measures these sizes without treating a fixed
+byte count as an API guarantee. Epoch-8 targets report
+`mode: "target_freshness_v1"`; older contracts report `mode: "legacy_global"`
+with conservative effective defaults and no invented or stale policy
+provenance. Non-default values are never described as defaulted, even if their
+stored provenance is inconsistent. The standard projection remains unchanged
+for compatibility. A `freshness_policy` record is not receipt evidence and
+never says that a target is currently fresh; use `work gates`, `work evidence`,
+or status inspection for that evaluation.
+
 Epoch 8 target receipts contain `target_freshness`. A complete value contains
 the current identity, original dependency receipt references, effective expiry,
 and proof that the original execution did not change global source. Incomplete

@@ -11,10 +11,11 @@ use serde_json::Value;
 
 use crate::context::RepoContext;
 use crate::repository::{InspectRequest, PlanRunRequest, RepositoryCatalog};
+use crate::surface::ResponseSurface;
 use crate::tool_defs::{
-    CancelRunArgs, CancelRunOutput, ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput,
-    RepositoryInspectArgs, RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool,
-    RunInspection,
+    AgentRepositoryInspectOutput, AgentRepositoryInspectResult, CancelRunArgs, CancelRunOutput,
+    ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput, RepositoryInspectArgs,
+    RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool, RunInspection,
 };
 
 use super::repository_run::validate_effect_approval;
@@ -59,16 +60,28 @@ pub(super) fn call(
     tool: RepositoryTool,
     args: Value,
     cancelled: &dyn Fn() -> bool,
+    surface: ResponseSurface,
 ) -> Result<Value> {
     match tool {
-        RepositoryTool::Inspect => inspect(ctx, parse_inspect_args(args)?),
+        RepositoryTool::Inspect => inspect(ctx, parse_inspect_args(args)?, surface),
         RepositoryTool::PlanRun => plan(ctx, parse_args(args, "jig.plan_run")?, cancelled),
         RepositoryTool::ExecuteRun => execute(ctx, parse_args(args, "jig.execute_run")?),
         RepositoryTool::CancelRun => cancel(ctx, parse_args(args, "jig.cancel_run")?),
     }
 }
 
-fn inspect(ctx: &RepoContext, args: RepositoryInspectArgs) -> Result<Value> {
+fn inspect(
+    ctx: &RepoContext,
+    args: RepositoryInspectArgs,
+    surface: ResponseSurface,
+) -> Result<Value> {
+    match surface {
+        ResponseSurface::Standard => inspect_standard(ctx, args),
+        ResponseSurface::AgentV1 => inspect_agent_v1(ctx, args),
+    }
+}
+
+fn inspect_standard(ctx: &RepoContext, args: RepositoryInspectArgs) -> Result<Value> {
     let kind = args.kind();
     let result = match args {
         RepositoryInspectArgs::Workspace => catalog_inspection(ctx, InspectRequest::Workspace)?,
@@ -97,6 +110,39 @@ fn inspect(ctx: &RepoContext, args: RepositoryInspectArgs) -> Result<Value> {
     })
 }
 
+fn inspect_agent_v1(ctx: &RepoContext, args: RepositoryInspectArgs) -> Result<Value> {
+    let kind = args.kind();
+    let result = match args {
+        RepositoryInspectArgs::Workspace => {
+            agent_catalog_inspection(ctx, InspectRequest::Workspace)?
+        }
+        RepositoryInspectArgs::Components => {
+            agent_catalog_inspection(ctx, InspectRequest::Components)?
+        }
+        RepositoryInspectArgs::Component { id } => {
+            agent_catalog_inspection(ctx, InspectRequest::Component(id))?
+        }
+        RepositoryInspectArgs::Targets => agent_catalog_inspection(ctx, InspectRequest::Targets)?,
+        RepositoryInspectArgs::Target { id } => {
+            agent_catalog_inspection(ctx, InspectRequest::Target(id))?
+        }
+        RepositoryInspectArgs::Profiles => agent_catalog_inspection(ctx, InspectRequest::Profiles)?,
+        RepositoryInspectArgs::Profile { id } => {
+            agent_catalog_inspection(ctx, InspectRequest::Profile(id))?
+        }
+        RepositoryInspectArgs::Run { run_id } => {
+            let run = crate::state::reconcile_run_for_inspection(ctx, &run_id)?;
+            AgentRepositoryInspectResult::Run(RunInspection { run })
+        }
+    };
+    serialize_output(AgentRepositoryInspectOutput {
+        ok: true,
+        schema_version: REPOSITORY_MCP_SCHEMA_VERSION,
+        kind,
+        result,
+    })
+}
+
 fn catalog_inspection(
     ctx: &RepoContext,
     request: InspectRequest,
@@ -104,6 +150,16 @@ fn catalog_inspection(
     let current = super::refreshed_repository_context(ctx)?;
     Ok(RepositoryInspectResult::Catalog(
         crate::repository::inspect_repository_data(&current, request)?,
+    ))
+}
+
+fn agent_catalog_inspection(
+    ctx: &RepoContext,
+    request: InspectRequest,
+) -> Result<AgentRepositoryInspectResult> {
+    let current = super::refreshed_repository_context(ctx)?;
+    Ok(AgentRepositoryInspectResult::Catalog(
+        crate::repository::inspect_repository_data_agent_v1(&current, request)?,
     ))
 }
 
