@@ -389,8 +389,11 @@ impl InitScaffoldPlan {
             .unwrap_or_else(|| default_repo_name(destination));
         let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
         let db = opts.db.unwrap_or(ScaffoldDb::None);
-        let batter_dependency_collision = matches!(package_name.as_str(), "batter" | "batter-axum")
-            || (db == ScaffoldDb::Postgres && package_name == "batter-sqlx");
+        let batter_dependency_collision = matches!(
+            package_name.as_str(),
+            "batter" | "batter-core" | "batter-axum"
+        ) || (db == ScaffoldDb::Postgres
+            && package_name == "batter-sqlx");
         if batter_dependency_collision {
             bail!(
                 "Rust-react repo name normalizes to '{package_name}', which conflicts with a required Batter dependency. Choose a different --repo-name."

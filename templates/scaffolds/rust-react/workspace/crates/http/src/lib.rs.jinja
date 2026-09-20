@@ -23,7 +23,7 @@ pub fn router_with_lifecycle(
 
     router
         .with_state(state)
-        .layer(axum::middleware::from_fn(batter_axum::operational_http))
+        .layer(axum::middleware::from_fn(batter::axum::operational_http))
 }
 
 pub fn public_openapi() -> OpenApi {

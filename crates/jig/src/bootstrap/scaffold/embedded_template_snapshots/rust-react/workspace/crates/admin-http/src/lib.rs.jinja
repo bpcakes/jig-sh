@@ -11,8 +11,8 @@ use axum::{
     middleware::{self, Next},
     response::Response,
 };
+use batter::axum::CorrelationId;
 use batter::lifecycle::{LifecycleStatus, OperationAdmission, ShutdownHandle};
-use batter_axum::CorrelationId;
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema, openapi::OpenApi as OpenApiDocument};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -150,14 +150,14 @@ fn operational_router<A: AdminAuthorizer>(
         admission,
     );
     let probes = Router::new()
-        .route("/health/live", axum::routing::get(batter_axum::liveness))
-        .route("/health/ready", axum::routing::get(batter_axum::readiness))
+        .route("/health/live", axum::routing::get(batter::axum::liveness))
+        .route("/health/ready", axum::routing::get(batter::axum::readiness))
         .with_state(lifecycle);
     protected_routes
         .fallback(not_found)
         .with_state(state)
         .merge(probes)
-        .layer(middleware::from_fn(batter_axum::operational_http))
+        .layer(middleware::from_fn(batter::axum::operational_http))
 }
 
 pub fn router_with_lifecycle<A: AdminAuthorizer>(

@@ -3,10 +3,11 @@
 Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Batter, Axum, React, and OpenAPI[% endif %] workspace.
 
 [% if backend_language != "go" %]
-Batter and `batter-axum`[% if db == "postgres" %], plus `batter-sqlx`[% endif %] are
-pinned Git dependencies in `Cargo.toml` (not registry releases). The services target
-Unix and require network access on the first build. Commit `Cargo.lock` after
-bootstrap; upgrade all applicable Batter Git pins together deliberately.
+The `batter` facade is a pinned Git dependency in `Cargo.toml` (not a registry
+release) with its `axum` feature[% if db == "postgres" %] and PostgreSQL `sqlx`
+feature[% endif %] enabled. The services target Unix and require network access on
+the first build. Commit `Cargo.lock` after bootstrap; upgrade the Batter revision
+deliberately.
 
 `crates/<<[ package_name ]>>-runtime` owns protected startup, native signals, and
 resource cleanup. `Startup::scoped` constrains initialization to stage metadata,

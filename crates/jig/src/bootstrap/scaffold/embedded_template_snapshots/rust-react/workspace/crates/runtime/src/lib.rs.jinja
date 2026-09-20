@@ -47,7 +47,7 @@ where
                     let listener = tokio::net::TcpListener::bind(addr).await?;
                     let bound_addr = listener.local_addr()?;
                     tracing::info!(%bound_addr, "listening");
-                    batter_axum::register_http_in(scope, "http", listener, application)?;
+                    batter::axum::register_http_in(scope, "http", listener, application)?;
                     Ok::<_, anyhow::Error>(())
                 };
                 initialize_service.await.map_err(std::io::Error::other)

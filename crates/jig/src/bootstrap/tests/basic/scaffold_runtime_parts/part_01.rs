@@ -35,11 +35,11 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert_text_contains_none(&cargo_toml, &["sqlx ="]);
     let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
     let dependencies = &manifest["workspace"]["dependencies"];
-    for package in ["batter", "batter-axum"] {
-        assert_eq!(dependencies[package]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
-        assert_eq!(dependencies[package]["rev"].as_str(), Some("f4f90c9166ff255a91298c75cc020136f632d758"));
-    }
-    assert!(dependencies.get("batter-sqlx").is_none());
+    assert_eq!(dependencies["batter"]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
+    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("95252ad21fec3e6dc9dcf1023d2c417df3e8f2f8"));
+    assert_eq!(dependencies["batter"]["features"][0].as_str(), Some("axum"));
+    assert_eq!(dependencies["batter"]["features"].as_array().unwrap().len(), 1);
+    assert_text_contains_none(&cargo_toml, &["batter-axum =", "batter-sqlx ="]);
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");

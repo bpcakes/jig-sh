@@ -296,11 +296,11 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(workspace_cargo.contains("sqlx = { version = \"0.9\""));
     assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
-    for package in ["batter", "batter-axum", "batter-sqlx"] {
-        assert!(workspace_cargo.contains(&format!(
-            "{package} = {{ git = \"https://github.com/bpcakes/batter\", rev = \"f4f90c9166ff255a91298c75cc020136f632d758\" }}"
-        )));
-    }
+    assert!(workspace_cargo.contains(
+        "batter = { git = \"https://github.com/bpcakes/batter\", rev = \"95252ad21fec3e6dc9dcf1023d2c417df3e8f2f8\", features = [\"axum\", \"sqlx\"] }"
+    ));
+    assert!(!workspace_cargo.contains("batter-axum ="));
+    assert!(!workspace_cargo.contains("batter-sqlx ="));
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-http-common""#));
@@ -361,7 +361,7 @@ fn assert_application_and_public_http_crates(destination: &Path) {
         &http_lib,
         &[
             "pub fn router(state: AppState) -> Router",
-            "batter_axum::operational_http",
+            "batter::axum::operational_http",
             "pub fn router_with_lifecycle(",
             "public::operational_routes(lifecycle, admission).fallback(not_found)",
         ],
@@ -422,7 +422,7 @@ fn assert_admin_http_crate(destination: &Path) {
                 "        admission,\n",
                 "    )"
             ),
-            ".layer(middleware::from_fn(batter_axum::operational_http))",
+            ".layer(middleware::from_fn(batter::axum::operational_http))",
         ],
     );
     assert_contains_none(
@@ -470,7 +470,7 @@ fn assert_public_http_contract(destination: &Path) {
     assert_contains_all(
         &http_common_lib,
         &[
-            "use batter_axum::CorrelationId;",
+            "use batter::axum::CorrelationId;",
             "correlation_id: Option<&CorrelationId>",
             "request_id: request_id(correlation_id)",
             "pub async fn not_found(Extension(correlation_id): Extension<CorrelationId>)",
@@ -599,7 +599,7 @@ fn assert_database_crate_and_test_support(destination: &Path) {
     assert!(db_lib.contains("create_if_missing"));
     assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
     assert!(db_lib.contains("connect_with_timeout"));
-    assert!(db_lib.contains("batter_sqlx::pool_in"));
+    assert!(db_lib.contains("batter::sqlx::pool_in"));
     assert!(db_lib.contains("pub async fn connect_in("));
     assert!(db_lib.contains("sqlx::query(\"SELECT 1\")"));
     assert!(db_lib.contains("migrate_with_timeout"));
@@ -640,8 +640,8 @@ fn assert_generated_backend_docs(destination: &Path) {
     assert!(root_readme.contains("Commit the generated `bun.lock`"));
     assert!(root_readme.contains("DenyAllAdminAuthorizer"));
     assert!(root_readme.contains("bun run test:postgres"));
-    assert!(root_readme.contains("`batter-sqlx`"));
-    assert!(root_readme.contains("all applicable Batter Git pins together"));
+    assert!(root_readme.contains("`batter` facade"));
+    assert!(root_readme.contains("upgrade the Batter revision"));
     assert!(root_readme.contains("Startup::scoped"));
     assert!(root_readme.contains("local closure does not"));
     let http_agents = fs::read_to_string(destination.join("crates/my-app-http/AGENTS.md")).unwrap();

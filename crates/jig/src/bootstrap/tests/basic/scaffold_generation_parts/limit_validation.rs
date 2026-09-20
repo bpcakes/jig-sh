@@ -3,7 +3,14 @@ use super::*;
 #[test]
 fn rust_react_rejects_batter_dependency_collisions_before_destination_mutation() {
     let temp = tempdir().unwrap();
-    for name in ["batter", "Batter", "batter-axum", "Batter_Axum"] {
+    for name in [
+        "batter",
+        "Batter",
+        "batter-core",
+        "Batter_Core",
+        "batter-axum",
+        "Batter_Axum",
+    ] {
         for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
             for existing in [false, true] {
                 let parent = tempfile::tempdir_in(temp.path()).unwrap();
@@ -91,11 +98,11 @@ fn rust_react_batter_sqlx_collision_is_postgres_only_and_preflighted() {
                     defaults: true,
                     no_input: true,
                     no_vault: true,
+                    // Existing destinations exercise an explicit answer;
+                    // a fresh destination infers the normalized name from
+                    // its path. Include the underscore/case spelling to
+                    // cover the normalized package collision.
                     answers: AnswerOpts {
-                        // Existing destinations exercise an explicit answer;
-                        // a fresh destination infers the normalized name from
-                        // its path. Include the underscore/case spelling to
-                        // cover the normalized package collision.
                         repo_name: existing.then(|| requested_name.into()),
                         ..AnswerOpts::default()
                     },
@@ -127,7 +134,7 @@ fn rust_react_batter_sqlx_collision_is_postgres_only_and_preflighted() {
 fn rust_only_presets_allow_names_without_batter_dependency_collisions() {
     let temp = tempdir().unwrap();
     for preset in [ScaffoldPreset::RustLibrary, ScaffoldPreset::RustCli] {
-        for name in ["batter", "batter-axum", "batter-sqlx"] {
+        for name in ["batter", "batter-core", "batter-axum", "batter-sqlx"] {
             let plan = scaffold::InitScaffoldPlan::from_opts(
                 &ScaffoldOpts {
                     preset: Some(preset),

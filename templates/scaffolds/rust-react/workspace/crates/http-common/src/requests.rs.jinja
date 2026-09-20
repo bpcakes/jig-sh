@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use axum::{Router, middleware};
+use batter::axum::{CorrelationId, RequestPolicy, ResponseConstructionBudget, request_admission};
 use batter::lifecycle::OperationAdmission;
-use batter_axum::{CorrelationId, RequestPolicy, ResponseConstructionBudget, request_admission};
 
 /// Bound application handlers and preserve the application's error envelope.
 /// Call before merging probes and installing the outer operational wrapper.
@@ -44,8 +44,8 @@ mod tests {
             Router::new().route("/work", get(|| async { "done" })),
             shutdown.operation_admission(),
         )
-        .route("/health/live", get(batter_axum::liveness))
-        .layer(middleware::from_fn(batter_axum::operational_http));
+        .route("/health/live", get(batter::axum::liveness))
+        .layer(middleware::from_fn(batter::axum::operational_http));
         let response = router
             .clone()
             .oneshot(Request::get("/work").body(Body::empty()).unwrap())
@@ -87,7 +87,7 @@ mod tests {
             ),
             shutdown.operation_admission(),
         )
-        .layer(middleware::from_fn(batter_axum::operational_http));
+        .layer(middleware::from_fn(batter::axum::operational_http));
         let response = router
             .oneshot(
                 Request::get("/slow")

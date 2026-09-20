@@ -15,16 +15,19 @@ Batter runtime. This cutover does not mean Jig's own runtime uses Batter through
 ## Requirements and dependencies
 
 Generated applications require Rust 1.94 on Linux or macOS. Database variants use
-SQLx 0.9. Batter is unpublished: the generated workspace pins `batter` and
-`batter-axum` to the same Git revision, and PostgreSQL variants add `batter-sqlx`
-at that revision. The first uncached build needs network access. Commit the
-generated `Cargo.lock` after dependency bootstrap.
+SQLx 0.9. Batter is unpublished: the generated workspace pins the `batter` facade
+to one Git revision and enables its `axum` feature; PostgreSQL variants also enable
+the facade's `sqlx` feature. The facade keeps the established `batter::...`
+foundation paths and exposes adapter namespaces such as `batter::axum` and
+`batter::sqlx`. The first uncached build needs network access. Commit the generated
+`Cargo.lock` after dependency bootstrap.
 
-Application names that normalize to `batter` or `batter-axum` collide with runtime
-packages and are rejected before destination files are written. PostgreSQL
-Rust-react applications also reject names normalizing to `batter-sqlx`; SQLite,
-database-free, library, and CLI shapes do not reserve that name. Choose another
-`--repo-name` when the selected shape includes a conflicting dependency.
+Application names that normalize to `batter`, `batter-core`, or `batter-axum`
+collide with packages selected by the required facade and are rejected before
+destination files are written. PostgreSQL Rust-react applications also reject
+names normalizing to `batter-sqlx`; SQLite and database-free application shapes
+do not reserve that name. Rust library and CLI presets remain independent. Choose
+another `--repo-name` when the selected shape includes a conflicting package.
 
 ## Ownership in the generated workspace
 
@@ -127,11 +130,11 @@ or continuous connectivity guarantee.
 
 ## Upgrades and existing applications
 
-Upgrade all applicable Batter Git pins together in the generated `Cargo.toml`
-(`batter` and `batter-axum`, plus `batter-sqlx` for PostgreSQL), regenerate and
-commit the lockfile, and validate startup, request admission, shutdown, and
-database setup for the project's enabled shape. For Jig maintainers, new scaffold
-pins live in `crates/jig/src/bootstrap/scaffold/rust_workspace.rs`.
+Upgrade the Batter Git revision and enabled facade features together in the
+generated `Cargo.toml`, regenerate and commit the lockfile, and validate startup,
+request admission, shutdown, and database setup for the project's enabled shape.
+For Jig maintainers, new scaffold pins live in
+`crates/jig/src/bootstrap/scaffold/rust_workspace.rs`.
 
 Generated application source is project-owned. Neither `jig update` nor adoption
 automatically converts an existing non-Batter application. Generate a disposable

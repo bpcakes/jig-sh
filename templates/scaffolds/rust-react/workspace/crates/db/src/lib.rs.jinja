@@ -187,7 +187,7 @@ impl Db {
     ) -> anyhow::Result<Self> {
         let options = PgConnectOptions::from_str(database_url)
             .context("Could not parse PostgreSQL database URL")?;
-        let pool = batter_sqlx::pool_in(cleanup, PgPoolOptions::new(), options);
+        let pool = batter::sqlx::pool_in(cleanup, PgPoolOptions::new(), options);
         tokio::time::timeout(timeout_after, sqlx::query("SELECT 1").execute(&pool))
             .await
             .with_context(|| {

@@ -45,11 +45,11 @@
 
 ### Fixed
 
-- Reject Rust-react application names that normalize to `batter` or
-  `batter-axum` before writing destination files, and reject `batter-sqlx` for
-  PostgreSQL Rust-react applications where that dependency is generated. Keep
-  SQLite, no-database, and rust-only names independent of the conditional
-  PostgreSQL dependency.
+- Reject Rust-react application names that normalize to `batter`, `batter-core`,
+  or `batter-axum` before writing destination files, because the required facade
+  selects those packages transitively. PostgreSQL applications also reject
+  `batter-sqlx`; SQLite, database-free, library, and CLI shapes do not reserve
+  that conditional package name.
 - Keep machine-local Beads paths out of exports through the repository sync
   helper and CI guard. Continue Linux argv PATH searches past unavailable
   filesystem entries while preserving direct-executable errors.
@@ -72,25 +72,26 @@
 - Generate all new `rust-react` applications with Batter-protected
   `Startup::scoped` ownership, signal-aware shutdown, lifecycle-aware HTTP
   admission, and finite database bootstrap commands. PostgreSQL registers its
-  SQLx pool through `batter-sqlx::pool_in` before the bounded connectivity check;
+  SQLx pool through `batter::sqlx::pool_in` before the bounded connectivity check;
   SQLite retains its native/manual cleanup path. These scaffolds require Rust
-  1.94 on Unix and pin all applicable unpublished Batter Git dependencies. Advance
-  those pins together to Batter revision `f4f90c9`, including retained validation
-  witnesses for HTTP budgets, protected SQLx verification requests, and exact-role
-  grant manifests. Generated HTTP policy now validates its response-construction
-  budget before infallible policy assembly and receives only purpose-qualified
-  operation admission; readiness receives read-only lifecycle status while root
-  shutdown control remains runtime-owned. Batter's operational HTTP wrapper replaces
-  inbound request IDs and supplies typed server-generated correlation to application
-  errors and telemetry. PostgreSQL verification policy remains application-owned and
-  is not synthesized for an empty starter schema; browser credential transport also
-  remains application-owned rather than becoming starter authentication policy.
-  That revision additionally offers an optional native quota adapter, quota-aware
-  operational HTTP observation, and an opaque request interruption responder for
-  nested adapters. Generated services keep the ordinary operational observer, which
+  1.94 on Unix and pin the unpublished Batter facade to revision `95252ad`,
+  enabling its `axum` feature and, for PostgreSQL, its `sqlx` feature. The facade
+  preserves the foundation `batter::...` paths and exposes adapter namespaces
+  such as `batter::axum` and `batter::sqlx`. Generated HTTP policy now validates
+  its response-construction budget before infallible policy assembly and receives
+  only purpose-qualified operation admission; readiness receives read-only
+  lifecycle status while root shutdown control remains runtime-owned. Batter's
+  operational HTTP wrapper replaces inbound request IDs and supplies typed
+  server-generated correlation to application errors and telemetry. PostgreSQL
+  verification policy remains application-owned and is not synthesized for an
+  empty starter schema; browser credential transport also remains application-
+  owned rather than becoming starter authentication policy. The facade revision
+  additionally offers an optional native quota adapter, quota-aware operational
+  HTTP observation, and an opaque request interruption responder for nested
+  adapters. Generated services keep the ordinary operational observer, which
   allocates no quota record, and nest no adapter inside request admission, so
-  per-subject quota policy, its authentication closure, native subject keys, and a
-  quota backend remain application-owned rather than starter policy.
+  per-subject quota policy, its authentication closure, native subject keys, and
+  a quota backend remain application-owned rather than starter policy.
   There is no legacy non-Batter application preset. Rust library and CLI presets
   remain independent; `jig update` does not migrate existing application source.
 - Breaking: remove the `jig prompt` library CLI (`get`, `copy`, `add`, `edit`, `remove`, `list`, `search`, `export`, `import`), its user/repo/pack file registry, MiniJinja rendering, clipboard helpers, and `JIG_PROMPT_HOME` override. Named prompt packs are no longer a Jig surface. This is a runtime-owned CLI removal and does not require a new contract epoch.

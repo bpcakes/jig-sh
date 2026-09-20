@@ -15,20 +15,19 @@ project-owned; this is not an automatic migration of deployed applications.
   serve coverage.
 - [x] Validate generated variants and production-entrypoint checks, including the
   subprocess-isolated no-DB bind-failure regression.
-- [ ] Complete the full Jig `api:test` gate; it remains blocked by unrelated
-  work-evidence recovery behavior documented below.
+- [x] Complete the full Jig `api:test` gate. The original attempt was blocked by
+  unrelated work-evidence recovery behavior documented below; the final 2026-09-19
+  run passed all 4,234 executed tests with 3 skipped.
 
 Structured Jig work: `plan_01M2BC2AFCQ00TT99Y3V4Z49XD` (baseline `7c65ef11`).
 
-Checkpoint: implementation complete on baseline `7c65ef11` on
-`feat/batter-rust-scaffold`; focused and generated validation is green. The worker
-recorded structured plan `plan_01M2BC2AFCQ00TT99Y3V4Z49XD`. The no-DB production
-bind-failure test now launches the generated test executable as a child with
-command-scoped environment overrides; it makes no unsafe process-global environment
-mutation. The one justified full `api:test` rerun reached 3,085/4,071 tests, then
-was cancelled after two unrelated work-evidence recovery tests failed because Jig
-could not safely clean the process tree while running `git diff --cached --binary` in
-a temporary worktree. Do not commit or push without a new request.
+Checkpoint: complete on `feat/batter-rust-scaffold`. Focused and generated validation
+is green, and the final full repository gate passed after the unrelated work-evidence
+recovery defects were fixed upstream. The no-DB production bind-failure test launches
+the generated test executable as a child with command-scoped environment overrides;
+it makes no unsafe process-global environment mutation. The earlier failed full-suite
+attempt remains documented below as historical evidence. Do not commit or push without
+a new request.
 
 The user requires frugal delegation: Astra owns planning, milestone reviews, and
 blockers; reuse the Luna Max worker `batter_upgrade` for commands, implementation,
@@ -80,7 +79,7 @@ refreshed embedded snapshots. Focused evidence is green:
   cancellation retained `database.close` cleanup success where a local database was
   available. PostgreSQL used the disposable local service on port 55431.
 
-The configured full `api:test` gate remains blocked by the two recovery-test failures
+The initial configured full `api:test` gate was blocked by the two recovery-test failures
 above; 986 tests were not run after nextest cancelled on failure. The serial bounded
 follow-up passed `native_target_recovery_preserves_plan_comparison_without_overrides`
 in 36.9 seconds. The overall 120-second command bound included 55 seconds of
@@ -93,6 +92,11 @@ The full-gate failure details are retained in
 the failure is outside this change and the parent requested bounded validation.
 Direct generic Batter tests are not treated as production-entrypoint proof. The
 task-created PostgreSQL container `batter-review-primary` was stopped after validation.
+
+Final completion on 2026-09-19 reused the current passing formatter, Clippy, test, and
+source-runtime evidence and refreshed the remaining contract and file-budget targets
+against this plan's baseline. The full `api:test` run executed 4,234 tests successfully
+with 3 skipped, and the required `verify` gate is fresh and passing.
 
 ## Context and interfaces
 
@@ -173,7 +177,9 @@ plan at milestones with concise observed results and remaining gaps.
 Initial plan: records reviewed upstream APIs and adds the newly introduced package
 collision boundary to the worker's proposed migration scope.
 
-Final review: generated-code changes and focused validation are accepted; the full
-test gate remains unsuccessful. Corrected the reproduction timing from the actual
-log so the command-wide deadline is not mistaken for a per-test hang, and recorded
-the final subprocess-test fixture path. No unrelated recovery code was changed.
+Initial review: generated-code changes and focused validation were accepted while the
+full test gate remained unsuccessful. The reproduction timing was corrected from the
+actual log so the command-wide deadline was not mistaken for a per-test hang, and the
+final subprocess-test fixture path was recorded. Final review: the previously failing
+unrelated tests now pass, all required evidence is fresh, and no unrelated recovery
+code was changed as part of this Batter work.
