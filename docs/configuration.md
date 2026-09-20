@@ -1116,6 +1116,14 @@ new receipts. For one-off contract command runs that should not record evidence,
 pass `--no-receipt`; `--no-receipt` conflicts with `--plan-id` because
 plan-linked checks must leave evidence for `work finish` gate enforcement. When
 receipt recording is skipped, command JSON still includes `"receipt_id": null`.
+Native execution still writes its run journal with `--no-receipt`; this flag is
+not a promise of a clean checkout. Repo-mode scheduled workers accept only their
+exact parent receipt append, not nested validation receipts or unrelated state
+writes. Their additive `checkout.diagnostics` classifies application changes,
+operational-state changes, ambiguous receipt attribution, and unverifiable
+journals with bounded observations and read-only inspection commands. See the
+[validation context matrix](codex-task-operations.md#choose-the-checkout-deliberately)
+before selecting validation commands for a worker prompt.
 Timeout, process-await, cleanup, and output-capture failures after a configured
 command starts append a failed child receipt. In-flight cancellation appends a
 child receipt with supervised evidence status `cancelled`; cancellation before

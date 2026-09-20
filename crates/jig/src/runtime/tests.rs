@@ -723,4 +723,5 @@ mod legacy_loc;
 mod loops;
 mod mcp;
 mod repository_execution;
+mod validation_contexts;
 mod work;
