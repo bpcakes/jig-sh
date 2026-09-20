@@ -41,7 +41,7 @@ tld = "Example.TEST"
     assert!(config.contains("proxy_port = 2455"));
     assert!(config.contains("https_port = 2443"));
     assert!(config.contains("tld = \"example.test\""));
-    let vite = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
+    let vite = fs::read_to_string(destination.join("apps/web/vite.config.ts")).unwrap();
     assert!(vite.contains("http://api.exampleproject.example.test:2455"));
     assert!(!vite.contains("localhost:1355"));
 }
@@ -51,7 +51,7 @@ tld = "Example.TEST"
 fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_paths() {
     let planning_root = tempdir().unwrap();
     let names = [
-        ("manual-qa", "node22-npm12-sqlite-web".to_string()),
+        ("manual-qa", "node22-npm12-widget-web".to_string()),
         ("width-40", format!("r{}", "a".repeat(39))),
         ("width-52", format!("r{}", "a".repeat(51))),
         ("width-71", format!("r{}", "a".repeat(70))),
@@ -69,10 +69,9 @@ fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_path
         assert_eq!(name.len(), expected_len, "{label}");
     }
 
-    for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+    for db in [ScaffoldDb::None, ScaffoldDb::Postgres] {
         let db_label = match db {
             ScaffoldDb::None => "none",
-            ScaffoldDb::Sqlite => "sqlite",
             ScaffoldDb::Postgres => "postgres",
         };
         for (name_label, repo_name) in &names {
@@ -106,12 +105,8 @@ fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_path
         }
     }
 
-    for db in [ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
-        let db_label = match db {
-            ScaffoldDb::Sqlite => "sqlite",
-            ScaffoldDb::Postgres => "postgres",
-            ScaffoldDb::None => unreachable!(),
-        };
+    for db in [ScaffoldDb::Postgres] {
+        let db_label = "postgres";
         for migration_len in [13, 80, 216] {
             let plan = scaffold::InitScaffoldPlan::from_opts(
                 &ScaffoldOpts {
@@ -164,7 +159,6 @@ fn scaffold_rendered_go_is_formatted_and_config_handles_ip_hosts() {
             match db {
                 ScaffoldDb::None => "none",
                 ScaffoldDb::Postgres => "postgres",
-                ScaffoldDb::Sqlite => unreachable!(),
             },
         );
     }
@@ -269,7 +263,7 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         &["database.Bootstrap(ctx, databaseURL)"],
     );
     assert_contains_all(
-        rendered_contents(&rendered, "web/playwright.config.ts"),
+        rendered_contents(&rendered, "apps/web/playwright.config.ts"),
         &["go run ./cmd/api --bootstrap-database"],
     );
     let contracts = rendered_contents(&rendered, "scripts/contracts.mjs");

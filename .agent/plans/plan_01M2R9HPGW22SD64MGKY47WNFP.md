@@ -1,0 +1,1 @@
+Inspect Batter abbe6f5, advance generated pins, migrate lifecycle and trusted request-metadata boundaries, and verify all generated database variants.

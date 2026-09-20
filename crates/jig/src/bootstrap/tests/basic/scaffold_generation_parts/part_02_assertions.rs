@@ -23,7 +23,7 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
     )
     .unwrap();
     assert_eq!(agent_map_check["ok"], true);
-    assert_eq!(agent_map_check["agents"], 7);
+    assert_eq!(agent_map_check["agents"], 8);
     assert!(
         agent_map_check["missing_agents"]
             .as_array()
@@ -39,7 +39,7 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
     let agent_guides_check =
         crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
     assert_eq!(agent_guides_check["ok"], true);
-    assert_eq!(agent_guides_check["guide_count"], 6);
+    assert_eq!(agent_guides_check["guide_count"], 7);
     assert!(
         agent_guides_check["missing_entry_ref"]
             .as_array()
@@ -49,6 +49,8 @@ fn assert_rust_react_guidance_and_policy(destination: &Path, output: &serde_json
 }
 
 fn assert_rust_react_report_and_paths(destination: &Path, output: &serde_json::Value) {
+    assert_eq!(output["scaffold"]["frontends"][0]["dir"], "apps/web");
+    assert!(!destination.join("web").exists());
     assert_eq!(output["scaffold"]["preset"], "rust-react");
     assert_eq!(output["scaffold"]["db"], "postgres");
     assert_eq!(output["scaffold"]["frontends"][0]["role"], "spa");
@@ -91,13 +93,13 @@ fn assert_rust_react_report_and_paths(destination: &Path, output: &serde_json::V
             "crates/my-app-test-support/src/responses.rs",
             "crates/my-app-test-support/src/db.rs",
             "crates/my-app-test-support/tests/http.rs",
-            "web/package.json",
+            "apps/web/package.json",
         ],
     );
 }
 
 fn assert_workspace_and_contract_tooling(destination: &Path) {
-    let web_gitignore = fs::read_to_string(destination.join("web/.gitignore")).unwrap();
+    let web_gitignore = fs::read_to_string(destination.join("apps/web/.gitignore")).unwrap();
     assert_contains_all(
         &web_gitignore,
         &[
@@ -109,17 +111,24 @@ fn assert_workspace_and_contract_tooling(destination: &Path) {
     );
     assert_paths_exist(
         destination,
-        &["landing/astro.config.mjs", "admin-panel/package.json"],
+        &["apps/landing/astro.config.mjs", "apps/admin-panel/package.json"],
     );
     let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
     let workspace_package_json: serde_json::Value =
         serde_json::from_str(&workspace_package).unwrap();
+    assert_eq!(
+        workspace_package_json["workspaces"],
+        serde_json::json!([
+            "apps/web", "apps/landing", "apps/admin-panel",
+            "packages/public-api-client", "packages/admin-api-client"
+        ])
+    );
     let expected_node_engine = format!(">={GENERATED_NODE_VERSION}");
     assert_contains_all(
         &workspace_package,
         &[
             r#""packageManager": "bun@1.3.14""#,
-            r#""admin-panel""#,
+            r#""apps/admin-panel""#,
             r#""api:generate""#,
             r#""api:check""#,
             r#""contract:generate""#,
@@ -179,7 +188,7 @@ fn assert_workspace_and_contract_tooling(destination: &Path) {
 }
 
 fn assert_public_spa_package_and_clients(destination: &Path) {
-    let web_package = fs::read_to_string(destination.join("web/package.json")).unwrap();
+    let web_package = fs::read_to_string(destination.join("apps/web/package.json")).unwrap();
     let web_package_json: serde_json::Value = serde_json::from_str(&web_package).unwrap();
     assert_eq!(
         web_package_json["devDependencies"]["@types/node"].as_str(),
@@ -209,11 +218,11 @@ fn assert_public_spa_package_and_clients(destination: &Path) {
         ],
     );
     assert_contains_none(&web_package, &["my-app-admin-api-client", " install && "]);
-    let web_eslint = fs::read_to_string(destination.join("web/eslint.config.js")).unwrap();
+    let web_eslint = fs::read_to_string(destination.join("apps/web/eslint.config.js")).unwrap();
     assert_contains_all(
         &web_eslint,
         &[
-            r#"from "../eslint.config.shared.mjs""#,
+            r#"from "../../eslint.config.shared.mjs""#,
             "forbiddenApiClientPackages",
             r#""my-app-admin-api-client""#,
         ],
@@ -221,7 +230,7 @@ fn assert_public_spa_package_and_clients(destination: &Path) {
     assert_paths_exist(
         destination,
         &[
-            "web/src/api.ts",
+            "apps/web/src/api.ts",
             "packages/public-api-client/src/generated/sdk.gen.ts",
             "packages/admin-api-client/src/generated/sdk.gen.ts",
             "packages/admin-api-client/src/generated/zod.gen.ts",
@@ -248,21 +257,21 @@ fn assert_generated_api_clients_and_spa_paths(destination: &Path) {
             "{client} must export generated React Query helpers"
         );
     }
-    assert!(destination.join("web/src/app/providers.tsx").exists());
-    assert!(destination.join("web/src/app/router-context.ts").exists());
-    assert!(destination.join("web/src/app/router.ts").exists());
-    assert!(destination.join("web/src/lib/query-client.ts").exists());
-    assert!(destination.join("web/src/routes/__root.tsx").exists());
-    assert!(destination.join("web/src/routes/index.tsx").exists());
-    assert!(destination.join("web/src/routeTree.gen.ts").exists());
-    assert!(destination.join("web/playwright.config.ts").exists());
-    assert!(destination.join("web/e2e/app.spec.ts").exists());
-    assert!(destination.join("web/tsconfig.app.json").exists());
-    assert!(destination.join("web/tsconfig.node.json").exists());
+    assert!(destination.join("apps/web/src/app/providers.tsx").exists());
+    assert!(destination.join("apps/web/src/app/router-context.ts").exists());
+    assert!(destination.join("apps/web/src/app/router.ts").exists());
+    assert!(destination.join("apps/web/src/lib/query-client.ts").exists());
+    assert!(destination.join("apps/web/src/routes/__root.tsx").exists());
+    assert!(destination.join("apps/web/src/routes/index.tsx").exists());
+    assert!(destination.join("apps/web/src/routeTree.gen.ts").exists());
+    assert!(destination.join("apps/web/playwright.config.ts").exists());
+    assert!(destination.join("apps/web/e2e/app.spec.ts").exists());
+    assert!(destination.join("apps/web/tsconfig.app.json").exists());
+    assert!(destination.join("apps/web/tsconfig.node.json").exists());
 }
 
 fn assert_public_spa_source_files(destination: &Path) {
-    let web_tsconfig_app = fs::read_to_string(destination.join("web/tsconfig.app.json")).unwrap();
+    let web_tsconfig_app = fs::read_to_string(destination.join("apps/web/tsconfig.app.json")).unwrap();
     assert_contains_all(
         &web_tsconfig_app,
         &[
@@ -271,7 +280,7 @@ fn assert_public_spa_source_files(destination: &Path) {
         ],
     );
     assert_contains_none(&web_tsconfig_app, &[r#""node""#]);
-    let web_tsconfig_node = fs::read_to_string(destination.join("web/tsconfig.node.json")).unwrap();
+    let web_tsconfig_node = fs::read_to_string(destination.join("apps/web/tsconfig.node.json")).unwrap();
     assert_contains_all(
         &web_tsconfig_node,
         &[
@@ -283,15 +292,15 @@ fn assert_public_spa_source_files(destination: &Path) {
     assert_paths_exist(
         destination,
         &[
-            "web/components.json",
-            "web/src/components/ui/button.tsx",
-            "web/src/components/ui/card.tsx",
-            "web/src/lib/utils.ts",
+            "apps/web/components.json",
+            "apps/web/src/components/ui/button.tsx",
+            "apps/web/src/components/ui/card.tsx",
+            "apps/web/src/lib/utils.ts",
         ],
     );
-    let web_components = fs::read_to_string(destination.join("web/components.json")).unwrap();
+    let web_components = fs::read_to_string(destination.join("apps/web/components.json")).unwrap();
     assert!(web_components.contains(r#""style": "radix-nova""#));
-    let web_css = fs::read_to_string(destination.join("web/src/index.css")).unwrap();
+    let web_css = fs::read_to_string(destination.join("apps/web/src/index.css")).unwrap();
     assert_contains_all(
         &web_css,
         &[
@@ -299,7 +308,7 @@ fn assert_public_spa_source_files(destination: &Path) {
             r#"@import "shadcn/tailwind.css";"#,
         ],
     );
-    let web_app = fs::read_to_string(destination.join("web/src/App.tsx")).unwrap();
+    let web_app = fs::read_to_string(destination.join("apps/web/src/App.tsx")).unwrap();
     assert_contains_all(
         &web_app,
         &[
@@ -309,7 +318,7 @@ fn assert_public_spa_source_files(destination: &Path) {
             "appStatusQueryOptions",
         ],
     );
-    let web_api = fs::read_to_string(destination.join("web/src/api.ts")).unwrap();
+    let web_api = fs::read_to_string(destination.join("apps/web/src/api.ts")).unwrap();
     assert_contains_all(
         &web_api,
         &[
@@ -319,9 +328,9 @@ fn assert_public_spa_source_files(destination: &Path) {
             "my-app-public-api-client",
         ],
     );
-    let web_providers = fs::read_to_string(destination.join("web/src/app/providers.tsx")).unwrap();
+    let web_providers = fs::read_to_string(destination.join("apps/web/src/app/providers.tsx")).unwrap();
     assert!(web_providers.contains("<QueryClientProvider client={client}>"));
-    let web_router = fs::read_to_string(destination.join("web/src/app/router.ts")).unwrap();
+    let web_router = fs::read_to_string(destination.join("apps/web/src/app/router.ts")).unwrap();
     assert_contains_all(
         &web_router,
         &[
@@ -332,7 +341,7 @@ fn assert_public_spa_source_files(destination: &Path) {
             r#"declare module "@tanstack/react-router""#,
         ],
     );
-    let web_index_route = fs::read_to_string(destination.join("web/src/routes/index.tsx")).unwrap();
+    let web_index_route = fs::read_to_string(destination.join("apps/web/src/routes/index.tsx")).unwrap();
     assert_contains_all(
         &web_index_route,
         &[
@@ -342,12 +351,12 @@ fn assert_public_spa_source_files(destination: &Path) {
         ],
     );
     let web_query_client =
-        fs::read_to_string(destination.join("web/src/lib/query-client.ts")).unwrap();
+        fs::read_to_string(destination.join("apps/web/src/lib/query-client.ts")).unwrap();
     assert!(web_query_client.contains("retry: 1"));
 }
 
 fn assert_public_spa_vite_config(destination: &Path) {
-    let web_vite_config = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
+    let web_vite_config = fs::read_to_string(destination.join("apps/web/vite.config.ts")).unwrap();
     assert_contains_all(
         &web_vite_config,
         &[
@@ -401,7 +410,7 @@ fn assert_public_spa_source_and_vite(destination: &Path) {
 }
 
 fn assert_public_spa_playwright(destination: &Path) {
-    let web_playwright = fs::read_to_string(destination.join("web/playwright.config.ts")).unwrap();
+    let web_playwright = fs::read_to_string(destination.join("apps/web/playwright.config.ts")).unwrap();
     assert_contains_all(
         &web_playwright,
         &[
@@ -422,7 +431,7 @@ fn assert_public_spa_playwright(destination: &Path) {
             "JIG_DEV_API_ORIGIN: apiOrigin",
         ],
     );
-    let web_e2e = fs::read_to_string(destination.join("web/e2e/app.spec.ts")).unwrap();
+    let web_e2e = fs::read_to_string(destination.join("apps/web/e2e/app.spec.ts")).unwrap();
     assert_contains_all(
         &web_e2e,
         &[
@@ -454,7 +463,7 @@ fn assert_public_spa_e2e_workflow(destination: &Path) {
             "timeout-minutes: 30",
             "outside Playwright's 15-minute default CI suite budget",
             "E2E_SERVER_TIMEOUT_MS: \"300000\"",
-            "- name: \"web\"\n            dir: \"web\"",
+            "- name: \"web\"\n            dir: \"apps/web\"",
             r#"- "migrations/**""#,
             r#"- ".sqlx/**""#,
             "image: postgres:18",
@@ -472,7 +481,7 @@ fn assert_public_spa_e2e_workflow(destination: &Path) {
     );
     assert_contains_none(
         &e2e_workflow,
-        &["dir: landing", "dir: admin-panel", "bun run test:e2e"],
+        &["dir: \"apps/landing\"", "dir: \"apps/admin-panel\"", "bun run test:e2e"],
     );
 }
 
@@ -544,19 +553,19 @@ fn assert_generated_ci_workflows(destination: &Path) {
 }
 
 fn assert_landing_tooling(destination: &Path) {
-    let landing_package = fs::read_to_string(destination.join("landing/package.json")).unwrap();
+    let landing_package = fs::read_to_string(destination.join("apps/landing/package.json")).unwrap();
     assert!(landing_package.contains(r#""dev": "astro dev""#));
     assert!(!landing_package.contains(" install && "));
-    let landing_config = fs::read_to_string(destination.join("landing/astro.config.mjs")).unwrap();
+    let landing_config = fs::read_to_string(destination.join("apps/landing/astro.config.mjs")).unwrap();
     assert!(landing_config.contains("process.env.HOST?.trim() || '127.0.0.1'"));
     assert!(landing_config.contains("strictPort: true"));
     assert!(landing_config.contains("Number(process.env.PORT || '4321')"));
     assert!(landing_config.contains("port < 1 || port > 65_535"));
-    assert!(!destination.join("landing/playwright.config.ts").exists());
+    assert!(!destination.join("apps/landing/playwright.config.ts").exists());
 }
 
 fn assert_admin_package_tooling(destination: &Path) {
-    let admin_package = fs::read_to_string(destination.join("admin-panel/package.json")).unwrap();
+    let admin_package = fs::read_to_string(destination.join("apps/admin-panel/package.json")).unwrap();
     let admin_package_json: serde_json::Value = serde_json::from_str(&admin_package).unwrap();
     assert_eq!(
         admin_package_json["devDependencies"]["@types/node"].as_str(),
@@ -585,16 +594,16 @@ fn assert_admin_package_tooling(destination: &Path) {
     );
     assert_contains_none(&admin_package, &["react-router-dom", "@playwright/test"]);
     let admin_eslint =
-        fs::read_to_string(destination.join("admin-panel/eslint.config.js")).unwrap();
-    assert!(admin_eslint.contains(r#"from "../eslint.config.shared.mjs""#));
+        fs::read_to_string(destination.join("apps/admin-panel/eslint.config.js")).unwrap();
+    assert!(admin_eslint.contains(r#"from "../../eslint.config.shared.mjs""#));
     assert!(!admin_eslint.contains("forbiddenApiClientPackages"));
-    let admin_readme = fs::read_to_string(destination.join("admin-panel/README.md")).unwrap();
+    let admin_readme = fs::read_to_string(destination.join("apps/admin-panel/README.md")).unwrap();
     assert!(admin_readme.contains("real-backend Playwright starter for product SPA roles only"));
 }
 
 fn assert_admin_vite_config(destination: &Path) {
     let admin_vite_config =
-        fs::read_to_string(destination.join("admin-panel/vite.config.ts")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/vite.config.ts")).unwrap();
     assert!(admin_vite_config.contains(r#"from "@tanstack/router-plugin/vite""#));
     assert!(admin_vite_config.contains("path.resolve(import.meta.dirname, \"./src\")"));
     assert!(!admin_vite_config.contains("__dirname"));

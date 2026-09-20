@@ -565,11 +565,6 @@ impl ScaffoldOpts {
                     initial_migration_dir
                 );
             }
-            if self.db == Some(ScaffoldDb::Sqlite) {
-                bail!(
-                    "--preset go-react does not support --db sqlite; use --db none or --db postgres"
-                );
-            }
             if self
                 .frontends
                 .iter()

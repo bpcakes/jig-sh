@@ -39,7 +39,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert_landing_and_admin_tooling(&destination);
     assert_admin_theme_and_components(&destination);
     assert_admin_data_and_routes(&destination);
-    assert_agent_map_and_database_ignores(&destination);
+    assert_agent_map(&destination);
     assert_api_entrypoint_and_dev_config(&destination);
     assert_workspace_and_backend_crates(&destination);
     assert_http_contract_and_test_support(&destination);

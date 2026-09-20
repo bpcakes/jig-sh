@@ -36,11 +36,6 @@ fn postgres_bootstrap_and_database_setup_have_separate_authority() {
 }
 
 #[test]
-fn sqlite_bootstrap_and_database_setup_have_separate_authority() {
-    assert_bootstrap_and_database_setup_authority("sqlite");
-}
-
-#[test]
 fn no_database_bootstrap_omits_database_setup() {
     assert_bootstrap_and_database_setup_authority("none");
 }
@@ -178,11 +173,7 @@ esac
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("Missing DATABASE_URL"));
     assert!(fs::read_to_string(&calls).unwrap().is_empty());
-    let url = if db == "postgres" {
-        "postgres://example@localhost/example"
-    } else {
-        "sqlite:example.db"
-    };
+    let url = "postgres://example@localhost/example";
     succeeded(run(database_script, Some(url), false));
     assert_eq!(fs::read_to_string(&calls).unwrap(), "database setup\n");
     let denied = run(database_script, Some(url), true);

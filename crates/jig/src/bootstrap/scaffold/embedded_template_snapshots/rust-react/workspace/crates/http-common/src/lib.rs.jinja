@@ -1,12 +1,13 @@
+pub mod requests;
+
 use axum::{
-    Json,
-    http::{HeaderMap, HeaderName, StatusCode},
+    Extension, Json,
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
+use batter::axum::CorrelationId;
 use serde::Serialize;
 use utoipa::ToSchema;
-
-pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, ToSchema)]
 pub struct ApiErrorResponse {
@@ -29,59 +30,77 @@ impl ApiError {
         status: StatusCode,
         code: &'static str,
         message: &'static str,
-        headers: &HeaderMap,
+        correlation_id: Option<&CorrelationId>,
     ) -> Self {
         Self {
             status,
             body: ApiErrorResponse {
                 code: code.to_owned(),
                 message: message.to_owned(),
-                request_id: request_id(headers),
+                request_id: request_id(correlation_id),
             },
         }
     }
 
-    pub fn not_found(headers: &HeaderMap) -> Self {
+    pub fn not_found(correlation_id: Option<&CorrelationId>) -> Self {
         Self::new(
             StatusCode::NOT_FOUND,
             "not_found",
             "The requested resource was not found",
-            headers,
+            correlation_id,
         )
     }
 
     pub fn service_unavailable(
         code: &'static str,
         message: &'static str,
-        headers: &HeaderMap,
+        correlation_id: Option<&CorrelationId>,
     ) -> Self {
-        Self::new(StatusCode::SERVICE_UNAVAILABLE, code, message, headers)
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            code,
+            message,
+            correlation_id,
+        )
     }
 
-    pub fn unauthorized(headers: &HeaderMap) -> Self {
+    pub fn unauthorized(correlation_id: Option<&CorrelationId>) -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "Authentication is required",
-            headers,
+            correlation_id,
         )
     }
 
-    pub fn forbidden(headers: &HeaderMap) -> Self {
+    pub fn forbidden(correlation_id: Option<&CorrelationId>) -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
             "forbidden",
             "You are not authorized to perform this operation",
-            headers,
+            correlation_id,
         )
     }
 
-    pub fn conflict(code: &'static str, message: &'static str, headers: &HeaderMap) -> Self {
-        Self::new(StatusCode::CONFLICT, code, message, headers)
+    pub fn conflict(
+        code: &'static str,
+        message: &'static str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message, correlation_id)
     }
 
-    pub fn validation(code: &'static str, message: &'static str, headers: &HeaderMap) -> Self {
-        Self::new(StatusCode::UNPROCESSABLE_ENTITY, code, message, headers)
+    pub fn validation(
+        code: &'static str,
+        message: &'static str,
+        correlation_id: Option<&CorrelationId>,
+    ) -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            code,
+            message,
+            correlation_id,
+        )
     }
 }
 
@@ -91,15 +110,13 @@ impl IntoResponse for ApiError {
     }
 }
 
-pub async fn not_found(headers: HeaderMap) -> ApiError {
-    ApiError::not_found(&headers)
+pub async fn not_found(Extension(correlation_id): Extension<CorrelationId>) -> ApiError {
+    ApiError::not_found(Some(&correlation_id))
 }
 
-fn request_id(headers: &HeaderMap) -> String {
-    headers
-        .get(&REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
+fn request_id(correlation_id: Option<&CorrelationId>) -> String {
+    correlation_id
+        .map(CorrelationId::as_str)
         .unwrap_or("unknown")
         .to_owned()
 }
@@ -109,18 +126,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn errors_copy_the_request_id_without_internal_context() {
-        let mut headers = HeaderMap::new();
-        headers.insert(&REQUEST_ID_HEADER, "request-123".parse().unwrap());
-
+    fn errors_do_not_invent_request_ids_without_typed_context() {
         let error = ApiError::service_unavailable(
             "dependency_unavailable",
             "A required dependency is unavailable",
-            &headers,
+            None,
         );
 
         assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(error.body.code, "dependency_unavailable");
-        assert_eq!(error.body.request_id, "request-123");
+        assert_eq!(error.body.request_id, "unknown");
     }
 }

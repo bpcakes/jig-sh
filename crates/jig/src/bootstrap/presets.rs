@@ -200,7 +200,7 @@ impl ScaffoldPreset {
 
     pub(crate) const fn reserved_backend_roots(self) -> &'static [&'static str] {
         match self {
-            Self::RustReact => &["apps", "crates"],
+            Self::RustReact => &["crates"],
             Self::GoReact => &["cmd", "internal"],
             Self::HarnessOnly | Self::RustLibrary | Self::RustCli => &[],
         }
@@ -210,12 +210,13 @@ impl ScaffoldPreset {
         match self {
             Self::RustReact => ScaffoldPresetDescriptor {
                 name: "rust-react",
-                summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site.",
+                summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site. Batter owns service startup, request deadlines, and shutdown.",
                 defaults: &[
+                    "Batter and its Axum adapter use a pinned Git dependency; generated services target Unix.",
                     "Rust crate roots default to apps and crates.",
                     "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
-                    "Frontends default to web when omitted.",
-                    "Database scaffolding defaults to none; pass --db postgres or --db sqlite when wanted.",
+                    "Frontends live under apps/<name> and default to apps/web when omitted.",
+                    "Database scaffolding defaults to none; pass --db postgres when wanted.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
                     "Frontends share a pinned root workspace and install dependencies once during bootstrap.",
                     "React frontends ship tested shadcn 4 sources and provenance without running a mutable CLI during init.",
@@ -226,8 +227,9 @@ impl ScaffoldPreset {
                     "crates/<repo>-core",
                     "crates/<repo>",
                     "crates/<repo>-http",
+                    "crates/<repo>-runtime owns Batter startup, signals, and cleanup",
                     "crates/<repo>-test-support",
-                    "crates/<repo>-db when --db postgres or --db sqlite is selected",
+                    "crates/<repo>-db when --db postgres is selected",
                 ],
                 frontend_shorthands: &[
                     ScaffoldFrontendShorthand {
@@ -246,7 +248,6 @@ impl ScaffoldPreset {
                 examples: &[
                     "jig init ./my-app --preset rust-react",
                     "jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin",
-                    "jig init ./my-app --preset rust-react --db sqlite --frontends web",
                 ],
                 ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
                 non_goals: &[
@@ -259,7 +260,7 @@ impl ScaffoldPreset {
                 summary: "Go 1.26 chi/Huma API plus a shadcn React product app and optional Astro site.",
                 defaults: &[
                     "A Go module is required; --defaults derives example.com/<repo>.",
-                    "Frontends default to web when omitted.",
+                    "Frontends live under apps/<name> and default to apps/web when omitted.",
                     "Database scaffolding defaults to none; PostgreSQL uses pgxpool, sqlc, and Goose.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
                 ],
@@ -285,7 +286,7 @@ impl ScaffoldPreset {
                 ],
                 ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
                 non_goals: &[
-                    "The initial Go preset does not support SQLite or the privileged admin API/client boundary.",
+                    "The initial Go preset does not support the privileged admin API/client boundary.",
                     "jig update does not migrate or overwrite scaffolded application source.",
                 ],
             },

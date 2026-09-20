@@ -16,6 +16,9 @@
 
 ## Invariants
 
+- Production entrypoints use `router_with_lifecycle` with the runtime's read-only lifecycle status and operation admission. The convenience `router` creates and consumes an independent readiness approval for in-process tests.
+- Keep `operational_http` around the assembled router and use its typed `CorrelationId` for error bodies; never trust an inbound request-ID header.
+- Keep `/health/live` and `/health/ready` outside request admission and admin authorization; unauthenticated probes must not expose business data.
 - Every matched privileged route passes through `AdminAuthorizer`; keep the generated deny-all authorizer until the real implementation and its tests are ready.
 - Keep the authorizer fail closed on missing, malformed, expired, or unverifiable credentials. Use `Forbidden` only for an authenticated principal that lacks permission.
 - Keep all privileged operations under `/admin-api` so public artifact checks can identify accidental bundling.

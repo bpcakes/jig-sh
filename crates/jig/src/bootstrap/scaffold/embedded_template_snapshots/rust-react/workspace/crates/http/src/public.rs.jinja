@@ -2,11 +2,11 @@ use ::<<[ module_name ]>>::AppState;
 use ::<<[ module_name ]>>_core::AppVersion;
 use ::<<[ module_name ]>>_http_common::ApiError;
 use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-};
+use ::<<[ module_name ]>>_http_common::requests;
+use axum::{Extension, Router};
+use axum::{Json, extract::State, http::StatusCode};
+use batter::axum::CorrelationId;
+use batter::lifecycle::{LifecycleStatus, OperationAdmission, Readiness};
 use serde::Serialize;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -42,11 +42,30 @@ pub struct AppStatusResponse {
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(PublicApi::openapi())
+        .merge(probe_routes())
+        .merge(application_routes())
+}
+
+fn probe_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
         .routes(routes!(health))
         .routes(routes!(live))
         .routes(routes!(ready))
+}
+
+fn application_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
         .routes(routes!(version))
         .routes(routes!(status))
+}
+
+pub(super) fn operational_routes(
+    lifecycle: LifecycleStatus,
+    admission: OperationAdmission,
+) -> Router<AppState> {
+    requests::guard(Router::from(application_routes()), admission)
+        .merge(Router::from(probe_routes()))
+        .layer(Extension(lifecycle))
 }
 
 #[utoipa::path(
@@ -81,14 +100,25 @@ async fn health() -> &'static str {
     ),
     tag = "public"
 )]
-async fn ready(State(state): State<AppState>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
+async fn ready(
+    State(state): State<AppState>,
+    Extension(lifecycle): Extension<LifecycleStatus>,
+    Extension(correlation_id): Extension<CorrelationId>,
+) -> Result<StatusCode, ApiError> {
+    if lifecycle.readiness() != Readiness::Ready {
+        return Err(ApiError::service_unavailable(
+            "service_unavailable",
+            "The service is not ready",
+            Some(&correlation_id),
+        ));
+    }
     if state.is_ready() {
         Ok(StatusCode::OK)
     } else {
         Err(ApiError::service_unavailable(
             "dependency_unavailable",
             "A required dependency is unavailable",
-            &headers,
+            Some(&correlation_id),
         ))
     }
 }

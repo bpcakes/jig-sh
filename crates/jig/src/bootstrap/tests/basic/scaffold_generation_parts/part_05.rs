@@ -107,7 +107,7 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
     );
     assert_contains_none(workflow, &[r#"- "cmd/**""#, r#"- "internal/**""#, r#"- "**""#]);
 
-    let playwright = contents("web/playwright.config.ts");
+    let playwright = contents("apps/web/playwright.config.ts");
     assert_contains_all(playwright, &[r#"path.resolve(repoRoot, "services/api")"#, "cwd: backendRoot"]);
     let contracts = contents("scripts/contracts.mjs");
     assert_contains_all(contracts, &[
@@ -119,7 +119,7 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
 }
 
 #[test]
-fn go_react_rejects_missing_module_sqlite_and_admin() {
+fn go_react_rejects_missing_module_and_admin() {
     let planning_root = tempdir().unwrap();
     let missing_module = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -133,19 +133,6 @@ fn go_react_rejects_missing_module_sqlite_and_admin() {
     .unwrap_err()
     .to_string();
     assert!(missing_module.contains("--go-module"));
-
-    let sqlite = ScaffoldOpts {
-        preset: Some(ScaffoldPreset::GoReact),
-        db: Some(ScaffoldDb::Sqlite),
-        ..ScaffoldOpts::default()
-    }
-    .validate_init_invariants(&AnswerOpts {
-        go_module: Some("example.com/demo".into()),
-        ..AnswerOpts::default()
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(sqlite.contains("does not support --db sqlite"));
 
     let admin = ScaffoldOpts {
         preset: Some(ScaffoldPreset::GoReact),

@@ -20,7 +20,7 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert_eq!(report["frontends"][0]["name"], "web");
     assert_eq!(report["frontends"][0]["kind"], "vite");
     assert_eq!(report["frontends"][0]["role"], "spa");
-    assert!(temp.path().join("web/package.json").exists());
+    assert!(temp.path().join("apps/web/package.json").exists());
     let has_db_crate = fs::read_dir(temp.path().join("crates"))
         .unwrap()
         .any(|entry| {
@@ -33,18 +33,35 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert!(!has_db_crate);
     let cargo_toml = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
     assert_text_contains_none(&cargo_toml, &["sqlx ="]);
+    let manifest: toml::Value = toml::from_str(&cargo_toml).unwrap();
+    let dependencies = &manifest["workspace"]["dependencies"];
+    assert_eq!(dependencies["batter"]["git"].as_str(), Some("https://github.com/bpcakes/batter"));
+    assert_eq!(dependencies["batter"]["rev"].as_str(), Some("bd836a29c9d484b96ee1ce0af0af84d58d3df1ee"));
+    assert_eq!(dependencies["batter"]["features"][0].as_str(), Some("axum"));
+    assert_eq!(dependencies["batter"]["features"].as_array().unwrap().len(), 1);
+    assert_text_contains_none(&cargo_toml, &["batter-axum =", "batter-sqlx ="]);
     assert_text_contains_all(&cargo_toml, &["\"signal\", \"time\""]);
-    assert!(cargo_toml.ends_with('\n'));
     let repo_name = report["repo_name"].as_str().unwrap();
     let module_name = repo_name.replace('-', "_");
+    let runtime = fs::read_to_string(temp.path().join(format!("crates/{repo_name}-runtime/src/lib.rs"))).unwrap();
+    assert_text_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "register_http_in",
+            ".with_unix_signals(\"signals\")",
+            "check_shutdown",
+        ],
+    );
+    assert_text_contains_none(&runtime, &["Startup::new", "scope.supervisor()", "install_signals"]);
     let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
     assert_eq!(
         env_example,
         format!(
-            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,tower_http=info\n"
+            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,batter=info,batter_axum=info\n"
         )
     );
-    let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
+    let playwright = fs::read_to_string(temp.path().join("apps/web/playwright.config.ts")).unwrap();
     assert_text_contains_all(
         &playwright,
         &["const backendCommand = \"cargo run --locked"],
@@ -109,7 +126,7 @@ fn scaffold_playwright_api_environment_overrides_hostile_inherited_bindings() {
     .unwrap();
     plan.write(temp.path(), false).unwrap();
 
-    let config = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
+    let config = fs::read_to_string(temp.path().join("apps/web/playwright.config.ts")).unwrap();
     let api_server_config = config
         .split_once(r#"name: "Rust API""#)
         .unwrap()
@@ -320,8 +337,8 @@ fn scaffold_named_ready_scopes_the_live_status_badge() {
     .unwrap();
 
     plan.write(temp.path(), false).unwrap();
-    let app = fs::read_to_string(temp.path().join("ready/src/App.tsx")).unwrap();
-    let spec = fs::read_to_string(temp.path().join("ready/e2e/app.spec.ts")).unwrap();
+    let app = fs::read_to_string(temp.path().join("apps/ready/src/App.tsx")).unwrap();
+    let spec = fs::read_to_string(temp.path().join("apps/ready/e2e/app.spec.ts")).unwrap();
 
     assert!(app.contains(r#"aria-labelledby="service-status-card-label""#));
     assert!(app.contains(r#"id="service-status-card-label">Rust API"#));
@@ -370,7 +387,7 @@ fn scaffold_e2e_workflow_serializes_dynamic_yaml_scalars() {
     );
     assert_eq!(
         workflow_yaml["jobs"]["e2e"]["strategy"]["matrix"]["app"][0]["dir"],
-        "null"
+        "apps/null"
     );
     assert_eq!(
         workflow_yaml["on"]["pull_request"]["paths"], workflow_yaml["on"]["push"]["paths"],
@@ -626,23 +643,23 @@ fn assert_frontend_dev_scripts_for_package_manager(package_manager: &str) {
     );
     plan.write(temp.path(), false).unwrap();
     assert_text_contains_all(
-        &fs::read_to_string(temp.path().join("web/package.json")).unwrap(),
+        &fs::read_to_string(temp.path().join("apps/web/package.json")).unwrap(),
         &[r#""dev": "vite""#],
     );
     assert_text_contains_none(
-        &fs::read_to_string(temp.path().join("web/package.json")).unwrap(),
+        &fs::read_to_string(temp.path().join("apps/web/package.json")).unwrap(),
         &[" install && "],
     );
     assert_text_contains_all(
-        &fs::read_to_string(temp.path().join("landing/package.json")).unwrap(),
+        &fs::read_to_string(temp.path().join("apps/landing/package.json")).unwrap(),
         &[r#""dev": "astro dev""#],
     );
     assert_text_contains_none(
-        &fs::read_to_string(temp.path().join("landing/package.json")).unwrap(),
+        &fs::read_to_string(temp.path().join("apps/landing/package.json")).unwrap(),
         &[" install && "],
     );
     assert_text_contains_all(
-        &fs::read_to_string(temp.path().join("landing/astro.config.mjs")).unwrap(),
+        &fs::read_to_string(temp.path().join("apps/landing/astro.config.mjs")).unwrap(),
         &[
             "process.env.HOST?.trim()",
             "process.env.PORT",

@@ -1,0 +1,1 @@
+Implement Batter as the sole Rust application scaffold under rust-react. The user explicitly cancelled the parallel legacy preset. See [the implementation plan](batter-scaffold.md) for architecture, progress, and verification. Verify generated service lifecycle and database variants plus configured gates.

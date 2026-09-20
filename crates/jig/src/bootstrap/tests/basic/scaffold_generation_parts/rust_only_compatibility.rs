@@ -31,7 +31,7 @@ fn assert_legacy_web_frontend(scaffold: &serde_json::Value) {
     let frontends = scaffold["frontends"].as_array().unwrap();
     assert_eq!(frontends.len(), 1);
     assert_eq!(frontends[0]["name"], "web");
-    assert_eq!(frontends[0]["dir"], "web");
+    assert_eq!(frontends[0]["dir"], "apps/web");
     assert_eq!(frontends[0]["kind"], "vite");
     assert_eq!(frontends[0]["role"], "spa");
     assert_eq!(frontends[0]["ui"]["style"], "radix-nova");
@@ -81,7 +81,7 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
             "crates/exampleproject-http/src/public.rs",
             "openapi/public.json",
             "package.json",
-            "web/package.json",
+            "apps/web/package.json",
         ],
         &[
             "crates/exampleproject/src/main.rs",
@@ -101,6 +101,7 @@ fn rust_only_foundation_preserves_rust_react_output_and_report() {
             "crates/exampleproject",
             "crates/exampleproject-http",
             "crates/exampleproject-http-common",
+            "crates/exampleproject-runtime",
             "crates/exampleproject-test-support",
         ]
         .map(|member| toml::Value::String(member.into()))
@@ -165,7 +166,7 @@ fn rust_only_foundation_preserves_go_react_output_and_report() {
             "internal/httpapi/httpapi.go",
             "openapi/public.json",
             "package.json",
-            "web/package.json",
+            "apps/web/package.json",
         ],
         &[
             "Cargo.toml",

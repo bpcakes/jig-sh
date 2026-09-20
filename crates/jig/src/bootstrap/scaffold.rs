@@ -219,7 +219,6 @@ impl InitScaffoldPlan {
         match self.database() {
             ScaffoldDb::None => {}
             ScaffoldDb::Postgres => parts.push("postgres DB".to_string()),
-            ScaffoldDb::Sqlite => parts.push("sqlite DB".to_string()),
         }
         if self.requested_repo_name != self.repo_name {
             parts.push(format!("repo name {}", self.repo_name));
@@ -388,12 +387,22 @@ impl InitScaffoldPlan {
             .clone()
             .unwrap_or_else(|| default_repo_name(destination));
         let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
+        let db = opts.db.unwrap_or(ScaffoldDb::None);
+        let batter_dependency_collision = matches!(
+            package_name.as_str(),
+            "batter" | "batter-core" | "batter-axum"
+        ) || (db == ScaffoldDb::Postgres
+            && package_name == "batter-sqlx");
+        if batter_dependency_collision {
+            bail!(
+                "Rust-react repo name normalizes to '{package_name}', which conflicts with a required Batter dependency. Choose a different --repo-name."
+            );
+        }
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
         let (dev_proxy_port, dev_tld) = scaffold_dev_proxy_answers(answers)?;
         // Rust package normalization validates the underscore form before this replacement.
         let module_name = package_name.replace('-', "_");
-        let db = opts.db.unwrap_or(ScaffoldDb::None);
         let package_manager = answers
             .web_package_manager
             .clone()
@@ -462,6 +471,7 @@ impl InitScaffoldPlan {
             &frontends,
             &root_workspace_package_name,
             ScaffoldPreset::RustReact,
+            &package_name,
         )?;
         Ok(Self {
             project: ScaffoldProjectPlan::RustReact(RustReactScaffoldPlan {
@@ -506,9 +516,6 @@ impl InitScaffoldPlan {
         let database = match opts.db.unwrap_or(ScaffoldDb::None) {
             ScaffoldDb::None => GoDatabase::None,
             ScaffoldDb::Postgres => GoDatabase::Postgres,
-            ScaffoldDb::Sqlite => bail!(
-                "--preset go-react does not support --db sqlite; use --db none or --db postgres"
-            ),
         };
         let package_manager = answers
             .web_package_manager
@@ -563,6 +570,7 @@ impl InitScaffoldPlan {
             &frontends,
             &format!("{package_name}-workspace"),
             ScaffoldPreset::GoReact,
+            &package_name,
         )?;
         let component_root = go_component_root(answers)?.to_owned();
         let migration_dir = answers
@@ -718,6 +726,7 @@ fn validate_unique_frontends(
     frontends: &[FrontendScaffold],
     root_workspace_package_name: &str,
     preset: ScaffoldPreset,
+    package_name: &str,
 ) -> Result<()> {
     let mut names = HashSet::new();
     let mut dirs = HashSet::new();
@@ -748,7 +757,18 @@ fn validate_unique_frontends(
             );
         }
         let root_dir = frontend.dir.split('/').next().unwrap_or_default();
-        if preset.reserved_backend_roots().contains(&root_dir) {
+        let overlaps_rust_app = preset == ScaffoldPreset::RustReact
+            && [
+                format!("apps/{package_name}-api"),
+                format!("apps/{package_name}-admin-api"),
+            ]
+            .iter()
+            .any(|backend| {
+                frontend.dir == *backend
+                    || frontend.dir.starts_with(&format!("{backend}/"))
+                    || backend.starts_with(&format!("{}/", frontend.dir))
+            });
+        if preset.reserved_backend_roots().contains(&root_dir) || overlaps_rust_app {
             bail!(
                 "Scaffold frontend '{}' uses reserved directory '{}'",
                 frontend.name,

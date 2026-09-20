@@ -115,6 +115,22 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         template: "rust-react/workspace/crates/test-support/tests/http.rs.jinja",
         output: "crates/{package}-test-support/tests/http.rs",
     },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/src/lib.rs.jinja",
+        output: "crates/{package}-runtime/src/lib.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/Cargo.toml.jinja",
+        output: "crates/{package}-runtime/Cargo.toml",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/runtime/AGENTS.md.jinja",
+        output: "crates/{package}-runtime/AGENTS.md",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http-common/src/requests.rs.jinja",
+        output: "crates/{package}-http-common/src/requests.rs",
+    },
 ];
 
 const RUST_ADMIN_API_TEMPLATES: &[ScaffoldTemplateFile] = &[
@@ -264,12 +280,12 @@ impl InitScaffoldPlan {
                     bounded_postgres_identifier(&format!("{}_dev", self.module_name));
                 format!("postgres://postgres:postgres@localhost:5432/{database_name}")
             }
-            ScaffoldDb::Sqlite => format!("sqlite:{}.db", self.module_name),
         };
         let postgres_test_database_name =
             bounded_postgres_identifier(&format!("test_db_{}", self.module_name));
 
         json!({
+            "batter_revision": "bd836a29c9d484b96ee1ce0af0af84d58d3df1ee",
             "package_name": self.package_name,
             "module_name": self.module_name,
             "repo_name": self.repo_name,
@@ -277,17 +293,14 @@ impl InitScaffoldPlan {
             "sqlx_driver": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "postgres",
-                ScaffoldDb::Sqlite => "sqlite",
             },
             "db_pool": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "PgPool",
-                ScaffoldDb::Sqlite => "SqlitePool",
             },
             "db_database": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "Postgres",
-                ScaffoldDb::Sqlite => "Sqlite",
             },
             "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", backend.migration_dir),
             "database_url_example": database_url_example,

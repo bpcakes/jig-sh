@@ -1,0 +1,1 @@
+Remove SQLite from new Rust React scaffold choices. Route PostgreSQL startup and database bootstrap probes through the inherited Batter operation context, and validate interrupted established-query cleanup with a protocol-level regression test.

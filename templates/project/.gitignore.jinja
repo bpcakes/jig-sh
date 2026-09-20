@@ -14,10 +14,6 @@
 
 [% if rust_backend_enabled %]# Rust
 target/
-
-# Default local SQLite database and transient sidecars
-/<<[ repo_name | replace("-", "_") ]>>.db
-/<<[ repo_name | replace("-", "_") ]>>.db-*
 [% endif %]
 [% if go_backend_enabled %]# Go
 *.test

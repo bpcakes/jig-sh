@@ -1,5 +1,5 @@
 fn assert_admin_theme_contract(destination: &Path) {
-    let admin_index = fs::read_to_string(destination.join("admin-panel/index.html")).unwrap();
+    let admin_index = fs::read_to_string(destination.join("apps/admin-panel/index.html")).unwrap();
     let theme_storage_key = "admin-panel-theme";
     let theme_bootstrap = admin_index
         .find(&format!("const themeStorageKey = \"{theme_storage_key}\""))
@@ -17,7 +17,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let theme_provider =
-        fs::read_to_string(destination.join("admin-panel/src/components/theme-provider.tsx"))
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/theme-provider.tsx"))
             .unwrap();
     assert_contains_all(
         &theme_provider,
@@ -27,7 +27,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let providers =
-        fs::read_to_string(destination.join("admin-panel/src/app/providers.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/app/providers.tsx")).unwrap();
     assert!(providers.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
     assert_eq!(providers.matches(theme_storage_key).count(), 1);
     assert_contains_all(
@@ -38,7 +38,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let admin_router =
-        fs::read_to_string(destination.join("admin-panel/src/app/router.ts")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/app/router.ts")).unwrap();
     assert_contains_all(
         &admin_router,
         &[
@@ -50,7 +50,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let admin_shell =
-        fs::read_to_string(destination.join("admin-panel/src/app/shell.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/app/shell.tsx")).unwrap();
     assert_contains_all(
         &admin_shell,
         &[
@@ -60,7 +60,7 @@ fn assert_admin_theme_contract(destination: &Path) {
         ],
     );
     let admin_sidebar =
-        fs::read_to_string(destination.join("admin-panel/src/components/app-sidebar.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/app-sidebar.tsx")).unwrap();
     assert_contains_all(
         &admin_sidebar,
         &[
@@ -72,7 +72,7 @@ fn assert_admin_theme_contract(destination: &Path) {
     );
     assert_eq!(admin_sidebar.matches("\"my-app\"").count(), 1);
     let admin_overview_test = fs::read_to_string(
-        destination.join("admin-panel/src/features/overview/overview-page.test.tsx"),
+        destination.join("apps/admin-panel/src/features/overview/overview-page.test.tsx"),
     )
     .unwrap();
     assert_contains_all(
@@ -88,7 +88,7 @@ fn assert_admin_theme_contract(destination: &Path) {
 
 fn assert_admin_component_sources(destination: &Path) {
     let admin_prettierignore =
-        fs::read_to_string(destination.join("admin-panel/.prettierignore")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/.prettierignore")).unwrap();
     assert_eq!(admin_prettierignore.matches("dist/\n").count(), 1);
     assert_eq!(admin_prettierignore.matches("pnpm-lock.yaml").count(), 1);
     assert_eq!(
@@ -98,30 +98,30 @@ fn assert_admin_component_sources(destination: &Path) {
     assert!(admin_prettierignore.contains("bun.lock\nbun.lockb\n"));
     assert!(admin_prettierignore.contains("src/routeTree.gen.ts"));
     let admin_empty =
-        fs::read_to_string(destination.join("admin-panel/src/components/ui/empty.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/ui/empty.tsx")).unwrap();
     assert!(admin_empty.contains(r#"import type { ComponentProps } from "react""#));
     assert!(!admin_empty.contains("React.ComponentProps"));
     let admin_skeleton =
-        fs::read_to_string(destination.join("admin-panel/src/components/ui/skeleton.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/ui/skeleton.tsx")).unwrap();
     assert!(admin_skeleton.contains(r#"import type { ComponentProps } from "react""#));
     assert!(!admin_skeleton.contains("React.ComponentProps"));
     let admin_sonner =
-        fs::read_to_string(destination.join("admin-panel/src/components/ui/sonner.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/components/ui/sonner.tsx")).unwrap();
     assert!(admin_sonner.contains(r#"import type { CSSProperties } from "react""#));
     assert!(!admin_sonner.contains("React.CSSProperties"));
-    let components = fs::read_to_string(destination.join("admin-panel/components.json")).unwrap();
+    let components = fs::read_to_string(destination.join("apps/admin-panel/components.json")).unwrap();
     assert!(components.contains(r#""style": "radix-nova""#));
     assert!(
         destination
-            .join("admin-panel/src/components/ui/sidebar.tsx")
+            .join("apps/admin-panel/src/components/ui/sidebar.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/features/overview/overview-page.tsx")
+            .join("apps/admin-panel/src/features/overview/overview-page.tsx")
             .exists()
     );
-    assert!(destination.join("admin-panel/src/lib/api.ts").exists());
+    assert!(destination.join("apps/admin-panel/src/lib/api.ts").exists());
 }
 
 fn assert_admin_theme_and_components(destination: &Path) {
@@ -130,54 +130,54 @@ fn assert_admin_theme_and_components(destination: &Path) {
 }
 
 fn assert_admin_data_and_routes(destination: &Path) {
-    let admin_api = fs::read_to_string(destination.join("admin-panel/src/lib/api.ts")).unwrap();
+    let admin_api = fs::read_to_string(destination.join("apps/admin-panel/src/lib/api.ts")).unwrap();
     assert!(admin_api.contains("getAdminStatusOptions"));
     assert!(admin_api.contains("adminStatusQueryOptions"));
     assert!(
         destination
-            .join("admin-panel/src/lib/query-client.ts")
+            .join("apps/admin-panel/src/lib/query-client.ts")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/app/router-context.ts")
+            .join("apps/admin-panel/src/app/router-context.ts")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routes/__root.tsx")
+            .join("apps/admin-panel/src/routes/__root.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routes/index.tsx")
+            .join("apps/admin-panel/src/routes/index.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routes/settings.tsx")
+            .join("apps/admin-panel/src/routes/settings.tsx")
             .exists()
     );
     assert!(
         destination
-            .join("admin-panel/src/routeTree.gen.ts")
+            .join("apps/admin-panel/src/routeTree.gen.ts")
             .exists()
     );
     let admin_index_route =
-        fs::read_to_string(destination.join("admin-panel/src/routes/index.tsx")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/routes/index.tsx")).unwrap();
     assert!(admin_index_route.contains(r#"createFileRoute("/")"#));
     assert!(admin_index_route.contains("context.queryClient.ensureQueryData"));
     let admin_query_client =
-        fs::read_to_string(destination.join("admin-panel/src/lib/query-client.ts")).unwrap();
+        fs::read_to_string(destination.join("apps/admin-panel/src/lib/query-client.ts")).unwrap();
     assert!(admin_query_client.contains("retry: 1"));
     let admin_overview =
-        fs::read_to_string(destination.join("admin-panel/src/features/overview/overview-page.tsx"))
+        fs::read_to_string(destination.join("apps/admin-panel/src/features/overview/overview-page.tsx"))
             .unwrap();
     assert!(admin_overview.contains("useSuspenseQuery(appStatusQueryOptions)"));
     assert!(admin_overview.contains("useQueryErrorResetBoundary()"));
 }
 
-fn assert_agent_map_and_database_ignores(destination: &Path) {
+fn assert_agent_map(destination: &Path) {
     let agent_map = fs::read_to_string(destination.join("agent-map.md")).unwrap();
     for guide in [
         "crates/my-app/AGENTS.md",
@@ -187,34 +187,6 @@ fn assert_agent_map_and_database_ignores(destination: &Path) {
     ] {
         assert!(agent_map.contains(guide), "agent map is missing {guide}");
     }
-    let root_gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
-    assert!(root_gitignore.contains("/my_app.db\n"));
-    assert!(root_gitignore.contains("/my_app.db-*\n"));
-    for database_file in [
-        "my_app.db",
-        "my_app.db-wal",
-        "my_app.db-shm",
-        "my_app.db-journal",
-        "my_app.db-jig-migrate.lock",
-    ] {
-        fs::write(destination.join(database_file), "local database artifact").unwrap();
-    }
-    assert_eq!(
-        git_stdout(
-            destination,
-            [
-                "check-ignore",
-                "--",
-                "my_app.db",
-                "my_app.db-wal",
-                "my_app.db-shm",
-                "my_app.db-journal",
-                "my_app.db-jig-migrate.lock",
-            ],
-        )
-        .unwrap(),
-        "my_app.db\nmy_app.db-wal\nmy_app.db-shm\nmy_app.db-journal\nmy_app.db-jig-migrate.lock"
-    );
 }
 
 fn assert_api_entrypoint(destination: &Path) {
@@ -227,31 +199,49 @@ fn assert_api_entrypoint(destination: &Path) {
             "use ::my_app_http as app_http_crate;",
             "load_dotenv();",
             "warning: failed to load .env",
-            "let bound_addr = listener",
-            "Failed to read API listener address after bind",
-            "tracing::info!(%bound_addr, \"listening\")",
-            "app_http_crate::router",
+            "runtime::serve(config, app_http_crate::router_with_lifecycle).await",
             "app_crate::AppConfig::from_env()",
-            "app_crate::AppState::from_config(config)",
             "--bootstrap-database",
             "    let command = parse_command()?;\n    let config = app_crate::AppConfig::from_env()",
             "match (arguments.next(), arguments.next())",
             "unexpected API argument",
-            "app_crate::AppState::bootstrap_database(&config)",
+            "runtime::bootstrap_database(config)",
             "install_panic_hook",
             "tracing::error!(error = ?error, \"API server failed\")",
             "#[allow(clippy::useless_concat)]\n    let default_filter",
             "let default_filter = concat!(",
             "\"my_app=info,\",",
             "\"my_app_api=info,\",",
-            "\"tower_http=info\",",
-            "Failed to bind API listener",
-            "API server exited with an error",
-            "SignalKind::terminate",
-            "failed to listen for Ctrl-C",
+            "\"batter=info,batter_axum=info\",",
         ],
     );
-    assert_contains_none(&api_main, &["args_os().any"]);
+    assert_contains_none(
+        &api_main,
+        &["args_os().any", "unsafe {", "std::env::set_var", "std::env::remove_var"],
+    );
+    let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
+    assert_contains_all(
+        &runtime,
+        &[
+            "Startup::scoped",
+            "register_http_in",
+            ".with_unix_signals(\"signals\")",
+            "let supervisor = Supervisor::new(budget);",
+            "let lifecycle = supervisor.status();",
+            "let admission = supervisor.operation_admission();",
+            "ProtectedStartupScope",
+            "check_shutdown",
+            "reserve_cleanup(\"database.close\")",
+            "let initialization_context = startup_context.clone();",
+            "&initialization_context",
+            "let database_context = scope.context().clone();",
+            "&database_context",
+        ],
+    );
+    assert_contains_none(
+        &runtime,
+        &["Startup::new", "scope.supervisor()", "install_signals", "signals.received()"],
+    );
 }
 
 fn assert_generated_dev_config(destination: &Path) {
@@ -266,7 +256,7 @@ fn assert_generated_dev_config(destination: &Path) {
     assert!(!jig_toml.contains("port = 3000"));
     assert_eq!(
         fs::read_to_string(destination.join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,my_app_admin_api=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,my_app_admin_api=info,batter=info,batter_axum=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
     );
 }
 
@@ -281,6 +271,11 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
     assert!(workspace_cargo.contains("sqlx = { version = \"0.9\""));
     assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
+    assert!(workspace_cargo.contains(
+        "batter = { git = \"https://github.com/bpcakes/batter\", rev = \"bd836a29c9d484b96ee1ce0af0af84d58d3df1ee\", features = [\"axum\", \"sqlx\"] }"
+    ));
+    assert!(!workspace_cargo.contains("batter-axum ="));
+    assert!(!workspace_cargo.contains("batter-sqlx ="));
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-http-common""#));
@@ -294,6 +289,19 @@ fn assert_workspace_and_binary_manifests(destination: &Path) {
 }
 
 fn assert_application_and_public_http_crates(destination: &Path) {
+    let runtime = fs::read_to_string(destination.join("crates/my-app-runtime/src/lib.rs")).unwrap();
+    assert_contains_all(
+        &runtime,
+        &[
+            "pub async fn bootstrap_database(config: app_crate::AppConfig)",
+            "use batter::command::{Command, check_command}",
+            "let command = Command::new(",
+            "scope.reserve_cleanup(\"database.close\")?",
+            "scope.stage(\"database.migrate\")?",
+            "command.cancel(); command.wait().await",
+            "let report = check_command(outcome)?",
+        ],
+    );
     let app_lib = fs::read_to_string(destination.join("crates/my-app/src/lib.rs")).unwrap();
     assert_contains_all(
         &app_lib,
@@ -307,7 +315,6 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "partial_jig_bind_values_fall_back_to_bind_addr",
             "DATABASE_URL is required when the db feature is enabled",
             "pub async fn from_config(config: AppConfig) -> Result<Self>",
-            "pub async fn bootstrap_database(config: &AppConfig)",
             "pub fn new_with_version(version: impl Into<String>)",
             "pub fn version(&self) -> &AppVersion",
             "pub fn is_ready(&self) -> bool",
@@ -320,6 +327,8 @@ fn assert_application_and_public_http_crates(destination: &Path) {
             "return self.db.is_some()",
             "use axum::",
             "pub fn router",
+            "bootstrap_database",
+            "batter::",
         ],
     );
     let http_lib = fs::read_to_string(destination.join("crates/my-app-http/src/lib.rs")).unwrap();
@@ -327,12 +336,20 @@ fn assert_application_and_public_http_crates(destination: &Path) {
         &http_lib,
         &[
             "pub fn router(state: AppState) -> Router",
-            "TraceLayer::new_for_http()",
-            "SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid)",
-            "Router::from(public::routes()).fallback(not_found)",
+            "batter::axum::operational_http",
+            "pub fn router_with_lifecycle(",
+            "public::operational_routes(lifecycle, admission).fallback(not_found)",
         ],
     );
-    assert_contains_none(&http_lib, &["admin"]);
+    assert_contains_none(
+        &http_lib,
+        &[
+            "admin",
+            "SetRequestIdLayer",
+            "PropagateRequestIdLayer",
+            "router_with_shutdown",
+        ],
+    );
 }
 
 fn assert_admin_http_crate(destination: &Path) {
@@ -352,6 +369,66 @@ fn assert_admin_http_crate(destination: &Path) {
     );
     assert!(admin_http_lib.contains("let expected_ready = state.is_ready();"));
     assert!(admin_http_lib.contains("assert_eq!(body[\"ready\"], expected_ready);"));
+    assert_contains_all(
+        &admin_http_lib,
+        &[
+            "pub fn router_with_lifecycle<A: AdminAuthorizer>(",
+            "lifecycle: LifecycleStatus,",
+            "admission: OperationAdmission,",
+            "request.extensions().get::<CorrelationId>()",
+            "ApiError::unauthorized(correlation_id.as_ref())",
+            "ApiError::forbidden(correlation_id.as_ref())",
+            concat!(
+                "let protected_routes = requests::guard(\n",
+                "        protected_routes.layer(middleware::from_fn_with_state(\n",
+                "            authorizer,\n",
+                "            require_admin_authorization::<A>,\n",
+                "        )),\n",
+                "        admission,\n",
+                "    );"
+            ),
+            ".with_state(lifecycle);",
+            concat!(
+                "operational_router(\n",
+                "        state,\n",
+                "        authorizer,\n",
+                "        Router::from(routes()),\n",
+                "        lifecycle,\n",
+                "        admission,\n",
+                "    )"
+            ),
+            ".layer(middleware::from_fn(batter::axum::operational_http))",
+        ],
+    );
+    assert_contains_none(
+        &admin_http_lib,
+        &[
+            "REQUEST_ID_HEADER",
+            "SetRequestIdLayer",
+            "PropagateRequestIdLayer",
+            "router_with_shutdown",
+            "observe_http",
+            "ApiError::unauthorized(request.headers())",
+            "ApiError::forbidden(request.headers())",
+        ],
+    );
+    let admin_api_main =
+        fs::read_to_string(destination.join("apps/my-app-admin-api/src/main.rs")).unwrap();
+    assert_contains_all(
+        &admin_api_main,
+        &[
+            "runtime::serve(config, |state, lifecycle, admission| {",
+            concat!(
+                "admin_http_crate::router_with_lifecycle(\n",
+                "            state,\n",
+                "            admin_http_crate::DenyAllAdminAuthorizer,\n",
+                "            lifecycle,\n",
+                "            admission,\n",
+                "        )"
+            ),
+        ],
+    );
+    assert_contains_none(&admin_api_main, &["router_with_shutdown"]);
 }
 
 fn assert_workspace_and_backend_crates(destination: &Path) {
@@ -365,6 +442,52 @@ fn assert_public_http_contract(destination: &Path) {
         fs::read_to_string(destination.join("crates/my-app-http-common/src/lib.rs")).unwrap();
     assert!(http_common_lib.contains("pub struct ApiErrorResponse"));
     assert!(http_common_lib.contains("pub request_id: String"));
+    assert_contains_all(
+        &http_common_lib,
+        &[
+            "use batter::axum::CorrelationId;",
+            "correlation_id: Option<&CorrelationId>",
+            "request_id: request_id(correlation_id)",
+            "pub async fn not_found(Extension(correlation_id): Extension<CorrelationId>)",
+            "ApiError::not_found(Some(&correlation_id))",
+            "fn request_id(correlation_id: Option<&CorrelationId>) -> String",
+            ".map(CorrelationId::as_str)",
+        ],
+    );
+    assert_contains_none(
+        &http_common_lib,
+        &[
+            "REQUEST_ID_HEADER",
+            "HeaderMap",
+            "request_id(headers",
+            "request.headers()",
+        ],
+    );
+    let requests =
+        fs::read_to_string(destination.join("crates/my-app-http-common/src/requests.rs")).unwrap();
+    assert_contains_all(
+        &requests,
+        &[
+            "ResponseConstructionBudget::new(Duration::from_secs(10))",
+            "RequestPolicy::new(admission, request_budget)",
+            ".with_failure_renderer(|failure, parts|",
+            concat!(
+                "crate::ApiError::new(\n",
+                "                failure.status(),\n",
+                "                failure.code(),\n",
+                "                \"The request could not be completed\",\n",
+                "                parts.extensions.get::<CorrelationId>(),\n",
+                "            )"
+            ),
+        ],
+    );
+    assert_contains_none(
+        &requests,
+        &[
+            "RequestPolicy::new(shutdown",
+            "RequestPolicy::new(admission, Duration::from_secs(10))",
+        ],
+    );
     let public_http =
         fs::read_to_string(destination.join("crates/my-app-http/src/public.rs")).unwrap();
     for handler in ["health", "live", "ready", "version", "status"] {
@@ -376,6 +499,31 @@ fn assert_public_http_contract(destination: &Path) {
     assert!(public_http.contains(r#"path = "/api/status""#));
     assert!(public_http.contains("body = ApiErrorResponse"));
     assert!(public_http.contains(r#""dependency_unavailable""#));
+    assert!(public_http.contains(concat!(
+        "async fn ready(\n",
+        "    State(state): State<AppState>,\n",
+        "    Extension(lifecycle): Extension<LifecycleStatus>,\n",
+        "    Extension(correlation_id): Extension<CorrelationId>,\n",
+        ") -> Result<StatusCode, ApiError>"
+    )));
+    assert_eq!(
+        public_http
+            .matches("Extension(lifecycle): Extension<LifecycleStatus>")
+            .count(),
+        1
+    );
+    assert_eq!(
+        public_http
+            .matches("Extension(correlation_id): Extension<CorrelationId>")
+            .count(),
+        1
+    );
+    assert!(public_http.contains("if lifecycle.readiness() != Readiness::Ready"));
+    assert_eq!(public_http.matches("Some(&correlation_id)").count(), 2);
+    assert_contains_none(
+        &public_http,
+        &["HeaderMap", "ShutdownHandle", "&headers"],
+    );
 }
 
 fn assert_http_test_support(destination: &Path) {
@@ -419,14 +567,7 @@ fn assert_http_contract_and_test_support(destination: &Path) {
 
 fn assert_database_crate_and_test_support(destination: &Path) {
     let db_lib = fs::read_to_string(destination.join("crates/my-app-db/src/lib.rs")).unwrap();
-    assert!(db_lib.contains("PgPool"));
-    assert!(db_lib.contains("sqlx::Postgres::database_exists"));
-    assert!(db_lib.contains("sqlx::Postgres::create_database"));
-    assert!(db_lib.contains("Could not confirm database existence after creation failed"));
-    assert!(db_lib.contains("create_if_missing"));
-    assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
-    assert!(db_lib.contains("connect_with_timeout"));
-    assert!(db_lib.contains("migrate_with_timeout"));
+    assert_database_crate_source(&db_lib);
     let test_support_db =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/db.rs")).unwrap();
     assert!(test_support_db.contains("pub struct DatabaseTestConfig"));
@@ -441,6 +582,23 @@ fn assert_database_crate_and_test_support(destination: &Path) {
     assert!(
         postgres_test.contains("#[ignore = \"run with the root test:postgres package script\"]")
     );
+}
+
+fn assert_database_crate_source(db_lib: &str) {
+    assert!(db_lib.contains("PgPool"));
+    assert!(db_lib.contains("sqlx::Postgres::database_exists"));
+    assert!(db_lib.contains("sqlx::Postgres::create_database"));
+    assert!(db_lib.contains("Could not confirm database existence after creation failed"));
+    assert!(db_lib.contains("create_if_missing"));
+    assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
+    assert!(db_lib.contains("connect_with_timeout"));
+    assert!(db_lib.contains("batter::sqlx::pool_in"));
+    assert!(db_lib.contains("pub async fn connect_in("));
+    assert!(db_lib.contains("context.child(DEFAULT_DB_TIMEOUT)"));
+    assert!(db_lib.contains("batter::sqlx::probe(&pool, &probe_context)"));
+    assert!(!db_lib.contains("sqlx::query(\"SELECT 1\")"));
+    assert!(db_lib.contains("interrupted_established_probe_retires_lease_and_closes_pool"));
+    assert!(db_lib.contains("migrate_with_timeout"));
 }
 
 fn assert_postgres_test_script(destination: &Path) {
@@ -464,6 +622,10 @@ fn assert_generated_backend_docs(destination: &Path) {
     assert!(root_readme.contains("Commit the generated `bun.lock`"));
     assert!(root_readme.contains("DenyAllAdminAuthorizer"));
     assert!(root_readme.contains("bun run test:postgres"));
+    assert!(root_readme.contains("`batter` facade"));
+    assert!(root_readme.contains("upgrade the Batter revision"));
+    assert!(root_readme.contains("Startup::scoped"));
+    assert!(root_readme.contains("local closure does not"));
     let http_agents = fs::read_to_string(destination.join("crates/my-app-http/AGENTS.md")).unwrap();
     assert!(http_agents.contains("`src/public.rs`: owns public routes"));
     assert!(http_agents.contains("Never depend on `my-app-admin-http`"));
@@ -492,7 +654,7 @@ fn assert_rendered_jig_answers(destination: &Path) {
             "web_package_manager = \"bun\"",
             "if [ -f Cargo.toml ]; then cargo fetch;",
             "name = \"web\"",
-            "dir = \"landing\"",
+            "dir = \"apps/landing\"",
             "kind = \"env-port\"",
             "name = \"admin-panel\"",
             "role = \"spa\"",

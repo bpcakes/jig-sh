@@ -65,7 +65,6 @@ pub(in crate::bootstrap::scaffold) fn render_frontend_workspace_files_for_backen
         "db": match db {
             ScaffoldDb::None => "none",
             ScaffoldDb::Postgres => "postgres",
-            ScaffoldDb::Sqlite => "sqlite",
         },
         "migration_dir": migration_dir,
         "sqlx_metadata_dir": sqlx_metadata_dir,

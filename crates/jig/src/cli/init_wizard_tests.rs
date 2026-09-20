@@ -578,7 +578,7 @@ fn defaults_preserve_explicit_project_shape_choices() {
         "--preset",
         "rust-react",
         "--db",
-        "sqlite",
+        "postgres",
         "--frontends",
         "landing,admin",
         "--no-vault",
@@ -589,7 +589,7 @@ fn defaults_preserve_explicit_project_shape_choices() {
     prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
 
     assert_eq!(opts.scaffold.preset, Some(ScaffoldPreset::RustReact));
-    assert_eq!(opts.scaffold.db, Some(ScaffoldDb::Sqlite));
+    assert_eq!(opts.scaffold.db, Some(ScaffoldDb::Postgres));
     assert_eq!(opts.scaffold.frontend_list.len(), 2);
     assert!(opts.scaffold.frontends.is_empty());
 }

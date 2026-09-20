@@ -117,7 +117,6 @@ impl ScaffoldReport {
             "db": match plan.database() {
                 ScaffoldDb::None => "none",
                 ScaffoldDb::Postgres => "postgres",
-                ScaffoldDb::Sqlite => "sqlite",
             },
             "frontends": plan.frontends().iter().map(|frontend| {
                 json!({

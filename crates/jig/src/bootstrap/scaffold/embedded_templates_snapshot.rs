@@ -712,6 +712,10 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http-common/src/lib.rs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/http-common/src/requests.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http-common/src/requests.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/http/AGENTS.md.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http/AGENTS.md.jinja")),
     },
@@ -726,6 +730,18 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/http/src/public.rs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http/src/public.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/runtime/AGENTS.md.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/runtime/AGENTS.md.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/runtime/Cargo.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/runtime/Cargo.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/runtime/src/lib.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/runtime/src/lib.rs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/test-support/AGENTS.md.jinja",

@@ -202,7 +202,6 @@ fn parses_hidden_sqlx_todo_generator_for_compatibility() {
         "sqlx-todo.md",
     ])
     .unwrap();
-
     match cli.command {
         CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => {
             assert_eq!(opts.output, Some(PathBuf::from("sqlx-todo.md")));
@@ -385,6 +384,7 @@ fn parses_init_scaffold_preset_frontends_and_db() {
         }
         other => panic!("expected init command, got {other:?}"),
     }
+    assert!(Cli::try_parse_from(["jig", "init", "demo", "--db", "sqlite"]).is_err());
 }
 
 #[test]
