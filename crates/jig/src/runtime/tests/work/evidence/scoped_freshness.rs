@@ -10,6 +10,7 @@ use crate::repository::freshness::{CollectionBudget, CollectionLimits, collect_t
 mod cross_plan;
 mod native;
 mod recovery;
+mod selected_gates;
 mod worktree;
 
 fn fixture(root: &Path, dependency: bool, profile: bool) -> RepoContext {

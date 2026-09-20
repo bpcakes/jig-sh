@@ -24,6 +24,7 @@ pub(in crate::runtime::work) struct CheckTargetSnapshot {
 pub(in crate::runtime::work) fn check_target_snapshot(
     ctx: &RepoContext,
     plan_id: &str,
+    selected: &BTreeSet<jig_contract::TargetId>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckTargetSnapshot> {
     let report = gate_report_with_cancellation(ctx, plan_id, cancelled, RECORDING_TIMEOUT_MS)?;
@@ -31,11 +32,12 @@ pub(in crate::runtime::work) fn check_target_snapshot(
     let mut targets = BTreeMap::new();
     let mut freshness_collection = None;
     for gate in &report.gates {
-        if let GateEvaluation::Evidence(gate) = gate
-            && gate.required()
-        {
+        if let GateEvaluation::Evidence(gate) = gate {
             freshness_collection = gate.collection_stats().cloned().or(freshness_collection);
             for (target, passed, value) in gate.check_targets() {
+                if !selected.contains(&target) {
+                    continue;
+                }
                 if passed {
                     passing.insert(target.clone());
                 }

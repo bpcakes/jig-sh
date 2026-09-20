@@ -8,14 +8,20 @@ pub(super) fn check(
     ctx: &RepoContext,
     plan_id: &str,
     required: BTreeSet<jig_contract::TargetId>,
+    force: bool,
     execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let catalog = RepositoryCatalog::from_context(ctx)?;
     validate_current_repository_authority(ctx, catalog.config_digest())?;
-    let before = check_target_snapshot(ctx, plan_id, &|| observer.cancelled())?;
-    let scheduled = super::super::check_schedule::schedule(&catalog, &required, &before.passing)?;
+    let before = check_target_snapshot(ctx, plan_id, &required, &|| observer.cancelled())?;
+    let empty = BTreeSet::new();
+    let scheduled = super::super::check_schedule::schedule(
+        &catalog,
+        &required,
+        if force { &empty } else { &before.passing },
+    )?;
 
     let mut result = json!({"plan": null, "run": null, "results": [], "failed_targets": []});
     let mut dispositions = std::collections::BTreeMap::new();
@@ -71,7 +77,7 @@ pub(super) fn check(
     // This is a new validation of original receipts, not an empty execution or
     // a replacement target receipt. Reassess every target after execution.
     validate_current_repository_authority(ctx, catalog.config_digest())?;
-    let after = check_target_snapshot(ctx, plan_id, &|| observer.cancelled())?;
+    let after = check_target_snapshot(ctx, plan_id, &required, &|| observer.cancelled())?;
     let stable = before.fingerprint.is_some() && before.fingerprint == after.fingerprint;
     let ok = run_ok && stable && required.is_subset(&after.passing) && !observer.cancelled();
     if !ok && error.is_empty() {

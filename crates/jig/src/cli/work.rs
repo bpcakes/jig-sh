@@ -17,6 +17,7 @@ pub(super) const WORK_CHECK_AFTER_HELP: &str = "\
 Validate configured target/profile evidence and legacy check gates for a plan.
 Reuse current target passes; execute missing, failed or stale checks and their dependencies.
 Use jig check COMPONENT:ACTION --plan-id ID to force a native target execution.
+Use --gate ID to force a configured native evidence or legacy check gate.
 Use --tool to select a legacy execution tool; its receipt does not satisfy a native target gate.
 Human-readable output is the default. Pass --json for structured automation output.
 

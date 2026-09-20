@@ -21,11 +21,15 @@ Beads epic: `jig-sh-ndz2` (Remove remaining agent workflow friction).
 - [x] Export and verify one epic and its dependency graph.
 - [ ] Implement the delivery tasks; none has been implemented by this planning work.
 
-Restart checkpoint: planning and Beads export are complete. First implementation action is T-01's
-generic native-gate reproduction. T-02 and T-03 can also start independently.
-T-04 and T-05 have open prerequisites owned by existing epics. Re-read their
-current state before claiming work. Use task-local ExecPlans during execution
-where the risk warrants them; do not create additional planning beads.
+Execution checkpoint (2026-09-20): T-01's native-gate implementation and regression
+tests are in progress; final staged validation and native Codex review are pending.
+T-02 and T-03 remain independent roots. The owner also authorized implementation
+of the external prerequisite chains needed by T-04 and T-05, retaining their
+existing issue ownership. Iteration selection (`fe13c657`) and Cargo discovery
+(`350536dc`) are marked delivered in Beads but live on the unmerged
+`feat/rust-validation-velocity` branch; integrate and validate that existing work
+before implementing its dependent tasks. Use task-local ExecPlans where the risk
+warrants them; do not create additional planning beads.
 
 ## Scope
 
