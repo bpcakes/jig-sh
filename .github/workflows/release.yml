@@ -268,11 +268,38 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # Release checks append an intentionally uncommitted local run receipt.
+          # Remove it before moving this checkout onto the latest default branch.
+          git restore --worktree .agent/state/runs.jsonl
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "Unexpected working-tree changes before the development bump." >&2
+            git status --short >&2
+            exit 1
+          fi
+          git fetch origin "$DEFAULT_BRANCH"
+          git rebase "origin/$DEFAULT_BRANCH"
+
           next_version="$(scripts/release.sh next-version patch)-dev"
           scripts/release.sh prepare-development "$next_version"
           scripts/release.sh stage
-          git commit -m "Begin v$next_version development"
-          git push origin "HEAD:$DEFAULT_BRANCH"
+          if git diff --cached --quiet; then
+            echo "Default branch is already at development version $next_version."
+          else
+            git commit -m "Begin v$next_version development"
+          fi
+
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$DEFAULT_BRANCH"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "Default branch kept advancing; failed to push the development bump after $attempt attempts." >&2
+              exit 1
+            fi
+            echo "Default branch advanced during the development bump; rebasing and retrying ($attempt/3)." >&2
+            git fetch origin "$DEFAULT_BRANCH"
+            git rebase "origin/$DEFAULT_BRANCH"
+          done
 
   backfill-v0-1-0:
     name: Backfill v0.1.0 GitHub Release

@@ -306,8 +306,13 @@ fn ui_json_repository_failures_keep_the_command_identity() {
 
 #[test]
 fn product_version_is_independent_of_the_runner_contract_epoch() {
-    assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.1-dev");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest: toml::Value =
+        toml::from_str(&fs::read_to_string(root.join("Cargo.toml")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["workspace"]["package"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
     let contract: Value =
         serde_json::from_slice(&fs::read(root.join(".agent/jig-contract.json")).unwrap()).unwrap();
     assert_eq!(contract["contract_version"], 8);
