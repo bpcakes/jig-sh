@@ -117,8 +117,10 @@ fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChil
         Ok(())
     })?;
     let mut children = Vec::new();
-    match (schema.as_deref(), targets, gates) {
-        (Some(WORK_CHECK_TARGETS_SCHEMA), Some(targets), _) => {
+    match schema.as_deref() {
+        Some(WORK_CHECK_TARGETS_SCHEMA) => {
+            let targets =
+                required_batch_array(record, targets, WORK_CHECK_TARGETS_SCHEMA, "targets")?;
             visit_array_values(record, targets, &mut |entry| {
                 let entry: TargetEvidenceEntry = serde_json::from_slice(&record[entry])
                     .context("work-check target evidence entry")?;
@@ -131,7 +133,8 @@ fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChil
                 Ok(())
             })?;
         }
-        (Some(WORK_CHECK_EVIDENCE_SCHEMA), _, Some(gates)) => {
+        Some(WORK_CHECK_EVIDENCE_SCHEMA) => {
+            let gates = required_batch_array(record, gates, WORK_CHECK_EVIDENCE_SCHEMA, "gates")?;
             visit_array_values(record, gates, &mut |entry| {
                 let entry: GateEvidenceEntry = serde_json::from_slice(&record[entry])
                     .context("work-check gate evidence entry")?;
@@ -150,6 +153,21 @@ fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChil
         _ => {}
     }
     Ok(children)
+}
+
+fn required_batch_array(
+    record: &[u8],
+    value: Option<Range<usize>>,
+    schema: &str,
+    field: &str,
+) -> Result<Range<usize>> {
+    let Some(value) = value else {
+        bail!("supported evidence schema {schema:?} is missing required {field:?} array");
+    };
+    if first_non_whitespace(record, &value) != Some(b'[') {
+        bail!("supported evidence schema {schema:?} requires {field:?} to be an array");
+    }
+    Ok(value)
 }
 
 fn decode_string(record: &[u8], value: &Range<usize>) -> Result<String> {

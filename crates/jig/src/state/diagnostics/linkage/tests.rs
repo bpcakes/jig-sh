@@ -15,11 +15,11 @@ use super::super::state_diagnose;
 use super::*;
 use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
-use crate::state::WORK_CHECK_EVIDENCE_SCHEMA;
 use crate::state::receipts::work_check_targets_evidence;
 use crate::state::runs::{
     complete_run, mark_run_running, mark_target_started, record_target_result, start_run,
 };
+use crate::state::{WORK_CHECK_EVIDENCE_SCHEMA, WORK_CHECK_TARGETS_SCHEMA};
 use crate::test_env::TestRepoBuilder;
 
 mod damage;
@@ -473,11 +473,13 @@ fn gate_batch_evidence_links_tool_receipts_through_their_own_run_ids() {
 #[test]
 fn gate_batch_existing_no_run_receipts_are_not_unresolved() {
     let (_temp, ctx) = fixture_context();
+    let mut explicit_null_run = target_receipt("receipt_source", "jig.test", "api:test", None);
+    explicit_null_run["run_id"] = Value::Null;
     write_records(
         &ctx.state_file("receipts.jsonl"),
         &[
             target_receipt("receipt_tool", "jig.test", "api:test", None),
-            target_receipt("receipt_source", "jig.test", "api:test", None),
+            explicit_null_run,
             json!({
                 "id": "receipt_gate_batch",
                 "tool_name": "jig.work_check",
@@ -502,6 +504,50 @@ fn gate_batch_existing_no_run_receipts_are_not_unresolved() {
 }
 
 #[test]
+fn supported_batch_evidence_requires_its_array_container() {
+    for (schema, field) in [
+        (WORK_CHECK_TARGETS_SCHEMA, "targets"),
+        (WORK_CHECK_EVIDENCE_SCHEMA, "gates"),
+    ] {
+        for (shape, malformed) in [
+            ("object", Some(json!({"receipt_id": "receipt_missing"}))),
+            ("string", Some(json!("not-an-array"))),
+            ("null", Some(Value::Null)),
+            ("missing", None),
+        ] {
+            let (_temp, ctx) = fixture_context();
+            let mut evidence = json!({"schema": schema});
+            if let Some(malformed) = malformed {
+                evidence[field] = malformed;
+            }
+            write_records(
+                &ctx.state_file("receipts.jsonl"),
+                &[json!({
+                    "id": format!("receipt_{field}_{shape}"),
+                    "tool_name": "jig.work_check",
+                    "evidence": evidence,
+                })],
+            );
+
+            let output = diagnose(&ctx, true);
+
+            assert_eq!(
+                output["streams"]["receipts"]["deep_analysis_error_count"], 1,
+                "schema {schema} with {shape} {field}"
+            );
+            assert_eq!(
+                output["run_linkage"]["complete"], false,
+                "schema {schema} with {shape} {field}"
+            );
+            assert_eq!(
+                output["run_linkage"]["verdict"], "incomplete",
+                "schema {schema} with {shape} {field}"
+            );
+        }
+    }
+}
+
+#[test]
 fn optional_and_legacy_links_are_valid_without_run_history() {
     let (_temp, ctx) = fixture_context();
     let mut null_run = target_receipt("receipt_null", "jig.test", "api:test", None);
@@ -514,6 +560,7 @@ fn optional_and_legacy_links_are_valid_without_run_history() {
             json!({"id": "receipt_tool", "tool_name": "jig.session_start", "evidence": {"schema": "jig.other/v1", "targets": [{"receipt_id": "x", "run_id": "run_y"}]}}),
             json!({"id": "receipt_string_evidence", "tool_name": "jig.note", "evidence": "run_01ARZ3NDEKTSV4RRFFQ69G5FAV"}),
             work_check_targets_receipt("receipt_empty_batch", &[]),
+            work_check_gates_receipt("receipt_empty_gate_batch", &[]),
         ],
     );
 
