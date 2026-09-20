@@ -11,7 +11,7 @@ fn rust_react_rejects_batter_dependency_collisions_before_destination_mutation()
         "batter-axum",
         "Batter_Axum",
     ] {
-        for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+        for db in [ScaffoldDb::None, ScaffoldDb::Postgres] {
             for existing in [false, true] {
                 let parent = tempfile::tempdir_in(temp.path()).unwrap();
                 let destination = parent.path().join(name);
@@ -71,7 +71,7 @@ fn rust_react_batter_sqlx_collision_is_postgres_only_and_preflighted() {
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     for requested_name in ["batter-sqlx", "Batter_Sqlx"] {
-        for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+        for db in [ScaffoldDb::None, ScaffoldDb::Postgres] {
             for existing in [false, true] {
                 let parent = tempfile::tempdir_in(temp.path()).unwrap();
                 let destination = parent.path().join(requested_name);

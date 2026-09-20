@@ -25,8 +25,8 @@ foundation paths and exposes adapter namespaces such as `batter::axum` and
 Application names that normalize to `batter`, `batter-core`, or `batter-axum`
 collide with packages selected by the required facade and are rejected before
 destination files are written. PostgreSQL Rust-react applications also reject
-names normalizing to `batter-sqlx`; SQLite and database-free application shapes
-do not reserve that name. Rust library and CLI presets remain independent. Choose
+names normalizing to `batter-sqlx`; database-free application shapes do not reserve
+that name. Rust library and CLI presets remain independent. Choose
 another `--repo-name` when the selected shape includes a conflicting package.
 
 ## Ownership in the generated workspace
@@ -121,8 +121,7 @@ The PostgreSQL role must already exist; setup does not grant privileges.
 Database bootstrap uses Batter's finite `Command` owner with a 30-second work
 budget and independently bounded cleanup, rather than an empty service supervisor.
 PostgreSQL setup uses the same cleanup-slot-aware pool owner and bounded connectivity
-check before migrations; SQLite keeps its native configuration and manual cleanup
-path. SIGINT or SIGTERM cancels the command and waits for cleanup. Normal server
+probe before migrations. SIGINT or SIGTERM cancels the command and waits for cleanup. Normal server
 startup also applies pending migrations but does not create the database. Cancellation
 does not roll back already committed migrations, database creation, remote
 transactions, or other remote effects; local pool closure is not a remote rollback

@@ -39,8 +39,7 @@ data to unauthenticated probes.
 Readiness combines the runtime lifecycle with initialized application state; it is
 not a continuous database connectivity check. PostgreSQL pool construction registers
 local cleanup before an explicit bounded connectivity check; local closure does not
-roll back remote transactions or guarantee remote session termination. SQLite keeps
-its native configuration and manual cleanup path. Change lifecycle budgets in the
+roll back remote transactions or guarantee remote session termination. Change lifecycle budgets in the
 runtime crate and request policy in `crates/<<[ package_name ]>>-http-common/src/requests.rs`;
 these are source policies, not `.jig.toml` settings.
 [% endif %]
@@ -72,7 +71,7 @@ Edit `DATABASE_URL` in that `.env` file (or export it), then run:
 <<[ web_run_command ]>> database:setup
 ```
 
-This runs `bash scripts/setup-database.sh`, which creates the database if missing and applies migrations. [% if db == "postgres" %]The role in `DATABASE_URL` must already exist. Use an existing database that the role can access and migrate, or a role already authorized to create the database. Setup never creates roles or grants permissions.[% else %]The SQLite file and its parent directory are created if missing.[% endif %] Run the same command on fresh checkouts before starting the application.
+This runs `bash scripts/setup-database.sh`, which creates the database if missing and applies migrations. The role in `DATABASE_URL` must already exist. Use an existing database that the role can access and migrate, or a role already authorized to create the database. Setup never creates roles or grants permissions. Run the same command on fresh checkouts before starting the application.
 
 [% endif %]
 ```sh

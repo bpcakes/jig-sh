@@ -13,11 +13,7 @@ Owns persistence for `<<[ repo_name ]>>`, including database pools, migrations, 
 
 - Add SQLx queries, transaction helpers, repository functions, and persistence mappers here.
 - Keep HTTP DTOs in `crates/<<[ package_name ]>>-http` and business decisions in `crates/<<[ package_name ]>>`.
-[% if sqlx_driver == "postgres" %]
-- Keep PostgreSQL native pool options and URL parsing here; `connect_in` uses `batter::sqlx::pool_in` with a runtime-provided cleanup slot and performs the explicit bounded connectivity check.
-[% else %]
-- Keep SQLite native pool options, migration locking, and manual cleanup semantics here.
-[% endif %]
+- Keep PostgreSQL native pool options and URL parsing here; `connect_in` uses `batter::sqlx::pool_in` with a runtime-provided cleanup slot and performs the connectivity probe under the runtime-provided operation context.
 
 ## Invariants
 

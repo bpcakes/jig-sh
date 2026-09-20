@@ -219,7 +219,6 @@ impl InitScaffoldPlan {
         match self.database() {
             ScaffoldDb::None => {}
             ScaffoldDb::Postgres => parts.push("postgres DB".to_string()),
-            ScaffoldDb::Sqlite => parts.push("sqlite DB".to_string()),
         }
         if self.requested_repo_name != self.repo_name {
             parts.push(format!("repo name {}", self.repo_name));
@@ -516,9 +515,6 @@ impl InitScaffoldPlan {
         let database = match opts.db.unwrap_or(ScaffoldDb::None) {
             ScaffoldDb::None => GoDatabase::None,
             ScaffoldDb::Postgres => GoDatabase::Postgres,
-            ScaffoldDb::Sqlite => bail!(
-                "--preset go-react does not support --db sqlite; use --db none or --db postgres"
-            ),
         };
         let package_manager = answers
             .web_package_manager

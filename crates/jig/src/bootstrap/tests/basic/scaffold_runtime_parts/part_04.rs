@@ -9,7 +9,7 @@ fn scaffold_test_support_uses_absolute_paths_for_local_module_name_collisions() 
         let plan = scaffold::InitScaffoldPlan::from_opts(
             &ScaffoldOpts {
                 preset: Some(ScaffoldPreset::RustReact),
-                db: Some(ScaffoldDb::Sqlite),
+                db: Some(ScaffoldDb::Postgres),
                 frontends: Vec::new(),
                 frontend_list: Vec::new(),
             },

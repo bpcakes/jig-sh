@@ -177,7 +177,7 @@ fn assert_admin_data_and_routes(destination: &Path) {
     assert!(admin_overview.contains("useQueryErrorResetBoundary()"));
 }
 
-fn assert_agent_map_and_database_ignores(destination: &Path) {
+fn assert_agent_map(destination: &Path) {
     let agent_map = fs::read_to_string(destination.join("agent-map.md")).unwrap();
     for guide in [
         "crates/my-app/AGENTS.md",
@@ -187,34 +187,6 @@ fn assert_agent_map_and_database_ignores(destination: &Path) {
     ] {
         assert!(agent_map.contains(guide), "agent map is missing {guide}");
     }
-    let root_gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
-    assert!(root_gitignore.contains("/my_app.db\n"));
-    assert!(root_gitignore.contains("/my_app.db-*\n"));
-    for database_file in [
-        "my_app.db",
-        "my_app.db-wal",
-        "my_app.db-shm",
-        "my_app.db-journal",
-        "my_app.db-jig-migrate.lock",
-    ] {
-        fs::write(destination.join(database_file), "local database artifact").unwrap();
-    }
-    assert_eq!(
-        git_stdout(
-            destination,
-            [
-                "check-ignore",
-                "--",
-                "my_app.db",
-                "my_app.db-wal",
-                "my_app.db-shm",
-                "my_app.db-journal",
-                "my_app.db-jig-migrate.lock",
-            ],
-        )
-        .unwrap(),
-        "my_app.db\nmy_app.db-wal\nmy_app.db-shm\nmy_app.db-journal\nmy_app.db-jig-migrate.lock"
-    );
 }
 
 fn assert_api_entrypoint(destination: &Path) {
@@ -260,7 +232,10 @@ fn assert_api_entrypoint(destination: &Path) {
             "ProtectedStartupScope",
             "check_shutdown",
             "reserve_cleanup(\"database.close\")",
-            "Db::connect_in(database_url, cleanup).await?",
+            "let initialization_context = startup_context.clone();",
+            "&initialization_context",
+            "let database_context = scope.context().clone();",
+            "&database_context",
         ],
     );
     assert_contains_none(
@@ -592,17 +567,7 @@ fn assert_http_contract_and_test_support(destination: &Path) {
 
 fn assert_database_crate_and_test_support(destination: &Path) {
     let db_lib = fs::read_to_string(destination.join("crates/my-app-db/src/lib.rs")).unwrap();
-    assert!(db_lib.contains("PgPool"));
-    assert!(db_lib.contains("sqlx::Postgres::database_exists"));
-    assert!(db_lib.contains("sqlx::Postgres::create_database"));
-    assert!(db_lib.contains("Could not confirm database existence after creation failed"));
-    assert!(db_lib.contains("create_if_missing"));
-    assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
-    assert!(db_lib.contains("connect_with_timeout"));
-    assert!(db_lib.contains("batter::sqlx::pool_in"));
-    assert!(db_lib.contains("pub async fn connect_in("));
-    assert!(db_lib.contains("sqlx::query(\"SELECT 1\")"));
-    assert!(db_lib.contains("migrate_with_timeout"));
+    assert_database_crate_source(&db_lib);
     let test_support_db =
         fs::read_to_string(destination.join("crates/my-app-test-support/src/db.rs")).unwrap();
     assert!(test_support_db.contains("pub struct DatabaseTestConfig"));
@@ -617,6 +582,23 @@ fn assert_database_crate_and_test_support(destination: &Path) {
     assert!(
         postgres_test.contains("#[ignore = \"run with the root test:postgres package script\"]")
     );
+}
+
+fn assert_database_crate_source(db_lib: &str) {
+    assert!(db_lib.contains("PgPool"));
+    assert!(db_lib.contains("sqlx::Postgres::database_exists"));
+    assert!(db_lib.contains("sqlx::Postgres::create_database"));
+    assert!(db_lib.contains("Could not confirm database existence after creation failed"));
+    assert!(db_lib.contains("create_if_missing"));
+    assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
+    assert!(db_lib.contains("connect_with_timeout"));
+    assert!(db_lib.contains("batter::sqlx::pool_in"));
+    assert!(db_lib.contains("pub async fn connect_in("));
+    assert!(db_lib.contains("context.child(DEFAULT_DB_TIMEOUT)"));
+    assert!(db_lib.contains("batter::sqlx::probe(&pool, &probe_context)"));
+    assert!(!db_lib.contains("sqlx::query(\"SELECT 1\")"));
+    assert!(db_lib.contains("interrupted_established_probe_retires_lease_and_closes_pool"));
+    assert!(db_lib.contains("migrate_with_timeout"));
 }
 
 fn assert_postgres_test_script(destination: &Path) {

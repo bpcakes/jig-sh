@@ -178,7 +178,6 @@ fn frontend_workspace_declared_paths_match_rendered_outputs_for_all_shapes() {
         ] {
             for (preset, db) in [
                 (ScaffoldPreset::RustReact, ScaffoldDb::None),
-                (ScaffoldPreset::RustReact, ScaffoldDb::Sqlite),
                 (ScaffoldPreset::RustReact, ScaffoldDb::Postgres),
                 (ScaffoldPreset::GoReact, ScaffoldDb::None),
                 (ScaffoldPreset::GoReact, ScaffoldDb::Postgres),
@@ -272,21 +271,21 @@ fn e2e_workflow_paths_have_one_role_and_database_aware_authority() {
     assert!(no_database.iter().any(|path| path == "rust-toolchain.toml"));
     assert!(no_database.iter().any(|path| path == "npm-shrinkwrap.json"));
 
-    let sqlite = e2e_workflow_paths(
-        ScaffoldDb::Sqlite,
+    let postgres = e2e_workflow_paths(
+        ScaffoldDb::Postgres,
         "db/migrations",
         "db/sqlx",
         &[spa, admin, astro],
     );
-    assert!(sqlite.iter().any(|path| path == "web/**"));
-    assert!(sqlite.iter().any(|path| path == "db/migrations/**"));
-    assert!(sqlite.iter().any(|path| path == "db/sqlx/**"));
+    assert!(postgres.iter().any(|path| path == "web/**"));
+    assert!(postgres.iter().any(|path| path == "db/migrations/**"));
+    assert!(postgres.iter().any(|path| path == "db/sqlx/**"));
     assert_eq!(
-        sqlite
+        postgres
             .iter()
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
-        sqlite.len(),
+        postgres.len(),
         "E2E path authority must not contain duplicate entries"
     );
 
@@ -331,7 +330,7 @@ fn database_config_guard_requires_exported_url_or_dotenv_assignment() {
     let temp = tempdir().unwrap();
     let exported = Command::new("sh")
         .args(["-c", DATABASE_CONFIG_GUARD])
-        .env("DATABASE_URL", "sqlite:demo.db")
+        .env("DATABASE_URL", "postgres://localhost/demo")
         .current_dir(temp.path())
         .output()
         .unwrap();
@@ -348,7 +347,7 @@ fn database_config_guard_requires_exported_url_or_dotenv_assignment() {
 
     for invalid in [
         "",
-        "# DATABASE_URL=sqlite:commented.db\n",
+        "# DATABASE_URL=postgres://localhost/commented\n",
         "OTHER_SETTING=true\n",
         "DATABASE_URL=\n",
         "DATABASE_URL=   # still empty\n",
@@ -369,9 +368,9 @@ fn database_config_guard_requires_exported_url_or_dotenv_assignment() {
     }
 
     for valid in [
-        "DATABASE_URL=sqlite:demo.db\n",
+        "DATABASE_URL=postgres://localhost/demo\n",
         " export DATABASE_URL = postgres://localhost/demo\n",
-        "OTHER_SETTING=true\nDATABASE_URL='sqlite:quoted.db'\n",
+        "OTHER_SETTING=true\nDATABASE_URL='postgres://localhost/quoted'\n",
     ] {
         fs::write(temp.path().join(".env"), valid).unwrap();
         let output = Command::new("sh")

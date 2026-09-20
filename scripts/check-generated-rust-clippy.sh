@@ -371,27 +371,20 @@ assert_mod_module_files_rejected \
   online \
   workspace
 
-for database in sqlite postgres; do
-  database_repo="$fixture_root/ExampleProject-${database}"
-  init_repo "$database_repo" \
-    --preset rust-react \
-    --repo-name ExampleProject \
-    --db "$database" \
-    --frontends web,admin
-  prepare_and_check "$database_repo" "$rust_react_toolchain" online
-  if [[ "$database" == sqlite ]]; then
-    policy_source=command
-  else
-    policy_source=workspace
-  fi
-  assert_mod_module_files_rejected \
-    "Rust/React $database $policy_source lint" \
-    "$database_repo" \
-    "crates/exampleproject-core" \
-    "src/lib.rs" \
-    "$rust_react_toolchain" \
-    online \
-    "$policy_source"
-done
+postgres_repo="$fixture_root/ExampleProject-postgres"
+init_repo "$postgres_repo" \
+  --preset rust-react \
+  --repo-name ExampleProject \
+  --db postgres \
+  --frontends web,admin
+prepare_and_check "$postgres_repo" "$rust_react_toolchain" online
+assert_mod_module_files_rejected \
+  "Rust/React postgres inherited workspace lint" \
+  "$postgres_repo" \
+  "crates/exampleproject-core" \
+  "src/lib.rs" \
+  "$rust_react_toolchain" \
+  online \
+  workspace
 
 echo "Generated Rust Clippy validation passed."

@@ -216,7 +216,7 @@ impl ScaffoldPreset {
                     "Rust crate roots default to apps and crates.",
                     "The strict Clippy gate rejects functions when Clippy's cognitive-complexity heuristic exceeds 20.",
                     "Frontends default to web when omitted.",
-                    "Database scaffolding defaults to none; pass --db postgres or --db sqlite when wanted.",
+                    "Database scaffolding defaults to none; pass --db postgres when wanted.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
                     "Frontends share a pinned root workspace and install dependencies once during bootstrap.",
                     "React frontends ship tested shadcn 4 sources and provenance without running a mutable CLI during init.",
@@ -229,7 +229,7 @@ impl ScaffoldPreset {
                     "crates/<repo>-http",
                     "crates/<repo>-runtime owns Batter startup, signals, and cleanup",
                     "crates/<repo>-test-support",
-                    "crates/<repo>-db when --db postgres or --db sqlite is selected",
+                    "crates/<repo>-db when --db postgres is selected",
                 ],
                 frontend_shorthands: &[
                     ScaffoldFrontendShorthand {
@@ -248,7 +248,6 @@ impl ScaffoldPreset {
                 examples: &[
                     "jig init ./my-app --preset rust-react",
                     "jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin",
-                    "jig init ./my-app --preset rust-react --db sqlite --frontends web",
                 ],
                 ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
                 non_goals: &[
@@ -287,7 +286,7 @@ impl ScaffoldPreset {
                 ],
                 ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
                 non_goals: &[
-                    "The initial Go preset does not support SQLite or the privileged admin API/client boundary.",
+                    "The initial Go preset does not support the privileged admin API/client boundary.",
                     "jig update does not migrate or overwrite scaffolded application source.",
                 ],
             },

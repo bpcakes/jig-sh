@@ -48,8 +48,8 @@
 - Reject Rust-react application names that normalize to `batter`, `batter-core`,
   or `batter-axum` before writing destination files, because the required facade
   selects those packages transitively. PostgreSQL applications also reject
-  `batter-sqlx`; SQLite, database-free, library, and CLI shapes do not reserve
-  that conditional package name.
+  `batter-sqlx`; database-free, library, and CLI shapes do not reserve that
+  conditional package name.
 - Keep machine-local Beads paths out of exports through the repository sync
   helper and CI guard. Continue Linux argv PATH searches past unavailable
   filesystem entries while preserving direct-executable errors.
@@ -72,8 +72,9 @@
 - Generate all new `rust-react` applications with Batter-protected
   `Startup::scoped` ownership, signal-aware shutdown, lifecycle-aware HTTP
   admission, and finite database bootstrap commands. PostgreSQL registers its
-  SQLx pool through `batter::sqlx::pool_in` before the bounded connectivity check;
-  SQLite retains its native/manual cleanup path. These scaffolds require Rust
+  SQLx pool through `batter::sqlx::pool_in` before probing under the owning
+  operation context. New application scaffolds support PostgreSQL or no database;
+  SQLite is no longer a scaffold option. These scaffolds require Rust
   1.94 on Unix and pin the unpublished Batter facade to revision `95252ad`,
   enabling its `axum` feature and, for PostgreSQL, its `sqlx` feature. The facade
   preserves the foundation `batter::...` paths and exposes adapter namespaces

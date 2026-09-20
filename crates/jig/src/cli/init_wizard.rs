@@ -243,11 +243,7 @@ fn guide_project_shape<R: BufRead, W: Write>(
         print_project_shape_header(output, &metadata)?;
     }
     if needs_database {
-        opts.scaffold.db = Some(prompt_database(
-            input,
-            output,
-            preset == ScaffoldPreset::GoReact,
-        )?);
+        opts.scaffold.db = Some(prompt_database(input, output)?);
     }
     if needs_frontends {
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
@@ -325,29 +321,19 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
     }
 }
 
-fn prompt_database<R: BufRead, W: Write>(
-    input: &mut R,
-    output: &mut W,
-    go_backend: bool,
-) -> Result<ScaffoldDb> {
+fn prompt_database<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldDb> {
     loop {
         let answer = prompt_line(
             input,
             output,
-            if go_backend {
-                "Database? [none/postgres] (none): "
-            } else {
-                "Database? [none/postgres/sqlite] (none): "
-            },
+            "Database? [none/postgres] (none): ",
             "none",
             "database choice",
         )?;
         match answer.as_str() {
             "1" | "none" | "no" => return Ok(ScaffoldDb::None),
             "2" | "postgres" | "postgresql" => return Ok(ScaffoldDb::Postgres),
-            "3" | "sqlite" if !go_backend => return Ok(ScaffoldDb::Sqlite),
-            _ if go_backend => writeln!(output, "  Enter none or postgres.")?,
-            _ => writeln!(output, "  Enter none, postgres, or sqlite.")?,
+            _ => writeln!(output, "  Enter none or postgres.")?,
         }
     }
 }

@@ -280,7 +280,6 @@ impl InitScaffoldPlan {
                     bounded_postgres_identifier(&format!("{}_dev", self.module_name));
                 format!("postgres://postgres:postgres@localhost:5432/{database_name}")
             }
-            ScaffoldDb::Sqlite => format!("sqlite:{}.db", self.module_name),
         };
         let postgres_test_database_name =
             bounded_postgres_identifier(&format!("test_db_{}", self.module_name));
@@ -294,17 +293,14 @@ impl InitScaffoldPlan {
             "sqlx_driver": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "postgres",
-                ScaffoldDb::Sqlite => "sqlite",
             },
             "db_pool": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "PgPool",
-                ScaffoldDb::Sqlite => "SqlitePool",
             },
             "db_database": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "Postgres",
-                ScaffoldDb::Sqlite => "Sqlite",
             },
             "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", backend.migration_dir),
             "database_url_example": database_url_example,

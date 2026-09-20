@@ -280,7 +280,7 @@ fn scaffold_options_require_preset() {
     let error = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
             preset: None,
-            db: Some(ScaffoldDb::Sqlite),
+            db: Some(ScaffoldDb::Postgres),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
         },

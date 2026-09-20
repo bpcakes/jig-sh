@@ -334,7 +334,6 @@ pub enum ScaffoldPreset {
 pub enum ScaffoldDb {
     None,
     Postgres,
-    Sqlite,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
