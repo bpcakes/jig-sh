@@ -197,7 +197,19 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
             let entry = entry.unwrap();
             let path = entry.path();
             let relative = path.strip_prefix(root).unwrap().to_path_buf();
-            if entry.file_type().unwrap().is_dir() {
+            let file_type = entry.file_type().unwrap();
+            if file_type.is_symlink() {
+                files.insert(
+                    relative,
+                    Some(
+                        fs::read_link(&path)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned()
+                            .into_bytes(),
+                    ),
+                );
+            } else if file_type.is_dir() {
                 files.insert(relative, None);
                 pending.push(path);
             } else {

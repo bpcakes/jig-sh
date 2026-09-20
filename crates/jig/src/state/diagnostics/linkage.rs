@@ -331,12 +331,13 @@ fn classify_missing_run(
             recovery: None,
         });
     }
-    if sources.error_count > 0 {
+    let unverifiable_sources = sources.error_count.saturating_add(sources.symlinks_skipped);
+    if unverifiable_sources > 0 {
         return Some(Classification {
             status: "unverifiable",
             detail: format!(
                 "No lifecycle for this run was found in the active run journal, but {} local run history source(s) could not be verified. Archived history or a safe recovery source therefore cannot be confirmed.",
-                sources.error_count
+                unverifiable_sources
             ),
             history_sources,
             recovery: None,
@@ -558,6 +559,12 @@ pub(super) fn resolve(
         incomplete_reasons.push(format!(
             "{} local run history source(s) could not be fully verified",
             sources.error_count
+        ));
+    }
+    if sources.symlinks_skipped > 0 {
+        incomplete_reasons.push(format!(
+            "{} symlinked local run history candidate(s) were skipped and could not be verified",
+            sources.symlinks_skipped
         ));
     }
     if sources.budget_exhausted {

@@ -180,7 +180,12 @@ fn scan_local_history_sources_with_budget(
     sources
 }
 
-fn directory_entries(root: &Path, directory: &Path, sources: &mut HistorySources) -> Vec<PathBuf> {
+fn directory_entries(
+    root: &Path,
+    directory: &Path,
+    sources: &mut HistorySources,
+    is_history_symlink: impl Fn(&Path) -> bool,
+) -> Vec<PathBuf> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
@@ -193,7 +198,11 @@ fn directory_entries(root: &Path, directory: &Path, sources: &mut HistorySources
     for entry in entries {
         match entry {
             Ok(entry) => match entry.file_type() {
-                Ok(file_type) if file_type.is_symlink() => sources.symlinks_skipped += 1,
+                Ok(file_type) if file_type.is_symlink() => {
+                    if is_history_symlink(&entry.path()) {
+                        sources.symlinks_skipped += 1;
+                    }
+                }
                 Ok(_) => paths.push(entry.path()),
                 Err(error) => sources.error(format!(
                     "{}: {error}",
@@ -207,6 +216,12 @@ fn directory_entries(root: &Path, directory: &Path, sources: &mut HistorySources
     paths
 }
 
+fn is_run_archive(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(RUN_ARCHIVE_PREFIX) && name.ends_with(ARCHIVE_SUFFIX))
+}
+
 fn scan_run_archives(
     root: &Path,
     wanted: &mut BTreeSet<String>,
@@ -214,17 +229,11 @@ fn scan_run_archives(
     sources: &mut HistorySources,
 ) {
     let directory = root.join(STATE_ARCHIVES_DIR);
-    for path in directory_entries(root, &directory, sources) {
+    for path in directory_entries(root, &directory, sources, is_run_archive) {
         if wanted.is_empty() || budget.exhausted {
             break;
         }
-        let is_run_archive = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                name.starts_with(RUN_ARCHIVE_PREFIX) && name.ends_with(ARCHIVE_SUFFIX)
-            });
-        if !is_run_archive || !path.is_file() {
+        if !is_run_archive(&path) || !path.is_file() {
             continue;
         }
         sources.archives_scanned += 1;
@@ -248,7 +257,7 @@ fn scan_run_backups(
 ) {
     let directory = root.join(STATE_BACKUPS_DIR);
     let mut candidates = Vec::new();
-    for backup_dir in directory_entries(root, &directory, sources) {
+    for backup_dir in directory_entries(root, &directory, sources, |_| true) {
         let manifest_path = backup_dir.join(BACKUP_MANIFEST_FILE);
         if !backup_dir.is_dir() || !manifest_path.is_file() {
             continue;
