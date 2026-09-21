@@ -143,6 +143,54 @@ fn unrelated_invalid_archive_lifecycle_makes_history_unverifiable() {
 }
 
 #[test]
+fn unknown_event_in_a_second_gzip_member_makes_history_unverifiable() {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    let archive = ctx
+        .root()
+        .join(".agent/.cache/state-archives/runs-before-10-EXAMPLE.jsonl.gz");
+    write_gzip(&archive, &fs::read(ctx.state_file("runs.jsonl")).unwrap());
+    let unknown_event = serde_json::to_vec(&json!({
+        "id": "run_event_future_annotation",
+        "run_id": run_id,
+        "event": "future_annotation",
+        "timestamp_ms": 5,
+    }))
+    .unwrap();
+    let mut second_member = unknown_event;
+    second_member.push(b'\n');
+    append_gzip_member(&archive, &second_member);
+    fs::write(ctx.state_file("runs.jsonl"), b"").unwrap();
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[target_receipt(
+            "receipt_test",
+            "jig.test",
+            "api:test",
+            Some(&run_id),
+        )],
+    );
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+    let finding = finding_for(&output, &run_id);
+
+    assert_eq!(finding["status"], "unverifiable");
+    assert_eq!(linkage["runs"]["archived_verified"], 0);
+    assert_eq!(linkage["sources"]["archives_scanned"], 1);
+    assert_eq!(linkage["sources"]["error_count"], 1);
+    assert_string_array_contains(
+        &linkage["sources"]["errors"],
+        "trailing data after the first member",
+    );
+    assert_eq!(linkage["complete"], false);
+}
+
+#[test]
 fn events_before_queued_are_reported_as_inconsistent_not_healthy() {
     let (_temp, ctx) = fixture_context();
     write_orphan_batch(&ctx);

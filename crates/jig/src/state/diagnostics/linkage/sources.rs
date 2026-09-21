@@ -9,12 +9,12 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::super::{display_repo_path, push_sample};
 use super::LifecycleObservation;
+use crate::state::compression::single_member_gzip_reader;
 use crate::state::maintenance::read_run_backup_manifest;
 use crate::state::records::RunEventRecord;
 use crate::state::runs::lifecycle::{RunStreamValidator, is_recognized_run_event};
@@ -349,7 +349,7 @@ fn scan_gzip_run_events(
     budget: &mut ScanBudget,
 ) -> Result<BTreeMap<String, LifecycleObservation>> {
     let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-    let mut reader = BufReader::new(GzDecoder::new(file));
+    let mut reader = BufReader::new(single_member_gzip_reader(file));
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     let mut buffer = Vec::new();

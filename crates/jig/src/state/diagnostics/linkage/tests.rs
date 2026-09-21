@@ -141,6 +141,13 @@ fn write_gzip(path: &Path, bytes: &[u8]) {
     encoder.finish().unwrap();
 }
 
+fn append_gzip_member(path: &Path, bytes: &[u8]) {
+    let file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap();
+}
+
 /// Three target receipts plus the work-check batch that references them,
 /// exactly as `work check` writes them: the batch carries no top-level run_id.
 fn write_orphan_batch(ctx: &RepoContext) {
