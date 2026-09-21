@@ -73,8 +73,9 @@ pub(in crate::state) fn analyze_receipt_linkage(
     let Some(id) = id else {
         bail!("receipt record has no string id");
     };
-    let tracked_receipt = collector.track_references(1);
-    if tracked_receipt {
+    let newly_tracked_receipt = collector.track_references(1);
+    let tracked_receipt = newly_tracked_receipt || collector.receipt_ids.contains(&id);
+    if newly_tracked_receipt {
         collector.receipt_ids.insert(id.clone());
     }
     if let Some(run_id) = run_id {

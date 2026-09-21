@@ -69,6 +69,36 @@ fn identical_duplicate_receipt_runs_remain_clean() {
 }
 
 #[test]
+fn tracked_duplicate_receipt_runs_survive_reference_exhaustion_in_both_orders() {
+    for (first_run, second_run) in [(RUN_A, RUN_B), (RUN_B, RUN_A)] {
+        let mut collector = RunLinkageCollector {
+            receipt_ids: BTreeSet::from(["receipt_same".into()]),
+            receipt_runs: BTreeMap::from([(
+                "receipt_same".into(),
+                BTreeSet::from([first_run.into()]),
+            )]),
+            tracked_references: MAX_TRACKED_REFERENCES,
+            ..RunLinkageCollector::default()
+        };
+        let receipt = serde_json::to_vec(&json!({
+            "id": "receipt_same",
+            "run_id": second_run,
+        }))
+        .unwrap();
+
+        analyze_receipt_linkage(&receipt, &mut collector).unwrap();
+
+        assert!(collector.reference_budget_exceeded);
+        assert_eq!(
+            collector.receipt_runs["receipt_same"],
+            BTreeSet::from([RUN_A.into(), RUN_B.into()])
+        );
+        assert!(collector.conflicting_receipt_runs.contains("receipt_same"));
+        assert_eq!(collect_references(&collector).runs.len(), 2);
+    }
+}
+
+#[test]
 fn receipt_reference_exhaustion_does_not_starve_journal_lifecycles() {
     let mut collector = RunLinkageCollector {
         tracked_references: MAX_TRACKED_REFERENCES,
