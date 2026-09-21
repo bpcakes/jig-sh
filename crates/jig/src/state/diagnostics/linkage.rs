@@ -40,7 +40,8 @@ pub(super) const NOT_CHECKED_REASON: &str = "Run linkage is analyzed only with -
 #[derive(Default)]
 pub(super) struct RunLinkageCollector {
     receipt_ids: BTreeSet<String>,
-    receipt_runs: BTreeMap<String, String>,
+    receipt_runs: BTreeMap<String, BTreeSet<String>>,
+    conflicting_receipt_runs: BTreeSet<String>,
     batches: Vec<BatchReference>,
     receipts_with_run_id: u64,
     batch_receipts: u64,
@@ -230,6 +231,12 @@ fn incomplete_reasons(
             }
         }
         None => reasons.push("receipt stream was not scanned".into()),
+    }
+    if !collector.conflicting_receipt_runs.is_empty() {
+        reasons.push(format!(
+            "{} receipt ID(s) reference conflicting runs",
+            collector.conflicting_receipt_runs.len()
+        ));
     }
     if let Some(error) = &journal.scan_error {
         reasons.push(format!("run journal scan failed: {error}"));

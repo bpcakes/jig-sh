@@ -80,7 +80,11 @@ pub(in crate::state) fn analyze_receipt_linkage(
     if let Some(run_id) = run_id {
         collector.receipts_with_run_id += 1;
         if tracked_receipt {
-            collector.receipt_runs.insert(id.clone(), run_id);
+            let runs = collector.receipt_runs.entry(id.clone()).or_default();
+            runs.insert(run_id);
+            if runs.len() > 1 {
+                collector.conflicting_receipt_runs.insert(id.clone());
+            }
         }
     }
     if let Some(evidence) = evidence
@@ -181,13 +185,15 @@ fn decode_optional_string(record: &[u8], value: &Range<usize>) -> Result<Option<
 
 pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedReferences {
     let mut collected = CollectedReferences::default();
-    for (receipt_id, run_id) in &collector.receipt_runs {
-        collected
-            .runs
-            .entry(run_id.clone())
-            .or_default()
-            .receipt_ids
-            .insert(receipt_id.clone());
+    for (receipt_id, run_ids) in &collector.receipt_runs {
+        for run_id in run_ids {
+            collected
+                .runs
+                .entry(run_id.clone())
+                .or_default()
+                .receipt_ids
+                .insert(receipt_id.clone());
+        }
     }
     for batch in &collector.batches {
         for child in &batch.children {
@@ -198,12 +204,12 @@ pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedRe
             if let Some(run_id) = &child.run_id {
                 run_ids.insert(run_id.clone());
             }
-            let receipt_run_id = child
+            let receipt_run_ids = child
                 .receipt_id
                 .as_ref()
                 .and_then(|receipt_id| collector.receipt_runs.get(receipt_id));
-            if let Some(run_id) = receipt_run_id {
-                run_ids.insert(run_id.clone());
+            if let Some(receipt_run_ids) = receipt_run_ids {
+                run_ids.extend(receipt_run_ids.iter().cloned());
             }
             let receipt_exists = child
                 .receipt_id

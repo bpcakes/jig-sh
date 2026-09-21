@@ -8,9 +8,64 @@ fn receipt_linkage_analysis_rejects_unusable_identities() {
     analyze_receipt_linkage(br#"{"id":"r","run_id":"run_1"}"#, &mut collector).unwrap();
     assert_eq!(collector.receipts_with_run_id, 1);
     assert_eq!(
-        collector.receipt_runs.get("r").map(String::as_str),
-        Some("run_1")
+        collector.receipt_runs.get("r"),
+        Some(&BTreeSet::from(["run_1".into()]))
     );
+}
+
+fn diagnose_conflicting_receipt_runs(reverse: bool) -> Value {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let present_run = started.result.run_id;
+    complete_target(&ctx, &present_run);
+    complete_run(&ctx, &present_run, RunConclusion::Success).unwrap();
+    drop(lease);
+    let missing = target_receipt("receipt_same", "jig.test", "api:test", Some("run_missing"));
+    let present = target_receipt("receipt_same", "jig.test", "api:test", Some(&present_run));
+    let records = if reverse {
+        vec![present, missing]
+    } else {
+        vec![missing, present]
+    };
+    write_records(&ctx.state_file("receipts.jsonl"), &records);
+    diagnose(&ctx, true)
+}
+
+#[test]
+fn conflicting_duplicate_receipt_runs_are_order_independent_and_incomplete() {
+    for reverse in [false, true] {
+        let output = diagnose_conflicting_receipt_runs(reverse);
+        let linkage = &output["run_linkage"];
+        assert_eq!(linkage["complete"], false);
+        assert_ne!(linkage["verdict"], "clean");
+        assert_eq!(linkage["referenced_runs"], 2);
+        assert_eq!(finding_for(&output, "run_missing")["status"], "missing");
+        assert_string_array_contains(
+            &linkage["incomplete_reasons"],
+            "1 receipt ID(s) reference conflicting runs",
+        );
+    }
+}
+
+#[test]
+fn identical_duplicate_receipt_runs_remain_clean() {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    let receipt = target_receipt("receipt_same", "jig.test", "api:test", Some(&run_id));
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[receipt.clone(), receipt],
+    );
+
+    let output = diagnose(&ctx, true);
+
+    assert_eq!(output["run_linkage"]["verdict"], "clean");
+    assert_eq!(output["run_linkage"]["complete"], true);
+    assert_eq!(output["run_linkage"]["referenced_runs"], 1);
 }
 
 #[test]
