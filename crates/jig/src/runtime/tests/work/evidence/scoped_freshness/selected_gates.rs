@@ -123,6 +123,9 @@ fn mixed_native_and_legacy_gates_share_cli_and_mcp_selection() {
             dispatch(
                 &ctx,
                 CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+                    rust_focus: Default::default(),
+                    phase: None,
+                    explain: false,
                     projection: crate::surface::ResponseSurface::Standard,
                     plan_id: "plan_1".into(),
                     gates: vec!["legacy".into(), "optional".into()],

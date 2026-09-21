@@ -1,10 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+pub mod cargo;
 pub mod freshness;
 pub mod recovery;
 pub mod repository;
 pub mod run;
+pub mod rust_focus;
 
+pub use rust_focus::{
+    PreparedRustInputV1, RustFeaturesV1, RustFocusV1, RustNextestConfigV1, RustScopeDispositionV1,
+    RustTargetV1,
+};
+
+pub use cargo::{
+    CargoImpactContextV1, CargoImpactDispositionV1, CargoImpactReasonV1, CargoImpactV1,
+    CargoPackageImpactV1, CargoRuntimeTestFilterV1, CargoTargetImpactV1,
+};
 pub use repository::{
     ActionArgumentSpec, ActionEffect, ActionId, ActionInputsPolicy, ActionIntent, ActionRunner,
     ActionSourceState, ActionSpec, ArgvValue, ComponentId, ComponentSpec, FieldProvenance,

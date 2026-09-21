@@ -32,6 +32,8 @@ use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 mod archive;
 mod journal;
 mod originals;
+mod reuse_guard;
+use reuse_guard::current_plan_work_check_gate_evidence_in_locked_journal;
 mod validity;
 pub(crate) use originals::OriginalReceiptIndex;
 pub(crate) use validity::{effective_time_from_value, metadata_time, receipt_effective_time};
@@ -513,6 +515,34 @@ pub(crate) fn work_gate_receipt_index(
         evidence_targets,
         &|| false,
     )
+}
+
+pub(crate) fn target_receipt_index_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    targets: &BTreeSet<TargetId>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<TargetId, TargetReceiptStatus>> {
+    ensure_receipt_scan_active(cancelled)?;
+    if targets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    // Share gate inspection's cross-plan eligibility and newest-outcome policy,
+    // including its legacy and native-action plan-local exceptions.
+    const SELECTED_TARGETS: &str = "selected-invocations";
+    let mut index = work_gate_receipt_index_with_cancellation(
+        ctx,
+        plan_id,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &BTreeMap::from([(SELECTED_TARGETS.into(), targets.clone())]),
+        cancelled,
+    )?;
+    Ok(index
+        .evidence
+        .remove(SELECTED_TARGETS)
+        .map(IndexedTargetReceipts::into_selected)
+        .unwrap_or_default())
 }
 
 pub(crate) fn reusable_work_check_evidence_batch_with_cancellation(

@@ -388,4 +388,28 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn plan_output_schema_exposes_cargo_impact_facts() {
+        fn contains_property(value: &Value, property: &str) -> bool {
+            match value {
+                Value::Object(object) => {
+                    object
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_some_and(|properties| properties.contains_key(property))
+                        || object
+                            .values()
+                            .any(|value| contains_property(value, property))
+                }
+                Value::Array(values) => values
+                    .iter()
+                    .any(|value| contains_property(value, property)),
+                _ => false,
+            }
+        }
+
+        let schema = RepositoryTool::PlanRun.descriptor()["outputSchema"].clone();
+        assert!(contains_property(&schema, "cargo_impacts"));
+    }
 }

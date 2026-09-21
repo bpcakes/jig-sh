@@ -41,14 +41,16 @@ pub(crate) use receipts::{
     WorkGateReceiptIndexes, WorkReviewFinding, WorkReviewReceiptEvidence, WorkReviewReceiptStatus,
     current_worktree_fingerprint, current_worktree_fingerprint_for_receipt_with_cancellation,
     current_worktree_fingerprint_with_cancellation,
-    reusable_work_check_evidence_batch_with_cancellation, time_validity_is_current,
-    work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
+    reusable_work_check_evidence_batch_with_cancellation, target_receipt_index_with_cancellation,
+    time_validity_is_current, work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
     work_gate_receipt_indexes_with_cancellation,
 };
 pub(crate) use receipts::{OriginalReceiptIndex, TargetReceiptMetadata, record_target_receipt};
 pub(crate) use receipts::{
     ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
-    record_receipt_with_cancellation, record_receipt_with_cancellation_until,
+    record_receipt_with_cancellation,
+    record_receipt_with_cancellation_if_no_current_plan_gate_evidence,
+    record_receipt_with_cancellation_until,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};

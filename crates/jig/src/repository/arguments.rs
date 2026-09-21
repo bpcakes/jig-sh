@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use jig_contract::{ActionArgumentSpec, ActionArguments, ActionRunner, ActionSpec, TargetId};
 
 use super::ACTION_EXECUTION_CONTRACT_VERSION;
@@ -28,7 +28,14 @@ pub(crate) fn normalize_declarations(version: u32, action: &mut ActionSpec) -> R
             "target '{}' has invalid argument name '{name}'",
             action.target
         );
-        let ActionArgumentSpec::String { max_bytes, .. } = spec;
+        let ActionArgumentSpec::String { max_bytes, .. } = spec else {
+            ensure!(
+                name == "focus"
+                    && matches!(&action.runner, ActionRunner::RustNextestV1 { configuration } if configuration.focused),
+                "Rust focus arguments require an explicitly focused Rust runner"
+            );
+            continue;
+        };
         ensure!(
             (1..=MAX_STRING_BYTES).contains(max_bytes),
             "target '{}' argument '{name}' max_bytes must be between 1 and {MAX_STRING_BYTES}",
@@ -70,7 +77,7 @@ fn migration_action(action: &ActionSpec) -> bool {
 pub(crate) fn bind(
     version: u32,
     action: &ActionSpec,
-    supplied: ActionArguments,
+    mut supplied: ActionArguments,
 ) -> Result<ActionArguments> {
     // Legacy native inputs predate bounded declarations. Preserve that input
     // contract without inventing a finite bound for an unbounded legacy name.
@@ -100,11 +107,24 @@ pub(crate) fn bind(
         );
     }
     for (name, spec) in &action.arguments {
+        if matches!(spec, ActionArgumentSpec::RustFocusV1 {}) {
+            if let Some(value) = supplied.get_mut(name) {
+                ensure!(value.len() <= 65536, "Rust focus exceeds 65536 bytes");
+                let mut focus: jig_contract::RustFocusV1 =
+                    serde_json::from_str(value).context("invalid typed Rust focus")?;
+                jig_rust::rust_focus::normalize_focus(&mut focus).map_err(anyhow::Error::msg)?;
+                *value = serde_json::to_string(&focus)?;
+            }
+            continue;
+        }
         let ActionArgumentSpec::String {
             required,
             allow_empty,
             max_bytes,
-        } = spec;
+        } = spec
+        else {
+            unreachable!("Rust focus was normalized above")
+        };
         match supplied.get(name) {
             None if *required => bail!(
                 "target '{}' requires string argument '{name}'",

@@ -30,6 +30,7 @@ pub(crate) mod args {
     pub(crate) const NOTES: &str = "notes";
     pub(crate) const OPERATION: &str = "operation";
     pub(crate) const OUTCOME: &str = "outcome";
+    pub(crate) const PHASE: &str = "phase";
     pub(crate) const PLAN_ID: &str = "plan_id";
     pub(crate) const RATIONALE: &str = "rationale";
     pub(crate) const REASON: &str = "reason";
@@ -47,6 +48,7 @@ pub(crate) mod args {
     pub(crate) const CONSTRAINTS: &str = "constraints";
     pub(crate) const OBJECTIVE: &str = "objective";
     pub(crate) const VALIDATIONS: &str = "validations";
+    pub(crate) const EXPLAIN: &str = "explain";
 }
 
 pub(crate) mod cli_command {
@@ -575,41 +577,8 @@ fn work_start_input_schema() -> Value {
     schema
 }
 
-fn work_check_input_schema() -> Value {
-    let mut schema = object_schema(
-        &[
-            (args::PLAN_ID, string_schema()),
-            (
-                args::GATES,
-                json!({
-                    "type": "array",
-                    "items": { "type": "string" }
-                }),
-            ),
-            (
-                args::TOOLS,
-                json!({
-                    "type": "array",
-                    "items": { "type": "string" }
-                }),
-            ),
-        ],
-        &[args::PLAN_ID],
-    );
-    schema["not"] = json!({
-        "allOf": [
-            {
-                "required": [args::GATES],
-                "properties": { "gates": { "minItems": 1 } }
-            },
-            {
-                "required": [args::TOOLS],
-                "properties": { "tools": { "minItems": 1 } }
-            }
-        ]
-    });
-    schema
-}
+mod work_check;
+use work_check::work_check_input_schema;
 
 fn work_append_input_schema() -> Value {
     let mut schema = object_schema(
@@ -736,6 +705,9 @@ mod tests {
         for valid in [
             json!({ "plan_id": "plan_1" }),
             json!({ "plan_id": "plan_1", "gates": [], "tools": [] }),
+            json!({ "plan_id": "plan_1", "phase": null, "explain": null }),
+            json!({ "plan_id": "plan_1", "phase": "iteration", "explain": true }),
+            json!({ "plan_id": "plan_1", "phase": "final", "gates": [], "tools": [] }),
             json!({ "plan_id": "plan_1", "gates": ["tests"], "tools": [] }),
             json!({ "plan_id": "plan_1", "gates": [], "tools": ["jig.test"] }),
         ] {
@@ -745,6 +717,20 @@ mod tests {
             "plan_id": "plan_1",
             "gates": ["tests"],
             "tools": ["jig.test"]
+        })));
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "phase": "iteration",
+            "gates": ["tests"]
+        })));
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "phase": "final",
+            "tools": ["jig.test"]
+        })));
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "phase": "unknown"
         })));
     }
 

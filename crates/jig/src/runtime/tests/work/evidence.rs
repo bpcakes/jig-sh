@@ -231,10 +231,13 @@ profile = "verify"
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -422,10 +425,13 @@ profile = "does-not-exist"
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -572,10 +578,13 @@ tool = "jig.custom_check"
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -660,10 +669,13 @@ legacy_aliases = ["jig.failing_check"]
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -750,10 +762,13 @@ legacy_aliases = ["jig.broken_check"]
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()

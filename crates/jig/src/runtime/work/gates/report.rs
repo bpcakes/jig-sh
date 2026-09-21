@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) struct GateReport {
+pub(in crate::runtime::work) struct GateReport {
     pub(super) recovery: Option<recovery::Recovery>,
     pub(super) plan_id: String,
     pub(super) plan_state: &'static str,
@@ -20,7 +20,7 @@ impl GateReport {
         self.required_failures.is_empty()
     }
 
-    pub(super) fn to_value(&self) -> Value {
+    pub(in crate::runtime::work) fn to_value(&self) -> Value {
         let gates_ok = self.gates_ok();
         json!({
             "ok": true,

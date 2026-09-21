@@ -640,7 +640,9 @@ mod closure_failures;
 mod evidence;
 mod gate_receipt_ordering;
 mod gates;
+mod phases;
 mod review;
+mod rust_focus;
 
 include!("work_parts/part_01.rs");
 include!("work_parts/part_02.rs");

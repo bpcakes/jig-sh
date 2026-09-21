@@ -32,10 +32,13 @@ fn check(ctx: &RepoContext) -> anyhow::Result<Value> {
     dispatch(
         ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
 }

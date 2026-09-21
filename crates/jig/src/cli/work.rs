@@ -23,6 +23,8 @@ Human-readable output is the default. Pass --json for structured automation outp
 
 Examples:
   jig work check --plan-id plan_abc123
+  jig work check --plan-id plan_abc123 --phase iteration --explain
+  jig work check --plan-id plan_abc123 --phase final
   jig work check --plan-id plan_abc123 --json
   jig work check --plan-id plan_abc123 --projection agent-v1 --json
   jig work check --plan-id plan_abc123 --tool jig.test";
@@ -225,6 +227,13 @@ pub(crate) struct WorkAppendOpts {
 pub(crate) struct WorkCheckOpts {
     #[arg(
         long,
+        value_name = "TARGET=JSON",
+        requires = "phase",
+        help = "Typed Rust focus for an iteration target; may be repeated for different targets"
+    )]
+    pub(crate) rust_focus: Vec<String>,
+    #[arg(
+        long,
         value_enum,
         default_value_t,
         help = "Select standard output or the compact agent-v1 completion observation"
@@ -245,6 +254,20 @@ pub(crate) struct WorkCheckOpts {
         help = "Specific execution tool to force-run; defaults to required applicable gates"
     )]
     pub(crate) tools: Vec<String>,
+
+    #[arg(
+        long,
+        value_parser = ["iteration", "final"],
+        conflicts_with_all = ["gates", "tools"],
+        help = "Select the configured iteration profile or the final check scope"
+    )]
+    pub(crate) phase: Option<String>,
+
+    #[arg(
+        long,
+        help = "Preview selection, reuse, and pending final requirements without executing"
+    )]
+    pub(crate) explain: bool,
 }
 
 #[derive(Args, Debug)]

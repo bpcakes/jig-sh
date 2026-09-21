@@ -175,7 +175,7 @@ fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> boo
         return false;
     }
     match &action.runner {
-        ActionRunner::Argv { .. } => false,
+        ActionRunner::Argv { .. } | ActionRunner::RustNextestV1 { .. } => false,
         ActionRunner::Native { operation, .. } => matches!(
             operation.as_str(),
             tool::CONTRACT_CHECK | tool::FILE_BUDGET | tool::SCHEMA_CHECK | tool::MIGRATION_ADD

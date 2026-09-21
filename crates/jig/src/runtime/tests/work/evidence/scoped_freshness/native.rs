@@ -109,10 +109,13 @@ expires=2099-12-31
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();

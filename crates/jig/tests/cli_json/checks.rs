@@ -130,6 +130,72 @@ fn named_v6_check_uses_aggregate_output_and_exits_unsuccessfully() {
     assert!(stdout.contains("api:test: failed (exit 7)"), "{stdout}");
 }
 
+#[test]
+fn phased_work_check_failure_uses_a_failing_exit_status_but_explain_succeeds() {
+    let repo = tempdir().unwrap();
+    write_v6_failing_test_repo(repo.path());
+    let config_path = repo.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "[commands]",
+        "[work]\niteration_profile = \"verify\"\n\n[commands]",
+    );
+    fs::write(config_path, config).unwrap();
+    let started = jig()
+        .current_dir(repo.path())
+        .args([
+            "work",
+            "start",
+            "--title",
+            "Check example",
+            "--body",
+            "Validate the example fixture.",
+            "--print-plan-id",
+        ])
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{started:?}");
+    let plan_id = String::from_utf8(started.stdout).unwrap();
+    let plan_id = plan_id.trim();
+
+    let failed = jig()
+        .current_dir(repo.path())
+        .args([
+            "work",
+            "check",
+            "--plan-id",
+            plan_id,
+            "--phase",
+            "iteration",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1), "{failed:?}");
+    assert!(failed.stderr.is_empty());
+    let failed: Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert_eq!(failed["ok"], false, "{failed:#}");
+    assert_eq!(failed["phase"], "iteration");
+
+    let explained = jig()
+        .current_dir(repo.path())
+        .args([
+            "work",
+            "check",
+            "--plan-id",
+            plan_id,
+            "--phase",
+            "iteration",
+            "--explain",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(explained.status.success(), "{explained:?}");
+    let explained: Value = serde_json::from_slice(&explained.stdout).unwrap();
+    assert_eq!(explained["ok"], true, "{explained:#}");
+    assert_eq!(explained["selected_ok"], false, "{explained:#}");
+}
+
 #[cfg(unix)]
 #[test]
 fn repository_check_prints_lease_contention_before_the_lease_is_released() {

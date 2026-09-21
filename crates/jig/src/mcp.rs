@@ -162,9 +162,7 @@ fn handle_tool_call(
         );
         let progress_result = observer.flush();
         let tool_result = combine_tool_and_progress_results(tool_result, progress_result)?;
-        let is_error = surface == ResponseSurface::AgentV1
-            && name == crate::tool_defs::tool::WORK_CHECK
-            && tool_result["ok"] == false;
+        let is_error = tool_result_is_error(name, &tool_result);
         Ok(json!({
             "content": [
                 {
@@ -196,6 +194,10 @@ fn handle_tool_call(
             response
         }
     }
+}
+
+fn tool_result_is_error(name: &str, result: &Value) -> bool {
+    name == tool_defs::tool::WORK_CHECK && result["ok"] == false
 }
 
 fn combine_tool_and_progress_results<T>(

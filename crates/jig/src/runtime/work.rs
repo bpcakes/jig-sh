@@ -19,8 +19,12 @@ use crate::state::{
 mod check_schedule;
 mod checks;
 #[cfg(test)]
-pub(in crate::runtime) use checks::check_tools_collect_failures_with_observer;
+pub(in crate::runtime) use checks::{
+    check_phase_with_pre_execution_test_hook, check_tools_collect_failures_with_observer,
+};
 mod gates;
+#[cfg(test)]
+pub(crate) use gates::selected_invocation_snapshot_with_test_timeout;
 mod goal;
 mod review;
 mod scope;

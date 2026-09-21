@@ -29,6 +29,9 @@ fn check(ctx: &RepoContext, plan: &str) -> Value {
     dispatch(
         ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            phase: None,
+            explain: false,
             projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan.into(),
             gates: vec![],

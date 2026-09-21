@@ -179,8 +179,10 @@ pub(super) fn run_process_target(
         ));
     }
     command.current_dir(working_directory).envs(environment);
-    if matches!(planned.runner, ActionRunner::Argv { .. })
-        && let Err(error) = crate::repository::runners::prepare_literal_exec(&mut command)
+    if matches!(
+        planned.runner,
+        ActionRunner::Argv { .. } | ActionRunner::RustNextestV1 { .. }
+    ) && let Err(error) = crate::repository::runners::prepare_literal_exec(&mut command)
     {
         return TargetCapture::blocked(format!(
             "target '{}' literal process could not be prepared: {error}",
@@ -198,6 +200,7 @@ pub(super) fn run_process_target(
             format!("Command runner '{command}'")
         }
         ActionRunner::Argv { program, .. } => format!("Argv runner '{program}'"),
+        ActionRunner::RustNextestV1 { .. } => "Typed Rust nextest runner".into(),
         ActionRunner::Native { .. } => "Native runner".into(),
     };
     let label = format!("{runner} for target '{}'", planned.target);

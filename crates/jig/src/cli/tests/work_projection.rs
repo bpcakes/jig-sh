@@ -21,7 +21,7 @@ fn work_projection_is_explicit_and_scoped_to_supported_inspection_commands() {
             let CommandKind::Work(command) = parsed.command else {
                 panic!("work command")
             };
-            let projection = match crate::command::WorkCommand::from(command) {
+            let projection = match crate::command::WorkCommand::try_from(command).unwrap() {
                 crate::command::WorkCommand::Check(request) => request.projection,
                 crate::command::WorkCommand::Gates(request) => request.projection,
                 crate::command::WorkCommand::Evidence(request) => request.projection,

@@ -56,7 +56,9 @@ fn mcp_work_tools_tolerate_null_optional_defaults() {
         tool::WORK_CHECK,
         json!({
             "plan_id": "plan_1",
-            "tools": null
+            "tools": null,
+            "phase": null,
+            "explain": null
         }),
     )
     .unwrap();
@@ -82,6 +84,60 @@ fn mcp_work_tools_tolerate_null_optional_defaults() {
     assert_eq!(receipts["ok"], true);
     assert_eq!(evidence["command"], "work evidence");
     assert!(!receipts["receipts"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn mcp_work_check_exposes_iteration_preview_and_runtime_conflicts() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "full"
+kind = "evidence"
+profile = "verify"
+"#,
+    );
+    enable_v6_iteration_profile(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let receipts_path = temp.path().join(".agent/state/receipts.jsonl");
+    let before = fs::read(&receipts_path).unwrap_or_default();
+
+    let preview = call_tool(
+        &ctx,
+        tool::WORK_CHECK,
+        json!({
+            "plan_id": "plan_1",
+            "phase": "iteration",
+            "explain": true,
+            "gates": [],
+            "tools": []
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(preview["phase"], "iteration");
+    assert_eq!(preview["explain"], true);
+    assert_eq!(preview["selected_invocations"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["pending_final_requirements"][0]["id"], "full");
+    assert_eq!(fs::read(&receipts_path).unwrap_or_default(), before);
+
+    let conflict = call_tool(
+        &ctx,
+        tool::WORK_CHECK,
+        json!({
+            "plan_id": "plan_1",
+            "phase": "final",
+            "gates": ["full"]
+        }),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        conflict.contains("--phase cannot be combined"),
+        "{conflict}"
+    );
 }
 
 #[test]

@@ -311,7 +311,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Dev(opts) => RuntimeCommand::Dev(opts.into()),
         CommandKind::Proxy(command) => RuntimeCommand::Proxy(command.into()),
         CommandKind::Agent(command) => RuntimeCommand::Agent(command.into()),
-        CommandKind::Work(command) => RuntimeCommand::Work(command.into()),
+        CommandKind::Work(command) => RuntimeCommand::Work(command.try_into().unwrap()),
         CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)

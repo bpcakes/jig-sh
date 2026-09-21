@@ -6,6 +6,19 @@ pub(super) fn check_with_execution(
     execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
+    super::rust_focus::arguments(&opts)?;
+    if opts.phase.is_some() && (!opts.gates.is_empty() || !opts.tools.is_empty()) {
+        bail!(
+            "Work check --phase cannot be combined with --gate or --tool; use the existing unphased force-selection command or the configured phase"
+        );
+    }
+    if (opts.phase.is_some() || opts.explain)
+        && opts.projection == crate::surface::ResponseSurface::AgentV1
+    {
+        bail!(
+            "Work check --phase and --explain are not supported by projection agent-v1; omit --projection for the selected invocation and final requirement report"
+        );
+    }
     let failure_mode = if opts.projection == crate::surface::ResponseSurface::AgentV1 {
         FailureMode::Collect
     } else {
@@ -15,6 +28,9 @@ pub(super) fn check_with_execution(
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     reject_native_tool_selectors(ctx, &opts)?;
+    if opts.phase.is_some() || opts.explain {
+        return super::phase::check_phase(ctx, opts, execution, observer);
+    }
     if !opts.gates.is_empty() {
         if !opts.tools.is_empty() {
             bail!("Work check accepts either gate ids or tool names, not both");

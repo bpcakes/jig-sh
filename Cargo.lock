@@ -1600,6 +1600,8 @@ name = "jig-rust"
 version = "0.4.1-dev"
 dependencies = [
  "jig-contract",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1625,6 +1627,7 @@ dependencies = [
  "jig-features",
  "jig-file-budget",
  "jig-owned-process",
+ "jig-rust",
  "jig-tui",
  "jig-typescript",
  "jig-ui",

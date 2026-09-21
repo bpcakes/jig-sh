@@ -1,0 +1,1 @@
+Implement jig-sh-rust-validation-velocity-w0yp.4 using .agent/plans/v04-typed-rust-focus.md. Integrate relevant V01 and V03 code without historical journals, then implement typed scope-bound Rust execution, real Cargo acceptance, all required gates, and native Codex review.

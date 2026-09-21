@@ -38,6 +38,19 @@ pub(super) fn collect(
     runner.text("runner-component");
     let mut resolved = action.runner.clone();
     match &mut resolved {
+        ActionRunner::RustNextestV1 { .. } => {
+            let prepared = invocation
+                .prepared_rust_input
+                .as_ref()
+                .ok_or_else(|| unavailable("Rust invocation was not prepared"))?;
+            if prepared.schema_version != 1 {
+                return Err(unavailable("Rust invocation schema is unsupported"));
+            }
+            runner.field(
+                &serde_json::to_vec(prepared)
+                    .map_err(|_| unavailable("Rust authority could not be encoded"))?,
+            );
+        }
         ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
             let command = ctx
                 .command_for_key(command)

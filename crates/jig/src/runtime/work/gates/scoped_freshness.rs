@@ -13,9 +13,16 @@ use crate::state::TargetReceiptStatus;
 mod observations;
 pub(super) use observations::ScopedGateObservations;
 
-pub(super) struct ScopedGateFreshness {
+pub(in crate::runtime::work) struct ScopedGateFreshness {
     pub(super) targets: BTreeMap<TargetId, TargetFreshness>,
+    pub(super) current_authority: BTreeMap<TargetId, CurrentTargetAuthority>,
     pub(super) stats: FreshnessCollectionStats,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CurrentTargetAuthority {
+    Available,
+    Unavailable,
 }
 
 pub(super) struct ScopedGateInputs<'a> {
@@ -25,6 +32,13 @@ pub(super) struct ScopedGateInputs<'a> {
     pub(super) receipts: &'a WorkGateReceiptIndex,
     pub(super) whole_source_token: Option<&'a str>,
     pub(super) observations: &'a mut ScopedGateObservations,
+}
+
+struct SelectedFreshnessInputs<'a> {
+    plan_id: &'a str,
+    required: BTreeSet<TargetId>,
+    selected: BTreeMap<TargetId, TargetReceiptStatus>,
+    whole_source_token: Option<&'a str>,
 }
 
 impl ScopedGateFreshness {
@@ -58,10 +72,97 @@ impl ScopedGateFreshness {
                 }
             }
         }
+        let invocation_targets = required.clone();
+        Self::collect_selected(
+            ctx,
+            catalog,
+            SelectedFreshnessInputs {
+                plan_id,
+                required,
+                selected: selected
+                    .into_iter()
+                    .map(|(target, receipt)| (target, receipt.clone()))
+                    .collect(),
+                whole_source_token,
+            },
+            observations,
+            budget,
+            |budget| {
+                default_invocations(ctx, catalog, &invocation_targets, plan_id, baseline, budget)
+            },
+        )
+    }
+
+    pub(in crate::runtime::work) fn collect_invocations(
+        ctx: &RepoContext,
+        catalog: &RepositoryCatalog,
+        plan_id: &str,
+        invocations: &[PlannedTarget],
+        receipts: &BTreeMap<TargetId, TargetReceiptStatus>,
+        whole_source_token: Option<&str>,
+        budget: &mut CollectionBudget<'_>,
+    ) -> Self {
+        Self::collect_selected(
+            ctx,
+            catalog,
+            SelectedFreshnessInputs {
+                plan_id,
+                required: invocations
+                    .iter()
+                    .map(|invocation| invocation.target.clone())
+                    .collect(),
+                selected: receipts.clone(),
+                whole_source_token,
+            },
+            &mut ScopedGateObservations::default(),
+            budget,
+            |_| Ok(invocations.to_vec()),
+        )
+    }
+
+    fn collect_selected(
+        ctx: &RepoContext,
+        catalog: &RepositoryCatalog,
+        inputs: SelectedFreshnessInputs<'_>,
+        observations: &mut ScopedGateObservations,
+        budget: &mut CollectionBudget<'_>,
+        resolve_invocations: impl FnOnce(
+            &mut CollectionBudget<'_>,
+        ) -> CollectionResult<Vec<PlannedTarget>>,
+    ) -> Self {
+        let SelectedFreshnessInputs {
+            plan_id,
+            required,
+            selected,
+            whole_source_token,
+        } = inputs;
+        let selected: BTreeMap<_, _> = selected
+            .iter()
+            .map(|(target, receipt)| (target.clone(), receipt))
+            .collect();
+        let mut current_authority = required
+            .iter()
+            .cloned()
+            .map(|target| (target, CurrentTargetAuthority::Unavailable))
+            .collect::<BTreeMap<_, _>>();
         let results = (|| {
             let proof_started = std::time::Instant::now();
-            let invocations =
-                default_invocations(ctx, catalog, &required, plan_id, baseline, budget)?;
+            let invocations = resolve_invocations(budget)?;
+            // A phase plan has already prepared authority against its frozen
+            // source. Preserve that authority if receipt inspection times out;
+            // later identity or source failures still revoke it.
+            for invocation in &invocations {
+                if required.contains(&invocation.target) {
+                    current_authority.insert(
+                        invocation.target.clone(),
+                        if invocation.target_identity.is_some() {
+                            CurrentTargetAuthority::Available
+                        } else {
+                            CurrentTargetAuthority::Unavailable
+                        },
+                    );
+                }
+            }
             budget.stats.proof_us += proof_started.elapsed().as_micros() as u64;
             let observation = observations.observe(
                 ctx,
@@ -84,6 +185,14 @@ impl ScopedGateFreshness {
                         "current required target identity is missing",
                     )
                 })?;
+                current_authority.insert(
+                    target.clone(),
+                    if expected.is_ok() {
+                        CurrentTargetAuthority::Available
+                    } else {
+                        CurrentTargetAuthority::Unavailable
+                    },
+                );
                 if let Some(receipt) = selected.get(target) {
                     compare_current_identity(result, receipt, expected);
                 } else if let Err(failure) = expected {
@@ -92,7 +201,14 @@ impl ScopedGateFreshness {
                     *result = unknown(failure.reason.clone());
                 }
             }
-            revalidate_whole_source(ctx, catalog, &invocations, whole_source_token, budget)?;
+            if let Err(error) =
+                revalidate_whole_source(ctx, catalog, &invocations, whole_source_token, budget)
+            {
+                current_authority
+                    .values_mut()
+                    .for_each(|authority| *authority = CurrentTargetAuthority::Unavailable);
+                return Err(error);
+            }
             observation.originals.revalidate(budget)?;
             let now = crate::state::now_ms();
             for result in targets.values_mut() {
@@ -117,6 +233,7 @@ impl ScopedGateFreshness {
         });
         Self {
             targets,
+            current_authority,
             stats: budget.finish_stats(),
         }
     }
@@ -165,6 +282,10 @@ fn default_invocations(
         invocation.depends_on.clone_from(&action.depends_on);
         invocation.timeout_seconds = action.timeout_seconds;
         invocation.result_parser = action.result_parser;
+        if let ActionRunner::RustNextestV1 { configuration } = &action.runner {
+            invocation.prepared_rust_input =
+                Some(crate::repository::rust_focus::full_input(configuration));
+        }
         // Empty request arguments are the declared execution defaults; binding
         // and any missing required arguments are checked by the authority collector.
         if let ActionRunner::Native {

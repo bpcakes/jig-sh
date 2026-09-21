@@ -53,9 +53,10 @@ pub(crate) use vault::{
     is_valid_vault_scope_id,
 };
 pub(crate) use work::{
-    DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckRequest, WorkCommand,
-    WorkDecisionRequest, WorkEvidenceRequest, WorkFinishRequest, WorkGatesRequest, WorkGoalRequest,
-    WorkReceiptsRequest, WorkRefineRequest, WorkRetireRequest, WorkReviewRequest, WorkStartRequest,
+    DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckPhase, WorkCheckRequest,
+    WorkCommand, WorkDecisionRequest, WorkEvidenceRequest, WorkFinishRequest, WorkGatesRequest,
+    WorkGoalRequest, WorkReceiptsRequest, WorkRefineRequest, WorkRetireRequest, WorkReviewRequest,
+    WorkStartRequest,
 };
 
 #[derive(Debug)]

@@ -13,7 +13,9 @@ use crate::state::{
     WorkCheckBatchEvidence, WorkCheckGateEvidence,
     current_worktree_fingerprint_for_receipt_with_cancellation,
     current_worktree_fingerprint_with_cancellation, now_ms, record_receipt,
-    record_receipt_with_cancellation, reusable_work_check_evidence_batch_with_cancellation,
+    record_receipt_with_cancellation,
+    record_receipt_with_cancellation_if_no_current_plan_gate_evidence,
+    reusable_work_check_evidence_batch_with_cancellation,
 };
 use crate::tool_defs::tool;
 
@@ -59,7 +61,12 @@ fn check_projected(
     }
 }
 
+mod batch;
+mod phase;
+mod rust_focus;
 mod selection;
+#[cfg(test)]
+pub(in crate::runtime) use phase::check_phase_with_pre_execution_test_hook;
 use selection::check_with_execution;
 
 #[cfg(test)]
@@ -128,45 +135,16 @@ fn check_selected_with_failure_mode(
         bail!(EMPTY_CHECK_SELECTION_MESSAGE);
     }
     let started = now_ms();
-    let batch = prepare_check_batch(ctx, plan_id, selected, observer)?;
-    let outcome = execute_check_batch(ctx, plan_id, &batch, failure_mode, execution, observer)?;
-    let receipt_result =
-        record_check_batch_receipt(ctx, plan_id, started, &batch, &outcome, observer);
-
-    if (failure_mode.aborts() || observer.cancelled())
-        && let Some(failure) = outcome.failure.as_ref()
-    {
-        return match receipt_result {
-            Ok(_) => Err(anyhow!("{:#}", failure.error)),
-            Err(receipt_error) => {
-                bail!(
-                    "{:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}",
-                    failure.error
-                )
-            }
-        };
-    }
-    let receipt_id = receipt_result?;
-    let failure_message = outcome
-        .failure
-        .as_ref()
-        .map(|failure| format!("{:#}", failure.error));
-
-    let mut value = json!({
-        "ok": outcome.failure.is_none(),
-        "plan_id": plan_id,
-        "checks": outcome.results,
-        "change_evidence": batch.changes.to_value(),
-        "gate_evidence": outcome.gate_evidence,
-        "error": failure_message,
-        "receipt_id": receipt_id,
-    });
-    if let Some(validity) = batch_effective_time(ctx, &outcome) {
-        value["effective_valid_until_ms"] = json!(validity.effective_valid_until_ms);
-        value["effective_requires_time_validity"] =
-            json!(validity.effective_requires_time_validity);
-    }
-    Ok(value)
+    let batch = prepare_check_batch(ctx, plan_id, selected, None, observer)?;
+    batch::check_prepared_with_failure_mode(
+        ctx,
+        plan_id,
+        batch,
+        started,
+        failure_mode,
+        execution,
+        observer,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -250,6 +228,7 @@ struct PreparedCheckBatch {
     runnable_count: usize,
     changes: BatchChanges,
     before_fingerprint: crate::state::CurrentWorktreeFingerprint,
+    expected_authority_digest: Option<String>,
 }
 
 #[derive(Default)]
@@ -332,6 +311,7 @@ fn prepare_check_batch(
     ctx: &RepoContext,
     plan_id: &str,
     selected: Vec<SelectedCheck>,
+    expected_authority_digest: Option<&str>,
     observer: &dyn ExecutionControl,
 ) -> Result<PreparedCheckBatch> {
     for selected in &selected {
@@ -426,6 +406,7 @@ fn prepare_check_batch(
         runnable_count,
         changes,
         before_fingerprint,
+        expected_authority_digest: expected_authority_digest.map(str::to_owned),
     })
 }
 
@@ -478,7 +459,7 @@ fn execute_check_batch(
             plan_id,
             runnable,
             position,
-            failure_mode,
+            batch.expected_authority_digest.as_deref(),
             execution,
             observer,
         )?;
@@ -610,7 +591,7 @@ fn run_check(
     plan_id: &str,
     runnable: RunnableCheck<'_>,
     position: PhasePosition,
-    _failure_mode: FailureMode,
+    expected_authority_digest: Option<&str>,
     work_check_execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CheckRunOutcome> {
@@ -622,6 +603,7 @@ fn run_check(
                 json!({}),
                 Some(plan_id.to_string()),
                 position,
+                expected_authority_digest,
                 observer,
             )
         }
@@ -632,6 +614,7 @@ fn run_check(
                 json!({}),
                 Some(plan_id.to_string()),
                 position,
+                expected_authority_digest,
                 observer,
             )
         }

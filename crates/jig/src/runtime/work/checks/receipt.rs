@@ -37,6 +37,12 @@ pub(super) fn record_check_batch_receipt(
         .gate_evidence
         .iter()
         .any(|gate| gate.requires_time_validity);
+    let reused_gate_ids = outcome
+        .gate_evidence
+        .iter()
+        .filter(|gate| gate.status == "reused")
+        .map(|gate| gate.gate_id.clone())
+        .collect::<BTreeSet<_>>();
     let receipt_input = ReceiptInput {
         tool_name: tool::WORK_CHECK,
         args: json!({
@@ -71,7 +77,20 @@ pub(super) fn record_check_batch_receipt(
         collect_worktree_fingerprint: false,
         worktree_fingerprint_override,
     };
-    if cancellation_active {
+    if !cancellation_active && !reused_gate_ids.is_empty() {
+        // Reuse preparation deliberately happens before phase planning. Close
+        // the resulting journal race at publication: no current-plan gate
+        // evidence may have appeared before this successful reuse receipt.
+        // The scan and append share the receipt writer lock, so a concurrent
+        // writer is ordered entirely before or after this decision.
+        record_receipt_with_cancellation_if_no_current_plan_gate_evidence(
+            ctx,
+            receipt_input,
+            plan_id,
+            &reused_gate_ids,
+            &|| observer.cancelled(),
+        )
+    } else if cancellation_active {
         // Cancellation is already authoritative, but its batch evidence still
         // has to supersede older passes. Append the small cleanup record
         // without starting fresh Git metadata collection.

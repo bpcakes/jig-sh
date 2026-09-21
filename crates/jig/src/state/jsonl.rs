@@ -740,6 +740,7 @@ pub(super) use reverse::{
 };
 
 mod snapshot;
+pub(in crate::state) use snapshot::scan_jsonl_file as scan_jsonl_file_for_locked_receipt;
 use snapshot::*;
 #[cfg(test)]
 pub(super) use snapshot::{read_jsonl_with_data_lock, read_jsonl_with_io};

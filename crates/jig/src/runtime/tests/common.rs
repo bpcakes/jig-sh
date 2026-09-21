@@ -200,6 +200,66 @@ targets = [
     write_open_plan(root);
 }
 
+pub(super) fn enable_v6_iteration_profile(root: &Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "[commands]",
+            "[work]\niteration_profile = \"iteration\"\n\n[commands]",
+        )
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"printf 'api tests passed\\n'; printf 'api\\n' >> .agent/launch.log\"",
+        )
+        .replace(
+            "web_test_command = \"printf 'web tests passed\\n'\"",
+            "web_test_command = \"printf 'web tests passed\\n'; printf 'web\\n' >> .agent/launch.log\"",
+        );
+    let config = format!(
+        "{config}\n[[repository.profiles]]\nid = \"iteration\"\ntargets = [{{ component = \"api\", action = \"test\" }}]\n"
+    );
+    fs::write(&config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["profiles"].as_array_mut().unwrap().push(json!({
+        "id": "iteration",
+        "targets": [{"component": "api", "action": "test"}]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+pub(super) fn enable_v6_legacy_web_tool(root: &Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replacen(
+        "inputs = [\"web/**\"]",
+        "inputs = [\"web/**\"]\nlegacy_aliases = [\"jig.web_test\"]",
+        1,
+    );
+    fs::write(&config_path, config).unwrap();
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"][1]["legacy_aliases"] = json!(["jig.web_test"]);
+    manifest["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.web_test",
+        "kind": "command",
+        "description": "Run the full web check.",
+        "command": "web_test_command"
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 pub(super) fn write_non_rust_file_budget_fixture_repo(root: &Path) {
     fs::create_dir_all(root.join(".agent")).unwrap();
     fs::create_dir_all(root.join("web")).unwrap();

@@ -31,10 +31,13 @@ fn work_finish_allows_passing_required_gates() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -66,10 +69,13 @@ fn work_gates_reject_stale_required_gate_receipts() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -78,7 +84,7 @@ projection: crate::surface::ResponseSurface::Standard,
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
@@ -116,10 +122,13 @@ fn work_gates_reject_unknown_required_gate_freshness() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -127,7 +136,7 @@ projection: crate::surface::ResponseSurface::Standard,
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
@@ -232,7 +241,7 @@ fn work_review_records_structured_codex_review_findings() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -303,7 +312,7 @@ fn work_review_surfaces_raw_counts_when_findings_are_truncated() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -348,7 +357,7 @@ fn work_review_fails_when_codex_exits_nonzero_with_below_threshold_findings() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -430,7 +439,7 @@ fn work_refine_runs_fixer_then_review_and_check_gates() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-projection: crate::surface::ResponseSurface::Standard,
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),

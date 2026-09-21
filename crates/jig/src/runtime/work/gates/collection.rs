@@ -13,7 +13,7 @@ pub(super) fn gate_report(ctx: &RepoContext, plan_id: &str, timeout_ms: u64) -> 
     )
 }
 
-pub(super) fn gate_report_with_cancellation(
+pub(in crate::runtime::work) fn gate_report_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
     cancelled: &dyn Fn() -> bool,

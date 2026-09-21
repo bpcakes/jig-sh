@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{self, Write};
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -14,6 +15,135 @@ use crate::context::RepoContext;
 use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 use crate::surface::ResponseSurface;
 use crate::test_env::TestRepoBuilder;
+
+fn write_failing_phase_fixture(root: &std::path::Path) {
+    fs::create_dir_all(root.join("api")).unwrap();
+    fs::write(root.join("api/example.go"), "package example\n").unwrap();
+    TestRepoBuilder::new(root)
+        .contract_version(6)
+        .config(
+            r#"
+[commands]
+api_test_command = "exit 7"
+
+[work]
+iteration_profile = "iteration"
+
+[repository]
+default_check_profile = "iteration"
+
+[[repository.components]]
+id = "api"
+root = "api"
+adapters = ["go"]
+
+[[repository.actions]]
+target = { component = "api", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+
+[[repository.profiles]]
+id = "iteration"
+targets = [{ component = "api", action = "test" }]
+"#,
+        )
+        .required_commands(["api_test_command"])
+        .write();
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"] = json!([
+        {"id": "api", "root": "api", "adapters": ["go"]}
+    ]);
+    manifest["actions"] = json!([{
+        "target": {"component": "api", "action": "test"},
+        "intent": "check",
+        "effects": ["read_only", "process"],
+        "runner": {"kind": "command", "command": "api_test_command"},
+        "inputs": ["api/**"]
+    }]);
+    manifest["profiles"] = json!([{
+        "id": "iteration",
+        "targets": [{"component": "api", "action": "test"}]
+    }]);
+    manifest["default_check_profile"] = json!("iteration");
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "agent@example.invalid"],
+        vec!["config", "user.name", "Fixture Agent"],
+        vec!["add", "."],
+        vec!["commit", "-qm", "fixture"],
+    ] {
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+}
+
+#[test]
+fn failed_phase_check_sets_mcp_tool_error_and_preserves_the_report() {
+    let temp = tempdir().unwrap();
+    write_failing_phase_fixture(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Example plan", "Body").unwrap();
+    let mut writer = Vec::new();
+
+    let response = handle_tool_call(
+        &ctx,
+        Some(json!(1)),
+        json!({
+            "name": crate::tool_defs::tool::WORK_CHECK,
+            "arguments": {"plan_id": "plan_1", "phase": "iteration"}
+        }),
+        &mut writer,
+        MessageFraming::JsonLine,
+        ResponseSurface::Standard,
+    );
+
+    assert!(response.get("error").is_none(), "{response:#}");
+    assert_eq!(response["result"]["isError"], true, "{response:#}");
+    assert_eq!(response["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        response["result"]["structuredContent"]["phase"],
+        "iteration"
+    );
+    let text: serde_json::Value =
+        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text, response["result"]["structuredContent"]);
+    assert!(writer.is_empty());
+
+    let preview = handle_tool_call(
+        &ctx,
+        Some(json!(2)),
+        json!({
+            "name": crate::tool_defs::tool::WORK_CHECK,
+            "arguments": {
+                "plan_id": "plan_1",
+                "phase": "iteration",
+                "explain": true
+            }
+        }),
+        &mut writer,
+        MessageFraming::JsonLine,
+        ResponseSurface::Standard,
+    );
+    assert_eq!(preview["result"]["isError"], false, "{preview:#}");
+    assert_eq!(preview["result"]["structuredContent"]["ok"], true);
+    assert_eq!(preview["result"]["structuredContent"]["selected_ok"], false);
+}
 
 #[test]
 fn work_retire_error_exposes_partial_completion_over_mcp() {

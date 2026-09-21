@@ -142,7 +142,7 @@ pub(crate) fn cargo_formatter(action: &ActionSpec, command: Option<&str>) -> boo
                     == &["fmt", "--all", "--", "--check"]
                         .map(|value| ArgvValue::Literal(value.into()))
         }
-        ActionRunner::Native { .. } => false,
+        ActionRunner::Native { .. } | ActionRunner::RustNextestV1 { .. } => false,
     }
 }
 

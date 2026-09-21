@@ -393,7 +393,7 @@ Nested accepted keys are:
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
-- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `refinements`
+- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`
 - `[work.tracker]`: `kind`, `workspace_id`, `export`, `manual_export_guidance`; the
   current `beads` kind accepts only manual export and no configurable store root
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
@@ -570,6 +570,113 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 ## `work` Shape
 
 The `work` block declares agent workflow defaults without adding repo-local launcher scripts:
+
+### Iteration and focused Rust checks
+
+`work.iteration_profile` opts into an existing repository profile for
+`work check --phase iteration`. All selected actions and prerequisites must be
+read-only checks. `--phase final` retains the configured final requirements;
+neither phase runs review gates or closes the plan. `--explain` previews exact
+invocations and pending final requirements without creating runs or receipts.
+An iteration can pass while `final_gates_ok` is false. `work finish` always
+checks current final evidence independently. Explicit phases cannot be combined
+with `--gate` or `--tool`; the unphased force-selection interface remains available.
+Phase/explain reports require the standard projection: `agent-v1` is rejected
+before execution because its compact completion schema does not describe phase scope.
+Phases and previews retain the gate evaluator's existing cross-plan receipt
+selection: eligible exact invocations can reuse original evidence, newer failed
+outcomes cannot revive older passes, and native actions and their dependents
+remain plan-local. Explicit `--gate` selection still forces execution.
+
+Contract-v8-or-later repositories may declare the opt-in, versioned
+`rust_nextest_v1` runner. The following action uses ordinary target execution,
+supervision, and receipts, but permits typed iteration focus:
+
+```toml
+[work]
+iteration_profile = "iteration"
+
+[[repository.actions]]
+target = { component = "api", action = "test-focused" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "rust_nextest_v1", configuration = { workspace_manifest = "Cargo.toml", focused = true } }
+arguments = { focus = { type = "rust_focus_v1" } }
+
+[[repository.profiles]]
+id = "iteration"
+targets = [{ component = "api", action = "test-focused" }]
+```
+
+The referenced component must already exist. Regenerate the resolved manifest
+through the normal update workflow after changing authored configuration.
+Existing shell/argv actions are not reinterpreted. This runner has no legacy
+tool aliases and requires whole-repository input authority. A fixed full action
+uses `focused = false` (the default) and no argument declarations; it cannot
+accept focus. Omitting focus on a focused action also runs its broad workspace
+scope. Keep the full-suite action in the final verification profile.
+
+```sh
+scripts/jig --json work check --plan-id PLAN --phase iteration --explain \
+  --rust-focus 'api:test-focused={"kind":"explicit","packages":["example-api@0.1.0"],"targets":[{"kind":"lib"}],"filter":"test(example)"}'
+scripts/jig work check --plan-id PLAN --phase iteration \
+  --rust-focus 'api:test-focused={"kind":"automatic"}'
+```
+
+Repeat `--rust-focus TARGET=JSON` for distinct targets, at most 32. MCP uses
+the equivalent `rust_focus` map in `jig.work_check`. Explicit selections require
+1–32 exact `name@version` workspace package selectors and at most 32 target
+selectors (`lib`, or named `bin`, `test`, `example`, `bench`). Empty targets means
+all targets in the selected packages. Names and flags are validated and lowered
+to whole argv positions, never shell fragments. A library selection includes
+`--package` and `--lib`, without `--workspace`; a runtime filter alone is not
+treated as compilation narrowing. Explicit target selection checks existence and
+kind, independently of Cargo's default `test` participation flag; examples or
+libraries marked `test = false` can still be explicitly selected. Each JSON
+focus is bounded to 65,536 bytes.
+
+Runner configuration additionally accepts `context`, `cargo_profile`, and
+`nextest_profile`. Context contains metadata format 1, optional Cargo target
+platform, explicit `features`, `no_default_features`, `all_features`, `locked`,
+and `offline`; defaults retain default features with locked/offline enabled.
+An explicit focus may override features with a `features` object containing
+the three feature-policy fields. All-features cannot combine with explicit
+features or no-default-features. Cargo build profile and Nextest test profile
+remain distinct. Metadata acquisition uses the same feature/platform/network
+context as the prepared execution, with a 30-second and 16-MiB capture bound.
+Discovery always adds `--locked` to keep planning and previews read-only, even
+when execution permits lock updates with `locked = false`. A missing or outdated
+lockfile rejects explicit focus or produces broad automatic fallback without
+creating or rewriting the lock; prepare the lockfile separately before retrying.
+Raw Cargo package IDs and absolute manifest paths remain in memory; only
+validated portable selectors enter plans and receipts.
+
+Automatic focus uses the open plan's recorded Git baseline and all current
+changes, including earlier commits. It uses conservative Cargo package and
+reverse-consumer ownership, never inferred test names. Missing comparison,
+metadata, or ownership broadens to the declared workspace invocation with a
+reason. Named features retain narrowed scope only when each is qualified by a
+package still selected. Unqualified features or features owned outside the
+selection conservatively retain workspace scope, preserving the feature policy.
+An explicit Cargo target also retains workspace scope for automatic focus:
+target-filtered metadata alone cannot prove dependencies built for the host,
+such as a procedural macro's platform-specific dependencies. This fallback
+reports `UnsupportedContext`; it does not change the configured execution
+target or reject explicit user-selected package/target focus.
+Automatic requests on unsupported custom runners retain their configured
+default check with an explicit fallback report. Explicit unprovable selections
+are rejected; run the configured full check to recover. Changing a filter,
+feature policy, or comparison changes invocation authority. A passing focused
+receipt cannot satisfy a differently scoped full invocation.
+
+Nextest runs with `--no-tests=fail`. Zero matching tests produces failed
+`empty_selection` evidence, not a behavioral pass. Ordinary source/config
+revalidation, cancellation, deadlines, output limits, and failure recording
+still apply. Repositories must upgrade their runtime before adopting the new
+runner/argument tags: unsupported runtimes reject them rather than execute a
+silently weakened check. Existing string arguments and old receipts retain
+their meaning. Probe CLI help or MCP input schemas before sending new phase
+or focus fields to an older endpoint.
 
 ### Optional Beads task snapshots
 

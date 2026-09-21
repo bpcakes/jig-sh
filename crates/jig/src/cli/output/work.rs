@@ -5,6 +5,7 @@ use super::{concise_preview, status, value_bool, value_i64, value_str};
 mod check_targets;
 mod compact;
 mod gate_recovery;
+mod phase;
 mod plan_lifecycle;
 use check_targets::{TargetSummary, append_target_summary, original_plan_suffix, target_summaries};
 use plan_lifecycle::append_plan_lifecycle;
@@ -16,6 +17,9 @@ pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
 }
 
 pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
+    if value.get("phase").is_some() {
+        return phase::format_phase_check_summary(value);
+    }
     if value.get("readiness_basis").is_some() {
         return compact::format(value);
     }

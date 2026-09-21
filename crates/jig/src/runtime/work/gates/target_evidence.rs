@@ -15,7 +15,7 @@ use crate::state::{CurrentWorktreeFingerprint, TargetReceiptStatus, WorkGateRece
 use super::{EvaluatedReceipt, GateCollection, GateFreshness, GateOutcome, GateReceiptView};
 
 #[derive(Clone, Debug)]
-struct TargetEvidenceEvaluation {
+pub(in crate::runtime::work) struct TargetEvidenceEvaluation {
     scoped: Option<TargetFreshness>,
     target: TargetId,
     run_id: Option<String>,
@@ -27,6 +27,7 @@ struct TargetEvidenceEvaluation {
     expected_config_digest: String,
     input_digest: Option<String>,
     expected_input_digest: Option<String>,
+    current_authority: super::scoped_freshness::CurrentTargetAuthority,
 }
 
 #[derive(Clone, Debug)]
@@ -43,7 +44,7 @@ pub(super) struct EvidenceGateEvaluation {
 }
 
 impl TargetEvidenceEvaluation {
-    fn to_value(&self) -> Value {
+    pub(in crate::runtime::work) fn to_value(&self) -> Value {
         let receipt = &self.receipt;
         let mut value = json!({
             "target": self.target,
@@ -76,6 +77,18 @@ impl TargetEvidenceEvaluation {
         value
     }
 
+    pub(in crate::runtime::work) fn target(&self) -> &TargetId {
+        &self.target
+    }
+
+    pub(in crate::runtime::work) fn is_passing(&self) -> bool {
+        self.outcome == GateOutcome::Passed && self.receipt.freshness == GateFreshness::Fresh
+    }
+
+    pub(in crate::runtime::work) fn authority_unavailable(&self) -> bool {
+        self.current_authority == super::scoped_freshness::CurrentTargetAuthority::Unavailable
+    }
+
     fn status_view(&self) -> jig_ui::dashboard::StatusEvidenceTarget {
         let receipt = &self.receipt;
         jig_ui::dashboard::StatusEvidenceTarget {
@@ -105,6 +118,9 @@ impl TargetEvidenceEvaluation {
         }
     }
 }
+
+mod selection;
+pub(in crate::runtime::work) use selection::evaluate_targets;
 
 impl EvidenceGateEvaluation {
     pub(super) fn compact_targets(
@@ -144,99 +160,14 @@ impl EvidenceGateEvaluation {
         scoped: Option<&super::scoped_freshness::ScopedGateFreshness>,
     ) -> Result<Self> {
         let required_targets = resolve_evidence_targets(catalog, &gate.selector)?;
-        let selected = receipt_index.target_receipts(&gate.id);
-        let expected_config_digest = catalog.config_digest().to_owned();
-        let expected_input_digests = required_targets
-            .iter()
-            .map(|target| {
-                let digest = current_fingerprint
-                    .fingerprint
-                    .as_deref()
-                    .map(|fingerprint| target_input_digest(catalog, target, fingerprint))
-                    .transpose()?;
-                Ok((target.clone(), digest))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
-        let mut targets = Vec::with_capacity(required_targets.len());
-        for target in required_targets {
-            collection.ensure_active()?;
-            let receipt = selected.and_then(|receipts| receipts.get(&target));
-            let expected_input_digest =
-                expected_input_digests.get(&target).cloned().unwrap_or(None);
-            let scoped_target = scoped
-                .and_then(|scoped| scoped.targets.get(&target))
-                .cloned();
-            let (freshness, freshness_reason) = if let Some(scoped) = &scoped_target {
-                let freshness = GateFreshness::from(scoped.status);
-                (freshness, scoped_freshness_reason(scoped).to_owned())
-            } else {
-                target_evidence_freshness(
-                    receipt,
-                    &expected_config_digest,
-                    expected_input_digest.as_deref(),
-                    current_fingerprint,
-                )
-            };
-            let evaluated_receipt = EvaluatedReceipt::with_freshness(
-                receipt,
-                receipt,
-                current_fingerprint,
-                freshness,
-                freshness_reason,
-            );
-            let outcome = match receipt {
-                Some(receipt) if receipt.exit_status != 0 => GateOutcome::Failed,
-                Some(_) => freshness.as_gate_outcome(),
-                None => GateOutcome::Missing,
-            };
-            targets.push(TargetEvidenceEvaluation {
-                scoped: scoped_target,
-                target,
-                run_id: receipt.and_then(|receipt| receipt.run_id.clone()),
-                original_plan_id: receipt.and_then(|receipt| receipt.plan_id.clone()),
-                started_at_ms: receipt.map(|receipt| receipt.started_at_ms),
-                outcome,
-                receipt: evaluated_receipt,
-                config_digest: receipt.and_then(|receipt| receipt.config_digest.clone()),
-                expected_config_digest: expected_config_digest.clone(),
-                input_digest: receipt.and_then(|receipt| receipt.input_digest.clone()),
-                expected_input_digest,
-            });
-        }
-
-        // A dependent proof cannot outlive a failed, missing, stale, or newer
-        // dependency result. Iterate to carry invalidity through the graph.
-        while scoped.is_none() {
-            let invalidate: Vec<_> = targets
-                .iter()
-                .enumerate()
-                .filter_map(|(index, target)| {
-                    if target.outcome != GateOutcome::Passed {
-                        return None;
-                    }
-                    let action = catalog.action(&target.target)?;
-                    let invalid_dependency = action.depends_on.iter().any(|dependency| {
-                        targets
-                            .iter()
-                            .find(|entry| &entry.target == dependency)
-                            .is_none_or(|entry| {
-                                entry.outcome != GateOutcome::Passed
-                                    || entry.receipt.ended_at_ms > target.started_at_ms
-                            })
-                    });
-                    invalid_dependency.then_some(index)
-                })
-                .collect();
-            if invalidate.is_empty() {
-                break;
-            }
-            for index in invalidate {
-                targets[index].outcome = GateOutcome::Stale;
-                targets[index].receipt.freshness = GateFreshness::Stale;
-                targets[index].receipt.freshness_reason =
-                    "a required dependency has missing, nonpassing, stale or newer evidence".into();
-            }
-        }
+        let targets = evaluate_targets(
+            catalog,
+            current_fingerprint,
+            receipt_index.target_receipts(&gate.id),
+            required_targets,
+            collection,
+            scoped,
+        )?;
         let freshness = aggregate_evidence_freshness(&targets);
         let outcome = aggregate_evidence_outcome(&targets);
         let run_id = targets

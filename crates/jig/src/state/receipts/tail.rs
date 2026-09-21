@@ -100,7 +100,34 @@ pub(crate) fn record_receipt_with_cancellation(
     input: ReceiptInput<'_>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    record_receipt_inner(ctx, input, None, Some(cancelled), ReceiptPublication::Finalize)
+    record_receipt_inner(
+        ctx,
+        input,
+        None,
+        Some(cancelled),
+        ReceiptPublication::Finalize,
+    )
+}
+
+/// For rollback-sensitive operations, cancellation aborts publication too.
+pub(crate) fn record_receipt_with_cancellation_if_no_current_plan_gate_evidence(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    plan_id: &str,
+    gate_ids: &BTreeSet<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    record_receipt_inner(
+        ctx,
+        input,
+        None,
+        Some(cancelled),
+        ReceiptPublication::GuardedReuse {
+            plan_id,
+            gate_ids,
+            cancelled,
+        },
+    )
 }
 
 /// For rollback-sensitive operations, cancellation aborts publication too.
@@ -115,12 +142,20 @@ pub(crate) fn record_receipt_with_cancellation_until(
         input,
         None,
         Some(cancelled),
-        ReceiptPublication::Cancellable { deadline, cancelled },
+        ReceiptPublication::Cancellable {
+            deadline,
+            cancelled,
+        },
     )
 }
 
 enum ReceiptPublication<'a> {
     Finalize,
+    GuardedReuse {
+        plan_id: &'a str,
+        gate_ids: &'a BTreeSet<String>,
+        cancelled: &'a dyn Fn() -> bool,
+    },
     Cancellable {
         deadline: std::time::Instant,
         cancelled: &'a dyn Fn() -> bool,
@@ -130,11 +165,14 @@ enum ReceiptPublication<'a> {
 impl ReceiptPublication<'_> {
     fn lock_budget(&self) -> (std::time::Instant, &dyn Fn() -> bool) {
         match self {
-            Self::Finalize => (
+            Self::Finalize | Self::GuardedReuse { .. } => (
                 std::time::Instant::now() + journal::RECEIPT_LOCK_TIMEOUT,
                 &|| false,
             ),
-            Self::Cancellable { deadline, cancelled } => (*deadline, *cancelled),
+            Self::Cancellable {
+                deadline,
+                cancelled,
+            } => (*deadline, *cancelled),
         }
     }
 }
@@ -222,11 +260,9 @@ fn record_receipt_inner(
         id: new_id("receipt"),
         session_id: match input.session_override {
             Some(session_id) => Some(session_id),
-            None => super::session_pointer::read_with_cancellation_until(
-                ctx,
-                lock_cancelled,
-                deadline,
-            )?,
+            None => {
+                super::session_pointer::read_with_cancellation_until(ctx, lock_cancelled, deadline)?
+            }
         },
         plan_id: input.plan_id,
         tool_name: input.tool_name.to_string(),
@@ -274,6 +310,30 @@ fn record_receipt_inner(
     };
     let receipt_id = receipt.id.clone();
     with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
+        if let ReceiptPublication::GuardedReuse {
+            plan_id,
+            gate_ids,
+            cancelled,
+        } = publication
+        {
+            let found = writer
+                .inspect(|journal| {
+                    current_plan_work_check_gate_evidence_in_locked_journal(
+                        journal,
+                        &ctx.state_file("receipts.jsonl"),
+                        plan_id,
+                        gate_ids,
+                        cancelled,
+                    )
+                })?
+                .unwrap_or_default();
+            if !found.is_empty() {
+                anyhow::bail!(
+                    "Reusable work-check evidence became stale because current-plan evidence was recorded for: {}; rerun the check against the current receipt journal",
+                    found.into_iter().collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
         writer.append(&receipt)
     })?;
     Ok(receipt_id)

@@ -21,6 +21,124 @@ pub(in crate::runtime::work) struct CheckTargetSnapshot {
         Option<jig_contract::freshness::FreshnessCollectionStats>,
 }
 
+pub(in crate::runtime::work) struct SelectedInvocationSnapshot {
+    pub(in crate::runtime::work) passing: BTreeSet<jig_contract::TargetId>,
+    pub(in crate::runtime::work) unavailable: BTreeSet<jig_contract::TargetId>,
+    pub(in crate::runtime::work) targets: Vec<super::target_evidence::TargetEvidenceEvaluation>,
+    pub(in crate::runtime::work) fingerprint: Option<String>,
+    pub(in crate::runtime::work) freshness_collection:
+        Option<jig_contract::freshness::FreshnessCollectionStats>,
+}
+
+pub(in crate::runtime::work) fn selected_invocation_snapshot(
+    ctx: &RepoContext,
+    plan_id: &str,
+    catalog: &RepositoryCatalog,
+    invocations: &[jig_contract::PlannedTarget],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<SelectedInvocationSnapshot> {
+    selected_invocation_snapshot_with_timeout(
+        ctx,
+        plan_id,
+        catalog,
+        invocations,
+        cancelled,
+        std::time::Duration::from_millis(crate::repository::freshness::RECORDING_TIMEOUT_MS),
+    )
+}
+
+fn selected_invocation_snapshot_with_timeout(
+    ctx: &RepoContext,
+    plan_id: &str,
+    catalog: &RepositoryCatalog,
+    invocations: &[jig_contract::PlannedTarget],
+    cancelled: &dyn Fn() -> bool,
+    timeout: std::time::Duration,
+) -> Result<SelectedInvocationSnapshot> {
+    let current_fingerprint =
+        crate::state::current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
+    let required = invocations
+        .iter()
+        .map(|invocation| invocation.target.clone())
+        .collect::<BTreeSet<_>>();
+    let receipts =
+        crate::state::target_receipt_index_with_cancellation(ctx, plan_id, &required, cancelled)?;
+    let scoped = if catalog.contract_version()
+        >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
+    {
+        let mut budget = crate::repository::freshness::CollectionBudget::new(
+            crate::repository::freshness::CollectionLimits::with_timeout(timeout),
+            cancelled,
+        );
+        Some(
+            super::scoped_freshness::ScopedGateFreshness::collect_invocations(
+                ctx,
+                catalog,
+                plan_id,
+                invocations,
+                &receipts,
+                current_fingerprint.fingerprint.as_deref(),
+                &mut budget,
+            ),
+        )
+    } else {
+        None
+    };
+    let freshness_collection = scoped.as_ref().map(|scoped| scoped.stats.clone());
+    let targets = super::target_evidence::evaluate_targets(
+        catalog,
+        &current_fingerprint,
+        Some(&receipts),
+        required,
+        super::GateCollection::Cancellable(cancelled),
+        scoped.as_ref(),
+    )?;
+    let passing = targets
+        .iter()
+        .filter(|target| target.is_passing())
+        .map(|target| target.target().clone())
+        .collect();
+    let unavailable = targets
+        .iter()
+        .filter(|target| target.authority_unavailable())
+        .map(|target| target.target().clone())
+        .collect();
+    Ok(SelectedInvocationSnapshot {
+        passing,
+        unavailable,
+        targets,
+        fingerprint: current_fingerprint.fingerprint,
+        freshness_collection,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn selected_invocation_snapshot_with_test_timeout(
+    ctx: &RepoContext,
+    plan_id: &str,
+    catalog: &RepositoryCatalog,
+    invocations: &[jig_contract::PlannedTarget],
+    timeout: std::time::Duration,
+) -> Result<(
+    BTreeSet<jig_contract::TargetId>,
+    BTreeSet<jig_contract::TargetId>,
+    Option<jig_contract::freshness::FreshnessCollectionStats>,
+)> {
+    let snapshot = selected_invocation_snapshot_with_timeout(
+        ctx,
+        plan_id,
+        catalog,
+        invocations,
+        &|| false,
+        timeout,
+    )?;
+    Ok((
+        snapshot.passing,
+        snapshot.unavailable,
+        snapshot.freshness_collection,
+    ))
+}
+
 pub(in crate::runtime::work) fn check_target_snapshot(
     ctx: &RepoContext,
     plan_id: &str,

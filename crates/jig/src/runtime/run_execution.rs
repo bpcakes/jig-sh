@@ -186,7 +186,7 @@ fn execute_freshly_planned_check_run_with_lease(
     execute_started_check_run_with_control(ctx, catalog, run, request, &mut control)
 }
 
-fn acquire_observed_repository_execution_lease(
+pub(super) fn acquire_observed_repository_execution_lease(
     ctx: &RepoContext,
     effects: &[ActionEffect],
     observer: &mut dyn ExecutionControl,
@@ -628,6 +628,9 @@ fn run_target_capture_inner(
                 &mut control,
             )
         }
+        ActionRunner::RustNextestV1 { .. } => {
+            rust_nextest::run_rust_nextest_target(ctx, planned, &mut control)
+        }
         ActionRunner::Native { operation, .. } if operation == jig_contract::tool::FILE_BUDGET => {
             match control.remaining() {
                 Err(stop) => stopped_before_start(planned, stop),
@@ -762,6 +765,7 @@ impl RepositoryRunControl for CancellationOnlyRunControl<'_> {
     }
 }
 
+mod rust_nextest;
 mod target;
 use target::*;
 

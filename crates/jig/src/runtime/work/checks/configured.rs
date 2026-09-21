@@ -122,7 +122,7 @@ pub(super) fn check_combined_with_execution(
     Ok(result)
 }
 
-fn configured_evidence_targets_if_any(
+pub(super) fn configured_evidence_targets_if_any(
     ctx: &RepoContext,
 ) -> Result<BTreeSet<jig_contract::TargetId>> {
     let evidence_gates = ctx

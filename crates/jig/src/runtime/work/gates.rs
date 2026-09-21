@@ -31,7 +31,7 @@ use target_evidence::EvidenceGateEvaluation;
 const MAX_GATE_CHANGED_PATHS: usize = 100;
 
 #[derive(Clone, Copy)]
-enum GateCollection<'a> {
+pub(in crate::runtime::work) enum GateCollection<'a> {
     Blocking,
     Cancellable(&'a dyn Fn() -> bool),
 }
@@ -486,7 +486,7 @@ impl GateEvaluation {
 mod recovery;
 
 mod report;
-use report::GateReport;
+pub(super) use report::GateReport;
 
 #[derive(Default)]
 struct RequiredGateFailures {
@@ -590,7 +590,8 @@ pub(super) fn ensure_required_gates_passed_with_cancellation(
 }
 
 mod collection;
-use collection::{evaluate_gate_report_from_index, gate_report, gate_report_with_cancellation};
+pub(super) use collection::gate_report_with_cancellation;
+use collection::{evaluate_gate_report_from_index, gate_report};
 
 pub(super) fn open_plan_snapshots_with_cancellation(
     ctx: &RepoContext,
@@ -718,8 +719,12 @@ mod scoped_freshness;
 mod target_evidence;
 
 mod check_snapshot;
-pub(super) use check_snapshot::check_target_snapshot;
 use check_snapshot::repository_for_evidence_gates;
+#[cfg(test)]
+pub(crate) use check_snapshot::selected_invocation_snapshot_with_test_timeout;
+pub(super) use check_snapshot::{
+    SelectedInvocationSnapshot, check_target_snapshot, selected_invocation_snapshot,
+};
 
 fn inspection_timeout(requested: Option<u64>) -> Result<u64> {
     let timeout = requested.unwrap_or(INSPECTION_TIMEOUT_MS);

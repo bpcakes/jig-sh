@@ -432,10 +432,9 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         CommandKind::Work(command) => {
             let human_output = work_human_output(&command);
-            let require_ok = matches!(&command, WorkCommand::Check(opts)
-                if opts.projection == crate::surface::ResponseSurface::AgentV1);
+            let require_ok = work_command_reports_failure_with_ok(&command);
             dispatch_runtime_command(
-                crate::command::RuntimeCommand::Work(command.into()),
+                crate::command::RuntimeCommand::Work(command.try_into()?),
                 require_ok,
                 json_output,
                 human_output,
@@ -665,6 +664,7 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
+        CommandKind::Work(command) => work_command_reports_failure_with_ok(command),
         CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
         CommandKind::Check(_) | CommandKind::Run(_) => true,
         _ => false,
@@ -680,6 +680,10 @@ const fn loop_command_reports_failure_with_ok(command: &LoopCommand) -> bool {
         command,
         LoopCommand::Tick(_) | LoopCommand::Dispatch(_) | LoopCommand::Run(_)
     )
+}
+
+const fn work_command_reports_failure_with_ok(command: &WorkCommand) -> bool {
+    matches!(command, WorkCommand::Check(_))
 }
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {

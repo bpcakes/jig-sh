@@ -351,7 +351,7 @@ surfaces described below.
 
 `jig check --explain` returns `command: "check plan"`, `executed: false`, and a
 `plan` object without running a command or writing a receipt. A newly written
-plan uses run-plan schema version 3 and includes its derived `id`, configuration digest, source identity,
+plan uses run-plan schema version 4 and includes its derived `id`, configuration digest, source identity,
 normalized selectors or profile, sorted targets, selection reasons, declared
 effects, input digests, and dependency execution layers. Bare `jig check` uses
 the default verification profile. An action selector such as `test` matches
@@ -360,6 +360,43 @@ and `*` is the only wildcard and occupies a whole component or action segment.
 Profiles and explicit selectors are mutually exclusive. Contract-6 legacy
 aliases must not parse as canonical action, target, or wildcard selectors;
 canonical selector meaning therefore cannot be shadowed by an alias.
+
+Affected Rust plans may include optional, digest-bound `cargo_impacts`: bounded
+portable package and test-target candidates from locked/offline Cargo metadata.
+Generic affected selection still determines authored actions first; these facts
+alone do not change execution. Ambiguous ownership, topology changes, incomplete
+graphs, unsupported context, or discovery limits produce broad/unavailable
+reasons. Raw Cargo IDs and absolute checkout paths are never persisted. Existing
+schema-2/3 records remain readable; submitted plans must use current schema 4.
+
+The opt-in runner tag `rust_nextest_v1` and argument tag `rust_focus_v1` are
+strict versioned capabilities under contract 8 or later. Unsupported runtimes
+reject the tags before execution; no shell command is inferred to be Cargo.
+A selected runner carries `prepared_rust_input` schema 1: literal Cargo argv,
+portable packages/target selectors, feature/platform context, scope disposition,
+fallback reasons, and optional exact comparison base. Planner replay authenticates
+that input, and it participates in invocation identity. The runner retains normal
+supervised execution and target receipts. A zero-match Nextest result is a failed
+target with finding source `empty_selection`, never a passing test requirement.
+Explicit target existence is independent of Cargo's default test-participation
+flag. Automatic package narrowing preserves the configured feature policy,
+falling back to workspace scope when its meaning for the subset is unproved.
+Metadata discovery always enforces `--locked`, independently of execution's
+lock-update policy, so planning cannot create or rewrite Cargo.lock.
+
+`jig.work_check` accepts optional `phase` (`iteration` or `final`), `explain`,
+and a `rust_focus` object keyed by canonical target strings. The CLI equivalent
+is `work check --phase iteration --rust-focus TARGET=JSON`. Work focus is legal
+only during iteration. Automatic requests bind to the owning open plan's exact
+baseline; explicit requests bind package, target, feature, and test filter choices.
+Both transports share normalization. Phase reports distinguish selected scope,
+`selected_ok`, `final_requirements`, `pending_final_requirements`, and
+`final_gates_ok`; they never confer closure authority. An execution report with
+`ok: false` is retained in MCP `structuredContent` with `isError: true`.
+Explain performs no check or review execution and writes no run or receipt.
+Explicit phase/explain plus projection `agent-v1` is rejected before execution;
+the existing unphased compact completion shape is unchanged. Configuration and
+examples are in [focused Rust checks](configuration.md#iteration-and-focused-rust-checks).
 
 For a selected contract-v7 action that still uses the built-in
 `jig.file_budget` runner, the target also carries one bounded
