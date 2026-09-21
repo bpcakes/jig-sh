@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::Cursor;
 
 use serde_json::{Value, json};
@@ -5,7 +6,102 @@ use tempfile::tempdir;
 
 use super::super::{MessageFraming, read_frame, serve_messages, write_message};
 use crate::context::RepoContext;
+use crate::surface::ResponseSurface;
 use crate::test_env::TestRepoBuilder;
+
+fn write_repository_fixture(root: &std::path::Path) {
+    TestRepoBuilder::new(root)
+        .contract_version(6)
+        .config(
+            r#"
+[commands]
+api_test_command = "printf passed"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "api"
+adapters = ["go"]
+
+[[repository.actions]]
+target = { component = "api", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [{ component = "api", action = "test" }]
+"#,
+        )
+        .required_commands(["api_test_command"])
+        .write();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": ["api_test_command"],
+            "tools": [],
+            "components": [{"id": "api", "root": "api", "adapters": ["go"]}],
+            "actions": [{
+                "target": {"component": "api", "action": "test"},
+                "intent": "check",
+                "effects": ["read_only", "process"],
+                "runner": {"kind": "command", "command": "api_test_command"},
+                "inputs": ["api/**"]
+            }],
+            "profiles": [{
+                "id": "verify",
+                "targets": [{"component": "api", "action": "test"}]
+            }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn listed_inspect_schema(ctx: &RepoContext, surface: ResponseSurface) -> Value {
+    let wire = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}\n";
+    let mut output = Vec::new();
+    serve_messages(ctx, &mut Cursor::new(wire), &mut output, surface).unwrap();
+    let mut responses = Cursor::new(output);
+    let (response, _) = read_frame(&mut responses).unwrap().unwrap();
+    serde_json::from_slice::<Value>(&response).unwrap()["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "jig.inspect")
+        .unwrap()["outputSchema"]
+        .clone()
+}
+
+fn contains_key(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.contains_key(key) || object.values().any(|value| contains_key(value, key))
+        }
+        Value::Array(values) => values.iter().any(|value| contains_key(value, key)),
+        _ => false,
+    }
+}
+
+#[test]
+fn tools_list_uses_the_process_selected_inspection_schema() {
+    let temp = tempdir().unwrap();
+    write_repository_fixture(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let standard = listed_inspect_schema(&ctx, ResponseSurface::Standard);
+    let agent = listed_inspect_schema(&ctx, ResponseSurface::AgentV1);
+
+    assert!(!contains_key(&standard, "freshness_policy"));
+    assert!(contains_key(&agent, "freshness_policy"));
+}
 
 #[test]
 fn rejected_payloads_return_parse_errors_and_preserve_the_session() {
@@ -38,7 +134,13 @@ fn rejected_payloads_return_parse_errors_and_preserve_the_session() {
                 ),
             };
             let mut output = Vec::new();
-            serve_messages(&ctx, &mut Cursor::new(wire), &mut output).unwrap();
+            serve_messages(
+                &ctx,
+                &mut Cursor::new(wire),
+                &mut output,
+                ResponseSurface::Standard,
+            )
+            .unwrap();
 
             let mut responses = Cursor::new(output);
             let (error, error_framing) = read_frame(&mut responses).unwrap().unwrap();
@@ -76,7 +178,15 @@ fn incomplete_or_invalid_framing_remains_fatal() {
         "Content-Length: 10\r\n\r\n{}",
     ] {
         let mut output = Vec::new();
-        assert!(serve_messages(&ctx, &mut Cursor::new(wire), &mut output).is_err());
+        assert!(
+            serve_messages(
+                &ctx,
+                &mut Cursor::new(wire),
+                &mut output,
+                ResponseSurface::Standard,
+            )
+            .is_err()
+        );
         assert!(output.is_empty());
     }
 }

@@ -16,6 +16,9 @@ use super::{
     repo_task_has_changes,
 };
 
+mod diagnostics;
+use diagnostics::{CheckoutDiagnostics, JournalFailure};
+
 const MAX_VERIFIED_RECEIPT_BASELINE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_VERIFIED_RECEIPT_APPEND_BYTES: u64 = 16 * 1024 * 1024;
 const RECEIPT_SNAPSHOT_ATTEMPTS: usize = 3;
@@ -50,6 +53,7 @@ pub(super) enum CheckoutReport {
         dirty: Option<bool>,
         head_changed: Option<bool>,
         receipt_append_valid: Option<bool>,
+        diagnostics: CheckoutDiagnostics,
     },
     Worktree {
         path: PathBuf,
@@ -110,6 +114,7 @@ impl CheckoutReport {
                 dirty,
                 head_changed,
                 receipt_append_valid,
+                diagnostics,
             } => json!({
                 "mode": "repo",
                 "path": super::super::occurrence::encode_worktree_path(path),
@@ -117,6 +122,7 @@ impl CheckoutReport {
                 "dirty": dirty,
                 "head_changed": head_changed,
                 "receipt_append_valid": receipt_append_valid,
+                "diagnostics": diagnostics,
             }),
             Self::Worktree {
                 path,
@@ -158,6 +164,14 @@ impl PreparedCheckout {
                 let final_head =
                     git_stdout(ctx, &path, ["rev-parse", "HEAD"], &mut cleanup_observer);
                 let receipt_append = receipt_journal.verify(ctx, worker_receipt_id);
+                let diagnostics = CheckoutDiagnostics::inspect(
+                    ctx,
+                    &path,
+                    &dirty,
+                    &final_head,
+                    &receipt_append,
+                    worker_receipt_id,
+                );
                 let mut errors = Vec::new();
                 if let Err(error) = &dirty {
                     errors.push(format!(
@@ -180,6 +194,7 @@ impl PreparedCheckout {
                         dirty: dirty.ok(),
                         head_changed: final_head.ok().map(|head| head != initial_head),
                         receipt_append_valid: Some(receipt_append.is_ok()),
+                        diagnostics,
                     },
                     error: (!errors.is_empty()).then(|| errors.join("; ")),
                 }
@@ -426,6 +441,27 @@ fn verify_append(
     current_len: u64,
     worker_receipt_id: Option<&str>,
 ) -> Result<()> {
+    let mut failure = JournalFailure::default();
+    verify_append_records(
+        baseline,
+        source,
+        current_len,
+        worker_receipt_id,
+        &mut failure,
+    )
+    .map_err(|error| {
+        failure.message = error.to_string();
+        error.context(failure)
+    })
+}
+
+fn verify_append_records(
+    baseline: &ReceiptJournalBaseline,
+    source: &File,
+    current_len: u64,
+    worker_receipt_id: Option<&str>,
+    failure: &mut JournalFailure,
+) -> Result<()> {
     let mut file = source
         .try_clone()
         .with_context(|| format!("Failed to inspect {}", baseline.path.display()))?;
@@ -471,11 +507,13 @@ fn verify_append(
         }
         record.pop();
         let receipt_id = receipt_record_id(&record)?;
+        failure.observe(&receipt_id);
         appended_records += 1;
         if worker_receipt_id == Some(receipt_id.as_str()) {
             worker_receipt_matches += 1;
         }
     }
+    failure.ambiguous = true;
     match worker_receipt_id {
         Some(_) if appended_records != 1 || worker_receipt_matches != 1 => bail!(
             "expected the worker receipt to be the only appended record; found {appended_records} records and {worker_receipt_matches} matching worker receipts"

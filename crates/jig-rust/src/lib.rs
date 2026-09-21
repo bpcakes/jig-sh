@@ -1,3 +1,16 @@
+pub mod cargo;
+pub mod rust_focus;
+
+pub use cargo::{
+    CARGO_METADATA_FORMAT_VERSION_V1, CargoMetadataErrorV1, CargoMetadataGraphV1,
+    CargoMetadataLimitsV1, CargoMetadataResourceV1, CargoPackageFactsV1, CargoTargetFactsV1,
+    MAX_METADATA_BYTES_V1, MAX_METADATA_CHANGED_PATHS_V1, MAX_METADATA_EDGES_V1,
+    MAX_METADATA_FEATURES_V1, MAX_METADATA_NODES_V1, MAX_METADATA_PACKAGES_V1,
+    MAX_METADATA_PATH_BYTES_V1, MAX_METADATA_PATHS_V1, MAX_METADATA_ROOTS_V1,
+    MAX_METADATA_STRING_BYTES_V1, MAX_METADATA_TARGETS_V1, normalize_cargo_metadata,
+    normalize_cargo_metadata_v1, select_cargo_impact_v1,
+};
+
 use jig_contract::{
     ActionEffect, ActionIntent, AdapterActionDescriptor, AdapterRunnerDescriptor, FeatureContext,
     FeatureDescriptor, RepositoryAdapterDescriptor, tool,

@@ -57,6 +57,25 @@ requires attention. Use direct, focused test commands inside the prompt, or use
 an isolated worktree task when its changes do not need to land in the selected
 checkout.
 
+Validation contexts are deliberately different:
+
+| Context | Supported recipe |
+| --- | --- |
+| Standalone diagnostic, including a review's local test command | Outside a repo-mode worker, use `scripts/jig check <target> --no-receipt` when no plan evidence is required. This suppresses receipts, not native run metadata. |
+| Plan-linked validation | Use `scripts/jig check <target> --plan-id <plan-id>` outside the repo-mode worker or in its isolated task checkout. Preserve the receipt and original plan ID. `--no-receipt` conflicts with `--plan-id`. |
+| Repo-mode worker | Use direct test commands that leave the checkout clean. A legacy contract's receipt-free command can be suitable when it writes no other tracked state; native checks still append `.agent/state/runs.jsonl`. Do not treat `--no-receipt` as a blanket safe-nesting flag. |
+| Isolated task | Run validation in the task worktree. Receipt and run-journal changes cause the worktree to be retained for inspection, not merged or discarded. |
+
+Completion keeps the original worker output and receipt identity. Additive
+`checkout.diagnostics` fields distinguish `application_changes`,
+`operational_state_changes`, `receipt_ambiguity`, and `journal_unverifiable`;
+`checkout_unverifiable` means status or HEAD could not be fully inspected.
+Diagnostics include observed paths, the parent receipt ID, bounded observed
+appended receipt IDs, and explicit incomplete-observation flags. A well-formed
+unowned append is still ambiguous, even if it came from a legitimate check.
+Staged journal changes, rewritten history, malformed or partial rows, and missing
+parent attribution remain rejected. None of these reasons exempts a write.
+
 ## Install a dispatcher
 
 Run `scripts/jig loop dispatch` once per minute. The command executes only due
@@ -186,6 +205,14 @@ receipts, and any retained worktree before enabling unattended runs.
 Use `scripts/jig loop status` and scheduler logs for routine monitoring. When an
 occurrence reports `needs_attention`, inspect its receipt and retained checkout,
 then acknowledge the exact occurrence only after resolving its result:
+
+Use the diagnostic `inspection_commands` to inspect Git status, staged and
+unstaged journal diffs, and loop status. These commands are read-only. Preserve
+the retained output and append-only evidence; do not truncate the journal, strip
+plan linkage, replay a started worker, or rerun completed checks to clear
+attention. The commands intentionally do not include a new tick, dispatch, or
+automatic acknowledgement. For unsupported nested validation, choose a supported
+context for future work only.
 
 ```sh
 scripts/jig loop acknowledge-occurrence --occurrence '<reported-id>'

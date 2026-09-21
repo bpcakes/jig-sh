@@ -7,9 +7,12 @@ use jig_contract::{PlannedTarget, TargetId};
 use super::*;
 use crate::repository::freshness::{CollectionBudget, CollectionLimits, collect_target_identities};
 
+mod compact;
 mod cross_plan;
 mod native;
+mod observations;
 mod recovery;
+mod selected_gates;
 mod worktree;
 
 fn fixture(root: &Path, dependency: bool, profile: bool) -> RepoContext {
@@ -446,9 +449,13 @@ fn inspection_timeout_is_request_scoped_and_check_uses_recording_budget() {
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -582,9 +589,13 @@ fn inherited_expiry_reaches_target_gate_status_latest_and_work_check_summaries()
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();

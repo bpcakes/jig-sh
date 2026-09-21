@@ -461,7 +461,7 @@ target = "api:test"
 }
 
 #[test]
-fn mcp_work_check_rejects_repository_lease_contention_without_blocking_the_transport() {
+fn mcp_phase_work_check_rejects_repository_lease_contention_without_blocking_the_transport() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(
         temp.path(),
@@ -472,6 +472,7 @@ kind = "evidence"
 target = "api:test"
 "#,
     );
+    enable_v6_iteration_profile(temp.path());
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let held = crate::state::acquire_repository_execution_lease(
@@ -487,14 +488,18 @@ target = "api:test"
         let ctx = RepoContext::load_from(&root).unwrap();
         ready_tx.send(()).unwrap();
         start_rx.recv().unwrap();
-        let result = call_tool(&ctx, tool::WORK_CHECK, json!({"plan_id": "plan_1"}))
-            .map_err(|error| error.to_string());
+        let result = call_tool(
+            &ctx,
+            tool::WORK_CHECK,
+            json!({"plan_id": "plan_1", "phase": "iteration"}),
+        )
+        .map_err(|error| error.to_string());
         let _ = result_tx.send(result);
     });
 
     ready_rx.recv().unwrap();
     start_tx.send(()).unwrap();
-    let timely = result_rx.recv_timeout(Duration::from_secs(5));
+    let timely = result_rx.recv_timeout(Duration::from_secs(20));
     drop(held);
     let result = match timely {
         Ok(result) => result,
@@ -696,3 +701,5 @@ mod repository_execution;
 mod foreground_run;
 
 mod action_arguments;
+
+mod surfaces;

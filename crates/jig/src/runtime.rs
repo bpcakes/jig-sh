@@ -510,6 +510,8 @@ fn execute_repository_check_plan(
         catalog,
         plan.clone(),
         run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id,
             record_receipts,
             fail_fast,
@@ -535,11 +537,38 @@ pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Va
     call_tool_with_observer(ctx, name, args, &mut NoopExecutionObserver)
 }
 
+#[cfg(test)]
+pub(crate) fn call_tool_on_surface(
+    ctx: &RepoContext,
+    name: &str,
+    args: Value,
+    surface: crate::surface::ResponseSurface,
+) -> Result<Value> {
+    call_tool_with_observer_on_surface(ctx, name, args, &mut NoopExecutionObserver, surface)
+}
+
+#[cfg(test)]
 pub(crate) fn call_tool_with_observer(
     ctx: &RepoContext,
     name: &str,
     args: Value,
     observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    call_tool_with_observer_on_surface(
+        ctx,
+        name,
+        args,
+        observer,
+        crate::surface::ResponseSurface::Standard,
+    )
+}
+
+pub(crate) fn call_tool_with_observer_on_surface(
+    ctx: &RepoContext,
+    name: &str,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+    surface: crate::surface::ResponseSurface,
 ) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
     let memory_tool = MemoryTool::from_name(name);
@@ -549,7 +578,7 @@ pub(crate) fn call_tool_with_observer(
     }
     if ctx.contract_version() >= 6 {
         if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
-            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled());
+            return mcp_repository::call(ctx, tool, args, &|| observer.cancelled(), surface);
         }
     } else if memory_tool.is_none() {
         let current = refreshed_repository_context(ctx)?;
@@ -577,9 +606,15 @@ pub(crate) fn call_tool_with_observer(
         Some(MemoryTool::Goal) => work::goal_from_args(memory_ctx, args),
         Some(MemoryTool::Start) => work::start_from_args(memory_ctx, args),
         Some(MemoryTool::Append) => work::append_from_args(ctx, args),
-        Some(MemoryTool::Check) => work::check_from_args_with_observer(memory_ctx, args, observer),
-        Some(MemoryTool::Gates) => work::gates_from_args(memory_ctx, args),
-        Some(MemoryTool::Evidence) => work::evidence_from_args(memory_ctx, args),
+        Some(MemoryTool::Check) => {
+            work::check_from_args_with_observer(memory_ctx, args, observer, surface)
+        }
+        Some(MemoryTool::Gates) => {
+            work::gates_from_args(memory_ctx, args, surface, &|| observer.cancelled())
+        }
+        Some(MemoryTool::Evidence) => {
+            work::evidence_from_args(memory_ctx, args, surface, &|| observer.cancelled())
+        }
         Some(MemoryTool::Review) => {
             work::review_from_args_with_observer(memory_ctx, args, observer)
         }

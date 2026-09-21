@@ -202,7 +202,7 @@ pub(super) fn execute_manifest_tool_with_observer(
         args,
         plan_id,
         ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
-        PhasePosition::single(),
+        ManifestToolExecutionBoundary::single(),
         observer,
     )?
     .into_value()
@@ -221,7 +221,7 @@ pub(super) fn execute_manifest_tool_result_without_worktree_fingerprint(
         args,
         plan_id,
         ManifestToolExecutionOptions::collect_result(true, false, false),
-        PhasePosition::single(),
+        ManifestToolExecutionBoundary::single(),
         &mut NoopExecutionObserver,
     )?
     .into_value()
@@ -233,6 +233,7 @@ pub(super) fn execute_manifest_tool_with_options_for_work_check(
     args: Value,
     plan_id: Option<String>,
     position: PhasePosition,
+    expected_authority_digest: Option<&str>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     execute_manifest_tool_with_options(
@@ -241,7 +242,10 @@ pub(super) fn execute_manifest_tool_with_options_for_work_check(
         args,
         plan_id,
         ManifestToolExecutionOptions::collect_result(true, false, false),
-        position,
+        ManifestToolExecutionBoundary {
+            position,
+            expected_authority_digest,
+        },
         observer,
     )
 }
@@ -252,6 +256,7 @@ pub(super) fn execute_manifest_tool_without_lease_wait_for_work_check(
     args: Value,
     plan_id: Option<String>,
     position: PhasePosition,
+    expected_authority_digest: Option<&str>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     execute_manifest_tool_with_options(
@@ -260,7 +265,10 @@ pub(super) fn execute_manifest_tool_without_lease_wait_for_work_check(
         args,
         plan_id,
         ManifestToolExecutionOptions::collect_result_without_lease_wait(true, false, false),
-        position,
+        ManifestToolExecutionBoundary {
+            position,
+            expected_authority_digest,
+        },
         observer,
     )
 }
@@ -323,9 +331,12 @@ impl LeaseContention {
         self,
         ctx: &RepoContext,
         effects: &[jig_contract::ActionEffect],
+        observer: &mut dyn ExecutionControl,
     ) -> Result<crate::state::RepositoryExecutionLease> {
         match self {
-            Self::Wait => crate::state::acquire_repository_execution_lease(ctx, effects),
+            Self::Wait => super::run_execution::acquire_observed_repository_execution_lease(
+                ctx, effects, observer,
+            ),
             Self::Reject => {
                 crate::state::acquire_repository_execution_lease_without_wait(ctx, effects)
             }
@@ -377,20 +388,36 @@ impl ManifestToolExecutionOptions {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ManifestToolExecutionBoundary<'a> {
+    position: PhasePosition,
+    expected_authority_digest: Option<&'a str>,
+}
+
+impl ManifestToolExecutionBoundary<'_> {
+    fn single() -> Self {
+        Self {
+            position: PhasePosition::single(),
+            expected_authority_digest: None,
+        }
+    }
+}
+
 fn execute_manifest_tool_with_options(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
-    position: PhasePosition,
+    boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    let current = if ctx.contract_version() >= 6 {
+    let current = if ctx.contract_version() >= 6 || boundary.expected_authority_digest.is_some() {
         super::refreshed_repository_context(ctx)?
     } else {
         ctx.clone()
     };
+    ensure_expected_execution_authority(&current, boundary.expected_authority_digest)?;
     let tool = current
         .tool_spec(tool_name)
         .cloned()
@@ -403,7 +430,7 @@ fn execute_manifest_tool_with_options(
             );
         }
         return execute_v6_action_alias(
-            current, tool_name, args, plan_id, options, position, observer,
+            current, tool_name, args, plan_id, options, boundary, observer,
         );
     }
     if let Some(error) = jig_features::tool_admission_error(&current, tool_name) {
@@ -421,7 +448,7 @@ fn execute_manifest_tool_with_options(
             args,
             plan_id,
             options,
-            position,
+            boundary.position,
             observer,
         ),
         kind::COMMAND => {
@@ -444,7 +471,7 @@ fn execute_manifest_tool_with_options(
                 args,
                 plan_id,
                 options,
-                position,
+                boundary.position,
                 observer,
             )
         }
@@ -458,7 +485,7 @@ fn execute_v6_action_alias(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
-    position: PhasePosition,
+    boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     loop {
@@ -469,11 +496,13 @@ fn execute_v6_action_alias(
         // effects. The authority can change while this blocks, so this lease is
         // only admission to a second resolution below, not permission to run
         // the action value resolved above.
-        let repository_execution = options
-            .lease_contention
-            .acquire(&current, &action.effects)?;
+        let repository_execution =
+            options
+                .lease_contention
+                .acquire(&current, &action.effects, observer)?;
 
         let refreshed = super::refreshed_repository_context(&current)?;
+        ensure_expected_execution_authority(&refreshed, boundary.expected_authority_digest)?;
         let tool = refreshed
             .tool_spec(tool_name)
             .cloned()
@@ -497,11 +526,26 @@ fn execute_v6_action_alias(
             normalized,
             plan_id,
             options,
-            position,
+            boundary.position,
             observer,
             repository_execution,
         );
     }
+}
+
+fn ensure_expected_execution_authority(
+    current: &RepoContext,
+    expected_authority_digest: Option<&str>,
+) -> Result<()> {
+    if let Some(expected) = expected_authority_digest
+        && current.contract_digest() != expected
+    {
+        bail!(
+            "repository execution authority changed after phase selection (expected {expected}, current {}); select again",
+            current.contract_digest()
+        );
+    }
+    Ok(())
 }
 
 fn bind_alias_arguments(
@@ -546,9 +590,10 @@ fn validate_action_admission(
 ) -> Result<()> {
     let admission_name = match &action.runner {
         ActionRunner::Native { operation, .. } => operation.as_str(),
-        ActionRunner::Command { .. } | ActionRunner::Shell { .. } | ActionRunner::Argv { .. } => {
-            tool_name
-        }
+        ActionRunner::Command { .. }
+        | ActionRunner::Shell { .. }
+        | ActionRunner::Argv { .. }
+        | ActionRunner::RustNextestV1 { .. } => tool_name,
     };
     if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
         bail!(error);
@@ -568,7 +613,22 @@ fn execute_action_alias(
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
+    if !action.resources.is_empty() {
+        return resource_alias::execute(
+            ctx,
+            tool,
+            action,
+            args,
+            plan_id,
+            options,
+            observer,
+            repository_execution,
+        );
+    }
     let outcome = match action.runner {
+        ActionRunner::RustNextestV1 { .. } => bail!(
+            "typed Rust actions require a prepared repository target; legacy tool aliases are unsupported"
+        ),
         ActionRunner::Argv {
             program,
             args: positions,
@@ -651,6 +711,8 @@ use native::*;
 
 mod command_tool;
 use command_tool::*;
+
+mod resource_alias;
 
 #[cfg(test)]
 mod tests;

@@ -108,9 +108,11 @@ After applying and reviewing the paired files, record new evidence:
 
 ```sh
 scripts/jig work check --plan-id PLAN_ID
-scripts/jig work gates --plan-id PLAN_ID
-scripts/jig work evidence --plan-id PLAN_ID
 ```
+
+An agent-v1-capable runtime can add `--projection agent-v1` to that check for
+the completion summary described below. Use gates/evidence inspection when the
+summary reports a blocker or more detail is needed.
 
 The configuration change invalidates earlier evidence once; receipts are never
 rewritten. Subsequent staging and commits of unchanged checked files preserve
@@ -127,6 +129,62 @@ assertions retain the owning action and runner through footprint/capability
 refresh; use this preview to migrate existing saved actions deliberately.
 
 ## Recording and inspection
+
+For routine structured work, the compact workflow uses three commands:
+
+```sh
+plan_id="$(scripts/jig work start --title 'Example change' --body 'Implement and validate the change.' --print-plan-id)"
+scripts/jig work check --plan-id "$plan_id" --projection agent-v1
+# Only after the summary reports finish_ready and required reviews are satisfied:
+scripts/jig work finish --plan-id "$plan_id" --resolution 'Example change validated'
+```
+
+`work check`, `work gates`, and `work evidence` accept this explicit projection.
+Omission or `--projection standard` preserves existing responses. The compact
+result separates check execution/reuse activity from current gate status and
+freshness. A successful check may still report `finish_ready: false` because
+review or other required evidence is unresolved. Failed checks retain a nonzero
+CLI exit and one JSON result; inspection success does not imply gate success.
+
+The summary renders one gate observation, includes bounded previews and full
+counts, and supplies safely quoted recovery plus detailed-evidence/receipt
+commands. Unknown observation recommends read-only inspection, never a check
+execution as its first recovery step. A larger timeout cannot cure resource
+ceilings or unobservable inputs; follow the observation diagnostics. No summary,
+timestamp, or retained result authorizes closure: `work finish` independently
+revalidates current source/configuration/evidence while holding its execution
+lease.
+
+The MCP `agent-v1` surface advertises the same strict compact result for
+`jig.work_check`, `jig.work_gates`, and `jig.work_evidence`. These tools' input
+schemas remain unchanged. Full legacy evidence is available through the emitted
+standard CLI commands or a standard-surface MCP server. No schema negotiation,
+automatic plan creation, review execution, or closure is introduced.
+
+Catalog inspection exposes the policy that would govern later freshness
+evaluation without reading the receipt journal. Use the opt-in agent projection
+to see the effective input and source-state policies, whether each value was
+defaulted, and its authored-model provenance:
+
+```sh
+scripts/jig --json info target api:test --projection agent-v1
+```
+
+The same projection is available to MCP clients when the server is started with
+`scripts/jig mcp --surface agent-v1`. Epoch-8 targets report
+the policy through a separately advertised schema. In the epoch-8 inspection
+fixture, serialized `jig.inspect` descriptors measure 29,584 bytes for standard
+and 31,431 bytes for agent-v1 (+1,847 bytes). Other catalog/execution descriptors
+are unchanged; the three work tools separately advertise their compact schema.
+The regression test measures these sizes without treating a fixed
+byte count as an API guarantee. Epoch-8 targets report
+`mode: "target_freshness_v1"`; older contracts report `mode: "legacy_global"`
+with conservative effective defaults and no invented or stale policy
+provenance. Non-default values are never described as defaulted, even if their
+stored provenance is inconsistent. The standard projection remains unchanged
+for compatibility. A `freshness_policy` record is not receipt evidence and
+never says that a target is currently fresh; use `work gates`, `work evidence`,
+or status inspection for that evaluation.
 
 Epoch 8 target receipts contain `target_freshness`. A complete value contains
 the current identity, original dependency receipt references, effective expiry,
@@ -328,5 +386,13 @@ while checking local object availability again; inspection performs no fetch.
 
 Dependency execution proof requires a nonempty, shared work-plan identity. A
 dependent run outside a work plan records incomplete gate proof. Archive frontier
-resolution scans once per dependency depth; deep-chain performance and aggregate
-multi-plan exhaustion have not been separately benchmarked.
+resolution scans once per dependency depth; deep-chain performance has not been
+separately benchmarked.
+
+Aggregate inspection retains at most one request-local proof/source observation
+for an identical plan-independent target graph and selected receipts. Each reuse
+revalidates journal, source and configuration guards and current time validity.
+Native actions and their dependents remain per-plan; no inspection result is a
+completion token. The [bounded inspection measurements](benchmarks/work-inspection.md)
+document physical scan counts, cold/warm timings, shared-budget limits and the
+absence of demonstrated duplicate work in single-plan compact inspection.

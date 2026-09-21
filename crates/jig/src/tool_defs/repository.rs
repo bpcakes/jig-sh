@@ -7,8 +7,9 @@ use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::repository::CatalogInspection;
+use crate::repository::{AgentCatalogInspection, CatalogInspection};
 use crate::state::DurableRun;
+use crate::surface::ResponseSurface;
 
 use super::tool;
 
@@ -64,11 +65,19 @@ impl RepositoryTool {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn descriptor(self) -> Value {
+        self.descriptor_for_surface(ResponseSurface::Standard)
+    }
+
+    pub(crate) fn descriptor_for_surface(self, surface: ResponseSurface) -> Value {
         let (input, output) = match self {
             Self::Inspect => (
                 schema_value::<RepositoryInspectArgs>(),
-                schema_value::<RepositoryInspectOutput>(),
+                match surface {
+                    ResponseSurface::Standard => schema_value::<RepositoryInspectOutput>(),
+                    ResponseSurface::AgentV1 => schema_value::<AgentRepositoryInspectOutput>(),
+                },
             ),
             Self::PlanRun => (
                 schema_value::<PlanRunArgs>(),
@@ -180,9 +189,25 @@ pub(crate) struct RepositoryInspectOutput {
 }
 
 #[derive(Clone, Debug, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentRepositoryInspectOutput {
+    pub(crate) ok: bool,
+    pub(crate) schema_version: u32,
+    pub(crate) kind: RepositoryInspectKind,
+    pub(crate) result: AgentRepositoryInspectResult,
+}
+
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 #[serde(untagged)]
 pub(crate) enum RepositoryInspectResult {
     Catalog(CatalogInspection),
+    Run(RunInspection),
+}
+
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[serde(untagged)]
+pub(crate) enum AgentRepositoryInspectResult {
+    Catalog(AgentCatalogInspection),
     Run(RunInspection),
 }
 
@@ -222,7 +247,7 @@ pub(crate) struct CancelRunOutput {
     pub(crate) run: RunResult,
 }
 
-fn schema_value<T: JsonSchema>() -> Value {
+pub(super) fn schema_value<T: JsonSchema>() -> Value {
     let schema = SchemaGenerator::new(SchemaSettings::draft2020_12()).into_root_schema_for::<T>();
     serde_json::to_value(schema).expect("repository MCP schemas must serialize")
 }
@@ -362,5 +387,29 @@ mod tests {
                 reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck
             })
         ));
+    }
+
+    #[test]
+    fn plan_output_schema_exposes_cargo_impact_facts() {
+        fn contains_property(value: &Value, property: &str) -> bool {
+            match value {
+                Value::Object(object) => {
+                    object
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_some_and(|properties| properties.contains_key(property))
+                        || object
+                            .values()
+                            .any(|value| contains_property(value, property))
+                }
+                Value::Array(values) => values
+                    .iter()
+                    .any(|value| contains_property(value, property)),
+                _ => false,
+            }
+        }
+
+        let schema = RepositoryTool::PlanRun.descriptor()["outputSchema"].clone();
+        assert!(contains_property(&schema, "cargo_impacts"));
     }
 }

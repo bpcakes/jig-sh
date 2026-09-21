@@ -6,9 +6,9 @@ use serde_json::{Map, Value, json};
 mod repository;
 
 pub(crate) use repository::{
-    CancelRunArgs, CancelRunOutput, ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput,
-    RepositoryInspectArgs, RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool,
-    RunInspection,
+    AgentRepositoryInspectOutput, AgentRepositoryInspectResult, CancelRunArgs, CancelRunOutput,
+    ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput, RepositoryInspectArgs,
+    RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool, RunInspection,
 };
 
 pub(crate) const DEFAULT_RECEIPTS_LIMIT: usize = 20;
@@ -30,6 +30,7 @@ pub(crate) mod args {
     pub(crate) const NOTES: &str = "notes";
     pub(crate) const OPERATION: &str = "operation";
     pub(crate) const OUTCOME: &str = "outcome";
+    pub(crate) const PHASE: &str = "phase";
     pub(crate) const PLAN_ID: &str = "plan_id";
     pub(crate) const RATIONALE: &str = "rationale";
     pub(crate) const REASON: &str = "reason";
@@ -47,6 +48,7 @@ pub(crate) mod args {
     pub(crate) const CONSTRAINTS: &str = "constraints";
     pub(crate) const OBJECTIVE: &str = "objective";
     pub(crate) const VALIDATIONS: &str = "validations";
+    pub(crate) const EXPLAIN: &str = "explain";
 }
 
 pub(crate) mod cli_command {
@@ -287,7 +289,7 @@ impl MemoryTool {
                 "Append nonblank progress to a structured work plan using exactly one of body or body_file."
             }
             Self::Check => {
-                "Validate required work gates, reuse current target passes and execute repairs with dependencies. Explicit gate ids or tool names select legacy checks; use native check selectors to force target execution."
+                "Validate required work gates, reuse current target passes and execute repairs with dependencies. Explicit gate ids force native evidence or legacy check gates; tool names select legacy checks only."
             }
             Self::Gates => "Report configured work gate status for a plan.",
             Self::Evidence => {
@@ -440,15 +442,28 @@ impl MemoryTool {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn tool_descriptors(
     contract_version: u32,
     manifest_tools: &[ManifestTool],
+) -> Vec<Value> {
+    tool_descriptors_for_surface(
+        contract_version,
+        manifest_tools,
+        crate::surface::ResponseSurface::Standard,
+    )
+}
+
+pub(crate) fn tool_descriptors_for_surface(
+    contract_version: u32,
+    manifest_tools: &[ManifestTool],
+    surface: crate::surface::ResponseSurface,
 ) -> Vec<Value> {
     let execution = if contract_version >= 6 {
         RepositoryTool::ALL
             .iter()
             .copied()
-            .map(RepositoryTool::descriptor)
+            .map(|tool| tool.descriptor_for_surface(surface))
             .collect::<Vec<_>>()
     } else {
         manifest_tools
@@ -459,7 +474,19 @@ pub(crate) fn tool_descriptors(
     };
     execution
         .into_iter()
-        .chain(MemoryTool::ALL.iter().copied().map(memory_tool_descriptor))
+        .chain(MemoryTool::ALL.iter().copied().map(|tool| {
+            let mut descriptor = memory_tool_descriptor(tool);
+            if surface == crate::surface::ResponseSurface::AgentV1
+                && matches!(
+                    tool,
+                    MemoryTool::Check | MemoryTool::Gates | MemoryTool::Evidence
+                )
+            {
+                descriptor["outputSchema"] =
+                    repository::schema_value::<crate::surface::work::WorkCompletion>();
+            }
+            descriptor
+        }))
         .collect()
 }
 
@@ -550,41 +577,8 @@ fn work_start_input_schema() -> Value {
     schema
 }
 
-fn work_check_input_schema() -> Value {
-    let mut schema = object_schema(
-        &[
-            (args::PLAN_ID, string_schema()),
-            (
-                args::GATES,
-                json!({
-                    "type": "array",
-                    "items": { "type": "string" }
-                }),
-            ),
-            (
-                args::TOOLS,
-                json!({
-                    "type": "array",
-                    "items": { "type": "string" }
-                }),
-            ),
-        ],
-        &[args::PLAN_ID],
-    );
-    schema["not"] = json!({
-        "allOf": [
-            {
-                "required": [args::GATES],
-                "properties": { "gates": { "minItems": 1 } }
-            },
-            {
-                "required": [args::TOOLS],
-                "properties": { "tools": { "minItems": 1 } }
-            }
-        ]
-    });
-    schema
-}
+mod work_check;
+use work_check::work_check_input_schema;
 
 fn work_append_input_schema() -> Value {
     let mut schema = object_schema(
@@ -711,6 +705,9 @@ mod tests {
         for valid in [
             json!({ "plan_id": "plan_1" }),
             json!({ "plan_id": "plan_1", "gates": [], "tools": [] }),
+            json!({ "plan_id": "plan_1", "phase": null, "explain": null }),
+            json!({ "plan_id": "plan_1", "phase": "iteration", "explain": true }),
+            json!({ "plan_id": "plan_1", "phase": "final", "gates": [], "tools": [] }),
             json!({ "plan_id": "plan_1", "gates": ["tests"], "tools": [] }),
             json!({ "plan_id": "plan_1", "gates": [], "tools": ["jig.test"] }),
         ] {
@@ -720,6 +717,20 @@ mod tests {
             "plan_id": "plan_1",
             "gates": ["tests"],
             "tools": ["jig.test"]
+        })));
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "phase": "iteration",
+            "gates": ["tests"]
+        })));
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "phase": "final",
+            "tools": ["jig.test"]
+        })));
+        assert!(!validator.is_valid(&json!({
+            "plan_id": "plan_1",
+            "phase": "unknown"
         })));
     }
 

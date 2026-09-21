@@ -64,6 +64,7 @@ fn work_retire_writes_no_gate_evidence_and_leaves_gates_blocked() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),

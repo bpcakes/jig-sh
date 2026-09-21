@@ -3,9 +3,9 @@ use std::fs;
 use std::process::Command;
 
 use jig_contract::{
-    ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId,
-    ComponentSpec, ManifestTool, PlannedTarget, ProfileId, ProfileSpec, RunPlan, SelectionReason,
-    SourceIdentity, TargetId,
+    ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, CargoImpactReasonV1,
+    CargoImpactV1, ComponentId, ComponentSpec, ManifestTool, PlannedTarget, ProfileId, ProfileSpec,
+    RunPlan, SelectionReason, SourceIdentity, TargetId,
 };
 use serde_json::json;
 use tempfile::{TempDir, tempdir};
@@ -16,6 +16,9 @@ use super::{
 };
 use crate::context::RepoContext;
 use crate::repository::RepositoryCatalog;
+
+#[path = "../planner_tests/cargo_impact.rs"]
+mod cargo_impact;
 
 fn fixture() -> RepositoryCatalog {
     let components = [
@@ -626,6 +629,26 @@ fn prepared_file_budget_target(plan: &RunPlan) -> &PlannedTarget {
 
 fn reidentify(plan: &mut RunPlan) {
     plan.id = super::plan_digest(plan).unwrap();
+}
+
+#[test]
+fn cargo_impact_is_part_of_the_plan_digest_and_equality() {
+    let mut plan = plan_run_with_source(&fixture(), PlanRunRequest::default(), source()).unwrap();
+    let original_id = plan.id.clone();
+    plan.cargo_impacts.push(CargoImpactV1::unavailable(
+        ComponentId::parse("api").unwrap(),
+        "Cargo.toml",
+        Default::default(),
+        CargoImpactReasonV1::MetadataMalformed,
+    ));
+    reidentify(&mut plan);
+    assert_ne!(plan.id, original_id);
+
+    let mut equivalent = plan.clone();
+    equivalent.id.clear();
+    reidentify(&mut equivalent);
+    assert_eq!(plan.id, equivalent.id);
+    assert_eq!(plan, equivalent);
 }
 
 #[test]

@@ -9,9 +9,13 @@ fn work_check_runs_configured_tools() {
     let output = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -57,9 +61,13 @@ fn work_check_emits_one_balanced_phase_per_tool_with_aggregate_positions() {
         &ctx,
         RuntimeCommand::Work(crate::command::WorkCommand::Check(
             crate::command::WorkCheckRequest {
+                rust_focus: Default::default(),
+                projection: crate::surface::ResponseSurface::Standard,
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 tools: Vec::new(),
+                phase: None,
+                explain: false,
             },
         )),
         &mut observer,
@@ -86,9 +94,13 @@ fn work_check_rejects_unknown_plan_before_running_tools() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_missing".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -117,9 +129,13 @@ fn work_check_rejects_closed_plan_before_running_tools() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -142,9 +158,13 @@ fn work_check_collects_change_metadata_only_on_batch_receipt() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -190,9 +210,13 @@ fn failed_work_check_records_metadata_on_batch_and_stops_later_tools() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: vec!["jig.failing_check".into(), "jig.later_check".into()],
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -412,9 +436,13 @@ fn timed_out_work_check_records_child_and_batch_failure_receipts() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -483,9 +511,13 @@ tool = "jig.overflow_check"
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -520,9 +552,13 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -530,6 +566,7 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),

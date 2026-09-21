@@ -1,5 +1,17 @@
 use super::*;
 
+impl PlanChangeSnapshot {
+    pub(crate) fn all_changed_paths(&self) -> Vec<String> {
+        self.changed_paths
+            .iter()
+            .chain(&self.untracked_paths)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
 pub(super) fn plan_change_snapshot_inner(
     root: &Path,
     baseline_oid: &str,

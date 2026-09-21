@@ -72,6 +72,7 @@ mod signal_supervision;
 mod source_projection;
 mod state;
 mod status;
+mod surface;
 #[cfg(test)]
 mod test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

@@ -315,6 +315,8 @@ impl SourceSnapshot {
         budget: &mut CollectionBudget<'_>,
     ) -> CollectionResult<Self> {
         budget.ensure_active()?;
+        #[cfg(test)]
+        let _measurement = super::observations::measure(super::observations::Phase::Source);
         let root = files::open_root(ctx.root())?;
         let configuration = files::configuration(&root, budget)?;
         // Match bounded observations to the bytes from which this context was

@@ -428,7 +428,7 @@ pub(crate) enum CommandKind {
         name = root_commands::MCP.name,
         display_order = root_commands::MCP.display_order
     )]
-    Mcp,
+    Mcp(McpOpts),
     /// Validate this binary against a generated repository launcher contract.
     #[command(name = "__runtime-compatible", hide = true)]
     RuntimeCompatible(RuntimeCompatibleOpts),
@@ -498,8 +498,48 @@ pub(crate) struct InfoOpts {
         help = "Show root commands with repository-specific availability and remediation"
     )]
     pub(crate) commands: bool,
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t,
+        help = "Select the standard or opt-in agent-v1 inspection projection"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[command(subcommand)]
     pub(crate) subject: Option<InfoCommand>,
+}
+
+impl InfoOpts {
+    pub(crate) fn validate_projection(&self) -> anyhow::Result<()> {
+        if self.projection == crate::surface::ResponseSurface::Standard
+            || matches!(
+                self.subject.as_ref(),
+                Some(
+                    InfoCommand::Workspace
+                        | InfoCommand::Component { .. }
+                        | InfoCommand::Targets
+                        | InfoCommand::Target { .. }
+                )
+            )
+        {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "--projection agent-v1 requires a target-bearing info subject: workspace, component, targets, or target"
+        )
+    }
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct McpOpts {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select the standard or opt-in agent-v1 MCP response surface"
+    )]
+    pub(crate) surface: crate::surface::ResponseSurface,
 }
 
 #[derive(Debug, Subcommand)]

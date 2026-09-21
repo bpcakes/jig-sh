@@ -12,6 +12,40 @@ use super::ACTION_EXECUTION_CONTRACT_VERSION;
 
 pub(crate) fn validate(version: u32, action: &ActionSpec) -> Result<()> {
     match &action.runner {
+        ActionRunner::RustNextestV1 { configuration } => {
+            ensure!(
+                version >= ACTION_EXECUTION_CONTRACT_VERSION,
+                "Rust Nextest v1 requires contract v8 or later"
+            );
+            jig_rust::rust_focus::validate_config(configuration).map_err(anyhow::Error::msg)?;
+            let expected = if configuration.focused {
+                BTreeMap::from([(
+                    "focus".into(),
+                    jig_contract::ActionArgumentSpec::RustFocusV1 {},
+                )])
+            } else {
+                BTreeMap::new()
+            };
+            ensure!(
+                action.arguments == expected,
+                "Rust Nextest arguments must match the fixed full or focused v1 capability"
+            );
+            ensure!(
+                action.legacy_aliases.is_empty(),
+                "Rust Nextest v1 uses typed target execution, not legacy tool aliases"
+            );
+            ensure!(
+                action.intent == jig_contract::ActionIntent::Check
+                    && action.result_parser == jig_contract::ResultParser::ExitCode,
+                "Rust Nextest v1 requires a check action with the exit_code result parser"
+            );
+            ensure!(
+                action.inputs_policy.unwrap_or_default()
+                    == jig_contract::ActionInputsPolicy::WholeRepository,
+                "Rust Nextest v1 requires whole_repository input authority; narrow input reuse is not supported"
+            );
+            return Ok(());
+        }
         ActionRunner::Command { .. } => ensure!(
             version < ACTION_EXECUTION_CONTRACT_VERSION,
             "target '{}' must explicitly select an argv or shell runner in contract v8",

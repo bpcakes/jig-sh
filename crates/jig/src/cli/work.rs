@@ -17,12 +17,16 @@ pub(super) const WORK_CHECK_AFTER_HELP: &str = "\
 Validate configured target/profile evidence and legacy check gates for a plan.
 Reuse current target passes; execute missing, failed or stale checks and their dependencies.
 Use jig check COMPONENT:ACTION --plan-id ID to force a native target execution.
+Use --gate ID to force a configured native evidence or legacy check gate.
 Use --tool to select a legacy execution tool; its receipt does not satisfy a native target gate.
 Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
   jig work check --plan-id plan_abc123
+  jig work check --plan-id plan_abc123 --phase iteration --explain
+  jig work check --plan-id plan_abc123 --phase final
   jig work check --plan-id plan_abc123 --json
+  jig work check --plan-id plan_abc123 --projection agent-v1 --json
   jig work check --plan-id plan_abc123 --tool jig.test";
 
 pub(super) const WORK_GATES_AFTER_HELP: &str = "\
@@ -221,6 +225,20 @@ pub(crate) struct WorkAppendOpts {
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkCheckOpts {
+    #[arg(
+        long,
+        value_name = "TARGET=JSON",
+        requires = "phase",
+        help = "Typed Rust focus for an iteration target; may be repeated for different targets"
+    )]
+    pub(crate) rust_focus: Vec<String>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select standard output or the compact agent-v1 completion observation"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[arg(long, help = "Open plan id to check")]
     pub(crate) plan_id: String,
 
@@ -236,10 +254,31 @@ pub(crate) struct WorkCheckOpts {
         help = "Specific execution tool to force-run; defaults to required applicable gates"
     )]
     pub(crate) tools: Vec<String>,
+
+    #[arg(
+        long,
+        value_parser = ["iteration", "final"],
+        conflicts_with_all = ["gates", "tools"],
+        help = "Select the configured iteration profile or the final check scope"
+    )]
+    pub(crate) phase: Option<String>,
+
+    #[arg(
+        long,
+        help = "Preview selection, reuse, and pending final requirements without executing"
+    )]
+    pub(crate) explain: bool,
 }
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkGatesOpts {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select standard output or the compact agent-v1 completion observation"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..=30_000), help = "Freshness collection budget; defaults to 2000 ms")]
     pub(crate) freshness_timeout_ms: Option<u64>,
     #[arg(long, help = "Plan id to inspect; defaults to the single open plan")]
@@ -248,6 +287,13 @@ pub(crate) struct WorkGatesOpts {
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct WorkEvidenceOpts {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select standard output or the compact agent-v1 completion observation"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..=30_000), help = "Freshness collection budget; defaults to 2000 ms")]
     pub(crate) freshness_timeout_ms: Option<u64>,
     #[arg(long, help = "Open plan id whose evidence should be summarized")]

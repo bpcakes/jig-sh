@@ -780,6 +780,8 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
     // Status is a diagnostic report: its JSON may carry `ok: false`, but the
     // command remains inspectable without turning that report into a CLI error.
     assert!(!test_command_reports_failure_with_ok(&status.command));
+    let work_check = Cli::try_parse_from(["jig", "work", "check", "--plan-id", "plan_1"]).unwrap();
+    assert!(test_command_reports_failure_with_ok(&work_check.command));
 }
 
 mod child_exit;

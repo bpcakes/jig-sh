@@ -31,7 +31,10 @@ pub(super) fn append_details(lines: &mut Vec<String>, value: &Value) {
             }
         }
     }
-    let recovery = &value["recovery"];
+    append_recovery_details(lines, &value["recovery"]);
+}
+
+pub(super) fn append_recovery_details(lines: &mut Vec<String>, recovery: &Value) {
     if !recovery.is_object() {
         return;
     }
@@ -70,7 +73,10 @@ pub(super) fn append_details(lines: &mut Vec<String>, value: &Value) {
 
 /// True also means recovery deliberately withheld execution advice.
 pub(super) fn append_next_step(lines: &mut Vec<String>, value: &Value) -> bool {
-    let recovery = &value["recovery"];
+    append_recovery_next_step(lines, &value["recovery"])
+}
+
+pub(super) fn append_recovery_next_step(lines: &mut Vec<String>, recovery: &Value) -> bool {
     if let Some(command) = command(&recovery["next_step"]) {
         lines.push(format!("Next step: {command}"));
         return true;
@@ -82,7 +88,7 @@ pub(super) fn append_next_step(lines: &mut Vec<String>, value: &Value) -> bool {
     false
 }
 
-fn command(value: &Value) -> Option<String> {
+pub(super) fn command(value: &Value) -> Option<String> {
     let argv = value["argv"].as_array()?;
     let args = argv
         .iter()

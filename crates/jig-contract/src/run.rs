@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    ActionEffect, ActionIntent, ActionRunner, NativeFileBudgetConfigV1, ProfileId, ResultParser,
-    TargetId,
+    ActionEffect, ActionIntent, ActionRunner, CargoImpactV1, NativeFileBudgetConfigV1, ProfileId,
+    ResultParser, TargetId,
 };
 
 /// Named literal strings, ordered canonically before plan hashing.
@@ -68,6 +68,8 @@ pub struct PlannedTarget {
     pub intent: ActionIntent,
     pub effects: Vec<ActionEffect>,
     pub runner: ActionRunner,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<crate::ExecutionResourceV1>,
     #[serde(default, skip_serializing_if = "ActionArguments::is_empty")]
     pub arguments: ActionArguments,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -89,6 +91,8 @@ pub struct PlannedTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prepared_native_input: Option<PreparedNativeInputV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_rust_input: Option<crate::PreparedRustInputV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_identity: Option<crate::freshness::TargetIdentityV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_identity_error: Option<crate::freshness::FreshnessReason>,
@@ -107,6 +111,7 @@ impl PlannedTarget {
             intent,
             effects: Vec::new(),
             runner,
+            resources: Vec::new(),
             arguments: ActionArguments::default(),
             inputs: Vec::new(),
             depends_on: Vec::new(),
@@ -118,6 +123,7 @@ impl PlannedTarget {
             selection_reasons_truncated: false,
             selection_reasons_digest: None,
             prepared_native_input: None,
+            prepared_rust_input: None,
             target_identity: None,
             target_identity_error: None,
         }
@@ -316,10 +322,12 @@ pub struct RunPlan {
     pub targets: Vec<PlannedTarget>,
     pub execution_layers: Vec<Vec<TargetId>>,
     pub effects: Vec<ActionEffect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cargo_impacts: Vec<CargoImpactV1>,
 }
 
 impl RunPlan {
-    pub const SCHEMA_VERSION: u32 = 3;
+    pub const SCHEMA_VERSION: u32 = 4;
 
     #[must_use]
     pub fn new(
@@ -340,6 +348,7 @@ impl RunPlan {
             targets,
             execution_layers,
             effects: Vec::new(),
+            cargo_impacts: Vec::new(),
         }
     }
 }
@@ -442,6 +451,8 @@ pub struct TargetRunResult {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused_from: Option<crate::ReusedTargetEvidenceV1>,
     pub config_digest: String,
     pub input_digest: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -478,6 +489,7 @@ impl TargetRunResult {
             ended_at_ms: None,
             exit_code: None,
             receipt_id: None,
+            reused_from: None,
             config_digest: config_digest.into(),
             input_digest: input_digest.into(),
             findings: Vec::new(),
@@ -582,7 +594,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(plan).unwrap(),
             serde_json::json!({
-                "schema_version": 3,
+                "schema_version": 4,
                 "id": "run-plan_sha256",
                 "config_digest": "sha256:config",
                 "source": {"commit": "abc123", "worktree_fingerprint": "worktree-1"},
@@ -652,6 +664,7 @@ mod tests {
         });
         let plan: RunPlan = serde_json::from_value(old_plan).unwrap();
         assert_eq!(plan.schema_version, 2);
+        assert!(plan.cargo_impacts.is_empty());
         assert!(plan.targets[0].prepared_native_input.is_none());
         assert!(matches!(
             &plan.targets[0].runner,

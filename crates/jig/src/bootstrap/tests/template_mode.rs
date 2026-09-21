@@ -289,6 +289,51 @@ fn update_recopy_seeds_then_preserves_authored_file_budget_policy() {
 }
 
 #[test]
+fn update_and_recopy_preserve_authored_iteration_profile() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_git_worktree();
+
+    for recopy in [false, true] {
+        let repo = temp.path().join(format!("repo-{recopy}"));
+        write_test_crate_guide(&repo);
+        adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
+
+        let answers_path = repo.join(".jig.toml");
+        let mut answers = read_answers_toml(&answers_path).unwrap();
+        answers
+            .get_mut("work")
+            .and_then(TomlValue::as_table_mut)
+            .unwrap()
+            .insert(
+                "iteration_profile".into(),
+                TomlValue::String("verify".into()),
+            );
+        write_answers_toml(&answers_path, &answers).unwrap();
+
+        run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy,
+            launcher_only: false,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+
+        let updated = read_answers_toml(&answers_path).unwrap();
+        assert_eq!(
+            updated["work"]["iteration_profile"].as_str(),
+            Some("verify"),
+            "iteration profile was lost with recopy={recopy}"
+        );
+    }
+}
+
+#[test]
 fn update_recopy_preserves_authored_file_budget_action_alias_and_profile_removals() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

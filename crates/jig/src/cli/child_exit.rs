@@ -26,7 +26,10 @@ fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
         true,
         &CommandKind::Info(InfoOpts::default())
     ));
-    assert!(!should_report_json_command_errors(true, &CommandKind::Mcp));
+    assert!(!should_report_json_command_errors(
+        true,
+        &CommandKind::Mcp(McpOpts::default())
+    ));
     let runtime_probe = Cli::try_parse_from([
         "jig",
         "__runtime-compatible",

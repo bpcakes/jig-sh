@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "work_projection.rs"]
+mod work_projection;
+
 #[test]
 fn parses_work_status_command() {
     let cli = Cli::try_parse_from(["jig", "work", "status"]).unwrap();
@@ -77,6 +80,18 @@ fn work_append_requires_exactly_one_body_source() {
     ])
     .unwrap_err();
     assert_eq!(conflicting.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+    let unknown = Cli::try_parse_from([
+        "jig",
+        "work",
+        "check",
+        "--plan-id",
+        "plan_1",
+        "--phase",
+        "focused",
+    ])
+    .unwrap_err();
+    assert_eq!(unknown.kind(), clap::error::ErrorKind::InvalidValue);
 }
 
 #[test]
@@ -98,9 +113,48 @@ fn parses_work_check_tools() {
         CommandKind::Work(WorkCommand::Check(opts)) => {
             assert_eq!(opts.plan_id, "plan_1");
             assert_eq!(opts.tools, vec![tool::CONTRACT_CHECK, tool::TEST]);
+            assert_eq!(opts.phase, None);
+            assert!(!opts.explain);
         }
         other => panic!("expected work check command, got {other:?}"),
     }
+}
+
+#[test]
+fn parses_work_check_phase_and_explain() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "work",
+        "check",
+        "--plan-id",
+        "plan_1",
+        "--phase",
+        "iteration",
+        "--explain",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Work(WorkCommand::Check(opts)) => {
+            assert_eq!(opts.phase.as_deref(), Some("iteration"));
+            assert!(opts.explain);
+        }
+        other => panic!("expected work check command, got {other:?}"),
+    }
+
+    let conflicting = Cli::try_parse_from([
+        "jig",
+        "work",
+        "check",
+        "--plan-id",
+        "plan_1",
+        "--phase",
+        "final",
+        "--tool",
+        tool::TEST,
+    ])
+    .unwrap_err();
+    assert_eq!(conflicting.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

@@ -222,6 +222,11 @@ fn validate_actions_and_evidence_gates(ctx: &RepoContext, errors: &mut Vec<Strin
     }
     for action in ctx.action_specs() {
         match &action.runner {
+            jig_contract::ActionRunner::RustNextestV1 { configuration } => {
+                if let Err(error) = jig_rust::rust_focus::validate_config(configuration) {
+                    errors.push(format!("Target {}: {error}.", action.target));
+                }
+            }
             jig_contract::ActionRunner::Argv { .. } => {}
             jig_contract::ActionRunner::Command { command, .. }
             | jig_contract::ActionRunner::Shell { command, .. } => {
@@ -281,6 +286,16 @@ fn validate_tool_definition(
     errors: &mut Vec<String>,
 ) {
     let alias_action = catalog.and_then(|catalog| catalog.action_for_alias(&tool.name));
+    if matches!(
+        alias_action.map(|action| &action.runner),
+        Some(jig_contract::ActionRunner::RustNextestV1 { .. })
+    ) {
+        errors.push(format!(
+            "Rust Nextest v1 target must not expose legacy alias {}.",
+            tool.name
+        ));
+        return;
+    }
     if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
         errors.push(format!(
             "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
@@ -291,7 +306,8 @@ fn validate_tool_definition(
         jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
         jig_contract::ActionRunner::Command { .. }
         | jig_contract::ActionRunner::Shell { .. }
-        | jig_contract::ActionRunner::Argv { .. } => None,
+        | jig_contract::ActionRunner::Argv { .. }
+        | jig_contract::ActionRunner::RustNextestV1 { .. } => None,
     });
     let admission_name = native_operation.unwrap_or(&tool.name);
     if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
@@ -423,7 +439,8 @@ fn validate_work_tools(
                 jig_contract::ActionRunner::Native { operation, .. } => Some(operation.as_str()),
                 jig_contract::ActionRunner::Command { .. }
                 | jig_contract::ActionRunner::Shell { .. }
-                | jig_contract::ActionRunner::Argv { .. } => None,
+                | jig_contract::ActionRunner::Argv { .. }
+                | jig_contract::ActionRunner::RustNextestV1 { .. } => None,
             });
         if tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation) {
             errors.push(format!(

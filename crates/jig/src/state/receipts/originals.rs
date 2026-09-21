@@ -90,6 +90,10 @@ impl OriginalReceiptIndex {
         if !metadata.is_file() {
             return Err(failed("original receipt journal is not a regular file"));
         }
+        #[cfg(test)]
+        let _measurement = crate::repository::freshness::observations::measure(
+            crate::repository::freshness::observations::Phase::OriginalIndex,
+        );
         let mut reader = BufReader::new(file);
         let mut locations: BTreeMap<String, OriginalLocation> = BTreeMap::new();
         let mut latest = BTreeMap::new();
@@ -291,6 +295,10 @@ fn read_at(
     location: &OriginalLocation,
     budget: &mut CollectionBudget<'_>,
 ) -> CollectionResult<Vec<u8>> {
+    #[cfg(test)]
+    let _measurement = crate::repository::freshness::observations::measure(
+        crate::repository::freshness::observations::Phase::OriginalRead,
+    );
     file.seek(SeekFrom::Start(location.offset))
         .map_err(|_| failed("original receipt seek failed"))?;
     let mut bytes = vec![0; location.length];

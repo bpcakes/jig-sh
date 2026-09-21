@@ -164,8 +164,16 @@ impl ExecutionSourceEpoch {
         ctx: &RepoContext,
         target_count: usize,
     ) -> std::result::Result<(), String> {
+        self.prepare_read_only_layer_with(target_count, || collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn prepare_read_only_layer_with(
+        &mut self,
+        target_count: usize,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> std::result::Result<(), String> {
         let trusted_fingerprint = self.trusted_fingerprint.clone()?;
-        let current = self.observe_with(|| collect_execution_fingerprint(ctx));
+        let current = self.observe_with(collect);
         self.observed_fingerprint = current.clone();
         match current {
             Ok(current) if current == trusted_fingerprint => Ok(()),
@@ -182,10 +190,24 @@ impl ExecutionSourceEpoch {
         &mut self,
         ctx: &RepoContext,
     ) -> std::result::Result<String, String> {
-        let current = self.observe_with(|| collect_execution_fingerprint(ctx));
+        self.observe_read_only_layer_postcondition_with(|| collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn observe_read_only_layer_postcondition_with(
+        &mut self,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> std::result::Result<String, String> {
+        let current = self.observe_with(collect);
         self.observed_fingerprint = current.clone();
         self.discard_reusable_observation();
         current
+    }
+
+    pub(super) fn read_only_postcondition_matches(
+        &self,
+        current: &std::result::Result<String, String>,
+    ) -> bool {
+        matches!((self.trusted_fingerprint.as_ref(), current.as_ref()), (Ok(expected), Ok(actual)) if expected == actual)
     }
 
     pub(super) fn finish_started_read_only_layer_target(

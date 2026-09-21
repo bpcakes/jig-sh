@@ -172,7 +172,7 @@ impl CommandKind {
             Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
             Self::AgentMap(_) => (tool_defs::cli_command::AGENT_MAP, Repository),
             Self::State(_) => (tool_defs::cli_command::STATE, Repository),
-            Self::Mcp => (tool_defs::cli_command::MCP, Repository),
+            Self::Mcp(_) => (tool_defs::cli_command::MCP, Repository),
             Self::RuntimeCompatible(_) => ("__runtime-compatible", CapabilityOnly),
         };
 
@@ -199,7 +199,7 @@ const fn should_report_json_command_errors(json_output: bool, command: &CommandK
     json_output
         && !matches!(
             command,
-            CommandKind::Mcp | CommandKind::RuntimeCompatible(_)
+            CommandKind::Mcp(_) | CommandKind::RuntimeCompatible(_)
         )
 }
 
@@ -211,9 +211,9 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Presets => run_presets_command(json_output),
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
         CommandKind::Update(opts) => run_update_command(opts, json_output),
-        CommandKind::Mcp => {
+        CommandKind::Mcp(opts) => {
             let ctx = RepoContext::load()?;
-            mcp::serve(&ctx)
+            mcp::serve(&ctx, opts.surface)
         }
         CommandKind::Ui(opts) => {
             let ctx = RepoContext::load().map_err(|error| {
@@ -231,6 +231,7 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
+            opts.validate_projection()?;
             if let Some(super::InfoCommand::Freshness(freshness)) = opts.subject.as_ref() {
                 if opts.commands {
                     bail!("--commands cannot be combined with an info subject");
@@ -270,7 +271,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     crate::repository::InspectRequest::Profile(id)
                 }
             });
-            let output = info::run(opts.commands, json_output, request)?;
+            let output = info::run(opts.commands, json_output, request, opts.projection)?;
             emit(json_output, HumanOutput::Info, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
@@ -431,9 +432,10 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         CommandKind::Work(command) => {
             let human_output = work_human_output(&command);
+            let require_ok = work_command_reports_failure_with_ok(&command);
             dispatch_runtime_command(
-                crate::command::RuntimeCommand::Work(command.into()),
-                false,
+                crate::command::RuntimeCommand::Work(command.try_into()?),
+                require_ok,
                 json_output,
                 human_output,
             )
@@ -662,6 +664,7 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
+        CommandKind::Work(command) => work_command_reports_failure_with_ok(command),
         CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
         CommandKind::Check(_) | CommandKind::Run(_) => true,
         _ => false,
@@ -677,6 +680,10 @@ const fn loop_command_reports_failure_with_ok(command: &LoopCommand) -> bool {
         command,
         LoopCommand::Tick(_) | LoopCommand::Dispatch(_) | LoopCommand::Run(_)
     )
+}
+
+const fn work_command_reports_failure_with_ok(command: &WorkCommand) -> bool {
+    matches!(command, WorkCommand::Check(_))
 }
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {
@@ -767,6 +774,7 @@ fn dispatch_runtime_command(
 
 mod argument_parsing;
 mod freshness;
+mod workflow_recovery;
 pub(super) use argument_parsing::*;
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;

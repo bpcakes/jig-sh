@@ -22,6 +22,7 @@ pub(super) struct GateReportPlanInput<'a> {
     pub(super) plan_state: &'static str,
     pub(super) plan_retirement: Option<crate::state::PlanRetirement>,
     pub(super) prepared_scope: PlanGateContext,
+    pub(super) observations: &'a mut super::scoped_freshness::ScopedGateObservations,
 }
 
 pub(crate) fn gate_receipt_indexes(
@@ -111,6 +112,7 @@ pub(crate) fn open_plan_reports_with_cancellation(
         super::CollectionLimits::with_timeout(std::time::Duration::from_millis(timeout_ms)),
         cancelled,
     );
+    let mut observations = super::scoped_freshness::ScopedGateObservations::default();
     for (plan_id, plan_scope) in scopes {
         ensure_gate_collection_active(cancelled)?;
         let index = indexes
@@ -124,6 +126,7 @@ pub(crate) fn open_plan_reports_with_cancellation(
                 // Dashboard gate snapshots only cover open plans.
                 plan_retirement: None,
                 prepared_scope: plan_scope,
+                observations: &mut observations,
             },
             current_fingerprint.clone(),
             work_gates.clone(),

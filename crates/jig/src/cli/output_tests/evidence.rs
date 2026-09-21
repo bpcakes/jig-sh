@@ -2,6 +2,8 @@ use serde_json::json;
 
 use super::*;
 
+include!("phase.rs");
+
 #[test]
 fn work_check_summary_reports_empty_checks() {
     let summary = format_work_check_summary(&json!({

@@ -19,8 +19,13 @@ use crate::state::{
 mod check_schedule;
 mod checks;
 #[cfg(test)]
-pub(in crate::runtime) use checks::check_tools_collect_failures_with_observer;
+pub(in crate::runtime) use checks::{
+    check_phase_with_pre_execution_test_hook, check_tools_collect_failures_with_observer,
+};
 mod gates;
+pub(in crate::runtime) use gates::reusable_invocation_after_resource_wait;
+#[cfg(test)]
+pub(crate) use gates::selected_invocation_snapshot_with_test_timeout;
 mod goal;
 mod review;
 mod scope;
@@ -400,19 +405,41 @@ pub(super) fn check_from_args_with_observer(
     ctx: &RepoContext,
     args: Value,
     observer: &mut dyn ExecutionControl,
+    projection: crate::surface::ResponseSurface,
 ) -> Result<Value> {
-    let request: WorkCheckRequest = request_from_args(args)?;
+    let mut request: WorkCheckRequest = request_from_args(args)?;
+    request.projection = projection;
     checks::check_from_mcp_with_observer(ctx, request, observer)
 }
 
-pub(super) fn gates_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
-    let request: WorkGatesRequest = request_from_args(args)?;
-    gates::gates(ctx, request)
+pub(super) fn gates_from_args(
+    ctx: &RepoContext,
+    args: Value,
+    projection: crate::surface::ResponseSurface,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    let mut request: WorkGatesRequest = request_from_args(args)?;
+    request.projection = projection;
+    if projection == crate::surface::ResponseSurface::AgentV1 {
+        gates::snapshot_with_cancellation(ctx, request, cancelled)
+    } else {
+        gates::gates(ctx, request)
+    }
 }
 
-pub(super) fn evidence_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
-    let request: WorkEvidenceRequest = request_from_args(args)?;
-    gates::evidence(ctx, request)
+pub(super) fn evidence_from_args(
+    ctx: &RepoContext,
+    args: Value,
+    projection: crate::surface::ResponseSurface,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    let mut request: WorkEvidenceRequest = request_from_args(args)?;
+    request.projection = projection;
+    if projection == crate::surface::ResponseSurface::AgentV1 {
+        gates::evidence_with_cancellation(ctx, request, cancelled)
+    } else {
+        gates::evidence(ctx, request)
+    }
 }
 
 pub(super) fn review_from_args_with_observer(

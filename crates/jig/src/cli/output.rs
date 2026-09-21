@@ -183,6 +183,7 @@ fn format_repository_execution_summary(
             format!("  Targets: {targets}"),
         ];
         append_planned_targets(&mut lines, plan);
+        append_cargo_impact_summary(&mut lines, plan);
         lines.push("  No commands executed (--explain).".into());
         lines.push("  full plan: rerun with --json".into());
         return lines.join("\n");
@@ -275,6 +276,44 @@ fn append_planned_targets(lines: &mut Vec<String>, plan: &serde_json::Value) {
                 }
             }
             lines.push(format!("  - {address}: {reasons}"));
+        }
+    }
+}
+
+fn append_cargo_impact_summary(lines: &mut Vec<String>, plan: &serde_json::Value) {
+    let Some(impacts) = plan["cargo_impacts"].as_array() else {
+        return;
+    };
+    if impacts.is_empty() {
+        return;
+    }
+    lines.push(
+        "  Cargo candidate build scope (configured target selection remains authoritative):".into(),
+    );
+    for impact in impacts {
+        let component = impact["component"].as_str().unwrap_or("<unknown>");
+        let disposition = impact["disposition"].as_str().unwrap_or("unavailable");
+        let packages = impact["build_packages"]
+            .as_array()
+            .map(|packages| {
+                packages
+                    .iter()
+                    .filter_map(|package| package["selector"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|packages| !packages.is_empty())
+            .unwrap_or_else(|| "none recorded".to_owned());
+        lines.push(format!(
+            "  - {component}: {disposition}; packages: {packages}"
+        ));
+        if let Some(targets) = impact["test_targets"].as_array()
+            && !targets.is_empty()
+        {
+            lines.push(format!(
+                "      test-enabled Cargo targets: {}",
+                targets.len()
+            ));
         }
     }
 }

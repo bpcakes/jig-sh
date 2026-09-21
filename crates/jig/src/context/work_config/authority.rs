@@ -9,6 +9,8 @@ pub(in crate::context) struct WorkExecutionAuthority<'a> {
     tracker: Option<TrackerExecutionAuthority<'a>>,
     checks: &'a [String],
     gates: &'a [WorkGateConfig],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iteration_profile: Option<&'a ProfileId>,
     refinements: &'a [WorkRefinementConfig],
 }
 
@@ -29,6 +31,7 @@ impl WorkConfig {
             tracker,
             checks,
             gates,
+            iteration_profile,
             refinements,
         } = self;
         WorkExecutionAuthority {
@@ -45,6 +48,7 @@ impl WorkConfig {
             }),
             checks,
             gates,
+            iteration_profile: iteration_profile.as_ref(),
             refinements,
         }
     }
@@ -58,6 +62,7 @@ mod tests {
     fn work_authority_preserves_existing_serialization_without_display_guidance() {
         for source in [
             "",
+            "iteration_profile = \"iteration\"",
             "receipt_metadata = [\"beads\"]\nchecks = [\"jig.test\"]",
             "[tracker]\nkind = \"beads\"\nworkspace_id = \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\nexport = \"manual\"",
         ] {

@@ -17,6 +17,8 @@ pub(crate) mod adoption;
 mod authority;
 mod budget;
 mod encoding;
+#[cfg(test)]
+pub(crate) mod observations;
 pub(crate) mod proof;
 mod source;
 
@@ -187,6 +189,8 @@ pub(crate) fn collect_target_identities_with_source(
     whole_repository_token: Option<&str>,
     budget: &mut CollectionBudget<'_>,
 ) -> CollectionResult<TargetIdentityCollection> {
+    #[cfg(test)]
+    let _measurement = observations::measure(observations::Phase::Identity);
     if !supported_freshness_epoch(catalog.contract_version()) {
         return Err(CollectionFailure::new(
             FreshnessReasonCode::UnsupportedAuthority,

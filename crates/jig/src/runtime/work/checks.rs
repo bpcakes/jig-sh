@@ -13,7 +13,9 @@ use crate::state::{
     WorkCheckBatchEvidence, WorkCheckGateEvidence,
     current_worktree_fingerprint_for_receipt_with_cancellation,
     current_worktree_fingerprint_with_cancellation, now_ms, record_receipt,
-    record_receipt_with_cancellation, reusable_work_check_evidence_batch_with_cancellation,
+    record_receipt_with_cancellation,
+    record_receipt_with_cancellation_if_no_current_plan_gate_evidence,
+    reusable_work_check_evidence_batch_with_cancellation,
 };
 use crate::tool_defs::tool;
 
@@ -32,7 +34,7 @@ pub(super) fn check_with_observer(
     opts: WorkCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_with_execution(ctx, opts, WorkCheckExecution::WaitForLease, observer)
+    check_projected(ctx, opts, WorkCheckExecution::WaitForLease, observer)
 }
 
 pub(super) fn check_from_mcp_with_observer(
@@ -40,10 +42,31 @@ pub(super) fn check_from_mcp_with_observer(
     opts: WorkCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_with_execution(ctx, opts, WorkCheckExecution::RejectContention, observer)
+    check_projected(ctx, opts, WorkCheckExecution::RejectContention, observer)
 }
 
+fn check_projected(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    let projection = opts.projection;
+    let plan_id = opts.plan_id.clone();
+    let result = check_with_execution(ctx, opts, execution, observer)?;
+    if projection == crate::surface::ResponseSurface::AgentV1 {
+        super::gates::completion_after_check(ctx, &plan_id, &result, &|| observer.cancelled())
+    } else {
+        Ok(result)
+    }
+}
+
+mod batch;
+mod phase;
+mod rust_focus;
 mod selection;
+#[cfg(test)]
+pub(in crate::runtime) use phase::check_phase_with_pre_execution_test_hook;
 use selection::check_with_execution;
 
 #[cfg(test)]
@@ -100,23 +123,6 @@ fn check_required_collect_failures_with_execution(
     check_configured_with_execution(ctx, plan_id, FailureMode::Collect, execution, observer)
 }
 
-fn check_selected_with_observer(
-    ctx: &RepoContext,
-    plan_id: &str,
-    selected: Vec<SelectedCheck>,
-    execution: WorkCheckExecution,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    check_selected_with_failure_mode(
-        ctx,
-        plan_id,
-        selected,
-        FailureMode::Abort,
-        execution,
-        observer,
-    )
-}
-
 fn check_selected_with_failure_mode(
     ctx: &RepoContext,
     plan_id: &str,
@@ -129,45 +135,16 @@ fn check_selected_with_failure_mode(
         bail!(EMPTY_CHECK_SELECTION_MESSAGE);
     }
     let started = now_ms();
-    let batch = prepare_check_batch(ctx, plan_id, selected, observer)?;
-    let outcome = execute_check_batch(ctx, plan_id, &batch, failure_mode, execution, observer)?;
-    let receipt_result =
-        record_check_batch_receipt(ctx, plan_id, started, &batch, &outcome, observer);
-
-    if (failure_mode.aborts() || observer.cancelled())
-        && let Some(failure) = outcome.failure.as_ref()
-    {
-        return match receipt_result {
-            Ok(_) => Err(anyhow!("{:#}", failure.error)),
-            Err(receipt_error) => {
-                bail!(
-                    "{:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}",
-                    failure.error
-                )
-            }
-        };
-    }
-    let receipt_id = receipt_result?;
-    let failure_message = outcome
-        .failure
-        .as_ref()
-        .map(|failure| format!("{:#}", failure.error));
-
-    let mut value = json!({
-        "ok": outcome.failure.is_none(),
-        "plan_id": plan_id,
-        "checks": outcome.results,
-        "change_evidence": batch.changes.to_value(),
-        "gate_evidence": outcome.gate_evidence,
-        "error": failure_message,
-        "receipt_id": receipt_id,
-    });
-    if let Some(validity) = batch_effective_time(ctx, &outcome) {
-        value["effective_valid_until_ms"] = json!(validity.effective_valid_until_ms);
-        value["effective_requires_time_validity"] =
-            json!(validity.effective_requires_time_validity);
-    }
-    Ok(value)
+    let batch = prepare_check_batch(ctx, plan_id, selected, None, observer)?;
+    batch::check_prepared_with_failure_mode(
+        ctx,
+        plan_id,
+        batch,
+        started,
+        failure_mode,
+        execution,
+        observer,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -202,116 +179,8 @@ impl WorkCheckExecution {
     }
 }
 
-fn check_configured_with_execution(
-    ctx: &RepoContext,
-    plan_id: &str,
-    failure_mode: FailureMode,
-    execution: WorkCheckExecution,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    let selected = selected_checks(ctx, &[], &[])?;
-    let targets = configured_evidence_targets_if_any(ctx)?;
-    if selected.is_empty() && targets.is_empty() {
-        bail!(EMPTY_CHECK_SELECTION_MESSAGE);
-    }
-
-    let mut result = if selected.is_empty() {
-        json!({
-            "ok": true,
-            "plan_id": plan_id,
-            "checks": [],
-            "change_evidence": null,
-            "gate_evidence": [],
-            "receipt_id": null,
-        })
-    } else {
-        // Run the full configured set before reporting aggregate failures so
-        // repository evidence is still refreshed when a command-backed check
-        // fails.
-        check_selected_with_failure_mode(
-            ctx,
-            plan_id,
-            selected,
-            FailureMode::Collect,
-            execution,
-            observer,
-        )?
-    };
-    let mut check_failures = result["checks"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|check| manifest_tool_result_failure(check).transpose())
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|(_, message)| message)
-        .collect::<Vec<_>>();
-    if let Some(error) = result["error"].as_str()
-        && !check_failures.iter().any(|failure| failure == error)
-    {
-        check_failures.push(error.to_string());
-    }
-
-    if targets.is_empty() {
-        if failure_mode.aborts() && !check_failures.is_empty() {
-            bail!("{}", check_failures.join("\n"));
-        }
-        if let Some(object) = result.as_object_mut() {
-            object.insert("ok".into(), json!(check_failures.is_empty()));
-        }
-        return Ok(result);
-    }
-
-    let evidence = targets::check(ctx, plan_id, targets, execution, observer)?;
-    let evidence_ok = evidence["ok"] == true;
-    let evidence_failure = evidence["error"]
-        .as_str()
-        .unwrap_or("required target evidence is not current and passing");
-    let checks_ok = check_failures.is_empty();
-    let object = result
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
-    object.extend(
-        evidence
-            .as_object()
-            .expect("target check returns an object")
-            .clone(),
-    );
-    object.insert("ok".into(), json!(checks_ok && evidence_ok));
-
-    if failure_mode.aborts() {
-        let check_failure = (!checks_ok).then(|| check_failures.join("\n"));
-        match (check_failure, evidence_ok) {
-            (Some(failure), false) => bail!("{failure}\n{evidence_failure}"),
-            (Some(failure), true) => bail!("{failure}"),
-            (None, false) => bail!("{evidence_failure}"),
-            (None, true) => {}
-        }
-    }
-    Ok(result)
-}
-
-fn configured_evidence_targets_if_any(
-    ctx: &RepoContext,
-) -> Result<BTreeSet<jig_contract::TargetId>> {
-    let evidence_gates = ctx
-        .work_gates()
-        .into_iter()
-        .filter_map(|gate| match gate {
-            crate::context::WorkGate::Evidence(gate) if gate.required => Some(gate),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if evidence_gates.is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    let catalog = RepositoryCatalog::from_context(ctx)?;
-    let mut targets = BTreeSet::new();
-    for gate in evidence_gates {
-        targets.extend(resolve_evidence_targets(&catalog, &gate.selector)?);
-    }
-    Ok(targets)
-}
+mod configured;
+use configured::{CheckSelection, check_combined_with_execution, check_configured_with_execution};
 
 fn evidence_failure_message(result: &jig_contract::RunResult) -> String {
     let conclusion = result
@@ -359,6 +228,7 @@ struct PreparedCheckBatch {
     runnable_count: usize,
     changes: BatchChanges,
     before_fingerprint: crate::state::CurrentWorktreeFingerprint,
+    expected_authority_digest: Option<String>,
 }
 
 #[derive(Default)]
@@ -441,6 +311,7 @@ fn prepare_check_batch(
     ctx: &RepoContext,
     plan_id: &str,
     selected: Vec<SelectedCheck>,
+    expected_authority_digest: Option<&str>,
     observer: &dyn ExecutionControl,
 ) -> Result<PreparedCheckBatch> {
     for selected in &selected {
@@ -535,6 +406,7 @@ fn prepare_check_batch(
         runnable_count,
         changes,
         before_fingerprint,
+        expected_authority_digest: expected_authority_digest.map(str::to_owned),
     })
 }
 
@@ -587,7 +459,7 @@ fn execute_check_batch(
             plan_id,
             runnable,
             position,
-            failure_mode,
+            batch.expected_authority_digest.as_deref(),
             execution,
             observer,
         )?;
@@ -719,7 +591,7 @@ fn run_check(
     plan_id: &str,
     runnable: RunnableCheck<'_>,
     position: PhasePosition,
-    _failure_mode: FailureMode,
+    expected_authority_digest: Option<&str>,
     work_check_execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CheckRunOutcome> {
@@ -731,6 +603,7 @@ fn run_check(
                 json!({}),
                 Some(plan_id.to_string()),
                 position,
+                expected_authority_digest,
                 observer,
             )
         }
@@ -741,6 +614,7 @@ fn run_check(
                 json!({}),
                 Some(plan_id.to_string()),
                 position,
+                expected_authority_digest,
                 observer,
             )
         }

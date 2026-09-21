@@ -31,7 +31,7 @@ use target_evidence::EvidenceGateEvaluation;
 const MAX_GATE_CHANGED_PATHS: usize = 100;
 
 #[derive(Clone, Copy)]
-enum GateCollection<'a> {
+pub(in crate::runtime::work) enum GateCollection<'a> {
     Blocking,
     Cancellable(&'a dyn Fn() -> bool),
 }
@@ -486,7 +486,7 @@ impl GateEvaluation {
 mod recovery;
 
 mod report;
-use report::GateReport;
+pub(super) use report::GateReport;
 
 #[derive(Default)]
 struct RequiredGateFailures {
@@ -524,63 +524,11 @@ impl RequiredGateFailures {
     }
 }
 
-pub(super) fn gates(ctx: &RepoContext, opts: WorkGatesRequest) -> Result<Value> {
-    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
-    let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
-    Ok(gate_report(ctx, &plan_id, timeout)?.to_value())
-}
-
-pub(super) fn snapshot_with_cancellation(
-    ctx: &RepoContext,
-    opts: WorkGatesRequest,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    ensure_gate_collection_active(cancelled)?;
-    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
-    let plan_id = resolve_work_plan_id_with_cancellation(ctx, opts.plan_id, cancelled)?;
-    ensure_gate_collection_active(cancelled)?;
-    Ok(gate_report_with_cancellation(ctx, &plan_id, cancelled, timeout)?.to_value())
-}
-
-pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<Value> {
-    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
-    let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
-    let report = gate_report(ctx, &plan_id, timeout)?;
-    evidence_from_report(report)
-}
-
-pub(super) fn evidence_with_cancellation(
-    ctx: &RepoContext,
-    opts: WorkEvidenceRequest,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    ensure_gate_collection_active(cancelled)?;
-    let timeout = inspection_timeout(opts.freshness_timeout_ms)?;
-    let plan_id = resolve_work_plan_id_with_cancellation(ctx, opts.plan_id, cancelled)?;
-    ensure_gate_collection_active(cancelled)?;
-    let report = gate_report_with_cancellation(ctx, &plan_id, cancelled, timeout)?;
-    evidence_from_report(report)
-}
-
-fn evidence_from_report(report: GateReport) -> Result<Value> {
-    let latest = latest_passing_gates(&report);
-    let mut status = report.to_value();
-    if let Some(argv) = status
-        .get_mut("recovery")
-        .and_then(|recovery| recovery.get_mut("next_step"))
-        .and_then(|command| command.get_mut("argv"))
-        .and_then(Value::as_array_mut)
-        && argv.get(2).and_then(Value::as_str) == Some("gates")
-    {
-        argv[2] = json!("evidence");
-    }
-    let object = status
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("work gate status was not a JSON object"))?;
-    object.insert("command".into(), json!("work evidence"));
-    object.insert("latest_passing_gates".into(), json!(latest));
-    Ok(status)
-}
+mod compact;
+mod inspection;
+pub(super) use inspection::{
+    completion_after_check, evidence, evidence_with_cancellation, gates, snapshot_with_cancellation,
+};
 
 pub(super) fn ensure_required_gates_passed_with_cancellation(
     ctx: &RepoContext,
@@ -642,7 +590,8 @@ pub(super) fn ensure_required_gates_passed_with_cancellation(
 }
 
 mod collection;
-use collection::{evaluate_gate_report_from_index, gate_report, gate_report_with_cancellation};
+pub(super) use collection::gate_report_with_cancellation;
+use collection::{evaluate_gate_report_from_index, gate_report};
 
 pub(super) fn open_plan_snapshots_with_cancellation(
     ctx: &RepoContext,
@@ -719,6 +668,7 @@ pub(super) fn open_plan_snapshots_with_cancellation(
         CollectionLimits::with_timeout(Duration::from_millis(timeout_ms)),
         cancelled,
     );
+    let mut observations = scoped_freshness::ScopedGateObservations::default();
     for (plan_id, plan_scope) in scopes {
         ensure_gate_collection_active(cancelled)?;
         let index = indexes
@@ -731,6 +681,7 @@ pub(super) fn open_plan_snapshots_with_cancellation(
                 plan_state: "open",
                 plan_retirement: None,
                 prepared_scope: plan_scope,
+                observations: &mut observations,
             },
             current_fingerprint.clone(),
             work_gates.clone(),
@@ -768,8 +719,13 @@ mod scoped_freshness;
 mod target_evidence;
 
 mod check_snapshot;
-pub(super) use check_snapshot::check_target_snapshot;
 use check_snapshot::repository_for_evidence_gates;
+pub(in crate::runtime) use check_snapshot::reusable_invocation_after_resource_wait;
+#[cfg(test)]
+pub(crate) use check_snapshot::selected_invocation_snapshot_with_test_timeout;
+pub(super) use check_snapshot::{
+    SelectedInvocationSnapshot, check_target_snapshot, selected_invocation_snapshot,
+};
 
 fn inspection_timeout(requested: Option<u64>) -> Result<u64> {
     let timeout = requested.unwrap_or(INSPECTION_TIMEOUT_MS);

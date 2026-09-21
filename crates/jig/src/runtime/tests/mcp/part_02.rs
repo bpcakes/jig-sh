@@ -503,6 +503,8 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
         &catalog,
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
@@ -554,6 +556,8 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
         &catalog,
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: true,
             fail_fast: false,

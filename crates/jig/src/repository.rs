@@ -1,6 +1,7 @@
 pub(crate) mod arguments;
 pub(crate) mod freshness;
 pub(crate) mod runners;
+pub(crate) mod rust_focus;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -16,16 +17,19 @@ use crate::context::{
 };
 
 pub(crate) use inspect::{
-    CatalogInspection, InspectRequest, inspect_repository, inspect_repository_data,
+    AgentCatalogInspection, CatalogInspection, InspectRequest, inspect_repository,
+    inspect_repository_data, inspect_repository_data_agent_v1,
 };
 pub(crate) use planner::{
-    PlanRunRequest, plan_action_run_with_cancellation, plan_run_with_cancellation,
-    target_input_digest, validate_current_repository_authority, validate_run_plan,
-    validate_run_plan_source,
+    PlanRunRequest, plan_action_run_with_cancellation, plan_focused_check_run_with_cancellation,
+    plan_run_with_cancellation, target_input_digest, validate_current_repository_authority,
+    validate_run_plan, validate_run_plan_source,
 };
 #[cfg(test)]
 pub(crate) use planner::{plan_action_run, plan_run};
 
+pub(crate) mod cargo_discovery;
+mod cargo_impact;
 mod native_input;
 pub(crate) use native_input::{
     prepare_file_budget_input_v1, prepare_gate_file_budget_input, read_policy_bytes,
@@ -262,6 +266,7 @@ impl RepositoryCatalog {
             arguments::normalize_declarations(contract_version, &mut action)?;
             freshness::validate_inputs_policy(contract_version, &action)?;
             runners::validate(contract_version, &action)?;
+            planner::resources::validate_declarations(&action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(
                     "target '{}' references unknown component '{}'",
@@ -762,5 +767,8 @@ use legacy::*;
 mod tests;
 
 mod affected;
+pub(crate) mod cargo_resources;
+pub(crate) mod execution_resources;
 mod inspect;
 mod planner;
+mod playwright_resources;

@@ -57,6 +57,13 @@ printf 'task complete\n' > "$out"
     assert_eq!(second["executed_count"], 0, "{second:#}");
     assert_eq!(second["actions"][0]["reason"], "occurrence_requires_attention");
     assert_eq!(fs::read_to_string(run_log).unwrap(), "run\n");
+    let task = &first["actions"][0]["tick"]["actions"][0];
+    let diagnostic = &task["checkout"]["diagnostics"];
+    assert_eq!(diagnostic["reasons"], json!(["application_changes"]));
+    assert_eq!(diagnostic["observed_paths"], json!(["scheduled-change.txt"]));
+    assert_eq!(diagnostic["parent_receipt_id"], task["worker_receipt_id"]);
+    assert_eq!(diagnostic["observed_receipt_ids"], json!([task["worker_receipt_id"]]));
+    assert_eq!(task["output"], "task complete\n");
 }
 
 #[cfg(unix)]
@@ -95,6 +102,7 @@ printf 'task complete\n' > "$out"
 
     assert_eq!(output["status"], "needs_attention", "{output:#}");
     let task = &output["actions"][0]["tick"]["actions"][0];
+    assert_eq!(task["checkout"]["diagnostics"]["reasons"], json!(["journal_unverifiable"]));
     assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
     assert_eq!(
         task["checkout"]["receipt_append_valid"], false,
@@ -147,6 +155,8 @@ printf 'task complete\n'
 
     assert_eq!(output["status"], "needs_attention", "{output:#}");
     let task = &output["actions"][0]["tick"]["actions"][0];
+    assert_eq!(task["checkout"]["diagnostics"]["reasons"], json!(["receipt_ambiguity"]));
+    assert_eq!(task["checkout"]["diagnostics"]["observed_receipt_ids"].as_array().unwrap().len(), 2);
     assert_eq!(task["checkout"]["dirty"], false, "{output:#}");
     assert_eq!(
         task["checkout"]["receipt_append_valid"],

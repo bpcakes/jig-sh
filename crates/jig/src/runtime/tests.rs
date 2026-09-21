@@ -311,7 +311,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Dev(opts) => RuntimeCommand::Dev(opts.into()),
         CommandKind::Proxy(command) => RuntimeCommand::Proxy(command.into()),
         CommandKind::Agent(command) => RuntimeCommand::Agent(command.into()),
-        CommandKind::Work(command) => RuntimeCommand::Work(command.into()),
+        CommandKind::Work(command) => RuntimeCommand::Work(command.try_into().unwrap()),
         CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)
@@ -328,7 +328,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Codex(_)
         | CommandKind::Vault(_)
         | CommandKind::Ui(_)
-        | CommandKind::Mcp => {
+        | CommandKind::Mcp(_) => {
             panic!("runtime test helper only accepts runtime commands")
         }
     }
@@ -703,6 +703,8 @@ checks = ["jig.test"]
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
@@ -723,4 +725,5 @@ mod legacy_loc;
 mod loops;
 mod mcp;
 mod repository_execution;
+mod validation_contexts;
 mod work;

@@ -10,6 +10,10 @@ impl AuthoredRepositoryModel {
                 .get(command)
                 .is_some_and(|value| !value.trim().is_empty()),
             ActionRunner::Native { .. } | ActionRunner::Argv { .. } => true,
+            ActionRunner::RustNextestV1 { configuration } => {
+                jig_rust::rust_focus::validate_config(configuration).is_ok()
+                    && action.legacy_aliases.is_empty()
+            }
         })
     }
 }

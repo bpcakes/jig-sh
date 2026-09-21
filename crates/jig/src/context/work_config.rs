@@ -26,6 +26,8 @@ pub(crate) struct WorkConfig {
     checks: Vec<String>,
     #[serde(default)]
     gates: Vec<WorkGateConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    iteration_profile: Option<ProfileId>,
     #[allow(dead_code)]
     #[serde(default)]
     refinements: Vec<WorkRefinementConfig>,
@@ -147,9 +149,17 @@ impl super::RepoContext {
     pub(crate) fn work_tracker(&self) -> Option<&WorkTrackerConfig> {
         self.config.work.tracker()
     }
+
+    pub(crate) fn work_iteration_profile(&self) -> Option<&ProfileId> {
+        self.config.work.iteration_profile()
+    }
 }
 
 impl WorkConfig {
+    pub(crate) fn iteration_profile(&self) -> Option<&ProfileId> {
+        self.iteration_profile.as_ref()
+    }
+
     pub(crate) fn receipt_metadata_paths(&self) -> Vec<&'static str> {
         self.receipt_metadata
             .iter()
@@ -418,6 +428,7 @@ pub(crate) fn parse_work_gate(value: &toml::Value) -> Result<WorkGate> {
         tracker: None,
         checks: Vec::new(),
         gates: vec![gate.clone()],
+        iteration_profile: None,
         refinements: Vec::new(),
     };
     config.validate()?;
@@ -671,6 +682,10 @@ fn unique_gate_id(base: String, existing_ids: &mut HashSet<String>) -> String {
 const fn default_required() -> bool {
     true
 }
+
+#[cfg(test)]
+#[path = "work_config/phase_tests.rs"]
+mod phase_tests;
 
 #[cfg(test)]
 mod tests {

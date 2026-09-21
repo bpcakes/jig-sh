@@ -214,6 +214,65 @@ fn footprint_and_capability_refresh_preserve_owned_freshness_and_its_command() {
 }
 
 #[test]
+fn footprint_and_capability_refresh_preserve_cargo_resource_owner_and_command() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("ExampleProject");
+    fs::create_dir_all(&repo).unwrap();
+    run_adopt(options(&repo, template.path(), false, false)).unwrap();
+    let mut action = saved_formatter(&repo);
+    // Retain generated provenance: opting into coordination alone must protect
+    // the implementation it describes, without requiring a freshness assertion.
+    action.resources = vec![jig_contract::ExecutionResourceV1::CargoV1 {
+        workspace_manifest: "backend/Cargo.toml".into(),
+        working_directory: Some("backend".into()),
+        context: jig_contract::CargoImpactContextV1::default(),
+    }];
+    action.description = Some("Example repository-owned formatter".into());
+    match &mut action.runner {
+        ActionRunner::Shell { environment, .. } | ActionRunner::Command { environment, .. } => {
+            environment.insert("EXAMPLE_FORMAT_PROFILE".into(), "owned".into());
+        }
+        _ => panic!("generated formatter must use a command key"),
+    }
+    let command = "cd backend && cargo fmt --all -- --check";
+    save_formatter(&repo, &action, Some(command));
+
+    for capability_refresh in [false, true] {
+        let mut refresh = options(&repo, template.path(), true, true);
+        if capability_refresh {
+            refresh.answers.sqlx_enabled = Some(true);
+            refresh.answers.rust_migration_dir = Some("migrations".into());
+        }
+        run_adopt(refresh).unwrap();
+        assert_eq!(
+            saved_formatter(&repo),
+            action,
+            "resource owner changed during capability_refresh={capability_refresh}"
+        );
+        let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+        let key = match &action.runner {
+            ActionRunner::Shell { command, .. } | ActionRunner::Command { command, .. } => command,
+            _ => unreachable!(),
+        };
+        assert_eq!(ctx.command_for_key(key).unwrap(), command);
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap(),
+        )
+        .unwrap();
+        let target = serde_json::to_value(&action.target).unwrap();
+        let resolved = manifest["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["target"] == target)
+            .unwrap();
+        assert_eq!(resolved, &serde_json::to_value(&action).unwrap());
+    }
+}
+
+#[test]
 fn generated_cargo_formatter_stays_git_with_aliases_added_before_or_after_adoption() {
     use crate::repository::freshness::adoption::{Request, preview};
 
@@ -254,6 +313,71 @@ fn generated_cargo_formatter_stays_git_with_aliases_added_before_or_after_adopti
         );
         assert_eq!(report["patch"], "");
         assert_eq!(saved_formatter(&repo), original);
+    }
+}
+
+#[test]
+fn readoption_preserves_authored_browser_policy_and_public_checker_invocation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("ExampleProject");
+    fs::create_dir_all(&repo).unwrap();
+    run_adopt(options(&repo, template.path(), false, false)).unwrap();
+    let mut action = saved_formatter(&repo);
+    action.target.action = "e2e".parse().unwrap();
+    action.legacy_aliases.clear();
+    action.description = Some("Example authored browser check".into());
+    action.resources = vec![jig_contract::ExecutionResourceV1::PlaywrightServersV1 {}];
+    action.runner = ActionRunner::Argv {
+        program: "scripts/check-webapps.sh".into(),
+        args: ["run-script", "frontend", "test:e2e"]
+            .into_iter()
+            .map(|arg| jig_contract::ArgvValue::Literal(arg.into()))
+            .collect(),
+        working_directory: None,
+        environment: std::collections::BTreeMap::from([
+            ("E2E_WEB_PORT".into(), "43711".into()),
+            ("E2E_API_PORT".into(), "43712".into()),
+            ("E2E_BASE_URL".into(), "".into()),
+        ]),
+    };
+    let config_path = repo.join(".jig.toml");
+    let mut config: toml::Value =
+        toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    config["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(toml::Value::try_from(&action).unwrap());
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    for sqlx in [false, true] {
+        let mut refresh = options(&repo, template.path(), true, true);
+        if sqlx {
+            refresh.answers.sqlx_enabled = Some(true);
+            refresh.answers.rust_migration_dir = Some("migrations".into());
+        }
+        run_adopt(refresh).unwrap();
+        let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
+        assert_eq!(
+            ctx.authored_action_specs()
+                .unwrap()
+                .iter()
+                .find(|candidate| candidate.target == action.target),
+            Some(&action)
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap(),
+        )
+        .unwrap();
+        let target = serde_json::to_value(&action.target).unwrap();
+        assert_eq!(
+            manifest["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|candidate| candidate["target"] == target),
+            Some(&serde_json::to_value(&action).unwrap())
+        );
     }
 }
 

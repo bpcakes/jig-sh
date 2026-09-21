@@ -1,0 +1,1 @@
+Implement contextual, non-executing recovery for description/body, plan-specific status, unsupported summaries, top-level contract and native targets supplied as legacy tools. Preserve structured error envelopes and supported commands; test suggested retries including spaces and ambiguity, regenerate template snapshots, then run all required gates and native Codex review.

@@ -158,6 +158,7 @@ fn work_gates(ctx: &RepoContext) -> Value {
     dispatch(
         ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -230,9 +231,13 @@ profile = "verify"
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -253,6 +258,7 @@ profile = "verify"
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: Some("plan_1".into()),
             },
@@ -419,9 +425,13 @@ profile = "does-not-exist"
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -568,9 +578,13 @@ tool = "jig.custom_check"
     let checked = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap();
@@ -655,9 +669,13 @@ legacy_aliases = ["jig.failing_check"]
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()
@@ -744,9 +762,13 @@ legacy_aliases = ["jig.broken_check"]
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            rust_focus: Default::default(),
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
+            phase: None,
+            explain: false,
         })),
     )
     .unwrap_err()

@@ -46,7 +46,7 @@ def toml_value(value):
     return json.dumps(value)
 
 
-def create_fixture(root, epoch):
+def create_fixture(root, epoch, source_files=4000, ignored_files=10000, narrow_files=100):
     root.mkdir()
     for directory in (".agent", "scripts", "web/src", "api/model", "api/fixtures", "docs"):
         (root / directory).mkdir(parents=True, exist_ok=True)
@@ -56,12 +56,12 @@ def create_fixture(root, epoch):
     script.chmod(0o755)
     for name in ("api/model/example.txt", "api/fixtures/example.txt"):
         (root / name).write_text("Example input\n")
-    for index in range(4000):
-        directory = "web/src" if index < 100 else "docs"
+    for index in range(source_files):
+        directory = "web/src" if index < narrow_files else "docs"
         (root / directory / f"example-{index:04}.txt").write_text("x" * 512)
     ignored = root / "node_modules"
     ignored.mkdir()
-    for index in range(10000):
+    for index in range(ignored_files):
         (ignored / f"example-{index:05}").write_text("ignored")
     specs = [
         ("api:model", ["api/model/**", "scripts/check.sh"], []),

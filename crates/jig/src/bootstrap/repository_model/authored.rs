@@ -55,6 +55,16 @@ impl RepositoryRenderModel {
         let mut tools = BTreeMap::new();
         for action in &authored.actions {
             let (kind, command_key) = match &action.runner {
+                ActionRunner::RustNextestV1 { configuration } => {
+                    jig_rust::rust_focus::validate_config(configuration)
+                        .map_err(anyhow::Error::msg)?;
+                    if !action.legacy_aliases.is_empty() {
+                        bail!(
+                            "Rust Nextest v1 uses typed target execution, not legacy tool aliases"
+                        );
+                    }
+                    continue;
+                }
                 ActionRunner::Command { command, .. } | ActionRunner::Shell { command, .. } => {
                     let value = authored_commands.get(command.as_str()).ok_or_else(|| {
                         anyhow::anyhow!(

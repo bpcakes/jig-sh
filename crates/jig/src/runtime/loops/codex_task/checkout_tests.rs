@@ -72,7 +72,7 @@ mod tests {
         let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
         let competing_writer =
             thread::spawn(move || record_receipt(&competing_ctx, receipt_input()));
-        competing_writer.join().unwrap().unwrap();
+        let competing_id = competing_writer.join().unwrap().unwrap();
         let receipt_id = append_runtime_receipt(&ctx).unwrap();
         let error = baseline.verify(&ctx, Some(&receipt_id)).unwrap_err();
 
@@ -81,6 +81,13 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
+        let diagnostic = serde_json::to_value(CheckoutDiagnostics::inspect(
+            &ctx, ctx.root(), &Ok(false), &Ok("example-head".into()), &Err(error), Some(&receipt_id),
+        )).unwrap();
+        assert_eq!(diagnostic["reasons"], json!(["receipt_ambiguity"]));
+        assert_eq!(diagnostic["parent_receipt_id"], receipt_id);
+        assert_eq!(diagnostic["observed_receipt_ids"], json!([competing_id, receipt_id]));
+        assert_eq!(diagnostic["receipt_ids_incomplete"], false);
     }
 
     #[test]
@@ -478,5 +485,96 @@ esac
         let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
 
         baseline.verify(&ctx, None).unwrap();
+    }
+
+    #[test]
+    fn legacy_receipt_free_review_validation_preserves_parent_only_success() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (temp, _, path) = fixture();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .contract_version(2)
+            .config("rust_test_command = \"printf 'focused validation passed\\n'\"")
+            .required_commands(["rust_test_command"])
+            .tool(json!({"name": "jig.test", "kind": "command", "command": "rust_test_command", "description": "Test"}))
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        let before = fs::read(&path).unwrap_or_default();
+        let result = crate::runtime::dispatch(&ctx, crate::command::RuntimeCommand::Check(
+            crate::command::CheckCommand::Test(crate::command::ToolRequest::new(None, false)),
+        )).unwrap();
+        assert_eq!(result["ok"], true, "{result:#}");
+        assert!(result["receipt_id"].is_null());
+        assert_eq!(fs::read(&path).unwrap_or_default(), before);
+        assert!(!ctx.state_file("runs.jsonl").exists());
+        let id = append_runtime_receipt(&ctx).unwrap();
+        baseline.verify(&ctx, Some(&id)).unwrap();
+    }
+
+    #[test]
+    fn staged_receipt_append_remains_unverifiable_not_owned() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (_temp, ctx, _) = fixture();
+        let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        let id = append_runtime_receipt(&ctx).unwrap();
+        git_stdout(&ctx, ctx.root(), ["add", "--", WORKER_RECEIPT_PATH], &mut NoopExecutionObserver).unwrap();
+        let result = baseline.verify(&ctx, Some(&id));
+        assert!(result.as_ref().unwrap_err().to_string().contains("Git index entry changed"));
+        let diagnostic = serde_json::to_value(CheckoutDiagnostics::inspect(
+            &ctx, ctx.root(), &Ok(false), &Ok("example-head".into()), &result, Some(&id),
+        )).unwrap();
+        assert_eq!(diagnostic["reasons"], json!(["journal_unverifiable"]));
+        assert_eq!(diagnostic["receipt_ids_incomplete"], true);
+    }
+
+    #[test]
+    fn operational_state_is_reported_but_never_exempted_from_dirty_status() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (_temp, ctx, _) = fixture();
+        fs::write(ctx.root().join(".gitignore"), ".agent/.cache/\n").unwrap();
+        git_stdout(&ctx, ctx.root(), ["add", "."], &mut NoopExecutionObserver).unwrap();
+        git_stdout(&ctx, ctx.root(), ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-m", "fixture"], &mut NoopExecutionObserver).unwrap();
+        let initial_head = git_stdout(&ctx, ctx.root(), ["rev-parse", "HEAD"], &mut NoopExecutionObserver).unwrap();
+        let receipt_journal = ReceiptJournalBaseline::capture(&ctx).unwrap();
+        fs::write(ctx.state_file("runs.jsonl"), "example operational change\n").unwrap();
+        let id = append_runtime_receipt(&ctx).unwrap();
+        let result = PreparedCheckout::Repo {
+            path: ctx.root().into(), initial_head, receipt_journal,
+        }.finish(TaskOutcome::Succeeded, &ctx, Some(&id));
+        assert!(result.report.repository_requires_attention());
+        let value = result.report.value();
+        assert_eq!(value["dirty"], true);
+        assert_eq!(value["receipt_append_valid"], true);
+        assert_eq!(value["diagnostics"]["reasons"], json!(["operational_state_changes"]), "{value:#}");
+        assert_eq!(value["diagnostics"]["observed_paths"], json!([".agent/state/runs.jsonl"]));
+    }
+
+    #[test]
+    fn isolated_task_retains_validation_receipts_without_dirtying_shared_checkout() {
+        let _env_lock = lock_env();
+        let _git = EnvVarGuard::set(GIT_BIN_ENV, std::ffi::OsStr::new("git"));
+        let (_temp, ctx, _) = fixture();
+        git_stdout(&ctx, ctx.root(), ["add", "."], &mut NoopExecutionObserver).unwrap();
+        git_stdout(&ctx, ctx.root(), ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-m", "fixture"], &mut NoopExecutionObserver).unwrap();
+        let initial_head = git_stdout(&ctx, ctx.root(), ["rev-parse", "HEAD"], &mut NoopExecutionObserver).unwrap();
+        let isolated = tempdir().unwrap();
+        let path = isolated.path().join("example-task");
+        git_stdout(&ctx, ctx.root(), ["worktree", "add", "--detach", path.to_str().unwrap(), "HEAD"], &mut NoopExecutionObserver).unwrap();
+        let task_ctx = RepoContext::load_from(&path).unwrap();
+        let id = append_runtime_receipt(&task_ctx).unwrap();
+        let result = PreparedCheckout::Worktree {
+            repo_root: ctx.root().into(), path: path.clone(), initial_head,
+        }.finish(TaskOutcome::Succeeded, &ctx, Some(&id));
+        assert!(!result.report.repository_requires_attention());
+        let value = result.report.value();
+        assert_eq!(value["mode"], "worktree");
+        assert_eq!(value["retained"], true);
+        assert_eq!(value["dirty"], true);
+        assert!(fs::read_to_string(path.join(WORKER_RECEIPT_PATH)).unwrap().contains(&id));
+        assert!(!ctx.root().join(WORKER_RECEIPT_PATH).exists());
+        assert!(!git_is_dirty(&ctx, ctx.root(), &mut NoopExecutionObserver).unwrap());
     }
 }

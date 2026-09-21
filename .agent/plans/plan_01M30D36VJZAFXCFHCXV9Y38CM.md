@@ -1,0 +1,1 @@
+Implement jig-sh-ndz2.2 under canonical T-02/D-02. Preserve exact-parent receipt ownership and at-most-once worker execution. Add bounded typed checkout diagnostics and non-replaying recovery, validate the supported standalone/linked/repo/isolated matrix with generic fixtures, run focused tests and required staged gates, then native Codex review before closure and commit.

@@ -276,13 +276,15 @@ impl From<AgentBootstrapOpts> for command::AgentBootstrapRequest {
     }
 }
 
-impl From<WorkCommand> for command::WorkCommand {
-    fn from(command: WorkCommand) -> Self {
-        match command {
+impl TryFrom<WorkCommand> for command::WorkCommand {
+    type Error = anyhow::Error;
+
+    fn try_from(command: WorkCommand) -> anyhow::Result<Self> {
+        Ok(match command {
             WorkCommand::Goal(opts) => Self::Goal(opts.into()),
             WorkCommand::Start(opts) => Self::Start(opts.into()),
             WorkCommand::Append(opts) => Self::Append(opts.into()),
-            WorkCommand::Check(opts) => Self::Check(opts.into()),
+            WorkCommand::Check(opts) => Self::Check(opts.try_into()?),
             WorkCommand::Gates(opts) => Self::Gates(opts.into()),
             WorkCommand::Evidence(opts) => Self::Evidence(opts.into()),
             WorkCommand::Review(opts) => Self::Review(opts.into()),
@@ -292,7 +294,7 @@ impl From<WorkCommand> for command::WorkCommand {
             WorkCommand::Status => Self::Status,
             WorkCommand::Finish(opts) => Self::Finish(opts.into()),
             WorkCommand::Retire(opts) => Self::Retire(opts.into()),
-        }
+        })
     }
 }
 
@@ -344,19 +346,30 @@ impl From<WorkAppendOpts> for command::WorkAppendRequest {
     }
 }
 
-impl From<WorkCheckOpts> for command::WorkCheckRequest {
-    fn from(opts: WorkCheckOpts) -> Self {
-        Self {
+impl TryFrom<WorkCheckOpts> for command::WorkCheckRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(opts: WorkCheckOpts) -> anyhow::Result<Self> {
+        Ok(Self {
+            rust_focus: crate::repository::rust_focus::parse_cli(opts.rust_focus)?,
+            projection: opts.projection,
             plan_id: opts.plan_id,
             gates: opts.gates,
             tools: opts.tools,
-        }
+            phase: opts.phase.map(|phase| match phase.as_str() {
+                "iteration" => command::WorkCheckPhase::Iteration,
+                "final" => command::WorkCheckPhase::Final,
+                _ => unreachable!("clap restricts work-check phases"),
+            }),
+            explain: opts.explain,
+        })
     }
 }
 
 impl From<WorkGatesOpts> for command::WorkGatesRequest {
     fn from(opts: WorkGatesOpts) -> Self {
         Self {
+            projection: opts.projection,
             plan_id: opts.plan_id,
             freshness_timeout_ms: opts.freshness_timeout_ms,
         }
@@ -366,6 +379,7 @@ impl From<WorkGatesOpts> for command::WorkGatesRequest {
 impl From<WorkEvidenceOpts> for command::WorkEvidenceRequest {
     fn from(opts: WorkEvidenceOpts) -> Self {
         Self {
+            projection: opts.projection,
             plan_id: opts.plan_id,
             freshness_timeout_ms: opts.freshness_timeout_ms,
         }

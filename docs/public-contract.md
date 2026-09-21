@@ -289,9 +289,69 @@ component, target, or profile records:
 Target identity is always an object with separate `component` and `action`
 fields in JSON. Human output renders its canonical `component:action` text.
 
+Catalog inspection has two explicitly selected response projections. Omitting
+the option, or selecting `--projection standard`, preserves the existing CLI
+JSON shape. The opt-in `--projection agent-v1` adds a typed
+`freshness_policy` object to every target returned by the workspace, component,
+targets, and target views. CLI use with another info view is rejected rather
+than silently ignoring the selection:
+
+```sh
+scripts/jig --json info target api:test --projection agent-v1
+scripts/jig --json info workspace --projection agent-v1
+```
+
+The object reports `contract_epoch`, a `mode` of `target_freshness_v1` or
+`legacy_global`, and separate `inputs_policy` and `source_state` records. Each
+policy record contains its effective value, a `defaulted` boolean, and nullable
+field `provenance`. Effective input values remain `whole_repository` or
+`exhaustive`; effective source-state values remain `git` or `worktree`.
+Generated epoch-8 defaults normally report `defaulted: true` with `inferred`
+provenance, while authored declarations report `defaulted: false` with
+`declared` provenance. A non-default effective value is never labeled defaulted,
+even if a stale provenance record calls it inferred. Pre-8 targets report
+`legacy_global`, the conservative effective defaults, and null provenance;
+policy provenance keys from an epoch that did not support those policies are
+not projected. Human output renders the same effective values and metadata.
+This is configuration inspection only: it does not evaluate receipts or claim
+that evidence is currently fresh.
+
+MCP uses the same typed projection. Starting the server with
+`scripts/jig mcp --surface agent-v1` advertises a matching strict output schema
+for `jig.inspect`; omitting the option, or selecting `standard`,
+keeps the baseline descriptor and response shapes. Surface selection is fixed
+for the process lifetime and is not negotiated through MCP `initialize`.
+Unknown projection or surface values fail during command parsing, before an
+inspection runs or an MCP server starts. A caller can roll back by omitting the
+option. The catalog schema remains version 1 because the baseline schema is
+unchanged and the additive shape is isolated behind an explicitly versioned
+projection.
+
+Input globs alone do not identify source authority. These otherwise identical
+policies have different reuse behavior:
+
+```json
+{
+  "inputs_policy": {"effective": "exhaustive", "defaulted": false, "provenance": "declared"},
+  "source_state": {"effective": "git", "defaulted": false, "provenance": "declared"}
+}
+```
+
+```json
+{
+  "inputs_policy": {"effective": "exhaustive", "defaulted": false, "provenance": "declared"},
+  "source_state": {"effective": "worktree", "defaulted": false, "provenance": "declared"}
+}
+```
+
+Both may describe the same `inputs`, but the first retains Git placement,
+HEAD, and branch identity while the second depends only on the checked working
+files. Current receipt evaluation remains on the work gate and evidence
+surfaces described below.
+
 `jig check --explain` returns `command: "check plan"`, `executed: false`, and a
 `plan` object without running a command or writing a receipt. A newly written
-plan uses run-plan schema version 3 and includes its derived `id`, configuration digest, source identity,
+plan uses run-plan schema version 4 and includes its derived `id`, configuration digest, source identity,
 normalized selectors or profile, sorted targets, selection reasons, declared
 effects, input digests, and dependency execution layers. Bare `jig check` uses
 the default verification profile. An action selector such as `test` matches
@@ -300,6 +360,62 @@ and `*` is the only wildcard and occupies a whole component or action segment.
 Profiles and explicit selectors are mutually exclusive. Contract-6 legacy
 aliases must not parse as canonical action, target, or wildcard selectors;
 canonical selector meaning therefore cannot be shadowed by an alias.
+
+Affected Rust plans may include optional, digest-bound `cargo_impacts`: bounded
+portable package and test-target candidates from locked/offline Cargo metadata.
+Generic affected selection still determines authored actions first; these facts
+alone do not change execution. Ambiguous ownership, topology changes, incomplete
+graphs, unsupported context, or discovery limits produce broad/unavailable
+reasons. Raw Cargo IDs and absolute checkout paths are never persisted. Existing
+schema-2/3 records remain readable; submitted plans must use current schema 4.
+
+The opt-in runner tag `rust_nextest_v1` and argument tag `rust_focus_v1` are
+strict versioned capabilities under contract 8 or later. Unsupported runtimes
+reject the tags before execution; no shell command is inferred to be Cargo.
+A selected runner carries `prepared_rust_input` schema 1: literal Cargo argv,
+portable packages/target selectors, feature/platform context, scope disposition,
+fallback reasons, and optional exact comparison base. Planner replay authenticates
+that input, and it participates in invocation identity. The runner retains normal
+supervised execution and target receipts. A zero-match Nextest result is a failed
+target with finding source `empty_selection`, never a passing test requirement.
+Explicit target existence is independent of Cargo's default test-participation
+flag. Automatic package narrowing preserves the configured feature policy,
+falling back to workspace scope when its meaning for the subset is unproved.
+Metadata discovery always enforces `--locked`, independently of execution's
+lock-update policy, so planning cannot create or rewrite Cargo.lock.
+
+Actions and planned targets may also carry a bounded `resources` list. The
+strict `cargo_v1` variant declares a workspace manifest, execution directory and
+Cargo context; omitted lists retain legacy behavior. Declarations participate
+in configuration, invocation and replay authority. Unsupported runtimes reject
+the field or variant rather than silently dropping the scheduling promise.
+Resource ownership is machine-local scheduling state, never an evidence
+dependency. An unstarted successful target with `reused_from` references the
+original receipt/run/plan and does not claim a new execution proof. See
+[Cargo resource coordination](cargo-resource-coordination.md) for supported
+aliases, partial coordination, deadline and ownership boundaries.
+
+The strict fieldless `playwright_servers_v1` resource variant explicitly opts an
+authored generic read-only runner into the generated Playwright environment
+contract. It owns individual loopback endpoints only without a trimmed nonempty
+`E2E_BASE_URL`, and shares the same admission/lease owner. Older runtimes reject
+the tag; omitted declarations keep prior behavior. See
+[browser endpoint coordination](browser-resource-coordination.md) for authority,
+compatibility, external URL and current-readiness limits.
+
+`jig.work_check` accepts optional `phase` (`iteration` or `final`), `explain`,
+and a `rust_focus` object keyed by canonical target strings. The CLI equivalent
+is `work check --phase iteration --rust-focus TARGET=JSON`. Work focus is legal
+only during iteration. Automatic requests bind to the owning open plan's exact
+baseline; explicit requests bind package, target, feature, and test filter choices.
+Both transports share normalization. Phase reports distinguish selected scope,
+`selected_ok`, `final_requirements`, `pending_final_requirements`, and
+`final_gates_ok`; they never confer closure authority. An execution report with
+`ok: false` is retained in MCP `structuredContent` with `isError: true`.
+Explain performs no check or review execution and writes no run or receipt.
+Explicit phase/explain plus projection `agent-v1` is rejected before execution;
+the existing unphased compact completion shape is unchanged. Configuration and
+examples are in [focused Rust checks](configuration.md#iteration-and-focused-rust-checks).
 
 For a selected contract-v7 action that still uses the built-in
 `jig.file_budget` runner, the target also carries one bounded
@@ -568,9 +684,54 @@ Native task mutation is intentionally absent. A later `jig beads` writer must pr
 
 ## Work Gates
 
+Common usage errors include contextual recovery without executing a correction.
+`work start --description` points to `--body`; `work status --plan-id ID` points
+to that explicit plan's `work gates` inspection. `--summary` points to the existing
+`--projection agent-v1` only on commands supporting it, otherwise to scoped help.
+Top-level `contract` points to `check contract`. A single known check target
+passed to `work check --tool` points to `check COMPONENT:ACTION --plan-id ID`;
+ambiguous or unknown target/tool combinations point to selection help.
+CLI retries are parse-checked, checked against the existing info projection
+policy, and shell-quoted, with private launcher handoff arguments omitted.
+Launcher-backed retries and scoped help name the owning repository's absolute
+`scripts/jig` path, so they work without a global installation and from another
+directory. Direct CLI recovery preserves the invoked executable.
+Other invalid arguments still require attention; no active
+plan is guessed. These are diagnostic hints, not aliases or automatic retries.
+Standard error envelope fields and exit statuses remain unchanged.
+
+The explicit CLI `--projection agent-v1` option on `work check`, `work gates`,
+and `work evidence` selects a shared strict compact result. MCP selects the same
+result through `mcp --surface agent-v1`; work-tool input schemas do not change.
+Omitted selection and `standard` preserve existing response and descriptor
+shapes. Unknown CLI selections are rejected before the operation starts.
+
+The compact result reports `activity` (execution versus evidence reuse),
+current gate `status` and `freshness`, `observation` diagnostics, and
+`finish_ready`. Inspection `ok` means observation succeeded, while check `ok`
+reports the selected check result; neither substitutes for `finish_ready`.
+Failed compact checks return their structured summary with a nonzero CLI exit.
+MCP preserves that summary in `structuredContent` and sets `isError: true` for
+an agent-v1 work check whose `ok` is false.
+Invalid requests, recording errors and cancellations retain ordinary error
+behavior. Required reviews and unsupported/external policies remain visible,
+without acquiring approval or launching reviews automatically.
+
+Previews retain at most 50 gates, 50 target rows across those gates, and 50
+activity rows. Full counts and truncation flags accompany those previews;
+readiness evaluates every required gate, including omitted rows. Reasons and
+observation messages are limited to 256 Unicode characters. `next_step`,
+`evidence`, and `receipts` contain literal argv plus a read-only flag, with
+shell-safe human rendering. Unknown observation yields read-only recovery.
+Detailed evidence remains reachable using the emitted standard CLI commands
+or standard-surface MCP. The summary shares one gate observation across its
+rendered fields; it neither persists nor caches closure authorization.
+`observed_at_ms` is diagnostic, and `work finish` independently revalidates
+source, configuration and evidence under its existing execution lease.
+
 `work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. Each explicitly required target uses its latest original receipt in the same work plan, ordered by completion time then receipt ID. A newer failure or unverifiable result supersedes an older pass. Epochs 6–7 also select the latest receipts for execution dependencies. Epoch 8 validates implicit dependencies through the selected target's original execution proof; a dependency that is explicitly required still uses its own latest receipt. Locally recorded receipts from the former unreleased epochs 9 and 10 remain readable with their original proof shapes, but v9 and v10 repository contracts are rejected. Current authority and time-validity checks follow the recorded receipt epoch. A profile may combine current receipts from separate runs; its aggregate `run_id` is null in that case, while every target retains its actual `run_id` and `receipt_id`. Archive protection retains the latest target outcomes, including failures and expired results, so removing history cannot reveal an older pass.
 
-`scripts/jig work check --plan-id ...` executes missing, failed, stale or unknown targets, their normal execution dependencies, and required dependents invalidated by those executions. It reuses fresh independent passes. Final validation reassesses all required targets and records `jig.work_check_targets/v1` evidence referencing their original receipts with `executed`, `not_started`, or `reused` disposition derived from the actual selected receipt and target-run result. The result exposes `target_evidence` and `target_validation_receipt_id`; when all targets are reused, `plan` and `run` are null and `results` is empty. Use `scripts/jig check COMPONENT:ACTION --plan-id ...` to force native target execution. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
+`scripts/jig work check --plan-id ...` executes missing, failed, stale or unknown targets, their normal execution dependencies, and required dependents invalidated by those executions. It reuses fresh independent passes. Final validation reassesses all required targets and records `jig.work_check_targets/v1` evidence referencing their original receipts with `executed`, `not_started`, or `reused` disposition derived from the actual selected receipt and target-run result. The result exposes `target_evidence` and `target_validation_receipt_id`; when all targets are reused, `plan` and `run` are null and `results` is empty. Use `scripts/jig check COMPONENT:ACTION --plan-id ...` to force native target execution. Explicit `work check --gate ID` forces a configured native evidence or legacy check gate, including optional gates. Multiple gate IDs may mix those kinds; native targets and their prerequisites execute once per invocation even when selectors overlap. All gate IDs and native selectors are resolved before any child starts; unknown, unsupported, and review gates are rejected. Only selected native targets are assessed in the returned target batch; a successful partial selection does not satisfy unselected required gates or authorize `work finish`. CLI and MCP `gates` use the same selection semantics. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only and cannot be combined with gate IDs. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
 
 Contract 5 and later check gates may declare strict `paths`, `paths_ignore`, and `reuse` policy. Work-plan open records an immutable commit or empty-tree baseline. Scoped checks compare that baseline with the current staged, unstaged, untracked, and committed inputs; their evidence records applicability, gate signature, scope fingerprint, and bounded changed-path metadata. A non-applicable gate closes with explicit evidence rather than a synthetic pass. Reuse is opt-in and accepts only a direct successful execution with the exact current gate and input identity; failed, cancelled, malformed, mutating, or transitively reused batches supersede older proof instead of revealing it. `work check --gate ID` forces a named check to execute while retaining its applicability facts.
 

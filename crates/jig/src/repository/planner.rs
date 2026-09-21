@@ -16,6 +16,7 @@ use crate::{
     },
 };
 
+use super::cargo_impact::attach_cargo_impacts;
 use super::native_input::prepare_file_budget_input_v1;
 use super::{
     RepositoryCatalog,
@@ -26,6 +27,11 @@ use super::{
 };
 
 const SELECTION_REASONS_DIGEST_DOMAIN: &[u8] = b"jig-selection-reasons-v2\0";
+
+mod focused;
+pub(super) mod resources;
+pub(crate) use focused::plan_focused_check_run_with_cancellation;
+use resources::conservative_action_input_digest;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PlanRunRequest {
@@ -122,12 +128,26 @@ fn plan_run_with_policy(
     let mut plan = plan_run_with_source_and_paths(
         catalog,
         request,
-        source,
+        source.clone(),
         changed_paths.as_deref(),
         &observed_input_paths,
         arguments,
         policy,
     )?;
+    if plan.affected_base.is_some() {
+        validate_current_repository_authority(ctx, catalog.config_digest())?;
+        attach_cargo_impacts(
+            ctx,
+            catalog,
+            &mut plan,
+            changed_paths.as_deref().unwrap_or(&[]),
+            &observed_input_paths,
+            freshness_cancelled,
+        )?;
+        validate_source_after_cargo_discovery(ctx, &source)?;
+        validate_current_repository_authority(ctx, catalog.config_digest())?;
+        plan.id = plan_digest(&plan)?;
+    }
     if catalog.contract_version() >= super::FILE_BUDGET_CONTRACT_VERSION {
         for target in &mut plan.targets {
             let ActionRunner::Native {
@@ -154,6 +174,9 @@ fn plan_run_with_policy(
         }
         plan.id = plan_digest(&plan)?;
     }
+    if super::rust_focus::prepare_plan(ctx, &mut plan, freshness_cancelled)? {
+        validate_source_after_cargo_discovery(ctx, &source)?;
+    }
     if let Some(cancelled) = freshness_cancelled {
         let mut budget = super::freshness::CollectionBudget::new(
             super::freshness::CollectionLimits::with_timeout(std::time::Duration::from_millis(
@@ -174,6 +197,16 @@ fn current_source_identity(ctx: &RepoContext) -> Result<SourceIdentity> {
         source.head_commit,
         source.worktree_fingerprint,
     ))
+}
+
+fn validate_source_after_cargo_discovery(
+    ctx: &RepoContext,
+    expected: &SourceIdentity,
+) -> Result<()> {
+    if current_source_identity(ctx)? != *expected {
+        bail!("repository source changed while discovering Cargo metadata; plan again");
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_run_plan_source(ctx: &RepoContext, plan: &RunPlan) -> Result<()> {
@@ -394,6 +427,7 @@ fn plan_run_with_source_and_paths(
         );
         planned.arguments = arguments.get(&planned.target).cloned().unwrap_or_default();
         planned.effects.clone_from(&action.effects);
+        planned.resources.clone_from(&action.resources);
         planned.inputs.clone_from(&action.inputs);
         planned.depends_on.clone_from(&action.depends_on);
         planned.timeout_seconds = action.timeout_seconds;
@@ -613,44 +647,6 @@ pub(crate) fn target_input_digest(
     conservative_action_input_digest(catalog.contract_version(), action, worktree_fingerprint)
 }
 
-/// Binds a target receipt to both its declared inputs and the repository-wide
-/// source projection. This is intentionally conservative freshness authority,
-/// not a per-target artifact-cache key: any observed source change invalidates
-/// the receipt even when it falls outside the target's selection patterns.
-fn conservative_action_input_digest(
-    contract_version: u32,
-    action: &jig_contract::ActionSpec,
-    worktree_fingerprint: &str,
-) -> Result<String> {
-    let mut hasher = Sha256::new();
-    if contract_version < super::FILE_BUDGET_CONTRACT_VERSION {
-        hasher.update(b"jig-target-input-v1\0");
-    } else {
-        hasher.update(b"jig-target-input-v2\0");
-    }
-    hasher.update(action.target.to_string().as_bytes());
-    hasher.update([0]);
-    hasher.update(worktree_fingerprint.as_bytes());
-    for input in &action.inputs {
-        hasher.update([0]);
-        hasher.update(input.as_bytes());
-    }
-    if contract_version >= super::FILE_BUDGET_CONTRACT_VERSION {
-        let runner = serde_json::to_vec(&action.runner)
-            .context("Failed to canonicalize native target input authority")?;
-        hasher.update([0]);
-        hasher.update((runner.len() as u64).to_be_bytes());
-        hasher.update(runner);
-    }
-    if contract_version >= super::ACTION_EXECUTION_CONTRACT_VERSION {
-        let declarations = serde_json::to_vec(&action.arguments)?;
-        hasher.update([0]);
-        hasher.update((declarations.len() as u64).to_be_bytes());
-        hasher.update(declarations);
-    }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
-}
-
 struct BoundedSelectionReasons {
     preview: Vec<SelectionReason>,
     total: Option<usize>,
@@ -731,6 +727,7 @@ struct PlanDigestInput<'a> {
     targets: &'a [PlannedTarget],
     execution_layers: &'a [Vec<TargetId>],
     effects: &'a [ActionEffect],
+    cargo_impacts: &'a [jig_contract::CargoImpactV1],
 }
 
 fn plan_digest(plan: &RunPlan) -> Result<String> {
@@ -751,6 +748,7 @@ fn plan_digest(plan: &RunPlan) -> Result<String> {
         targets: &targets,
         execution_layers: &plan.execution_layers,
         effects: &plan.effects,
+        cargo_impacts: &plan.cargo_impacts,
     };
     let bytes = serde_json::to_vec(&input).context("Failed to canonicalize the run plan")?;
     Ok(format!("run-plan_sha256:{:x}", Sha256::digest(bytes)))

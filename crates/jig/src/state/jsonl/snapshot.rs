@@ -223,7 +223,7 @@ pub(super) fn parse_jsonl_file_with_cancellation<T: DeserializeOwned>(
     Ok(items)
 }
 
-pub(super) fn scan_jsonl_file(
+pub(in crate::state) fn scan_jsonl_file(
     file: &File,
     path: &Path,
     cancelled: &dyn Fn() -> bool,
