@@ -20,7 +20,7 @@ installation, or live benchmark rerun. T-03's three-repetition budget is exhaust
 - [x] Prove endpoint contention and independent overlap with synchronized fixtures.
 - [x] Finish focused readoption/readiness-preservation and Cargo regression evidence.
 - [x] Run required gates, stage and native-review all uncommitted changes.
-- [ ] Finish structured work, close/sync task, commit and verify clean checkout.
+- [x] Finish structured work, close/sync task, commit and verify clean checkout.
 
 Structured work: `plan_01M31Q8R4TKAW36Z4T4H9909RP`.
 Exact baseline: `d966205e3ae7377ee340f2f03b93a5116c756f94`.
@@ -37,8 +37,10 @@ receipt `receipt_01M31SHN7EP9GRXCD1JFT6KRPK`. The other five gates passed in
 `run_01M31R8QTZH6KW0GZ0XAKF6S5A`. Work check reused all six current passes
 (`receipt_01M31SKYXZ6AG8KJBHNC92K9KE`), and evidence/gates report fresh passes.
 Native Codex review of all uncommitted changes completed with no actionable
-defects. Its independent focused resolver run passed all four tests. Next:
-finish structured work before tracker closure/export, then commit and verify clean.
+defects. Its independent focused resolver run passed all four tests. Structured
+work finished before tracker closure/export (plan-event_01M31SWE6T85ZBDXHCPCNTGF3T).
+Task closed and committed as `197e3824`; clean checkout verified. No remaining
+T-04 implementation work.
 
 ## Decision Log
 

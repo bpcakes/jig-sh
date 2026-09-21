@@ -19,7 +19,7 @@ Beads epic: `jig-sh-ndz2` (Remove remaining agent workflow friction).
 - [x] Define task boundaries, acceptance, compatibility, and external prerequisites.
 - [x] Complete focused plan review and structural validation.
 - [x] Export and verify one epic and its dependency graph.
-- [ ] Implement the delivery tasks; none has been implemented by this planning work.
+- [x] Implement all six delivery tasks and their authorized external prerequisites.
 
 Execution checkpoint (2026-09-21): T-01 is complete in `0154477a` and T-02 in
 `79290f75`; all six gates passed for each and native Codex review reported no
@@ -47,19 +47,22 @@ existing per-invocation database connection guard rather than a duplicate prefli
 The owner also authorized implementation
 of the external prerequisite chains needed by T-04 and T-05, retaining their
 existing issue ownership. Iteration selection (`fe13c657`) and Cargo discovery
-(`350536dc`) are marked delivered in Beads but live on the unmerged
-`feat/rust-validation-velocity` branch; integrate and validate that existing work
-before implementing its dependent tasks. Use task-local ExecPlans where the risk
-warrants them; do not create additional planning beads.
+(`350536dc`) initially lived on the unmerged `feat/rust-validation-velocity`
+branch; V04 subsequently integrated and validated that existing work before V06.
+Task-local ExecPlans retain the implementation evidence; no additional planning
+beads were created.
 
 Resumed integration checkpoint: V04 is delivered in `911b7b16`, including the
 existing iteration/Cargo-discovery prerequisites. V06 Cargo coordination is
 delivered in `d966205e`, with 4488 backend tests passed, four existing skips,
 all required gates fresh, and native review clean after two bounded fixes.
 Its authorized readiness-wave revision preserves same-run independent resources.
-T-04 is now unblocked and in progress under
-`.agent/plans/t04-resource-prerequisite-integration.md`; other epic siblings remain
-outside this dependency chain. The source-runtime pin has not changed.
+T-04 is delivered in `197e3824`, documented in
+`.agent/plans/t04-resource-prerequisite-integration.md`. Its full backend suite
+passed (1341.079 seconds), all six required gates were fresh, and native Codex
+review found no actionable defects. All six delivery tasks are closed. Other
+external-epic siblings remain outside this dependency chain. The source-runtime
+pin has not changed; the conditional launcher-hermeticity repair was not needed.
 
 ## Scope
 
@@ -366,7 +369,19 @@ or new presentation behavior to contain regressions while retaining evidence.
 
 ## Outcomes & Retrospective
 
-Planning and export delivered epic `jig-sh-ndz2` with six open tasks. Focused
+Implementation completed all six tasks and the authorized compact-summary and
+Cargo prerequisite chains. Each task was validated, native-reviewed and committed
+separately. Fifteen native review findings were fixed across the workflow; none
+remain rejected or unresolved. The V06 architectural escalation was resolved only
+after explicit authorization, with independent-resource concurrency preserved.
+T-04 adds explicit browser endpoint ownership through that same resource owner
+and preserves the existing per-invocation SQLx guard. Current live browser,
+database and macOS qualification are not claimed by its deterministic fixtures.
+The source-runtime pin and historical receipts are unchanged. External parent
+epics and unrelated siblings are not closed by this delivery.
+
+The following records the original planning outcome, not current delivery status.
+Planning and export initially delivered epic `jig-sh-ndz2` with six open tasks. Focused
 review covered native retry authority, receipt provenance, resource boundaries,
 and graph/inspection compatibility; all material findings were integrated.
 Structural validation passes with one intentional warning for independent T-02.
@@ -381,10 +396,11 @@ new records. The repository sync helper then exported and passed privacy checks.
 The sync also preserves an already-newer database record rather than replacing it
 with an older export. This is tracker maintenance, not a new epic delivery.
 
-No product code or downstream configuration has changed. Implementation behavior,
-performance effects, and delivery acceptance remain unverified until task-specific
-checks run. Planning work receipts retain the configured gate results separately;
-passing those checks cannot certify the planned runtime features.
+At that planning checkpoint, no product code or downstream configuration had
+changed and delivery acceptance was unverified. Implementation evidence above
+supersedes that limitation for completed tasks. Planning work receipts retain
+their configured gate results separately; those checks cannot certify the runtime
+features delivered later.
 
 Planning verification limitation: the configured `work check` ran the full
 profile, and nextest reported 3,145 passes, one launch failure, three skips, and
