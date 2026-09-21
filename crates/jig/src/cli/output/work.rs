@@ -1,34 +1,24 @@
 use std::fmt::Write as _;
 
-use anyhow::{Result, anyhow};
-
 use super::{concise_preview, status, value_bool, value_i64, value_str};
 
 mod check_targets;
+mod compact;
 mod gate_recovery;
 mod plan_lifecycle;
 use check_targets::{TargetSummary, append_target_summary, original_plan_suffix, target_summaries};
 use plan_lifecycle::append_plan_lifecycle;
 
-pub(super) fn format_work_start_plan_id(value: &serde_json::Value) -> Result<String> {
-    let plan = value
-        .get("plan")
-        .ok_or_else(|| anyhow!("work start output did not include plan"))?;
-    if !plan.is_object() {
-        anyhow::bail!("work start output plan was not an object");
-    }
-
-    plan.get("plan_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("work start output did not include plan.plan_id"))
-}
+pub(super) use plan_lifecycle::format_work_start_plan_id;
 
 pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
     status::format_work_summary(value)
 }
 
 pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
+    if value.get("readiness_basis").is_some() {
+        return compact::format(value);
+    }
     let plan_id = value_str(value, "plan_id").unwrap_or("<unknown>");
     let checks = value["checks"].as_array().map(Vec::as_slice).unwrap_or(&[]);
     let gate_evidence = value["gate_evidence"]
@@ -289,6 +279,9 @@ fn work_check_summary_status(
 }
 
 pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
+    if value.get("readiness_basis").is_some() {
+        return compact::format(value);
+    }
     let plan_id = value_str(value, "plan_id").unwrap_or("<unknown>");
     let plan_state = value_str(value, "plan_state").unwrap_or("open");
     let overall = value_str(value, "overall").unwrap_or("unknown");
@@ -383,6 +376,9 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
 }
 
 pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String {
+    if value.get("readiness_basis").is_some() {
+        return compact::format(value);
+    }
     let plan_id = value_str(value, "plan_id").unwrap_or("<unknown>");
     let plan_state = value_str(value, "plan_state").unwrap_or("open");
     let overall = value_str(value, "overall").unwrap_or("unknown");

@@ -32,6 +32,7 @@ fn check(ctx: &RepoContext) -> anyhow::Result<Value> {
     dispatch(
         ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -313,6 +314,7 @@ fn cancelled_validation_does_not_record_a_reused_pass() {
         &ctx,
         json!({"plan_id": "plan_1"}),
         &mut Cancelled,
+        crate::surface::ResponseSurface::Standard,
     )
     .unwrap_err();
     assert!(format!("{error:#}").contains("cancelled"));
@@ -368,6 +370,7 @@ fn explicit_native_retry_preserves_prepared_work_plan_authority() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.into()),
         })),

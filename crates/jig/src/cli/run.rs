@@ -432,9 +432,11 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Codex(command) => run_codex_command(command, json_output),
         CommandKind::Work(command) => {
             let human_output = work_human_output(&command);
+            let require_ok = matches!(&command, WorkCommand::Check(opts)
+                if opts.projection == crate::surface::ResponseSurface::AgentV1);
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Work(command.into()),
-                false,
+                require_ok,
                 json_output,
                 human_output,
             )

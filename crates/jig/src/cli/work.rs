@@ -222,6 +222,13 @@ pub(crate) struct WorkAppendOpts {
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkCheckOpts {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select standard output or the compact agent-v1 completion observation"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[arg(long, help = "Open plan id to check")]
     pub(crate) plan_id: String,
 
@@ -241,6 +248,13 @@ pub(crate) struct WorkCheckOpts {
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkGatesOpts {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select standard output or the compact agent-v1 completion observation"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..=30_000), help = "Freshness collection budget; defaults to 2000 ms")]
     pub(crate) freshness_timeout_ms: Option<u64>,
     #[arg(long, help = "Plan id to inspect; defaults to the single open plan")]
@@ -249,6 +263,13 @@ pub(crate) struct WorkGatesOpts {
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct WorkEvidenceOpts {
+    #[arg(
+        long,
+        value_enum,
+        default_value_t,
+        help = "Select standard output or the compact agent-v1 completion observation"
+    )]
+    pub(crate) projection: crate::surface::ResponseSurface,
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..=30_000), help = "Freshness collection budget; defaults to 2000 ms")]
     pub(crate) freshness_timeout_ms: Option<u64>,
     #[arg(long, help = "Open plan id whose evidence should be summarized")]

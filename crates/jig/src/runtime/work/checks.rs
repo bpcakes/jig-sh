@@ -32,7 +32,7 @@ pub(super) fn check_with_observer(
     opts: WorkCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_with_execution(ctx, opts, WorkCheckExecution::WaitForLease, observer)
+    check_projected(ctx, opts, WorkCheckExecution::WaitForLease, observer)
 }
 
 pub(super) fn check_from_mcp_with_observer(
@@ -40,7 +40,23 @@ pub(super) fn check_from_mcp_with_observer(
     opts: WorkCheckRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_with_execution(ctx, opts, WorkCheckExecution::RejectContention, observer)
+    check_projected(ctx, opts, WorkCheckExecution::RejectContention, observer)
+}
+
+fn check_projected(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    execution: WorkCheckExecution,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    let projection = opts.projection;
+    let plan_id = opts.plan_id.clone();
+    let result = check_with_execution(ctx, opts, execution, observer)?;
+    if projection == crate::surface::ResponseSurface::AgentV1 {
+        super::gates::completion_after_check(ctx, &plan_id, &result, &|| observer.cancelled())
+    } else {
+        Ok(result)
+    }
 }
 
 mod selection;
@@ -98,23 +114,6 @@ fn check_required_collect_failures_with_execution(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     check_configured_with_execution(ctx, plan_id, FailureMode::Collect, execution, observer)
-}
-
-fn check_selected_with_observer(
-    ctx: &RepoContext,
-    plan_id: &str,
-    selected: Vec<SelectedCheck>,
-    execution: WorkCheckExecution,
-    observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
-    check_selected_with_failure_mode(
-        ctx,
-        plan_id,
-        selected,
-        FailureMode::Abort,
-        execution,
-        observer,
-    )
 }
 
 fn check_selected_with_failure_mode(

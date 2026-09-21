@@ -604,9 +604,15 @@ pub(crate) fn call_tool_with_observer_on_surface(
         Some(MemoryTool::Goal) => work::goal_from_args(memory_ctx, args),
         Some(MemoryTool::Start) => work::start_from_args(memory_ctx, args),
         Some(MemoryTool::Append) => work::append_from_args(ctx, args),
-        Some(MemoryTool::Check) => work::check_from_args_with_observer(memory_ctx, args, observer),
-        Some(MemoryTool::Gates) => work::gates_from_args(memory_ctx, args),
-        Some(MemoryTool::Evidence) => work::evidence_from_args(memory_ctx, args),
+        Some(MemoryTool::Check) => {
+            work::check_from_args_with_observer(memory_ctx, args, observer, surface)
+        }
+        Some(MemoryTool::Gates) => {
+            work::gates_from_args(memory_ctx, args, surface, &|| observer.cancelled())
+        }
+        Some(MemoryTool::Evidence) => {
+            work::evidence_from_args(memory_ctx, args, surface, &|| observer.cancelled())
+        }
         Some(MemoryTool::Review) => {
             work::review_from_args_with_observer(memory_ctx, args, observer)
         }

@@ -1,6 +1,9 @@
 use super::*;
 use std::process::Output;
 
+#[path = "checks/work_completion.rs"]
+mod work_completion;
+
 fn assert_file_budget_check(output: &Output) {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());

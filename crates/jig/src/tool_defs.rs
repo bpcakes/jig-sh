@@ -472,7 +472,19 @@ pub(crate) fn tool_descriptors_for_surface(
     };
     execution
         .into_iter()
-        .chain(MemoryTool::ALL.iter().copied().map(memory_tool_descriptor))
+        .chain(MemoryTool::ALL.iter().copied().map(|tool| {
+            let mut descriptor = memory_tool_descriptor(tool);
+            if surface == crate::surface::ResponseSurface::AgentV1
+                && matches!(
+                    tool,
+                    MemoryTool::Check | MemoryTool::Gates | MemoryTool::Evidence
+                )
+            {
+                descriptor["outputSchema"] =
+                    repository::schema_value::<crate::surface::work::WorkCompletion>();
+            }
+            descriptor
+        }))
         .collect()
 }
 

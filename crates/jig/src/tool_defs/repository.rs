@@ -247,7 +247,7 @@ pub(crate) struct CancelRunOutput {
     pub(crate) run: RunResult,
 }
 
-fn schema_value<T: JsonSchema>() -> Value {
+pub(super) fn schema_value<T: JsonSchema>() -> Value {
     let schema = SchemaGenerator::new(SchemaSettings::draft2020_12()).into_root_schema_for::<T>();
     serde_json::to_value(schema).expect("repository MCP schemas must serialize")
 }

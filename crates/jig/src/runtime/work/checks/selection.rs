@@ -6,6 +6,11 @@ pub(super) fn check_with_execution(
     execution: WorkCheckExecution,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
+    let failure_mode = if opts.projection == crate::surface::ResponseSurface::AgentV1 {
+        FailureMode::Collect
+    } else {
+        FailureMode::Abort
+    };
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
@@ -49,7 +54,14 @@ pub(super) fn check_with_execution(
             }
         }
         if targets.is_empty() {
-            return check_selected_with_observer(ctx, &opts.plan_id, selected, execution, observer);
+            return check_selected_with_failure_mode(
+                ctx,
+                &opts.plan_id,
+                selected,
+                failure_mode,
+                execution,
+                observer,
+            );
         }
         // Resolve and validate the whole native plan before any legacy child starts.
         {
@@ -73,7 +85,7 @@ pub(super) fn check_with_execution(
                 targets,
                 force: true,
             },
-            FailureMode::Abort,
+            failure_mode,
             execution,
             observer,
         );
@@ -82,15 +94,16 @@ pub(super) fn check_with_execution(
         return check_configured_with_execution(
             ctx,
             &opts.plan_id,
-            FailureMode::Abort,
+            failure_mode,
             execution,
             observer,
         );
     }
-    let mut result = check_selected_with_observer(
+    let mut result = check_selected_with_failure_mode(
         ctx,
         &opts.plan_id,
         selected_checks(ctx, &opts.gates, &opts.tools)?,
+        failure_mode,
         execution,
         observer,
     )?;

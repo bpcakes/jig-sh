@@ -162,6 +162,9 @@ fn handle_tool_call(
         );
         let progress_result = observer.flush();
         let tool_result = combine_tool_and_progress_results(tool_result, progress_result)?;
+        let is_error = surface == ResponseSurface::AgentV1
+            && name == crate::tool_defs::tool::WORK_CHECK
+            && tool_result["ok"] == false;
         Ok(json!({
             "content": [
                 {
@@ -170,7 +173,7 @@ fn handle_tool_call(
                 }
             ],
             "structuredContent": tool_result,
-            "isError": false
+            "isError": is_error
         }))
     })();
 

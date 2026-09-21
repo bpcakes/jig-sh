@@ -29,6 +29,7 @@ fn check(ctx: &RepoContext, plan: &str) -> Value {
     dispatch(
         ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan.into(),
             gates: vec![],
             tools: vec![],

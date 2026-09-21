@@ -347,6 +347,7 @@ impl From<WorkAppendOpts> for command::WorkAppendRequest {
 impl From<WorkCheckOpts> for command::WorkCheckRequest {
     fn from(opts: WorkCheckOpts) -> Self {
         Self {
+            projection: opts.projection,
             plan_id: opts.plan_id,
             gates: opts.gates,
             tools: opts.tools,
@@ -357,6 +358,7 @@ impl From<WorkCheckOpts> for command::WorkCheckRequest {
 impl From<WorkGatesOpts> for command::WorkGatesRequest {
     fn from(opts: WorkGatesOpts) -> Self {
         Self {
+            projection: opts.projection,
             plan_id: opts.plan_id,
             freshness_timeout_ms: opts.freshness_timeout_ms,
         }
@@ -366,6 +368,7 @@ impl From<WorkGatesOpts> for command::WorkGatesRequest {
 impl From<WorkEvidenceOpts> for command::WorkEvidenceRequest {
     fn from(opts: WorkEvidenceOpts) -> Self {
         Self {
+            projection: opts.projection,
             plan_id: opts.plan_id,
             freshness_timeout_ms: opts.freshness_timeout_ms,
         }

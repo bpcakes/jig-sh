@@ -54,6 +54,8 @@ pub(crate) struct WorkAppendRequest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkCheckRequest {
+    #[serde(skip)]
+    pub(crate) projection: crate::surface::ResponseSurface,
     pub(crate) plan_id: String,
     #[serde(default, deserialize_with = "crate::serde_helpers::null_or_default")]
     pub(crate) gates: Vec<String>,
@@ -63,6 +65,8 @@ pub(crate) struct WorkCheckRequest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkGatesRequest {
+    #[serde(skip)]
+    pub(crate) projection: crate::surface::ResponseSurface,
     pub(crate) plan_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_freshness_timeout_ms")]
     pub(crate) freshness_timeout_ms: Option<u64>,
@@ -70,6 +74,8 @@ pub(crate) struct WorkGatesRequest {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WorkEvidenceRequest {
+    #[serde(skip)]
+    pub(crate) projection: crate::surface::ResponseSurface,
     pub(crate) plan_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_freshness_timeout_ms")]
     pub(crate) freshness_timeout_ms: Option<u64>,

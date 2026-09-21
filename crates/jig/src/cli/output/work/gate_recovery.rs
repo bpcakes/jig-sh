@@ -82,7 +82,7 @@ pub(super) fn append_next_step(lines: &mut Vec<String>, value: &Value) -> bool {
     false
 }
 
-fn command(value: &Value) -> Option<String> {
+pub(super) fn command(value: &Value) -> Option<String> {
     let argv = value["argv"].as_array()?;
     let args = argv
         .iter()

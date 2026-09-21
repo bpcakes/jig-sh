@@ -628,6 +628,35 @@ Native task mutation is intentionally absent. A later `jig beads` writer must pr
 
 ## Work Gates
 
+The explicit CLI `--projection agent-v1` option on `work check`, `work gates`,
+and `work evidence` selects a shared strict compact result. MCP selects the same
+result through `mcp --surface agent-v1`; work-tool input schemas do not change.
+Omitted selection and `standard` preserve existing response and descriptor
+shapes. Unknown CLI selections are rejected before the operation starts.
+
+The compact result reports `activity` (execution versus evidence reuse),
+current gate `status` and `freshness`, `observation` diagnostics, and
+`finish_ready`. Inspection `ok` means observation succeeded, while check `ok`
+reports the selected check result; neither substitutes for `finish_ready`.
+Failed compact checks return their structured summary with a nonzero CLI exit.
+MCP preserves that summary in `structuredContent` and sets `isError: true` for
+an agent-v1 work check whose `ok` is false.
+Invalid requests, recording errors and cancellations retain ordinary error
+behavior. Required reviews and unsupported/external policies remain visible,
+without acquiring approval or launching reviews automatically.
+
+Previews retain at most 50 gates, 50 target rows across those gates, and 50
+activity rows. Full counts and truncation flags accompany those previews;
+readiness evaluates every required gate, including omitted rows. Reasons and
+observation messages are limited to 256 Unicode characters. `next_step`,
+`evidence`, and `receipts` contain literal argv plus a read-only flag, with
+shell-safe human rendering. Unknown observation yields read-only recovery.
+Detailed evidence remains reachable using the emitted standard CLI commands
+or standard-surface MCP. The summary shares one gate observation across its
+rendered fields; it neither persists nor caches closure authorization.
+`observed_at_ms` is diagnostic, and `work finish` independently revalidates
+source, configuration and evidence under its existing execution lease.
+
 `work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. Each explicitly required target uses its latest original receipt in the same work plan, ordered by completion time then receipt ID. A newer failure or unverifiable result supersedes an older pass. Epochs 6–7 also select the latest receipts for execution dependencies. Epoch 8 validates implicit dependencies through the selected target's original execution proof; a dependency that is explicitly required still uses its own latest receipt. Locally recorded receipts from the former unreleased epochs 9 and 10 remain readable with their original proof shapes, but v9 and v10 repository contracts are rejected. Current authority and time-validity checks follow the recorded receipt epoch. A profile may combine current receipts from separate runs; its aggregate `run_id` is null in that case, while every target retains its actual `run_id` and `receipt_id`. Archive protection retains the latest target outcomes, including failures and expired results, so removing history cannot reveal an older pass.
 
 `scripts/jig work check --plan-id ...` executes missing, failed, stale or unknown targets, their normal execution dependencies, and required dependents invalidated by those executions. It reuses fresh independent passes. Final validation reassesses all required targets and records `jig.work_check_targets/v1` evidence referencing their original receipts with `executed`, `not_started`, or `reused` disposition derived from the actual selected receipt and target-run result. The result exposes `target_evidence` and `target_validation_receipt_id`; when all targets are reused, `plan` and `run` are null and `results` is empty. Use `scripts/jig check COMPONENT:ACTION --plan-id ...` to force native target execution. Explicit `work check --gate ID` forces a configured native evidence or legacy check gate, including optional gates. Multiple gate IDs may mix those kinds; native targets and their prerequisites execute once per invocation even when selectors overlap. All gate IDs and native selectors are resolved before any child starts; unknown, unsupported, and review gates are rejected. Only selected native targets are assessed in the returned target batch; a successful partial selection does not satisfy unselected required gates or authorize `work finish`. CLI and MCP `gates` use the same selection semantics. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only and cannot be combined with gate IDs. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.

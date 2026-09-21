@@ -11,6 +11,7 @@ fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -25,6 +26,7 @@ fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: Some("plan_1".into()),
             },
@@ -76,6 +78,7 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     let missing = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -91,6 +94,7 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -101,6 +105,7 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     let passed = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -130,6 +135,7 @@ fn work_gates_report_a_renamed_check_tool_as_unsupported() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_1".into()),
         })),
@@ -182,6 +188,7 @@ fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() 
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -193,6 +200,7 @@ fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() 
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: None,
             },
@@ -239,6 +247,7 @@ fn work_evidence_gate_health_reflects_blocked_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: None,
             },
@@ -262,6 +271,7 @@ fn work_evidence_reports_closed_plan_state() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: "plan_1".into(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -284,6 +294,7 @@ fn work_evidence_reports_closed_plan_state() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: Some("plan_1".into()),
             },
@@ -315,6 +326,7 @@ fn work_evidence_requires_plan_id_when_multiple_plans_are_open() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: None,
             },
@@ -345,6 +357,7 @@ fn work_evidence_without_open_plan_points_to_work_status() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
+                projection: crate::surface::ResponseSurface::Standard,
                 freshness_timeout_ms: None,
                 plan_id: None,
             },
@@ -366,6 +379,7 @@ fn work_gates_defaults_to_single_open_plan() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: None,
         })),
@@ -386,6 +400,7 @@ fn work_gates_rejects_unknown_plan() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some("plan_missing".into()),
         })),
@@ -454,6 +469,7 @@ fn work_finish_allows_passing_required_gates() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -491,6 +507,7 @@ fn work_finish_holds_checkout_read_lease_through_plan_closure() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -558,6 +575,7 @@ fn work_finish_rejects_gate_authority_that_changed_after_evaluation() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -568,6 +586,7 @@ fn work_finish_rejects_gate_authority_that_changed_after_evaluation() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
@@ -619,6 +638,7 @@ fn work_finish_rejects_source_that_changed_after_gate_evaluation() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -628,6 +648,7 @@ fn work_finish_rejects_source_that_changed_after_gate_evaluation() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
@@ -672,6 +693,7 @@ fn work_gates_reject_stale_required_gate_receipts() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -683,6 +705,7 @@ fn work_gates_reject_stale_required_gate_receipts() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),
@@ -720,6 +743,7 @@ fn work_gates_reject_unknown_required_gate_freshness() {
     dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             plan_id: plan_id.clone(),
             gates: Vec::new(),
             tools: Vec::new(),
@@ -730,6 +754,7 @@ fn work_gates_reject_unknown_required_gate_freshness() {
     let gates = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            projection: crate::surface::ResponseSurface::Standard,
             freshness_timeout_ms: None,
             plan_id: Some(plan_id.clone()),
         })),

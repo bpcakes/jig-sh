@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "work_projection.rs"]
+mod work_projection;
+
 #[test]
 fn parses_work_status_command() {
     let cli = Cli::try_parse_from(["jig", "work", "status"]).unwrap();

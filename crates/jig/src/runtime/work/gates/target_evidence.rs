@@ -107,6 +107,30 @@ impl TargetEvidenceEvaluation {
 }
 
 impl EvidenceGateEvaluation {
+    pub(super) fn compact_targets(
+        &self,
+    ) -> impl Iterator<Item = crate::surface::work::TargetSummary> + '_ {
+        self.targets.iter().map(|target| {
+            let (reason, reason_truncated) =
+                crate::surface::work::bounded_reason(&target.receipt.freshness_reason);
+            crate::surface::work::TargetSummary {
+                target: target.target.clone(),
+                status: target.outcome.as_str().into(),
+                freshness: target.receipt.freshness.as_str().into(),
+                reason,
+                reason_truncated,
+            }
+        })
+    }
+
+    pub(super) fn target_count(&self) -> usize {
+        self.targets.len()
+    }
+
+    pub(super) const fn freshness(&self) -> GateFreshness {
+        self.freshness
+    }
+
     pub(super) fn collection_stats(&self) -> Option<&FreshnessCollectionStats> {
         self.freshness_collection.as_ref()
     }
@@ -258,6 +282,17 @@ impl EvidenceGateEvaluation {
 
     pub(super) const fn outcome(&self) -> GateOutcome {
         self.outcome
+    }
+
+    pub(super) fn has_unavailable_target(&self) -> bool {
+        // Aggregate failure/missing/stale priority and the representative
+        // receipt cannot establish that every target was observable.
+        self.targets.iter().any(|target| {
+            matches!(
+                target.receipt.freshness,
+                GateFreshness::Unknown | GateFreshness::Unsupported
+            )
+        })
     }
 
     pub(super) fn receipt(&self) -> Option<&EvaluatedReceipt> {
@@ -437,7 +472,7 @@ impl EvidenceGateEvaluation {
         }
     }
 
-    fn freshness_reason(&self) -> String {
+    pub(super) fn freshness_reason(&self) -> String {
         if let Some(stats) = &self.freshness_collection
             && self
                 .targets

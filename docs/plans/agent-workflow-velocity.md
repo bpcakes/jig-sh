@@ -24,9 +24,11 @@ Beads epic: `jig-sh-ndz2` (Remove remaining agent workflow friction).
 Execution checkpoint (2026-09-21): T-01 is complete in `0154477a` and T-02 in
 `79290f75`; all six gates passed for each and native Codex review reported no
 findings. T-03 is complete in `c823f19e` with six fresh gates and no native review
-findings. External prerequisite `jig-sh-9wcn.7` is now integrating the existing
-freshness-inspection implementation from `5be831db`, preserving this branch's
-newer CLI/MCP behavior and standard response shapes; validation/review remain.
+findings. External prerequisite `jig-sh-9wcn.7` is complete in `a3e8420d`:
+explicit freshness inspection preserves standard shapes; six fresh gates and
+4,259 tests passed, with three skips and no native review findings.
+Prerequisite `jig-sh-9wcn.9` is implementing the shared opt-in compact completion
+projection over existing gate/recovery authority; final validation/review remain.
 The [measurement result](agent-workflow-velocity-measurements.md) selects Cargo
 admission, narrow opt-in browser endpoint ownership, and preservation of SQLx's
 existing per-invocation database connection guard rather than a duplicate preflight.

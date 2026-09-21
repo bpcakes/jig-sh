@@ -218,6 +218,7 @@ fn work_receipts_conversion_preserves_filters() {
 #[test]
 fn work_evidence_conversion_preserves_plan_id() {
     let request: command::WorkEvidenceRequest = WorkEvidenceOpts {
+        projection: crate::surface::ResponseSurface::Standard,
         freshness_timeout_ms: None,
         plan_id: Some("plan_1".to_string()),
     }

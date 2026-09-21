@@ -14,7 +14,7 @@ fn output_schema(ctx: &RepoContext, name: &str, surface: crate::surface::Respons
 }
 
 #[test]
-fn surface_selection_changes_only_the_inspection_descriptor() {
+fn surface_selection_preserves_inputs_and_unmodified_descriptors() {
     let temp = tempdir().unwrap();
     write_v8_policy_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -35,6 +35,13 @@ fn surface_selection_changes_only_the_inspection_descriptor() {
                 serde_json::to_vec(baseline).unwrap().len(),
                 serde_json::to_vec(selected).unwrap().len()
             );
+        } else if matches!(
+            baseline["name"].as_str(),
+            Some("jig.work_check" | "jig.work_gates" | "jig.work_evidence")
+        ) {
+            assert_eq!(baseline["inputSchema"], selected["inputSchema"]);
+            assert!(baseline.get("outputSchema").is_none());
+            assert!(selected["outputSchema"].is_object());
         } else {
             assert_eq!(baseline, selected);
         }
