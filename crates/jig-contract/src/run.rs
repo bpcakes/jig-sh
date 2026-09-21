@@ -68,6 +68,8 @@ pub struct PlannedTarget {
     pub intent: ActionIntent,
     pub effects: Vec<ActionEffect>,
     pub runner: ActionRunner,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<crate::ExecutionResourceV1>,
     #[serde(default, skip_serializing_if = "ActionArguments::is_empty")]
     pub arguments: ActionArguments,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -109,6 +111,7 @@ impl PlannedTarget {
             intent,
             effects: Vec::new(),
             runner,
+            resources: Vec::new(),
             arguments: ActionArguments::default(),
             inputs: Vec::new(),
             depends_on: Vec::new(),
@@ -448,6 +451,8 @@ pub struct TargetRunResult {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused_from: Option<crate::ReusedTargetEvidenceV1>,
     pub config_digest: String,
     pub input_digest: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -484,6 +489,7 @@ impl TargetRunResult {
             ended_at_ms: None,
             exit_code: None,
             receipt_id: None,
+            reused_from: None,
             config_digest: config_digest.into(),
             input_digest: input_digest.into(),
             findings: Vec::new(),

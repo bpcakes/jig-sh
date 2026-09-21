@@ -214,6 +214,8 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     let worker_plan = args.plan;
     let work_plan_id = args.work_plan_id;
     let request = ExecuteCheckRunRequest {
+        reuse_after_resource_wait: false,
+        alias_override: None,
         work_plan_id: work_plan_id.clone(),
         record_receipts: args.record_receipts,
         fail_fast: args.fail_fast,

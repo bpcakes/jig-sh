@@ -613,6 +613,18 @@ fn execute_action_alias(
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
 ) -> Result<ManifestToolExecutionOutcome> {
+    if !action.resources.is_empty() {
+        return resource_alias::execute(
+            ctx,
+            tool,
+            action,
+            args,
+            plan_id,
+            options,
+            observer,
+            repository_execution,
+        );
+    }
     let outcome = match action.runner {
         ActionRunner::RustNextestV1 { .. } => bail!(
             "typed Rust actions require a prepared repository target; legacy tool aliases are unsupported"
@@ -699,6 +711,8 @@ use native::*;
 
 mod command_tool;
 use command_tool::*;
+
+mod resource_alias;
 
 #[cfg(test)]
 mod tests;

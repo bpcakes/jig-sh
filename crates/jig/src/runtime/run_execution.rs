@@ -50,9 +50,17 @@ pub(super) struct SourceObservationMetrics {
 }
 
 pub(super) struct ExecuteCheckRunRequest {
+    pub(super) alias_override: Option<ExecutionAliasOverride>,
+    pub(super) reuse_after_resource_wait: bool,
     pub(super) work_plan_id: Option<String>,
     pub(super) record_receipts: bool,
     pub(super) fail_fast: bool,
+}
+
+pub(super) struct ExecutionAliasOverride {
+    pub(super) target: TargetId,
+    pub(super) tool_name: String,
+    pub(super) args: Value,
 }
 
 #[cfg(test)]
@@ -134,7 +142,7 @@ pub(super) fn execute_freshly_planned_check_run_without_lease_wait(
     )
 }
 
-fn execute_freshly_planned_check_run_with_lease(
+pub(super) fn execute_freshly_planned_check_run_with_lease(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     plan: RunPlan,
@@ -338,6 +346,7 @@ fn execute_started_check_run_inner(
             >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION)
         .then(|| freshness::ExecutionFreshness::prepare(ctx, catalog, &run, control));
     let finisher = TargetFinisher {
+        alias_override: request.alias_override.as_ref(),
         freshness: freshness.as_ref(),
         ctx,
         catalog,
@@ -376,6 +385,33 @@ fn execute_started_check_run_inner(
                 })
                 .collect::<Vec<_>>();
             target_index += positioned.len();
+            if planned_layer
+                .iter()
+                .any(|target| !target.resources.is_empty())
+            {
+                execute_resource_layer(
+                    &finisher,
+                    control,
+                    &mut source_epoch,
+                    &positioned,
+                    request.reuse_after_resource_wait,
+                    &mut |target, result, compatibility| {
+                        record_finished_target(
+                            ctx,
+                            &run_id,
+                            target,
+                            result,
+                            compatibility,
+                            request.fail_fast,
+                            &mut conclusions,
+                            &mut failed_targets,
+                            &mut compatibility_results,
+                            &mut stop_after_failure,
+                        )
+                    },
+                )?;
+                continue;
+            }
             let execution = execute_parallel_read_only_layer(
                 ctx,
                 catalog,
@@ -409,6 +445,7 @@ fn execute_started_check_run_inner(
         }
 
         for (target_id, planned) in layer.iter().zip(planned_layer) {
+            let mut resource_lease = None;
             target_index += 1;
             let dependency_failed = planned.depends_on.iter().any(|dependency| {
                 conclusions
@@ -451,6 +488,18 @@ fn execute_started_check_run_inner(
                         planned.target
                     )),
                 )?
+            } else if !planned.resources.is_empty() {
+                let outcome = resources::execute_coordinated_target(
+                    &finisher,
+                    planned,
+                    control,
+                    &mut source_epoch,
+                    PhasePosition::new(target_index, target_count)
+                        .expect("planned target position must be valid"),
+                    request.reuse_after_resource_wait,
+                )?;
+                resource_lease = outcome.lease;
+                (outcome.result, outcome.compatibility)
             } else if let Err(error) = crate::repository::validate_current_repository_authority(
                 ctx,
                 &run.plan.config_digest,
@@ -513,6 +562,8 @@ fn execute_started_check_run_inner(
                 &mut compatibility_results,
                 &mut stop_after_failure,
             )?;
+            // Keep the resource through both receipt and durable result publication.
+            drop(resource_lease);
         }
     }
 
@@ -523,44 +574,22 @@ fn execute_started_check_run_inner(
     let conclusion = aggregate_conclusion(conclusions.values().copied());
     complete_run(ctx, &run_id, conclusion)?;
     let source_observations = source_epoch.metrics();
-    debug_assert!(source_observations.count <= target_count.saturating_mul(2));
+    // A coordinated target can recheck a reusable proof, discover that its
+    // time boundary expired, then execute in a second wave with its own
+    // precondition and postcondition (without restarting its target budget).
+    let source_observation_bound = run
+        .plan
+        .targets
+        .iter()
+        .map(|target| if target.resources.is_empty() { 2 } else { 4 })
+        .sum();
+    debug_assert!(source_observations.count <= source_observation_bound);
     Ok(CheckRunExecution {
         run: run_by_id(ctx, &run_id)?,
         results: compatibility_results,
         failed_targets,
         source_observations,
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn record_finished_target(
-    ctx: &RepoContext,
-    run_id: &str,
-    target_id: &TargetId,
-    result: TargetRunResult,
-    compatibility: Option<Value>,
-    fail_fast: bool,
-    conclusions: &mut BTreeMap<TargetId, RunConclusion>,
-    failed_targets: &mut Vec<TargetId>,
-    compatibility_results: &mut Vec<Value>,
-    stop_after_failure: &mut bool,
-) -> Result<()> {
-    let conclusion = result
-        .conclusion
-        .expect("finished target results always have a conclusion");
-    conclusions.insert(target_id.clone(), conclusion);
-    if matches!(
-        conclusion,
-        RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked
-    ) {
-        failed_targets.push(target_id.clone());
-        *stop_after_failure |= fail_fast;
-    }
-    record_target_result(ctx, run_id, result)?;
-    if let Some(compatibility) = compatibility {
-        compatibility_results.push(compatibility);
-    }
-    Ok(())
 }
 
 mod parallel;
@@ -593,6 +622,17 @@ fn run_target_capture_inner(
     run_control: &mut dyn RepositoryRunControl,
 ) -> TargetCapture {
     let mut control = TargetExecutionControl::new(ctx, planned, run_control);
+    run_target_with_control(ctx, catalog, run_id, work_plan_id, planned, &mut control)
+}
+
+fn run_target_with_control(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    run_id: &str,
+    work_plan_id: Option<&str>,
+    planned: &PlannedTarget,
+    control: &mut TargetExecutionControl<'_>,
+) -> TargetCapture {
     let capture = match &planned.runner {
         ActionRunner::Command {
             command,
@@ -609,7 +649,7 @@ fn run_target_capture_inner(
             command,
             working_directory.as_deref(),
             environment,
-            &mut control,
+            control,
         ),
         ActionRunner::Argv {
             program,
@@ -625,11 +665,11 @@ fn run_target_capture_inner(
                 command,
                 working_directory.as_deref(),
                 environment,
-                &mut control,
+                control,
             )
         }
         ActionRunner::RustNextestV1 { .. } => {
-            rust_nextest::run_rust_nextest_target(ctx, planned, &mut control)
+            rust_nextest::run_rust_nextest_target(ctx, planned, control)
         }
         ActionRunner::Native { operation, .. } if operation == jig_contract::tool::FILE_BUDGET => {
             match control.remaining() {
@@ -689,37 +729,8 @@ fn run_target_capture_inner(
     enforce_current_repository_authority(ctx, catalog.config_digest(), planned, capture)
 }
 
-fn native_runner_error_capture(
-    planned: &PlannedTarget,
-    operation: &str,
-    timeout: Duration,
-    error: anyhow::Error,
-) -> TargetCapture {
-    match error.downcast_ref::<OwnedProcessTreeError>() {
-        Some(OwnedProcessTreeError::TimedOut) => TargetCapture::stopped_after_start(
-            RunConclusion::TimedOut,
-            format!(
-                "native target '{}' exceeded its {timeout:?} timeout",
-                planned.target
-            ),
-        ),
-        Some(OwnedProcessTreeError::CancelledBeforeStart) => TargetCapture::not_started(
-            RunConclusion::Cancelled,
-            format!("native target '{}' was cancelled", planned.target),
-        ),
-        Some(OwnedProcessTreeError::Cancelled) => TargetCapture::stopped_after_start(
-            RunConclusion::Cancelled,
-            format!("native target '{}' was cancelled", planned.target),
-        ),
-        _ => TargetCapture::blocked(format!(
-            "native runner '{operation}' for target '{}' failed: {error:#}",
-            planned.target
-        ))
-        .with_maybe_executed(true),
-    }
-}
-
 mod freshness;
+mod resources;
 mod source_epoch;
 use source_epoch::*;
 

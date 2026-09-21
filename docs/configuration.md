@@ -616,6 +616,11 @@ uses `focused = false` (the default) and no argument declarations; it cannot
 accept focus. Omitting focus on a focused action also runs its broad workspace
 scope. Keep the full-suite action in the final verification profile.
 
+Read-only Cargo actions can separately opt into
+[Cargo resource coordination](cargo-resource-coordination.md). Resource claims
+control scheduling across Jig processes; they do not add evidence dependencies
+or change the selected test scope.
+
 ```sh
 scripts/jig --json work check --plan-id PLAN --phase iteration --explain \
   --rust-focus 'api:test-focused={"kind":"explicit","packages":["example-api@0.1.0"],"targets":[{"kind":"lib"}],"filter":"test(example)"}'

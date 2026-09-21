@@ -94,6 +94,8 @@ use support::{ensure_state_layout, new_id};
 mod compression;
 mod diagnostics;
 mod execution_leases;
+mod resource_leases;
+pub(crate) use resource_leases::{ResourceClaim, ResourceClaimMode, ResourceLease};
 mod json_scan;
 mod jsonl;
 mod maintenance;

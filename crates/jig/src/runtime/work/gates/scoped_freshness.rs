@@ -278,6 +278,7 @@ fn default_invocations(
         pending.extend(action.depends_on.iter().cloned());
         let mut invocation = PlannedTarget::new(target, action.intent, action.runner.clone(), "");
         invocation.effects.clone_from(&action.effects);
+        invocation.resources.clone_from(&action.resources);
         invocation.inputs.clone_from(&action.inputs);
         invocation.depends_on.clone_from(&action.depends_on);
         invocation.timeout_seconds = action.timeout_seconds;

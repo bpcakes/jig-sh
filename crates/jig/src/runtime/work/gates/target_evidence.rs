@@ -44,6 +44,46 @@ pub(super) struct EvidenceGateEvaluation {
 }
 
 impl TargetEvidenceEvaluation {
+    pub(in crate::runtime::work) fn reused_result(&self) -> Option<jig_contract::TargetRunResult> {
+        if !self.is_passing() {
+            return None;
+        }
+        let provenance = jig_contract::ReusedTargetEvidenceV1 {
+            receipt_id: self.receipt.receipt_id.clone()?,
+            run_id: self.run_id.clone()?,
+            plan_id: self.original_plan_id.clone()?,
+        };
+        let mut result = jig_contract::TargetRunResult::queued(
+            self.target.clone(),
+            self.expected_config_digest.clone(),
+            self.input_digest.clone()?,
+        );
+        result.status = jig_contract::RunStatus::Completed;
+        result.conclusion = Some(jig_contract::RunConclusion::Success);
+        result.ended_at_ms = Some(crate::state::now_ms());
+        result.receipt_id = Some(provenance.receipt_id.clone());
+        result.reused_from = Some(provenance);
+        let (valid_until, requires_time) = self.scoped.as_ref().map_or(
+            (
+                self.receipt.valid_until_ms,
+                self.receipt.requires_time_validity,
+            ),
+            |scoped| {
+                (
+                    scoped.effective_valid_until_ms,
+                    scoped.effective_requires_time_validity,
+                )
+            },
+        );
+        if requires_time && valid_until.is_none() {
+            return None;
+        }
+        result.valid_until_ms = valid_until;
+        // This run did not execute the target. Never fabricate a start, exit
+        // status or a fresh execution proof from the original receipt.
+        Some(result)
+    }
+
     pub(in crate::runtime::work) fn to_value(&self) -> Value {
         let receipt = &self.receipt;
         let mut value = json!({

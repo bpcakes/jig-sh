@@ -9,6 +9,9 @@ const MAX_PARALLEL_LAYER_TARGETS: usize = 8;
 const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;
 const MAX_EVENTS_PER_COORDINATOR_TICK: usize = 64;
 
+mod resource_waves;
+pub(super) use resource_waves::execute_resource_layer;
+
 pub(super) struct ParallelTargetOutcome {
     pub(super) completed: CompletedTargetCapture,
     pub(super) fingerprint: std::result::Result<String, String>,

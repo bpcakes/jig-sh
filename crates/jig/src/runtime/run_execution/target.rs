@@ -1,10 +1,65 @@
 use super::*;
 
-pub(super) struct TargetExecutionControl<'a> {
-    started: Instant,
+#[cfg(test)]
+#[path = "budget_tests.rs"]
+mod budget_tests;
+
+pub(super) fn native_runner_error_capture(
+    planned: &PlannedTarget,
+    operation: &str,
     timeout: Duration,
+    error: anyhow::Error,
+) -> TargetCapture {
+    match error.downcast_ref::<OwnedProcessTreeError>() {
+        Some(OwnedProcessTreeError::TimedOut) => TargetCapture::stopped_after_start(
+            RunConclusion::TimedOut,
+            format!(
+                "native target '{}' exceeded its {timeout:?} timeout",
+                planned.target
+            ),
+        ),
+        Some(OwnedProcessTreeError::CancelledBeforeStart) => TargetCapture::not_started(
+            RunConclusion::Cancelled,
+            format!("native target '{}' was cancelled", planned.target),
+        ),
+        Some(OwnedProcessTreeError::Cancelled) => TargetCapture::stopped_after_start(
+            RunConclusion::Cancelled,
+            format!("native target '{}' was cancelled", planned.target),
+        ),
+        _ => TargetCapture::blocked(format!(
+            "native runner '{operation}' for target '{}' failed: {error:#}",
+            planned.target
+        ))
+        .with_maybe_executed(true),
+    }
+}
+
+pub(super) struct TargetExecutionControl<'a> {
+    budget: TargetBudget,
     run_control: &'a mut dyn RepositoryRunControl,
     poll_failure: Mutex<Option<String>>,
+    resource_lease: Option<&'a crate::state::ResourceLease>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TargetBudget {
+    started: Instant,
+    timeout: Duration,
+}
+
+impl TargetBudget {
+    pub(super) fn remaining_time(self) -> Duration {
+        self.timeout.saturating_sub(self.started.elapsed())
+    }
+    pub(super) fn new(ctx: &RepoContext, planned: &PlannedTarget) -> Self {
+        Self {
+            started: Instant::now(),
+            timeout: planned
+                .timeout_seconds
+                .map(Duration::from_secs)
+                .unwrap_or_else(|| ctx.command_timeout().duration()),
+        }
+    }
 }
 
 impl<'a> TargetExecutionControl<'a> {
@@ -13,15 +68,19 @@ impl<'a> TargetExecutionControl<'a> {
         planned: &PlannedTarget,
         run_control: &'a mut dyn RepositoryRunControl,
     ) -> Self {
-        let timeout = planned
-            .timeout_seconds
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| ctx.command_timeout().duration());
+        Self::with_budget(TargetBudget::new(ctx, planned), run_control, None)
+    }
+
+    pub(super) fn with_budget(
+        budget: TargetBudget,
+        run_control: &'a mut dyn RepositoryRunControl,
+        resource_lease: Option<&'a crate::state::ResourceLease>,
+    ) -> Self {
         Self {
-            started: Instant::now(),
-            timeout,
+            budget,
             run_control,
             poll_failure: Mutex::new(None),
+            resource_lease,
         }
     }
 
@@ -31,7 +90,10 @@ impl<'a> TargetExecutionControl<'a> {
             Ok(false) => {}
             Err(message) => return Err(TargetStop::Blocked(message)),
         }
-        let remaining = self.timeout.saturating_sub(self.started.elapsed());
+        let remaining = self
+            .budget
+            .timeout
+            .saturating_sub(self.budget.started.elapsed());
         if remaining.is_zero() {
             Err(TargetStop::TimedOut)
         } else {
@@ -100,6 +162,7 @@ impl ExecutionCancellation for TargetExecutionControl<'_> {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum TargetStop {
     Cancelled,
     TimedOut,
@@ -179,6 +242,13 @@ pub(super) fn run_process_target(
         ));
     }
     command.current_dir(working_directory).envs(environment);
+    if let Some(lease) = control.resource_lease
+        && lease.inherit_into(&mut command).is_err()
+    {
+        return TargetCapture::blocked(
+            "could not retain Cargo resource ownership in the target process",
+        );
+    }
     if matches!(
         planned.runner,
         ActionRunner::Argv { .. } | ActionRunner::RustNextestV1 { .. }

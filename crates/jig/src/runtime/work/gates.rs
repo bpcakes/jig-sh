@@ -720,6 +720,7 @@ mod target_evidence;
 
 mod check_snapshot;
 use check_snapshot::repository_for_evidence_gates;
+pub(in crate::runtime) use check_snapshot::reusable_invocation_after_resource_wait;
 #[cfg(test)]
 pub(crate) use check_snapshot::selected_invocation_snapshot_with_test_timeout;
 pub(super) use check_snapshot::{

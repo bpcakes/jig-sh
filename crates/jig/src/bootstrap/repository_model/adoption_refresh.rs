@@ -145,6 +145,12 @@ pub(in crate::bootstrap) fn refresh(
 }
 
 fn generated_action(action: &ActionSpec, model: &AuthoredRepositoryModel) -> bool {
+    // Resource declarations describe this exact implementation, including a
+    // wrapper's inner Cargo invocation. Preserve its owner and command rather
+    // than discarding or transplanting the opt-in onto regenerated code.
+    if !action.resources.is_empty() {
+        return false;
+    }
     // A policy assertion belongs to this implementation and its input set.
     // Retain the whole action, including its runner, when refreshing capabilities.
     // Transplanting the assertion onto a replacement runner would be unsound.

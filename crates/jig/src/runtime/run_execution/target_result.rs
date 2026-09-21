@@ -1,6 +1,38 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_finished_target(
+    ctx: &RepoContext,
+    run_id: &str,
+    target_id: &TargetId,
+    result: TargetRunResult,
+    compatibility: Option<Value>,
+    fail_fast: bool,
+    conclusions: &mut BTreeMap<TargetId, RunConclusion>,
+    failed_targets: &mut Vec<TargetId>,
+    compatibility_results: &mut Vec<Value>,
+    stop_after_failure: &mut bool,
+) -> Result<()> {
+    let conclusion = result
+        .conclusion
+        .expect("finished target results always have a conclusion");
+    conclusions.insert(target_id.clone(), conclusion);
+    if matches!(
+        conclusion,
+        RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked
+    ) {
+        failed_targets.push(target_id.clone());
+        *stop_after_failure |= fail_fast;
+    }
+    record_target_result(ctx, run_id, result)?;
+    if let Some(compatibility) = compatibility {
+        compatibility_results.push(compatibility);
+    }
+    Ok(())
+}
+
 pub(super) struct TargetFinisher<'a> {
+    pub(super) alias_override: Option<&'a ExecutionAliasOverride>,
     pub(super) ctx: &'a RepoContext,
     pub(super) catalog: &'a RepositoryCatalog,
     pub(super) run: &'a crate::state::DurableRun,
@@ -54,7 +86,13 @@ impl TargetFinisher<'_> {
             ended_at_ms,
             capture,
         } = completed;
-        let tool_name = capture.alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL);
+        let alias_override = self
+            .alias_override
+            .filter(|alias| alias.target == planned.target);
+        let tool_name = alias_override.map_or_else(
+            || capture.alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL),
+            |alias| alias.tool_name.as_str(),
+        );
         let input_digest = match &worktree_fingerprint {
             Ok(fingerprint) => target_input_digest(self.catalog, &planned.target, fingerprint)?,
             Err(_) => planned.input_digest.clone(),
@@ -66,10 +104,15 @@ impl TargetFinisher<'_> {
                     self.ctx,
                     ReceiptInput {
                         tool_name,
-                        args: json!({
-                            "run_id": self.run.result.run_id,
-                            "target": planned.target,
-                        }),
+                        args: alias_override.map_or_else(
+                            || {
+                                json!({
+                                    "run_id": self.run.result.run_id,
+                                    "target": planned.target,
+                                })
+                            },
+                            |alias| alias.args.clone(),
+                        ),
                         invoked_command_key: capture.command_key.clone(),
                         plan_id: self.work_plan_id.map(str::to_owned),
                         started_at_ms: started_at_ms.unwrap_or(ended_at_ms),
@@ -136,11 +179,14 @@ impl TargetFinisher<'_> {
         result.target_freshness.clone_from(&target_freshness);
 
         let compatibility = started_at_ms.map(|_| {
-            let alias = self
-                .catalog
-                .aliases_for_target(&planned.target)
-                .first()
-                .cloned();
+            let alias = alias_override
+                .map(|alias| alias.tool_name.clone())
+                .or_else(|| {
+                    self.catalog
+                        .aliases_for_target(&planned.target)
+                        .first()
+                        .cloned()
+                });
             let mut value = json!({
                 "target": planned.target,
                 "tool": alias,
@@ -148,7 +194,7 @@ impl TargetFinisher<'_> {
                     "ok": capture.conclusion == RunConclusion::Success,
                     "tool": alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL),
                     "command_key": capture.command_key,
-                    "args": {},
+                    "args": alias_override.map_or_else(|| json!({}), |alias| alias.args.clone()),
                     "result": {
                         "exit_status": capture.receipt_exit_status,
                         "stdout": capture.stdout,

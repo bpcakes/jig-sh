@@ -27,6 +27,8 @@ fn parallel_read_only_layer_fails_closed_and_reports_failure_on_a_source_mutatio
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: false,
             fail_fast: false,
@@ -97,6 +99,8 @@ fn cancelled_parallel_target_keeps_not_started_evidence_after_a_sibling_mutation
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: false,
             fail_fast: false,
@@ -143,6 +147,8 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evid
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
@@ -253,6 +259,8 @@ depends_on = [{ component = "api", action = "generate" }]
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: false,
             fail_fast: false,
@@ -315,6 +323,8 @@ checks = ["jig.first", "jig.second"]
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id: None,
             record_receipts: true,
             fail_fast: false,

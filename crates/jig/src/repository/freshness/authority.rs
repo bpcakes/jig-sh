@@ -28,6 +28,11 @@ pub(super) fn collect(
     budget: &mut CollectionBudget<'_>,
 ) -> CollectionResult<AuthorityDigest> {
     budget.ensure_active()?;
+    if invocation.resources != action.resources {
+        return Err(unavailable(
+            "execution resource declarations do not match action authority",
+        ));
+    }
     let arguments = super::super::arguments::bind(
         catalog.contract_version(),
         action,
@@ -153,13 +158,17 @@ pub(super) fn collect(
     let timeout_seconds = action
         .timeout_seconds
         .unwrap_or_else(|| ctx.command_timeout().as_secs());
-    let invocation_value = json!({
+    let mut invocation_value = json!({
         "target": action.target, "intent": action.intent, "effects": effects,
         "inputs_policy": action.inputs_policy.unwrap_or_default(), "inputs": inputs,
         "depends_on": dependencies, "arguments": action.arguments, "bound_arguments": arguments,
         "result_parser": action.result_parser, "timeout_seconds": timeout_seconds,
         "output_limit_bytes": ctx.command_output_limit().bytes(),
     });
+    if !action.resources.is_empty() {
+        invocation_value["resources"] = serde_json::to_value(&action.resources)
+            .map_err(|_| unavailable("execution resource authority could not be encoded"))?;
+    }
     let mut invocation_hash =
         IdentityEncoder::new("jig-target-authority-v1", catalog.contract_version());
     invocation_hash.text("invocation-component");

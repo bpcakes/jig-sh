@@ -429,6 +429,8 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
             &catalog,
             plan,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
+                reuse_after_resource_wait: false,
+                alias_override: None,
                 work_plan_id: None,
                 record_receipts: true,
                 fail_fast: false,

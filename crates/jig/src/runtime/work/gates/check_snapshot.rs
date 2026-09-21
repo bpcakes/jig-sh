@@ -1,5 +1,34 @@
 use super::*;
 
+pub(in crate::runtime) fn reusable_invocation_after_resource_wait(
+    ctx: &RepoContext,
+    plan_id: &str,
+    catalog: &RepositoryCatalog,
+    planned: &jig_contract::PlannedTarget,
+    timeout: std::time::Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<jig_contract::TargetRunResult>> {
+    let started = std::time::Instant::now();
+    let stopped = || cancelled() || started.elapsed() >= timeout;
+    // The outer predicate bounds fingerprinting and journal scans as well as
+    // scoped proof collection; none may reset the target's admission budget.
+    let snapshot = selected_invocation_snapshot_with_timeout(
+        ctx,
+        plan_id,
+        catalog,
+        std::slice::from_ref(planned),
+        &stopped,
+        timeout,
+    )?;
+    if stopped() || !snapshot.unavailable.is_empty() {
+        return Ok(None);
+    }
+    Ok(snapshot
+        .targets
+        .first()
+        .and_then(|target| target.reused_result()))
+}
+
 pub(super) fn repository_for_evidence_gates(
     ctx: &RepoContext,
     work_gates: &[WorkGate],

@@ -520,6 +520,8 @@ pub struct ActionSpec {
     pub intent: ActionIntent,
     pub effects: Vec<ActionEffect>,
     pub runner: ActionRunner,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<crate::ExecutionResourceV1>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub arguments: BTreeMap<String, ActionArgumentSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -552,6 +554,7 @@ impl ActionSpec {
             intent,
             effects: Vec::new(),
             runner,
+            resources: Vec::new(),
             arguments: BTreeMap::new(),
             inputs: Vec::new(),
             inputs_policy: None,

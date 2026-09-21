@@ -4,9 +4,11 @@ pub mod cargo;
 pub mod freshness;
 pub mod recovery;
 pub mod repository;
+pub mod resources;
 pub mod run;
 pub mod rust_focus;
 
+pub use resources::{ExecutionResourceV1, ReusedTargetEvidenceV1};
 pub use rust_focus::{
     PreparedRustInputV1, RustFeaturesV1, RustFocusV1, RustNextestConfigV1, RustScopeDispositionV1,
     RustTargetV1,

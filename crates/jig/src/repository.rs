@@ -266,6 +266,7 @@ impl RepositoryCatalog {
             arguments::normalize_declarations(contract_version, &mut action)?;
             freshness::validate_inputs_policy(contract_version, &action)?;
             runners::validate(contract_version, &action)?;
+            planner::resources::validate_declarations(&action)?;
             if !components.contains_key(&action.target.component) {
                 bail!(
                     "target '{}' references unknown component '{}'",
@@ -766,5 +767,6 @@ use legacy::*;
 mod tests;
 
 mod affected;
+pub(crate) mod cargo_resources;
 mod inspect;
 mod planner;

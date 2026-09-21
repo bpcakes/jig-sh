@@ -510,6 +510,8 @@ fn execute_repository_check_plan(
         catalog,
         plan.clone(),
         run_execution::ExecuteCheckRunRequest {
+            reuse_after_resource_wait: false,
+            alias_override: None,
             work_plan_id,
             record_receipts,
             fail_fast,

@@ -29,7 +29,9 @@ use super::{
 const SELECTION_REASONS_DIGEST_DOMAIN: &[u8] = b"jig-selection-reasons-v2\0";
 
 mod focused;
+pub(super) mod resources;
 pub(crate) use focused::plan_focused_check_run_with_cancellation;
+use resources::conservative_action_input_digest;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PlanRunRequest {
@@ -425,6 +427,7 @@ fn plan_run_with_source_and_paths(
         );
         planned.arguments = arguments.get(&planned.target).cloned().unwrap_or_default();
         planned.effects.clone_from(&action.effects);
+        planned.resources.clone_from(&action.resources);
         planned.inputs.clone_from(&action.inputs);
         planned.depends_on.clone_from(&action.depends_on);
         planned.timeout_seconds = action.timeout_seconds;
@@ -642,44 +645,6 @@ pub(crate) fn target_input_digest(
         .action(target)
         .ok_or_else(|| anyhow::anyhow!("target '{target}' is not defined"))?;
     conservative_action_input_digest(catalog.contract_version(), action, worktree_fingerprint)
-}
-
-/// Binds a target receipt to both its declared inputs and the repository-wide
-/// source projection. This is intentionally conservative freshness authority,
-/// not a per-target artifact-cache key: any observed source change invalidates
-/// the receipt even when it falls outside the target's selection patterns.
-fn conservative_action_input_digest(
-    contract_version: u32,
-    action: &jig_contract::ActionSpec,
-    worktree_fingerprint: &str,
-) -> Result<String> {
-    let mut hasher = Sha256::new();
-    if contract_version < super::FILE_BUDGET_CONTRACT_VERSION {
-        hasher.update(b"jig-target-input-v1\0");
-    } else {
-        hasher.update(b"jig-target-input-v2\0");
-    }
-    hasher.update(action.target.to_string().as_bytes());
-    hasher.update([0]);
-    hasher.update(worktree_fingerprint.as_bytes());
-    for input in &action.inputs {
-        hasher.update([0]);
-        hasher.update(input.as_bytes());
-    }
-    if contract_version >= super::FILE_BUDGET_CONTRACT_VERSION {
-        let runner = serde_json::to_vec(&action.runner)
-            .context("Failed to canonicalize native target input authority")?;
-        hasher.update([0]);
-        hasher.update((runner.len() as u64).to_be_bytes());
-        hasher.update(runner);
-    }
-    if contract_version >= super::ACTION_EXECUTION_CONTRACT_VERSION {
-        let declarations = serde_json::to_vec(&action.arguments)?;
-        hasher.update([0]);
-        hasher.update((declarations.len() as u64).to_be_bytes());
-        hasher.update(declarations);
-    }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 struct BoundedSelectionReasons {

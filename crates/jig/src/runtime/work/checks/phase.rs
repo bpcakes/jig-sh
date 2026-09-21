@@ -225,6 +225,7 @@ fn check_phase_with_pre_execution(
                     ctx,
                     plan,
                     targets::PlannedCheckInput {
+                        reuse_after_resource_wait: opts.gates.is_empty(),
                         plan_id: &opts.plan_id,
                         catalog: &catalog,
                         phase,

@@ -23,6 +23,7 @@ pub(in crate::runtime) use checks::{
     check_phase_with_pre_execution_test_hook, check_tools_collect_failures_with_observer,
 };
 mod gates;
+pub(in crate::runtime) use gates::reusable_invocation_after_resource_wait;
 #[cfg(test)]
 pub(crate) use gates::selected_invocation_snapshot_with_test_timeout;
 mod goal;

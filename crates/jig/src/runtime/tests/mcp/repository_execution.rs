@@ -33,6 +33,8 @@ fn targets_without_a_worktree_effect_cannot_mutate_the_repository() {
             &catalog,
             run,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
+                reuse_after_resource_wait: false,
+                alias_override: None,
                 work_plan_id: None,
                 record_receipts: true,
                 fail_fast: false,

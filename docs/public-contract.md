@@ -384,6 +384,17 @@ falling back to workspace scope when its meaning for the subset is unproved.
 Metadata discovery always enforces `--locked`, independently of execution's
 lock-update policy, so planning cannot create or rewrite Cargo.lock.
 
+Actions and planned targets may also carry a bounded `resources` list. The
+strict `cargo_v1` variant declares a workspace manifest, execution directory and
+Cargo context; omitted lists retain legacy behavior. Declarations participate
+in configuration, invocation and replay authority. Unsupported runtimes reject
+the field or variant rather than silently dropping the scheduling promise.
+Resource ownership is machine-local scheduling state, never an evidence
+dependency. An unstarted successful target with `reused_from` references the
+original receipt/run/plan and does not claim a new execution proof. See
+[Cargo resource coordination](cargo-resource-coordination.md) for supported
+aliases, partial coordination, deadline and ownership boundaries.
+
 `jig.work_check` accepts optional `phase` (`iteration` or `final`), `explain`,
 and a `rust_focus` object keyed by canonical target strings. The CLI equivalent
 is `work check --phase iteration --rust-focus TARGET=JSON`. Work focus is legal

@@ -10,6 +10,7 @@ pub(super) struct PlannedCheckOutcome {
 }
 
 pub(super) struct PlannedCheckInput<'a> {
+    pub(super) reuse_after_resource_wait: bool,
     pub(super) plan_id: &'a str,
     pub(super) catalog: &'a RepositoryCatalog,
     pub(super) phase: crate::command::WorkCheckPhase,
@@ -26,6 +27,7 @@ pub(super) fn check_planned(
 ) -> Result<PlannedCheckOutcome> {
     let started = now_ms();
     let PlannedCheckInput {
+        reuse_after_resource_wait,
         plan_id,
         catalog,
         phase,
@@ -64,6 +66,8 @@ pub(super) fn check_planned(
             catalog,
             plan.clone(),
             ExecuteCheckRunRequest {
+                reuse_after_resource_wait,
+                alias_override: None,
                 work_plan_id: Some(plan_id.to_owned()),
                 record_receipts: true,
                 fail_fast: false,
@@ -77,7 +81,9 @@ pub(super) fn check_planned(
         for target in &evidence.run.result.targets {
             dispositions.insert(
                 target.target.clone(),
-                if target.started_at_ms.is_some() {
+                if target.reused_from.is_some() {
+                    "reused"
+                } else if target.started_at_ms.is_some() {
                     "selected"
                 } else {
                     "deferred"
@@ -226,6 +232,7 @@ fn scheduled_plan(
                     && planned.inputs == selected.inputs
                     && planned.depends_on == selected.depends_on
                     && planned.timeout_seconds == selected.timeout_seconds
+                    && planned.resources == selected.resources
                     && planned.result_parser == selected.result_parser
                     && planned.input_digest == selected.input_digest
                     && planned.prepared_native_input == selected.prepared_native_input
@@ -279,6 +286,8 @@ pub(super) fn check(
             &catalog,
             plan.clone(),
             ExecuteCheckRunRequest {
+                reuse_after_resource_wait: !force,
+                alias_override: None,
                 work_plan_id: Some(plan_id.to_owned()),
                 record_receipts: true,
                 fail_fast: false,
@@ -293,7 +302,9 @@ pub(super) fn check(
             if let Some(receipt_id) = &target.receipt_id {
                 dispositions.insert(
                     receipt_id.clone(),
-                    if target.started_at_ms.is_some() {
+                    if target.reused_from.is_some() {
+                        "reused"
+                    } else if target.started_at_ms.is_some() {
                         "executed"
                     } else {
                         "not_started"
