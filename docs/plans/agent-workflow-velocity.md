@@ -52,6 +52,15 @@ existing issue ownership. Iteration selection (`fe13c657`) and Cargo discovery
 before implementing its dependent tasks. Use task-local ExecPlans where the risk
 warrants them; do not create additional planning beads.
 
+Resumed integration checkpoint: V04 is delivered in `911b7b16`, including the
+existing iteration/Cargo-discovery prerequisites. V06 Cargo coordination is
+delivered in `d966205e`, with 4488 backend tests passed, four existing skips,
+all required gates fresh, and native review clean after two bounded fixes.
+Its authorized readiness-wave revision preserves same-run independent resources.
+T-04 is now unblocked and in progress under
+`.agent/plans/t04-resource-prerequisite-integration.md`; other epic siblings remain
+outside this dependency chain. The source-runtime pin has not changed.
+
 ## Scope
 
 In scope: the five remaining findings above, delivered through the existing Jig

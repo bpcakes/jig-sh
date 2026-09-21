@@ -17,6 +17,9 @@ pub enum ExecutionResourceV1 {
         #[serde(default)]
         context: CargoImpactContextV1,
     },
+    /// Attests the generated Playwright environment contract; resolution owns
+    /// local server endpoints only when no external base URL is selected.
+    PlaywrightServersV1 {},
 }
 
 /// Original durable evidence reused without inventing a newly executed target.

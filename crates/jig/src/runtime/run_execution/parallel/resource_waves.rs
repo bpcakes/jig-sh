@@ -1,6 +1,6 @@
 //! Admit without hold-and-wait, then publish only after the cohort source check.
 use super::*;
-use crate::repository::cargo_resources::ResolvedCargoResources;
+use crate::repository::execution_resources::{self, ResolvedResources};
 use crate::runtime::run_execution::resources;
 use crate::runtime::run_execution::target::TargetBudget;
 use crate::state::ResourceLease;
@@ -12,7 +12,7 @@ struct Pending<'a> {
     planned: &'a PlannedTarget,
     position: PhasePosition,
     budget: Option<TargetBudget>,
-    resolved: Option<ResolvedCargoResources>,
+    resolved: Option<ResolvedResources>,
     waited: bool,
     force_execution: bool,
     done: bool,
@@ -162,7 +162,7 @@ fn admit_wave(
                         pending.waited = true;
                         control.event(ExecutionEvent::Output {
                             stream: ExecutionStream::Stderr,
-                            bytes: b"Waiting for a Cargo build resource...\n",
+                            bytes: execution_resources::waiting_message(pending.planned),
                         });
                     }
                     None
@@ -171,7 +171,7 @@ fn admit_wave(
                     stopped.push((
                         index,
                         TargetStop::Blocked(
-                            "private Cargo resource ownership could not be established".into(),
+                            "private execution resource ownership could not be established".into(),
                         ),
                     ));
                     None

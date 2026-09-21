@@ -768,5 +768,7 @@ mod tests;
 
 mod affected;
 pub(crate) mod cargo_resources;
+pub(crate) mod execution_resources;
 mod inspect;
 mod planner;
+mod playwright_resources;

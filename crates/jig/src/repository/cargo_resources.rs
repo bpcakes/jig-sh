@@ -21,19 +21,7 @@ use crate::{
     state::{ResourceClaim, ResourceClaimMode},
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedCargoResources {
-    pub(crate) claims: Vec<ResourceClaim>,
-    /// A portable explanation: partial claims coordinate only this repository.
-    pub(crate) partial_reason: Option<&'static str>,
-    identity: Vec<String>,
-}
-
-impl ResolvedCargoResources {
-    pub(crate) fn same_identity(&self, other: &Self) -> bool {
-        self == other
-    }
-}
+use super::execution_resources::ResolvedResources as ResolvedCargoResources;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CargoResourceStop {
@@ -127,14 +115,17 @@ pub(crate) fn resolve(
         .then_some("repository_identity_unavailable");
     for declaration in &planned.resources {
         budget.remaining()?;
-        let authority =
-            serde_json::to_vec(&(declaration, &planned.runner, &planned.prepared_rust_input))?;
-        identity.push(format!("{:x}", Sha256::digest(authority)));
         let ExecutionResourceV1::CargoV1 {
             workspace_manifest,
             working_directory,
             context,
-        } = declaration;
+        } = declaration
+        else {
+            continue;
+        };
+        let authority =
+            serde_json::to_vec(&(declaration, &planned.runner, &planned.prepared_rust_input))?;
+        identity.push(format!("{:x}", Sha256::digest(authority)));
         let command = metadata_command(
             &root,
             planned,

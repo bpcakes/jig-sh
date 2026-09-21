@@ -621,6 +621,13 @@ Read-only Cargo actions can separately opt into
 control scheduling across Jig processes; they do not add evidence dependencies
 or change the selected test scope.
 
+Authored generic browser checks can opt into the strict fieldless
+`playwright_servers_v1` resource policy when they follow the generated Playwright
+environment contract. This coordinates individual owned loopback endpoints,
+preserves external-URL mode, and leaves distinct port pairs concurrent. No
+generated action or CI job is automatically enrolled. See
+[browser endpoint coordination](browser-resource-coordination.md).
+
 ```sh
 scripts/jig --json work check --plan-id PLAN --phase iteration --explain \
   --rust-focus 'api:test-focused={"kind":"explicit","packages":["example-api@0.1.0"],"targets":[{"kind":"lib"}],"filter":"test(example)"}'

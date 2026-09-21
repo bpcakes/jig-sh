@@ -10,7 +10,10 @@ fn cargo_resource_v1_round_trips_with_closed_nested_context() {
         working_directory,
         context,
         ..
-    } = &resource;
+    } = &resource
+    else {
+        panic!("expected Cargo resource");
+    };
     assert!(working_directory.is_none());
     assert_eq!(context, &CargoImpactContextV1::default());
     assert_eq!(
@@ -25,6 +28,22 @@ fn cargo_resource_v1_round_trips_with_closed_nested_context() {
         json!({"kind":"cargo_v1"}),
     ] {
         assert!(serde_json::from_value::<ExecutionResourceV1>(value).is_err());
+    }
+}
+
+#[test]
+fn playwright_server_resource_is_fieldless_and_strict() {
+    let value = json!({"kind":"playwright_servers_v1"});
+    let resource: ExecutionResourceV1 = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(resource, ExecutionResourceV1::PlaywrightServersV1 {});
+    assert_eq!(serde_json::to_value(resource).unwrap(), value);
+    for invalid in [
+        json!({"kind":"playwright_servers_v2"}),
+        json!({"kind":"playwright_servers_v1", "workspace_manifest":"Cargo.toml"}),
+        json!({"kind":"playwright_servers_v1", "ports":[4173,4174]}),
+        json!({"kind":"playwright_servers_v1", "context":{}}),
+    ] {
+        assert!(serde_json::from_value::<ExecutionResourceV1>(invalid).is_err());
     }
 }
 
@@ -74,7 +93,7 @@ fn resource_lists_round_trip_on_action_and_immutable_plan() {
         ActionIntent::Check,
         ActionRunner::command("example_command"),
     );
-    action.resources = vec![resource];
+    action.resources = vec![resource, ExecutionResourceV1::PlaywrightServersV1 {}];
     let mut plan = PlannedTarget::new(
         action.target.clone(),
         action.intent,

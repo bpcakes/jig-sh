@@ -23,13 +23,13 @@ not dependency or receipt authority.
   same-run overlap, conflicting publication order and shared source invalidation.
 - [x] Run required gates, stage, native Codex review, resolve findings, finish
   structured work, and close the bead.
-- [ ] Commit task changes and verify clean checkout.
+- [x] Commit task changes and verify clean checkout (`d966205e`).
 
 Restart checkpoint: V06 is implemented and validated. All4488 backend tests and
 all other required gates passed after the two review fixes. Native review cycle2
 reported no actionable defects. Structured work finished successfully with
 receipt `receipt_01M31Q6N276E13PK4Q46XF6AC2`, then the bead was closed and synced.
-Commit the complete task and verify a clean checkout before starting T-04. The
+The complete task was committed as `d966205e` and clean checkout verified before T-04. The
 external workflow findings ledger is never staged or committed.
 
 ## Surprises & Discoveries

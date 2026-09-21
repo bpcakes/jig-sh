@@ -1,5 +1,8 @@
 use super::*;
-use crate::repository::cargo_resources::{self, ResolvedCargoResources};
+use crate::repository::{
+    cargo_resources,
+    execution_resources::{self, ResolvedResources},
+};
 use crate::state::ResourceLease;
 use target::TargetBudget;
 mod execution;
@@ -33,7 +36,7 @@ pub(super) fn execute_coordinated_target(
             let (result, compatibility) = finisher.finish(
                 planned,
                 CompletedTargetCapture::now(None, capture),
-                Err("Cargo resource admission did not complete; no child was started".into()),
+                Err("execution resource admission did not complete; no child was started".into()),
             )?;
             return Ok(CoordinatedOutcome {
                 result,
@@ -65,7 +68,7 @@ fn acquire(
     ctx: &RepoContext,
     planned: &PlannedTarget,
     control: &mut TargetExecutionControl<'_>,
-) -> std::result::Result<(ResourceLease, ResolvedCargoResources, bool), TargetStop> {
+) -> std::result::Result<(ResourceLease, ResolvedResources, bool), TargetStop> {
     let resolved = resolve(ctx, planned, control)?;
     if let Some(reason) = resolved.partial_reason {
         let message = format!("Cargo resource coordination is partial: {reason}\n");
@@ -88,14 +91,14 @@ fn acquire(
             Ok(None) => {}
             Err(_) => {
                 return Err(TargetStop::Blocked(
-                    "private Cargo resource ownership could not be established".into(),
+                    "private execution resource ownership could not be established".into(),
                 ));
             }
         }
         if !waited {
             control.event(ExecutionEvent::Output {
                 stream: ExecutionStream::Stderr,
-                bytes: b"Waiting for a Cargo build resource...\n",
+                bytes: execution_resources::waiting_message(planned),
             });
             control.flush().map_err(|_| {
                 TargetStop::Blocked("resource wait diagnostic could not be delivered".into())
@@ -110,8 +113,8 @@ pub(super) fn resolve(
     ctx: &RepoContext,
     planned: &PlannedTarget,
     control: &TargetExecutionControl<'_>,
-) -> std::result::Result<ResolvedCargoResources, TargetStop> {
-    let resolved = cargo_resources::resolve(ctx, planned, control.remaining()?, &|| {
+) -> std::result::Result<ResolvedResources, TargetStop> {
+    let resolved = execution_resources::resolve(ctx, planned, control.remaining()?, &|| {
         control.remaining().is_err()
     });
     // Translate a deadline observed by a cancellation-aware collector back to
@@ -121,7 +124,7 @@ pub(super) fn resolve(
         |error| match error.downcast_ref::<cargo_resources::CargoResourceStop>() {
             Some(cargo_resources::CargoResourceStop::TimedOut) => TargetStop::TimedOut,
             Some(cargo_resources::CargoResourceStop::Cancelled) => TargetStop::Cancelled,
-            None => TargetStop::Blocked("Cargo resource identity could not be established".into()),
+            None => TargetStop::Blocked("execution resource identity could not be established; verify the declared resource policy and its prerequisites".into()),
         },
     )
 }
@@ -131,7 +134,7 @@ fn post_admission(
     planned: &PlannedTarget,
     control: &TargetExecutionControl<'_>,
     source_epoch: &mut ExecutionSourceEpoch,
-    resolved: &ResolvedCargoResources,
+    resolved: &ResolvedResources,
 ) -> std::result::Result<(), TargetStop> {
     revalidate_authority(finisher, planned, control, resolved)?;
     source_epoch.discard_reusable_observation();
@@ -144,7 +147,7 @@ pub(super) fn revalidate_authority(
     finisher: &TargetFinisher<'_>,
     planned: &PlannedTarget,
     control: &TargetExecutionControl<'_>,
-    resolved: &ResolvedCargoResources,
+    resolved: &ResolvedResources,
 ) -> std::result::Result<(), TargetStop> {
     control.remaining()?;
     crate::repository::validate_current_repository_authority(
@@ -153,13 +156,13 @@ pub(super) fn revalidate_authority(
     )
     .map_err(|_| {
         TargetStop::Blocked(
-            "repository execution authority changed while awaiting a Cargo resource; plan again"
+            "repository execution authority changed while awaiting an execution resource; plan again"
                 .into(),
         )
     })?;
     if !resolved.same_identity(&resolve(finisher.ctx, planned, control)?) {
         return Err(TargetStop::Blocked(
-            "Cargo resource authority changed while waiting; plan again".into(),
+            "execution resource authority changed while waiting; plan again".into(),
         ));
     }
     control.remaining()?;
@@ -173,7 +176,7 @@ fn execute_admitted(
     control: &mut TargetExecutionControl<'_>,
     source_epoch: &mut ExecutionSourceEpoch,
     position: PhasePosition,
-    resolved: &ResolvedCargoResources,
+    resolved: &ResolvedResources,
     allow_reuse: bool,
 ) -> Result<(TargetRunResult, Option<Value>)> {
     let preparation = post_admission(finisher, planned, control, source_epoch, resolved);
@@ -227,7 +230,7 @@ fn finish_unstarted(
     finisher: &TargetFinisher<'_>,
     planned: &PlannedTarget,
     source_epoch: &ExecutionSourceEpoch,
-    resolved: &ResolvedCargoResources,
+    resolved: &ResolvedResources,
     stop: TargetStop,
 ) -> Result<(TargetRunResult, Option<Value>)> {
     let mut capture = stopped_before_start(planned, stop);
@@ -239,7 +242,7 @@ fn finish_unstarted(
     )
 }
 
-pub(super) fn explain_partial(capture: &mut TargetCapture, resolved: &ResolvedCargoResources) {
+pub(super) fn explain_partial(capture: &mut TargetCapture, resolved: &ResolvedResources) {
     if let Some(reason) = resolved.partial_reason {
         let message = format!("Cargo resource coordination is partial: {reason}");
         capture.stderr.push_str(&format!("{message}\n"));
@@ -257,7 +260,9 @@ fn fingerprint(
         control.remaining().is_err()
     })
     .map(|snapshot| snapshot.worktree_fingerprint)
-    .map_err(|_| "source authority could not be established within the Cargo target budget".into())
+    .map_err(|_| {
+        "source authority could not be established within the resource target budget".into()
+    })
 }
 
 struct BudgetedObservation<'a, 'b>(&'a mut TargetExecutionControl<'b>);

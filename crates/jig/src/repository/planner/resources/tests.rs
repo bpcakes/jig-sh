@@ -30,15 +30,116 @@ fn action() -> ActionSpec {
 }
 
 fn catalog(action: &ActionSpec) -> Result<RepositoryCatalog> {
+    catalog_at_version(action, 8)
+}
+
+fn catalog_at_version(action: &ActionSpec, version: u32) -> Result<RepositoryCatalog> {
     let profile = ProfileSpec::new("verify".parse().unwrap(), vec![action.target.clone()]);
     RepositoryCatalog::from_native(
-        8,
+        version,
         "example_digest",
         &[ComponentSpec::new("repo".parse().unwrap(), ".")],
         std::slice::from_ref(action),
         std::slice::from_ref(&profile),
         Some(&profile.id),
     )
+}
+
+#[test]
+fn browser_resources_allow_generic_readonly_wrappers_and_explicit_cargo_combination() {
+    let mut action = action();
+    action
+        .resources
+        .push(ExecutionResourceV1::PlaywrightServersV1 {});
+    for (version, runner) in [
+        (8, action.runner.clone()),
+        (7, ActionRunner::command("example_e2e_command")),
+        (
+            8,
+            ActionRunner::Shell {
+                command: "scripts/check-webapps.sh run-script example test:e2e".into(),
+                working_directory: None,
+                environment: BTreeMap::new(),
+            },
+        ),
+    ] {
+        action.runner = runner;
+        let catalog = catalog_at_version(&action, version).unwrap();
+        let plan = plan_run_with_source(
+            &catalog,
+            PlanRunRequest::default(),
+            SourceIdentity::new(None, "example_source"),
+        )
+        .unwrap();
+        assert_eq!(plan.targets[0].resources, action.resources);
+        assert!(plan.targets[0].depends_on.is_empty());
+    }
+    action.resources.remove(0);
+    assert!(
+        catalog(&action).is_ok(),
+        "browser-only wrapper needs no Cargo declaration"
+    );
+}
+
+#[test]
+fn browser_resources_reject_duplicates_typed_rust_and_effectful_actions() {
+    let mut browser = action();
+    browser.resources = vec![ExecutionResourceV1::PlaywrightServersV1 {}];
+    for change in 0..7 {
+        let mut invalid = browser.clone();
+        match change {
+            0 => invalid
+                .resources
+                .push(ExecutionResourceV1::PlaywrightServersV1 {}),
+            1 => {
+                invalid.runner = ActionRunner::RustNextestV1 {
+                    configuration: RustNextestConfigV1 {
+                        workspace_manifest: "Cargo.toml".into(),
+                        focused: false,
+                        context: Default::default(),
+                        cargo_profile: None,
+                        nextest_profile: None,
+                    },
+                }
+            }
+            2 => invalid.runner = ActionRunner::native(jig_contract::tool::CONTRACT_CHECK),
+            3 => invalid.effects.push(ActionEffect::Worktree),
+            4 => invalid.effects.push(ActionEffect::External),
+            5 => invalid.intent = ActionIntent::Generate,
+            6 => invalid.effects = vec![ActionEffect::ReadOnly],
+            _ => unreachable!(),
+        }
+        assert!(
+            catalog(&invalid).is_err(),
+            "accepted browser misuse {change}"
+        );
+    }
+}
+
+#[test]
+fn browser_declaration_changes_plan_and_input_authority_without_changing_dependencies() {
+    let mut action = action();
+    action.resources.clear();
+    let plan = |action: &ActionSpec| {
+        plan_run_with_source(
+            &catalog(action).unwrap(),
+            PlanRunRequest::default(),
+            SourceIdentity::new(None, "example_source"),
+        )
+        .unwrap()
+    };
+    let legacy = plan(&action);
+    action
+        .resources
+        .push(ExecutionResourceV1::PlaywrightServersV1 {});
+    let browser = plan(&action);
+    assert_ne!(legacy.id, browser.id);
+    assert_ne!(
+        legacy.targets[0].input_digest,
+        browser.targets[0].input_digest
+    );
+    assert_eq!(legacy.execution_layers, browser.execution_layers);
+    assert_eq!(legacy.targets[0].depends_on, browser.targets[0].depends_on);
 }
 
 #[test]
@@ -64,7 +165,10 @@ fn execution_resources_require_readonly_process_runners_and_bounded_unique_decla
         workspace_manifest,
         working_directory,
         ..
-    } = &mut alias;
+    } = &mut alias
+    else {
+        panic!("expected Cargo resource")
+    };
     *workspace_manifest = "./Cargo.toml".into();
     *working_directory = Some(".".into());
     duplicate.resources.push(alias);
@@ -90,7 +194,10 @@ fn execution_resource_paths_context_and_runner_directory_fail_closed() {
         let mut invalid = action();
         let ExecutionResourceV1::CargoV1 {
             workspace_manifest, ..
-        } = &mut invalid.resources[0];
+        } = &mut invalid.resources[0]
+        else {
+            panic!("expected Cargo resource")
+        };
         *workspace_manifest = path.into();
         assert!(catalog(&invalid).is_err(), "accepted {path:?}");
     }
@@ -98,12 +205,17 @@ fn execution_resource_paths_context_and_runner_directory_fail_closed() {
         let mut invalid = action();
         let ExecutionResourceV1::CargoV1 {
             working_directory, ..
-        } = &mut invalid.resources[0];
+        } = &mut invalid.resources[0]
+        else {
+            panic!("expected Cargo resource")
+        };
         *working_directory = Some(cwd.into());
         assert!(catalog(&invalid).is_err(), "accepted {cwd:?}");
     }
     let mut invalid = action();
-    let ExecutionResourceV1::CargoV1 { context, .. } = &mut invalid.resources[0];
+    let ExecutionResourceV1::CargoV1 { context, .. } = &mut invalid.resources[0] else {
+        panic!("expected Cargo resource")
+    };
     context.metadata_format_version = 2;
     assert!(catalog(&invalid).is_err());
     let mut nested = action();
@@ -111,7 +223,10 @@ fn execution_resource_paths_context_and_runner_directory_fail_closed() {
         workspace_manifest,
         working_directory,
         ..
-    } = &mut nested.resources[0];
+    } = &mut nested.resources[0]
+    else {
+        panic!("expected Cargo resource")
+    };
     *workspace_manifest = "example/Cargo.toml".into();
     *working_directory = Some("example".into());
     assert!(
@@ -139,7 +254,10 @@ fn typed_rust_resource_must_match_declared_runner_manifest_context_and_root() {
             workspace_manifest,
             working_directory,
             context,
-        } = &mut invalid.resources[0];
+        } = &mut invalid.resources[0]
+        else {
+            panic!("expected Cargo resource")
+        };
         match change {
             0 => *workspace_manifest = "example/Cargo.toml".into(),
             1 => *working_directory = Some("example".into()),
@@ -164,7 +282,9 @@ fn planned_resources_bind_plan_and_input_authority_without_dependency_edges() {
     assert!(planned.targets[0].depends_on.is_empty());
     assert_eq!(planned.execution_layers, vec![vec![action.target.clone()]]);
     let mut changed = action;
-    let ExecutionResourceV1::CargoV1 { context, .. } = &mut changed.resources[0];
+    let ExecutionResourceV1::CargoV1 { context, .. } = &mut changed.resources[0] else {
+        panic!("expected Cargo resource")
+    };
     context.offline = false;
     let updated = plan_run_with_source(
         &catalog(&changed).unwrap(),
@@ -199,13 +319,32 @@ fn planned_resources_bind_plan_and_input_authority_without_dependency_edges() {
 
 #[test]
 fn execution_resource_replay_and_manifest_authority_reject_changed_coordination() {
+    let action = action();
+    let mut resources = action.resources.clone();
+    let ExecutionResourceV1::CargoV1 { context, .. } = &mut resources[0] else {
+        panic!("expected Cargo resource");
+    };
+    context.offline = false;
+    assert_resource_authority_change(action, resources);
+}
+
+#[test]
+fn browser_resource_replay_and_manifest_authority_reject_removed_coordination() {
+    let mut action = action();
+    action.resources = vec![ExecutionResourceV1::PlaywrightServersV1 {}];
+    assert_resource_authority_change(action, Vec::new());
+}
+
+fn assert_resource_authority_change(
+    action: ActionSpec,
+    changed_resources: Vec<ExecutionResourceV1>,
+) {
     use crate::repository::planner::{plan_run_with_cancellation, validate_run_plan};
     use crate::{context::RepoContext, test_env::TestRepoBuilder};
     use std::{fs, process::Command};
 
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
-    let action = action();
     let repository = json!({
         "components":[{"id":"repo", "root":"."}],
         "actions":[action],
@@ -257,7 +396,7 @@ fn execution_resource_replay_and_manifest_authority_reject_changed_coordination(
         .unwrap()
         .invocation_digest
         .clone();
-    manifest["actions"][0]["resources"][0]["context"]["offline"] = json!(false);
+    manifest["actions"][0]["resources"] = json!(changed_resources);
     fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     assert!(
         RepoContext::load_from_root(root.to_path_buf()).is_err(),
@@ -267,8 +406,8 @@ fn execution_resource_replay_and_manifest_authority_reject_changed_coordination(
     let config_path = root.join(".jig.toml");
     let mut config: toml::Value =
         toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    config["repository"]["actions"][0]["resources"][0]["context"]["offline"] =
-        toml::Value::Boolean(false);
+    config["repository"]["actions"][0]["resources"] =
+        toml::Value::try_from(changed_resources).unwrap();
     fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
     let updated = RepoContext::load_from_root(root.to_path_buf()).unwrap();
     assert_ne!(ctx.contract_digest(), updated.contract_digest());

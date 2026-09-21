@@ -267,7 +267,10 @@ fn unavailable_authority_is_partial_and_conflicts_with_known_repo_guard() {
     let known = resolve_fixture(&ctx, &planned);
     let ExecutionResourceV1::CargoV1 {
         workspace_manifest, ..
-    } = &mut planned.resources[0];
+    } = &mut planned.resources[0]
+    else {
+        unreachable!()
+    };
     *workspace_manifest = "missing/Cargo.toml".into();
     let partial = resolve_fixture(&ctx, &planned);
     assert_eq!(

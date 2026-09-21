@@ -395,6 +395,14 @@ original receipt/run/plan and does not claim a new execution proof. See
 [Cargo resource coordination](cargo-resource-coordination.md) for supported
 aliases, partial coordination, deadline and ownership boundaries.
 
+The strict fieldless `playwright_servers_v1` resource variant explicitly opts an
+authored generic read-only runner into the generated Playwright environment
+contract. It owns individual loopback endpoints only without a trimmed nonempty
+`E2E_BASE_URL`, and shares the same admission/lease owner. Older runtimes reject
+the tag; omitted declarations keep prior behavior. See
+[browser endpoint coordination](browser-resource-coordination.md) for authority,
+compatibility, external URL and current-readiness limits.
+
 `jig.work_check` accepts optional `phase` (`iteration` or `final`), `explain`,
 and a `rust_focus` object keyed by canonical target strings. The CLI equivalent
 is `work check --phase iteration --rust-focus TARGET=JSON`. Work focus is legal

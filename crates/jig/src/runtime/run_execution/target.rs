@@ -246,7 +246,7 @@ pub(super) fn run_process_target(
         && lease.inherit_into(&mut command).is_err()
     {
         return TargetCapture::blocked(
-            "could not retain Cargo resource ownership in the target process",
+            "could not retain execution resource ownership in the target process",
         );
     }
     if matches!(

@@ -221,6 +221,9 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
             .env("RUN_COUNT", &run_count)
             .env("UNEXPECTED_INSTALL", &unexpected_install)
             .env("NODE_ENV", node_environment)
+            .env("E2E_WEB_PORT", "43711")
+            .env("E2E_API_PORT", "43712")
+            .env("E2E_BASE_URL", "https://example.invalid/browser")
             .env("NPM_CONFIG_OMIT", "dev optional peer")
             .env("NPM_CONFIG_INCLUDE", "prod")
             .env("NPM_CONFIG_PRODUCTION", "true")
@@ -313,6 +316,9 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
             &environment,
             &[
                 "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
+                "E2E_WEB_PORT=43711",
+                "E2E_API_PORT=43712",
+                "E2E_BASE_URL=https://example.invalid/browser",
                 "npm_config_install_strategy=nested",
                 "NPM_CONFIG_LEGACY_PEER_DEPS=true",
                 "NPM_CONFIG_STRICT_PEER_DEPS=true",

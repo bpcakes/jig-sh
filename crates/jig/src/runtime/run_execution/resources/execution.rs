@@ -13,7 +13,11 @@ pub(in crate::runtime::run_execution) fn reuse_candidate(
         .targets
         .iter()
         .any(|target| target.depends_on.contains(&planned.target));
-    if !allow_reuse || !terminal || !finisher.record_receipts {
+    if !allow_reuse
+        || !terminal
+        || !finisher.record_receipts
+        || crate::repository::execution_resources::has_browser_policy(planned)
+    {
         return Ok(None);
     }
     let Some(plan_id) = finisher.work_plan_id else {

@@ -2,7 +2,9 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
-use jig_contract::{ActionEffect, ActionIntent, ActionRunner, ActionSpec, ExecutionResourceV1};
+use jig_contract::{
+    ActionEffect, ActionIntent, ActionRunner, ActionSpec, CargoImpactContextV1, ExecutionResourceV1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::repository_path::normalize_portable_repo_path;
@@ -34,50 +36,81 @@ pub(in crate::repository) fn validate_declarations(action: &ActionSpec) -> Resul
         );
     }
     let mut seen = BTreeSet::new();
+    let mut browser_seen = false;
     for resource in &action.resources {
-        let ExecutionResourceV1::CargoV1 {
-            workspace_manifest,
-            working_directory,
-            context,
-        } = resource;
-        ensure!(
-            workspace_manifest.len() <= 4096,
-            "Cargo resource workspace_manifest is too long"
-        );
-        let manifest =
-            normalize_portable_repo_path(workspace_manifest, "Cargo resource workspace_manifest")?;
-        ensure!(
-            manifest.rsplit('/').next() == Some("Cargo.toml"),
-            "Cargo resource workspace_manifest must name Cargo.toml"
-        );
-        let cwd = working_directory.as_deref().unwrap_or(".");
-        ensure!(
-            cwd.len() <= 4096,
-            "Cargo resource working_directory is too long"
-        );
-        let cwd = normalize_portable_repo_path(cwd, "Cargo resource working_directory")?;
-        // Wrappers may explicitly declare the directory in which they invoke
-        // Cargo after changing directory; never infer it from shell text.
-        jig_rust::rust_focus::validate_context(context).map_err(anyhow::Error::msg)?;
-        if let ActionRunner::RustNextestV1 { configuration } = &action.runner {
-            ensure!(
-                manifest == configuration.workspace_manifest
-                    && context == &configuration.context
-                    && cwd == ".",
-                "Cargo resource must match the typed Rust runner manifest, context and repository-root working directory"
-            );
+        match resource {
+            ExecutionResourceV1::CargoV1 {
+                workspace_manifest,
+                working_directory,
+                context,
+            } => {
+                let identity = cargo_identity(
+                    action,
+                    workspace_manifest,
+                    working_directory.as_deref(),
+                    context,
+                )?;
+                ensure!(
+                    seen.insert(identity),
+                    "target '{}' has duplicate Cargo resource declarations",
+                    action.target
+                );
+            }
+            ExecutionResourceV1::PlaywrightServersV1 {} => {
+                ensure!(
+                    !matches!(action.runner, ActionRunner::RustNextestV1 { .. }),
+                    "target '{}' Playwright server resources require a generic process runner",
+                    action.target
+                );
+                ensure!(
+                    !browser_seen,
+                    "target '{}' has duplicate Playwright server resource declarations",
+                    action.target
+                );
+                browser_seen = true;
+            }
         }
-        let mut context = context.clone();
-        context.features.sort();
-        context.features.dedup();
-        let identity = serde_json::to_vec(&(manifest, cwd, context))?;
-        ensure!(
-            seen.insert(identity),
-            "target '{}' has duplicate Cargo resource declarations",
-            action.target
-        );
     }
     Ok(())
+}
+
+fn cargo_identity(
+    action: &ActionSpec,
+    workspace_manifest: &str,
+    working_directory: Option<&str>,
+    context: &CargoImpactContextV1,
+) -> Result<Vec<u8>> {
+    ensure!(
+        workspace_manifest.len() <= 4096,
+        "Cargo resource workspace_manifest is too long"
+    );
+    let manifest =
+        normalize_portable_repo_path(workspace_manifest, "Cargo resource workspace_manifest")?;
+    ensure!(
+        manifest.rsplit('/').next() == Some("Cargo.toml"),
+        "Cargo resource workspace_manifest must name Cargo.toml"
+    );
+    let cwd = working_directory.unwrap_or(".");
+    ensure!(
+        cwd.len() <= 4096,
+        "Cargo resource working_directory is too long"
+    );
+    let cwd = normalize_portable_repo_path(cwd, "Cargo resource working_directory")?;
+    // Wrappers may explicitly declare the directory in which they invoke
+    // Cargo after changing directory; never infer it from shell text.
+    jig_rust::rust_focus::validate_context(context).map_err(anyhow::Error::msg)?;
+    if let ActionRunner::RustNextestV1 { configuration } = &action.runner {
+        ensure!(
+            manifest == configuration.workspace_manifest
+                && context == &configuration.context
+                && cwd == ".",
+            "Cargo resource must match the typed Rust runner manifest, context and repository-root working directory"
+        );
+    }
+    let mut context = context.clone();
+    context.features.sort();
+    context.features.dedup();
+    Ok(serde_json::to_vec(&(manifest, cwd, context))?)
 }
 
 /// Bind declared inputs and repository-wide source, retaining legacy digests
