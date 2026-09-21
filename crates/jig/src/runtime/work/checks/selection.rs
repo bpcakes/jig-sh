@@ -14,6 +14,7 @@ pub(super) fn check_with_execution(
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
+    reject_native_tool_selectors(ctx, &opts)?;
     if !opts.gates.is_empty() {
         if !opts.tools.is_empty() {
             bail!("Work check accepts either gate ids or tool names, not both");
@@ -118,4 +119,39 @@ pub(super) fn check_with_execution(
         );
     }
     Ok(result)
+}
+
+fn reject_native_tool_selectors(ctx: &RepoContext, opts: &WorkCheckRequest) -> Result<()> {
+    for name in &opts.tools {
+        if ctx.tool_spec(name).is_some() {
+            continue;
+        }
+        let Ok(target) = name.parse::<jig_contract::TargetId>() else {
+            continue;
+        };
+        let launcher = ctx.root().join("scripts/jig");
+        let Some(launcher) = launcher.to_str() else {
+            bail!(
+                "{name} is a native target, not a legacy execution tool; inspect work check --help through this repository's launcher"
+            );
+        };
+        let launcher = crate::shell::quote(launcher);
+        let catalog = RepositoryCatalog::from_context(ctx)?;
+        if opts.tools.len() == 1
+            && opts.gates.is_empty()
+            && catalog
+                .action(&target)
+                .is_some_and(|action| action.intent == jig_contract::ActionIntent::Check)
+        {
+            bail!(
+                "{name} is a native target, not a legacy execution tool. Suggested retry (not executed):\n  {launcher} check {} --plan-id {}",
+                crate::shell::quote(name),
+                crate::shell::quote(&opts.plan_id),
+            );
+        }
+        bail!(
+            "{name} uses native target syntax, not a legacy execution tool name. The selection has no unambiguous equivalent; inspect supported selectors:\n  {launcher} work check --help"
+        );
+    }
+    Ok(())
 }

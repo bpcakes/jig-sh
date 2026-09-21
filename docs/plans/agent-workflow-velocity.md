@@ -30,12 +30,17 @@ explicit freshness inspection preserves standard shapes; six fresh gates and
 Prerequisite `jig-sh-9wcn.9` is complete in `b871f4e8`: the shared opt-in compact
 completion projection passed all six gates and 4,273 tests (three skips). Two P2
 native review findings were reproduced and fixed; the second review was clean.
-T-05's [bounded comparison](../benchmarks/work-inspection.md) found repeated proof
-indexing and source capture in eligible multi-plan status, but not single-plan
-compact inspection. Request-local retention reduces the 20-plan fixture from 20
-scans/captures to one, while preserving live revalidation and per-plan native
-authority. Implementation and focused regressions are ready for full validation
-and native review; task completion is not yet claimed.
+T-05 is complete in `3755c684`: its [bounded comparison](../benchmarks/work-inspection.md)
+found repeated proof indexing and source capture in eligible multi-plan status,
+but not single-plan compact inspection. Request-local retention reduces the
+20-plan fixture from 20 scans/captures to one while preserving live revalidation
+and per-plan native authority. All six gates were fresh, 4,278 tests passed
+(four skips), and native review was clean after 62 independent focused tests.
+T-06 is complete: non-executing CLI recovery preserves explicit plan identity,
+supported compact semantics, and the owning launcher. All six gates were fresh,
+4,292 tests passed (four skips), and native review cycle three was clean after
+two P2 findings were fixed. Recovery tests now execute the complete displayed
+command unchanged, including from another directory without a global Jig.
 The [measurement result](agent-workflow-velocity-measurements.md) selects Cargo
 admission, narrow opt-in browser endpoint ownership, and preservation of SQLx's
 existing per-invocation database connection guard rather than a duplicate preflight.

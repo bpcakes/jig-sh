@@ -5,14 +5,25 @@ pub(in crate::cli) fn parse_cli() -> Cli {
     let command_args = || args.iter().skip(1).cloned();
     let report_json_errors = args_request_json(command_args()) && !args_target_mcp(command_args());
 
-    match Cli::try_parse_from(args) {
+    match Cli::try_parse_from(&args) {
         Ok(cli) => {
             if let Some(error) = post_parse_usage_error(&cli) {
                 exit_with_cli_error(error, report_json_errors);
             }
             cli
         }
-        Err(error) => exit_with_cli_error(error, report_json_errors),
+        Err(error) => {
+            if let Some(hint) = super::workflow_recovery::hint(&args, &error) {
+                let message = format!("{}\n{hint}", augmented_cli_error_message(&error));
+                if report_json_errors {
+                    let _ = print_json(&json_error_payload("usage", &message, error.exit_code()));
+                } else {
+                    let _ = writeln!(std::io::stderr(), "{message}");
+                }
+                process::exit(error.exit_code());
+            }
+            exit_with_cli_error(error, report_json_errors)
+        }
     }
 }
 

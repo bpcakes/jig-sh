@@ -198,6 +198,9 @@ mod checks;
 #[cfg(unix)]
 #[path = "cli_json/foreground_cancellation.rs"]
 mod foreground_cancellation;
+#[cfg(unix)]
+#[path = "cli_json/workflow_recovery.rs"]
+mod workflow_recovery;
 
 #[test]
 fn info_commands_exposes_versioned_json_and_grouped_human_output() {

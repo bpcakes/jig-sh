@@ -770,6 +770,7 @@ fn dispatch_runtime_command(
 
 mod argument_parsing;
 mod freshness;
+mod workflow_recovery;
 pub(super) use argument_parsing::*;
 #[cfg(feature = "dev-proxy")]
 mod dev_launch;

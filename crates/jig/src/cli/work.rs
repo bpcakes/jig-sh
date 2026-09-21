@@ -24,6 +24,7 @@ Human-readable output is the default. Pass --json for structured automation outp
 Examples:
   jig work check --plan-id plan_abc123
   jig work check --plan-id plan_abc123 --json
+  jig work check --plan-id plan_abc123 --projection agent-v1 --json
   jig work check --plan-id plan_abc123 --tool jig.test";
 
 pub(super) const WORK_GATES_AFTER_HELP: &str = "\

@@ -628,6 +628,22 @@ Native task mutation is intentionally absent. A later `jig beads` writer must pr
 
 ## Work Gates
 
+Common usage errors include contextual recovery without executing a correction.
+`work start --description` points to `--body`; `work status --plan-id ID` points
+to that explicit plan's `work gates` inspection. `--summary` points to the existing
+`--projection agent-v1` only on commands supporting it, otherwise to scoped help.
+Top-level `contract` points to `check contract`. A single known check target
+passed to `work check --tool` points to `check COMPONENT:ACTION --plan-id ID`;
+ambiguous or unknown target/tool combinations point to selection help.
+CLI retries are parse-checked, checked against the existing info projection
+policy, and shell-quoted, with private launcher handoff arguments omitted.
+Launcher-backed retries and scoped help name the owning repository's absolute
+`scripts/jig` path, so they work without a global installation and from another
+directory. Direct CLI recovery preserves the invoked executable.
+Other invalid arguments still require attention; no active
+plan is guessed. These are diagnostic hints, not aliases or automatic retries.
+Standard error envelope fields and exit statuses remain unchanged.
+
 The explicit CLI `--projection agent-v1` option on `work check`, `work gates`,
 and `work evidence` selects a shared strict compact result. MCP selects the same
 result through `mcp --surface agent-v1`; work-tool input schemas do not change.
