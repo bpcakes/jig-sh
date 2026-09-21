@@ -386,5 +386,13 @@ while checking local object availability again; inspection performs no fetch.
 
 Dependency execution proof requires a nonempty, shared work-plan identity. A
 dependent run outside a work plan records incomplete gate proof. Archive frontier
-resolution scans once per dependency depth; deep-chain performance and aggregate
-multi-plan exhaustion have not been separately benchmarked.
+resolution scans once per dependency depth; deep-chain performance has not been
+separately benchmarked.
+
+Aggregate inspection retains at most one request-local proof/source observation
+for an identical plan-independent target graph and selected receipts. Each reuse
+revalidates journal, source and configuration guards and current time validity.
+Native actions and their dependents remain per-plan; no inspection result is a
+completion token. The [bounded inspection measurements](benchmarks/work-inspection.md)
+document physical scan counts, cold/warm timings, shared-budget limits and the
+absence of demonstrated duplicate work in single-plan compact inspection.

@@ -110,6 +110,7 @@ fn evaluate_gate_report(
             plan_state,
             plan_retirement,
             prepared_scope: plan_scope,
+            observations: &mut scoped_freshness::ScopedGateObservations::default(),
         },
         current_fingerprint,
         work_gates,
@@ -133,6 +134,7 @@ pub(super) fn evaluate_gate_report_from_index(
         plan_state,
         plan_retirement,
         prepared_scope,
+        observations,
     } = plan;
     let mut gates = Vec::new();
     let mut required_failures = RequiredGateFailures::default();
@@ -155,6 +157,7 @@ pub(super) fn evaluate_gate_report_from_index(
                     gates: &work_gates,
                     receipts: receipt_index,
                     whole_source_token: current_fingerprint.fingerprint.as_deref(),
+                    observations,
                 },
                 budget,
             )

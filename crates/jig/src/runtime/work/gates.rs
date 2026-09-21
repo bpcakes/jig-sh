@@ -667,6 +667,7 @@ pub(super) fn open_plan_snapshots_with_cancellation(
         CollectionLimits::with_timeout(Duration::from_millis(timeout_ms)),
         cancelled,
     );
+    let mut observations = scoped_freshness::ScopedGateObservations::default();
     for (plan_id, plan_scope) in scopes {
         ensure_gate_collection_active(cancelled)?;
         let index = indexes
@@ -679,6 +680,7 @@ pub(super) fn open_plan_snapshots_with_cancellation(
                 plan_state: "open",
                 plan_retirement: None,
                 prepared_scope: plan_scope,
+                observations: &mut observations,
             },
             current_fingerprint.clone(),
             work_gates.clone(),

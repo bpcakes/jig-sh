@@ -4,14 +4,14 @@ use jig_contract::freshness::{
 use jig_contract::{ActionRunner, NativeActionConfigurationV1, PlannedTarget, TargetId};
 
 use super::*;
-use crate::repository::freshness::proof::{
-    OriginalProofValidator, compare_current_identity, empty, unknown, unverified,
-};
+use crate::repository::freshness::proof::{compare_current_identity, empty, unknown, unverified};
 use crate::repository::freshness::{
-    CollectionBudget, CollectionFailure, CollectionResult, collect_target_identities_with_source,
-    revalidate_whole_source,
+    CollectionBudget, CollectionFailure, CollectionResult, revalidate_whole_source,
 };
-use crate::state::{OriginalReceiptIndex, TargetReceiptStatus};
+use crate::state::TargetReceiptStatus;
+
+mod observations;
+pub(super) use observations::ScopedGateObservations;
 
 pub(super) struct ScopedGateFreshness {
     pub(super) targets: BTreeMap<TargetId, TargetFreshness>,
@@ -24,6 +24,7 @@ pub(super) struct ScopedGateInputs<'a> {
     pub(super) gates: &'a [WorkGate],
     pub(super) receipts: &'a WorkGateReceiptIndex,
     pub(super) whole_source_token: Option<&'a str>,
+    pub(super) observations: &'a mut ScopedGateObservations,
 }
 
 impl ScopedGateFreshness {
@@ -39,6 +40,7 @@ impl ScopedGateFreshness {
             gates,
             receipts,
             whole_source_token,
+            observations,
         } = inputs;
         let mut required = BTreeSet::new();
         let mut selected: BTreeMap<TargetId, &TargetReceiptStatus> = BTreeMap::new();
@@ -60,38 +62,23 @@ impl ScopedGateFreshness {
             let proof_started = std::time::Instant::now();
             let invocations =
                 default_invocations(ctx, catalog, &required, plan_id, baseline, budget)?;
-            let originals = OriginalReceiptIndex::open_for_work_reuse(
-                &ctx.state_file("receipts.jsonl"),
-                plan_id,
-                &crate::repository::plan_independent_targets(catalog, &required),
-                budget,
-            )?;
-            let mut validator =
-                OriginalProofValidator::for_work_reuse(originals, crate::state::now_ms());
-            let mut targets = BTreeMap::new();
-            for target in &required {
-                budget.ensure_active()?;
-                let evaluation = if let Some(receipt) = selected.get(target) {
-                    validator.evaluate_original(receipt, budget)
-                } else {
-                    missing()
-                };
-                targets.insert(target.clone(), evaluation);
-            }
             budget.stats.proof_us += proof_started.elapsed().as_micros() as u64;
-            // Resolve every original before observing current source. The
-            // collector's final source revalidation then follows all journal
-            // I/O; no second complete Git/source scan is needed after lookup.
-            let identities = collect_target_identities_with_source(
+            let observation = observations.observe(
                 ctx,
                 catalog,
-                &invocations,
-                whole_source_token,
+                observations::Request {
+                    plan_id,
+                    required: &required,
+                    selected: &selected,
+                    invocations: &invocations,
+                    whole_source_token,
+                },
                 budget,
             )?;
+            let mut targets = observation.original_targets.clone();
             for (target, result) in &mut targets {
                 budget.ensure_active()?;
-                let expected = identities.targets.get(target).ok_or_else(|| {
+                let expected = observation.identities.targets.get(target).ok_or_else(|| {
                     CollectionFailure::new(
                         FreshnessReasonCode::CollectionFailed,
                         "current required target identity is missing",
@@ -106,7 +93,7 @@ impl ScopedGateFreshness {
                 }
             }
             revalidate_whole_source(ctx, catalog, &invocations, whole_source_token, budget)?;
-            validator.revalidate(budget)?;
+            observation.originals.revalidate(budget)?;
             let now = crate::state::now_ms();
             for result in targets.values_mut() {
                 budget.ensure_active()?;

@@ -10,6 +10,7 @@ use crate::repository::freshness::{CollectionBudget, CollectionLimits, collect_t
 mod compact;
 mod cross_plan;
 mod native;
+mod observations;
 mod recovery;
 mod selected_gates;
 mod worktree;
