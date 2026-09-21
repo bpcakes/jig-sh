@@ -9,7 +9,7 @@ fn final_phase_reloads_pre_v6_authority_between_legacy_checks() {
         .unwrap()
         .replace(
             "first_check_command = \"printf 'first ran\\n'\"",
-            "first_check_command = \"sed -i 's/second ran/replacement ran/' .jig.toml; printf 'first ran\\n' >> .agent/launch.log\"",
+            "first_check_command = \"sed 's/second ran/replacement ran/' .jig.toml > .jig.toml.next && mv .jig.toml.next .jig.toml && printf 'first ran\\n' >> .agent/launch.log\"",
         )
         .replace(
             "mutating_check_command = \"printf 'generated\\n' > generated.txt\"",

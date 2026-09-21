@@ -355,6 +355,7 @@ fn running_metadata_timeout_and_cancellation_are_terminal() {
 #[test]
 fn prepared_nextest_features_override_declared_context_without_splitting_claims() {
     let (temp, _, mut planned) = fixture();
+    let root = fs::canonicalize(temp.path()).unwrap();
     let configuration = RustNextestConfigV1 {
         workspace_manifest: "Cargo.toml".into(),
         focused: true,
@@ -368,7 +369,7 @@ fn prepared_nextest_features_override_declared_context_without_splitting_claims(
     planned.runner = ActionRunner::RustNextestV1 { configuration };
     planned.prepared_rust_input = Some(prepared);
     let command = metadata_command(
-        temp.path(),
+        &root,
         &planned,
         "Cargo.toml",
         None,
