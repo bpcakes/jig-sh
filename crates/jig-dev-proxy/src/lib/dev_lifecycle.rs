@@ -329,6 +329,8 @@ fn replace_refuses_an_unregistered_live_process_route() {
 
     assert!(error.contains("not attributable to a registered Jig dev session"));
     assert!(error.contains("will not terminate an unregistered or ad-hoc process"));
+    assert!(error.contains("jig proxy prune --state-dir PATH"));
+    assert!(error.contains(&store.root().display().to_string()));
     assert!(error.contains(&owner_pid.to_string()));
     assert!(error.contains("127.0.0.1:4005"));
     assert_eq!(store.read_routes(false).unwrap().len(), 1);

@@ -45,11 +45,12 @@ impl ClaimConflicts {
                 .map(|pid| pid.to_string())
                 .unwrap_or_else(|| "<unknown>".into());
             return anyhow!(
-                "Proxy route '{}' would replace a live process route owned by PID {} and targeting {}:{}, but that route is not attributable to a registered Jig dev session. `jig dev --replace` will not terminate an unregistered or ad-hoc process. Stop that process, run `jig proxy prune`, or change the duplicate hostname.",
+                "Proxy route '{}' would replace a live process route owned by PID {} and targeting {}:{}, but that route is not attributable to a registered Jig dev session. `jig dev --replace` will not terminate an unregistered or ad-hoc process. Stop that process, run `jig proxy prune --state-dir PATH` using state directory {}, or change the duplicate hostname.",
                 route.hostname,
                 owner,
                 route.target_host,
-                route.target_port
+                route.target_port,
+                state_dir.display()
             );
         }
         let hosts = conflict_hostnames(&self.same_repo);
