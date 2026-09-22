@@ -32,8 +32,29 @@ impl ClaimConflicts {
     pub(super) fn launch_error(&self, replacing: bool, state_dir: &Path) -> anyhow::Error {
         if let Some((hostname, session)) = self.other_repos.first() {
             let activity = claim_activity(session);
+            let additional = self
+                .other_repos
+                .iter()
+                .skip(1)
+                .map(|(hostname, session)| {
+                    format!(
+                        "hostname '{hostname}', session '{}' from repository {} ({})",
+                        session.session_id,
+                        session.repo_root_display,
+                        claim_activity(session)
+                    )
+                })
+                .collect::<Vec<_>>();
+            let additional = if additional.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Additional cross-repository claims: {}.",
+                    additional.join("; ")
+                )
+            };
             return anyhow!(
-                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}). Cross-repository ownership remains reserved until that exact session is explicitly cleaned up; `jig dev --replace` will not take it over. Inspect the session from its repository with `jig dev status --state-dir PATH`, using state directory {}, or change the duplicate hostname.",
+                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}).{additional} Cross-repository ownership remains reserved until each exact session is explicitly cleaned up; `jig dev --replace` will not take it over. When an owning repository root still exists, inspect from that repository with `jig dev status --state-dir PATH`, using state directory {}; otherwise change the duplicate hostname.",
                 session.session_id,
                 session.repo_root_display,
                 state_dir.display(),

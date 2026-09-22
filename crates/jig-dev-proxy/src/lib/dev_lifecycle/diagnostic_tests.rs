@@ -85,6 +85,75 @@ fn replace_refuses_cross_repo_route_ownership() {
 }
 
 #[test]
+fn cross_repo_conflict_reports_every_overlapping_session() {
+    let temp = tempdir().unwrap();
+    let roots = ["ExampleProjectA", "ExampleProjectB", "ExampleProjectC"]
+        .map(|name| temp.path().join(name));
+    for root in &roots {
+        std::fs::create_dir_all(root).unwrap();
+    }
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let first = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "ExampleProjectA",
+        &roots[0],
+        &[lifecycle_spec(
+            &roots[0],
+            "web",
+            "web.example.localhost",
+            true,
+        )],
+        false,
+    )
+    .unwrap();
+    let second = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "ExampleProjectB",
+        &roots[1],
+        &[lifecycle_spec(
+            &roots[1],
+            "api",
+            "api.example.localhost",
+            true,
+        )],
+        false,
+    )
+    .unwrap();
+    let ids = store
+        .snapshot_dev_state()
+        .unwrap()
+        .sessions
+        .into_iter()
+        .map(|session| session.session_id)
+        .collect::<Vec<_>>();
+
+    let error = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "ExampleProjectC",
+        &roots[2],
+        &[
+            lifecycle_spec(&roots[2], "web", "web.example.localhost", true),
+            lifecycle_spec(&roots[2], "api", "api.example.localhost", true),
+        ],
+        true,
+    )
+    .err()
+    .expect("both cross-repository claims block replacement")
+    .to_string();
+
+    for id in &ids {
+        assert!(error.contains(id), "missing claimant {id}: {error}");
+    }
+    assert!(error.contains("web.example.localhost"));
+    assert!(error.contains("api.example.localhost"));
+    assert!(error.contains("Additional cross-repository claims"));
+    assert!(error.contains(&store.root().display().to_string()));
+    assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 2);
+    drop(second);
+    drop(first);
+}
+
+#[test]
 fn dead_cross_repo_claim_reports_exact_cleanup_without_changing_state() {
     let temp = tempdir().unwrap();
     let repo_a = temp.path().join("ExampleProject");
