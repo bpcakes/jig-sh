@@ -53,17 +53,12 @@ impl ClaimConflicts {
                     additional.join("; ")
                 )
             };
-            let same_repo = self
-                .same_repo
-                .iter()
-                .map(|session| session.session_id.as_str())
-                .collect::<Vec<_>>();
-            let same_repo = if same_repo.is_empty() {
+            let same_repo = if self.same_repo.is_empty() {
                 String::new()
             } else {
                 format!(
-                    " Same-repository session claim IDs: {}.",
-                    same_repo.join(", ")
+                    " Same-repository blocking claim(s): {}.",
+                    self.same_repo_claim_details()
                 )
             };
             let unmanaged = self
@@ -105,17 +100,12 @@ impl ClaimConflicts {
                     other_routes.join(", ")
                 )
             };
-            let same_repo = self
-                .same_repo
-                .iter()
-                .map(|session| session.session_id.as_str())
-                .collect::<Vec<_>>();
-            let same_repo = if same_repo.is_empty() {
+            let same_repo = if self.same_repo.is_empty() {
                 String::new()
             } else {
                 format!(
-                    " Same-repository session claim IDs: {}.",
-                    same_repo.join(", ")
+                    " Same-repository blocking claim(s): {}.",
+                    self.same_repo_claim_details()
                 )
             };
             return anyhow!(
@@ -128,7 +118,31 @@ impl ClaimConflicts {
             );
         }
         let hosts = conflict_hostnames(&self.same_repo);
-        let claim_details = self
+        let claim_details = self.same_repo_claim_details();
+        if replacing {
+            anyhow!(
+                "The registered Jig dev session for {} could not be replaced safely. Blocking claim(s): {claim_details}. Inspect with `jig dev status --state-dir PATH` using state directory {}.",
+                hosts.join(", "),
+                state_dir.display(),
+            )
+        } else {
+            anyhow!(
+                "A registered Jig dev session from this repository already claims {}. Blocking claim(s): {claim_details}. Inspect with `jig dev status --state-dir PATH` or explicitly clean up with `jig dev stop --state-dir PATH`, using state directory {}; otherwise retry with `jig dev --replace`.",
+                hosts.join(", "),
+                state_dir.display(),
+            )
+        }
+    }
+
+    pub(super) fn concurrent_launch_error(&self, state_dir: &Path) -> anyhow::Error {
+        anyhow!(
+            "A concurrent Jig dev launch claimed the requested app or hostname while replacement was completing. No newly observed session was stopped. {}",
+            self.launch_error(false, state_dir)
+        )
+    }
+
+    fn same_repo_claim_details(&self) -> String {
+        let detailed = self
             .same_repo
             .iter()
             .take(8)
@@ -141,34 +155,14 @@ impl ClaimConflicts {
             .skip(8)
             .map(|session| session.session_id.as_str())
             .collect::<Vec<_>>();
-        let more = if remaining_ids.is_empty() {
-            String::new()
+        if remaining_ids.is_empty() {
+            detailed
         } else {
             format!(
-                "; additional blocker IDs (inspect status for their activity and retention reasons): {}",
+                "{detailed}; additional blocker IDs (inspect status for their activity and retention reasons): {}",
                 remaining_ids.join(", ")
             )
-        };
-        if replacing {
-            anyhow!(
-                "The registered Jig dev session for {} could not be replaced safely. Blocking claim(s): {claim_details}{more}. Inspect with `jig dev status --state-dir PATH` using state directory {}.",
-                hosts.join(", "),
-                state_dir.display(),
-            )
-        } else {
-            anyhow!(
-                "A registered Jig dev session from this repository already claims {}. Blocking claim(s): {claim_details}{more}. Inspect with `jig dev status --state-dir PATH` or explicitly clean up with `jig dev stop --state-dir PATH`, using state directory {}; otherwise retry with `jig dev --replace`.",
-                hosts.join(", "),
-                state_dir.display(),
-            )
         }
-    }
-
-    pub(super) fn concurrent_launch_error(&self, state_dir: &Path) -> anyhow::Error {
-        anyhow!(
-            "A concurrent Jig dev launch claimed the requested app or hostname while replacement was completing. No newly observed session was stopped. {}",
-            self.launch_error(false, state_dir)
-        )
     }
 }
 
@@ -444,6 +438,7 @@ mod tests {
         let cross_error = conflicts.launch_error(false, state_dir).to_string();
         assert!(cross_error.contains("dev_example_cross"));
         assert!(cross_error.contains("dev_example_same"));
+        assert!(cross_error.contains("Same-repository blocking claim(s): 'dev_example_same' (activity none; cleanup required true"));
         assert!(cross_error.contains("unmanaged.example.localhost"));
         assert!(cross_error.contains(&state_dir.display().to_string()));
 
@@ -451,6 +446,7 @@ mod tests {
         let unmanaged_error = conflicts.launch_error(false, state_dir).to_string();
         assert!(unmanaged_error.contains("unmanaged.example.localhost"));
         assert!(unmanaged_error.contains("dev_example_same"));
+        assert!(unmanaged_error.contains("Same-repository blocking claim(s): 'dev_example_same' (activity none; cleanup required true"));
         assert!(unmanaged_error.contains(&state_dir.display().to_string()));
     }
 }
