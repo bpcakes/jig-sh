@@ -1,0 +1,1 @@
+Planning-only delivery: create a canonical implementation plan and one Beads epic with scoped tasks, acceptance criteria, and dependency edges. Validate plan structure, tracker graph, and sanitized Beads export. No runtime implementation or private proxy-state mutation.
