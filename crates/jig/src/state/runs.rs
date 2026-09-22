@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
 use jig_contract::{
     Finding, FindingSeverity, RunConclusion, RunPlan, RunResult, RunStatus, TargetId,
@@ -31,6 +31,7 @@ use super::{
         GzipWriteReport, decompress_gzip_to_temp, remove_invalid_gzip, write_gzip_atomic,
     },
 };
+use lifecycle::validate_run_plan_structure;
 
 const RUNS_FILE: &str = "runs.jsonl";
 const RUN_LEASE_DIR: &str = ".agent/.cache/run-leases";
@@ -165,63 +166,6 @@ pub(crate) fn start_run_with_event_cursor_and_execution_lease(
     Ok((run, lease, event_cursor))
 }
 
-fn validate_run_plan_structure(plan: &RunPlan) -> Result<()> {
-    let planned_targets = plan
-        .targets
-        .iter()
-        .map(|target| target.target.clone())
-        .collect::<BTreeSet<_>>();
-    if planned_targets.len() != plan.targets.len() {
-        bail!("run plan contains duplicate targets");
-    }
-
-    let mut target_layers = BTreeMap::<TargetId, usize>::new();
-    for (layer_index, layer) in plan.execution_layers.iter().enumerate() {
-        if layer.is_empty() {
-            bail!("run plan execution layer {layer_index} is empty");
-        }
-        for target in layer {
-            if !planned_targets.contains(target) {
-                bail!("run plan execution layers reference unknown target '{target}'");
-            }
-            if target_layers.insert(target.clone(), layer_index).is_some() {
-                bail!("run plan execution layers contain duplicate target '{target}'");
-            }
-        }
-    }
-
-    let missing = planned_targets
-        .iter()
-        .filter(|target| !target_layers.contains_key(*target))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        bail!(
-            "run plan execution layers omit planned target(s): {}",
-            missing.join(", ")
-        );
-    }
-
-    for target in &plan.targets {
-        let target_layer = target_layers[&target.target];
-        for dependency in &target.depends_on {
-            let dependency_layer = target_layers.get(dependency).ok_or_else(|| {
-                anyhow!(
-                    "run plan target '{}' depends on missing target '{dependency}'",
-                    target.target
-                )
-            })?;
-            if *dependency_layer >= target_layer {
-                bail!(
-                    "run plan target '{}' must execute after dependency '{dependency}'",
-                    target.target
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
 fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
     let file = open_run_lease(ctx, run_id)?;
     file.lock_exclusive()
@@ -282,11 +226,12 @@ fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<File> {
 }
 
 fn run_lease_path(ctx: &RepoContext, run_id: &str) -> Result<std::path::PathBuf> {
+    run_lease_path_for_root(ctx.root(), run_id)
+}
+
+fn run_lease_path_for_root(root: &Path, run_id: &str) -> Result<std::path::PathBuf> {
     validate_run_id_for_lease(run_id)?;
-    Ok(ctx
-        .root()
-        .join(RUN_LEASE_DIR)
-        .join(format!("{run_id}.lock")))
+    Ok(root.join(RUN_LEASE_DIR).join(format!("{run_id}.lock")))
 }
 
 fn validate_run_id_for_lease(run_id: &str) -> Result<()> {
@@ -302,7 +247,11 @@ fn validate_run_id_for_lease(run_id: &str) -> Result<()> {
 }
 
 fn run_lease_is_idle(ctx: &RepoContext, run_id: &str) -> Result<bool> {
-    let path = run_lease_path(ctx, run_id)?;
+    run_lease_is_idle_at_root(ctx.root(), run_id)
+}
+
+fn run_lease_is_idle_at_root(root: &Path, run_id: &str) -> Result<bool> {
+    let path = run_lease_path_for_root(root, run_id)?;
     let file = match OpenOptions::new().read(true).write(true).open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
@@ -829,8 +778,11 @@ fn target_result_mut<'a>(
 }
 
 mod archive;
+mod lease_inventory;
+pub(super) mod lifecycle;
 pub(crate) use archive::runs_archive;
 pub(super) use archive::{ensure_run_stream_replaceable, validate_run_stream};
+pub(in crate::state) use lease_inventory::active_run_lease_ids;
 
 #[cfg(test)]
 mod tests;

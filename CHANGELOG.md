@@ -10,6 +10,26 @@
 - Advance the default branch to the next patch `-dev` version after a successful
   automated release, while allowing the release workflow to promote the current
   development version to its stable counterpart.
+### Fixed
+
+- `jig state diagnose --deep` now detects receipts whose run history is
+  unavailable. Deep diagnosis joins receipt `run_id` values and child receipts
+  named by `jig.work_check_targets/v1` and `jig.work_check/v2` batch evidence to
+  the active run journal, verified run archives, and manifested run backups, and
+  reports each affected run with its child and batch receipt IDs, explicit
+  counts, and truncation flags. Findings distinguish missing, unverifiable,
+  inconsistent, and backup-recoverable history; live, completed, and verified
+  archived lifecycles are never labeled orphans, and a failed or truncated scan
+  reports `incomplete` instead of `clean`. Shallow mode discloses that linkage
+  was not checked, `ok` reports command completion only, and the new
+  `integrity` object plus human summary separate integrity findings from
+  command success. Recovery guidance is read-only: export affected receipts and
+  record a decision naming the affected IDs, or restore a verified exact backup
+  after preserving newer appends; nothing fabricates run events.
+- Run archive and restore validation now applies the runtime's complete queued
+  plan-structure contract, including execution-layer coverage and dependency
+  ordering. Structurally invalid hand-edited or cross-version run journals are
+  rejected before archival or replacement.
 
 ## v0.4.0 - 2026-09-18
 

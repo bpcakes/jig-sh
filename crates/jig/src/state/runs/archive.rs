@@ -1,3 +1,8 @@
+use std::collections::BTreeSet;
+
+use anyhow::anyhow;
+
+use super::lifecycle::{RunLifecycleValidator, RunStreamValidator};
 use super::*;
 
 #[cfg(test)]
@@ -13,162 +18,14 @@ pub(super) fn corrupt_next_run_archive_after_publish() {
     CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH.with(|corrupt| corrupt.set(true));
 }
 
-#[derive(Default)]
-struct RunArchiveLifecycle {
-    event_count: usize,
-    known_event_count: usize,
-    queued: bool,
-    work_plan_id: Option<String>,
-    planned_targets: BTreeSet<TargetId>,
-    completed_targets: BTreeSet<TargetId>,
-    completed_at_ms: Option<u64>,
-}
-
-impl RunArchiveLifecycle {
-    fn observe(&mut self, event: &RunEventRecord) -> Result<()> {
-        let known = matches!(
-            event.event.as_str(),
-            EVENT_QUEUED
-                | EVENT_RUNNING
-                | EVENT_TARGET_STARTED
-                | EVENT_TARGET_COMPLETED
-                | EVENT_COMPLETED
-                | EVENT_CANCEL_REQUESTED
-        );
-        if known {
-            validate_run_id_for_lease(&event.run_id)?;
-        }
-        if event.event == EVENT_QUEUED {
-            if self.queued || self.known_event_count > 0 {
-                bail!(
-                    "run '{}' has more than one or a late queued event",
-                    event.run_id
-                );
-            }
-            let plan = event
-                .plan
-                .as_ref()
-                .ok_or_else(|| anyhow!("run '{}' queued event has no plan", event.run_id))?;
-            self.planned_targets = plan
-                .targets
-                .iter()
-                .map(|target| target.target.clone())
-                .collect();
-            if self.planned_targets.len() != plan.targets.len() {
-                bail!("run '{}' plan contains duplicate targets", event.run_id);
-            }
-            self.queued = true;
-            self.work_plan_id.clone_from(&event.work_plan_id);
-        } else if known && !self.queued {
-            bail!(
-                "run '{}' has a {} event before queued",
-                event.run_id,
-                event.event
-            );
-        }
-        match event.event.as_str() {
-            EVENT_TARGET_STARTED => {
-                let target = event.target.as_ref().ok_or_else(|| {
-                    anyhow!("run '{}' target_started event has no target", event.run_id)
-                })?;
-                if !self.planned_targets.contains(target) {
-                    bail!(
-                        "run '{}' references unplanned target '{target}'",
-                        event.run_id
-                    );
-                }
-                if self.completed_targets.contains(target) {
-                    bail!(
-                        "run '{}' target '{target}' started after completion",
-                        event.run_id
-                    );
-                }
-            }
-            EVENT_TARGET_COMPLETED => {
-                let result = event.result.as_ref().ok_or_else(|| {
-                    anyhow!(
-                        "run '{}' target_completed event has no result",
-                        event.run_id
-                    )
-                })?;
-                if event.target.as_ref() != Some(&result.target) {
-                    bail!(
-                        "run '{}' target_completed identity does not match its result",
-                        event.run_id
-                    );
-                }
-                if !self.planned_targets.contains(&result.target) {
-                    bail!(
-                        "run '{}' references unplanned target '{}'",
-                        event.run_id,
-                        result.target
-                    );
-                }
-                if result.status != RunStatus::Completed || result.conclusion.is_none() {
-                    bail!(
-                        "run '{}' target '{}' has a nonterminal result",
-                        event.run_id,
-                        result.target
-                    );
-                }
-                if !self.completed_targets.insert(result.target.clone()) {
-                    bail!(
-                        "run '{}' target '{}' completed more than once",
-                        event.run_id,
-                        result.target
-                    );
-                }
-            }
-            EVENT_COMPLETED => {
-                if self.completed_targets != self.planned_targets {
-                    bail!(
-                        "run '{}' completed before every target reached a conclusion",
-                        event.run_id
-                    );
-                }
-                if event.conclusion.is_none() {
-                    bail!("run '{}' completed event has no conclusion", event.run_id);
-                }
-                if self.completed_at_ms.replace(event.timestamp_ms).is_some() {
-                    bail!("run '{}' has more than one completed event", event.run_id);
-                }
-                self.planned_targets.clear();
-                self.completed_targets.clear();
-            }
-            _ => {}
-        }
-        if self.completed_at_ms.is_some()
-            && known
-            && !matches!(
-                event.event.as_str(),
-                EVENT_COMPLETED | EVENT_CANCEL_REQUESTED
-            )
-        {
-            bail!(
-                "run '{}' has a {} event after completion",
-                event.run_id,
-                event.event
-            );
-        }
-        if known {
-            self.known_event_count = self.known_event_count.saturating_add(1);
-        }
-        self.event_count = self.event_count.saturating_add(1);
-        Ok(())
-    }
-}
-
 fn scan_run_archive_lifecycles(
     path: &Path,
     mut scan: impl FnMut(&mut dyn FnMut(RawJsonlRecord<'_>) -> Result<()>) -> Result<bool>,
-) -> Result<BTreeMap<String, RunArchiveLifecycle>> {
-    let mut lifecycles = BTreeMap::<String, RunArchiveLifecycle>::new();
+) -> Result<BTreeMap<String, RunLifecycleValidator>> {
+    let mut validator = RunStreamValidator::default();
     let mut observe = |raw: RawJsonlRecord<'_>| {
         let event = parse_run_event(raw, path)?;
-        lifecycles
-            .entry(event.run_id.clone())
-            .or_default()
-            .observe(&event)
+        validator.observe(&event)
     };
     if scan(&mut observe)? {
         bail!(
@@ -176,12 +33,7 @@ fn scan_run_archive_lifecycles(
             path.display()
         );
     }
-    for (run_id, lifecycle) in &lifecycles {
-        if lifecycle.known_event_count > 0 && !lifecycle.queued {
-            bail!("run '{run_id}' has no queued event");
-        }
-    }
-    Ok(lifecycles)
+    validator.finish()
 }
 
 pub(in crate::state) fn validate_run_stream(path: &Path) -> Result<()> {
@@ -203,9 +55,7 @@ pub(in crate::state) fn ensure_run_stream_replaceable(
     })?;
     let nonterminal_run_ids = lifecycles
         .iter()
-        .filter(|(_, lifecycle)| {
-            lifecycle.known_event_count > 0 && lifecycle.completed_at_ms.is_none()
-        })
+        .filter(|(_, lifecycle)| lifecycle.known_event_count() > 0 && !lifecycle.completed())
         .map(|(run_id, _)| run_id.as_str())
         .collect::<Vec<_>>();
     if !nonterminal_run_ids.is_empty() {
@@ -220,49 +70,13 @@ pub(in crate::state) fn ensure_run_stream_replaceable(
     // journal. In that case a live worker's stable lease may no longer have a
     // corresponding queued event to discover above, so inspect every owned
     // lease file as well as every lifecycle represented by current state.
-    let mut lease_run_ids = lifecycles.keys().cloned().collect::<BTreeSet<_>>();
-    let lease_dir = ctx.root().join(RUN_LEASE_DIR);
-    match fs::read_dir(&lease_dir) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry.with_context(|| {
-                    format!(
-                        "Failed to inspect run lease directory {}",
-                        lease_dir.display()
-                    )
-                })?;
-                let name = entry.file_name().into_string().map_err(|_| {
-                    anyhow!(
-                        "Run lease directory {} contains a non-UTF-8 entry",
-                        lease_dir.display()
-                    )
-                })?;
-                let Some(run_id) = name.strip_suffix(".lock") else {
-                    continue;
-                };
-                validate_run_id_for_lease(run_id)?;
-                lease_run_ids.insert(run_id.to_owned());
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "Failed to inspect run lease directory {}",
-                    lease_dir.display()
-                )
-            });
-        }
-    }
-
-    let mut active_run_ids = Vec::new();
-    for run_id in &lease_run_ids {
-        if !run_lease_is_idle(ctx, run_id)? {
-            active_run_ids.push(run_id.as_str());
-        }
-    }
+    let active_run_ids = active_run_lease_ids(ctx.root(), lifecycles.keys().cloned())?;
     if !active_run_ids.is_empty() {
-        let (preview, suffix) = run_id_preview(&active_run_ids);
+        let active_run_id_refs = active_run_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let (preview, suffix) = run_id_preview(&active_run_id_refs);
         bail!(
             "Refusing to restore run state while {} active worker lease(s) remain ({preview}{suffix}); wait for the run workers to exit before retrying",
             active_run_ids.len()
@@ -294,9 +108,7 @@ fn reconcile_abandoned_runs_before_archive(ctx: &RepoContext, path: &Path) -> Re
     })?;
     let nonterminal_run_ids = lifecycles
         .into_iter()
-        .filter(|(_, lifecycle)| {
-            lifecycle.known_event_count > 0 && lifecycle.completed_at_ms.is_none()
-        })
+        .filter(|(_, lifecycle)| lifecycle.known_event_count() > 0 && !lifecycle.completed())
         .map(|(run_id, _)| run_id)
         .collect::<Vec<_>>();
     nonterminal_run_ids
@@ -329,7 +141,7 @@ fn validate_run_archive_artifact(
     })?;
     let restored_event_count = lifecycles.values().try_fold(0usize, |count, lifecycle| {
         count
-            .checked_add(lifecycle.event_count)
+            .checked_add(lifecycle.event_count())
             .context("Run archive event count overflow")
     })?;
     if restored_report.uncompressed_bytes != artifact.uncompressed_bytes
@@ -401,9 +213,7 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
         })?;
         let nonterminal_run_ids = lifecycles
             .iter()
-            .filter(|(_, lifecycle)| {
-                lifecycle.known_event_count > 0 && lifecycle.completed_at_ms.is_none()
-            })
+            .filter(|(_, lifecycle)| lifecycle.known_event_count() > 0 && !lifecycle.completed())
             .map(|(run_id, _)| run_id.as_str())
             .collect::<Vec<_>>();
         let nonterminal_runs = nonterminal_run_ids.len();
@@ -419,12 +229,11 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
         let mut run_events_archived = 0usize;
         for (run_id, lifecycle) in &lifecycles {
             if lifecycle
-                .completed_at_ms
+                .completed_at_ms()
                 .is_some_and(|ended| ended < before_ms)
             {
                 if lifecycle
-                    .work_plan_id
-                    .as_ref()
+                    .work_plan_id()
                     .is_some_and(|plan_id| open_plan_ids.contains(plan_id))
                 {
                     protected_runs_retained = protected_runs_retained.saturating_add(1);
@@ -436,7 +245,8 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
                     active_run_leases_retained = active_run_leases_retained.saturating_add(1);
                 } else {
                     archived_run_ids.insert(run_id.clone());
-                    run_events_archived = run_events_archived.saturating_add(lifecycle.event_count);
+                    run_events_archived =
+                        run_events_archived.saturating_add(lifecycle.event_count());
                 }
             }
         }
@@ -444,7 +254,7 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
         let runs_archived = archived_run_ids.len();
         let runs_retained = lifecycles.len().saturating_sub(runs_archived);
         let run_event_count_before = lifecycles.values().fold(0usize, |count, lifecycle| {
-            count.saturating_add(lifecycle.event_count)
+            count.saturating_add(lifecycle.event_count())
         });
         // Lease files are non-authoritative cache state. Once a terminal run's
         // lease is idle, no execution or inspection path opens it again. Remove

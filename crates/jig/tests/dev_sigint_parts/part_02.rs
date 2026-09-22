@@ -606,49 +606,6 @@ impl Drop for ForegroundChildGuard {
     }
 }
 
-struct ProxyRuntimeGuard {
-    repo: PathBuf,
-    state_dir: PathBuf,
-    http_port: u16,
-    armed: bool,
-}
-
-impl ProxyRuntimeGuard {
-    fn new(repo: &Path, state_dir: &Path, http_port: u16) -> Self {
-        Self {
-            repo: repo.to_path_buf(),
-            state_dir: state_dir.to_path_buf(),
-            http_port,
-            armed: true,
-        }
-    }
-
-    fn stop(mut self) -> std::process::ExitStatus {
-        self.armed = false;
-        self.stop_inner().expect("stop background proxy")
-    }
-
-    fn stop_inner(&self) -> std::io::Result<std::process::ExitStatus> {
-        Command::new(env!("CARGO_BIN_EXE_jig"))
-            .args(["proxy", "stop", "--state-dir"])
-            .arg(&self.state_dir)
-            .args(["--http-port", &self.http_port.to_string()])
-            .current_dir(&self.repo)
-            .env_remove("JIG_REPO_ROOT")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-    }
-}
-
-impl Drop for ProxyRuntimeGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = self.stop_inner();
-        }
-    }
-}
-
 fn read_helper_marker(path: &Path) -> (VerifiedProcessIdentity, u16, VerifiedProcessIdentity) {
     let marker = fs::read_to_string(path).expect("read helper marker");
     let mut fields = marker.split_whitespace();

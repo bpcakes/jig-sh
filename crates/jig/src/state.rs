@@ -54,6 +54,7 @@ pub(crate) use receipts::{
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
+pub(crate) use receipts::{WORK_CHECK_TARGETS_SCHEMA, work_check_targets_evidence};
 pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
 pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
 #[cfg(test)]

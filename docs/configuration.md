@@ -1254,7 +1254,15 @@ does not confuse an interrupted check with missing evidence.
 Use `scripts/jig state diagnose` for a read-only size and integrity report.
 `--deep` additionally analyzes recursive session summaries, projected
 compaction savings, receipt payload categories, and archive recommendations
-for oversized receipt or run journals. The report also includes
+for oversized receipt or run journals. `--deep` also joins every receipt run
+reference, including child receipts named by `jig.work_check_targets/v1` and
+`jig.work_check/v2` batch evidence, to the run journal, verified run archives,
+and manifested run backups under `.agent/.cache/`. The `run_linkage` report
+names each run whose lifecycle is missing, unverifiable, inconsistent, or
+recoverable from an exact backup, together with the affected receipt and batch
+receipt IDs, and the human summary repeats the first findings. Shallow mode
+reports the check as not performed. `ok` only means the command ran; the
+`integrity` object and `recommendations` carry the findings. The report also includes
 local disk usage from maintenance backups under
 `.agent/.cache/state-backups/` and compressed receipt archives under
 `.agent/.cache/state-archives/`. Repair legacy recursive summaries with
