@@ -1,5 +1,6 @@
 //! Receipt and supported batch-evidence reference collection.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
@@ -22,19 +23,19 @@ struct BatchChild {
 }
 
 #[derive(Deserialize)]
-struct TargetEvidenceEntry {
-    #[serde(default)]
-    receipt_id: Option<String>,
-    #[serde(default)]
-    run_id: Option<String>,
+struct TargetEvidenceEntry<'a> {
+    #[serde(default, borrow)]
+    receipt_id: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    run_id: Option<Cow<'a, str>>,
 }
 
 #[derive(Deserialize)]
-struct GateEvidenceEntry {
-    #[serde(default)]
-    tool_receipt_id: Option<String>,
-    #[serde(default)]
-    source_tool_receipt_id: Option<String>,
+struct GateEvidenceEntry<'a> {
+    #[serde(default, borrow)]
+    tool_receipt_id: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    source_tool_receipt_id: Option<Cow<'a, str>>,
 }
 
 #[derive(Default)]
@@ -92,14 +93,22 @@ pub(in crate::state) fn analyze_receipt_linkage(
     if let Some(evidence) = evidence
         && first_non_whitespace(record, &evidence) == Some(b'{')
     {
-        let children = batch_children(record, evidence)?;
-        if !children.is_empty() {
+        let mut retained_children = Vec::new();
+        let child_count = visit_batch_children(record, evidence, |receipt_id, run_id| {
+            if collector.track_references(1) {
+                retained_children.push(BatchChild {
+                    receipt_id: receipt_id.map(str::to_owned),
+                    run_id: run_id.map(str::to_owned),
+                });
+            }
+        })?;
+        if child_count > 0 {
             collector.batch_receipts += 1;
-            collector.batch_links = collector.batch_links.saturating_add(children.len() as u64);
-            if collector.track_references(children.len()) {
+            collector.batch_links = collector.batch_links.saturating_add(child_count);
+            if !retained_children.is_empty() {
                 collector.batches.push(BatchReference {
                     receipt_id: id,
-                    children,
+                    children: retained_children,
                 });
             }
         }
@@ -107,7 +116,11 @@ pub(in crate::state) fn analyze_receipt_linkage(
     Ok(())
 }
 
-fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChild>> {
+fn visit_batch_children(
+    record: &[u8],
+    evidence: Range<usize>,
+    mut visit: impl FnMut(Option<&str>, Option<&str>),
+) -> Result<u64> {
     let mut schema = None;
     let mut targets = None;
     let mut gates = None;
@@ -122,19 +135,17 @@ fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChil
         }
         Ok(())
     })?;
-    let mut children = Vec::new();
+    let mut child_count = 0u64;
     match schema.as_deref() {
         Some(WORK_CHECK_TARGETS_SCHEMA) => {
             let targets =
                 required_batch_array(record, targets, WORK_CHECK_TARGETS_SCHEMA, "targets")?;
             visit_array_values(record, targets, &mut |entry| {
-                let entry: TargetEvidenceEntry = serde_json::from_slice(&record[entry])
+                let entry: TargetEvidenceEntry<'_> = serde_json::from_slice(&record[entry])
                     .context("work-check target evidence entry")?;
                 if entry.receipt_id.is_some() || entry.run_id.is_some() {
-                    children.push(BatchChild {
-                        receipt_id: entry.receipt_id,
-                        run_id: entry.run_id,
-                    });
+                    child_count = child_count.saturating_add(1);
+                    visit(entry.receipt_id.as_deref(), entry.run_id.as_deref());
                 }
                 Ok(())
             })?;
@@ -142,23 +153,24 @@ fn batch_children(record: &[u8], evidence: Range<usize>) -> Result<Vec<BatchChil
         Some(WORK_CHECK_EVIDENCE_SCHEMA) => {
             let gates = required_batch_array(record, gates, WORK_CHECK_EVIDENCE_SCHEMA, "gates")?;
             visit_array_values(record, gates, &mut |entry| {
-                let entry: GateEvidenceEntry = serde_json::from_slice(&record[entry])
+                let entry: GateEvidenceEntry<'_> = serde_json::from_slice(&record[entry])
                     .context("work-check gate evidence entry")?;
-                for receipt_id in [entry.tool_receipt_id, entry.source_tool_receipt_id]
-                    .into_iter()
-                    .flatten()
+                for receipt_id in [
+                    entry.tool_receipt_id.as_deref(),
+                    entry.source_tool_receipt_id.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
                 {
-                    children.push(BatchChild {
-                        receipt_id: Some(receipt_id),
-                        run_id: None,
-                    });
+                    child_count = child_count.saturating_add(1);
+                    visit(Some(receipt_id), None);
                 }
                 Ok(())
             })?;
         }
         _ => {}
     }
-    Ok(children)
+    Ok(child_count)
 }
 
 fn required_batch_array(

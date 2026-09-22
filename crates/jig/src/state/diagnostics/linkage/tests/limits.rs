@@ -127,6 +127,39 @@ fn receipt_reference_exhaustion_does_not_starve_journal_lifecycles() {
 }
 
 #[test]
+fn supported_batch_retains_only_the_reference_budget_prefix() {
+    let mut collector = RunLinkageCollector {
+        tracked_references: MAX_TRACKED_REFERENCES - 2,
+        ..RunLinkageCollector::default()
+    };
+    let receipt = serde_json::to_vec(&work_check_targets_receipt(
+        "receipt_batch",
+        &[
+            ("api:test", "receipt_test", RUN_A),
+            ("api:fmt", "receipt_fmt", RUN_B),
+            (
+                "api:clippy",
+                "receipt_clippy",
+                "run_01ARZ3NDEKTSV4RRFFQ69G5FB3",
+            ),
+        ],
+    ))
+    .unwrap();
+
+    analyze_receipt_linkage(&receipt, &mut collector).unwrap();
+
+    assert_eq!(collector.tracked_references, MAX_TRACKED_REFERENCES);
+    assert!(collector.reference_budget_exceeded);
+    assert_eq!(collector.batch_receipts, 1);
+    assert_eq!(collector.batch_links, 3);
+    assert_eq!(collector.batches.len(), 1);
+    let references = collect_references(&collector);
+    assert_eq!(references.runs.len(), 1);
+    assert!(references.runs.contains_key(RUN_A));
+    assert!(!references.runs.contains_key(RUN_B));
+}
+
+#[test]
 fn reference_exhaustion_marks_preservation_recommendations_as_truncated() {
     let report = RunLinkageReport {
         checked: true,
