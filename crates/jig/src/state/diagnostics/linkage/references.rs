@@ -75,18 +75,31 @@ pub(in crate::state) fn analyze_receipt_linkage(
     let Some(id) = id else {
         bail!("receipt record has no string id");
     };
-    let newly_tracked_receipt = collector.track_references(1);
-    let tracked_receipt = newly_tracked_receipt || collector.receipt_ids.contains(&id);
-    if newly_tracked_receipt {
+    let record_budgeted = collector.track_references(1);
+    let tracked_receipt = record_budgeted || collector.receipt_ids.contains(&id);
+    if record_budgeted {
         collector.receipt_ids.insert(id.clone());
     }
     if let Some(run_id) = run_id {
         collector.receipts_with_run_id += 1;
         if tracked_receipt {
-            let runs = collector.receipt_runs.entry(id.clone()).or_default();
-            runs.insert(run_id);
-            if runs.len() > 1 {
+            let association_known = collector
+                .receipt_runs
+                .get(&id)
+                .is_some_and(|runs| runs.contains(&run_id));
+            let association_conflicts = collector
+                .receipt_runs
+                .get(&id)
+                .is_some_and(|runs| !runs.is_empty() && !association_known);
+            if association_conflicts {
                 collector.conflicting_receipt_runs.insert(id.clone());
+            }
+            if record_budgeted && !association_known {
+                collector
+                    .receipt_runs
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(run_id);
             }
         }
     }

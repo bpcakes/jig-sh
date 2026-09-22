@@ -69,7 +69,7 @@ fn identical_duplicate_receipt_runs_remain_clean() {
 }
 
 #[test]
-fn tracked_duplicate_receipt_runs_survive_reference_exhaustion_in_both_orders() {
+fn duplicate_run_associations_remain_bounded_after_exhaustion_in_both_orders() {
     for (first_run, second_run) in [(RUN_A, RUN_B), (RUN_B, RUN_A)] {
         let mut collector = RunLinkageCollector {
             receipt_ids: BTreeSet::from(["receipt_same".into()]),
@@ -87,15 +87,51 @@ fn tracked_duplicate_receipt_runs_survive_reference_exhaustion_in_both_orders() 
         .unwrap();
 
         analyze_receipt_linkage(&receipt, &mut collector).unwrap();
+        for index in 0..1_024 {
+            let extra = serde_json::to_vec(&json!({
+                "id": "receipt_same",
+                "run_id": format!("run_extra_{index}"),
+            }))
+            .unwrap();
+            analyze_receipt_linkage(&extra, &mut collector).unwrap();
+        }
 
         assert!(collector.reference_budget_exceeded);
         assert_eq!(
             collector.receipt_runs["receipt_same"],
-            BTreeSet::from([RUN_A.into(), RUN_B.into()])
+            BTreeSet::from([first_run.into()])
         );
         assert!(collector.conflicting_receipt_runs.contains("receipt_same"));
-        assert_eq!(collect_references(&collector).runs.len(), 2);
+        assert_eq!(collect_references(&collector).runs.len(), 1);
     }
+}
+
+#[test]
+fn each_novel_duplicate_run_association_requires_remaining_reference_budget() {
+    let mut collector = RunLinkageCollector {
+        receipt_ids: BTreeSet::from(["receipt_same".into()]),
+        receipt_runs: BTreeMap::from([("receipt_same".into(), BTreeSet::from([RUN_A.into()]))]),
+        tracked_references: MAX_TRACKED_REFERENCES - 1,
+        ..RunLinkageCollector::default()
+    };
+
+    for run_id in [RUN_B, "run_unbudgeted_c", "run_unbudgeted_d"] {
+        let receipt = serde_json::to_vec(&json!({
+            "id": "receipt_same",
+            "run_id": run_id,
+        }))
+        .unwrap();
+        analyze_receipt_linkage(&receipt, &mut collector).unwrap();
+    }
+
+    assert!(collector.reference_budget_exceeded);
+    assert_eq!(collector.tracked_references, MAX_TRACKED_REFERENCES);
+    assert_eq!(
+        collector.receipt_runs["receipt_same"],
+        BTreeSet::from([RUN_A.into(), RUN_B.into()])
+    );
+    assert!(collector.conflicting_receipt_runs.contains("receipt_same"));
+    assert_eq!(collect_references(&collector).runs.len(), 2);
 }
 
 #[test]
