@@ -4,4 +4,5 @@ mod support;
 
 include!("dev_sigint_parts/part_01.rs");
 include!("dev_sigint_parts/part_02.rs");
+include!("dev_sigint_parts/proxy_guard.rs");
 include!("dev_sigint_parts/part_03.rs");

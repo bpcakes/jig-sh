@@ -1,0 +1,1 @@
+Implement read-only run-linkage diagnosis in deep state diagnose with recovery guidance, JSON and CLI summary coverage (jig-sh-g5ct).

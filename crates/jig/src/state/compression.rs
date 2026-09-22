@@ -1,13 +1,13 @@
 //! Deterministic gzip streams used by local state backups and exports.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use flate2::GzBuilder;
-use flate2::read::GzDecoder;
+use flate2::bufread::GzDecoder;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
@@ -22,6 +22,39 @@ pub(super) struct GzipWriteReport {
 pub(super) struct GzipReadReport {
     pub(super) uncompressed_bytes: u64,
     pub(super) uncompressed_sha256: String,
+}
+
+pub(super) struct SingleMemberGzipReader<R: Read> {
+    decoder: GzDecoder<BufReader<R>>,
+    end_checked: bool,
+}
+
+impl<R: Read> Read for SingleMemberGzipReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let read = self.decoder.read(buffer)?;
+        if read > 0 || self.end_checked {
+            return Ok(read);
+        }
+        self.end_checked = true;
+        if self.decoder.get_mut().fill_buf()?.is_empty() {
+            Ok(0)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "gzip input contains trailing data after the first member",
+            ))
+        }
+    }
+}
+
+pub(super) fn single_member_gzip_reader<R: Read>(reader: R) -> SingleMemberGzipReader<R> {
+    SingleMemberGzipReader {
+        decoder: GzDecoder::new(BufReader::new(reader)),
+        end_checked: false,
+    }
 }
 
 pub(super) fn write_gzip_atomic(
@@ -111,7 +144,7 @@ pub(super) fn decompress_gzip_to_temp(
 ) -> Result<(NamedTempFile, GzipReadReport)> {
     let source_file =
         File::open(source).with_context(|| format!("Failed to open {}", source.display()))?;
-    let mut decoder = GzDecoder::new(source_file);
+    let mut decoder = single_member_gzip_reader(source_file);
     let mut temp = NamedTempFile::new_in(destination_dir).with_context(|| {
         format!(
             "Failed to create restored state file in {}",
@@ -163,7 +196,7 @@ pub(super) fn verify_gzip_file(
 ) -> Result<GzipReadReport> {
     let source_file =
         File::open(source).with_context(|| format!("Failed to open {}", source.display()))?;
-    let mut decoder = GzDecoder::new(source_file);
+    let mut decoder = single_member_gzip_reader(source_file);
     let mut hasher = Sha256::new();
     let mut bytes = 0u64;
     let mut buffer = vec![0u8; 64 * 1024];
@@ -316,7 +349,10 @@ fn digest_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::fs::OpenOptions;
 
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use tempfile::tempdir;
 
     use super::*;
@@ -378,5 +414,43 @@ mod tests {
             .to_string();
 
         assert!(error.contains("beyond the expected 1024 bytes"));
+    }
+
+    #[test]
+    fn concatenated_gzip_member_is_rejected() {
+        let temp = tempdir().unwrap();
+        let output = temp.path().join("state.jsonl.gz");
+        write_gzip_atomic(&output, |writer| {
+            writer.write_all(b"first\n")?;
+            Ok(())
+        })
+        .unwrap();
+        let file = OpenOptions::new().append(true).open(&output).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(b"second\n").unwrap();
+        encoder.finish().unwrap();
+
+        let verify_error = verify_gzip_file(&output, None).unwrap_err();
+        let restore_error = decompress_gzip_to_temp(&output, temp.path(), None).unwrap_err();
+
+        assert!(format!("{verify_error:#}").contains("trailing data after the first member"));
+        assert!(format!("{restore_error:#}").contains("trailing data after the first member"));
+    }
+
+    #[test]
+    fn trailing_non_gzip_data_is_rejected() {
+        let temp = tempdir().unwrap();
+        let output = temp.path().join("state.jsonl.gz");
+        write_gzip_atomic(&output, |writer| {
+            writer.write_all(b"payload\n")?;
+            Ok(())
+        })
+        .unwrap();
+        let mut file = OpenOptions::new().append(true).open(&output).unwrap();
+        file.write_all(b"not gzip").unwrap();
+
+        let error = decompress_gzip_to_temp(&output, temp.path(), None).unwrap_err();
+
+        assert!(format!("{error:#}").contains("trailing data after the first member"));
     }
 }

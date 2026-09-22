@@ -1,4 +1,5 @@
-use super::*;
+// State maintenance summaries. Included from `output_tests_parts.rs` inside
+// the `cli::output::tests` module.
 
 #[test]
 fn state_diagnose_shallow_summary_does_not_imply_deep_cleanliness() {
@@ -6,13 +7,135 @@ fn state_diagnose_shallow_summary_does_not_imply_deep_cleanliness() {
         "deep": false,
         "totals": { "bytes": 42 },
         "sessions": null,
-        "receipts": null
+        "receipts": null,
+        "run_linkage": { "checked": false, "verdict": "not_checked" }
     }));
 
+    assert!(summary.contains("State diagnose: complete (command status"));
+    assert!(summary.contains("Integrity: run linkage not checked (rerun with --deep)"));
     assert!(summary.contains("Total bytes: 42"));
     assert!(summary.contains("Session recursion: not analyzed"));
     assert!(summary.contains("Receipt payloads: not analyzed"));
+    assert!(summary.contains("Run linkage: not checked (rerun with --deep)"));
     assert!(!summary.contains("Recursive session records: 0"));
+    assert!(!summary.contains("Run linkage: clean"));
+}
+
+#[test]
+fn state_diagnose_summary_without_linkage_report_never_claims_a_clean_verdict() {
+    let summary = format_state_diagnose_summary(&json!({
+        "deep": true,
+        "totals": { "bytes": 1 }
+    }));
+
+    assert!(summary.contains("Integrity: run linkage not checked"));
+    assert!(summary.contains("Run linkage: not checked (rerun with --deep)"));
+}
+
+#[test]
+fn state_diagnose_deep_summary_reports_clean_run_linkage_with_counts() {
+    let summary = format_state_diagnose_summary(&json!({
+        "deep": true,
+        "totals": { "bytes": 1 },
+        "integrity": { "malformed_records": 0, "torn_streams": 0, "scan_errors": 0 },
+        "sessions": { "recursive_session_records": 0, "estimated_reclaimable_bytes": 0 },
+        "run_linkage": {
+            "checked": true,
+            "verdict": "clean",
+            "complete": true,
+            "referenced_runs": 4,
+            "runs": { "active": 1, "completed": 2, "archived_verified": 1 },
+            "finding_count": 0
+        }
+    }));
+
+    assert!(summary.contains("Integrity: run linkage clean"));
+    assert!(
+        summary
+            .contains("Run linkage: clean (4 referenced runs: 1 active, 2 completed, 1 archived)")
+    );
+}
+
+#[test]
+fn state_diagnose_summary_lists_run_linkage_findings_and_affected_ids() {
+    let summary = format_state_diagnose_summary(&json!({
+        "deep": true,
+        "totals": { "bytes": 1 },
+        "integrity": { "malformed_records": 1, "torn_streams": 0, "scan_errors": 0 },
+        "sessions": { "recursive_session_records": 0, "estimated_reclaimable_bytes": 0 },
+        "run_linkage": {
+            "checked": true,
+            "verdict": "findings",
+            "complete": false,
+            "finding_count": 7,
+            "findings_truncated": true,
+            "runs": { "missing": 5, "unverifiable": 1, "inconsistent": 0, "recoverable_from_backup": 1 },
+            "findings": [{
+                "run_id": "run_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "status": "missing",
+                "receipt_ids": ["receipt_a, alias", "receipt_b", "receipt_c", "receipt_d"],
+                "receipt_count": 6,
+                "batch_receipt_ids": ["receipt_batch"],
+                "batch_receipt_count": 1
+            }, {
+                "run_id": "run_01ARZ3NDEKTSV4RRFFQ69G5FB2",
+                "status": "recoverable_from_backup",
+                "receipt_ids": [],
+                "receipt_count": 0,
+                "batch_receipt_ids": [],
+                "batch_receipt_count": 0
+            }]
+        },
+        "recommendations": [{
+            "kind": "preserve_unlinked_receipt_evidence",
+            "reason": "6 receipt(s) reference 5 run(s) whose lifecycle is unavailable.",
+            "command": "jig state export receipts --before <YYYY-MM-DD> --output receipts-preserved.jsonl.gz",
+            "alternative_command": "jig work decide --title \"Run history unavailable\" --selected-option \"Preserve receipts; record affected IDs\" --rationale \"...\""
+        }]
+    }));
+
+    assert!(summary.contains("Integrity: 1 malformed records; 7 run linkage findings"));
+    assert!(summary.contains(
+        "Run linkage: 7 finding(s) (5 missing, 1 unverifiable, 0 inconsistent, 1 recoverable from backup); scan incomplete, more may exist"
+    ));
+    assert!(summary.contains(
+        "run_01ARZ3NDEKTSV4RRFFQ69G5FAV: missing; receipts: receipt_a, alias, receipt_b, receipt_c (+3 more); batch receipts: receipt_batch"
+    ));
+    assert!(summary.contains(
+        "run_01ARZ3NDEKTSV4RRFFQ69G5FB2: recoverable_from_backup; receipts: none; batch receipts: none"
+    ));
+    assert!(summary.contains(
+        "... 5 more finding(s); rerun with --json for structured findings and truncation metadata"
+    ));
+    assert!(!summary.contains("every affected ID"));
+    assert!(summary.contains("Command: jig state export receipts"));
+    assert!(summary.contains("Alternative: jig work decide"));
+}
+
+#[test]
+fn state_diagnose_summary_reports_incomplete_linkage_without_a_clean_verdict() {
+    let summary = format_state_diagnose_summary(&json!({
+        "deep": true,
+        "totals": { "bytes": 1 },
+        "integrity": { "scan_errors": 1 },
+        "sessions": { "recursive_session_records": 0, "estimated_reclaimable_bytes": 0 },
+        "run_linkage": {
+            "checked": true,
+            "verdict": "incomplete",
+            "complete": false,
+            "incomplete_reasons": ["run journal scan failed: is a directory"],
+            "finding_count": 0
+        }
+    }));
+
+    assert!(
+        summary
+            .contains("Integrity: 1 stream scan errors; run linkage incomplete (no clean verdict)")
+    );
+    assert!(summary.contains(
+        "Run linkage: incomplete; no clean verdict (run journal scan failed: is a directory)"
+    ));
+    assert!(!summary.contains("Run linkage: clean"));
 }
 
 #[test]

@@ -393,6 +393,7 @@ fn diagnose_recommends_receipt_retention_and_export_before_repair() {
         &receipts,
         &LegacyArchiveDiagnostics::default(),
         &MaintenanceCacheDiagnostics::default(),
+        &RunLinkageReport::not_checked(),
     );
 
     assert!(recommendations.iter().any(|recommendation| {

@@ -121,7 +121,7 @@ pub(super) fn analyze_receipt_record(
     })
 }
 
-fn visit_object_members(
+pub(super) fn visit_object_members(
     input: &[u8],
     range: Range<usize>,
     visitor: &mut impl FnMut(&str, Range<usize>) -> Result<()>,
@@ -159,7 +159,7 @@ fn visit_object_members(
     }
 }
 
-fn visit_array_values(
+pub(super) fn visit_array_values(
     input: &[u8],
     range: Range<usize>,
     visitor: &mut impl FnMut(Range<usize>) -> Result<()>,
