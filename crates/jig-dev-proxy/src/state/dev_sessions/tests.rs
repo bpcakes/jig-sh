@@ -275,6 +275,39 @@ fn version_two_requires_complete_cleanup_evidence() {
 }
 
 #[test]
+fn duplicate_state_keys_fail_before_cleanup_evidence_is_interpreted() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    write_to_path(
+        &store.dev_sessions_path(),
+        COMPLETE_EVIDENCE_VERSION,
+        &[session("dev_example_duplicate_keys")],
+    )
+    .unwrap();
+    let valid = fs::read_to_string(store.dev_sessions_path()).unwrap();
+    let cases = [
+        valid.replacen("\"version\": 2", "\"version\": 2, \"version\": 1", 1),
+        valid.replacen("\"sessions\": [", "\"sessions\": [], \"sessions\": [", 1),
+        valid.replacen(
+            "\"preflight_cleanup_pending\": false",
+            "\"preflight_cleanup_pending\": true, \"preflight_cleanup_pending\": false",
+            1,
+        ),
+        valid.replacen(
+            "\"spawn_state_tracked\": true",
+            "\"spawn_state_tracked\": false, \"spawn_state_tracked\": true",
+            1,
+        ),
+    ];
+    for document in cases {
+        assert_ne!(document, valid);
+        write_private_fixture(&store.dev_sessions_path(), document);
+        let error = format!("{:#}", store.snapshot_dev_state().unwrap_err());
+        assert!(error.contains("duplicate field"), "{error}");
+    }
+}
+
+#[test]
 fn legacy_claim_requires_empty_store_and_preserves_every_blocker() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();

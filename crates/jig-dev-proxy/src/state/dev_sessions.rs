@@ -203,20 +203,22 @@ pub(super) fn read_document_from_path(path: &Path) -> Result<DevSessionsState> {
     if text.trim().is_empty() {
         bail!("Jig development sessions file {} is empty", path.display());
     }
-    let raw: serde_json::Value =
-        serde_json::from_str(&text).context("Failed to parse Jig development sessions")?;
-    let version = raw.get("version").and_then(serde_json::Value::as_u64);
-    if !matches!(version, Some(1 | 2)) {
+    // Deserialize modeled fields before using Value for v2 presence checks.
+    // Typed deserialization rejects duplicate keys; Value would keep the last
+    // duplicate and could erase a session or a cleanup obligation.
+    let document = serde_json::from_str::<DevSessionsDocumentOwned>(&text)
+        .context("Failed to parse Jig development sessions")?;
+    if !matches!(document.version, LEGACY_VERSION | COMPLETE_EVIDENCE_VERSION) {
         bail!(
             "Unsupported Jig development sessions version {}",
-            raw.get("version").unwrap_or(&serde_json::Value::Null)
+            document.version
         );
     }
-    if version == Some(u64::from(COMPLETE_EVIDENCE_VERSION)) {
+    if document.version == COMPLETE_EVIDENCE_VERSION {
+        let raw: serde_json::Value =
+            serde_json::from_str(&text).context("Failed to parse Jig development sessions")?;
         validate_complete_evidence(&raw)?;
     }
-    let document = serde_json::from_value::<DevSessionsDocumentOwned>(raw)
-        .context("Failed to parse Jig development sessions")?;
     validate_records(&document.sessions)?;
     Ok(DevSessionsState {
         version: document.version,
