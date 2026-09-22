@@ -160,6 +160,51 @@ fn supported_batch_retains_only_the_reference_budget_prefix() {
 }
 
 #[test]
+fn receipt_skipped_by_reference_budget_is_not_reported_as_missing() {
+    let (_temp, ctx) = fixture_context();
+    let mut collector = RunLinkageCollector {
+        tracked_references: MAX_TRACKED_REFERENCES - 2,
+        ..RunLinkageCollector::default()
+    };
+    let batch = serde_json::to_vec(&work_check_targets_receipt(
+        "receipt_batch",
+        &[("api:test", "receipt_child", RUN_A)],
+    ))
+    .unwrap();
+    analyze_receipt_linkage(&batch, &mut collector).unwrap();
+    let child = serde_json::to_vec(&target_receipt(
+        "receipt_child",
+        "jig.test",
+        "api:test",
+        Some(RUN_A),
+    ))
+    .unwrap();
+    analyze_receipt_linkage(&child, &mut collector).unwrap();
+
+    assert!(collector.reference_budget_exceeded);
+    assert!(!collector.receipt_ids.contains("receipt_child"));
+    assert_eq!(collect_references(&collector).unresolved_batch_links, 0);
+
+    let linkage = resolve(ctx.root(), collector, None, None).to_value();
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["unresolved_batch_links"], 0);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "later references were not tracked",
+    );
+    assert!(
+        linkage["incomplete_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|reason| !reason
+                .as_str()
+                .unwrap()
+                .contains("missing receipt identities"))
+    );
+}
+
+#[test]
 fn reference_exhaustion_marks_preservation_recommendations_as_truncated() {
     let report = RunLinkageReport {
         checked: true,
