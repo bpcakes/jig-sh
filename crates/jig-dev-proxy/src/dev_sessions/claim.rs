@@ -33,7 +33,7 @@ impl ClaimConflicts {
         if let Some((hostname, session)) = self.other_repos.first() {
             let activity = claim_activity(session);
             return anyhow!(
-                "Development route '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}). Cross-repository ownership remains reserved until that exact session is explicitly cleaned up; `jig dev --replace` will not take it over. Inspect the session from its repository with `jig dev status --state-dir PATH`, using state directory {}, or change the duplicate hostname.",
+                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}). Cross-repository ownership remains reserved until that exact session is explicitly cleaned up; `jig dev --replace` will not take it over. Inspect the session from its repository with `jig dev status --state-dir PATH`, using state directory {}, or change the duplicate hostname.",
                 session.session_id,
                 session.repo_root_display,
                 state_dir.display(),

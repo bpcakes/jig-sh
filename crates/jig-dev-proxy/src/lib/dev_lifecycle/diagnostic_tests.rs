@@ -113,6 +113,7 @@ fn dead_cross_repo_claim_reports_exact_cleanup_without_changing_state() {
         })
         .unwrap();
     let recorded = store.snapshot_dev_state().unwrap().sessions.remove(0);
+    assert!(store.snapshot_dev_state().unwrap().routes.is_empty());
     let session_bytes = std::fs::read(state_dir.join("dev-sessions.json")).unwrap();
     let route_bytes = std::fs::read(state_dir.join("routes.json")).ok();
 
@@ -146,10 +147,12 @@ fn dead_cross_repo_claim_reports_exact_cleanup_without_changing_state() {
     .expect("cross-repository cleanup obligation remains reserved")
     .to_string();
     assert!(error.contains(&recorded.session_id));
+    assert!(error.contains("Development hostname 'shared.localhost'"));
     assert!(error.contains("activity none"));
     assert!(error.contains("cleanup required true"));
     assert!(error.contains(&state_dir.display().to_string()));
     assert!(!error.contains("live Jig dev session"));
+    assert!(!error.contains("Development route"));
     assert!(!error.contains(&recorded.control.token));
     assert_eq!(
         std::fs::read(state_dir.join("dev-sessions.json")).unwrap(),
