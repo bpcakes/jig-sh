@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::types::Route;
 
@@ -46,7 +46,9 @@ impl StateStore {
         &self,
         mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
     ) -> Result<T> {
-        self.with_route_lock(|routes_path| self.mutate_dev_sessions_unlocked(routes_path, mutate))
+        self.with_route_lock(|routes_path| {
+            self.mutate_dev_sessions_unlocked(routes_path, false, mutate)
+        })
     }
 
     pub(crate) fn mutate_dev_sessions_interruptible<T>(
@@ -55,7 +57,21 @@ impl StateStore {
         mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
     ) -> Result<LockOutcome<T>> {
         self.with_route_lock_interruptible(cancelled, |routes_path| {
-            self.mutate_dev_sessions_unlocked(routes_path, mutate)
+            self.mutate_dev_sessions_unlocked(routes_path, false, mutate)
+        })
+    }
+
+    /// The version transition and first claim share the route lock. Until
+    /// contextless legacy recovery is available, callers keep the cutover
+    /// disabled; tests exercise the future transition explicitly.
+    pub(crate) fn mutate_dev_sessions_for_claim_interruptible<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        enable_v2_cutover: bool,
+        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
+    ) -> Result<LockOutcome<T>> {
+        self.with_route_lock_interruptible(cancelled, |routes_path| {
+            self.mutate_dev_sessions_unlocked(routes_path, enable_v2_cutover, mutate)
         })
     }
 
@@ -75,16 +91,16 @@ impl StateStore {
             let mut routes = read_routes_from_path(routes_path)?;
             let original_routes = routes.clone();
             let sessions_path = self.dev_sessions_path();
-            let mut sessions = dev_sessions::read_from_path(&sessions_path)?;
-            let original_sessions = sessions.clone();
-            let result = mutate(&mut sessions, &mut routes)?;
-            dev_sessions::validate_records(&sessions)?;
+            let mut state = dev_sessions::read_document_from_path(&sessions_path)?;
+            let original_sessions = state.sessions.clone();
+            let result = mutate(&mut state.sessions, &mut routes)?;
+            dev_sessions::validate_records(&state.sessions)?;
 
             if routes != original_routes {
                 write_routes_to_path(routes_path, &routes)?;
             }
-            if sessions != original_sessions {
-                dev_sessions::write_to_path(&sessions_path, &sessions)?;
+            if state.sessions != original_sessions {
+                dev_sessions::write_to_path(&sessions_path, state.version, &state.sessions)?;
             }
             Ok(result)
         })
@@ -96,23 +112,44 @@ impl StateStore {
         mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
     ) -> Result<Option<T>> {
         self.with_route_lock_cancelable(cancelled, |routes_path| {
-            self.mutate_dev_sessions_unlocked(routes_path, mutate)
+            self.mutate_dev_sessions_unlocked(routes_path, false, mutate)
         })
     }
 
     fn mutate_dev_sessions_unlocked<T>(
         &self,
         routes_path: &Path,
+        enable_v2_cutover: bool,
         mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
     ) -> Result<T> {
         let routes = read_routes_from_path(routes_path)?;
         let sessions_path = self.dev_sessions_path();
-        let mut sessions = dev_sessions::read_from_path(&sessions_path)?;
-        let original = sessions.clone();
-        let result = mutate(&mut sessions, &routes)?;
-        dev_sessions::validate_records(&sessions)?;
-        if sessions != original {
-            dev_sessions::write_to_path(&sessions_path, &sessions)?;
+        let mut state = dev_sessions::read_document_from_path(&sessions_path)?;
+        if enable_v2_cutover && state.version != dev_sessions::COMPLETE_EVIDENCE_VERSION {
+            if !state.sessions.is_empty() {
+                let blockers = state
+                    .sessions
+                    .iter()
+                    .take(8)
+                    .map(|session| {
+                        format!("'{}' ({})", session.session_id, session.repo_root_display)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "Jig dev cannot upgrade the nonempty legacy sessions store at {}: {} session(s) require explicit cleanup or repair; first blockers: {}. Run `jig dev status --all --state-dir PATH` with this state directory to inspect every session, including sessions without proxy routes. No session was stopped or changed.",
+                    self.root.display(),
+                    state.sessions.len(),
+                    blockers,
+                );
+            }
+            state.version = dev_sessions::COMPLETE_EVIDENCE_VERSION;
+        }
+        let original = state.sessions.clone();
+        let result = mutate(&mut state.sessions, &routes)?;
+        dev_sessions::validate_records(&state.sessions)?;
+        if state.sessions != original {
+            dev_sessions::write_to_path(&sessions_path, state.version, &state.sessions)?;
         }
         Ok(result)
     }

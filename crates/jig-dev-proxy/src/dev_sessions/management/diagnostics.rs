@@ -16,6 +16,9 @@ pub(super) fn retention_warning(
         OrphanRetentionReason::PreflightCleanupPending => {
             "development preflight cleanup was not confirmed".to_owned()
         }
+        OrphanRetentionReason::PreflightCleanupUnknown => {
+            "legacy development preflight cleanup evidence is missing".to_owned()
+        }
         OrphanRetentionReason::AppAlive(app) => {
             let pid = session
                 .apps
@@ -40,6 +43,7 @@ pub(super) fn retention_warning(
     };
     let repair = match reason {
         OrphanRetentionReason::PreflightCleanupPending
+        | OrphanRetentionReason::PreflightCleanupUnknown
         | OrphanRetentionReason::AppSpawnPending(_)
         | OrphanRetentionReason::AppSpawnUntracked(_) => {
             "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --forget-ambiguous-orphans`"

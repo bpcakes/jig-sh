@@ -733,7 +733,7 @@ fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
     );
     let persisted = store.snapshot_dev_state().unwrap();
     assert_eq!(persisted.sessions.len(), 1);
-    assert!(persisted.sessions[0].preflight_cleanup_pending);
+    assert_eq!(persisted.sessions[0].preflight_cleanup_pending, Some(true));
 
     let forgotten = dev_stop(
         DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
