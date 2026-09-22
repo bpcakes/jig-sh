@@ -540,9 +540,19 @@ fn count_status(counts: &mut RunLinkageCounts, status: &str) {
 /// Joins collected references to lifecycle history after every stream scan.
 pub(super) fn resolve(
     root: &Path,
+    collector: RunLinkageCollector,
+    receipts: Option<&StreamDiagnostics>,
+    runs: Option<&StreamDiagnostics>,
+) -> RunLinkageReport {
+    resolve_with_derived_reference_budget(root, collector, receipts, runs, MAX_TRACKED_REFERENCES)
+}
+
+fn resolve_with_derived_reference_budget(
+    root: &Path,
     mut collector: RunLinkageCollector,
     receipts: Option<&StreamDiagnostics>,
     runs: Option<&StreamDiagnostics>,
+    derived_reference_budget: usize,
 ) -> RunLinkageReport {
     let journal = journal_facts(root, &collector, runs);
     let wanted_receipt_ids = batch_receipt_ids(&collector);
@@ -576,7 +586,13 @@ pub(super) fn resolve(
         incomplete_reasons
             .push("local receipt history scan exhausted the linkage reference budget".into());
     }
-    let collected_references = collect_references(&collector);
+    let collected_references = collect_references(&collector, derived_reference_budget);
+    if collected_references.derived_reference_budget_exceeded {
+        collector.reference_budget_exceeded = true;
+        incomplete_reasons.push(format!(
+            "more than {derived_reference_budget} derived batch-to-run reference expansions were required; later derived references were not retained"
+        ));
+    }
     if collected_references.unresolved_batch_links > 0 {
         incomplete_reasons.push(format!(
             "{} supported batch child receipt link(s) reference missing receipt identities",

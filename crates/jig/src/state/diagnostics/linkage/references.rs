@@ -49,6 +49,8 @@ pub(super) struct CollectedReferences {
     pub(super) runs: BTreeMap<String, RunReferences>,
     pub(super) unresolved_batch_links: u64,
     pub(super) conflicting_batch_links: u64,
+    pub(super) derived_references: usize,
+    pub(super) derived_reference_budget_exceeded: bool,
 }
 
 /// Records the identity and optional run reference carried by one valid
@@ -210,7 +212,10 @@ fn decode_optional_string(record: &[u8], value: &Range<usize>) -> Result<Option<
         .context("expected a JSON string or null")
 }
 
-pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedReferences {
+pub(super) fn collect_references(
+    collector: &RunLinkageCollector,
+    derived_reference_budget: usize,
+) -> CollectedReferences {
     let mut collected = CollectedReferences::default();
     for (receipt_id, run_ids) in &collector.receipt_runs {
         for run_id in run_ids {
@@ -222,7 +227,7 @@ pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedRe
                 .insert(receipt_id.clone());
         }
     }
-    for batch in &collector.batches {
+    'batches: for batch in &collector.batches {
         for child in &batch.children {
             // Reused child evidence may belong to several runs. Record every
             // run the supported evidence names and every run the child receipt
@@ -256,6 +261,14 @@ pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedRe
                     collected.unresolved_batch_links.saturating_add(1);
             }
             for run_id in run_ids {
+                // Charge expansion work rather than only successful set
+                // insertions so duplicate batch evidence cannot trade bounded
+                // retained memory for an unbounded amount of CPU work.
+                if collected.derived_references >= derived_reference_budget {
+                    collected.derived_reference_budget_exceeded = true;
+                    break 'batches;
+                }
+                collected.derived_references += 1;
                 let entry = collected.runs.entry(run_id).or_default();
                 entry.batch_receipt_ids.insert(batch.receipt_id.clone());
                 if let Some(receipt_id) = &child.receipt_id {

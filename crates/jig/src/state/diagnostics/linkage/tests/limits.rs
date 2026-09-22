@@ -102,7 +102,12 @@ fn duplicate_run_associations_remain_bounded_after_exhaustion_in_both_orders() {
             BTreeSet::from([first_run.into()])
         );
         assert!(collector.conflicting_receipt_runs.contains("receipt_same"));
-        assert_eq!(collect_references(&collector).runs.len(), 1);
+        assert_eq!(
+            collect_references(&collector, MAX_TRACKED_REFERENCES)
+                .runs
+                .len(),
+            1
+        );
     }
 }
 
@@ -131,7 +136,146 @@ fn each_novel_duplicate_run_association_requires_remaining_reference_budget() {
         BTreeSet::from([RUN_A.into(), RUN_B.into()])
     );
     assert!(collector.conflicting_receipt_runs.contains("receipt_same"));
-    assert_eq!(collect_references(&collector).runs.len(), 2);
+    assert_eq!(
+        collect_references(&collector, MAX_TRACKED_REFERENCES)
+            .runs
+            .len(),
+        2
+    );
+}
+
+fn conflicting_runs_with_referring_batches(reverse: bool) -> RunLinkageCollector {
+    let mut collector = RunLinkageCollector::default();
+    let mut run_ids = vec![RUN_A, RUN_B, "run_01ARZ3NDEKTSV4RRFFQ69G5FB3"];
+    let mut batch_ids = vec!["receipt_batch_a", "receipt_batch_b", "receipt_batch_c"];
+    if reverse {
+        run_ids.reverse();
+        batch_ids.reverse();
+    }
+
+    for run_id in run_ids {
+        let receipt = serde_json::to_vec(&json!({
+            "id": "receipt_child",
+            "run_id": run_id,
+        }))
+        .unwrap();
+        analyze_receipt_linkage(&receipt, &mut collector).unwrap();
+    }
+    for batch_id in batch_ids {
+        let batch = serde_json::to_vec(&work_check_targets_receipt(
+            batch_id,
+            &[("api:test", "receipt_child", RUN_A)],
+        ))
+        .unwrap();
+        analyze_receipt_linkage(&batch, &mut collector).unwrap();
+    }
+
+    collector
+}
+
+#[test]
+fn derived_batch_run_associations_are_complete_and_order_independent_within_budget() {
+    let expected_batch_ids = BTreeSet::from([
+        "receipt_batch_a".to_owned(),
+        "receipt_batch_b".to_owned(),
+        "receipt_batch_c".to_owned(),
+    ]);
+    let mut projections = Vec::new();
+
+    for reverse in [false, true] {
+        let collector = conflicting_runs_with_referring_batches(reverse);
+        assert!(!collector.reference_budget_exceeded);
+        assert!(collector.conflicting_receipt_runs.contains("receipt_child"));
+
+        let references = collect_references(&collector, 9);
+        assert!(!references.derived_reference_budget_exceeded);
+        assert_eq!(references.derived_references, 9);
+        assert_eq!(references.runs.len(), 3);
+        assert!(
+            references
+                .runs
+                .values()
+                .all(|reference| reference.batch_receipt_ids == expected_batch_ids)
+        );
+        projections.push(
+            references
+                .runs
+                .into_iter()
+                .map(|(run_id, reference)| (run_id, reference.batch_receipt_ids))
+                .collect::<BTreeMap<_, _>>(),
+        );
+    }
+
+    assert_eq!(projections[0], projections[1]);
+}
+
+#[test]
+fn derived_batch_run_expansion_is_bounded_and_reported_incomplete() {
+    let references = collect_references(&conflicting_runs_with_referring_batches(false), 5);
+
+    assert!(references.derived_reference_budget_exceeded);
+    assert_eq!(references.derived_references, 5);
+    assert_eq!(
+        references
+            .runs
+            .values()
+            .map(|reference| reference.batch_receipt_ids.len())
+            .sum::<usize>(),
+        5
+    );
+
+    let (_temp, ctx) = fixture_context();
+    let linkage = resolve_with_derived_reference_budget(
+        ctx.root(),
+        conflicting_runs_with_referring_batches(false),
+        None,
+        None,
+        5,
+    )
+    .to_value();
+
+    assert_eq!(linkage["complete"], false);
+    assert_ne!(linkage["verdict"], "clean");
+    assert_eq!(linkage["tracked_references"], 9);
+    assert_eq!(linkage["reference_budget_exceeded"], true);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "more than 5 derived batch-to-run reference expansions were required; later derived references were not retained",
+    );
+}
+
+#[test]
+fn duplicate_derived_pairs_cannot_bypass_the_expansion_work_budget() {
+    let mut collector = RunLinkageCollector::default();
+    for run_id in [RUN_A, RUN_B, "run_01ARZ3NDEKTSV4RRFFQ69G5FB3"] {
+        let receipt = serde_json::to_vec(&json!({
+            "id": "receipt_child",
+            "run_id": run_id,
+        }))
+        .unwrap();
+        analyze_receipt_linkage(&receipt, &mut collector).unwrap();
+    }
+    let batch = serde_json::to_vec(&work_check_targets_receipt(
+        "receipt_batch",
+        &[("api:test", "receipt_child", RUN_A)],
+    ))
+    .unwrap();
+    for _ in 0..3 {
+        analyze_receipt_linkage(&batch, &mut collector).unwrap();
+    }
+
+    let references = collect_references(&collector, 5);
+
+    assert!(references.derived_reference_budget_exceeded);
+    assert_eq!(references.derived_references, 5);
+    assert_eq!(
+        references
+            .runs
+            .values()
+            .map(|reference| reference.batch_receipt_ids.len())
+            .sum::<usize>(),
+        3
+    );
 }
 
 #[test]
@@ -189,7 +333,7 @@ fn supported_batch_retains_only_the_reference_budget_prefix() {
     assert_eq!(collector.batch_receipts, 1);
     assert_eq!(collector.batch_links, 3);
     assert_eq!(collector.batches.len(), 1);
-    let references = collect_references(&collector);
+    let references = collect_references(&collector, MAX_TRACKED_REFERENCES);
     assert_eq!(references.runs.len(), 1);
     assert!(references.runs.contains_key(RUN_A));
     assert!(!references.runs.contains_key(RUN_B));
@@ -295,7 +439,10 @@ fn receipt_skipped_by_reference_budget_is_not_reported_as_missing() {
 
     assert!(collector.reference_budget_exceeded);
     assert!(!collector.receipt_ids.contains("receipt_child"));
-    assert_eq!(collect_references(&collector).unresolved_batch_links, 0);
+    assert_eq!(
+        collect_references(&collector, MAX_TRACKED_REFERENCES).unresolved_batch_links,
+        0
+    );
 
     let linkage = resolve(ctx.root(), collector, None, None).to_value();
     assert_eq!(linkage["complete"], false);
