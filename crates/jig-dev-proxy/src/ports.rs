@@ -59,8 +59,8 @@ pub(crate) fn is_tcp_listening(host: &str, port: u16) -> bool {
 
 mod probe;
 pub(crate) use probe::{
-    CAPABILITIES_PATH, ProxyCapabilities, is_any_jig_proxy_http, is_jig_proxy_http,
-    jig_proxy_capabilities, jig_proxy_http_pid,
+    CAPABILITIES_PATH, CapabilityProbe, ProxyCapabilities, is_any_jig_proxy_http,
+    is_jig_proxy_http, jig_proxy_capabilities, jig_proxy_http_pid,
 };
 
 pub(crate) fn local_lan_ip_for_ipv4_listener() -> Option<IpAddr> {

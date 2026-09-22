@@ -1,5 +1,5 @@
 use super::*;
-use crate::ports::jig_proxy_capabilities;
+use crate::ports::{CapabilityProbe, jig_proxy_capabilities};
 
 #[test]
 fn capabilities_require_loopback_addresses_host_and_token() {
@@ -143,8 +143,10 @@ async fn serving_runtime_reports_effective_capabilities() {
         let actual =
             tokio::task::spawn_blocking(move || jig_proxy_capabilities("127.0.0.1", port, &token))
                 .await
-                .unwrap()
-                .expect("authenticated capability response");
+                .unwrap();
+        let CapabilityProbe::Available(actual) = actual else {
+            panic!("expected authenticated capability response, got {actual:?}");
+        };
         assert_eq!(actual.pid, std::process::id());
         assert_eq!(actual.lan, lan);
         assert_eq!(actual.https, https);

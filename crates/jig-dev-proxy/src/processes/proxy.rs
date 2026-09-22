@@ -14,13 +14,15 @@ use fs4::fs_std::FileExt;
 
 use crate::ports::{
     ProxyCapabilities, is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tcp_listening,
-    jig_proxy_capabilities,
 };
 use crate::state::{LockOutcome, StateStore};
 use crate::types::ProxySettings;
 
+use self::capability::{capability_pid_matches, checked_capabilities, runtime_generation_matches};
 use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_process_group};
 use super::cleanup::arm_owned_resources;
+
+mod capability;
 
 pub(super) const MAX_PROXY_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const PROXY_START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -392,6 +394,23 @@ pub(super) fn proxy_ready_interruptible(
     settings: &ProxySettings,
     cancelled: &impl Fn() -> bool,
 ) -> Result<LockOutcome<bool>> {
+    proxy_ready_with_probe_policy(store, settings, cancelled, false)
+}
+
+pub(super) fn proxy_ready_for_monitor_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<bool>> {
+    proxy_ready_with_probe_policy(store, settings, cancelled, true)
+}
+
+fn proxy_ready_with_probe_policy(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+    transient_as_miss: bool,
+) -> Result<LockOutcome<bool>> {
     let http_port = match store.read_http_port_interruptible(cancelled)? {
         LockOutcome::Acquired(port) => port,
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
@@ -423,35 +442,23 @@ pub(super) fn proxy_ready_interruptible(
         LockOutcome::Acquired(()) => {}
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
-    let Some(capabilities) = jig_proxy_capabilities("127.0.0.1", http_port, &health_token) else {
-        bail!(
-            "The running Jig proxy in state dir {} cannot report authenticated LAN/HTTPS HTTP2 capabilities (requested LAN={}, HTTPS={}, HTTP2={}). It may be an older proxy. Keep existing sessions running; explicitly stop and restart that shared proxy with `scripts/jig proxy stop --state-dir PATH` and `scripts/jig proxy start --state-dir PATH` using this state directory and the desired listener flags, or use a compatible proxy. No proxy was restarted.",
-            store.root().display(),
-            settings.lan,
-            settings.https,
-            settings.http2,
-        );
+    let Some(capabilities) =
+        checked_capabilities(store, settings, http_port, &health_token, transient_as_miss)?
+    else {
+        return Ok(LockOutcome::Acquired(false));
     };
-    if capabilities.pid != health_pid {
-        bail!(
-            "Jig proxy generation changed during capability verification in state dir {} (health PID {health_pid}, capability PID {}). Retry after the proxy stabilizes; no shared proxy was restarted.",
-            store.root().display(),
-            capabilities.pid,
-        );
+    if !capability_pid_matches(store, health_pid, capabilities.pid, transient_as_miss)? {
+        return Ok(LockOutcome::Acquired(false));
     }
-    let current_pid = match store.read_pid_interruptible(cancelled)? {
-        LockOutcome::Acquired(pid) => pid,
-        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
-    };
-    let current_token = match store.read_health_token_interruptible(cancelled)? {
-        LockOutcome::Acquired(token) => token,
-        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
-    };
-    if current_pid != Some(health_pid) || current_token.as_deref() != Some(health_token.as_str()) {
-        bail!(
-            "Jig proxy runtime generation changed during capability verification in state dir {}. Retry after the proxy stabilizes; no shared proxy was restarted.",
-            store.root().display(),
-        );
+    let generation = runtime_generation_matches(
+        store,
+        health_pid,
+        &health_token,
+        cancelled,
+        transient_as_miss,
+    )?;
+    if generation != LockOutcome::Acquired(true) {
+        return Ok(generation);
     }
     ensure_requested_capabilities(store, settings, capabilities)?;
     Ok(LockOutcome::Acquired(true))

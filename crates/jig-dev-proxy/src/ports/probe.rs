@@ -15,6 +15,14 @@ pub(crate) struct ProxyCapabilities {
     pub(crate) http2: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CapabilityProbe {
+    Available(ProxyCapabilities),
+    Unsupported,
+    Unavailable,
+    Invalid,
+}
+
 pub(crate) fn is_jig_proxy_http(host: &str, port: u16, health_token: Option<&str>) -> bool {
     jig_proxy_http_pid(host, port, health_token).is_some()
 }
@@ -31,21 +39,33 @@ pub(crate) fn jig_proxy_http_pid(host: &str, port: u16, health_token: Option<&st
     jig_proxy_http_probe_at(SocketAddr::new(ip, port), health_token)?.pid
 }
 
-pub(crate) fn jig_proxy_capabilities(
-    host: &str,
-    port: u16,
-    health_token: &str,
-) -> Option<ProxyCapabilities> {
-    let ip = host.parse::<IpAddr>().ok()?;
+pub(crate) fn jig_proxy_capabilities(host: &str, port: u16, health_token: &str) -> CapabilityProbe {
+    let Ok(ip) = host.parse::<IpAddr>() else {
+        return CapabilityProbe::Unavailable;
+    };
     if !ip_is_loopback(ip) {
-        return None;
+        return CapabilityProbe::Unavailable;
     }
-    let response = read_probe_headers(
+    let Some(response) = read_probe_headers(
         SocketAddr::new(ip, port),
         CAPABILITIES_PATH,
         Some(health_token),
-    )?;
-    parse_capabilities_response(&response)
+    ) else {
+        return CapabilityProbe::Unavailable;
+    };
+    let status = response.lines().next().unwrap_or_default();
+    let mut status_parts = status.split_ascii_whitespace();
+    if !matches!(status_parts.next(), Some("HTTP/1.0" | "HTTP/1.1")) {
+        return CapabilityProbe::Invalid;
+    }
+    match status_parts.next() {
+        Some("200") => parse_capabilities_response(&response)
+            .map(CapabilityProbe::Available)
+            .unwrap_or(CapabilityProbe::Invalid),
+        Some("404") => CapabilityProbe::Unsupported,
+        Some("503") | Some("403") => CapabilityProbe::Unavailable,
+        _ => CapabilityProbe::Invalid,
+    }
 }
 
 fn parse_capabilities_response(response: &str) -> Option<ProxyCapabilities> {

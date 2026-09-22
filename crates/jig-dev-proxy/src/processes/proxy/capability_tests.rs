@@ -16,6 +16,14 @@ enum GenerationChange {
     Pid,
 }
 
+#[derive(Clone, Copy)]
+enum CapabilityReply {
+    Available(ProxyCapabilities),
+    Unsupported,
+    Unavailable,
+    Invalid,
+}
+
 struct FakeProxy {
     _temp: tempfile::TempDir,
     store: StateStore,
@@ -28,6 +36,18 @@ struct FakeProxy {
 impl FakeProxy {
     fn start(
         capabilities: Option<ProxyCapabilities>,
+        https_listener: bool,
+        change: GenerationChange,
+    ) -> Self {
+        Self::start_with_reply(
+            capabilities.map_or(CapabilityReply::Unsupported, CapabilityReply::Available),
+            https_listener,
+            change,
+        )
+    }
+
+    fn start_with_reply(
+        reply: CapabilityReply,
         https_listener: bool,
         change: GenerationChange,
     ) -> Self {
@@ -81,20 +101,27 @@ impl FakeProxy {
                     .unwrap(),
                     GenerationChange::Pid => server_store.write_pid(u32::MAX).unwrap(),
                 }
-                if let Some(capabilities) = capabilities {
-                    write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nx-jig-proxy: 1\r\nx-jig-proxy-pid: {}\r\nx-jig-proxy-capabilities-version: 1\r\nx-jig-proxy-lan: {}\r\nx-jig-proxy-https: {}\r\nx-jig-proxy-http2: {}\r\ncontent-length: 0\r\n\r\n",
-                        capabilities.pid,
-                        u8::from(capabilities.lan),
-                        u8::from(capabilities.https),
-                        u8::from(capabilities.http2),
-                    )
-                    .unwrap();
-                } else {
-                    stream
-                        .write_all(b"HTTP/1.1 404 Not Found\r\nx-jig-proxy: 1\r\ncontent-length: 0\r\n\r\n")
+                match reply {
+                    CapabilityReply::Available(capabilities) => {
+                        write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nx-jig-proxy: 1\r\nx-jig-proxy-pid: {}\r\nx-jig-proxy-capabilities-version: 1\r\nx-jig-proxy-lan: {}\r\nx-jig-proxy-https: {}\r\nx-jig-proxy-http2: {}\r\ncontent-length: 0\r\n\r\n",
+                            capabilities.pid,
+                            u8::from(capabilities.lan),
+                            u8::from(capabilities.https),
+                            u8::from(capabilities.http2),
+                        )
                         .unwrap();
+                    }
+                    CapabilityReply::Unsupported => stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\nx-jig-proxy: 1\r\ncontent-length: 0\r\n\r\n")
+                        .unwrap(),
+                    CapabilityReply::Unavailable => stream
+                        .write_all(b"HTTP/1.1 503 Service Unavailable\r\nx-jig-proxy: 1\r\ncontent-length: 0\r\n\r\n")
+                        .unwrap(),
+                    CapabilityReply::Invalid => stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nx-jig-proxy: 1\r\ncontent-length: 0\r\n\r\n")
+                        .unwrap(),
                 }
             }
         });
@@ -276,6 +303,75 @@ fn capability_generation_mismatch_fails_closed() {
         assert!(error.contains(expected), "{error}");
         proxy.finish();
     }
+}
+
+#[test]
+fn transient_capability_evidence_uses_monitor_health_miss_budget() {
+    for reply in [CapabilityReply::Unavailable, CapabilityReply::Invalid] {
+        let proxy = FakeProxy::start_with_reply(reply, false, GenerationChange::None);
+        let result = proxy_ready_for_monitor_interruptible(
+            &proxy.store,
+            &proxy.settings(false, false, true),
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(result, LockOutcome::Acquired(false));
+        proxy.finish();
+    }
+    for change in [GenerationChange::Token, GenerationChange::Pid] {
+        let proxy = FakeProxy::start(Some(caps(false, false, false)), false, change);
+        let result = proxy_ready_for_monitor_interruptible(
+            &proxy.store,
+            &proxy.settings(false, false, true),
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(result, LockOutcome::Acquired(false));
+        proxy.finish();
+    }
+}
+
+#[test]
+fn transient_probe_does_not_recommend_restarting_shared_proxy() {
+    let proxy =
+        FakeProxy::start_with_reply(CapabilityReply::Unavailable, false, GenerationChange::None);
+    let error = ensure_proxy_running_interruptible(
+        &proxy.store,
+        &proxy.settings(false, false, true),
+        Path::new("unused-example-proxy-executable"),
+        &|| false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("temporarily unavailable"), "{error}");
+    assert!(!error.contains("proxy stop"), "{error}");
+    proxy.finish();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn incompatible_https_reuse_preserves_shared_certificate_material() {
+    let proxy = FakeProxy::start(Some(caps(false, true, true)), true, GenerationChange::None);
+    let spec = AppRunSpec::new(
+        "web",
+        proxy._temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["true".into()]),
+        "web.example.localhost",
+    )
+    .with_proxy(true);
+    let settings = proxy.settings(true, true, true);
+    let error = super::super::run_app_with_interrupt_probe(
+        spec,
+        &settings,
+        Path::new("unused-example-proxy-executable"),
+        || None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("LAN=false"), "{error}");
+    assert!(!proxy.store.ca_path().exists());
+    assert!(!proxy.store.leaf_path().exists());
+    proxy.finish();
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

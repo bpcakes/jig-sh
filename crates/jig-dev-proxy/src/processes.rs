@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::certs;
 use crate::host::{RouteHostname, TargetHost, target_host_is_loopback};
 use crate::ports::{find_free_app_port_excluding, local_lan_ip_for_ipv4_listener, port_is_free};
 use crate::state::{
@@ -25,6 +24,9 @@ use crate::state::{
 use crate::types::CommandSpec;
 use crate::types::{AppKind, AppRunSpec, ProxySettings, Route, RouteMode};
 
+#[cfg(all(test, unix))]
+use self::cert_preparation::prepare_certs_for_hosts;
+use self::cert_preparation::prepare_certs_for_hosts_interruptible;
 use self::child_lifecycle::*;
 use self::cleanup::{
     RunningChild, arm_owned_resources, cleanup_children, new_route_cleanup_deadline,
@@ -51,12 +53,14 @@ use self::proxy::proxy_ready;
 #[cfg(test)]
 use self::proxy::{MAX_PROXY_LOG_BYTES, ensure_requested_https, open_proxy_log};
 use self::proxy::{
-    ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_interruptible,
+    ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_for_monitor_interruptible,
+    proxy_ready_interruptible,
 };
 use self::route_publication::publish_process_route_interruptible;
 #[cfg(test)]
 use self::route_publication::publish_process_route_interruptible_with_verifier;
 
+mod cert_preparation;
 mod child_lifecycle;
 pub(crate) mod cleanup;
 mod dev_session;
@@ -262,6 +266,12 @@ fn run_app_with_interrupt_probe(
         ensure_process_routes_supported()?;
         let route_parts = process_route_parts(settings, &spec)?;
         preflight_process_routes(&store, std::slice::from_ref(&spec), &interrupt_requested)?;
+        // Check the live listener before certificate preparation can mutate
+        // material shared with other proxy users.
+        lock_outcome_or_interruption(
+            proxy_ready_interruptible(&store, settings, &cancelled)?,
+            &interrupt_requested,
+        )?;
         prepare_certs_for_hosts_interruptible(
             settings,
             std::slice::from_ref(&spec.hostname),
@@ -562,28 +572,6 @@ fn require_cleanup_for_success(cleanup_complete: bool, primary_failed: bool) -> 
 
 fn terminate_and_reap_with_retry_logged(child: &mut Child, context: &str) -> bool {
     terminate_and_reap_logged(child, context) || terminate_and_reap_logged(child, context)
-}
-
-fn prepare_certs_for_hosts_interruptible(
-    settings: &ProxySettings,
-    hostnames: &[String],
-    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
-) -> Result<()> {
-    if !settings.https {
-        return Ok(());
-    }
-    let cancelled = || interrupt_requested().is_some();
-    let outcome = certs::ensure_for_hosts_interruptible(settings, hostnames, &cancelled)
-        .with_context(|| {
-            "Failed to prepare HTTPS proxy certificates. Likely fix: run `scripts/jig proxy cert generate --force`, trust the CA with `scripts/jig proxy cert trust --accept-trust-scope`, or disable [dev].https for HTTP-only local development."
-        })?;
-    lock_outcome_or_interruption(outcome, interrupt_requested)?;
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-fn prepare_certs_for_hosts(settings: &ProxySettings, hostnames: &[String]) -> Result<()> {
-    prepare_certs_for_hosts_interruptible(settings, hostnames, &|| None)
 }
 
 fn validate_explicit_ports(specs: &[AppRunSpec]) -> Result<()> {
