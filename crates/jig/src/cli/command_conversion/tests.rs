@@ -166,6 +166,7 @@ fn dev_conversion_preserves_management_action_state_dirs() {
     let status: command::DevCommand = DevOpts {
         command: Some(DevSubcommand::Status(DevStatusOpts {
             state_dir: Some("/tmp/status".into()),
+            ..DevStatusOpts::default()
         })),
         launch: DevLaunchOpts::default(),
     }
@@ -181,6 +182,7 @@ fn dev_conversion_preserves_management_action_state_dirs() {
         command: Some(DevSubcommand::Stop(DevStopOpts {
             state_dir: Some("/tmp/stop".into()),
             forget_ambiguous_orphans: true,
+            ..DevStopOpts::default()
         })),
         launch: DevLaunchOpts::default(),
     }

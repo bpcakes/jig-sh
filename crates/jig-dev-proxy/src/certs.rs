@@ -31,6 +31,9 @@ use crate::ports::local_lan_ip_for_ipv4_listener;
 use crate::state::{LockOutcome, StateStore};
 use crate::types::ProxySettings;
 
+mod preparation;
+pub(crate) use preparation::{ensure_for_hosts, ensure_for_hosts_after_check_interruptible};
+
 mod trust;
 
 #[cfg(target_os = "linux")]
@@ -87,41 +90,6 @@ pub(crate) fn generate(settings: &ProxySettings, force: bool) -> Result<Value> {
 
 pub(crate) fn ensure(settings: &ProxySettings) -> Result<Value> {
     ensure_for_hosts(settings, &[])
-}
-
-pub(crate) fn ensure_for_hosts(settings: &ProxySettings, hostnames: &[String]) -> Result<Value> {
-    ensure_certificate_generation_supported()?;
-    let store = StateStore::resolve(settings.state_dir.clone())?;
-    store.with_cert_lock(|| ensure_for_hosts_locked(&store, settings, hostnames))
-}
-
-pub(crate) fn ensure_for_hosts_interruptible(
-    settings: &ProxySettings,
-    hostnames: &[String],
-    cancelled: &impl Fn() -> bool,
-) -> Result<LockOutcome<Value>> {
-    ensure_certificate_generation_supported()?;
-    let store = match StateStore::resolve_interruptible(settings.state_dir.clone(), cancelled)? {
-        LockOutcome::Acquired(store) => store,
-        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
-    };
-    match store.with_cert_lock_interruptible(cancelled, || {
-        ensure_for_hosts_locked_interruptible(&store, settings, hostnames, cancelled)
-    })? {
-        LockOutcome::Acquired(outcome) => Ok(outcome),
-        LockOutcome::Cancelled => Ok(LockOutcome::Cancelled),
-    }
-}
-
-fn ensure_for_hosts_locked(
-    store: &StateStore,
-    settings: &ProxySettings,
-    hostnames: &[String],
-) -> Result<Value> {
-    match ensure_for_hosts_locked_interruptible(store, settings, hostnames, &|| false)? {
-        LockOutcome::Acquired(value) => Ok(value),
-        LockOutcome::Cancelled => bail!("uncancelled certificate preparation was cancelled"),
-    }
 }
 
 fn ensure_for_hosts_locked_interruptible(

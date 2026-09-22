@@ -43,6 +43,9 @@ pub(crate) fn run() -> Result<()> {
 }
 
 fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
+    if matches!(&cli.command, CommandKind::Dev(opts) if opts.is_contextless()) {
+        return Ok(());
+    }
     let LauncherHandoff::Repository(request) = LauncherHandoff::from_cli(cli)? else {
         return Ok(());
     };
@@ -322,6 +325,11 @@ fn run_command(cli: Cli) -> Result<()> {
         #[cfg(feature = "dev-proxy")]
         CommandKind::Dev(opts) => {
             let human_output = dev_human_output(&opts);
+            if opts.is_contextless() {
+                let output = crate::dev_proxy::commands::dev_contextless(opts.into())?;
+                emit(json_output, human_output, &output)?;
+                return finish_after_json_output(require_foreground_status(&output), json_output);
+            }
             let Some(ctx) = RepoContext::load_optional()? else {
                 anyhow::bail!(
                     "`scripts/jig dev` requires an adopted Jig repo with `.jig.toml`. Run it from a Jig repo, or preview adoption with `scripts/jig adopt .` and apply it with `scripts/jig adopt . --write`."
@@ -642,6 +650,7 @@ const fn dev_human_output(opts: &DevOpts) -> HumanOutput {
     match &opts.command {
         None => HumanOutput::Dev,
         Some(DevSubcommand::Status(_)) => HumanOutput::DevStatus,
+        Some(DevSubcommand::Recover(_)) => HumanOutput::DevRecover,
         Some(DevSubcommand::Stop(_)) => HumanOutput::DevStop,
     }
 }

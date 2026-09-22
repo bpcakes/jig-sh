@@ -1,0 +1,1 @@
+Authenticate effective proxy capabilities over loopback before reuse, reject LAN and HTTPS HTTP2 mismatches or unknown capability evidence, and preserve all shared state. Validate isolated proxy integration cases and required gates.

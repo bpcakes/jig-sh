@@ -1,4 +1,3 @@
-use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -8,21 +7,29 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
+use self::claim::{ClaimOutcome, claim_session_interruptible};
 use self::management::{StopSessionOutcome, stop_session_ids_interruptible};
-use self::process_identity::{capture_process_identity, process_identity_may_be_alive};
+use self::process_identity::capture_process_identity;
 use crate::session_control::SessionControlServer;
 use crate::state::{
     DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
-    LockOutcome, StateStore, now_ms, observe_pid, process_start_token,
+    LockOutcome, StateStore, now_ms,
 };
 use crate::types::{AppRunSpec, Route, RouteMode};
 
+mod assessment;
+mod claim;
 mod management;
 mod process_identity;
 
-pub(crate) use management::{OrphanRecoveryNotice, status, stop};
+pub(crate) use management::{
+    OrphanRecoveryNotice, recover_session, status, status_all, status_session, stop, stop_session,
+};
 
 const SESSION_ID_RANDOM_BYTES: usize = 16;
+// Exact, repository-independent legacy repair is available before enabling this
+// writer cutover. T-02 installs the reader and serialized promotion path.
+const COMPLETE_EVIDENCE_CUTOVER_ENABLED: bool = true;
 
 pub(crate) struct DevSessionRuntime {
     store: StateStore,
@@ -94,7 +101,7 @@ impl DevSessionRuntime {
             started_at_ms: timestamp,
             updated_at_ms: timestamp,
             cleanup_required: false,
-            preflight_cleanup_pending: false,
+            preflight_cleanup_pending: Some(false),
             supervisor: supervisor.clone(),
             control: DevSessionControl {
                 port: control.port(),
@@ -120,48 +127,59 @@ impl DevSessionRuntime {
             LockOutcome::Cancelled => return Ok(DevSessionStartOutcome::Cancelled(Vec::new())),
         };
         match first_claim {
-            ClaimOutcome::Claimed => {}
+            ClaimOutcome::Claimed(recoveries) => replacement_recoveries.extend(recoveries),
             ClaimOutcome::Conflicted(conflicts) if !replace => {
-                return Err(conflicts.launch_error(false));
+                return Err(conflicts.launch_error(false, store.root()));
             }
             ClaimOutcome::Conflicted(conflicts) => {
                 if conflicts.has_unsafe_replacement() {
-                    return Err(conflicts.launch_error(true));
+                    return Err(conflicts.launch_error(true, store.root()));
                 }
                 let target_ids = conflicts.same_repo_session_ids();
+                let target_session_ids = target_ids.iter().cloned().collect::<Vec<_>>().join(", ");
                 if cancelled() {
                     return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                 }
-                let stop =
-                    match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled) {
-                        StopSessionOutcome::Complete(stop) => stop,
-                        StopSessionOutcome::Cancelled(progress) => {
-                            let (recoveries, warnings) = progress.into_parts();
-                            replacement_recoveries.extend(recoveries);
-                            for warning in warnings {
-                                eprintln!(
-                                    "jig dev --replace stop warning before cancellation: {warning}"
-                                );
-                            }
-                            return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                let stop = match stop_session_ids_interruptible(
+                    &store,
+                    &repo,
+                    &target_ids,
+                    cancelled,
+                ) {
+                    StopSessionOutcome::Complete(stop) => stop,
+                    StopSessionOutcome::Cancelled(progress) => {
+                        let (recoveries, warnings) = progress.into_parts();
+                        replacement_recoveries.extend(recoveries);
+                        for warning in warnings {
+                            eprintln!(
+                                "jig dev --replace stop warning before cancellation: {warning}"
+                            );
                         }
-                        StopSessionOutcome::Failed { error, progress } => {
-                            let (recoveries, warnings) = progress.into_parts();
-                            replacement_recoveries.extend(recoveries);
-                            let error = attach_replacement_stop_warnings(error, &warnings);
-                            return Err(crate::dev_outcome::with_recovery_notices(
-                                error,
-                                replacement_recoveries,
+                        return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                    }
+                    StopSessionOutcome::Failed { error, progress } => {
+                        let (recoveries, warnings) = progress.into_parts();
+                        replacement_recoveries.extend(recoveries);
+                        let error = attach_replacement_stop_warnings(error, &warnings);
+                        let error = error.context(format!(
+                                "Could not replace the existing Jig dev session safely (attempted session IDs: {target_session_ids}; final blockers could not be confirmed; state directory {}); inspect with `jig dev status --state-dir PATH`",
+                                store.root().display()
                             ));
-                        }
-                    };
+                        return Err(crate::dev_outcome::with_recovery_notices(
+                            error,
+                            replacement_recoveries,
+                        ));
+                    }
+                };
                 for recovery in &stop.recoveries {
                     eprintln!("jig dev --replace recovery: {}", recovery.message);
                 }
                 replacement_recoveries.extend(stop.recoveries.iter().cloned());
                 if !stop.ok {
+                    let blocker_ids = stop.remaining_session_ids().join(", ");
                     let error = anyhow!(
-                        "Could not replace the existing Jig dev session safely: {}",
+                        "Could not replace the existing Jig dev session safely (blocking session IDs: {blocker_ids}; state directory {}): {}. Inspect with `jig dev status --state-dir PATH`",
+                        store.root().display(),
                         stop.warnings.join("; ")
                     );
                     return Err(crate::dev_outcome::with_recovery_notices(
@@ -182,10 +200,12 @@ impl DevSessionRuntime {
                     LockOutcome::Cancelled => {
                         return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                     }
-                    LockOutcome::Acquired(ClaimOutcome::Claimed) => {}
+                    LockOutcome::Acquired(ClaimOutcome::Claimed(recoveries)) => {
+                        replacement_recoveries.extend(recoveries);
+                    }
                     LockOutcome::Acquired(ClaimOutcome::Conflicted(conflicts)) => {
                         return Err(crate::dev_outcome::with_recovery_notices(
-                            conflicts.concurrent_launch_error(),
+                            conflicts.concurrent_launch_error(store.root()),
                             replacement_recoveries,
                         ));
                     }
@@ -262,14 +282,14 @@ impl DevSessionRuntime {
             &self.repo_root_identity,
             &self.supervisor,
         )?;
-        if session.preflight_cleanup_pending {
+        if session.preflight_cleanup_pending == Some(true) {
             bail!(
                 "Jig dev session '{}' already has pending preflight cleanup",
                 self.session_id
             );
         }
         session.cleanup_required = true;
-        session.preflight_cleanup_pending = true;
+        session.preflight_cleanup_pending = Some(true);
         session.updated_at_ms = next_timestamp(session.updated_at_ms);
         Ok(())
     }
@@ -288,13 +308,13 @@ impl DevSessionRuntime {
                         &self.repo_root_identity,
                         &self.supervisor,
                     )?;
-                    if !session.preflight_cleanup_pending {
+                    if session.preflight_cleanup_pending != Some(true) {
                         bail!(
                             "Jig dev session '{}' has no pending preflight cleanup to confirm",
                             self.session_id
                         );
                     }
-                    session.preflight_cleanup_pending = false;
+                    session.preflight_cleanup_pending = Some(false);
                     session.updated_at_ms = next_timestamp(session.updated_at_ms);
                     Ok(())
                 })?;
@@ -496,25 +516,7 @@ fn attach_replacement_stop_warnings(error: anyhow::Error, warnings: &[String]) -
 }
 
 #[cfg(test)]
-mod stop_progress_tests {
-    use super::attach_replacement_stop_warnings;
-
-    #[test]
-    fn failed_replacement_stop_keeps_accumulated_warnings_in_the_error_chain() {
-        let warnings = vec![
-            "session 'dev_example': authenticated stop was unavailable".to_owned(),
-            "session 'dev_other': cleanup identity remained uncertain".to_owned(),
-        ];
-
-        let error =
-            attach_replacement_stop_warnings(anyhow::anyhow!("later state read failed"), &warnings);
-        let chain = format!("{error:#}");
-
-        assert!(chain.contains(&warnings[0]), "{chain}");
-        assert!(chain.contains(&warnings[1]), "{chain}");
-        assert!(chain.contains("later state read failed"), "{chain}");
-    }
-}
+mod stop_progress_tests;
 
 impl Drop for DevSessionRuntime {
     fn drop(&mut self) {
@@ -555,143 +557,14 @@ impl CanonicalRepo {
             root_identity,
         })
     }
-}
 
-#[derive(Default)]
-struct ClaimConflicts {
-    same_repo: Vec<DevSessionRecord>,
-    other_repos: Vec<(String, String)>,
-    unmanaged_routes: Vec<Route>,
-}
-
-impl ClaimConflicts {
-    fn is_empty(&self) -> bool {
-        self.same_repo.is_empty() && self.other_repos.is_empty() && self.unmanaged_routes.is_empty()
-    }
-
-    fn has_unsafe_replacement(&self) -> bool {
-        !self.other_repos.is_empty() || !self.unmanaged_routes.is_empty()
-    }
-
-    fn same_repo_session_ids(&self) -> BTreeSet<String> {
-        self.same_repo
-            .iter()
-            .map(|session| session.session_id.clone())
-            .collect()
-    }
-
-    fn launch_error(&self, replacing: bool) -> anyhow::Error {
-        if let Some((hostname, root)) = self.other_repos.first() {
-            return anyhow!(
-                "Development route '{hostname}' belongs to a live Jig dev session from repository {root}. `jig dev --replace` refuses cross-repository ownership; stop that repository's session or change the duplicate hostname."
-            );
-        }
-        if let Some(route) = self.unmanaged_routes.first() {
-            let owner = route
-                .owner_pid
-                .map(|pid| pid.to_string())
-                .unwrap_or_else(|| "<unknown>".into());
-            return anyhow!(
-                "Proxy route '{}' would replace a live process route owned by PID {} and targeting {}:{}, but that route is not attributable to a registered Jig dev session. `jig dev --replace` will not terminate an unregistered or ad-hoc process. Stop that process, run `jig proxy prune`, or change the duplicate hostname.",
-                route.hostname,
-                owner,
-                route.target_host,
-                route.target_port
-            );
-        }
-        let hosts = conflict_hostnames(&self.same_repo);
-        if replacing {
-            anyhow!(
-                "The registered Jig dev session for {} could not be replaced safely.",
-                hosts.join(", ")
-            )
-        } else {
-            anyhow!(
-                "A registered Jig dev session from this repository already claims {}. Run `jig dev stop` to stop all repository sessions, or retry this launch with `jig dev --replace`.",
-                hosts.join(", ")
-            )
+    pub(super) fn from_record(session: &DevSessionRecord) -> Self {
+        Self {
+            name: session.repo_name.clone(),
+            root_display: session.repo_root_display.clone(),
+            root_identity: session.repo_root_identity.clone(),
         }
     }
-
-    fn concurrent_launch_error(&self) -> anyhow::Error {
-        anyhow!(
-            "A concurrent Jig dev launch claimed the requested app or route while replacement was completing. No newly observed session was stopped; inspect `jig dev status` and retry."
-        )
-    }
-}
-
-enum ClaimOutcome {
-    Claimed,
-    Conflicted(ClaimConflicts),
-}
-
-fn claim_session_interruptible(
-    store: &StateStore,
-    proposed: &DevSessionRecord,
-    cancelled: &impl Fn() -> bool,
-) -> Result<LockOutcome<ClaimOutcome>> {
-    store.mutate_dev_sessions_interruptible(cancelled, |sessions, routes| {
-        sessions.retain(|session| session.cleanup_required || session_observed_alive(session));
-        let mut conflicts = ClaimConflicts::default();
-        let mut seen_session_ids = HashSet::new();
-
-        for session in sessions.iter() {
-            let same_repo = session.repo_root_identity == proposed.repo_root_identity;
-            let overlap = if same_repo {
-                sessions_overlap(session, proposed)
-            } else {
-                overlapping_hostname(session, proposed).is_some()
-            };
-            if !overlap {
-                continue;
-            }
-            seen_session_ids.insert(session.session_id.clone());
-            if same_repo {
-                conflicts.same_repo.push(session.clone());
-            } else {
-                let hostname = overlapping_hostname(session, proposed)
-                    .expect("cross-repository overlap is hostname-based");
-                conflicts
-                    .other_repos
-                    .push((hostname, session.repo_root_display.clone()));
-            }
-        }
-
-        let proposed_hostnames = proposed
-            .apps
-            .iter()
-            .filter_map(|app| app.hostname.as_deref())
-            .collect::<HashSet<_>>();
-        for route in routes.iter().filter(|route| {
-            route.mode == RouteMode::Process
-                && proposed_hostnames.contains(route.hostname.as_str())
-                && route_is_live(route)
-        }) {
-            let attributed = sessions
-                .iter()
-                .find(|session| session_owns_route(session, route));
-            match attributed {
-                Some(session) if seen_session_ids.contains(&session.session_id) => {}
-                Some(session) if session.repo_root_identity == proposed.repo_root_identity => {
-                    seen_session_ids.insert(session.session_id.clone());
-                    conflicts.same_repo.push(session.clone());
-                }
-                Some(session) => conflicts.other_repos.push((
-                    route.hostname.to_string(),
-                    session.repo_root_display.clone(),
-                )),
-                None => conflicts.unmanaged_routes.push(route.clone()),
-            }
-        }
-
-        deduplicate_conflicts(&mut conflicts);
-        if conflicts.is_empty() {
-            sessions.push(proposed.clone());
-            Ok(ClaimOutcome::Claimed)
-        } else {
-            Ok(ClaimOutcome::Conflicted(conflicts))
-        }
-    })
 }
 
 fn exact_session_mut<'a>(
@@ -710,32 +583,6 @@ fn exact_session_mut<'a>(
         .ok_or_else(|| anyhow!("Jig dev session '{session_id}' is no longer registered"))
 }
 
-fn sessions_overlap(left: &DevSessionRecord, right: &DevSessionRecord) -> bool {
-    left.apps.iter().any(|left_app| {
-        right.apps.iter().any(|right_app| {
-            left_app.name == right_app.name
-                || left_app
-                    .hostname
-                    .as_ref()
-                    .zip(right_app.hostname.as_ref())
-                    .is_some_and(|(left, right)| left == right)
-        })
-    })
-}
-
-fn overlapping_hostname(left: &DevSessionRecord, right: &DevSessionRecord) -> Option<String> {
-    left.apps.iter().find_map(|left_app| {
-        right.apps.iter().find_map(|right_app| {
-            left_app
-                .hostname
-                .as_ref()
-                .zip(right_app.hostname.as_ref())
-                .filter(|(left, right)| left == right)
-                .map(|(hostname, _)| hostname.clone())
-        })
-    })
-}
-
 fn session_owns_route(session: &DevSessionRecord, route: &Route) -> bool {
     route.mode == RouteMode::Process
         && session.apps.iter().any(|app| {
@@ -745,54 +592,6 @@ fn session_owns_route(session: &DevSessionRecord, route: &Route) -> bool {
                         && route.owner_start_token == identity.start_token
                 })
         })
-}
-
-fn session_observed_alive(session: &DevSessionRecord) -> bool {
-    process_identity_may_be_alive(&session.supervisor)
-        || session
-            .apps
-            .iter()
-            .filter_map(|app| app.process.as_ref())
-            .any(process_identity_may_be_alive)
-}
-
-fn route_is_live(route: &Route) -> bool {
-    match route.mode {
-        RouteMode::Alias => true,
-        RouteMode::Process => route
-            .owner_pid
-            .zip(route.owner_start_token.as_deref())
-            .is_some_and(|(pid, token)| {
-                observe_pid(pid).may_be_alive()
-                    && process_start_token(pid)
-                        .as_deref()
-                        .is_none_or(|current| current == token)
-            }),
-    }
-}
-
-fn deduplicate_conflicts(conflicts: &mut ClaimConflicts) {
-    let mut session_ids = HashSet::new();
-    conflicts
-        .same_repo
-        .retain(|session| session_ids.insert(session.session_id.clone()));
-    let mut other = HashSet::new();
-    conflicts
-        .other_repos
-        .retain(|entry| other.insert(entry.clone()));
-    let mut routes = HashSet::new();
-    conflicts
-        .unmanaged_routes
-        .retain(|route| routes.insert(route.hostname.to_string()));
-}
-
-fn conflict_hostnames(sessions: &[DevSessionRecord]) -> Vec<String> {
-    let hosts = sessions
-        .iter()
-        .flat_map(|session| &session.apps)
-        .filter_map(|app| app.hostname.clone().or_else(|| Some(app.name.clone())))
-        .collect::<BTreeSet<_>>();
-    hosts.into_iter().collect()
 }
 
 fn next_timestamp(previous: u64) -> u64 {

@@ -30,7 +30,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::certs;
 use crate::host::ip_is_loopback;
-use crate::ports::local_lan_ip_for_ipv4_listener;
+use crate::ports::{ProxyCapabilities, local_lan_ip_for_ipv4_listener};
 use crate::state::{FileSignature, StateStore, file_signature};
 use crate::types::{ProxySettings, Route};
 mod backend;
@@ -91,6 +91,7 @@ struct RequestContext {
     local_ip: IpAddr,
     lan_ip: Option<IpAddr>,
     health_token: Arc<str>,
+    capabilities: ProxyCapabilities,
 }
 
 #[derive(Clone)]
@@ -98,6 +99,7 @@ struct ListenerContext {
     proxy_port: u16,
     lan_ip: Option<IpAddr>,
     health_token: Arc<str>,
+    capabilities: ProxyCapabilities,
 }
 
 const ROUTE_CACHE_MAX_AGE: Duration = Duration::from_millis(500);
@@ -250,6 +252,12 @@ async fn run_bound(
         proxy_port: http_port,
         lan_ip,
         health_token,
+        capabilities: ProxyCapabilities {
+            pid: std::process::id(),
+            lan: settings.lan,
+            https: https_port.is_some(),
+            http2: https_port.is_some() && settings.http2,
+        },
     };
     let http = serve_http(
         http_listener,
@@ -573,6 +581,7 @@ async fn serve_http(
                 local_ip,
                 lan_ip: listener_context.lan_ip,
                 health_token: listener_context.health_token,
+                capabilities: listener_context.capabilities,
             };
             let service = service_fn(move |req| {
                 handle_request(
@@ -665,6 +674,7 @@ async fn serve_https(
                 local_ip,
                 lan_ip: listener_context.lan_ip,
                 health_token: listener_context.health_token,
+                capabilities: listener_context.capabilities,
             };
             let service = service_fn(move |req| {
                 handle_request(
@@ -761,19 +771,8 @@ async fn route_request(
             "CONNECT requests are not supported by Jig proxy.",
         ));
     }
-    if req.uri().path() == "/__jig_proxy_health" {
-        // Health requests intentionally bypass normal route host validation,
-        // but only after the loopback local/remote address and token checks
-        // below succeed. Keep those checks together with this early path.
-        if !health_request_allowed(
-            &req,
-            context.remote_addr.ip(),
-            context.local_ip,
-            &context.health_token,
-        ) {
-            return Ok(error_response(StatusCode::FORBIDDEN, "Forbidden."));
-        }
-        return Ok(health_response());
+    if let Some(response) = internal_probe_response(&req, &context) {
+        return Ok(response);
     }
     let host = match request_host_or_bad_request(&req) {
         Ok(host) => host,

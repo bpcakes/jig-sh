@@ -27,11 +27,18 @@ pub(crate) use signature::{FileSignature, file_signature};
 
 mod dev_session_store;
 mod dev_sessions;
+#[cfg(test)]
+pub(crate) use dev_sessions::fail_session_write_once;
 mod process_identity;
 mod resolution;
+mod route_writer;
+mod runtime;
 mod signature;
 
 use resolution::ensure_state_dir_has_no_symlinks;
+#[cfg(test)]
+pub(crate) use route_writer::fail_route_write_once;
+use route_writer::write_routes_to_path;
 
 const ROUTES_VERSION: u32 = 1;
 const ROUTES_FILE: &str = "routes.json";
@@ -722,15 +729,6 @@ impl StateStore {
         let unlock_result = lock.unlock();
         finish_with_unlock("runtime lock", result, unlock_result).map(LockOutcome::Acquired)
     }
-
-    fn remove_runtime_files_unlocked(&self) -> Result<()> {
-        remove_runtime_file(self.pid_path())?;
-        remove_runtime_file(self.proxy_exe_path())?;
-        remove_runtime_file(self.http_port_path())?;
-        remove_runtime_file(self.https_port_path())?;
-        remove_runtime_file(self.health_token_path())?;
-        Ok(())
-    }
 }
 
 fn remove_runtime_file(path: PathBuf) -> Result<()> {
@@ -1018,23 +1016,6 @@ fn live_process_route_for_hostname<'a>(routes: &'a [Route], hostname: &str) -> O
             && existing.mode == RouteMode::Process
             && route_is_alive(existing)
     })
-}
-
-fn write_routes_to_path(path: &Path, routes: &[Route]) -> Result<()> {
-    let tmp = file_ops::temp_path(path, "jig-proxy-state");
-    let mut file = file_ops::create_new_file(&tmp, 0o600)?;
-    serde_json::to_writer_pretty(
-        &mut file,
-        &RoutesDocument {
-            version: ROUTES_VERSION,
-            routes,
-        },
-    )?;
-    file.write_all(b"\n")?;
-    file.sync_data()?;
-    drop(file);
-    file_ops::replace_file(&tmp, path)?;
-    Ok(())
 }
 
 #[derive(Deserialize)]

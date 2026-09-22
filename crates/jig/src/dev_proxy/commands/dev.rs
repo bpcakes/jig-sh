@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::command::{DevCommand, DevRequest, DevStatusRequest, DevStopRequest};
+use crate::command::{DevCommand, DevRecoverRequest, DevRequest, DevStatusRequest, DevStopRequest};
 use crate::context::RepoContext;
 use crate::progress::CliProgress;
 
@@ -15,8 +15,35 @@ pub(crate) fn dev(ctx: &RepoContext, command: DevCommand) -> Result<Value> {
     match command {
         DevCommand::Launch(opts) => dev_launch(ctx, opts),
         DevCommand::Status(opts) => dev_status(ctx, opts),
+        DevCommand::Recover(opts) => dev_recover(opts),
         DevCommand::Stop(opts) => dev_stop(ctx, opts),
     }
+}
+
+pub(crate) fn dev_contextless(command: DevCommand) -> Result<Value> {
+    match command {
+        DevCommand::Status(DevStatusRequest {
+            all: true,
+            session: None,
+            state_dir,
+        }) => jig_dev_proxy::dev_status_all(state_dir),
+        DevCommand::Status(DevStatusRequest {
+            all: false,
+            session: Some(session),
+            state_dir,
+        }) => jig_dev_proxy::dev_status_session(&session, state_dir),
+        DevCommand::Recover(opts) => dev_recover(opts),
+        DevCommand::Stop(DevStopRequest {
+            session: Some(session),
+            state_dir,
+            forget_ambiguous_orphans,
+        }) => jig_dev_proxy::dev_stop_session(&session, state_dir, forget_ambiguous_orphans),
+        _ => anyhow::bail!("This Jig dev command requires an adopted repository"),
+    }
+}
+
+fn dev_recover(opts: DevRecoverRequest) -> Result<Value> {
+    jig_dev_proxy::dev_recover_session(&opts.session, opts.state_dir)
 }
 
 fn dev_launch(ctx: &RepoContext, opts: DevRequest) -> Result<Value> {
@@ -74,6 +101,9 @@ fn dev_launch(ctx: &RepoContext, opts: DevRequest) -> Result<Value> {
 }
 
 fn dev_status(ctx: &RepoContext, opts: DevStatusRequest) -> Result<Value> {
+    if opts.all || opts.session.is_some() {
+        return dev_contextless(DevCommand::Status(opts));
+    }
     jig_dev_proxy::dev_status(jig_dev_proxy::DevStatusRequest::new(
         ctx.repo_name(),
         ctx.root().to_path_buf(),
@@ -82,6 +112,9 @@ fn dev_status(ctx: &RepoContext, opts: DevStatusRequest) -> Result<Value> {
 }
 
 fn dev_stop(ctx: &RepoContext, opts: DevStopRequest) -> Result<Value> {
+    if opts.session.is_some() {
+        return dev_contextless(DevCommand::Stop(opts));
+    }
     jig_dev_proxy::dev_stop(
         jig_dev_proxy::DevStopRequest::new(
             ctx.repo_name(),

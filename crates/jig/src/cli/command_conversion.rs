@@ -6,17 +6,17 @@ use crate::command;
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
     CheckComparisonOpts, CheckMigrationImmutabilityOpts, CheckOpts, CheckTargetOpts,
-    CliExactTreeProvenance, DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
-    GenerateSqlxUncheckedQueriesTodoOpts, LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts,
-    LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
-    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
-    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
-    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
-    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
-    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
-    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
-    WorkRefineOpts, WorkRetireOpts, WorkReviewOpts, WorkStartOpts,
+    CliExactTreeProvenance, DevLaunchOpts, DevOpts, DevRecoverOpts, DevStatusOpts, DevStopOpts,
+    DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, LoopAcknowledgeOccurrenceOpts,
+    LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
+    ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts,
+    ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
+    ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
+    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
+    StateCompactCommand, StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand,
+    StateExportReceiptsOpts, StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts,
+    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
+    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkRetireOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -502,6 +502,7 @@ impl From<DevOpts> for command::DevCommand {
         match opts.command {
             None => Self::Launch(opts.launch.into()),
             Some(DevSubcommand::Status(opts)) => Self::Status(opts.into()),
+            Some(DevSubcommand::Recover(opts)) => Self::Recover(opts.into()),
             Some(DevSubcommand::Stop(opts)) => Self::Stop(opts.into()),
         }
     }
@@ -523,6 +524,17 @@ impl From<DevStatusOpts> for command::DevStatusRequest {
     fn from(opts: DevStatusOpts) -> Self {
         Self {
             state_dir: opts.state_dir,
+            all: opts.all,
+            session: opts.session,
+        }
+    }
+}
+
+impl From<DevRecoverOpts> for command::DevRecoverRequest {
+    fn from(opts: DevRecoverOpts) -> Self {
+        Self {
+            state_dir: opts.state_dir,
+            session: opts.session,
         }
     }
 }
@@ -531,6 +543,7 @@ impl From<DevStopOpts> for command::DevStopRequest {
     fn from(opts: DevStopOpts) -> Self {
         Self {
             state_dir: opts.state_dir,
+            session: opts.session,
             forget_ambiguous_orphans: opts.forget_ambiguous_orphans,
         }
     }
@@ -593,6 +606,7 @@ impl From<ProxyStartOpts> for command::ProxyStartRequest {
     fn from(opts: ProxyStartOpts) -> Self {
         Self {
             foreground: opts.foreground,
+            certificate_dns_name: opts.certificate_dns_name,
             proxy: opts.proxy.into(),
         }
     }

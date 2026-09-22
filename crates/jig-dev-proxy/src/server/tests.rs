@@ -21,6 +21,17 @@ use super::*;
 use crate::state::now_ms;
 use crate::types::RouteMode;
 
+mod capability_tests;
+
+fn test_capabilities(https: bool, http2: bool) -> ProxyCapabilities {
+    ProxyCapabilities {
+        pid: std::process::id(),
+        lan: false,
+        https,
+        http2,
+    }
+}
+
 #[test]
 fn websocket_detection_requires_connection_upgrade() {
     let mut headers = HeaderMap::new();
@@ -150,98 +161,6 @@ fn websocket_subprotocol_must_match_client_request() {
     assert!(websocket_subprotocol_allowed(&request, &selected));
     assert!(!websocket_subprotocol_allowed(&request, &unrequested));
     assert!(!websocket_subprotocol_allowed(&request, &duplicate));
-}
-
-#[test]
-fn health_request_requires_loopback_client_and_host() {
-    let loopback = "127.0.0.1".parse().unwrap();
-    let remote = "192.168.1.50".parse().unwrap();
-    let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    let localhost = Request::builder()
-        .header(HOST, "localhost")
-        .header("x-jig-proxy-health-token", token)
-        .body(())
-        .unwrap();
-    let loopback_literal = Request::builder()
-        .header(HOST, "127.0.0.1:1355")
-        .header("x-jig-proxy-health-token", token)
-        .body(())
-        .unwrap();
-    let ipv6_loopback = Request::builder()
-        .header(HOST, "[::1]:1355")
-        .header("x-jig-proxy-health-token", token)
-        .body(())
-        .unwrap();
-    let malformed_ipv6_loopback = Request::builder()
-        .header(HOST, "[::1]evil")
-        .header("x-jig-proxy-health-token", token)
-        .body(())
-        .unwrap();
-    let routed_host = Request::builder()
-        .header(HOST, "web.demo.localhost")
-        .header("x-jig-proxy-health-token", token)
-        .body(())
-        .unwrap();
-    let wrong_token = Request::builder()
-        .header(HOST, "localhost")
-        .header("x-jig-proxy-health-token", "wrong")
-        .body(())
-        .unwrap();
-    let missing_token = Request::builder()
-        .header(HOST, "localhost")
-        .body(())
-        .unwrap();
-
-    assert!(health_request_allowed(
-        &localhost, loopback, loopback, token
-    ));
-    assert!(health_request_allowed(
-        &loopback_literal,
-        loopback,
-        loopback,
-        token
-    ));
-    assert!(health_request_allowed(
-        &ipv6_loopback,
-        "::1".parse().unwrap(),
-        "::1".parse().unwrap(),
-        token
-    ));
-    assert!(health_request_allowed(
-        &localhost,
-        "::ffff:127.0.0.1".parse().unwrap(),
-        "::ffff:127.0.0.1".parse().unwrap(),
-        token
-    ));
-    assert!(!health_request_allowed(&localhost, remote, loopback, token));
-    assert!(!health_request_allowed(&localhost, loopback, remote, token));
-    assert!(!health_request_allowed(
-        &malformed_ipv6_loopback,
-        loopback,
-        loopback,
-        token
-    ));
-    assert!(!health_request_allowed(
-        &routed_host,
-        loopback,
-        loopback,
-        token
-    ));
-    assert!(!health_request_allowed(
-        &wrong_token,
-        loopback,
-        loopback,
-        token
-    ));
-    assert!(!health_request_allowed(
-        &missing_token,
-        loopback,
-        loopback,
-        token
-    ));
-    assert!(!constant_time_ascii_eq("health-token-prefix", token));
-    assert!(!constant_time_ascii_eq("short", "short"));
-    assert!(constant_time_ascii_eq(token, token));
 }
 
 #[test]
@@ -1029,6 +948,7 @@ async fn https_proxy_serves_h2_requests() {
                 proxy_port: addr.port(),
                 lan_ip: None,
                 health_token: Arc::from("test-health-token"),
+                capabilities: test_capabilities(true, true),
             },
         )
         .await
@@ -1162,6 +1082,7 @@ async fn request_limit_exhaustion_returns_service_unavailable() {
             proxy_port: addr.port(),
             lan_ip: None,
             health_token: Arc::from("test-health-token"),
+            capabilities: test_capabilities(false, false),
         },
     ));
 

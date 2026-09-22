@@ -56,10 +56,15 @@ pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
                 || value_bool(session, "supervisor_alive").unwrap_or(false)
         })
     });
-    let mut lines = vec![format!(
-        "Dev status: {}",
-        if running { "running" } else { "stopped" }
-    )];
+    let summary = match value_str(value, "activity") {
+        Some("verified") => "running",
+        Some("possible") => "activity uncertain",
+        Some("none") if value_bool(value, "cleanup_required") == Some(true) => "cleanup required",
+        Some("none") => "stopped",
+        _ if running => "running",
+        _ => "stopped",
+    };
+    let mut lines = vec![format!("Dev status: {summary}")];
     append_dev_repo_and_state(&mut lines, value);
     lines.push(format!("  Sessions: {}", sessions.len()));
 
@@ -67,13 +72,22 @@ pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
         let session_id = value_str(session, "session_id")
             .or_else(|| value_str(session, "id"))
             .unwrap_or("<unknown>");
-        let status = value_str(session, "status").unwrap_or_else(|| {
+        let legacy_status = value_str(session, "status").unwrap_or_else(|| {
             if value_bool(session, "supervisor_alive").unwrap_or(false) {
                 "running"
             } else {
                 "stale"
             }
         });
+        let status = match value_str(session, "activity") {
+            Some("verified") => "running",
+            Some("possible") => "activity uncertain",
+            Some("none") if value_bool(session, "cleanup_required") == Some(true) => {
+                "cleanup required"
+            }
+            Some("none") => "stopped",
+            _ => legacy_status,
+        };
         let supervisor_pid = value_u64(session, "supervisor_pid")
             .or_else(|| value_u64(&session["supervisor"], "pid"));
         let app_count = session["apps"].as_array().map(Vec::len).unwrap_or(0);
@@ -84,8 +98,51 @@ pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
         lines.push(format!(
             "  - {session_id}: {status}, {pid}, {app_count} {app_label}"
         ));
+        if value_str(value, "scope").is_some()
+            && let (Some(repo), Some(root)) = (
+                value_str(session, "repo_name"),
+                value_str(session, "repo_root"),
+            )
+        {
+            lines.push(format!("    Repository: {repo} ({root})"));
+        }
+        if let Some(reason) = value_str(session, "retention_reason") {
+            let readable = reason.replace('-', " ");
+            let app = value_str(session, "retention_app")
+                .map(|name| format!(" ({name})"))
+                .unwrap_or_default();
+            lines.push(format!("    Retained: {readable}{app}"));
+        } else if value_bool(session, "recoverable") == Some(true) {
+            lines.push("    Eligible for explicit metadata recovery".into());
+        }
     }
 
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
+    let session_id = value_str(value, "session_id").unwrap_or("<unknown>");
+    let state_dir = value_str(value, "state_dir").unwrap_or("<unknown>");
+    let retired = value_u64(value, "retired_sessions").unwrap_or(0);
+    let matched = value_u64(value, "matched_sessions").unwrap_or(0);
+    let mut lines = if retired == 1 {
+        vec![format!(
+            "Dev recover: retired metadata for session {session_id}; no process stop requested"
+        )]
+    } else if matched == 0 {
+        vec![format!(
+            "Dev recover: session {session_id} is already absent"
+        )]
+    } else {
+        vec![format!(
+            "Dev recover: session {session_id} retained; no process stop requested"
+        )]
+    };
+    lines.push(format!("  State directory: {state_dir}"));
+    if let Some(reason) = value_str(value, "retention_reason") {
+        lines.push(format!("  Reason: {}", reason.replace('-', " ")));
+    }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
 }
@@ -330,6 +387,49 @@ mod tests {
 
         assert!(summary.contains("Dev status: stopped"));
         assert!(summary.contains("dev_recoverable: recoverable"));
+    }
+
+    #[test]
+    fn dev_status_summary_uses_observed_activity_and_cleanup_evidence() {
+        let uncertain = format_dev_status_summary(&json!({
+            "repo_name": "ExampleProject",
+            "state_dir": "/tmp/ExampleProject-proxy-state",
+            "running": true,
+            "activity": "possible",
+            "cleanup_required": true,
+            "sessions": [{
+                "session_id": "dev_example_uncertain",
+                "status": "orphaned",
+                "activity": "possible",
+                "cleanup_required": true,
+                "retention_reason": "app-spawn-pending",
+                "retention_app": "web",
+                "supervisor_pid": 4242,
+                "apps": [{"name": "web"}]
+            }]
+        }));
+        assert!(uncertain.contains("Dev status: activity uncertain"));
+        assert!(uncertain.contains("dev_example_uncertain: activity uncertain"));
+        assert!(uncertain.contains("Retained: app spawn pending (web)"));
+        assert!(uncertain.contains("State: /tmp/ExampleProject-proxy-state"));
+        assert!(!uncertain.contains("Dev status: running"));
+
+        let recoverable = format_dev_status_summary(&json!({
+            "running": false,
+            "activity": "none",
+            "cleanup_required": true,
+            "sessions": [{
+                "session_id": "dev_example_recoverable",
+                "status": "recoverable",
+                "activity": "none",
+                "cleanup_required": true,
+                "recoverable": true,
+                "apps": []
+            }]
+        }));
+        assert!(recoverable.contains("Dev status: cleanup required"));
+        assert!(recoverable.contains("dev_example_recoverable: cleanup required"));
+        assert!(recoverable.contains("Eligible for explicit metadata recovery"));
     }
 
     #[test]

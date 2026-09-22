@@ -5,6 +5,9 @@ pub(super) fn retention_warning(
     reason: &OrphanRetentionReason,
 ) -> StopWarning {
     let detail = match reason {
+        OrphanRetentionReason::ControlAlive => {
+            "authenticated session control endpoint remained live".to_owned()
+        }
         OrphanRetentionReason::SupervisorAlive => format!(
             "supervisor PID {} remained live after the authenticated stop request",
             session.supervisor.pid
@@ -15,6 +18,9 @@ pub(super) fn retention_warning(
         ),
         OrphanRetentionReason::PreflightCleanupPending => {
             "development preflight cleanup was not confirmed".to_owned()
+        }
+        OrphanRetentionReason::PreflightCleanupUnknown => {
+            "legacy development preflight cleanup evidence is missing".to_owned()
         }
         OrphanRetentionReason::AppAlive(app) => {
             let pid = session
@@ -40,14 +46,21 @@ pub(super) fn retention_warning(
     };
     let repair = match reason {
         OrphanRetentionReason::PreflightCleanupPending
+        | OrphanRetentionReason::PreflightCleanupUnknown
         | OrphanRetentionReason::AppSpawnPending(_)
         | OrphanRetentionReason::AppSpawnUntracked(_) => {
-            "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --forget-ambiguous-orphans`"
+            format!(
+                "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --session {} --state-dir PATH --forget-ambiguous-orphans`",
+                session.session_id
+            )
         }
         OrphanRetentionReason::AppAlive(_) | OrphanRetentionReason::AppUncertain(_) => {
-            "; the owning supervisor is gone: inspect `jig dev status --json`, independently verify and stop surviving app processes, then retry `jig dev stop` or `jig dev --replace`; `--forget-ambiguous-orphans` cannot bypass live or uncertain process identities"
+            format!(
+                "; the owning supervisor is gone: inspect `jig dev status --session {} --state-dir PATH --json`, independently verify and stop surviving app processes, then retry `jig dev stop --session {} --state-dir PATH`; `--forget-ambiguous-orphans` cannot bypass live or uncertain process identities",
+                session.session_id, session.session_id
+            )
         }
-        _ => "",
+        _ => String::new(),
     };
     StopWarning {
         session_id: session.session_id.clone(),

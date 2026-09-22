@@ -23,7 +23,7 @@ fn session(session_id: &str) -> DevSessionRecord {
         started_at_ms: timestamp,
         updated_at_ms: timestamp,
         cleanup_required: true,
-        preflight_cleanup_pending: false,
+        preflight_cleanup_pending: Some(false),
         supervisor: DevProcessIdentity {
             pid: std::process::id(),
             start_token: Some("test-supervisor".into()),
@@ -146,12 +146,12 @@ fn older_v1_writer_degrades_new_cleanup_evidence_to_legacy_ambiguity() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     let mut expected = session("dev_legacy_cleanup_evidence");
-    expected.preflight_cleanup_pending = true;
+    expected.preflight_cleanup_pending = Some(true);
     expected.apps[0]
         .prepare_spawn(&expected.session_id, 4_005)
         .unwrap();
     let mut document = serde_json::to_value(DevSessionsDocument {
-        version: VERSION,
+        version: LEGACY_VERSION,
         sessions: std::slice::from_ref(&expected),
     })
     .unwrap();
@@ -174,7 +174,7 @@ fn older_v1_writer_degrades_new_cleanup_evidence_to_legacy_ambiguity() {
     assert_eq!(persisted.sessions.len(), 1);
     let legacy = &persisted.sessions[0];
     assert!(legacy.cleanup_required);
-    assert!(!legacy.preflight_cleanup_pending);
+    assert_eq!(legacy.preflight_cleanup_pending, None);
     assert_eq!(
         legacy.apps[0].spawn_evidence(),
         DevSessionAppSpawnEvidence::Untracked
@@ -183,6 +183,228 @@ fn older_v1_writer_degrades_new_cleanup_evidence_to_legacy_ambiguity() {
         legacy.apps[1].spawn_evidence(),
         DevSessionAppSpawnEvidence::Registered(_)
     ));
+}
+
+#[test]
+fn selective_v1_preflight_loss_stays_unknown_with_tracked_unstarted_apps() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let mut expected = session("dev_example_selective_loss");
+    expected.apps[1].process = None;
+    expected.preflight_cleanup_pending = Some(true);
+    let mut document = serde_json::to_value(DevSessionsDocument {
+        version: LEGACY_VERSION,
+        sessions: std::slice::from_ref(&expected),
+    })
+    .unwrap();
+    document["sessions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("preflight_cleanup_pending");
+    write_private_fixture(
+        &store.dev_sessions_path(),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    );
+    let before = fs::read(store.dev_sessions_path()).unwrap();
+
+    let persisted = store.snapshot_dev_state().unwrap();
+
+    assert_eq!(persisted.sessions[0].preflight_cleanup_pending, None);
+    assert!(
+        persisted.sessions[0]
+            .apps
+            .iter()
+            .all(|app| app.spawn_evidence() == DevSessionAppSpawnEvidence::NotStarted)
+    );
+    assert_eq!(fs::read(store.dev_sessions_path()).unwrap(), before);
+}
+
+#[test]
+fn version_two_requires_complete_cleanup_evidence() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let expected = session("dev_example_complete");
+    write_to_path(
+        &store.dev_sessions_path(),
+        COMPLETE_EVIDENCE_VERSION,
+        std::slice::from_ref(&expected),
+    )
+    .unwrap();
+    let complete: serde_json::Value =
+        serde_json::from_slice(&fs::read(store.dev_sessions_path()).unwrap()).unwrap();
+    assert_eq!(complete["version"], COMPLETE_EVIDENCE_VERSION);
+    assert_eq!(complete["sessions"][0]["preflight_cleanup_pending"], false);
+    assert_eq!(complete["sessions"][0]["apps"][0]["spawn_pending"], false);
+    assert!(complete["sessions"][0]["apps"][0].get("process").is_some());
+
+    let old_reader_version = serde_json::from_value::<DevSessionsDocumentOwned>(complete.clone())
+        .unwrap()
+        .version;
+    assert_ne!(old_reader_version, LEGACY_VERSION);
+
+    for path in [
+        &["sessions", "0", "cleanup_required"][..],
+        &["sessions", "0", "preflight_cleanup_pending"],
+        &["sessions", "0", "apps", "0", "spawn_state_tracked"],
+        &["sessions", "0", "apps", "0", "spawn_pending"],
+        &["sessions", "0", "apps", "0", "process"],
+    ] {
+        let mut invalid = complete.clone();
+        let mut parent = &mut invalid;
+        for key in &path[..path.len() - 1] {
+            parent = if let Ok(index) = key.parse::<usize>() {
+                &mut parent[index]
+            } else {
+                &mut parent[*key]
+            };
+        }
+        parent.as_object_mut().unwrap().remove(path[path.len() - 1]);
+        write_private_fixture(
+            &store.dev_sessions_path(),
+            serde_json::to_vec(&invalid).unwrap(),
+        );
+        assert!(store.snapshot_dev_state().is_err(), "missing {path:?}");
+    }
+    let mut invalid = complete;
+    invalid["sessions"][0]["preflight_cleanup_pending"] = serde_json::Value::Null;
+    write_private_fixture(
+        &store.dev_sessions_path(),
+        serde_json::to_vec(&invalid).unwrap(),
+    );
+    assert!(store.snapshot_dev_state().is_err());
+}
+
+#[test]
+fn duplicate_state_keys_fail_before_cleanup_evidence_is_interpreted() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    write_to_path(
+        &store.dev_sessions_path(),
+        COMPLETE_EVIDENCE_VERSION,
+        &[session("dev_example_duplicate_keys")],
+    )
+    .unwrap();
+    let valid = fs::read_to_string(store.dev_sessions_path()).unwrap();
+    let cases = [
+        valid.replacen("\"version\": 2", "\"version\": 2, \"version\": 1", 1),
+        valid.replacen("\"sessions\": [", "\"sessions\": [], \"sessions\": [", 1),
+        valid.replacen(
+            "\"preflight_cleanup_pending\": false",
+            "\"preflight_cleanup_pending\": true, \"preflight_cleanup_pending\": false",
+            1,
+        ),
+        valid.replacen(
+            "\"spawn_state_tracked\": true",
+            "\"spawn_state_tracked\": false, \"spawn_state_tracked\": true",
+            1,
+        ),
+    ];
+    for document in cases {
+        assert_ne!(document, valid);
+        write_private_fixture(&store.dev_sessions_path(), document);
+        let error = format!("{:#}", store.snapshot_dev_state().unwrap_err());
+        assert!(error.contains("duplicate field"), "{error}");
+    }
+}
+
+#[test]
+fn legacy_claim_requires_empty_store_and_preserves_every_blocker() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let mut unrelated = session("dev_example_no_proxy");
+    unrelated.repo_root_display = "/tmp/ExampleOtherProject".into();
+    unrelated
+        .apps
+        .iter_mut()
+        .for_each(|app| app.hostname = None);
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions.push(session("dev_example_first"));
+            sessions.push(unrelated);
+            Ok(())
+        })
+        .unwrap();
+    let before = fs::read(store.dev_sessions_path()).unwrap();
+
+    let error = store
+        .mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
+            sessions.push(session("dev_example_new"));
+            Ok(())
+        })
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("dev_example_first"), "{error}");
+    assert!(error.contains("dev_example_no_proxy"), "{error}");
+    assert!(error.contains("dev status --all"), "{error}");
+    assert_eq!(fs::read(store.dev_sessions_path()).unwrap(), before);
+    assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 2);
+}
+
+#[test]
+fn empty_legacy_promotion_and_claim_retry_are_atomic() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    write_private_fixture(&store.dev_sessions_path(), r#"{"version":1,"sessions":[]}"#);
+    let before = fs::read(store.dev_sessions_path()).unwrap();
+    FAIL_BEFORE_REPLACE_ONCE.with(|flag| flag.set(true));
+    let first = store.mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
+        sessions.push(session("dev_example_retry"));
+        Ok(())
+    });
+    assert!(first.unwrap_err().to_string().contains("injected"));
+    assert_eq!(fs::read(store.dev_sessions_path()).unwrap(), before);
+
+    store
+        .mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
+            sessions.push(session("dev_example_retry"));
+            Ok(())
+        })
+        .unwrap();
+    let persisted = read_document_from_path(&store.dev_sessions_path()).unwrap();
+    assert_eq!(persisted.version, COMPLETE_EVIDENCE_VERSION);
+    assert_eq!(persisted.sessions.len(), 1);
+}
+
+#[test]
+fn old_claim_waiting_on_promotion_cannot_downgrade_new_state() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let (promoting, promoted) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let new_store = store.clone();
+    let new_writer = thread::spawn(move || {
+        new_store.mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
+            promoting.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(2)).unwrap();
+            sessions.push(session("dev_example_new_writer"));
+            Ok(())
+        })
+    });
+    promoted.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    let old_store = store.clone();
+    let (attempting, attempted) = mpsc::channel();
+    let old_writer = thread::spawn(move || -> anyhow::Result<()> {
+        let lock = open_lock_file(old_store.lock_path())?;
+        attempting.send(()).unwrap();
+        lock.lock_exclusive()?;
+        let state = read_document_from_path(&old_store.dev_sessions_path())?;
+        if state.version != LEGACY_VERSION {
+            anyhow::bail!("old reader refused unsupported version {}", state.version);
+        }
+        let mut sessions = state.sessions;
+        sessions.push(session("dev_example_old_writer"));
+        write_to_path(&old_store.dev_sessions_path(), LEGACY_VERSION, &sessions)
+    });
+    attempted.recv_timeout(Duration::from_secs(2)).unwrap();
+    release.send(()).unwrap();
+    new_writer.join().unwrap().unwrap();
+    let error = old_writer.join().unwrap().unwrap_err().to_string();
+    assert!(error.contains("refused unsupported version 2"), "{error}");
+    let state = read_document_from_path(&store.dev_sessions_path()).unwrap();
+    assert_eq!(state.version, COMPLETE_EVIDENCE_VERSION);
+    assert_eq!(state.sessions[0].session_id, "dev_example_new_writer");
 }
 
 #[test]
@@ -275,9 +497,9 @@ fn duplicate_session_ids_are_rejected_without_replacing_existing_state() {
 fn unknown_version_and_malformed_state_are_rejected() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
-    write_private_fixture(&store.dev_sessions_path(), r#"{"version":2,"sessions":[]}"#);
+    write_private_fixture(&store.dev_sessions_path(), r#"{"version":3,"sessions":[]}"#);
     let version_error = store.snapshot_dev_state().unwrap_err().to_string();
-    assert!(version_error.contains("Unsupported Jig development sessions version 2"));
+    assert!(version_error.contains("Unsupported Jig development sessions version 3"));
 
     write_private_fixture(&store.dev_sessions_path(), "{not json");
     let parse_error = format!("{:#}", store.snapshot_dev_state().unwrap_err());
@@ -377,7 +599,7 @@ fn record_validation_rejects_invalid_identity_control_and_app_data() {
 
     let mut preflight_without_cleanup = session("preflight_without_cleanup");
     preflight_without_cleanup.cleanup_required = false;
-    preflight_without_cleanup.preflight_cleanup_pending = true;
+    preflight_without_cleanup.preflight_cleanup_pending = Some(true);
     assert!(
         validate_records(&[preflight_without_cleanup])
             .unwrap_err()

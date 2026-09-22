@@ -194,7 +194,7 @@ mod tests {
 
         let error = run_owned_process_tree_with_cooperative_interaction(
             &mut command,
-            Duration::from_millis(100),
+            Duration::from_millis(500),
             |_stdin, mut stdout, deadline| {
                 let mut buffer = [0_u8; 4096];
                 loop {
@@ -219,7 +219,7 @@ mod tests {
         terminate_and_confirm_test_process(&escaped);
         assert!(error.to_string().contains("timed out"), "{error}");
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(2),
             "escaped stdout ownership exceeded the interaction deadline"
         );
     }

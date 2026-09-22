@@ -24,6 +24,9 @@ Examples:
   jig dev --app web
   jig dev --replace
   jig dev status
+  jig dev status --all
+  jig dev status --session dev_ID
+  jig dev recover --session dev_ID
   jig dev stop";
 
 #[derive(Debug, Subcommand)]
@@ -112,7 +115,7 @@ pub(crate) struct ProxyRuntimeOpts {
         long,
         hide = true,
         conflicts_with = "no_http2",
-        help = "Enable HTTP/2 ALPN on the HTTPS listener"
+        help = "Require HTTP/2 ALPN on a new or reused HTTPS listener"
     )]
     pub(crate) http2: bool,
     // Expert diagnostic toggle kept for service parity while HTTP/2 support is
@@ -121,19 +124,19 @@ pub(crate) struct ProxyRuntimeOpts {
         long,
         hide = true,
         conflicts_with = "http2",
-        help = "Disable HTTP/2 ALPN on the HTTPS listener"
+        help = "Require HTTP/2 ALPN disabled on a new or reused HTTPS listener"
     )]
     pub(crate) no_http2: bool,
     #[arg(
         long,
         conflicts_with = "no_lan",
-        help = "Bind the proxy on 0.0.0.0; LAN clients can reach Jig-supervised loopback apps"
+        help = "Require LAN binding on a new or reused proxy; LAN clients can reach supervised apps"
     )]
     pub(crate) lan: bool,
     #[arg(
         long,
         conflicts_with = "lan",
-        help = "Disable LAN binding even when [dev].lan is true"
+        help = "Require loopback-only binding even when [dev].lan is true"
     )]
     pub(crate) no_lan: bool,
     #[arg(long, help = "Private/local TLD for generated route hostnames")]
@@ -153,11 +156,29 @@ pub(crate) struct DevOpts {
     pub(crate) launch: DevLaunchOpts,
 }
 
+impl DevOpts {
+    pub(crate) fn is_contextless(&self) -> bool {
+        match &self.command {
+            Some(DevSubcommand::Status(opts)) => opts.all || opts.session.is_some(),
+            Some(
+                DevSubcommand::Recover(_)
+                | DevSubcommand::Stop(DevStopOpts {
+                    session: Some(_), ..
+                }),
+            ) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum DevSubcommand {
     /// Show registered development sessions owned by the current repository.
     #[command(name = tool_defs::cli_command::DEV_STATUS)]
     Status(DevStatusOpts),
+    /// Retire one eligible session's metadata without stopping processes.
+    #[command(name = tool_defs::cli_command::DEV_RECOVER)]
+    Recover(DevRecoverOpts),
     /// Stop all registered development sessions owned by the current repository.
     #[command(name = tool_defs::cli_command::DEV_STOP)]
     Stop(DevStopOpts),
@@ -196,6 +217,35 @@ pub(crate) struct DevStatusOpts {
         help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
     )]
     pub(crate) state_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        conflicts_with = "session",
+        help = "Inspect every registered session without repository discovery"
+    )]
+    pub(crate) all: bool,
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with = "all",
+        help = "Inspect one exact session ID without repository discovery"
+    )]
+    pub(crate) session: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct DevRecoverOpts {
+    #[arg(
+        long,
+        value_name = "ID",
+        required = true,
+        help = "Retire one eligible exact session ID without repository discovery"
+    )]
+    pub(crate) session: String,
+    #[arg(
+        long,
+        help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -207,6 +257,12 @@ pub(crate) struct DevStopOpts {
     pub(crate) state_dir: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "ID",
+        help = "Stop one exact session ID without repository discovery"
+    )]
+    pub(crate) session: Option<String>,
+    #[arg(
+        long,
         help = "Forget dead-supervisor orphan records with unconfirmed preflight cleanup or unprovable spawn history; never signals stored PIDs"
     )]
     pub(crate) forget_ambiguous_orphans: bool,
@@ -216,6 +272,9 @@ pub(crate) struct DevStopOpts {
 pub(crate) struct ProxyStartOpts {
     #[arg(long, help = "Run the proxy in the foreground instead of detaching")]
     pub(crate) foreground: bool,
+    // Private parent-to-daemon handoff; the daemon runs outside repository context.
+    #[arg(long, hide = true, requires = "foreground", value_name = "DNS_NAME")]
+    pub(crate) certificate_dns_name: Vec<String>,
     #[command(flatten)]
     pub(crate) proxy: ProxyRuntimeOpts,
 }
