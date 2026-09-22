@@ -57,6 +57,14 @@ fn ensure_proxy_running_after_lock(
         LockOutcome::Acquired(false) => {}
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
+    match store.runtime_files_present_interruptible(cancelled)? {
+        LockOutcome::Acquired(false) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        LockOutcome::Acquired(true) => bail!(
+            "Jig proxy readiness in state dir {} is unconfirmed while runtime records remain. Retry after the proxy stabilizes, or inspect `scripts/jig proxy status --state-dir PATH` and explicitly stop it with `scripts/jig proxy stop --state-dir PATH` using this state directory before starting again. Runtime records and shared certificates were preserved; no proxy was started or restarted.",
+            store.root().display(),
+        ),
+    }
     match ensure_no_unregistered_proxy_on_requested_port_interruptible(store, settings, cancelled)?
     {
         LockOutcome::Acquired(()) => {}
@@ -643,6 +651,8 @@ pub(super) const fn proxy_health_failed(misses: &mut u8, ready: bool) -> bool {
 
 #[cfg(test)]
 mod capability_tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod certificate_safety_tests;
 
 fn preserve_proxy_child_env(command: &mut Command) {
     for key in [

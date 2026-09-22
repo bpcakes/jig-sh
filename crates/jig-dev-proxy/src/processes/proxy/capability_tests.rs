@@ -261,6 +261,20 @@ fn matching_reuse_and_http_only_request_accept_extra_https_listener() {
 }
 
 #[test]
+fn compatible_running_proxy_can_add_app_certificate_hosts() {
+    let proxy = FakeProxy::start(Some(caps(false, true, true)), true, GenerationChange::None);
+    super::super::prepare_certs_for_hosts_interruptible(
+        &proxy.settings(false, true, true),
+        &["web.example.localhost".into()],
+        &|| None,
+    )
+    .unwrap();
+    let hosts = fs::read_to_string(proxy.store.leaf_hosts_path()).unwrap();
+    assert!(hosts.contains("web.example.localhost"));
+    proxy.finish();
+}
+
+#[test]
 fn older_proxy_without_capabilities_requires_explicit_upgrade() {
     let proxy = FakeProxy::start(None, false, GenerationChange::None);
     let error = ensure_proxy_running_interruptible(

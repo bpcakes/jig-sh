@@ -21,10 +21,8 @@ pub(super) fn prepare_proxy_for_apps(
     ensure_process_routes_supported()?;
     validate_process_routes(settings, specs)?;
     preflight_process_routes(store, specs, interrupt_requested)?;
-    // Reject an incompatible live shared proxy before certificate preparation
-    // can replace material used by its existing clients.
     lock_outcome_or_interruption(
-        proxy_ready_interruptible(store, settings, cancelled)?,
+        ensure_proxy_running_interruptible(store, settings, current_exe, cancelled)?,
         interrupt_requested,
     )?;
     let hostnames = specs
@@ -33,10 +31,6 @@ pub(super) fn prepare_proxy_for_apps(
         .map(|spec| spec.hostname.clone())
         .collect::<Vec<_>>();
     prepare_certs_for_hosts_interruptible(settings, &hostnames, interrupt_requested)?;
-    lock_outcome_or_interruption(
-        ensure_proxy_running_interruptible(store, settings, current_exe, cancelled)?,
-        interrupt_requested,
-    )?;
     Ok(true)
 }
 

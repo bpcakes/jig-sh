@@ -32,6 +32,7 @@ pub(crate) use dev_sessions::fail_session_write_once;
 mod process_identity;
 mod resolution;
 mod route_writer;
+mod runtime;
 mod signature;
 
 use resolution::ensure_state_dir_has_no_symlinks;
@@ -727,15 +728,6 @@ impl StateStore {
         let result = f();
         let unlock_result = lock.unlock();
         finish_with_unlock("runtime lock", result, unlock_result).map(LockOutcome::Acquired)
-    }
-
-    fn remove_runtime_files_unlocked(&self) -> Result<()> {
-        remove_runtime_file(self.pid_path())?;
-        remove_runtime_file(self.proxy_exe_path())?;
-        remove_runtime_file(self.http_port_path())?;
-        remove_runtime_file(self.https_port_path())?;
-        remove_runtime_file(self.health_token_path())?;
-        Ok(())
     }
 }
 

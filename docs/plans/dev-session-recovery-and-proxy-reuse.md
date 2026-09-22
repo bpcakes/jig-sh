@@ -163,6 +163,16 @@ reports requested/actual settings and state directory; restarting a shared proxy
 remains an explicit operator action because other sessions depend on it. Preserve
 loopback-only management responses and existing LAN alias restrictions.
 
+Implementation revision (2026-09-22): an inconclusive readiness probe cannot
+authorize shared certificate writes or replacement of a registered daemon. If
+runtime artifacts remain, background startup fails closed and retains them for
+explicit inspection/stop. App certificate preparation now follows successful
+proxy startup/reuse and repeats compatibility verification under the certificate
+lock before writing. Fresh proxy startup prepares its initial certificates;
+app hostnames are added before app spawn, using the existing TLS reload path.
+This replaces the earlier pre-start certificate preparation order, whose boolean
+readiness check conflated unknown state with absence.
+
 ## 5. Execution graph
 
 ### T-01 — Explain session activity and cleanup blockers truthfully
@@ -276,15 +286,13 @@ blocks the first safe tasks. This plan does not authorize actual runtime repair.
 - [x] Investigated source paths and existing regression coverage.
 - [x] Reviewed process-ownership and mixed-version risks independently.
 - [x] Validate the canonical plan and export its five tasks under one Beads epic.
-- [ ] Implement T-01 through T-05 (not authorized by the planning request).
 
-Restart checkpoint: planning/export delivered; implementation remains open in Beads. Jig work ID
-`plan_01M33ZWXV3JY4KHASHNDJ31PAQ`; baseline above. Existing unrelated work records
-and a pre-existing Beads diff were preserved. This temporary structured-work wrapper
-is superseded by the canonical plan and epic; implementation tasks must open their
-own work at their actual execution baseline. First safe action: inspect/claim
-`jig-sh-3ykb.2` and reproduce selective legacy evidence loss in an isolated fixture.
-Runtime behavior remains unmodified.
+Implementation was authorized on 2026-09-22. Task completion and validation are
+recorded in the five Beads children and their structured-work receipts. The
+implementation wrapper is `plan_01M342TP4S976AJ585QF6PGCS8`; each child retains its
+own baseline and cumulative native review. The earlier planning wrapper
+`plan_01M33ZWXV3JY4KHASHNDJ31PAQ` is historical and was superseded by this plan.
+Existing unrelated work records and issues remain outside this epic's scope.
 
 ## Surprises & Discoveries
 

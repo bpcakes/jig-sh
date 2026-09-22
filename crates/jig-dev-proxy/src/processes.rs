@@ -266,19 +266,13 @@ fn run_app_with_interrupt_probe(
         ensure_process_routes_supported()?;
         let route_parts = process_route_parts(settings, &spec)?;
         preflight_process_routes(&store, std::slice::from_ref(&spec), &interrupt_requested)?;
-        // Check the live listener before certificate preparation can mutate
-        // material shared with other proxy users.
         lock_outcome_or_interruption(
-            proxy_ready_interruptible(&store, settings, &cancelled)?,
+            ensure_proxy_running_interruptible(&store, settings, current_exe, &cancelled)?,
             &interrupt_requested,
         )?;
         prepare_certs_for_hosts_interruptible(
             settings,
             std::slice::from_ref(&spec.hostname),
-            &interrupt_requested,
-        )?;
-        lock_outcome_or_interruption(
-            ensure_proxy_running_interruptible(&store, settings, current_exe, &cancelled)?,
             &interrupt_requested,
         )?;
         Some(route_parts)
