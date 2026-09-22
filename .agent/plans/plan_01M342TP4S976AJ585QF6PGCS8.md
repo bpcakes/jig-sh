@@ -1,0 +1,1 @@
+Deliver T-02, T-01, T-04, T-03, and T-05 from the canonical plan with task-local validation and cumulative pinned-base reviews. Keep the version cutover disabled until contextless recovery is available.

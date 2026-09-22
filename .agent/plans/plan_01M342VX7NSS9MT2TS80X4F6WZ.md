@@ -1,0 +1,1 @@
+Reproduce selective preflight-field loss; implement strict versioned evidence readers and a dormant new-version write fence; validate old-reader rejection, empty-store promotion, and retry behavior. Keep release cutover disabled until T-04.
