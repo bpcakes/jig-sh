@@ -26,6 +26,11 @@ thread_local! {
     static FAIL_BEFORE_REPLACE_ONCE: Cell<bool> = const { Cell::new(false) };
 }
 
+#[cfg(test)]
+pub(crate) fn fail_session_write_once() {
+    FAIL_BEFORE_REPLACE_ONCE.with(|flag| flag.set(true));
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct DevProcessIdentity {
     pub(crate) pid: u32,

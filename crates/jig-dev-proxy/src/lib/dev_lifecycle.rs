@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod assertions;
+mod automatic_recovery;
 mod diagnostic_tests;
 use assertions::*;
 
@@ -1148,7 +1149,7 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
 }
 
 #[test]
-fn cancelled_replacement_preserves_recoveries_completed_before_cancellation() {
+fn interrupted_launch_preserves_all_atomic_recoveries() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
     let web_spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", false);
@@ -1178,41 +1179,28 @@ fn cancelled_replacement_preserves_recoveries_completed_before_cancellation() {
         })
         .unwrap();
 
-    let sessions_path = store.root().join("dev-sessions.json");
-    let cancel_after_first_recovery = || {
-        std::fs::read_to_string(&sessions_path)
-            .ok()
-            .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
-            .and_then(|document| document["sessions"].as_array().map(Vec::len))
-            == Some(1)
-    };
-    let outcome = dev_sessions::DevSessionRuntime::start_interruptible(
+    let runtime = dev_sessions::DevSessionRuntime::start(
         store.clone(),
         "demo",
         temp.path(),
         &[web_spec, admin_spec],
-        true,
-        &cancel_after_first_recovery,
+        false,
     )
     .unwrap();
-    let recoveries = match outcome {
-        dev_sessions::DevSessionStartOutcome::Cancelled(recoveries) => recoveries,
-        dev_sessions::DevSessionStartOutcome::Claimed(_) => {
-            panic!("replacement must observe cancellation after the first recovery")
-        }
-    };
-    let output = dev_api::normalize_dev_result(Err(dev_outcome::with_recovery_notices(
-        processes::interruption_error(processes::TerminationReason::requested_stop()),
-        recoveries,
-    )))
+    let output = dev_api::normalize_dev_result(processes::finalize_claimed_dev_session_result(
+        Err(processes::interruption_error(
+            processes::TerminationReason::requested_stop(),
+        )),
+        &runtime,
+    ))
     .unwrap();
 
     assert_eq!(output["stopped"], true);
-    assert_eq!(output["recoveries"].as_array().unwrap().len(), 1);
+    assert_eq!(output["recoveries"].as_array().unwrap().len(), 2);
     assert_eq!(
         store.snapshot_dev_state().unwrap().sessions.len(),
         1,
-        "the cancellation must happen between the two orphan recoveries"
+        "both old claims retire atomically before the new session is registered"
     );
 }
 

@@ -127,7 +127,7 @@ impl DevSessionRuntime {
             LockOutcome::Cancelled => return Ok(DevSessionStartOutcome::Cancelled(Vec::new())),
         };
         match first_claim {
-            ClaimOutcome::Claimed => {}
+            ClaimOutcome::Claimed(recoveries) => replacement_recoveries.extend(recoveries),
             ClaimOutcome::Conflicted(conflicts) if !replace => {
                 return Err(conflicts.launch_error(false, store.root()));
             }
@@ -200,7 +200,9 @@ impl DevSessionRuntime {
                     LockOutcome::Cancelled => {
                         return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                     }
-                    LockOutcome::Acquired(ClaimOutcome::Claimed) => {}
+                    LockOutcome::Acquired(ClaimOutcome::Claimed(recoveries)) => {
+                        replacement_recoveries.extend(recoveries);
+                    }
                     LockOutcome::Acquired(ClaimOutcome::Conflicted(conflicts)) => {
                         return Err(crate::dev_outcome::with_recovery_notices(
                             conflicts.concurrent_launch_error(store.root()),

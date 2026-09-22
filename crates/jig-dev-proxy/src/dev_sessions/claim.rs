@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::assessment::{AmbiguousOrphanPolicy, OrphanRecoveryAssessment, assess_session};
 use super::process_identity::process_identity_may_be_alive;
@@ -167,7 +167,7 @@ impl ClaimConflicts {
 }
 
 pub(super) enum ClaimOutcome {
-    Claimed,
+    Claimed(Vec<OrphanRecoveryNotice>),
     Conflicted(ClaimConflicts),
 }
 
@@ -176,13 +176,43 @@ pub(super) fn claim_session_interruptible(
     proposed: &DevSessionRecord,
     cancelled: &impl Fn() -> bool,
 ) -> Result<LockOutcome<ClaimOutcome>> {
-    store.mutate_dev_sessions_for_claim_interruptible(
+    // Probe control endpoints before taking the mutation lock. A candidate is
+    // usable only if its complete record remains unchanged under that lock.
+    let snapshot = match store.snapshot_dev_state_interruptible(cancelled)? {
+        LockOutcome::Acquired(snapshot) => snapshot,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    let candidates = snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            session.cleanup_required
+                && session.repo_root_identity == proposed.repo_root_identity
+                && sessions_overlap(session, proposed)
+        })
+        .filter(|session| {
+            let control_alive = ping(
+                session.control.port,
+                &session.session_id,
+                &session.control.token,
+            )
+            .unwrap_or(false);
+            matches!(
+                assess_session(session, AmbiguousOrphanPolicy::Retain, control_alive).recovery,
+                OrphanRecoveryAssessment::Retirable
+            )
+        })
+        .map(|session| (session.session_id.clone(), session.clone()))
+        .collect::<HashMap<_, _>>();
+
+    store.mutate_dev_state_for_claim_interruptible(
         cancelled,
         COMPLETE_EVIDENCE_CUTOVER_ENABLED,
         |sessions, routes| {
             sessions.retain(|session| session.cleanup_required || session_observed_alive(session));
             let mut conflicts = ClaimConflicts::default();
             let mut seen_session_ids = HashSet::new();
+            let mut retire_ids = HashSet::new();
 
             for session in sessions.iter() {
                 let same_repo = session.repo_root_identity == proposed.repo_root_identity;
@@ -195,6 +225,21 @@ pub(super) fn claim_session_interruptible(
                     continue;
                 }
                 seen_session_ids.insert(session.session_id.clone());
+                if same_repo
+                    && candidates
+                        .get(&session.session_id)
+                        .is_some_and(|observed| observed == session)
+                    && matches!(
+                        assess_session(session, AmbiguousOrphanPolicy::Retain, false).recovery,
+                        OrphanRecoveryAssessment::Retirable
+                    )
+                    && !routes
+                        .iter()
+                        .any(|route| session_owns_route(session, route) && route_is_live(route))
+                {
+                    retire_ids.insert(session.session_id.clone());
+                    continue;
+                }
                 if same_repo {
                     conflicts.same_repo.push(session.clone());
                 } else {
@@ -230,10 +275,28 @@ pub(super) fn claim_session_interruptible(
                 }
             }
 
+            if !conflicts.is_empty() {
+                conflicts.same_repo.extend(
+                    sessions
+                        .iter()
+                        .filter(|session| retire_ids.contains(&session.session_id))
+                        .cloned(),
+                );
+            }
             deduplicate_conflicts(&mut conflicts);
             if conflicts.is_empty() {
+                let mut recoveries = Vec::new();
+                sessions.retain(|session| {
+                    if retire_ids.contains(&session.session_id) {
+                        routes.retain(|route| !session_owns_route(session, route));
+                        recoveries.push(OrphanRecoveryNotice::strict_from_session(session));
+                        false
+                    } else {
+                        true
+                    }
+                });
                 sessions.push(proposed.clone());
-                Ok(ClaimOutcome::Claimed)
+                Ok(ClaimOutcome::Claimed(recoveries))
             } else {
                 Ok(ClaimOutcome::Conflicted(conflicts))
             }

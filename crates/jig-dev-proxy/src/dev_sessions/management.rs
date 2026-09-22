@@ -274,6 +274,10 @@ impl OrphanRecoveryApp {
 }
 
 impl OrphanRecoveryNotice {
+    pub(super) fn strict_from_session(session: &DevSessionRecord) -> Self {
+        Self::from_session(session, &[])
+    }
+
     fn from_session(
         session: &DevSessionRecord,
         forgotten_ambiguities: &[ForgottenCleanupAmbiguity],

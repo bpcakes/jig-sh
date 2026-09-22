@@ -327,7 +327,7 @@ fn legacy_claim_requires_empty_store_and_preserves_every_blocker() {
     let before = fs::read(store.dev_sessions_path()).unwrap();
 
     let error = store
-        .mutate_dev_sessions_for_claim_interruptible(&|| false, true, |sessions, _| {
+        .mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
             sessions.push(session("dev_example_new"));
             Ok(())
         })
@@ -348,16 +348,15 @@ fn empty_legacy_promotion_and_claim_retry_are_atomic() {
     write_private_fixture(&store.dev_sessions_path(), r#"{"version":1,"sessions":[]}"#);
     let before = fs::read(store.dev_sessions_path()).unwrap();
     FAIL_BEFORE_REPLACE_ONCE.with(|flag| flag.set(true));
-    let first =
-        store.mutate_dev_sessions_for_claim_interruptible(&|| false, true, |sessions, _| {
-            sessions.push(session("dev_example_retry"));
-            Ok(())
-        });
+    let first = store.mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
+        sessions.push(session("dev_example_retry"));
+        Ok(())
+    });
     assert!(first.unwrap_err().to_string().contains("injected"));
     assert_eq!(fs::read(store.dev_sessions_path()).unwrap(), before);
 
     store
-        .mutate_dev_sessions_for_claim_interruptible(&|| false, true, |sessions, _| {
+        .mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
             sessions.push(session("dev_example_retry"));
             Ok(())
         })
@@ -375,7 +374,7 @@ fn old_claim_waiting_on_promotion_cannot_downgrade_new_state() {
     let (release, released) = mpsc::channel();
     let new_store = store.clone();
     let new_writer = thread::spawn(move || {
-        new_store.mutate_dev_sessions_for_claim_interruptible(&|| false, true, |sessions, _| {
+        new_store.mutate_dev_state_for_claim_interruptible(&|| false, true, |sessions, _| {
             promoting.send(()).unwrap();
             released.recv_timeout(Duration::from_secs(2)).unwrap();
             sessions.push(session("dev_example_new_writer"));

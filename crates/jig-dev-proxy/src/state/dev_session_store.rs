@@ -61,19 +61,6 @@ impl StateStore {
         })
     }
 
-    /// The version transition and first claim share the route lock. Callers
-    /// enable the cutover only after contextless legacy recovery is available.
-    pub(crate) fn mutate_dev_sessions_for_claim_interruptible<T>(
-        &self,
-        cancelled: &impl Fn() -> bool,
-        enable_v2_cutover: bool,
-        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
-    ) -> Result<LockOutcome<T>> {
-        self.with_route_lock_interruptible(cancelled, |routes_path| {
-            self.mutate_dev_sessions_unlocked(routes_path, enable_v2_cutover, mutate)
-        })
-    }
-
     /// Mutates development sessions and routes together under the shared route
     /// lock. Route state is persisted first, so a partial write retains the
     /// conservative session record and the whole operation can be retried.
@@ -87,22 +74,46 @@ impl StateStore {
         mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &mut Vec<Route>) -> Result<T>,
     ) -> Result<LockOutcome<T>> {
         self.with_route_lock_interruptible(cancelled, |routes_path| {
-            let mut routes = read_routes_from_path(routes_path)?;
-            let original_routes = routes.clone();
-            let sessions_path = self.dev_sessions_path();
-            let mut state = dev_sessions::read_document_from_path(&sessions_path)?;
-            let original_sessions = state.sessions.clone();
-            let result = mutate(&mut state.sessions, &mut routes)?;
-            dev_sessions::validate_records(&state.sessions)?;
-
-            if routes != original_routes {
-                write_routes_to_path(routes_path, &routes)?;
-            }
-            if state.sessions != original_sessions {
-                dev_sessions::write_to_path(&sessions_path, state.version, &state.sessions)?;
-            }
-            Ok(result)
+            self.mutate_dev_state_unlocked(routes_path, false, mutate)
         })
+    }
+
+    /// Claims a new session and retires eligible stale claims under one route
+    /// lock. Routes are persisted first; an interrupted session write leaves
+    /// the old cleanup obligation in place for a safe retry.
+    pub(crate) fn mutate_dev_state_for_claim_interruptible<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        enable_v2_cutover: bool,
+        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &mut Vec<Route>) -> Result<T>,
+    ) -> Result<LockOutcome<T>> {
+        self.with_route_lock_interruptible(cancelled, |routes_path| {
+            self.mutate_dev_state_unlocked(routes_path, enable_v2_cutover, mutate)
+        })
+    }
+
+    fn mutate_dev_state_unlocked<T>(
+        &self,
+        routes_path: &Path,
+        enable_v2_cutover: bool,
+        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &mut Vec<Route>) -> Result<T>,
+    ) -> Result<T> {
+        let mut routes = read_routes_from_path(routes_path)?;
+        let original_routes = routes.clone();
+        let sessions_path = self.dev_sessions_path();
+        let mut state = dev_sessions::read_document_from_path(&sessions_path)?;
+        self.prepare_claim_cutover(&mut state.version, &state.sessions, enable_v2_cutover)?;
+        let original_sessions = state.sessions.clone();
+        let result = mutate(&mut state.sessions, &mut routes)?;
+        dev_sessions::validate_records(&state.sessions)?;
+
+        if routes != original_routes {
+            write_routes_to_path(routes_path, &routes)?;
+        }
+        if state.sessions != original_sessions {
+            dev_sessions::write_to_path(&sessions_path, state.version, &state.sessions)?;
+        }
+        Ok(result)
     }
 
     pub(crate) fn mutate_dev_sessions_cleanup_cancelable<T>(
@@ -124,10 +135,25 @@ impl StateStore {
         let routes = read_routes_from_path(routes_path)?;
         let sessions_path = self.dev_sessions_path();
         let mut state = dev_sessions::read_document_from_path(&sessions_path)?;
-        if enable_v2_cutover && state.version != dev_sessions::COMPLETE_EVIDENCE_VERSION {
-            if !state.sessions.is_empty() {
-                let blockers = state
-                    .sessions
+        self.prepare_claim_cutover(&mut state.version, &state.sessions, enable_v2_cutover)?;
+        let original = state.sessions.clone();
+        let result = mutate(&mut state.sessions, &routes)?;
+        dev_sessions::validate_records(&state.sessions)?;
+        if state.sessions != original {
+            dev_sessions::write_to_path(&sessions_path, state.version, &state.sessions)?;
+        }
+        Ok(result)
+    }
+
+    fn prepare_claim_cutover(
+        &self,
+        version: &mut u32,
+        sessions: &[DevSessionRecord],
+        enable_v2_cutover: bool,
+    ) -> Result<()> {
+        if enable_v2_cutover && *version != dev_sessions::COMPLETE_EVIDENCE_VERSION {
+            if !sessions.is_empty() {
+                let blockers = sessions
                     .iter()
                     .take(8)
                     .map(|session| {
@@ -138,19 +164,13 @@ impl StateStore {
                 bail!(
                     "Jig dev cannot upgrade the nonempty legacy sessions store at {}: {} session(s) require explicit cleanup or repair; first blockers: {}. Run `jig dev status --all --state-dir PATH` with this state directory to inspect every session, including sessions without proxy routes. No session was stopped or changed.",
                     self.root.display(),
-                    state.sessions.len(),
+                    sessions.len(),
                     blockers,
                 );
             }
-            state.version = dev_sessions::COMPLETE_EVIDENCE_VERSION;
+            *version = dev_sessions::COMPLETE_EVIDENCE_VERSION;
         }
-        let original = state.sessions.clone();
-        let result = mutate(&mut state.sessions, &routes)?;
-        dev_sessions::validate_records(&state.sessions)?;
-        if state.sessions != original {
-            dev_sessions::write_to_path(&sessions_path, state.version, &state.sessions)?;
-        }
-        Ok(result)
+        Ok(())
     }
 
     pub(super) fn dev_sessions_path(&self) -> PathBuf {
