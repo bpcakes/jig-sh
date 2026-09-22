@@ -606,6 +606,7 @@ impl From<ProxyStartOpts> for command::ProxyStartRequest {
     fn from(opts: ProxyStartOpts) -> Self {
         Self {
             foreground: opts.foreground,
+            certificate_dns_name: opts.certificate_dns_name,
             proxy: opts.proxy.into(),
         }
     }

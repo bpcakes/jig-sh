@@ -1,5 +1,7 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+#[path = "dev_lifecycle/proxy_certificates.rs"]
+mod proxy_certificates;
 mod support;
 
 use std::fs;

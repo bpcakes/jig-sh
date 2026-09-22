@@ -85,6 +85,7 @@ pub(crate) enum ProxyServiceCommand {
 #[derive(Debug)]
 pub(crate) struct ProxyStartRequest {
     pub(crate) foreground: bool,
+    pub(crate) certificate_dns_name: Vec<String>,
     pub(crate) proxy: ProxyRuntimeOptions,
 }
 

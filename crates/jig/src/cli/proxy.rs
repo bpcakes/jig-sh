@@ -272,6 +272,9 @@ pub(crate) struct DevStopOpts {
 pub(crate) struct ProxyStartOpts {
     #[arg(long, help = "Run the proxy in the foreground instead of detaching")]
     pub(crate) foreground: bool,
+    // Private parent-to-daemon handoff; the daemon runs outside repository context.
+    #[arg(long, hide = true, requires = "foreground", value_name = "DNS_NAME")]
+    pub(crate) certificate_dns_name: Vec<String>,
     #[command(flatten)]
     pub(crate) proxy: ProxyRuntimeOpts,
 }

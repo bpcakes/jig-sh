@@ -173,6 +173,10 @@ app hostnames are added before app spawn, using the existing TLS reload path.
 This replaces the earlier pre-start certificate preparation order, whose boolean
 readiness check conflated unknown state with absence.
 
+Fresh background starts forward the exact configured certificate DNS names to the
+contextless daemon through a private foreground-only argument. This preserves
+custom-TLD alias startup without expanding CA constraints to the whole TLD.
+
 ## 5. Execution graph
 
 ### T-01 — Explain session activity and cleanup blockers truthfully

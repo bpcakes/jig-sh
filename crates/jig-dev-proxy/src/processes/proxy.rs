@@ -92,6 +92,9 @@ fn ensure_proxy_running_after_lock(
         .stderr(Stdio::from(log2));
     preserve_proxy_child_env(&mut command);
     command.env("JIG_PROXY_STATE_DIR", store.root());
+    for name in &settings.additional_dns_names {
+        command.arg("--certificate-dns-name").arg(name);
+    }
     if settings.https {
         command.arg("--https");
         if let Some(port) = settings.https_port {
