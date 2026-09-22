@@ -61,7 +61,7 @@ fn ensure_proxy_running_after_lock(
         LockOutcome::Acquired(false) => {}
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
         LockOutcome::Acquired(true) => bail!(
-            "Jig proxy readiness in state dir {} is unconfirmed while runtime records remain. Retry after the proxy stabilizes, or inspect `scripts/jig proxy status --state-dir PATH` and explicitly stop it with `scripts/jig proxy stop --state-dir PATH` using this state directory before starting again. Runtime records and shared certificates were preserved; no proxy was started or restarted.",
+            "Jig proxy readiness in state dir {} is unconfirmed while runtime records remain. Retry after the proxy stabilizes, or inspect `scripts/jig proxy list --state-dir PATH` and explicitly stop it with `scripts/jig proxy stop --state-dir PATH` using this state directory before starting again. Runtime records and shared certificates were preserved; no proxy was started or restarted.",
             store.root().display(),
         ),
     }
