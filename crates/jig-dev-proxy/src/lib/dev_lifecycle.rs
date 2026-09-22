@@ -109,6 +109,8 @@ fn dev_lifecycle_commands_are_non_mutating_and_structured_without_state() {
             "repo_root": repo_root,
             "state_dir": state_dir,
             "running": false,
+            "activity": "none",
+            "cleanup_required": false,
             "sessions": [],
         })
     );
@@ -176,6 +178,8 @@ fn dev_status_is_repo_scoped_and_does_not_expose_control_credentials() {
     assert_eq!(own["ok"], true);
     assert_eq!(own["command"], "dev status");
     assert_eq!(own["running"], true);
+    assert_eq!(own["activity"], "verified");
+    assert_eq!(own["cleanup_required"], false);
     assert_eq!(own["sessions"].as_array().unwrap().len(), 1);
     assert_eq!(own["sessions"][0]["status"], "starting");
     assert_eq!(own["sessions"][0]["control_alive"], true);
@@ -190,6 +194,8 @@ fn dev_status_is_repo_scoped_and_does_not_expose_control_credentials() {
         "status output must not disclose the private control token"
     );
     assert_eq!(other["running"], false);
+    assert_eq!(other["activity"], "none");
+    assert_eq!(other["cleanup_required"], false);
     assert_eq!(other["sessions"], json!([]));
 
     drop(runtime);
@@ -220,6 +226,9 @@ fn same_repo_conflict_recommends_dev_lifecycle_commands() {
     assert!(error.contains("from this repository"));
     assert!(error.contains("jig dev stop"));
     assert!(error.contains("jig dev --replace"));
+    let session_id = &store.snapshot_dev_state().unwrap().sessions[0].session_id;
+    assert!(error.contains(session_id));
+    assert!(error.contains(&store.root().display().to_string()));
     assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 1);
 
     drop(runtime);
@@ -344,8 +353,11 @@ fn replace_refuses_cross_repo_route_ownership() {
     .expect("cross-repository route replacement is rejected")
     .to_string();
 
-    assert!(error.contains("live Jig dev session"));
-    assert!(error.contains("cross-repository ownership"));
+    let session_id = &store.snapshot_dev_state().unwrap().sessions[0].session_id;
+    assert!(error.contains(session_id));
+    assert!(error.contains("activity verified"));
+    assert!(error.contains(&store.root().display().to_string()));
+    assert!(error.contains("Cross-repository ownership"));
     assert!(error.contains("shared.localhost"));
     assert!(
         error.contains(
@@ -358,6 +370,83 @@ fn replace_refuses_cross_repo_route_ownership() {
     assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 1);
 
     drop(runtime);
+}
+
+#[test]
+fn dead_cross_repo_claim_reports_exact_cleanup_without_changing_state() {
+    let temp = tempdir().unwrap();
+    let repo_a = temp.path().join("ExampleProject");
+    let repo_b = temp.path().join("ExampleOtherProject");
+    std::fs::create_dir_all(&repo_a).unwrap();
+    std::fs::create_dir_all(&repo_b).unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "ExampleProject",
+        &repo_a,
+        &[lifecycle_spec(&repo_a, "web", "shared.localhost", true)],
+        false,
+    )
+    .unwrap();
+    let _cleanup = runtime.arm_cleanup();
+    drop(runtime);
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            Ok(())
+        })
+        .unwrap();
+    let recorded = store.snapshot_dev_state().unwrap().sessions.remove(0);
+    let session_bytes = std::fs::read(state_dir.join("dev-sessions.json")).unwrap();
+    let route_bytes = std::fs::read(state_dir.join("routes.json")).ok();
+
+    let status = dev_status(DevStatusRequest::new(
+        "ExampleProject",
+        repo_a,
+        Some(state_dir.clone()),
+    ))
+    .unwrap();
+    assert_eq!(status["activity"], "none");
+    assert_eq!(status["cleanup_required"], true);
+    assert_eq!(status["sessions"][0]["session_id"], recorded.session_id);
+    assert_eq!(status["sessions"][0]["retention_reason"], Value::Null);
+    assert_eq!(
+        std::fs::read(state_dir.join("dev-sessions.json")).unwrap(),
+        session_bytes
+    );
+    assert_eq!(
+        std::fs::read(state_dir.join("routes.json")).ok(),
+        route_bytes
+    );
+
+    let error = dev_sessions::DevSessionRuntime::start(
+        store,
+        "ExampleOtherProject",
+        &repo_b,
+        &[lifecycle_spec(&repo_b, "web", "shared.localhost", true)],
+        true,
+    )
+    .err()
+    .expect("cross-repository cleanup obligation remains reserved")
+    .to_string();
+    assert!(error.contains(&recorded.session_id));
+    assert!(error.contains("activity none"));
+    assert!(error.contains("cleanup required true"));
+    assert!(error.contains(&state_dir.display().to_string()));
+    assert!(!error.contains("live Jig dev session"));
+    assert!(!error.contains(&recorded.control.token));
+    assert_eq!(
+        std::fs::read(state_dir.join("dev-sessions.json")).unwrap(),
+        session_bytes
+    );
+    assert_eq!(
+        std::fs::read(state_dir.join("routes.json")).ok(),
+        route_bytes
+    );
 }
 
 #[test]

@@ -7,6 +7,10 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use super::assessment::{
+    AmbiguousOrphanPolicy, ObservedActivity, OrphanRecoveryAssessment, OrphanRetentionReason,
+    assess_session, assess_with_observations,
+};
 use super::process_identity::{
     ProcessIdentityObservation, observe_process_identity, process_identity_may_be_alive,
 };
@@ -26,34 +30,10 @@ const CONTROL_RETIRE_PER_APP_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum OrphanRetentionReason {
-    SupervisorAlive,
-    SupervisorUncertain,
-    PreflightCleanupPending,
-    PreflightCleanupUnknown,
-    AppAlive(String),
-    AppUncertain(String),
-    AppSpawnPending(String),
-    AppSpawnUntracked(String),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum OrphanRecoveryAssessment {
-    Retirable,
-    Retain(OrphanRetentionReason),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 enum RetireDeadOrphanOutcome {
     Retired(OrphanRecoveryNotice),
     AlreadyAbsent,
     Retained(OrphanRetentionReason),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AmbiguousOrphanPolicy {
-    Retain,
-    Forget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +77,22 @@ pub(crate) fn status(request: DevStatusRequest) -> Result<Value> {
     let running = sessions
         .iter()
         .any(|session| !matches!(session["status"].as_str(), Some("stale" | "recoverable")));
+    let activity = if sessions
+        .iter()
+        .any(|session| session["activity"] == "verified")
+    {
+        ObservedActivity::Verified
+    } else if sessions
+        .iter()
+        .any(|session| session["activity"] == "possible")
+    {
+        ObservedActivity::Possible
+    } else {
+        ObservedActivity::None
+    };
+    let cleanup_required = sessions
+        .iter()
+        .any(|session| session["cleanup_required"] == true);
     Ok(json!({
         "ok": true,
         "command": "dev status",
@@ -104,6 +100,8 @@ pub(crate) fn status(request: DevStatusRequest) -> Result<Value> {
         "repo_root": repo.root_display,
         "state_dir": store.root(),
         "running": running,
+        "activity": activity.label(),
+        "cleanup_required": cleanup_required,
         "sessions": sessions,
     }))
 }
@@ -506,7 +504,7 @@ fn stop_session_ids_interruptible_inner(
         }
         match (
             session.cleanup_required,
-            orphan_recovery_assessment(&session, policy),
+            assess_session(&session, policy, false).recovery,
         ) {
             (true, OrphanRecoveryAssessment::Retirable) => {
                 match retire_orphan(store, &session, policy, cancelled)? {
@@ -599,7 +597,7 @@ fn retire_orphan(
         let current = &sessions[index];
         let forgotten_ambiguities = forgotten_cleanup_ambiguities(current, policy);
         if let OrphanRecoveryAssessment::Retain(reason) =
-            orphan_recovery_assessment(current, policy)
+            assess_session(current, policy, false).recovery
         {
             return Ok(RetireDeadOrphanOutcome::Retained(reason));
         }
@@ -609,91 +607,6 @@ fn retire_orphan(
         sessions.remove(index);
         Ok(RetireDeadOrphanOutcome::Retired(recovery))
     })
-}
-
-fn orphan_recovery_assessment(
-    session: &DevSessionRecord,
-    policy: AmbiguousOrphanPolicy,
-) -> OrphanRecoveryAssessment {
-    orphan_recovery_assessment_with_observations(
-        session,
-        policy,
-        observe_process_identity(&session.supervisor),
-        |_, app| app.process.as_ref().map(observe_process_identity),
-    )
-}
-
-fn orphan_recovery_assessment_with_observations(
-    session: &DevSessionRecord,
-    policy: AmbiguousOrphanPolicy,
-    supervisor_observation: ProcessIdentityObservation,
-    mut app_observation: impl FnMut(usize, &DevSessionApp) -> Option<ProcessIdentityObservation>,
-) -> OrphanRecoveryAssessment {
-    match supervisor_observation {
-        ProcessIdentityObservation::Alive => {
-            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::SupervisorAlive);
-        }
-        ProcessIdentityObservation::Uncertain => {
-            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::SupervisorUncertain);
-        }
-        ProcessIdentityObservation::Absent => {}
-    }
-    if !session.cleanup_required {
-        return OrphanRecoveryAssessment::Retirable;
-    }
-    if policy == AmbiguousOrphanPolicy::Retain {
-        match session.preflight_cleanup_pending {
-            Some(true) => {
-                return OrphanRecoveryAssessment::Retain(
-                    OrphanRetentionReason::PreflightCleanupPending,
-                );
-            }
-            None => {
-                return OrphanRecoveryAssessment::Retain(
-                    OrphanRetentionReason::PreflightCleanupUnknown,
-                );
-            }
-            Some(false) => {}
-        }
-    }
-    for (index, app) in session.apps.iter().enumerate() {
-        match app.spawn_evidence() {
-            DevSessionAppSpawnEvidence::Untracked => {
-                if policy == AmbiguousOrphanPolicy::Retain {
-                    return OrphanRecoveryAssessment::Retain(
-                        OrphanRetentionReason::AppSpawnUntracked(app.name.clone()),
-                    );
-                }
-                continue;
-            }
-            DevSessionAppSpawnEvidence::Pending => {
-                if policy == AmbiguousOrphanPolicy::Retain {
-                    return OrphanRecoveryAssessment::Retain(
-                        OrphanRetentionReason::AppSpawnPending(app.name.clone()),
-                    );
-                }
-                continue;
-            }
-            DevSessionAppSpawnEvidence::NotStarted => continue,
-            DevSessionAppSpawnEvidence::Registered(_) => {}
-        }
-        match app_observation(index, app)
-            .expect("registered development app must have a process observation")
-        {
-            ProcessIdentityObservation::Alive => {
-                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppAlive(
-                    app.name.clone(),
-                ));
-            }
-            ProcessIdentityObservation::Uncertain => {
-                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppUncertain(
-                    app.name.clone(),
-                ));
-            }
-            ProcessIdentityObservation::Absent => {}
-        }
-    }
-    OrphanRecoveryAssessment::Retirable
 }
 
 fn forgotten_cleanup_ambiguities(
@@ -877,12 +790,19 @@ fn session_status_from_observations(
             })
         })
         .collect::<Vec<_>>();
-    let recovery_assessment = orphan_recovery_assessment_with_observations(
+    let assessment = assess_with_observations(
         session,
         AmbiguousOrphanPolicy::Retain,
+        control_alive,
         supervisor_observation,
-        |index, _| app_observations[index],
+        app_observations,
     );
+    let activity = assessment.activity.label();
+    let (retention_reason, retention_app) = match &assessment.recovery {
+        OrphanRecoveryAssessment::Retain(reason) => (Some(reason.code()), reason.app()),
+        OrphanRecoveryAssessment::Retirable => (None, None),
+    };
+    let recovery_assessment = assessment.recovery.clone();
     let supervisor_active = control_alive || supervisor_observation.may_be_alive();
     let recoverable = !supervisor_active
         && session.cleanup_required
@@ -908,6 +828,9 @@ fn session_status_from_observations(
         "started_at_ms": session.started_at_ms,
         "updated_at_ms": session.updated_at_ms,
         "cleanup_required": session.cleanup_required,
+        "activity": activity,
+        "retention_reason": retention_reason,
+        "retention_app": retention_app,
         "preflight_cleanup_pending": session.preflight_cleanup_pending.unwrap_or(false),
         "preflight_cleanup_evidence": match session.preflight_cleanup_pending {
             Some(true) => "pending",
@@ -932,6 +855,8 @@ fn empty_status(repo: &CanonicalRepo, state_dir: PathBuf) -> Value {
         "repo_root": repo.root_display,
         "state_dir": state_dir,
         "running": false,
+        "activity": "none",
+        "cleanup_required": false,
         "sessions": [],
     })
 }

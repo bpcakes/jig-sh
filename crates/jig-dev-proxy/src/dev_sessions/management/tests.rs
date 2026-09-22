@@ -29,12 +29,14 @@ fn missing_legacy_preflight_evidence_blocks_strict_recovery() {
     let mut session = cleanup_required_session();
     session.preflight_cleanup_pending = None;
 
-    let strict = orphan_recovery_assessment_with_observations(
+    let strict = assess_with_observations(
         &session,
         AmbiguousOrphanPolicy::Retain,
+        false,
         ProcessIdentityObservation::Absent,
-        |_, _| None,
-    );
+        &[],
+    )
+    .recovery;
     assert_eq!(
         strict,
         OrphanRecoveryAssessment::Retain(OrphanRetentionReason::PreflightCleanupUnknown)
@@ -51,6 +53,8 @@ fn missing_legacy_preflight_evidence_blocks_strict_recovery() {
         &[],
     );
     assert_eq!(status["recoverable"], false);
+    assert_eq!(status["activity"], "possible");
+    assert_eq!(status["retention_reason"], "preflight-cleanup-unknown");
     assert_eq!(status["preflight_cleanup_pending"], false);
     assert_eq!(status["preflight_cleanup_evidence"], "unknown");
 }
@@ -68,6 +72,8 @@ fn active_status_evidence_cannot_also_be_recoverable() {
     );
     assert_eq!(control_active["status"], "running");
     assert_eq!(control_active["recoverable"], false);
+    assert_eq!(control_active["activity"], "verified");
+    assert_eq!(control_active["retention_reason"], "control-alive");
 
     let supervisor_active = session_status_from_observations(
         &session,
@@ -78,6 +84,8 @@ fn active_status_evidence_cannot_also_be_recoverable() {
     );
     assert_eq!(supervisor_active["status"], "running");
     assert_eq!(supervisor_active["recoverable"], false);
+    assert_eq!(supervisor_active["activity"], "verified");
+    assert_eq!(supervisor_active["retention_reason"], "supervisor-alive");
 }
 
 #[test]
@@ -94,6 +102,8 @@ fn inactive_recovery_snapshot_is_reported_consistently() {
 
     assert_eq!(status["status"], "recoverable");
     assert_eq!(status["recoverable"], true);
+    assert_eq!(status["activity"], "none");
+    assert!(status["retention_reason"].is_null());
     assert_eq!(status["supervisor_alive"], false);
     assert_eq!(status["control_alive"], false);
 }
@@ -124,6 +134,9 @@ fn live_app_observation_cannot_also_be_recoverable() {
 
     assert_eq!(status["status"], "orphaned");
     assert_eq!(status["recoverable"], false);
+    assert_eq!(status["activity"], "verified");
+    assert_eq!(status["retention_reason"], "app-alive");
+    assert_eq!(status["retention_app"], "web");
     assert_eq!(status["apps"][0]["alive"], true);
     assert_eq!(status["apps"][0]["identity_observation"], "alive");
 }

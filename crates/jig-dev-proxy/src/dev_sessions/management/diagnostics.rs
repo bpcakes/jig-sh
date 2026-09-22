@@ -5,6 +5,9 @@ pub(super) fn retention_warning(
     reason: &OrphanRetentionReason,
 ) -> StopWarning {
     let detail = match reason {
+        OrphanRetentionReason::ControlAlive => {
+            "authenticated session control endpoint remained live".to_owned()
+        }
         OrphanRetentionReason::SupervisorAlive => format!(
             "supervisor PID {} remained live after the authenticated stop request",
             session.supervisor.pid
