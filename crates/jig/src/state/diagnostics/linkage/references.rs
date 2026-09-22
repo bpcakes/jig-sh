@@ -47,6 +47,7 @@ pub(super) struct RunReferences {
 pub(super) struct CollectedReferences {
     pub(super) runs: BTreeMap<String, RunReferences>,
     pub(super) unresolved_batch_links: u64,
+    pub(super) conflicting_batch_links: u64,
 }
 
 /// Records the identity and optional run reference carried by one valid
@@ -210,6 +211,14 @@ pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedRe
                 .as_ref()
                 .and_then(|receipt_id| collector.receipt_runs.get(receipt_id));
             if let Some(receipt_run_ids) = receipt_run_ids {
+                if child
+                    .run_id
+                    .as_ref()
+                    .is_some_and(|run_id| !receipt_run_ids.contains(run_id))
+                {
+                    collected.conflicting_batch_links =
+                        collected.conflicting_batch_links.saturating_add(1);
+                }
                 run_ids.extend(receipt_run_ids.iter().cloned());
             }
             let receipt_exists = child

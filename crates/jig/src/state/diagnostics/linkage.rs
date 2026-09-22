@@ -551,6 +551,12 @@ pub(super) fn resolve(
             collected_references.unresolved_batch_links
         ));
     }
+    if collected_references.conflicting_batch_links > 0 {
+        incomplete_reasons.push(format!(
+            "{} supported batch child link(s) carry run IDs that conflict with their receipt histories",
+            collected_references.conflicting_batch_links
+        ));
+    }
     let references = collected_references.runs;
     let missing = references
         .keys()
@@ -682,6 +688,7 @@ pub(super) fn resolve(
         batch_receipts: collector.batch_receipts,
         batch_links: collector.batch_links,
         unresolved_batch_links: collected_references.unresolved_batch_links,
+        conflicting_batch_links: collected_references.conflicting_batch_links,
         referenced_runs: references.len() as u64,
         tracked_references: collector.tracked_references as u64,
         reference_budget_exceeded: collector.reference_budget_exceeded,

@@ -471,6 +471,45 @@ fn reused_batch_evidence_may_reference_several_runs() {
 }
 
 #[test]
+fn conflicting_batch_and_child_run_ids_make_linkage_incomplete() {
+    let (_temp, ctx) = fixture_context();
+    let (first, first_lease) = start_run(&ctx, plan(), None).unwrap();
+    let first_run = first.result.run_id;
+    complete_target(&ctx, &first_run);
+    complete_run(&ctx, &first_run, RunConclusion::Success).unwrap();
+    drop(first_lease);
+    let (second, second_lease) = start_run(&ctx, plan(), None).unwrap();
+    let second_run = second.result.run_id;
+    complete_target(&ctx, &second_run);
+    complete_run(&ctx, &second_run, RunConclusion::Success).unwrap();
+    drop(second_lease);
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[
+            target_receipt("receipt_test", "jig.test", "api:test", Some(&second_run)),
+            work_check_targets_receipt(
+                "receipt_batch",
+                &[("api:test", "receipt_test", &first_run)],
+            ),
+        ],
+    );
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+
+    assert_eq!(linkage["verdict"], "incomplete");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["conflicting_batch_links"], 1);
+    assert_eq!(linkage["referenced_runs"], 2);
+    assert_eq!(linkage["runs"]["completed"], 2);
+    assert_eq!(linkage["finding_count"], 0);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "supported batch child link(s) carry run IDs that conflict with their receipt histories",
+    );
+}
+
+#[test]
 fn gate_batch_evidence_links_tool_receipts_through_their_own_run_ids() {
     let (_temp, ctx) = fixture_context();
     write_records(

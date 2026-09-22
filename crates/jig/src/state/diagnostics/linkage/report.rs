@@ -18,6 +18,7 @@ pub(in crate::state::diagnostics) struct RunLinkageReport {
     pub(in crate::state::diagnostics) batch_receipts: u64,
     pub(in crate::state::diagnostics) batch_links: u64,
     pub(in crate::state::diagnostics) unresolved_batch_links: u64,
+    pub(in crate::state::diagnostics) conflicting_batch_links: u64,
     pub(in crate::state::diagnostics) referenced_runs: u64,
     pub(in crate::state::diagnostics) tracked_references: u64,
     pub(in crate::state::diagnostics) reference_budget_exceeded: bool,
