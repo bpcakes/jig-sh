@@ -186,9 +186,27 @@ fn directory_entries(
     sources: &mut HistorySources,
     is_history_symlink: impl Fn(&Path) -> bool,
 ) -> Vec<PathBuf> {
+    let metadata = match fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            sources.error(format!("{}: {error}", display_repo_path(root, directory)));
+            return Vec::new();
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        sources.symlinks_skipped += 1;
+        return Vec::new();
+    }
+    if !metadata.is_dir() {
+        sources.error(format!(
+            "{} is not a directory",
+            display_repo_path(root, directory)
+        ));
+        return Vec::new();
+    }
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
         Err(error) => {
             sources.error(format!("{}: {error}", display_repo_path(root, directory)));
             return Vec::new();

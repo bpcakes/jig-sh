@@ -337,6 +337,48 @@ fn symlinked_run_archive_makes_missing_history_unverifiable() {
 
 #[cfg(unix)]
 #[test]
+fn symlinked_run_archive_root_makes_missing_history_unverifiable() {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    let run_history = fs::read(ctx.state_file("runs.jsonl")).unwrap();
+    fs::write(ctx.state_file("runs.jsonl"), b"").unwrap();
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[target_receipt(
+            "receipt_test",
+            "jig.test",
+            "api:test",
+            Some(&run_id),
+        )],
+    );
+    let durable_root = ctx.root().join("durable-history/state-archives");
+    write_gzip(
+        &durable_root.join("runs-before-10-EXAMPLE.jsonl.gz"),
+        &run_history,
+    );
+    let archive_root = ctx.root().join(".agent/.cache/state-archives");
+    fs::create_dir_all(archive_root.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&durable_root, &archive_root).unwrap();
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+    let finding = finding_for(&output, &run_id);
+
+    assert_eq!(linkage["verdict"], "findings");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["sources"]["symlinks_skipped"], 1);
+    assert_eq!(linkage["sources"]["archives_scanned"], 0);
+    assert_eq!(linkage["runs"]["unverifiable"], 1);
+    assert_eq!(linkage["runs"]["missing"], 0);
+    assert_eq!(finding["status"], "unverifiable");
+}
+
+#[cfg(unix)]
+#[test]
 fn unrelated_archive_symlink_does_not_make_missing_history_incomplete() {
     let (_temp, ctx) = fixture_context();
     write_orphan_batch(&ctx);

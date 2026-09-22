@@ -436,3 +436,44 @@ fn symlinked_backup_directory_makes_missing_history_unverifiable() {
         "symlinked local run history candidate(s) were skipped",
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_backup_root_makes_missing_history_unverifiable() {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    let runs_path = ctx.state_file("runs.jsonl");
+    crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "symlinked-root", None)
+        .unwrap();
+    let backup_root = ctx.root().join(".agent/.cache/state-backups");
+    let durable_root = ctx.root().join("durable-history/state-backups");
+    fs::create_dir_all(durable_root.parent().unwrap()).unwrap();
+    fs::rename(&backup_root, &durable_root).unwrap();
+    std::os::unix::fs::symlink(&durable_root, &backup_root).unwrap();
+    fs::write(&runs_path, b"").unwrap();
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[target_receipt(
+            "receipt_test",
+            "jig.test",
+            "api:test",
+            Some(&run_id),
+        )],
+    );
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+    let finding = finding_for(&output, &run_id);
+
+    assert_eq!(linkage["verdict"], "findings");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["sources"]["symlinks_skipped"], 1);
+    assert_eq!(linkage["sources"]["backups_scanned"], 0);
+    assert_eq!(linkage["runs"]["unverifiable"], 1);
+    assert_eq!(linkage["runs"]["missing"], 0);
+    assert_eq!(finding["status"], "unverifiable");
+}
