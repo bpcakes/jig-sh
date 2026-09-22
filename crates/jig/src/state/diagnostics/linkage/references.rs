@@ -237,9 +237,7 @@ pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedRe
                 .receipt_id
                 .as_ref()
                 .is_some_and(|receipt_id| collector.receipt_ids.contains(receipt_id));
-            if child.receipt_id.is_some()
-                && !receipt_exists
-                && !collector.reference_budget_exceeded
+            if child.receipt_id.is_some() && !receipt_exists && !collector.reference_budget_exceeded
             {
                 collected.unresolved_batch_links =
                     collected.unresolved_batch_links.saturating_add(1);
