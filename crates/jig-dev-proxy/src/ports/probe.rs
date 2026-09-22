@@ -62,7 +62,10 @@ pub(crate) fn jig_proxy_capabilities(host: &str, port: u16, health_token: &str) 
         Some("200") => parse_capabilities_response(&response)
             .map(CapabilityProbe::Available)
             .unwrap_or(CapabilityProbe::Invalid),
-        Some("404") => CapabilityProbe::Unsupported,
+        // Legacy daemons route this unknown path through Host validation:
+        // our loopback-only `Host: localhost` yields 400 before route lookup.
+        // Neither response authorizes reuse; both require explicit upgrade.
+        Some("400" | "404") => CapabilityProbe::Unsupported,
         Some("503") | Some("403") => CapabilityProbe::Unavailable,
         _ => CapabilityProbe::Invalid,
     }

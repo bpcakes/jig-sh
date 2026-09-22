@@ -20,6 +20,7 @@ enum GenerationChange {
 enum CapabilityReply {
     Available(ProxyCapabilities),
     Unsupported,
+    NotFound,
     Unavailable,
     Invalid,
 }
@@ -82,6 +83,7 @@ impl FakeProxy {
                 }
                 let request = String::from_utf8(request).unwrap();
                 assert!(request.starts_with(&format!("GET {path} HTTP/1.1\r\n")));
+                assert!(request.contains("Host: localhost\r\n"));
                 assert!(request.contains(&format!("x-jig-proxy-health-token: {token}\r\n")));
                 if path == "/__jig_proxy_health" {
                     write!(
@@ -114,6 +116,9 @@ impl FakeProxy {
                         .unwrap();
                     }
                     CapabilityReply::Unsupported => stream
+                        .write_all(b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n")
+                        .unwrap(),
+                    CapabilityReply::NotFound => stream
                         .write_all(b"HTTP/1.1 404 Not Found\r\nx-jig-proxy: 1\r\ncontent-length: 0\r\n\r\n")
                         .unwrap(),
                     CapabilityReply::Unavailable => stream
@@ -276,19 +281,22 @@ fn compatible_running_proxy_can_add_app_certificate_hosts() {
 
 #[test]
 fn older_proxy_without_capabilities_requires_explicit_upgrade() {
-    let proxy = FakeProxy::start(None, false, GenerationChange::None);
-    let error = ensure_proxy_running_interruptible(
-        &proxy.store,
-        &proxy.settings(false, false, true),
-        Path::new("unused-example-proxy-executable"),
-        &|| false,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("cannot report authenticated"));
-    assert!(error.contains("proxy stop --state-dir PATH"));
-    assert!(error.contains(&proxy.store.root().display().to_string()));
-    proxy.finish();
+    for reply in [CapabilityReply::Unsupported, CapabilityReply::NotFound] {
+        let proxy = FakeProxy::start_with_reply(reply, false, GenerationChange::None);
+        let error = ensure_proxy_running_interruptible(
+            &proxy.store,
+            &proxy.settings(false, false, true),
+            Path::new("unused-example-proxy-executable"),
+            &|| false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("cannot report authenticated"));
+        assert!(error.contains("proxy stop --state-dir PATH"));
+        assert!(error.contains("proxy start --state-dir PATH"));
+        assert!(error.contains(&proxy.store.root().display().to_string()));
+        proxy.finish();
+    }
 }
 
 #[test]
