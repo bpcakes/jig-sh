@@ -62,7 +62,7 @@ operational limits, dependency upgrades, and existing-application migration guid
 
 Jig is pre-1.0. The current source renders contract v8; contracts v2 through v7 remain readable through documented compatibility paths. Contract epochs protect repository compatibility independently of the installed Jig product version. Review the [Public Contract](docs/public-contract.md) before wiring long-lived automation to Jig.
 
-This README describes the 0.4.0 line on current `master`. Upgrading from 0.3.0 replaces the browser dashboard and external status providers with the unified terminal dashboard below. See [CHANGELOG.md](CHANGELOG.md).
+This README describes the 0.5.0 line on current `master`. Upgrading from 0.3.0 replaces the browser dashboard and external status providers with the unified terminal dashboard below. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
