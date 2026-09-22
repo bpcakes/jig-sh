@@ -243,6 +243,223 @@ fn live_and_completed_lifecycles_written_by_the_runtime_are_not_orphans() {
     assert_eq!(completed["run_linkage"]["journal"]["lifecycles"], 1);
 }
 
+fn archive_child_receipt(ctx: &RepoContext, child: Value, batch: Value) {
+    write_records(&ctx.state_file("receipts.jsonl"), &[child, batch]);
+    let archived = crate::state::state_archive(
+        ctx,
+        crate::command::StateArchiveRequest {
+            before: "3".into(),
+            include_runs: false,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(archived["receipts_archived"], 1);
+    assert_eq!(archived["receipts_retained"], 1);
+}
+
+fn assert_archived_child_is_resolved(output: &Value, run_id: &str) {
+    let linkage = &output["run_linkage"];
+    assert_eq!(linkage["verdict"], "clean");
+    assert_eq!(linkage["complete"], true);
+    assert_eq!(linkage["unresolved_batch_links"], 0);
+    assert_eq!(linkage["referenced_runs"], 1);
+    assert_eq!(linkage["runs"]["completed"], 1);
+    assert_eq!(linkage["receipt_history"]["archives_scanned"], 1);
+    assert_eq!(linkage["receipt_history"]["error_count"], 0);
+    assert_eq!(linkage["receipt_history"]["budget_exhausted"], false);
+    assert_eq!(
+        linkage["finding_count"], 0,
+        "unexpected finding for {run_id}"
+    );
+}
+
+#[test]
+fn archived_targets_batch_child_is_resolved_from_receipt_history() {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    archive_child_receipt(
+        &ctx,
+        target_receipt(
+            "receipt_archived_child",
+            "jig.test",
+            "api:test",
+            Some(&run_id),
+        ),
+        work_check_targets_receipt(
+            "receipt_retained_batch",
+            &[("api:test", "receipt_archived_child", &run_id)],
+        ),
+    );
+
+    assert_archived_child_is_resolved(&diagnose(&ctx, true), &run_id);
+}
+
+#[test]
+fn archived_gates_batch_child_is_resolved_from_receipt_history() {
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    archive_child_receipt(
+        &ctx,
+        target_receipt(
+            "receipt_archived_child",
+            "jig.test",
+            "api:test",
+            Some(&run_id),
+        ),
+        work_check_gates_receipt("receipt_retained_batch", &["receipt_archived_child"]),
+    );
+
+    assert_archived_child_is_resolved(&diagnose(&ctx, true), &run_id);
+}
+
+#[test]
+fn malformed_receipt_archive_cannot_resolve_a_batch_child() {
+    let (_temp, ctx) = fixture_context();
+    let archive = ctx
+        .root()
+        .join(".agent/.cache/state-archives/receipts-before-3-EXAMPLE.jsonl.gz");
+    let mut bytes = serde_json::to_vec(&target_receipt(
+        "receipt_archived_child",
+        "jig.test",
+        "api:test",
+        Some(RUN_A),
+    ))
+    .unwrap();
+    bytes.extend_from_slice(b"\nnot-json\n");
+    write_gzip(&archive, &bytes);
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[work_check_gates_receipt(
+            "receipt_retained_batch",
+            &["receipt_archived_child"],
+        )],
+    );
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+    assert_eq!(linkage["verdict"], "incomplete");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["unresolved_batch_links"], 1);
+    assert_eq!(linkage["referenced_runs"], 0);
+    assert_eq!(linkage["receipt_history"]["archives_scanned"], 1);
+    assert_eq!(linkage["receipt_history"]["error_count"], 1);
+    assert_string_array_contains(
+        &linkage["receipt_history"]["errors"],
+        "Failed to parse receipt record",
+    );
+}
+
+#[test]
+fn conflicting_archived_child_run_associations_remain_incomplete() {
+    let (_temp, ctx) = fixture_context();
+    let archives = ctx.root().join(".agent/.cache/state-archives");
+    for (name, run_id) in [
+        ("receipts-before-2-EXAMPLE.jsonl.gz", RUN_A),
+        ("receipts-before-3-EXAMPLE.jsonl.gz", RUN_B),
+    ] {
+        let mut bytes = serde_json::to_vec(&target_receipt(
+            "receipt_archived_child",
+            "jig.test",
+            "api:test",
+            Some(run_id),
+        ))
+        .unwrap();
+        bytes.push(b'\n');
+        write_gzip(&archives.join(name), &bytes);
+    }
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[work_check_gates_receipt(
+            "receipt_retained_batch",
+            &["receipt_archived_child"],
+        )],
+    );
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+    assert_eq!(linkage["verdict"], "findings");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["unresolved_batch_links"], 0);
+    assert_eq!(linkage["referenced_runs"], 2);
+    assert_eq!(linkage["receipt_history"]["archives_scanned"], 2);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "receipt ID(s) reference conflicting runs",
+    );
+}
+
+#[test]
+fn archival_preserves_conflicts_between_active_and_archived_child_receipts() {
+    let (_temp, ctx) = fixture_context();
+    let (older, older_lease) = start_run(&ctx, plan(), None).unwrap();
+    let older_run_id = older.result.run_id;
+    complete_target(&ctx, &older_run_id);
+    complete_run(&ctx, &older_run_id, RunConclusion::Success).unwrap();
+    drop(older_lease);
+    let (newer, newer_lease) = start_run(&ctx, plan(), None).unwrap();
+    let newer_run_id = newer.result.run_id;
+    complete_target(&ctx, &newer_run_id);
+    complete_run(&ctx, &newer_run_id, RunConclusion::Success).unwrap();
+    drop(newer_lease);
+
+    let older_child = target_receipt(
+        "receipt_shared_child",
+        "jig.test",
+        "api:test",
+        Some(&older_run_id),
+    );
+    let mut newer_child = target_receipt(
+        "receipt_shared_child",
+        "jig.test",
+        "api:test",
+        Some(&newer_run_id),
+    );
+    newer_child["started_at_ms"] = json!(3);
+    newer_child["ended_at_ms"] = json!(4);
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[
+            older_child,
+            newer_child,
+            work_check_gates_receipt("receipt_retained_batch", &["receipt_shared_child"]),
+        ],
+    );
+    let archived = crate::state::state_archive(
+        &ctx,
+        crate::command::StateArchiveRequest {
+            before: "3".into(),
+            include_runs: false,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(archived["receipts_archived"], 1);
+    assert_eq!(archived["receipts_retained"], 2);
+
+    let output = diagnose(&ctx, true);
+    let linkage = &output["run_linkage"];
+    assert_eq!(linkage["verdict"], "incomplete");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["unresolved_batch_links"], 0);
+    assert_eq!(linkage["referenced_runs"], 2);
+    assert_eq!(linkage["runs"]["completed"], 2);
+    assert_eq!(linkage["finding_count"], 0);
+    assert_eq!(linkage["receipt_history"]["archives_scanned"], 1);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "receipt ID(s) reference conflicting runs",
+    );
+}
+
 #[test]
 fn verified_archived_history_is_not_an_orphan() {
     let (_temp, ctx) = fixture_context();
@@ -379,7 +596,7 @@ fn symlinked_run_archive_root_makes_missing_history_unverifiable() {
 
 #[cfg(unix)]
 #[test]
-fn unrelated_archive_symlink_does_not_make_missing_history_incomplete() {
+fn symlinked_receipt_archive_makes_batch_identity_history_incomplete() {
     let (_temp, ctx) = fixture_context();
     write_orphan_batch(&ctx);
     let durable_receipts = ctx.root().join("durable-history/receipts.jsonl.gz");
@@ -393,7 +610,12 @@ fn unrelated_archive_symlink_does_not_make_missing_history_incomplete() {
     let output = diagnose(&ctx, true);
     let linkage = &output["run_linkage"];
 
-    assert_eq!(linkage["complete"], true);
+    assert_eq!(linkage["complete"], false);
     assert_eq!(linkage["sources"]["symlinks_skipped"], 0);
+    assert_eq!(linkage["receipt_history"]["symlinks_skipped"], 1);
     assert_eq!(linkage["runs"]["missing"], 1);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "symlinked local receipt history candidate(s) were skipped",
+    );
 }

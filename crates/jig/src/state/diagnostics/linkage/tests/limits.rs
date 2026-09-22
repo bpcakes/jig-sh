@@ -160,6 +160,82 @@ fn supported_batch_retains_only_the_reference_budget_prefix() {
 }
 
 #[test]
+fn archived_receipt_associations_respect_the_remaining_reference_budget() {
+    let (_temp, ctx) = fixture_context();
+    let archive = ctx
+        .root()
+        .join(".agent/.cache/state-archives/receipts-before-20260922T000000Z.jsonl.gz");
+    let records = [
+        target_receipt("receipt_child", "jig.test", "api:test", Some(RUN_A)),
+        target_receipt("receipt_child", "jig.test", "api:test", Some(RUN_B)),
+    ];
+    let mut bytes = Vec::new();
+    for record in records {
+        serde_json::to_writer(&mut bytes, &record).unwrap();
+        bytes.push(b'\n');
+    }
+    write_gzip(&archive, &bytes);
+
+    let mut collector = RunLinkageCollector::default();
+    let batch = serde_json::to_vec(&work_check_targets_receipt(
+        "receipt_batch",
+        &[("api:test", "receipt_child", RUN_A)],
+    ))
+    .unwrap();
+    analyze_receipt_linkage(&batch, &mut collector).unwrap();
+    collector.tracked_references = MAX_TRACKED_REFERENCES - 1;
+
+    let linkage = resolve(ctx.root(), collector, None, None).to_value();
+
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["reference_budget_exceeded"], true);
+    assert_eq!(
+        linkage["receipt_history"]["reference_budget_exhausted"],
+        true
+    );
+    assert_eq!(linkage["receipt_history"]["error_count"], 1);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "local receipt history scan exhausted the linkage reference budget",
+    );
+}
+
+#[test]
+fn archived_receipt_identity_without_run_respects_the_reference_budget() {
+    let (_temp, ctx) = fixture_context();
+    let archive = ctx
+        .root()
+        .join(".agent/.cache/state-archives/receipts-before-20260922T000000Z.jsonl.gz");
+    let receipt = target_receipt("receipt_child", "jig.test", "api:test", None);
+    let mut bytes = serde_json::to_vec(&receipt).unwrap();
+    bytes.push(b'\n');
+    write_gzip(&archive, &bytes);
+
+    let mut collector = RunLinkageCollector::default();
+    let batch = serde_json::to_vec(&work_check_gates_receipt(
+        "receipt_batch",
+        &["receipt_child"],
+    ))
+    .unwrap();
+    analyze_receipt_linkage(&batch, &mut collector).unwrap();
+    collector.tracked_references = MAX_TRACKED_REFERENCES;
+
+    let linkage = resolve(ctx.root(), collector, None, None).to_value();
+
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["reference_budget_exceeded"], true);
+    assert_eq!(
+        linkage["receipt_history"]["reference_budget_exhausted"],
+        true
+    );
+    assert_eq!(linkage["receipt_history"]["error_count"], 1);
+    assert_string_array_contains(
+        &linkage["incomplete_reasons"],
+        "local receipt history scan exhausted the linkage reference budget",
+    );
+}
+
+#[test]
 fn receipt_skipped_by_reference_budget_is_not_reported_as_missing() {
     let (_temp, ctx) = fixture_context();
     let mut collector = RunLinkageCollector {

@@ -17,12 +17,14 @@ use crate::state::records::RunEventRecord;
 use crate::state::runs::active_run_lease_ids;
 use crate::state::runs::lifecycle::{RunLifecycleValidator, is_recognized_run_event};
 
+mod receipt_sources;
 mod references;
 mod report;
 mod sources;
 
+use receipt_sources::scan_receipt_history_sources;
 pub(super) use references::analyze_receipt_linkage;
-use references::{BatchReference, collect_references};
+use references::{BatchReference, batch_receipt_ids, collect_references};
 use report::{RunJournalFacts, RunLinkageCounts, guidance};
 pub(super) use report::{RunLinkageFinding, RunLinkageReport, recommendations};
 use sources::{HistorySources, SourceKind, scan_local_history_sources};
@@ -538,12 +540,42 @@ fn count_status(counts: &mut RunLinkageCounts, status: &str) {
 /// Joins collected references to lifecycle history after every stream scan.
 pub(super) fn resolve(
     root: &Path,
-    collector: RunLinkageCollector,
+    mut collector: RunLinkageCollector,
     receipts: Option<&StreamDiagnostics>,
     runs: Option<&StreamDiagnostics>,
 ) -> RunLinkageReport {
     let journal = journal_facts(root, &collector, runs);
+    let wanted_receipt_ids = batch_receipt_ids(&collector);
+    let remaining_references = MAX_TRACKED_REFERENCES.saturating_sub(collector.tracked_references);
+    let receipt_history = scan_receipt_history_sources(
+        root,
+        &wanted_receipt_ids,
+        &collector.receipt_ids,
+        &collector.receipt_runs,
+        remaining_references,
+    );
+    receipt_history.merge_into(&mut collector);
     let mut incomplete_reasons = incomplete_reasons(&collector, receipts, &journal);
+    if receipt_history.error_count > 0 {
+        incomplete_reasons.push(format!(
+            "{} local receipt history source(s) could not be fully verified",
+            receipt_history.error_count
+        ));
+    }
+    if receipt_history.symlinks_skipped > 0 {
+        incomplete_reasons.push(format!(
+            "{} symlinked local receipt history candidate(s) were skipped and could not be verified",
+            receipt_history.symlinks_skipped
+        ));
+    }
+    if receipt_history.budget_exhausted {
+        incomplete_reasons
+            .push("local receipt history scan exhausted its aggregate decompression budget".into());
+    }
+    if receipt_history.reference_budget_exhausted {
+        incomplete_reasons
+            .push("local receipt history scan exhausted the linkage reference budget".into());
+    }
     let collected_references = collect_references(&collector);
     if collected_references.unresolved_batch_links > 0 {
         incomplete_reasons.push(format!(
@@ -697,6 +729,7 @@ pub(super) fn resolve(
         runs: counts,
         journal,
         sources,
+        receipt_history,
         findings_truncated: finding_count as usize > findings.len(),
         findings,
         finding_count,

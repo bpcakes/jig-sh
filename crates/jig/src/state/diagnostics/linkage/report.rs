@@ -5,6 +5,7 @@
 use serde_json::{Value, json};
 
 use super::NOT_CHECKED_REASON;
+use super::receipt_sources::ReceiptHistorySources;
 use super::sources::HistorySources;
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -27,6 +28,7 @@ pub(in crate::state::diagnostics) struct RunLinkageReport {
     pub(in crate::state::diagnostics) runs: RunLinkageCounts,
     pub(in crate::state::diagnostics) journal: RunJournalFacts,
     pub(in crate::state::diagnostics) sources: HistorySources,
+    pub(in crate::state::diagnostics) receipt_history: ReceiptHistorySources,
     pub(in crate::state::diagnostics) findings: Vec<RunLinkageFinding>,
     pub(in crate::state::diagnostics) finding_count: u64,
     pub(in crate::state::diagnostics) findings_truncated: bool,

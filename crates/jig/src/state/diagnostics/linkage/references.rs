@@ -253,3 +253,16 @@ pub(super) fn collect_references(collector: &RunLinkageCollector) -> CollectedRe
     }
     collected
 }
+
+pub(super) fn batch_receipt_ids(collector: &RunLinkageCollector) -> BTreeSet<String> {
+    if collector.reference_budget_exceeded {
+        return BTreeSet::new();
+    }
+    collector
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.children)
+        .filter_map(|child| child.receipt_id.as_ref())
+        .cloned()
+        .collect()
+}
