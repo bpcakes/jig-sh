@@ -147,7 +147,27 @@ fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     let replaced_status = run_json(&repo_a, ["dev", "status", "--state-dir"], Some(&state_dir));
     assert_replaced_status(&replaced_status, &replacement);
 
-    let stopped = run_json(&repo_a, ["dev", "stop", "--state-dir"], Some(&state_dir));
+    let replacement_id = replaced_status["sessions"][0]["session_id"]
+        .as_str()
+        .unwrap();
+    let exact_status = run_json(
+        temp.path(),
+        ["dev", "status", "--session", replacement_id, "--state-dir"],
+        Some(&state_dir),
+    );
+    assert_eq!(exact_status["sessions"][0]["session_id"], replacement_id);
+    let all_status = run_json(
+        temp.path(),
+        ["dev", "status", "--all", "--state-dir"],
+        Some(&state_dir),
+    );
+    assert_eq!(all_status["sessions"].as_array().unwrap().len(), 2);
+
+    let stopped = run_json(
+        temp.path(),
+        ["dev", "stop", "--session", replacement_id, "--state-dir"],
+        Some(&state_dir),
+    );
     assert_stopped_status(&stopped);
     replacement.wait_for_success("stopped foreground dev");
     assert!(

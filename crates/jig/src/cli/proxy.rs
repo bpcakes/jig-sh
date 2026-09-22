@@ -24,6 +24,9 @@ Examples:
   jig dev --app web
   jig dev --replace
   jig dev status
+  jig dev status --all
+  jig dev status --session dev_ID
+  jig dev recover --session dev_ID
   jig dev stop";
 
 #[derive(Debug, Subcommand)]
@@ -153,11 +156,29 @@ pub(crate) struct DevOpts {
     pub(crate) launch: DevLaunchOpts,
 }
 
+impl DevOpts {
+    pub(crate) fn is_contextless(&self) -> bool {
+        match &self.command {
+            Some(DevSubcommand::Status(opts)) => opts.all || opts.session.is_some(),
+            Some(
+                DevSubcommand::Recover(_)
+                | DevSubcommand::Stop(DevStopOpts {
+                    session: Some(_), ..
+                }),
+            ) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum DevSubcommand {
     /// Show registered development sessions owned by the current repository.
     #[command(name = tool_defs::cli_command::DEV_STATUS)]
     Status(DevStatusOpts),
+    /// Retire one eligible session's metadata without stopping processes.
+    #[command(name = tool_defs::cli_command::DEV_RECOVER)]
+    Recover(DevRecoverOpts),
     /// Stop all registered development sessions owned by the current repository.
     #[command(name = tool_defs::cli_command::DEV_STOP)]
     Stop(DevStopOpts),
@@ -196,6 +217,35 @@ pub(crate) struct DevStatusOpts {
         help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
     )]
     pub(crate) state_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        conflicts_with = "session",
+        help = "Inspect every registered session without repository discovery"
+    )]
+    pub(crate) all: bool,
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with = "all",
+        help = "Inspect one exact session ID without repository discovery"
+    )]
+    pub(crate) session: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct DevRecoverOpts {
+    #[arg(
+        long,
+        value_name = "ID",
+        required = true,
+        help = "Retire one eligible exact session ID without repository discovery"
+    )]
+    pub(crate) session: String,
+    #[arg(
+        long,
+        help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -205,6 +255,12 @@ pub(crate) struct DevStopOpts {
         help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
     )]
     pub(crate) state_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Stop one exact session ID without repository discovery"
+    )]
+    pub(crate) session: Option<String>,
     #[arg(
         long,
         help = "Forget dead-supervisor orphan records with unconfirmed preflight cleanup or unprovable spawn history; never signals stored PIDs"

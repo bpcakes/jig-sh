@@ -98,6 +98,14 @@ pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
         lines.push(format!(
             "  - {session_id}: {status}, {pid}, {app_count} {app_label}"
         ));
+        if value_str(value, "scope").is_some()
+            && let (Some(repo), Some(root)) = (
+                value_str(session, "repo_name"),
+                value_str(session, "repo_root"),
+            )
+        {
+            lines.push(format!("    Repository: {repo} ({root})"));
+        }
         if let Some(reason) = value_str(session, "retention_reason") {
             let readable = reason.replace('-', " ");
             let app = value_str(session, "retention_app")
@@ -109,6 +117,32 @@ pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
         }
     }
 
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
+    let session_id = value_str(value, "session_id").unwrap_or("<unknown>");
+    let state_dir = value_str(value, "state_dir").unwrap_or("<unknown>");
+    let retired = value_u64(value, "retired_sessions").unwrap_or(0);
+    let matched = value_u64(value, "matched_sessions").unwrap_or(0);
+    let mut lines = if retired == 1 {
+        vec![format!(
+            "Dev recover: retired metadata for session {session_id}; no process stop requested"
+        )]
+    } else if matched == 0 {
+        vec![format!(
+            "Dev recover: session {session_id} is already absent"
+        )]
+    } else {
+        vec![format!(
+            "Dev recover: session {session_id} retained; no process stop requested"
+        )]
+    };
+    lines.push(format!("  State directory: {state_dir}"));
+    if let Some(reason) = value_str(value, "retention_reason") {
+        lines.push(format!("  Reason: {}", reason.replace('-', " ")));
+    }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
 }

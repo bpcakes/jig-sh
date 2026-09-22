@@ -47,11 +47,11 @@ pub(crate) use loops::{
 };
 pub(crate) use migration::{MigrationAddOpts, MigrationCommand};
 pub(crate) use proxy::{
-    DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, ProxyAliasOpts,
-    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
-    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
-    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts,
+    DevLaunchOpts, DevOpts, DevRecoverOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
+    ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts,
+    ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
+    ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
+    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts,
 };
 pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{

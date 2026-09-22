@@ -22,12 +22,14 @@ mod claim;
 mod management;
 mod process_identity;
 
-pub(crate) use management::{OrphanRecoveryNotice, status, stop};
+pub(crate) use management::{
+    OrphanRecoveryNotice, recover_session, status, status_all, status_session, stop, stop_session,
+};
 
 const SESSION_ID_RANDOM_BYTES: usize = 16;
-// T-04 enables this only after exact, repository-independent legacy repair is
-// available. T-02 installs the reader and tests the serialized promotion path.
-const COMPLETE_EVIDENCE_CUTOVER_ENABLED: bool = false;
+// Exact, repository-independent legacy repair is available before enabling this
+// writer cutover. T-02 installs the reader and serialized promotion path.
+const COMPLETE_EVIDENCE_CUTOVER_ENABLED: bool = true;
 
 pub(crate) struct DevSessionRuntime {
     store: StateStore,
@@ -552,6 +554,14 @@ impl CanonicalRepo {
             root_display,
             root_identity,
         })
+    }
+
+    pub(super) fn from_record(session: &DevSessionRecord) -> Self {
+        Self {
+            name: session.repo_name.clone(),
+            root_display: session.repo_root_display.clone(),
+            root_identity: session.repo_root_identity.clone(),
+        }
     }
 }
 

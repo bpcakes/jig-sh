@@ -87,6 +87,7 @@ pub(crate) mod cli_command {
     pub(crate) const CODEX_RESUME: &str = "resume";
     pub(crate) const DEV: &str = "dev";
     pub(crate) const DEV_STATUS: &str = "status";
+    pub(crate) const DEV_RECOVER: &str = "recover";
     pub(crate) const DEV_STOP: &str = "stop";
     pub(crate) const DOCTOR: &str = "doctor";
     pub(crate) const FILE_BUDGET: &str = "file-budget";

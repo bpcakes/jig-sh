@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub(crate) enum DevCommand {
     Launch(DevRequest),
     Status(DevStatusRequest),
+    Recover(DevRecoverRequest),
     Stop(DevStopRequest),
 }
 
@@ -23,11 +24,20 @@ pub(crate) struct DevRequest {
 #[derive(Debug, Default)]
 pub(crate) struct DevStatusRequest {
     pub(crate) state_dir: Option<PathBuf>,
+    pub(crate) all: bool,
+    pub(crate) session: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct DevRecoverRequest {
+    pub(crate) state_dir: Option<PathBuf>,
+    pub(crate) session: String,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct DevStopRequest {
     pub(crate) state_dir: Option<PathBuf>,
+    pub(crate) session: Option<String>,
     pub(crate) forget_ambiguous_orphans: bool,
 }
 

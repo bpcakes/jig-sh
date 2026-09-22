@@ -158,6 +158,7 @@ fn dev_process_list_identifies_its_repo() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let repo = tempdir().expect("create process-identity test repo");
+    let state_dir = repo.path().join("proxy-state");
     let ready_path = repo.path().join("helper-ready");
     let started_path = repo.path().join("helper-started");
     write_repo_fixture(repo.path());
@@ -166,7 +167,8 @@ fn dev_process_list_identifies_its_repo() {
     let stderr_file = NamedTempFile::new().expect("create stderr capture");
     let child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .process_group(0)
-        .args(["dev", "--no-proxy"])
+        .args(["dev", "--no-proxy", "--state-dir"])
+        .arg(&state_dir)
         .current_dir(repo.path())
         .env_remove("JIG_REPO_ROOT")
         .env(HELPER_ENV, "1")
@@ -260,6 +262,7 @@ fn sigint_during_frontend_preflight_stops_checker_tree_before_app_launch() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let repo = tempdir().expect("create preflight signal repo");
+    let state_dir = repo.path().join("proxy-state");
     let checker_ready = repo.path().join("checker-ready");
     let app_started = repo.path().join("app-started");
     let app_ready = repo.path().join("app-ready");
@@ -269,7 +272,8 @@ fn sigint_during_frontend_preflight_stops_checker_tree_before_app_launch() {
     let stderr_file = NamedTempFile::new().expect("create stderr capture");
     let child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .process_group(0)
-        .args(["--json", "dev", "--no-proxy"])
+        .args(["--json", "dev", "--no-proxy", "--state-dir"])
+        .arg(&state_dir)
         .current_dir(repo.path())
         .env_remove("JIG_REPO_ROOT")
         .env("JIG_PREFLIGHT_SIGNAL_READY", &checker_ready)

@@ -61,9 +61,8 @@ impl StateStore {
         })
     }
 
-    /// The version transition and first claim share the route lock. Until
-    /// contextless legacy recovery is available, callers keep the cutover
-    /// disabled; tests exercise the future transition explicitly.
+    /// The version transition and first claim share the route lock. Callers
+    /// enable the cutover only after contextless legacy recovery is available.
     pub(crate) fn mutate_dev_sessions_for_claim_interruptible<T>(
         &self,
         cancelled: &impl Fn() -> bool,

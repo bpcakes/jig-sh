@@ -70,6 +70,7 @@ fn replace_refuses_cross_repo_route_ownership() {
     assert!(error.contains("activity verified"));
     assert!(error.contains(&store.root().display().to_string()));
     assert!(error.contains("Cross-repository ownership"));
+    assert!(error.contains("jig dev status --session ID --state-dir PATH"));
     assert!(error.contains("shared.localhost"));
     assert!(
         error.contains(

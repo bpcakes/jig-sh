@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::{DevProcessIdentity, DevSessionControl};
+use tempfile::tempdir;
 
 fn cleanup_required_session() -> DevSessionRecord {
     DevSessionRecord {
@@ -18,10 +19,234 @@ fn cleanup_required_session() -> DevSessionRecord {
         },
         control: DevSessionControl {
             port: 1,
-            token: "example-control-token".into(),
+            token: "a".repeat(64),
         },
         apps: Vec::new(),
     }
+}
+
+#[test]
+fn contextless_inspection_finds_deleted_root_legacy_blocker_without_mutation() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let mut legacy = cleanup_required_session();
+    legacy.repo_root_display = temp
+        .path()
+        .join("deleted-ExampleProject")
+        .display()
+        .to_string();
+    legacy.preflight_cleanup_pending = None;
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions.push(legacy);
+            Ok(())
+        })
+        .unwrap();
+    let before = std::fs::read(state_dir.join("dev-sessions.json")).unwrap();
+
+    let all = status_all(Some(state_dir.clone())).unwrap();
+    let exact = status_session("dev_example", Some(state_dir.clone())).unwrap();
+    assert_eq!(all["sessions"][0]["session_id"], "dev_example");
+    assert_eq!(
+        all["sessions"][0]["retention_reason"],
+        "preflight-cleanup-unknown"
+    );
+    assert_eq!(
+        all["sessions"][0]["repo_root"],
+        temp.path()
+            .join("deleted-ExampleProject")
+            .display()
+            .to_string()
+    );
+    assert_eq!(exact["sessions"].as_array().unwrap().len(), 1);
+    assert!(!all.to_string().contains(&"a".repeat(64)));
+    assert!(!exact.to_string().contains(&"a".repeat(64)));
+    assert_eq!(
+        std::fs::read(state_dir.join("dev-sessions.json")).unwrap(),
+        before
+    );
+
+    let refused = recover_session("dev_example", Some(state_dir.clone())).unwrap();
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["retention_reason"], "preflight-cleanup-unknown");
+    assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 1);
+
+    let stopped = stop_session("dev_example", Some(state_dir), true).unwrap();
+    assert_eq!(stopped["ok"], true);
+    assert_eq!(stopped["stopped_sessions"], 1);
+    assert!(store.snapshot_dev_state().unwrap().sessions.is_empty());
+    assert!(!stopped.to_string().contains(&"a".repeat(64)));
+}
+
+#[test]
+fn exact_recovery_is_idempotent_and_preserves_unrelated_sessions() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let mut target = cleanup_required_session();
+    target.session_id = "dev_example_target".into();
+    let mut other = cleanup_required_session();
+    other.session_id = "dev_example_other".into();
+    other.preflight_cleanup_pending = Some(true);
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions.extend([target, other]);
+            Ok(())
+        })
+        .unwrap();
+
+    let prefix = recover_session("dev_example", Some(state_dir.clone())).unwrap();
+    assert_eq!(prefix["matched_sessions"], 0);
+    assert!(recover_session("dev_*", Some(state_dir.clone())).is_err());
+    let recovered = recover_session("dev_example_target", Some(state_dir.clone())).unwrap();
+    assert_eq!(recovered["retired_sessions"], 1);
+    assert_eq!(
+        recovered["recoveries"][0]["session_id"],
+        "dev_example_target"
+    );
+    let repeated = recover_session("dev_example_target", Some(state_dir.clone())).unwrap();
+    assert_eq!(repeated["retired_sessions"], 0);
+    assert_eq!(repeated["matched_sessions"], 0);
+    assert_eq!(
+        store.snapshot_dev_state().unwrap().sessions[0].session_id,
+        "dev_example_other"
+    );
+    let refused = recover_session("dev_example_other", Some(state_dir)).unwrap();
+    assert_eq!(refused["retention_reason"], "preflight-cleanup-pending");
+}
+
+#[test]
+fn exact_recovery_refuses_pending_live_and_uncertain_evidence() {
+    let mut cases = Vec::new();
+    let mut preflight = cleanup_required_session();
+    preflight.preflight_cleanup_pending = Some(true);
+    cases.push((preflight, "preflight-cleanup-pending"));
+
+    let mut supervisor = cleanup_required_session();
+    supervisor.supervisor.pid = std::process::id();
+    supervisor.supervisor.start_token = None;
+    cases.push((supervisor, "supervisor-uncertain"));
+
+    let mut spawn = cleanup_required_session();
+    spawn.apps.push(DevSessionApp {
+        name: "web".into(),
+        hostname: None,
+        target_host: "127.0.0.1".into(),
+        target_port: Some(4000),
+        spawn_state_tracked: true,
+        spawn_pending: true,
+        process: None,
+    });
+    cases.push((spawn, "app-spawn-pending"));
+
+    let mut app = cleanup_required_session();
+    app.apps.push(DevSessionApp {
+        name: "web".into(),
+        hostname: None,
+        target_host: "127.0.0.1".into(),
+        target_port: Some(4000),
+        spawn_state_tracked: true,
+        spawn_pending: false,
+        process: Some(DevProcessIdentity {
+            pid: std::process::id(),
+            start_token: None,
+        }),
+    });
+    cases.push((app, "app-uncertain"));
+
+    if let Some(token) = crate::state::process_start_token(std::process::id()) {
+        let mut live = cleanup_required_session();
+        live.apps.push(DevSessionApp {
+            name: "web".into(),
+            hostname: None,
+            target_host: "127.0.0.1".into(),
+            target_port: Some(4000),
+            spawn_state_tracked: true,
+            spawn_pending: false,
+            process: Some(DevProcessIdentity {
+                pid: std::process::id(),
+                start_token: Some(token),
+            }),
+        });
+        cases.push((live, "app-alive"));
+    }
+
+    for (session, reason) in cases {
+        let temp = tempdir().unwrap();
+        let state_dir = temp.path().join("proxy-state");
+        let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+        store
+            .mutate_dev_sessions(|sessions, _| {
+                sessions.push(session);
+                Ok(())
+            })
+            .unwrap();
+        let refused = recover_session("dev_example", Some(state_dir)).unwrap();
+        assert_eq!(refused["ok"], false, "{reason}");
+        assert_eq!(refused["retention_reason"], reason);
+        assert_eq!(store.snapshot_dev_state().unwrap().sessions.len(), 1);
+    }
+}
+
+#[test]
+fn exact_recovery_removes_only_selected_owned_process_route() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let mut target = cleanup_required_session();
+    target.session_id = "dev_example_target".into();
+    target.apps.push(DevSessionApp {
+        name: "web".into(),
+        hostname: Some("web.example.localhost".into()),
+        target_host: "127.0.0.1".into(),
+        target_port: Some(4000),
+        spawn_state_tracked: true,
+        spawn_pending: false,
+        process: Some(DevProcessIdentity {
+            pid: u32::MAX - 1,
+            start_token: Some("retired-app".into()),
+        }),
+    });
+    let mut other = cleanup_required_session();
+    other.session_id = "dev_example_other".into();
+    store
+        .mutate_dev_state_interruptible(&|| false, |sessions, routes| {
+            sessions.extend([target, other]);
+            routes.extend([
+                Route {
+                    hostname: "web.example.localhost".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: 4000,
+                    owner_pid: Some(u32::MAX - 1),
+                    owner_start_token: Some("retired-app".into()),
+                    mode: crate::types::RouteMode::Process,
+                    created_at_ms: 1,
+                },
+                Route {
+                    hostname: "other.example.localhost".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: 4001,
+                    owner_pid: None,
+                    owner_start_token: None,
+                    mode: crate::types::RouteMode::Alias,
+                    created_at_ms: 1,
+                },
+            ]);
+            Ok(())
+        })
+        .unwrap();
+
+    let recovered = recover_session("dev_example_target", Some(state_dir)).unwrap();
+    assert_eq!(recovered["retired_sessions"], 1);
+    let snapshot = store.snapshot_dev_state().unwrap();
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert_eq!(snapshot.sessions[0].session_id, "dev_example_other");
+    assert_eq!(snapshot.routes.len(), 1);
+    assert_eq!(
+        snapshot.routes[0].hostname.as_str(),
+        "other.example.localhost"
+    );
 }
 
 #[test]

@@ -75,7 +75,7 @@ impl ClaimConflicts {
                 )
             };
             return anyhow!(
-                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}).{additional}{same_repo}{unmanaged} Cross-repository ownership remains reserved until each exact session is explicitly cleaned up; `jig dev --replace` will not take it over. When an owning repository root still exists, inspect from that repository with `jig dev status --state-dir PATH`, using state directory {}; otherwise change the duplicate hostname.",
+                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}).{additional}{same_repo}{unmanaged} Cross-repository ownership remains reserved until each exact session is explicitly cleaned up; `jig dev --replace` will not take it over. Inspect exact sessions with `jig dev status --session ID --state-dir PATH` from any directory, using state directory {}; retire eligible metadata with `jig dev recover --session ID --state-dir PATH`, or change the duplicate hostname.",
                 session.session_id,
                 session.repo_root_display,
                 state_dir.display(),

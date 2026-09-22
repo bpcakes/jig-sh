@@ -21,7 +21,7 @@ use crate::progress::CliProgress;
 use crate::shell::quote as shell_quote;
 
 pub(crate) mod commands {
-    pub(crate) use self::dev::dev;
+    pub(crate) use self::dev::{dev, dev_contextless};
     use super::*;
 
     mod dev;

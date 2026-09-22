@@ -49,12 +49,18 @@ pub(super) fn retention_warning(
         | OrphanRetentionReason::PreflightCleanupUnknown
         | OrphanRetentionReason::AppSpawnPending(_)
         | OrphanRetentionReason::AppSpawnUntracked(_) => {
-            "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --forget-ambiguous-orphans`"
+            format!(
+                "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --session {} --state-dir PATH --forget-ambiguous-orphans`",
+                session.session_id
+            )
         }
         OrphanRetentionReason::AppAlive(_) | OrphanRetentionReason::AppUncertain(_) => {
-            "; the owning supervisor is gone: inspect `jig dev status --json`, independently verify and stop surviving app processes, then retry `jig dev stop` or `jig dev --replace`; `--forget-ambiguous-orphans` cannot bypass live or uncertain process identities"
+            format!(
+                "; the owning supervisor is gone: inspect `jig dev status --session {} --state-dir PATH --json`, independently verify and stop surviving app processes, then retry `jig dev stop --session {} --state-dir PATH`; `--forget-ambiguous-orphans` cannot bypass live or uncertain process identities",
+                session.session_id, session.session_id
+            )
         }
-        _ => "",
+        _ => String::new(),
     };
     StopWarning {
         session_id: session.session_id.clone(),

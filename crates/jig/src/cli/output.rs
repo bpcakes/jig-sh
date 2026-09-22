@@ -88,6 +88,7 @@ pub(super) enum HumanOutput {
     StateArchive,
     Dev,
     DevStatus,
+    DevRecover,
     DevStop,
     Proxy,
 }
@@ -152,6 +153,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::StateArchive => format_state_archive_summary(value),
         HumanOutput::Dev => format_dev_summary(value),
         HumanOutput::DevStatus => format_dev_status_summary(value),
+        HumanOutput::DevRecover => format_dev_recover_summary(value),
         HumanOutput::DevStop => format_dev_stop_summary(value),
         HumanOutput::Proxy => format_proxy_summary(value),
     })
@@ -545,6 +547,10 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
 
 pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
     dev::format_dev_status_summary(value)
+}
+
+pub(super) fn format_dev_recover_summary(value: &serde_json::Value) -> String {
+    dev::format_dev_recover_summary(value)
 }
 
 pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {

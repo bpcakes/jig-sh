@@ -28,8 +28,8 @@ pub(crate) use loops::{
 };
 pub(crate) use migration::MigrationAddRequest;
 pub(crate) use proxy::{
-    DevCommand, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest, ProxyCertCommand,
-    ProxyCertGenerateRequest, ProxyCertRuntimeRequest, ProxyCertTrustRequest,
+    DevCommand, DevRecoverRequest, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest,
+    ProxyCertCommand, ProxyCertGenerateRequest, ProxyCertRuntimeRequest, ProxyCertTrustRequest,
     ProxyCertUntrustRequest, ProxyCommand, ProxyListRequest, ProxyPruneRequest, ProxyRunRequest,
     ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
     ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
