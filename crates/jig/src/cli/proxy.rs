@@ -115,7 +115,7 @@ pub(crate) struct ProxyRuntimeOpts {
         long,
         hide = true,
         conflicts_with = "no_http2",
-        help = "Enable HTTP/2 ALPN on the HTTPS listener"
+        help = "Require HTTP/2 ALPN on a new or reused HTTPS listener"
     )]
     pub(crate) http2: bool,
     // Expert diagnostic toggle kept for service parity while HTTP/2 support is
@@ -124,19 +124,19 @@ pub(crate) struct ProxyRuntimeOpts {
         long,
         hide = true,
         conflicts_with = "http2",
-        help = "Disable HTTP/2 ALPN on the HTTPS listener"
+        help = "Require HTTP/2 ALPN disabled on a new or reused HTTPS listener"
     )]
     pub(crate) no_http2: bool,
     #[arg(
         long,
         conflicts_with = "no_lan",
-        help = "Bind the proxy on 0.0.0.0; LAN clients can reach Jig-supervised loopback apps"
+        help = "Require LAN binding on a new or reused proxy; LAN clients can reach supervised apps"
     )]
     pub(crate) lan: bool,
     #[arg(
         long,
         conflicts_with = "lan",
-        help = "Disable LAN binding even when [dev].lan is true"
+        help = "Require loopback-only binding even when [dev].lan is true"
     )]
     pub(crate) no_lan: bool,
     #[arg(long, help = "Private/local TLD for generated route hostnames")]

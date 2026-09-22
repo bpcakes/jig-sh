@@ -7,14 +7,73 @@ use hyper::header::{
     CONNECTION, CONTENT_LENGTH, HOST, HeaderMap, HeaderName, HeaderValue, TRANSFER_ENCODING,
     UPGRADE, VIA,
 };
-use hyper::{Request, Response, StatusCode, Version};
+use hyper::{Method, Request, Response, StatusCode, Version};
 use subtle::ConstantTimeEq;
 
 use crate::host::{ip_is_loopback, normalize_request_host};
+use crate::ports::{CAPABILITIES_PATH, ProxyCapabilities};
 use crate::types::Route;
 
 use super::error_page::error_response;
-use super::{HEALTH_TOKEN_BYTES, MAX_PROXY_HOPS, ProxyBody, VIA_VALUE};
+use super::{HEALTH_TOKEN_BYTES, MAX_PROXY_HOPS, ProxyBody, RequestContext, VIA_VALUE};
+
+pub(super) fn internal_probe_response<B>(
+    req: &Request<B>,
+    context: &RequestContext,
+) -> Option<Response<ProxyBody>> {
+    let capabilities = match req.uri().path() {
+        "/__jig_proxy_health" => false,
+        CAPABILITIES_PATH => true,
+        _ => return None,
+    };
+    // Both internal responses require the same loopback addresses, loopback
+    // Host, and private token. Neither exposes capabilities to LAN clients.
+    if !health_request_allowed(
+        req,
+        context.remote_addr.ip(),
+        context.local_ip,
+        &context.health_token,
+    ) {
+        return Some(error_response(StatusCode::FORBIDDEN, "Forbidden."));
+    }
+    if capabilities {
+        if req.method() != Method::GET {
+            return Some(error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Method not allowed.",
+            ));
+        }
+        Some(capabilities_response(context.capabilities))
+    } else {
+        Some(health_response())
+    }
+}
+
+fn capabilities_response(capabilities: ProxyCapabilities) -> Response<ProxyBody> {
+    let mut response = Response::new(full_body(Bytes::new()));
+    response
+        .headers_mut()
+        .insert("x-jig-proxy", HeaderValue::from_static("1"));
+    response.headers_mut().insert(
+        "x-jig-proxy-capabilities-version",
+        HeaderValue::from_static("1"),
+    );
+    response.headers_mut().insert(
+        "x-jig-proxy-pid",
+        HeaderValue::from_str(&capabilities.pid.to_string()).expect("PID is an HTTP header value"),
+    );
+    for (name, enabled) in [
+        ("x-jig-proxy-lan", capabilities.lan),
+        ("x-jig-proxy-https", capabilities.https),
+        ("x-jig-proxy-http2", capabilities.http2),
+    ] {
+        response.headers_mut().insert(
+            name,
+            HeaderValue::from_static(if enabled { "1" } else { "0" }),
+        );
+    }
+    response
+}
 
 pub(super) fn rewrite_proxy_headers(
     headers: &mut hyper::HeaderMap,

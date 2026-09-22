@@ -1,15 +1,11 @@
 use std::collections::HashSet;
-use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::host::ip_is_loopback;
-
 const MIN_APP_PORT: u16 = 4000;
 const MAX_APP_PORT: u16 = 4999;
-const MAX_HEALTH_RESPONSE_HEADER_BYTES: usize = 2048;
 
 pub(crate) fn find_free_app_port_excluding(host: &str, reserved: &HashSet<u16>) -> Result<u16> {
     let target_ips = resolve_target_ips(host, MIN_APP_PORT)
@@ -61,101 +57,11 @@ pub(crate) fn is_tcp_listening(host: &str, port: u16) -> bool {
         .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok())
 }
 
-pub(crate) fn is_jig_proxy_http(host: &str, port: u16, health_token: Option<&str>) -> bool {
-    jig_proxy_http_pid(host, port, health_token).is_some()
-}
-
-pub(crate) fn is_any_jig_proxy_http(host: &str, port: u16) -> bool {
-    jig_proxy_http_probe(host, port, None).is_some_and(|probe| probe.is_jig_proxy)
-}
-
-pub(crate) fn jig_proxy_http_pid(host: &str, port: u16, health_token: Option<&str>) -> Option<u32> {
-    let ip = host.parse::<IpAddr>().ok()?;
-    if !ip_is_loopback(ip) {
-        return None;
-    }
-    jig_proxy_http_probe_at(SocketAddr::new(ip, port), health_token)?.pid
-}
-
-struct JigProxyHealthProbe {
-    is_jig_proxy: bool,
-    pid: Option<u32>,
-}
-
-fn jig_proxy_http_probe(
-    host: &str,
-    port: u16,
-    health_token: Option<&str>,
-) -> Option<JigProxyHealthProbe> {
-    let ip = host.parse::<IpAddr>().ok()?;
-    if !ip_is_loopback(ip) {
-        return None;
-    }
-    jig_proxy_http_probe_at(SocketAddr::new(ip, port), health_token)
-}
-
-fn jig_proxy_http_probe_at(
-    addr: SocketAddr,
-    health_token: Option<&str>,
-) -> Option<JigProxyHealthProbe> {
-    if health_token.is_some_and(|token| token.bytes().any(|byte| matches!(byte, b'\r' | b'\n'))) {
-        return None;
-    }
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(150)) else {
-        return None;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-    let request = if let Some(token) = health_token {
-        format!(
-            "GET /__jig_proxy_health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nx-jig-proxy-health-token: {token}\r\n\r\n"
-        )
-    } else {
-        "GET /__jig_proxy_health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-            .to_string()
-    };
-    if stream.write_all(request.as_bytes()).is_err() {
-        return None;
-    }
-    let mut response_bytes = Vec::new();
-    let mut buffer = [0u8; 512];
-    while response_bytes.len() < MAX_HEALTH_RESPONSE_HEADER_BYTES {
-        let remaining = MAX_HEALTH_RESPONSE_HEADER_BYTES - response_bytes.len();
-        let read_len = buffer.len().min(remaining);
-        let Ok(n) = stream.read(&mut buffer[..read_len]) else {
-            return None;
-        };
-        if n == 0 {
-            break;
-        }
-        response_bytes.extend_from_slice(&buffer[..n]);
-        if response_bytes
-            .windows(4)
-            .any(|window| window == b"\r\n\r\n")
-        {
-            break;
-        }
-    }
-    let header_end = response_bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| index + 4)
-        .unwrap_or(response_bytes.len());
-    let response = String::from_utf8_lossy(&response_bytes[..header_end]);
-    let response_lower = response.to_ascii_lowercase();
-    let is_jig_proxy = response_lower.contains("\r\nx-jig-proxy: 1\r\n");
-    let pid = if is_jig_proxy {
-        response
-            .lines()
-            .filter_map(|line| line.split_once(':'))
-            .find(|(name, _)| name.eq_ignore_ascii_case("x-jig-proxy-pid"))
-            .map(|(_, value)| value)
-            .and_then(|value| value.trim().parse().ok())
-    } else {
-        None
-    };
-    Some(JigProxyHealthProbe { is_jig_proxy, pid })
-}
+mod probe;
+pub(crate) use probe::{
+    CAPABILITIES_PATH, ProxyCapabilities, is_any_jig_proxy_http, is_jig_proxy_http,
+    jig_proxy_capabilities, jig_proxy_http_pid,
+};
 
 pub(crate) fn local_lan_ip_for_ipv4_listener() -> Option<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
@@ -180,6 +86,7 @@ const fn ip_is_link_local(ip: IpAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
     use std::thread;
     use std::time::Duration;
 

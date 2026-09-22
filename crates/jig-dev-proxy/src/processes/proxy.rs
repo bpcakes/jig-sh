@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
 
-use crate::ports::{is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tcp_listening};
+use crate::ports::{
+    ProxyCapabilities, is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tcp_listening,
+    jig_proxy_capabilities,
+};
 use crate::state::{LockOutcome, StateStore};
 use crate::types::ProxySettings;
 
@@ -378,23 +381,10 @@ fn detach_background_proxy(_command: &mut Command) {}
 
 #[cfg(test)]
 pub(super) fn proxy_ready(store: &StateStore, settings: &ProxySettings) -> Result<bool> {
-    let Some(http_port) = store.read_http_port()? else {
-        return Ok(false);
-    };
-    let Some(health_token) = store.read_health_token()? else {
-        return Ok(false);
-    };
-    let Some(health_pid) =
-        crate::ports::jig_proxy_http_pid("127.0.0.1", http_port, Some(&health_token))
-    else {
-        return Ok(false);
-    };
-    if store.read_pid()? != Some(health_pid) {
-        return Ok(false);
+    match proxy_ready_interruptible(store, settings, &|| false)? {
+        LockOutcome::Acquired(ready) => Ok(ready),
+        LockOutcome::Cancelled => unreachable!("uncancelled proxy readiness was cancelled"),
     }
-    ensure_requested_http_port(store, settings, http_port)?;
-    ensure_requested_https(store, settings)?;
-    Ok(true)
 }
 
 pub(super) fn proxy_ready_interruptible(
@@ -430,9 +420,63 @@ pub(super) fn proxy_ready_interruptible(
     }
     ensure_requested_http_port(store, settings, http_port)?;
     match ensure_requested_https_interruptible(store, settings, cancelled)? {
-        LockOutcome::Acquired(()) => Ok(LockOutcome::Acquired(true)),
-        LockOutcome::Cancelled => Ok(LockOutcome::Cancelled),
+        LockOutcome::Acquired(()) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
+    let Some(capabilities) = jig_proxy_capabilities("127.0.0.1", http_port, &health_token) else {
+        bail!(
+            "The running Jig proxy in state dir {} cannot report authenticated LAN/HTTPS HTTP2 capabilities (requested LAN={}, HTTPS={}, HTTP2={}). It may be an older proxy. Keep existing sessions running; explicitly stop and restart that shared proxy with `scripts/jig proxy stop --state-dir PATH` and `scripts/jig proxy start --state-dir PATH` using this state directory and the desired listener flags, or use a compatible proxy. No proxy was restarted.",
+            store.root().display(),
+            settings.lan,
+            settings.https,
+            settings.http2,
+        );
+    };
+    if capabilities.pid != health_pid {
+        bail!(
+            "Jig proxy generation changed during capability verification in state dir {} (health PID {health_pid}, capability PID {}). Retry after the proxy stabilizes; no shared proxy was restarted.",
+            store.root().display(),
+            capabilities.pid,
+        );
+    }
+    let current_pid = match store.read_pid_interruptible(cancelled)? {
+        LockOutcome::Acquired(pid) => pid,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    let current_token = match store.read_health_token_interruptible(cancelled)? {
+        LockOutcome::Acquired(token) => token,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    if current_pid != Some(health_pid) || current_token.as_deref() != Some(health_token.as_str()) {
+        bail!(
+            "Jig proxy runtime generation changed during capability verification in state dir {}. Retry after the proxy stabilizes; no shared proxy was restarted.",
+            store.root().display(),
+        );
+    }
+    ensure_requested_capabilities(store, settings, capabilities)?;
+    Ok(LockOutcome::Acquired(true))
+}
+
+fn ensure_requested_capabilities(
+    store: &StateStore,
+    settings: &ProxySettings,
+    actual: ProxyCapabilities,
+) -> Result<()> {
+    if settings.lan == actual.lan
+        && (!settings.https || (actual.https && settings.http2 == actual.http2))
+    {
+        return Ok(());
+    }
+    bail!(
+        "A Jig proxy in state dir {} is already running with LAN={}, HTTPS={}, HTTP2={}, but this command requested LAN={}, HTTPS={}, HTTP2={}. Use matching listener flags, or explicitly stop and restart the shared proxy with `scripts/jig proxy stop --state-dir PATH` and `scripts/jig proxy start --state-dir PATH` using this state directory and the desired flags. No proxy was restarted.",
+        store.root().display(),
+        actual.lan,
+        actual.https,
+        actual.http2,
+        settings.lan,
+        settings.https,
+        settings.http2,
+    )
 }
 
 fn ensure_requested_http_port(
@@ -589,6 +633,9 @@ pub(super) const fn proxy_health_failed(misses: &mut u8, ready: bool) -> bool {
     *misses = misses.saturating_add(1);
     *misses >= PROXY_HEALTH_MISSES_BEFORE_STOP
 }
+
+#[cfg(test)]
+mod capability_tests;
 
 fn preserve_proxy_child_env(command: &mut Command) {
     for key in [
