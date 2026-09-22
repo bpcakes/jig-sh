@@ -134,39 +134,49 @@ impl DevSessionRuntime {
                     return Err(conflicts.launch_error(true, store.root()));
                 }
                 let target_ids = conflicts.same_repo_session_ids();
+                let blocker_ids = target_ids.iter().cloned().collect::<Vec<_>>().join(", ");
                 if cancelled() {
                     return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                 }
-                let stop =
-                    match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled) {
-                        StopSessionOutcome::Complete(stop) => stop,
-                        StopSessionOutcome::Cancelled(progress) => {
-                            let (recoveries, warnings) = progress.into_parts();
-                            replacement_recoveries.extend(recoveries);
-                            for warning in warnings {
-                                eprintln!(
-                                    "jig dev --replace stop warning before cancellation: {warning}"
-                                );
-                            }
-                            return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                let stop = match stop_session_ids_interruptible(
+                    &store,
+                    &repo,
+                    &target_ids,
+                    cancelled,
+                ) {
+                    StopSessionOutcome::Complete(stop) => stop,
+                    StopSessionOutcome::Cancelled(progress) => {
+                        let (recoveries, warnings) = progress.into_parts();
+                        replacement_recoveries.extend(recoveries);
+                        for warning in warnings {
+                            eprintln!(
+                                "jig dev --replace stop warning before cancellation: {warning}"
+                            );
                         }
-                        StopSessionOutcome::Failed { error, progress } => {
-                            let (recoveries, warnings) = progress.into_parts();
-                            replacement_recoveries.extend(recoveries);
-                            let error = attach_replacement_stop_warnings(error, &warnings);
-                            return Err(crate::dev_outcome::with_recovery_notices(
-                                error,
-                                replacement_recoveries,
+                        return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                    }
+                    StopSessionOutcome::Failed { error, progress } => {
+                        let (recoveries, warnings) = progress.into_parts();
+                        replacement_recoveries.extend(recoveries);
+                        let error = attach_replacement_stop_warnings(error, &warnings);
+                        let error = error.context(format!(
+                                "Could not replace the existing Jig dev session safely (blocking session IDs: {blocker_ids}; state directory {}); inspect with `jig dev status --state-dir PATH`",
+                                store.root().display()
                             ));
-                        }
-                    };
+                        return Err(crate::dev_outcome::with_recovery_notices(
+                            error,
+                            replacement_recoveries,
+                        ));
+                    }
+                };
                 for recovery in &stop.recoveries {
                     eprintln!("jig dev --replace recovery: {}", recovery.message);
                 }
                 replacement_recoveries.extend(stop.recoveries.iter().cloned());
                 if !stop.ok {
                     let error = anyhow!(
-                        "Could not replace the existing Jig dev session safely: {}",
+                        "Could not replace the existing Jig dev session safely (blocking session IDs: {blocker_ids}; state directory {}): {}. Inspect with `jig dev status --state-dir PATH`",
+                        store.root().display(),
                         stop.warnings.join("; ")
                     );
                     return Err(crate::dev_outcome::with_recovery_notices(

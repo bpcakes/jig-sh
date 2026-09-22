@@ -655,14 +655,14 @@ fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
         Ok(_) => panic!("replacement unexpectedly retired unconfirmed preflight cleanup"),
         Err(error) => error,
     };
-    assert!(
-        replacement
-            .to_string()
-            .contains("Could not replace the existing Jig dev session safely")
-    );
     let persisted = store.snapshot_dev_state().unwrap();
     assert_eq!(persisted.sessions.len(), 1);
     assert_eq!(persisted.sessions[0].preflight_cleanup_pending, Some(true));
+    let replacement_message = replacement.to_string();
+    assert!(replacement_message.contains("Could not replace the existing Jig dev session safely"));
+    assert!(replacement_message.contains(&persisted.sessions[0].session_id));
+    assert!(replacement_message.contains(&state_dir.display().to_string()));
+    assert!(replacement_message.contains("jig dev status --state-dir PATH"));
 
     let forgotten = dev_stop(
         DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
