@@ -240,6 +240,22 @@ fn is_run_archive(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with(RUN_ARCHIVE_PREFIX) && name.ends_with(ARCHIVE_SUFFIX))
 }
 
+fn path_matches_type(
+    root: &Path,
+    path: &Path,
+    sources: &mut HistorySources,
+    matches: impl FnOnce(&fs::Metadata) -> bool,
+) -> bool {
+    match fs::metadata(path) {
+        Ok(metadata) => matches(&metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            sources.error(format!("{}: {error}", display_repo_path(root, path)));
+            false
+        }
+    }
+}
+
 fn scan_run_archives(
     root: &Path,
     wanted: &mut BTreeSet<String>,
@@ -251,7 +267,8 @@ fn scan_run_archives(
         if wanted.is_empty() || budget.exhausted {
             break;
         }
-        if !is_run_archive(&path) || !path.is_file() {
+        if !is_run_archive(&path) || !path_matches_type(root, &path, sources, fs::Metadata::is_file)
+        {
             continue;
         }
         sources.archives_scanned += 1;
@@ -277,7 +294,9 @@ fn scan_run_backups(
     let mut candidates = Vec::new();
     for backup_dir in directory_entries(root, &directory, sources, |_| true) {
         let manifest_path = backup_dir.join(BACKUP_MANIFEST_FILE);
-        if !backup_dir.is_dir() || !manifest_path.is_file() {
+        if !path_matches_type(root, &backup_dir, sources, fs::Metadata::is_dir)
+            || !path_matches_type(root, &manifest_path, sources, fs::Metadata::is_file)
+        {
             continue;
         }
         let display = display_repo_path(root, &backup_dir);

@@ -224,6 +224,66 @@ fn recovery_uses_newest_verified_complete_backup_not_a_newer_partial_one() {
     assert!(finding_for(&partial_only, &run_id)["recovery"].is_null());
 }
 
+#[cfg(unix)]
+#[test]
+fn inaccessible_backup_is_unverifiable_until_access_is_restored() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_temp, ctx) = fixture_context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_target(&ctx, &run_id);
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    let runs_path = ctx.state_file("runs.jsonl");
+    let (backup_dir, _) = crate::state::maintenance::create_runs_backup(
+        &ctx,
+        &runs_path,
+        "inaccessible-history",
+        None,
+    )
+    .unwrap();
+    fs::write(&runs_path, b"").unwrap();
+    write_records(
+        &ctx.state_file("receipts.jsonl"),
+        &[target_receipt(
+            "receipt_test",
+            "jig.test",
+            "api:test",
+            Some(&run_id),
+        )],
+    );
+
+    let backup_before = snapshot(&backup_dir);
+    fs::set_permissions(&backup_dir, fs::Permissions::from_mode(0o600)).unwrap();
+    let inaccessible = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
+    fs::set_permissions(&backup_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(snapshot(&backup_dir), backup_before);
+
+    let linkage = &inaccessible["run_linkage"];
+    assert_eq!(linkage["verdict"], "findings");
+    assert_eq!(linkage["complete"], false);
+    assert_eq!(linkage["runs"]["unverifiable"], 1);
+    assert_eq!(linkage["runs"]["missing"], 0);
+    assert_eq!(linkage["sources"]["backups_scanned"], 0);
+    assert_eq!(linkage["sources"]["error_count"], 1);
+    assert_string_array_contains(&linkage["sources"]["errors"], "Permission denied");
+    assert_eq!(
+        finding_for(&inaccessible, &run_id)["status"],
+        "unverifiable"
+    );
+
+    let restored = diagnose(&ctx, true);
+    assert_eq!(restored["run_linkage"]["verdict"], "findings");
+    assert_eq!(restored["run_linkage"]["complete"], true);
+    assert_eq!(
+        finding_for(&restored, &run_id)["status"],
+        "recoverable_from_backup"
+    );
+    assert_eq!(restored["run_linkage"]["sources"]["backups_scanned"], 1);
+    assert_eq!(restored["run_linkage"]["sources"]["error_count"], 0);
+}
+
 #[test]
 fn recovery_skips_newer_backup_with_wrong_source_path() {
     let (_temp, ctx) = fixture_context();
