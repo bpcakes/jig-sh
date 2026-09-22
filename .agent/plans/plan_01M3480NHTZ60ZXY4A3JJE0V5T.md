@@ -1,0 +1,1 @@
+Share strict activity and retention assessment across status, conflicts, stop, and repair. Preserve legacy JSON fields and make exact IDs, state directory, and uncertainty visible without exposing tokens. Validate table-driven observations and isolated lifecycle regressions.
