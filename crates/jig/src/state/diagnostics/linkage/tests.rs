@@ -459,7 +459,6 @@ fn reused_batch_evidence_may_reference_several_runs() {
             ),
         ],
     );
-
     let output = diagnose(&ctx, true);
 
     assert_eq!(output["run_linkage"]["referenced_runs"], 2);
