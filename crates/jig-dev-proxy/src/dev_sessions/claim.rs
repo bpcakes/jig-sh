@@ -81,9 +81,10 @@ impl ClaimConflicts {
         }
     }
 
-    pub(super) fn concurrent_launch_error(&self) -> anyhow::Error {
+    pub(super) fn concurrent_launch_error(&self, state_dir: &Path) -> anyhow::Error {
         anyhow!(
-            "A concurrent Jig dev launch claimed the requested app or route while replacement was completing. No newly observed session was stopped; inspect `jig dev status` and retry."
+            "A concurrent Jig dev launch claimed the requested app or hostname while replacement was completing. No newly observed session was stopped. {}",
+            self.launch_error(false, state_dir)
         )
     }
 }
@@ -261,4 +262,56 @@ fn conflict_hostnames(sessions: &[DevSessionRecord]) -> Vec<String> {
         .filter_map(|app| app.hostname.clone().or_else(|| Some(app.name.clone())))
         .collect::<BTreeSet<_>>();
     hosts.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{DevSessionControl, DevSessionPhase};
+
+    #[test]
+    fn concurrent_claim_error_identifies_the_new_exact_owner() {
+        let session = DevSessionRecord {
+            session_id: "dev_example_winner".into(),
+            repo_name: "ExampleProject".into(),
+            repo_root_display: "/tmp/ExampleProject".into(),
+            repo_root_identity: "/tmp/ExampleProject".into(),
+            phase: DevSessionPhase::Orphaned,
+            started_at_ms: 1,
+            updated_at_ms: 1,
+            cleanup_required: true,
+            preflight_cleanup_pending: Some(false),
+            supervisor: DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            },
+            control: DevSessionControl {
+                port: 1,
+                token: "example-control-token".into(),
+            },
+            apps: vec![DevSessionApp {
+                name: "web".into(),
+                hostname: Some("web.example.localhost".into()),
+                target_host: "127.0.0.1".into(),
+                target_port: None,
+                spawn_state_tracked: true,
+                spawn_pending: false,
+                process: None,
+            }],
+        };
+        let conflicts = ClaimConflicts {
+            same_repo: vec![session],
+            ..ClaimConflicts::default()
+        };
+        let error = conflicts
+            .concurrent_launch_error(Path::new("/tmp/ExampleProject-proxy-state"))
+            .to_string();
+
+        assert!(error.contains("No newly observed session was stopped"));
+        assert!(error.contains("dev_example_winner"));
+        assert!(error.contains("activity none"));
+        assert!(error.contains("cleanup required true"));
+        assert!(error.contains("/tmp/ExampleProject-proxy-state"));
+        assert!(!error.contains("example-control-token"));
+    }
 }

@@ -323,6 +323,13 @@ impl OrphanRecoveryNotice {
 }
 
 impl StopReport {
+    pub(super) fn remaining_session_ids(&self) -> Vec<&str> {
+        self.sessions
+            .iter()
+            .filter_map(|session| session["session_id"].as_str())
+            .collect()
+    }
+
     fn into_json(self, repo: &CanonicalRepo, state_dir: &Path) -> Value {
         json!({
             "ok": self.ok,

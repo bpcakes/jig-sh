@@ -134,7 +134,7 @@ impl DevSessionRuntime {
                     return Err(conflicts.launch_error(true, store.root()));
                 }
                 let target_ids = conflicts.same_repo_session_ids();
-                let blocker_ids = target_ids.iter().cloned().collect::<Vec<_>>().join(", ");
+                let target_session_ids = target_ids.iter().cloned().collect::<Vec<_>>().join(", ");
                 if cancelled() {
                     return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                 }
@@ -160,7 +160,7 @@ impl DevSessionRuntime {
                         replacement_recoveries.extend(recoveries);
                         let error = attach_replacement_stop_warnings(error, &warnings);
                         let error = error.context(format!(
-                                "Could not replace the existing Jig dev session safely (blocking session IDs: {blocker_ids}; state directory {}); inspect with `jig dev status --state-dir PATH`",
+                                "Could not replace the existing Jig dev session safely (attempted session IDs: {target_session_ids}; final blockers could not be confirmed; state directory {}); inspect with `jig dev status --state-dir PATH`",
                                 store.root().display()
                             ));
                         return Err(crate::dev_outcome::with_recovery_notices(
@@ -174,6 +174,7 @@ impl DevSessionRuntime {
                 }
                 replacement_recoveries.extend(stop.recoveries.iter().cloned());
                 if !stop.ok {
+                    let blocker_ids = stop.remaining_session_ids().join(", ");
                     let error = anyhow!(
                         "Could not replace the existing Jig dev session safely (blocking session IDs: {blocker_ids}; state directory {}): {}. Inspect with `jig dev status --state-dir PATH`",
                         store.root().display(),
@@ -200,7 +201,7 @@ impl DevSessionRuntime {
                     LockOutcome::Acquired(ClaimOutcome::Claimed) => {}
                     LockOutcome::Acquired(ClaimOutcome::Conflicted(conflicts)) => {
                         return Err(crate::dev_outcome::with_recovery_notices(
-                            conflicts.concurrent_launch_error(),
+                            conflicts.concurrent_launch_error(store.root()),
                             replacement_recoveries,
                         ));
                     }

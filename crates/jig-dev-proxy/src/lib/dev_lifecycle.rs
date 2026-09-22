@@ -1098,6 +1098,21 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
         })
         .unwrap();
 
+    let before = store.snapshot_dev_state().unwrap();
+    let retired_id = before
+        .sessions
+        .iter()
+        .find(|session| session.apps[0].name == "web")
+        .unwrap()
+        .session_id
+        .clone();
+    let blocked_id = before
+        .sessions
+        .iter()
+        .find(|session| session.apps[0].name == "admin")
+        .unwrap()
+        .session_id
+        .clone();
     let error = dev_sessions::DevSessionRuntime::start(
         store.clone(),
         "demo",
@@ -1120,6 +1135,10 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
             .unwrap()
             .contains("admin")
     );
+    let message = failed["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("blocking session IDs: {blocked_id}")));
+    assert!(!message.contains(&retired_id));
+    assert!(message.contains(&store.root().display().to_string()));
 
     let snapshot = store.snapshot_dev_state().unwrap();
     assert_eq!(snapshot.sessions.len(), 1);
