@@ -142,6 +142,38 @@ fn live_app_observation_cannot_also_be_recoverable() {
 }
 
 #[test]
+fn uncertain_supervisor_with_live_app_does_not_claim_the_supervisor_is_gone() {
+    let mut session = cleanup_required_session();
+    session.apps.push(DevSessionApp {
+        name: "web".into(),
+        hostname: None,
+        target_host: "127.0.0.1".into(),
+        target_port: Some(4000),
+        spawn_state_tracked: true,
+        spawn_pending: false,
+        process: Some(DevProcessIdentity {
+            pid: u32::MAX - 1,
+            start_token: Some("example-app".into()),
+        }),
+    });
+    let assessment = assess_with_observations(
+        &session,
+        AmbiguousOrphanPolicy::Retain,
+        false,
+        ProcessIdentityObservation::Uncertain,
+        &[Some(ProcessIdentityObservation::Alive)],
+    );
+    assert_eq!(assessment.activity, ObservedActivity::Verified);
+    let OrphanRecoveryAssessment::Retain(reason) = assessment.recovery else {
+        panic!("uncertain supervisor must block recovery");
+    };
+    assert_eq!(reason, OrphanRetentionReason::SupervisorUncertain);
+    let warning = retention_warning(&session, &reason).message;
+    assert!(warning.contains("supervisor PID"));
+    assert!(!warning.contains("supervisor is gone"));
+}
+
+#[test]
 fn stopped_app_count_only_includes_targets_retired_during_control_phase() {
     let initially_maybe_live_apps =
         HashMap::from([("retired".to_owned(), 2), ("unretired".to_owned(), 3)]);

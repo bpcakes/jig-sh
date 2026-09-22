@@ -75,7 +75,7 @@ impl ClaimConflicts {
             )
         } else {
             anyhow!(
-                "A registered Jig dev session from this repository already claims {}. Blocking claim(s): {claim_details}{more}. Inspect with `jig dev status --state-dir PATH` using state directory {}; run `jig dev stop` for explicit cleanup, or retry with `jig dev --replace`.",
+                "A registered Jig dev session from this repository already claims {}. Blocking claim(s): {claim_details}{more}. Inspect with `jig dev status --state-dir PATH` or explicitly clean up with `jig dev stop --state-dir PATH`, using state directory {}; otherwise retry with `jig dev --replace`.",
                 hosts.join(", "),
                 state_dir.display(),
             )

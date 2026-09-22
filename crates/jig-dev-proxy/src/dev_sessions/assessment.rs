@@ -132,10 +132,10 @@ pub(super) fn assess_with_observations(
         Some(OrphanRetentionReason::ControlAlive)
     } else if supervisor == ProcessIdentityObservation::Alive {
         Some(OrphanRetentionReason::SupervisorAlive)
-    } else if let Some(app) = app_alive {
-        Some(OrphanRetentionReason::AppAlive(app))
     } else if supervisor == ProcessIdentityObservation::Uncertain {
         Some(OrphanRetentionReason::SupervisorUncertain)
+    } else if let Some(app) = app_alive {
+        Some(OrphanRetentionReason::AppAlive(app))
     } else if let Some(app) = app_uncertain {
         Some(OrphanRetentionReason::AppUncertain(app))
     } else if !session.cleanup_required || policy == AmbiguousOrphanPolicy::Forget {
@@ -294,6 +294,18 @@ mod tests {
                 false,
                 ObservedActivity::Verified,
                 Some(OrphanRetentionReason::AppAlive("web".into())),
+            ),
+            (
+                "app alive with uncertain supervisor",
+                Some(false),
+                true,
+                false,
+                Some(Alive),
+                Uncertain,
+                Some(Alive),
+                false,
+                ObservedActivity::Verified,
+                Some(OrphanRetentionReason::SupervisorUncertain),
             ),
             (
                 "supervisor alive",

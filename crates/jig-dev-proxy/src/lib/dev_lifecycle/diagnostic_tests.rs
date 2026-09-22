@@ -22,7 +22,7 @@ fn same_repo_conflict_recommends_dev_lifecycle_commands() {
             .to_string();
 
     assert!(error.contains("from this repository"));
-    assert!(error.contains("jig dev stop"));
+    assert!(error.contains("jig dev stop --state-dir PATH"));
     assert!(error.contains("jig dev --replace"));
     let session_id = &store.snapshot_dev_state().unwrap().sessions[0].session_id;
     assert!(error.contains(session_id));
