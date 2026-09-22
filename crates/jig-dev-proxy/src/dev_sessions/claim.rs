@@ -53,8 +53,34 @@ impl ClaimConflicts {
                     additional.join("; ")
                 )
             };
+            let same_repo = self
+                .same_repo
+                .iter()
+                .map(|session| session.session_id.as_str())
+                .collect::<Vec<_>>();
+            let same_repo = if same_repo.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Same-repository session claim IDs: {}.",
+                    same_repo.join(", ")
+                )
+            };
+            let unmanaged = self
+                .unmanaged_routes
+                .iter()
+                .map(|route| route.hostname.as_str())
+                .collect::<Vec<_>>();
+            let unmanaged = if unmanaged.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Unregistered process-route hostnames: {}.",
+                    unmanaged.join(", ")
+                )
+            };
             return anyhow!(
-                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}).{additional} Cross-repository ownership remains reserved until each exact session is explicitly cleaned up; `jig dev --replace` will not take it over. When an owning repository root still exists, inspect from that repository with `jig dev status --state-dir PATH`, using state directory {}; otherwise change the duplicate hostname.",
+                "Development hostname '{hostname}' is claimed by Jig dev session '{}' from repository {} ({activity}).{additional}{same_repo}{unmanaged} Cross-repository ownership remains reserved until each exact session is explicitly cleaned up; `jig dev --replace` will not take it over. When an owning repository root still exists, inspect from that repository with `jig dev status --state-dir PATH`, using state directory {}; otherwise change the duplicate hostname.",
                 session.session_id,
                 session.repo_root_display,
                 state_dir.display(),
@@ -65,8 +91,35 @@ impl ClaimConflicts {
                 .owner_pid
                 .map(|pid| pid.to_string())
                 .unwrap_or_else(|| "<unknown>".into());
+            let other_routes = self
+                .unmanaged_routes
+                .iter()
+                .skip(1)
+                .map(|route| route.hostname.as_str())
+                .collect::<Vec<_>>();
+            let other_routes = if other_routes.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Other unregistered route hostnames: {}.",
+                    other_routes.join(", ")
+                )
+            };
+            let same_repo = self
+                .same_repo
+                .iter()
+                .map(|session| session.session_id.as_str())
+                .collect::<Vec<_>>();
+            let same_repo = if same_repo.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Same-repository session claim IDs: {}.",
+                    same_repo.join(", ")
+                )
+            };
             return anyhow!(
-                "Proxy route '{}' would replace a live process route owned by PID {} and targeting {}:{}, but that route is not attributable to a registered Jig dev session. `jig dev --replace` will not terminate an unregistered or ad-hoc process. Stop that process, run `jig proxy prune --state-dir PATH` using state directory {}, or change the duplicate hostname.",
+                "Proxy route '{}' would replace a live process route owned by PID {} and targeting {}:{}, but that route is not attributable to a registered Jig dev session.{other_routes}{same_repo} `jig dev --replace` will not terminate an unregistered or ad-hoc process. Stop that process, run `jig proxy prune --state-dir PATH` using state directory {}, or change the duplicate hostname.",
                 route.hostname,
                 owner,
                 route.target_host,
@@ -367,5 +420,37 @@ mod tests {
         assert!(error.contains("additional blocker IDs"));
         assert!(error.contains("inspect status for their activity and retention reasons"));
         assert!(error.contains("/tmp/ExampleProject-proxy-state"));
+    }
+
+    #[test]
+    fn mixed_claim_conflicts_identify_every_blocker_category() {
+        let mut conflicts = ClaimConflicts {
+            same_repo: vec![example_session("dev_example_same")],
+            other_repos: vec![(
+                "cross.example.localhost".into(),
+                example_session("dev_example_cross"),
+            )],
+            unmanaged_routes: vec![Route {
+                hostname: "unmanaged.example.localhost".into(),
+                target_host: "127.0.0.1".into(),
+                target_port: 4000,
+                owner_pid: Some(u32::MAX),
+                owner_start_token: Some("example-route".into()),
+                mode: RouteMode::Process,
+                created_at_ms: 1,
+            }],
+        };
+        let state_dir = Path::new("/tmp/ExampleProject-proxy-state");
+        let cross_error = conflicts.launch_error(false, state_dir).to_string();
+        assert!(cross_error.contains("dev_example_cross"));
+        assert!(cross_error.contains("dev_example_same"));
+        assert!(cross_error.contains("unmanaged.example.localhost"));
+        assert!(cross_error.contains(&state_dir.display().to_string()));
+
+        conflicts.other_repos.clear();
+        let unmanaged_error = conflicts.launch_error(false, state_dir).to_string();
+        assert!(unmanaged_error.contains("unmanaged.example.localhost"));
+        assert!(unmanaged_error.contains("dev_example_same"));
+        assert!(unmanaged_error.contains(&state_dir.display().to_string()));
     }
 }
