@@ -82,11 +82,19 @@ impl ClaimConflicts {
             .map(|session| format!("'{}' ({})", session.session_id, claim_activity(session)))
             .collect::<Vec<_>>()
             .join(", ");
-        let omitted = self.same_repo.len().saturating_sub(8);
-        let more = if omitted == 0 {
+        let remaining_ids = self
+            .same_repo
+            .iter()
+            .skip(8)
+            .map(|session| session.session_id.as_str())
+            .collect::<Vec<_>>();
+        let more = if remaining_ids.is_empty() {
             String::new()
         } else {
-            format!("; {omitted} more claim(s) remain")
+            format!(
+                "; additional blocker IDs (inspect status for their activity and retention reasons): {}",
+                remaining_ids.join(", ")
+            )
         };
         if replacing {
             anyhow!(
@@ -291,10 +299,9 @@ mod tests {
     use super::*;
     use crate::state::{DevSessionControl, DevSessionPhase};
 
-    #[test]
-    fn concurrent_claim_error_identifies_the_new_exact_owner() {
-        let session = DevSessionRecord {
-            session_id: "dev_example_winner".into(),
+    fn example_session(id: &str) -> DevSessionRecord {
+        DevSessionRecord {
+            session_id: id.into(),
             repo_name: "ExampleProject".into(),
             repo_root_display: "/tmp/ExampleProject".into(),
             repo_root_identity: "/tmp/ExampleProject".into(),
@@ -320,9 +327,13 @@ mod tests {
                 spawn_pending: false,
                 process: None,
             }],
-        };
+        }
+    }
+
+    #[test]
+    fn concurrent_claim_error_identifies_the_new_exact_owner() {
         let conflicts = ClaimConflicts {
-            same_repo: vec![session],
+            same_repo: vec![example_session("dev_example_winner")],
             ..ClaimConflicts::default()
         };
         let error = conflicts
@@ -335,5 +346,26 @@ mod tests {
         assert!(error.contains("cleanup required true"));
         assert!(error.contains("/tmp/ExampleProject-proxy-state"));
         assert!(!error.contains("example-control-token"));
+    }
+
+    #[test]
+    fn same_repo_conflict_lists_every_id_after_the_detailed_probe_limit() {
+        let ids = (0..10)
+            .map(|index| format!("dev_example_{index}"))
+            .collect::<Vec<_>>();
+        let conflicts = ClaimConflicts {
+            same_repo: ids.iter().map(|id| example_session(id)).collect(),
+            ..ClaimConflicts::default()
+        };
+        let error = conflicts
+            .launch_error(false, Path::new("/tmp/ExampleProject-proxy-state"))
+            .to_string();
+
+        for id in ids {
+            assert!(error.contains(&id), "missing blocker {id}: {error}");
+        }
+        assert!(error.contains("additional blocker IDs"));
+        assert!(error.contains("inspect status for their activity and retention reasons"));
+        assert!(error.contains("/tmp/ExampleProject-proxy-state"));
     }
 }
