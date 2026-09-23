@@ -1,0 +1,1 @@
+Verify a safe close-before-evidence-commit path in a real Git fixture, distinguish Git identity changes from input changes, and document the sequence.

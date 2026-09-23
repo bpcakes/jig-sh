@@ -436,6 +436,10 @@ fn bounded_identity(identity: &TargetIdentityV1) -> bool {
     ]
     .into_iter()
     .all(|value| value.len() <= 128)
+        && identity
+            .source_content_digest
+            .as_ref()
+            .is_none_or(|value| value.len() <= 128)
         && identity.source_preview.len() <= MAX_FRESHNESS_REASON_PREVIEWS
         && identity.source_preview.iter().all(|entry| {
             entry.path.len() <= MAX_FRESHNESS_DIAGNOSTIC_BYTES && entry.digest.len() <= 128

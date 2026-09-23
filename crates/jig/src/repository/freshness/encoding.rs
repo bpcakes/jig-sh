@@ -4,6 +4,7 @@ use jig_contract::{ActionSourceState, TargetId, freshness::TARGET_IDENTITY_SCHEM
 
 /// V1: NUL-terminated domain followed by length-framed fields. Integers are
 /// fixed-width big-endian fields; an optional field has its own presence tag.
+#[derive(Clone)]
 pub(super) struct IdentityEncoder(Sha256);
 
 impl IdentityEncoder {

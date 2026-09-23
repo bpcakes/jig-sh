@@ -99,6 +99,8 @@ mod tests {
 #[serde(rename_all = "snake_case")]
 pub enum FreshnessReasonCode {
     DirectInputChanged,
+    GitIdentityChanged,
+    SourceChanged,
     DependencyChanged,
     RunnerChanged,
     ConfigurationChanged,
@@ -166,6 +168,8 @@ pub struct IdentityComponents {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_state: Option<ActionSourceState>,
     pub source_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_content_digest: Option<String>,
     pub authority_digest: String,
     pub dependency_digest: String,
     pub identity_digest: String,
@@ -183,6 +187,7 @@ impl From<&TargetIdentityV1> for IdentityComponents {
             inputs_policy: identity.inputs_policy,
             source_state: identity.source_state,
             source_digest: identity.source_digest.clone(),
+            source_content_digest: identity.source_content_digest.clone(),
             authority_digest: identity.authority_digest.clone(),
             dependency_digest: identity.dependency_digest.clone(),
             identity_digest: identity.identity_digest.clone(),
@@ -230,6 +235,9 @@ pub struct TargetIdentityV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_state: Option<ActionSourceState>,
     pub source_digest: String,
+    /// Diagnostic authority without HEAD/branch; never replaces source_digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_content_digest: Option<String>,
     pub authority_digest: String,
     pub dependency_digest: String,
     pub identity_digest: String,

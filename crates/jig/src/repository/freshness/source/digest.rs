@@ -1,5 +1,45 @@
 use super::*;
 
+struct SourceEncoders {
+    identity: IdentityEncoder,
+    content: IdentityEncoder,
+}
+
+impl SourceEncoders {
+    fn new(epoch: u32, action: &ActionSpec, head: Option<&str>) -> Self {
+        let mut identity = IdentityEncoder::new("jig-target-source-v1", epoch);
+        if epoch >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION {
+            identity.text(match action.source_state.unwrap_or_default() {
+                ActionSourceState::Git => "git",
+                ActionSourceState::Worktree => "worktree",
+            });
+        }
+        // The existing identity retains Git placement. The copy omits it and
+        // is diagnostic only; it cannot make a Git-sensitive receipt fresh.
+        let content = identity.clone();
+        if epoch >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION
+            && action.source_state.unwrap_or_default() == ActionSourceState::Git
+        {
+            identity.optional(head);
+        }
+        Self { identity, content }
+    }
+
+    fn text(&mut self, value: &str) {
+        self.identity.text(value);
+        self.content.text(value);
+    }
+
+    fn number(&mut self, value: u64) {
+        self.identity.number(value);
+        self.content.number(value);
+    }
+
+    fn finish(self) -> (String, String) {
+        (self.identity.finish(), self.content.finish())
+    }
+}
+
 impl SourceSnapshot {
     pub(in crate::repository::freshness) fn for_action(
         &self,
@@ -9,25 +49,16 @@ impl SourceSnapshot {
         budget: &CollectionBudget<'_>,
     ) -> CollectionResult<SourceDigest> {
         budget.ensure_active()?;
-        let mut hash = IdentityEncoder::new("jig-target-source-v1", epoch);
+        let mut hashes = SourceEncoders::new(epoch, action, self.head.as_deref());
         let policy = action.inputs_policy.unwrap_or_default();
-        if epoch >= jig_contract::freshness::WORKTREE_FRESHNESS_CONTRACT_VERSION {
-            hash.text(match action.source_state.unwrap_or_default() {
-                ActionSourceState::Git => "git",
-                ActionSourceState::Worktree => "worktree",
-            });
-            if action.source_state.unwrap_or_default() == ActionSourceState::Git {
-                hash.optional(self.head.as_deref());
-            }
-        }
-        hash.text(match policy {
+        hashes.text(match policy {
             ActionInputsPolicy::WholeRepository => "whole_repository",
             ActionInputsPolicy::Exhaustive => "exhaustive",
         });
         let normalized = action.inputs.iter().collect::<BTreeSet<_>>();
-        hash.number(normalized.len() as u64);
+        hashes.number(normalized.len() as u64);
         for pattern in normalized {
-            hash.text(pattern);
+            hashes.text(pattern);
         }
         let worktree = action.source_state == Some(ActionSourceState::Worktree);
         if policy == ActionInputsPolicy::WholeRepository && !worktree {
@@ -37,9 +68,11 @@ impl SourceSnapshot {
                     "whole-repository source authority could not be collected",
                 )
             })?;
-            hash.text(whole_repository_token);
+            hashes.text(whole_repository_token);
+            let (digest, content_digest) = hashes.finish();
             return Ok(SourceDigest {
-                digest: hash.finish(),
+                digest,
+                content_digest,
                 preview: Vec::new(),
                 count: 0,
                 truncated: false,
@@ -87,9 +120,9 @@ impl SourceSnapshot {
                     count += 1;
                 }
             }
-            hash.number(count);
+            hashes.number(count);
         }
-        hash.number(paths.len() as u64);
+        hashes.number(paths.len() as u64);
         let mut preview = Vec::new();
         let mut preview_bytes = 2; // enclosing JSON array
         let mut preview_exhausted = false;
@@ -114,8 +147,8 @@ impl SourceSnapshot {
                 entry.optional(current.digest.as_deref());
             }
             let digest = entry.finish();
-            hash.text(path);
-            hash.text(&digest);
+            hashes.text(path);
+            hashes.text(&digest);
             if !preview_exhausted && preview.len() < MAX_FRESHNESS_REASON_PREVIEWS {
                 let item = SourceIdentityPreview {
                     path: path.clone(),
@@ -133,8 +166,10 @@ impl SourceSnapshot {
                 }
             }
         }
+        let (digest, content_digest) = hashes.finish();
         Ok(SourceDigest {
-            digest: hash.finish(),
+            digest,
+            content_digest,
             truncated: preview.len() < paths.len(),
             preview,
             count: paths.len() as u64,

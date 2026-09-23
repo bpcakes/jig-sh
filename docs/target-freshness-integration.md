@@ -155,6 +155,39 @@ timestamp, or retained result authorizes closure: `work finish` independently
 revalidates current source/configuration/evidence while holding its execution
 lease.
 
+### Closing a plan with tracked Jig evidence
+
+A commit containing only `.agent/state/` changes leaves the repository source
+fingerprint unchanged, but moves HEAD. Targets with `source_state = "git"`
+intentionally become stale, including native targets that use prepared Git
+comparison authority. `git_identity_changed` means the observed inputs are
+unchanged and only HEAD or symbolic branch identity changed;
+`direct_input_changed` means the observed input digest changed. Older receipts
+without the separate diagnostic digest report `source_changed` when the cause
+cannot be distinguished. None of these reasons grants reuse of stale evidence.
+
+After committing product source, run final checks against that commit. If the
+required gates are ready and only append-only Jig state remains to commit, close
+the plan before committing that state:
+
+```sh
+scripts/jig work check --phase final --plan-id "$plan_id" --projection agent-v1
+scripts/jig work gates --plan-id "$plan_id" --projection agent-v1
+scripts/jig work finish --plan-id "$plan_id"
+git add .agent/state
+git commit -m 'Record Jig work evidence'
+```
+
+`work finish` rechecks required gates and source authority while the metadata
+is still uncommitted, then records the close. A later Jig-only commit may make
+the closed plan's Git-sensitive receipts appear stale in a new inspection; it
+does not undo the completed close or require rerunning gates for that closed
+plan. Finish only after the checked product source is final, and rerun any
+genuinely HEAD-sensitive check if HEAD moved before finish. Audited commands
+whose result depends solely on working files may instead opt in to
+`source_state = "worktree"`; native checks keep their Git authority and use the
+finish-before-commit sequence.
+
 The MCP `agent-v1` surface advertises the same strict compact result for
 `jig.work_check`, `jig.work_gates`, and `jig.work_evidence`. These tools' input
 schemas remain unchanged. Full legacy evidence is available through the emitted

@@ -294,6 +294,9 @@ pub(crate) fn collect_target_identities_with_source(
                 inputs_policy: action.inputs_policy.unwrap_or_default(),
                 source_state,
                 source_digest: source.digest,
+                source_content_digest: (catalog.contract_version()
+                    >= WORKTREE_FRESHNESS_CONTRACT_VERSION)
+                    .then_some(source.content_digest),
                 authority_digest: authority.digest,
                 dependency_digest,
                 identity_digest: identity_hash.finish(),
