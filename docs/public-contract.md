@@ -359,7 +359,12 @@ surfaces described below.
 `plan` object without running a command or writing a receipt. A newly written
 plan uses run-plan schema version 4 and includes its derived `id`, configuration digest, source identity,
 normalized selectors or profile, sorted targets, selection reasons, declared
-effects, input digests, and dependency execution layers. Bare `jig check` uses
+effects, input digests, and dependency execution layers. These layers describe
+the dependency topology. In entirely read-only plans with parallel dependency
+chains, ordinary targets can start once their actual prerequisites have
+validated and published successful results, even while unrelated targets in
+an earlier layer remain active. Resource batches, effectful execution and
+explicit fail-fast retain their ordering and safety constraints. Bare `jig check` uses
 the default verification profile. An action selector such as `test` matches
 that action across components; a target selector such as `api:test` is exact;
 and `*` is the only wildcard and occupies a whole component or action segment.

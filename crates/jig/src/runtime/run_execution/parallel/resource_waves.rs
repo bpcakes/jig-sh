@@ -23,7 +23,13 @@ struct Member {
     lease: Option<ResourceLease>,
 }
 
-type Publish<'a> = dyn FnMut(&TargetId, TargetRunResult, Option<Value>) -> Result<()> + 'a;
+type Publish<'a> = dyn FnMut(
+        &TargetId,
+        TargetRunResult,
+        Option<Value>,
+        Option<&std::result::Result<String, String>>,
+    ) -> Result<()>
+    + 'a;
 type StoppedAdmissions = Vec<(usize, TargetStop)>;
 
 pub(in crate::runtime::run_execution) fn execute_resource_layer(
@@ -216,7 +222,7 @@ fn publish_unstarted(
         CompletedTargetCapture::now(None, capture),
         Err("resource wave admission did not complete; no child was started".into()),
     )?;
-    publish(&pending.planned.target, result, compatibility)?;
+    publish(&pending.planned.target, result, compatibility, None)?;
     pending.done = true;
     Ok(())
 }
@@ -269,7 +275,7 @@ fn publish_outcome(
             let result = finalize_wave_reuse(pending, source_epoch, fingerprint, result, now_ms());
             match result {
                 Ok(Some(result)) => {
-                    publish(&pending.planned.target, result, None)?;
+                    publish(&pending.planned.target, result, None, Some(fingerprint))?;
                     pending.done = true;
                 }
                 Ok(None) => {}
@@ -303,7 +309,12 @@ fn publish_outcome(
     }
     let (result, compatibility) =
         finisher.finish(pending.planned, completed, fingerprint.clone())?;
-    publish(&pending.planned.target, result, compatibility)?;
+    publish(
+        &pending.planned.target,
+        result,
+        compatibility,
+        Some(fingerprint),
+    )?;
     pending.done = true;
     Ok(())
 }

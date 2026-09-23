@@ -1,5 +1,14 @@
 use super::*;
 
+pub(in crate::runtime) fn block_started_check_run(
+    ctx: &RepoContext,
+    run_id: &str,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let message = format!("repository run worker stopped unexpectedly: {error:#}");
+    crate::state::block_nonterminal_run(ctx, run_id, &message)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_finished_target(
     ctx: &RepoContext,

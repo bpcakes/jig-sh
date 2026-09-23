@@ -108,6 +108,13 @@ A source mutation during a batch invalidates its otherwise successful results;
 an earlier-finishing sibling cannot publish a passing receipt ahead of that
 shared check.
 
+In read-only plans that combine parallel work with dependency chains, ordinary
+checks run outside the resource batch. Their validated results can release
+ordinary dependents while a Cargo sibling is still running. There is at most
+one active resource batch; its selected members reserve slots against the
+shared eight-target limit until the batch releases its claims. Resource members
+continue to use the shared validation and publication rules above.
+
 ## Ownership and recovery
 
 Claims live in a private, owner-checked per-user namespace under the fixed system

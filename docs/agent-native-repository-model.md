@@ -217,6 +217,24 @@ reports the actual fingerprint scan `count` and `elapsed_ms` as
 adjacent observations, while a parallel layer takes an entry observation, one
 for each claim beyond the initial worker cohort, and a shared postcondition.
 
+For entirely read-only plans with both parallel work and dependencies, ordinary
+checks use a ready queue across the topological layers. A prerequisite releases
+its dependents after process cleanup, source validation, and durable result and
+receipt publication. An unrelated running check does not delay that release.
+Source observations cover completions already available to the coordinator;
+they do not wait for the other workers. A later source mutation fails the run
+and stops admission, while earlier validated results remain historical successes.
+Evidence reuse still validates current inputs and execution authority.
+
+One resource-only batch may run alongside these ordinary checks. Its members
+retain their shared source postcondition and hold their claims through durable
+publication. The batch reserves its size against the same eight-target limit
+until all its claims are released. Simple chains, independent single-layer
+plans, effectful plans, and explicit fail-fast runs retain their existing
+execution paths. The persisted `execution_layers` describe dependency order;
+they do not impose a barrier on ordinary ready work in the parallel read-only
+case.
+
 ## Human command-line experience
 
 The common path uses semantic verbs and one selector language:
