@@ -9,8 +9,8 @@ fn assert_package_manager_rendered_helpers(
     assert_text_contains_all(
         &agent_guidance,
         &[
-            "Generated install steps select the package-manager project from workspace membership, not root-lock presence",
-            "It ignores only real top-level tool-cache directories",
+            "Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>`",
+            "Iteration results do not replace final requirements",
         ],
     );
     assert_text_contains_none(

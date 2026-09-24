@@ -9,6 +9,9 @@ use super::*;
 #[path = "renderer_tests/freshness.rs"]
 mod freshness;
 
+#[path = "renderer_tests/iteration.rs"]
+mod iteration;
+
 fn rust_render_answers(projection: RepositoryProjectionHint) -> RenderAnswers {
     let destination = tempfile::tempdir().unwrap();
     let opts = AnswerOpts {

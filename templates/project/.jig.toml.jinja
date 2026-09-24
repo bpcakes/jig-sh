@@ -142,6 +142,17 @@ command_timeout_seconds = <<[ execution.command_timeout_seconds ]>>
 command_output_limit_bytes = <<[ execution.command_output_limit_bytes ]>>
 
 [% if _jig.contract_version >= 6 %]
+[% for profile in repository.profiles %]
+[% if profile.id == "iteration" and profile.targets | length > 0
+   and profile.provenance is defined
+   and profile.provenance.id | default("") == "inferred"
+   and profile.provenance.targets | default("") == "inherited" %]
+# Application checks for implementation rounds; work finish still requires verify.
+[work]
+iteration_profile = "iteration"
+[% endif %]
+[% endfor %]
+
 [[work.gates]]
 id = "verify"
 kind = "evidence"

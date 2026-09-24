@@ -109,6 +109,17 @@ all applicable repository-required gates. For bug fixes, include a regression ch
 distinguishes the faulty behavior from the fix when practical. Use the relevant
 functional, visual, performance, or compatibility checks for the outcome being changed.
 
+Separate iteration checks from final acceptance in the plan. Name focused commands
+for each milestone and repair loop; use a configured iteration profile when useful,
+and inspect its scope instead of assuming it is cheap or covers every changed area.
+For an external review controller that repeats validation, use focused underlying
+commands: Jig's `--no-receipt` still journals runs and can change tracked state.
+Run the final required gates after implementation and review repairs stabilize. If
+they uncover a defect, fix it with focused checks and refresh affected final evidence.
+Inspect gate status and evidence before repeating expensive checks, reuse fresh passes,
+and do not duplicate a broad suite already satisfied by final validation. Iteration
+success alone never establishes final acceptance.
+
 Record what actually ran and its result, including failures and checks that were not
 run. Explain blockers and remaining verification. Never present an expected result or
 stale receipt as current proof. Once acceptance and required checks are satisfied,

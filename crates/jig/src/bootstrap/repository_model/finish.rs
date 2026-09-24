@@ -24,6 +24,31 @@ impl ModelBuilder<'_> {
             ("id", FieldProvenance::Inferred),
             ("targets", FieldProvenance::Inherited),
         ]);
+        // Implementation rounds need application checks without the repository,
+        // database preparation, or delivery matrix. Final requirements stay in
+        // `verify`; owners can narrow iteration further for their test layout.
+        let iteration_targets = profile
+            .targets
+            .iter()
+            .filter(|target| {
+                target.component.as_str() != REPO_COMPONENT
+                    && matches!(
+                        target.action.as_str(),
+                        "build" | "fmt" | "lint" | "clippy" | "test" | "typecheck"
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut profiles = vec![profile];
+        if !iteration_targets.is_empty() {
+            let mut iteration = ProfileSpec::new(ProfileId::parse("iteration")?, iteration_targets);
+            iteration.description = Some("Application checks for implementation rounds; final verification remains required.".into());
+            iteration.provenance = provenance(&[
+                ("id", FieldProvenance::Inferred),
+                ("targets", FieldProvenance::Inherited),
+            ]);
+            profiles.push(iteration);
+        }
         Ok(RepositoryRenderModel {
             affected_ignore: DEFAULT_AFFECTED_IGNORE
                 .iter()
@@ -31,7 +56,7 @@ impl ModelBuilder<'_> {
                 .collect(),
             components: self.components.into_values().collect(),
             actions: self.actions.into_values().collect(),
-            profiles: vec![profile],
+            profiles,
             default_check_profile,
             required_commands: self.commands.keys().cloned().collect(),
             tools: self.tools.into_values().collect(),

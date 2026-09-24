@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn tooling_only_model_does_not_generate_an_empty_iteration_profile() {
+    let answers = answers("");
+    let mut builder = ModelBuilder::new(&answers).unwrap();
+    builder.add_repository_component().unwrap();
+    let model = builder.finish().unwrap();
+    assert_eq!(model.profiles.len(), 1);
+    assert_eq!(model.profiles[0].id.as_str(), "verify");
+    assert!(!model.profiles[0].targets.is_empty());
+}
+
+#[test]
 fn generated_verification_checks_are_independent_profile_requirements() {
     for (answers, backend) in [
         (answers(""), "api"),
@@ -50,6 +61,38 @@ role = "spa"
                 "{target} must not rerun when an independent policy receipt changes"
             );
         }
+        let iteration = model
+            .profiles
+            .iter()
+            .find(|profile| profile.id.as_str() == "iteration")
+            .unwrap();
+        let mut expected_iteration = vec![
+            target_id(backend, "fmt").unwrap(),
+            target_id(backend, "test").unwrap(),
+            target_id(
+                backend,
+                if answers.backend_language().is_go() {
+                    "lint"
+                } else {
+                    "clippy"
+                },
+            )
+            .unwrap(),
+        ];
+        if answers.frontend_harness_enabled() {
+            for action in ["build", "lint", "test", "typecheck"] {
+                expected_iteration.push(target_id("web", action).unwrap());
+            }
+        }
+        expected_iteration.sort();
+        assert_eq!(iteration.targets, expected_iteration);
+        assert!(
+            iteration
+                .targets
+                .iter()
+                .all(|target| profile.targets.contains(target))
+        );
+        assert_eq!(model.default_check_profile.as_str(), "verify");
     }
 }
 

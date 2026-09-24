@@ -294,21 +294,32 @@ fn update_and_recopy_preserve_authored_iteration_profile() {
     let temp = tempdir().unwrap();
     let template = materialize_template_git_worktree();
 
-    for recopy in [false, true] {
-        let repo = temp.path().join(format!("repo-{recopy}"));
+    for (recopy, selection) in [
+        (false, Some("verify")),
+        (true, Some("verify")),
+        (false, None),
+        (true, None),
+    ] {
+        let repo = temp
+            .path()
+            .join(format!("repo-{recopy}-{}", selection.unwrap_or("unset")));
         write_test_crate_guide(&repo);
         adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
 
         let answers_path = repo.join(".jig.toml");
         let mut answers = read_answers_toml(&answers_path).unwrap();
-        answers
+        let work = answers
             .get_mut("work")
             .and_then(TomlValue::as_table_mut)
-            .unwrap()
-            .insert(
+            .unwrap();
+        if let Some(selection) = selection {
+            work.insert(
                 "iteration_profile".into(),
-                TomlValue::String("verify".into()),
+                TomlValue::String(selection.into()),
             );
+        } else {
+            work.remove("iteration_profile");
+        }
         write_answers_toml(&answers_path, &answers).unwrap();
 
         run_update(UpdateOpts {
@@ -326,8 +337,10 @@ fn update_and_recopy_preserve_authored_iteration_profile() {
 
         let updated = read_answers_toml(&answers_path).unwrap();
         assert_eq!(
-            updated["work"]["iteration_profile"].as_str(),
-            Some("verify"),
+            updated["work"]
+                .get("iteration_profile")
+                .and_then(TomlValue::as_str),
+            selection,
             "iteration profile was lost with recopy={recopy}"
         );
     }

@@ -268,6 +268,10 @@ fn exact_generated_legacy_action_upgrades_to_native_file_budget() {
     for persisted in [false, true] {
         let initial = answers("rust_crate_roots = [\"crates\"]\n");
         let mut legacy = RepositoryRenderModel::from_answers(&initial).unwrap();
+        // Historical generated repositories had only the final verify profile.
+        legacy
+            .profiles
+            .retain(|profile| profile.id.as_str() == "verify");
         let budget_target = target_id("repo", "file-budget").unwrap();
         let legacy_target = target_id("repo", "rust-file-loc").unwrap();
         legacy

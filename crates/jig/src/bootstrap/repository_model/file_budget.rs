@@ -100,11 +100,17 @@ pub(super) fn matches_legacy_projection(
     }
 
     let mut expected_profiles = current.profiles.clone();
+    // The legacy checker predates generated iteration profiles. Recognize its
+    // actual verify-only projection without requiring a newly introduced profile.
+    expected_profiles.retain(|profile| {
+        profile.id.as_str() != "iteration"
+            || authored.profiles.iter().any(|saved| saved.id == profile.id)
+    });
     for profile in &mut expected_profiles {
         profile
             .targets
             .retain(|target| target != &file_budget_target);
-        if has_rust {
+        if has_rust && profile.id == current.default_check_profile {
             profile.targets.push(legacy_target.clone());
             profile.targets.sort();
             profile.targets.dedup();

@@ -385,6 +385,11 @@ fn reconcile_work(
     rendered: &mut toml::Table,
     staged_context: &RepoContext,
 ) -> Result<()> {
+    // A generated iteration profile is a default for new repositories. Existing
+    // repositories own both their selection and the choice to leave it unset.
+    if let Some(work) = rendered.get_mut("work").and_then(toml::Value::as_table_mut) {
+        work.remove("iteration_profile");
+    }
     let Some(existing_work) = existing.get("work") else {
         return Ok(());
     };

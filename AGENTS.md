@@ -19,6 +19,15 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
+## Validation Cadence
+
+- During edits, run focused checks for the changed behavior. Use `scripts/jig work check --plan-id ID --phase iteration` when `work.iteration_profile` is configured; inspect its targets first because an iteration profile can still include broad tests. Without one, use focused component checks or the underlying test command.
+- In an external review controller that repeats validation after each repair, use focused underlying commands. Jig checks still journal runs with `--no-receipt`, so that flag does not prevent tracked state changes inside the review loop. Keep the full delivery matrix outside repeated repair validation.
+- Once implementation and review repairs stabilize, run `scripts/jig work check --plan-id ID --phase final`. Iteration results do not replace final requirements. If final validation finds a defect, repair it with focused checks, then refresh affected final evidence before finishing.
+- Before repeating expensive checks, inspect `scripts/jig work gates --plan-id ID --projection agent-v1 --json` and `scripts/jig work evidence --plan-id ID --projection agent-v1 --json`. Reuse current passing evidence; investigate unknown freshness read-only. Do not repeat a broad suite already satisfied by fresh final evidence.
+- Narrow freshness only after auditing the command: `inputs_policy = "exhaustive"` must cover every consumed file, including shared configuration and future workspace members; `source_state = "worktree"` requires results independent of Git placement and history. Keep conservative defaults when those claims cannot be established.
+- Action `depends_on` entries represent real execution prerequisites. Put independent delivery checks alongside each other in a profile instead of chaining them; retain dependencies on artifacts or checks actually required by a consumer.
+
 ## Compatibility And Cutovers
 
 - Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
@@ -64,7 +73,7 @@ No web apps are configured in `.jig.toml`.
 ## Done Means
 
 - Run the relevant local verification for the area you changed.
-- For backend changes, finish with `scripts/jig check test`.
+- For backend changes, require passing `scripts/jig check test` evidence at completion; a fresh final run of the same suite satisfies this without a duplicate invocation.
 
 
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
