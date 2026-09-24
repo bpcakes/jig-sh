@@ -26,6 +26,23 @@ sandbox = "workspace-write"
 checkout = "repo"
 ```
 
+For an isolated task that needs dependencies, set `checkout = "worktree"` and add
+an argument-array preparation command, for example
+`prepare_command = ["./scripts/prepare-task.sh"]`. Jig runs it once from the
+new detached checkout, under the same configured Codex sandbox restriction,
+before launching the agent. The repository script owns lockfile checks, install
+policy, and writable cache placement. Keep caches in the worktree if the task
+needs to inspect them. The default task path has no preparation step.
+
+If preparation fails, times out, is cancelled, or cannot start, the worker does
+not run. The task action and tick receipt report `preparation.status`, bounded
+stdout and stderr, and the retained checkout path. Inspect the checkout and
+output, then acknowledge the occurrence and remove or preserve the worktree
+deliberately. Jig does not replay a partially prepared checkout. A successful
+preparation is also retained if worker launch then fails before the worker
+starts. A runtime without sandbox support fails the preparation step; it does
+not run the repository command on the host without restrictions.
+
 Use an IANA timezone such as `Europe/Prague` when the task should follow local
 daylight-saving changes. `codex_home = "codex"` selects `~/.codex`, while
 `codex_home = "work"` selects `~/.codex-work`; a configured home must exist.
