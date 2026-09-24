@@ -280,6 +280,43 @@ fn failed_or_missing_preparation_retains_evidence_and_does_not_replay() {
     }
 }
 
+#[test]
+fn unsupported_codex_sandbox_retains_worktree_without_starting_worker() {
+    let _lock = lock_env();
+    let bin = tempdir().unwrap();
+    let codex = bin.path().join("codex-stub.sh");
+    fs::write(
+        &codex,
+        "#!/bin/sh\nif [ \"$1\" = sandbox ]; then\n  printf 'unsupported sandbox options\\n' >&2\n  exit 2\nfi\nprintf 'worker\\n' >> \"$JIG_TEST_LOG\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = bin.path().join("calls.log");
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex.as_os_str());
+    let _log = EnvVarGuard::set("JIG_TEST_LOG", log.as_os_str());
+    let repo = tempdir().unwrap();
+    fixture(repo.path(), Some("/bin/true"), "workspace-write", None);
+    let ctx = RepoContext::load_from(repo.path()).unwrap();
+
+    let (action, occurrences) = dispatch(&ctx, &mut NoopExecutionObserver);
+    let task = &action["tick"]["actions"][0];
+    assert_eq!(action["status"], "needs_attention", "{action:#}");
+    assert_eq!(task["preparation"]["status"], "failed");
+    assert!(
+        task["preparation"]["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported sandbox options")
+    );
+    assert_eq!(task["worker_started"], false);
+    assert!(!log.exists());
+    assert!(Path::new(task["checkout"]["path"].as_str().unwrap()).exists());
+    assert_eq!(
+        occurrences.snapshot().unwrap()[0].status,
+        OccurrenceStatus::NeedsAttention
+    );
+}
+
 struct CancelAfterPreparation(PathBuf);
 
 impl crate::execution::ExecutionObserver for CancelAfterPreparation {}
@@ -355,6 +392,7 @@ fn commit_script(root: &Path) {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires installed Codex with --permission-profile and usable Linux sandbox"]
 fn installed_codex_read_only_profile_denies_preparation_writes() {
     let _lock = lock_env();
     let repo = tempdir().unwrap();
@@ -374,16 +412,8 @@ fn installed_codex_read_only_profile_denies_preparation_writes() {
             "printf 'sandbox-child-started\\n'; touch blocked",
         ])
         .current_dir(repo.path())
-        .output();
-    let output = match output {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // The unit fixture requires no Codex installation. Runtimes with
-            // the executable exercise this actual sandbox boundary as well.
-            return;
-        }
-        Err(error) => panic!("Failed to start Codex sandbox: {error}"),
-    };
+        .output()
+        .expect("opt-in sandbox test requires a compatible installed Codex");
     assert!(!output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"sandbox-child-started\n", "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
