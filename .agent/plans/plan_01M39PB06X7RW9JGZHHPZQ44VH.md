@@ -8,10 +8,13 @@ at `689a512e`. Jig plan: `plan_01M39PB06X7RW9JGZHHPZQ44VH`.
 
 - [x] T-01: Inspect workflows and a successful hosted baseline.
 - [x] T-02: Optimize test scheduling, formatter startup, and policy caches.
-- [ ] T-03: Validate syntax, relevant local gates, and hosted execution; open PR.
+- [x] T-03a: Validate syntax and formatting; open PR #50.
+- [x] T-03b: Verify every changed hosted job and report timings.
 
-Checkpoint: workflow edits are ready for local validation. Next, open the PR to
-exercise both hosted operating systems and compare job/step durations.
+Checkpoint: every changed hosted job passed at `ae1624fc` in PR #50.
+Implementation and validation are complete; local structured-work closure
+remains unavailable without a full local test receipt. No further workflow
+edits are needed. All hosted checks passed on the implementation commit.
 
 ## Surprises & Discoveries
 
@@ -52,7 +55,36 @@ a temporary target directory that is outside the existing cache.
 
 ## Outcomes & Retrospective
 
-Implementation pending hosted validation. No measured improvement claimed yet.
+Actionlint, direct formatting, and whitespace checks passed. Independent review
+found no coverage gaps: the three test selections are exhaustive and disjoint
+for this package, and Cargo doctests remain.
+
+The broad local `work check` ran every profile target even for workflow-only
+changes. Its test command failed in proxy fixtures because the ambient umask
+created group-writable directories. Committing during that run also invalidated
+the parallel layer's receipts; this was an execution mistake, not a code defect.
+A stable rerun passed fmt, Clippy, contract, file-budget, and source-runtime checks;
+read-only gate inspection confirmed those five passes fresh. The 12 proxy
+management tests passed separately under `umask 077`. No full local test pass
+is claimed, and the structured plan must remain open until that required receipt
+is available. Hosted validation directly exercises the changed test scheduling.
+
+[Hosted run 35999815450](https://github.com/bpcakes/jig-sh/actions/runs/35999815450)
+passed every changed job at implementation commit `ae1624fc`:
+
+| Measurement | Baseline | After | Observed reduction |
+| --- | ---: | ---: | ---: |
+| Linux no-default test steps, including compilation and doctests | 17m56s | 9m42s | 46% |
+| macOS no-default test steps, including compilation and doctests | 30m48s | 19m58s | 35% |
+| Complete formatting job | 2m13s | 21s | 84% |
+
+Linux passed 3,393 tests; macOS passed 3,375. Both doctest steps passed (zero
+current doctests). Both file-budget jobs and agent-map passed; their logs
+confirmed no existing cache, so warm-cache savings are not yet measured.
+The full Linux suite, rendered fixtures, Clippy, MSRV, launcher, generated
+scaffold, and dev-proxy checks passed. The full macOS workspace suite also passed.
+These runs have different source revisions and runner load; comparisons are
+observational and exclude queue time, not a controlled performance benchmark.
 
 ## Work and acceptance
 
