@@ -78,8 +78,12 @@ pub(super) fn run_resource_batch(finisher: &TargetFinisher<'_>, batch: ResourceB
                         index,
                         result,
                         compatibility,
-                        fingerprint: fingerprint.cloned(),
-                        wave_number,
+                        source: fingerprint.zip(wave_number).map(|(fingerprint, number)| {
+                            WaveFingerprint {
+                                number,
+                                fingerprint: fingerprint.clone(),
+                            }
+                        }),
                         acknowledge,
                     })
                     .map_err(|_| {

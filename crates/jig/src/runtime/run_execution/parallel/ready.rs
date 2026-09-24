@@ -8,6 +8,11 @@ use resources::{ResourceBatch, run_resource_batch, validate_resource_source};
 
 type Publish<'a> = dyn FnMut(&TargetId, TargetRunResult, Option<Value>) -> Result<()> + 'a;
 
+struct WaveFingerprint {
+    number: usize,
+    fingerprint: std::result::Result<String, String>,
+}
+
 enum ReadyOutcome {
     Ordinary {
         index: usize,
@@ -17,8 +22,7 @@ enum ReadyOutcome {
         index: usize,
         result: TargetRunResult,
         compatibility: Option<Value>,
-        fingerprint: Option<std::result::Result<String, String>>,
-        wave_number: Option<usize>,
+        source: Option<WaveFingerprint>,
         acknowledge: mpsc::SyncSender<()>,
     },
     ResourcesFinished {
@@ -50,14 +54,12 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 cancellation.update(control.cancelled());
                 let mut ordinary = Vec::new();
                 let mut resource_targets = Vec::new();
-                if resource_worker.is_none()
-                    && source_failure.is_none()
-                    && !cancellation.current().unwrap_or(true)
-                    && queue.ready.iter().any(|index| {
-                        !queue.targets[*index].0.resources.is_empty()
-                            && !queue.failed_dependency[*index]
-                    })
-                {
+                if resource_admission_needed(
+                    &queue,
+                    resource_worker.is_some(),
+                    source_failure.is_some(),
+                    &cancellation,
+                ) {
                     // Give an eligible resource claim one admission opportunity.
                     // The resource worker releases this preference when claims
                     // are busy, so ordinary work can use all eight slots.
@@ -208,24 +210,18 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                             index,
                             result,
                             compatibility,
-                            fingerprint,
-                            wave_number,
+                            source,
                             acknowledge,
                         } => {
-                            if let (Some(fingerprint), Some(wave_number)) =
-                                (fingerprint, wave_number)
-                                && observed_resource_wave != Some(wave_number)
-                            {
-                                validate_resource_source(
-                                    finisher.ctx,
-                                    control,
-                                    source_epoch,
-                                    fingerprint,
-                                    &mut source_failure,
-                                    &cancellation,
-                                );
-                                observed_resource_wave = Some(wave_number);
-                            }
+                            validate_resource_wave_once(
+                                finisher.ctx,
+                                control,
+                                source_epoch,
+                                source,
+                                &mut observed_resource_wave,
+                                &mut source_failure,
+                                &cancellation,
+                            );
                             queue.publish(index, result, compatibility, publish)?;
                             acknowledge.send(()).map_err(|_| {
                                 anyhow::anyhow!("resource worker stopped during publication")
@@ -307,6 +303,44 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
         }
         result.and(joins)
     })
+}
+
+fn resource_admission_needed(
+    queue: &ReadyQueue<'_>,
+    worker_running: bool,
+    source_failed: bool,
+    cancellation: &ParallelCancellationState,
+) -> bool {
+    !worker_running
+        && !source_failed
+        && !cancellation.current().unwrap_or(true)
+        && queue.ready.iter().any(|index| {
+            !queue.targets[*index].0.resources.is_empty() && !queue.failed_dependency[*index]
+        })
+}
+
+fn validate_resource_wave_once(
+    ctx: &RepoContext,
+    control: &dyn RepositoryRunControl,
+    epoch: &mut ExecutionSourceEpoch,
+    source: Option<WaveFingerprint>,
+    observed_wave: &mut Option<usize>,
+    source_failure: &mut Option<String>,
+    cancellation: &ParallelCancellationState,
+) {
+    if let Some(source) = source
+        && *observed_wave != Some(source.number)
+    {
+        validate_resource_source(
+            ctx,
+            control,
+            epoch,
+            source.fingerprint,
+            source_failure,
+            cancellation,
+        );
+        *observed_wave = Some(source.number);
+    }
 }
 
 fn unstarted_reason(
