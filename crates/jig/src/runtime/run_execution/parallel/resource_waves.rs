@@ -352,7 +352,13 @@ fn publish_outcome(
     let (mut completed, phase) = match outcome {
         WaveOutcome::Reused(result) => {
             if let Some(stop) = stop {
-                return publish_unstarted(finisher, pending, stop, None, publish);
+                return publish_unstarted(
+                    finisher,
+                    pending,
+                    stop,
+                    Some((fingerprint, wave_number)),
+                    publish,
+                );
             }
             let result = finalize_wave_reuse(pending, source_epoch, fingerprint, result, now_ms());
             match result {

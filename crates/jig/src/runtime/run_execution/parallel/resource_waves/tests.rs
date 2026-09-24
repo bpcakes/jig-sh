@@ -68,7 +68,7 @@ fn shared_wave_postcondition_rejects_successful_capture_and_reuse_after_source_c
 }
 
 #[test]
-fn rejected_reuse_publishes_the_wave_source_observation() {
+fn reused_wave_publications_preserve_source_observations() {
     let temp = tempfile::tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -145,6 +145,38 @@ fn rejected_reuse_publishes_the_wave_source_observation() {
     assert_eq!(source, Some(Ok("sha256:changed".into())));
     assert_eq!(wave_number, Some(7));
     assert!(pending.done);
+
+    // The wave also has a postcondition when the reuse budget expires just
+    // before publication. Forward it even though the target cannot reuse.
+    let mut timed_out_planned = planned.clone();
+    timed_out_planned.timeout_seconds = Some(0);
+    let mut timed_out = self::pending(&timed_out_planned);
+    timed_out.budget = Some(TargetBudget::new(&ctx, &timed_out_planned));
+    let mut timed_out_publication = None;
+    publish_outcome(
+        &finisher,
+        &mut control,
+        &epoch,
+        &mut timed_out,
+        &member,
+        WaveOutcome::Reused(proof()),
+        &fingerprint,
+        8,
+        &mut |_, result, _, source, wave_number| {
+            timed_out_publication = Some((result.conclusion, source.cloned(), wave_number));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        timed_out_publication,
+        Some((
+            Some(RunConclusion::TimedOut),
+            Some(Ok("sha256:changed".into())),
+            Some(8),
+        ))
+    );
+    assert!(timed_out.done);
 }
 
 #[test]
