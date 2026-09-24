@@ -79,7 +79,7 @@ if [ "$1" = sandbox ]; then
   [ "$1" = --include-managed-config ]
   shift
   [ "$1" = --cd ]
-  [ "$2" = "$PWD" ]
+  [ "$(cd "$2" && pwd -P)" = "$(pwd -P)" ]
   shift 2
   [ "$1" = -- ]
   shift
