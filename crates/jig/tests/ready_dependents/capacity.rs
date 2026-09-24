@@ -101,6 +101,66 @@ fn disjoint_ninth_resource_runs_while_first_eight_wait_for_an_external_claim() {
 }
 
 #[test]
+fn newly_ready_disjoint_resource_enters_the_active_contended_batch() {
+    let fixture = resource_batch_with_disjoint_dependent();
+    let owner_root = fixture.other_repository("example-external-owner", 30, false);
+    let mut owner = fixture.spawn_in(&owner_root, "example-external-owner", &[]);
+    owner.wait_entered();
+    let mut run = fixture.spawn_args(
+        "example-newly-ready-resource",
+        &["check", "--profile", "verify"],
+    );
+    run.wait_named_entry("prerequisite");
+    assert!(!fixture.signals.join("entered-cargo-8").exists());
+    release(&fixture, "prerequisite");
+    run.wait_target_publication("prerequisite");
+    let started = Instant::now();
+    while !fixture.signals.join("entered-cargo-8").exists() {
+        assert!(
+            run.running(),
+            "run ended before the disjoint target started"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "newly ready resource waited behind the unavailable shared claim"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    for index in 0..8 {
+        assert!(
+            !fixture
+                .signals
+                .join(format!("entered-cargo-{index}"))
+                .exists()
+        );
+    }
+    release(&fixture, "cargo-8");
+    run.wait_target_publication("cargo-8");
+    release(&fixture, "dependent");
+    owner.release();
+    owner.finish_success();
+    for index in 0..8 {
+        release(&fixture, &format!("cargo-{index}"));
+    }
+    run.finish_success();
+    assert_eight_target_bound(&fixture);
+}
+
+#[test]
+fn resource_worker_accepts_a_dependent_after_its_first_wave_drains() {
+    let fixture = resource_dependent_fixture();
+    let mut run = start(&fixture, &[]);
+    release(&fixture, "slow");
+    run.wait_target_publication("slow");
+    assert!(!fixture.signals.join("entered-dependent").exists());
+    release(&fixture, "prerequisite");
+    run.wait_named_entry("dependent");
+    release(&fixture, "dependent");
+    run.finish_success();
+    assert_eight_target_bound(&fixture);
+}
+
+#[test]
 fn ordinary_and_resource_workers_share_eight_execution_slots() {
     let fixture = wide_fixture();
     let mut run = fixture.spawn_args("example-wide", &["check", "--profile", "verify"]);

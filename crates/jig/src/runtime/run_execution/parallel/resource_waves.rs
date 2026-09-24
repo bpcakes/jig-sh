@@ -35,30 +35,50 @@ type Publish<'a> = dyn FnMut(
     + 'a;
 type StoppedAdmissions = Vec<(usize, TargetStop)>;
 
-pub(in crate::runtime::run_execution) fn execute_resource_layer(
+pub(in crate::runtime::run_execution) struct ResourceCandidates<'plan, 'source> {
+    // Ready dependents join the same worker between waves; no active wave
+    // releases claims until its results have been durably acknowledged.
+    pub(in crate::runtime::run_execution) initial:
+        &'source [(&'plan PlannedTarget, PhasePosition)],
+    pub(in crate::runtime::run_execution) arrivals:
+        Option<&'source mpsc::Receiver<(&'plan PlannedTarget, PhasePosition)>>,
+}
+
+pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
     finisher: &TargetFinisher<'_>,
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
-    targets: &[(&PlannedTarget, PhasePosition)],
+    candidates: ResourceCandidates<'plan, '_>,
     allow_reuse: bool,
     slots: &ExecutionSlots,
     publish: &mut Publish<'_>,
 ) -> Result<()> {
-    let mut pending = targets
+    let mut pending = candidates
+        .initial
         .iter()
-        .map(|(planned, position)| Pending {
-            planned,
-            position: *position,
-            budget: None,
-            resolved: None,
-            waited: false,
-            force_execution: false,
-            done: false,
-        })
+        .copied()
+        .map(pending_target)
         .collect::<Vec<_>>();
     source_epoch.begin_read_only_layer();
     let mut wave_number = 0;
-    while pending.iter().any(|pending| !pending.done) {
+    loop {
+        pending.retain(|pending| !pending.done);
+        if let Some(arrivals) = candidates.arrivals {
+            pending.extend(arrivals.try_iter().map(pending_target));
+        }
+        if pending.is_empty() {
+            match candidates.arrivals {
+                Some(arrivals) => match arrivals.recv_timeout(Duration::from_millis(25)) {
+                    Ok(target) => {
+                        pending.push(pending_target(target));
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                },
+                None => break,
+            }
+        }
         // This pass owns no build claim. Never run a resolver for a not-yet-
         // admitted candidate while retaining another candidate's resource.
         resolve_pending(finisher, control, &mut pending, publish)?;
@@ -112,6 +132,18 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer(
         publish_stopped(finisher, &mut pending, stopped, publish)?;
     }
     Ok(())
+}
+
+fn pending_target<'a>((planned, position): (&'a PlannedTarget, PhasePosition)) -> Pending<'a> {
+    Pending {
+        planned,
+        position,
+        budget: None,
+        resolved: None,
+        waited: false,
+        force_execution: false,
+        done: false,
+    }
 }
 
 fn resolve_pending(

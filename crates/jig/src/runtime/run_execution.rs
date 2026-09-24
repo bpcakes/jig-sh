@@ -414,7 +414,10 @@ fn execute_started_check_run_inner(
                     &finisher,
                     control,
                     &mut source_epoch,
-                    &positioned,
+                    parallel::ResourceCandidates {
+                        initial: &positioned,
+                        arrivals: None,
+                    },
                     request.reuse_after_resource_wait,
                     &parallel::ExecutionSlots::new(),
                     &mut |target, result, compatibility, _fingerprint, _wave_number| {

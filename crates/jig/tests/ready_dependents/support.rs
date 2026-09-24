@@ -10,6 +10,24 @@ pub fn resource_fixture() -> Fixture {
     configured_fixture(true, 0, None)
 }
 
+pub fn resource_dependent_fixture() -> Fixture {
+    let fixture = resource_fixture();
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    let dependent = manifest["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["target"]["action"] == "dependent")
+        .unwrap();
+    dependent["resources"] = json!([{"kind":"cargo_v1", "workspace_manifest":"Cargo.toml"}]);
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
 pub fn resource_timeout_fixture() -> Fixture {
     configured_fixture(true, 0, Some(4))
 }
@@ -123,6 +141,24 @@ pub fn resource_batch_with_disjoint_ninth() -> Fixture {
         .unwrap()
         .push(ninth["target"].clone());
     manifest["actions"].as_array_mut().unwrap().push(ninth);
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
+pub fn resource_batch_with_disjoint_dependent() -> Fixture {
+    let fixture = resource_batch_with_disjoint_ninth();
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    let ninth = manifest["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["target"]["action"] == "cargo-8")
+        .unwrap();
+    ninth["depends_on"] = json!([{"component":"example","action":"prerequisite"}]);
     let config =
         toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
     write_contract(&fixture, &manifest, config);

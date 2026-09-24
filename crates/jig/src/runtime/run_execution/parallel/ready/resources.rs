@@ -37,6 +37,8 @@ pub(super) fn validate_resource_source(
 
 pub(super) struct ResourceBatch<'a> {
     pub(super) targets: Vec<(usize, (&'a PlannedTarget, PhasePosition))>,
+    pub(super) arrivals: mpsc::Receiver<(&'a PlannedTarget, PhasePosition)>,
+    pub(super) indices: BTreeMap<TargetId, usize>,
     pub(super) allow_reuse: bool,
     pub(super) slots: ExecutionSlots,
     pub(super) cancellation: Arc<ParallelCancellationState>,
@@ -61,16 +63,17 @@ pub(super) fn run_resource_batch(finisher: &TargetFinisher<'_>, batch: ResourceB
             finisher,
             &mut control,
             &mut epoch,
-            &targets,
+            ResourceCandidates {
+                initial: &targets,
+                arrivals: Some(&batch.arrivals),
+            },
             batch.allow_reuse,
             &batch.slots,
             &mut |target, result, compatibility, fingerprint, wave_number| {
-                let index = batch
-                    .targets
-                    .iter()
-                    .find(|(_, (planned, _))| &planned.target == target)
-                    .expect("resource result belongs to its batch")
-                    .0;
+                let index = *batch
+                    .indices
+                    .get(target)
+                    .expect("resource result belongs to its plan");
                 let (acknowledge, acknowledgment) = mpsc::sync_channel(0);
                 batch
                     .outcomes

@@ -10,7 +10,7 @@ const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;
 const MAX_EVENTS_PER_COORDINATOR_TICK: usize = 64;
 
 mod resource_waves;
-pub(super) use resource_waves::execute_resource_layer;
+pub(super) use resource_waves::{ResourceCandidates, execute_resource_layer};
 mod slots;
 use slots::ExecutionSlot;
 pub(super) use slots::ExecutionSlots;

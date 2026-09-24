@@ -39,6 +39,13 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     let mut queue = ReadyQueue::new(&finisher.run.plan)?;
+    // Keep the active worker open until every resource target has either been
+    // sent to it or accounted for as unstarted after a failed prerequisite.
+    let mut unsent_resources = queue
+        .targets
+        .iter()
+        .filter(|(planned, _)| !planned.resources.is_empty())
+        .count();
     let slots = ExecutionSlots::new();
     let cancellation = Arc::new(ParallelCancellationState::default());
     let (event_tx, event_rx) = mpsc::sync_channel(PARALLEL_EVENT_QUEUE_CAPACITY);
@@ -49,6 +56,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
     thread::scope(|scope| {
         let mut workers = BTreeMap::new();
         let mut resource_worker = None;
+        let mut resource_sender: Option<mpsc::Sender<(&PlannedTarget, PhasePosition)>> = None;
         let result = (|| -> Result<()> {
             while queue.unfinished > 0 || resource_worker.is_some() {
                 cancellation.update(control.cancelled());
@@ -76,15 +84,20 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     );
                     if let Some((conclusion, reason)) = stop {
                         source_epoch.discard_reusable_observation();
+                        unsent_resources -=
+                            usize::from(!queue.targets[index].0.resources.is_empty());
                         queue.finish_unstarted(index, finisher, conclusion, reason, publish)?;
                         continue;
                     }
                     let target = queue.targets[index];
                     if !target.0.resources.is_empty() {
-                        if resource_worker.is_some() {
-                            continue;
-                        }
-                        resource_targets.push((index, target));
+                        dispatch_resource_candidate(
+                            resource_sender.as_ref(),
+                            &mut resource_targets,
+                            index,
+                            target,
+                            &mut unsent_resources,
+                        )?;
                     } else {
                         let Some(slot) = slots.try_acquire_ordinary() else {
                             continue;
@@ -151,8 +164,16 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     );
                 }
                 if !resource_targets.is_empty() {
+                    let (sender, arrivals) = mpsc::channel();
                     let batch = ResourceBatch {
                         targets: resource_targets,
+                        arrivals,
+                        indices: queue
+                            .targets
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (planned, _))| (planned.target.clone(), index))
+                            .collect(),
                         allow_reuse,
                         slots: slots.clone(),
                         cancellation: Arc::clone(&cancellation),
@@ -161,9 +182,11 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     };
                     resource_worker =
                         Some(scope.spawn(move || run_resource_batch(finisher, batch)));
+                    resource_sender = Some(sender);
                 } else if resource_worker.is_none() {
                     slots.set_resource_demand(false);
                 }
+                close_arrivals_if_complete(&mut resource_sender, unsent_resources);
 
                 if workers.is_empty() && resource_worker.is_none() {
                     if queue.unfinished == 0 {
@@ -230,6 +253,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                         ReadyOutcome::ResourcesFinished { result, metrics } => {
                             observed_resource_wave = None;
                             slots.set_resource_demand(false);
+                            resource_sender = None;
                             source_epoch.include_metrics(metrics);
                             join_worker(resource_worker.take().expect("resource worker exists"))?;
                             result?;
@@ -317,6 +341,30 @@ fn resource_admission_needed(
         && queue.ready.iter().any(|index| {
             !queue.targets[*index].0.resources.is_empty() && !queue.failed_dependency[*index]
         })
+}
+
+fn dispatch_resource_candidate<'a>(
+    sender: Option<&mpsc::Sender<(&'a PlannedTarget, PhasePosition)>>,
+    initial: &mut Vec<(usize, (&'a PlannedTarget, PhasePosition))>,
+    index: usize,
+    target: (&'a PlannedTarget, PhasePosition),
+    unsent: &mut usize,
+) -> Result<()> {
+    if let Some(sender) = sender {
+        sender.send(target).map_err(|_| {
+            anyhow::anyhow!("resource worker stopped before accepting a ready target")
+        })?;
+    } else {
+        initial.push((index, target));
+    }
+    *unsent -= 1;
+    Ok(())
+}
+
+fn close_arrivals_if_complete<T>(sender: &mut Option<mpsc::Sender<T>>, unsent: usize) {
+    if unsent == 0 {
+        *sender = None;
+    }
 }
 
 fn validate_resource_wave_once(
