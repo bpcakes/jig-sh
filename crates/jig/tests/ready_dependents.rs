@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+#[path = "ready_dependents/cancellation.rs"]
+mod cancellation;
 #[path = "ready_dependents/capacity.rs"]
 mod capacity;
 #[path = "cargo_resources/support.rs"]

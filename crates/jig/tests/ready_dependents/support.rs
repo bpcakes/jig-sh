@@ -18,6 +18,23 @@ pub fn wide_fixture() -> Fixture {
     configured_fixture(true, 8, None)
 }
 
+pub fn all_resource_fixture(prerequisite_timeout: u64) -> Fixture {
+    let fixture = resource_fixture();
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    for action in manifest["actions"].as_array_mut().unwrap() {
+        action["resources"] = json!([{"kind":"cargo_v1", "workspace_manifest":"Cargo.toml"}]);
+        if action["target"]["action"] == "prerequisite" {
+            action["timeout_seconds"] = json!(prerequisite_timeout);
+        }
+    }
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
 pub fn resource_batch_fixture(disjoint: bool) -> Fixture {
     let fixture = resource_fixture();
     let mut manifest: Value =

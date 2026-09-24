@@ -1,5 +1,40 @@
 use super::*;
 
+pub(super) fn validate_resource_source(
+    ctx: &RepoContext,
+    control: &dyn RepositoryRunControl,
+    epoch: &mut ExecutionSourceEpoch,
+    fingerprint: std::result::Result<String, String>,
+    source_failure: &mut Option<String>,
+    cancellation: &ParallelCancellationState,
+) {
+    let cancelled = || {
+        cancellation.update(control.cancelled());
+        cancellation.current().unwrap_or(true)
+    };
+    if cancelled() {
+        return;
+    }
+    // Resource observations use the wave's remaining target budgets. Exhaustion
+    // leaves its evidence incomplete, but cannot establish a source failure for
+    // unrelated targets. Verify independently before cancelling shared work.
+    let fingerprint = fingerprint.or_else(|_| {
+        epoch.observe_read_only_layer_postcondition_with(|| {
+            crate::git_receipts::repository_source_snapshot_with_cancellation(
+                ctx.root(),
+                &cancelled,
+            )
+            .map(|snapshot| snapshot.worktree_fingerprint)
+            .map_err(|error| format!("{error:#}"))
+        })
+    });
+    // Do not retain cancellation as a source failure. The caller must still
+    // publish and acknowledge the resource result so the worker can release claims.
+    if !cancelled() {
+        retain_source_failure(epoch, &fingerprint, source_failure, cancellation);
+    }
+}
+
 pub(super) struct ResourceBatch<'a> {
     pub(super) targets: Vec<(usize, (&'a PlannedTarget, PhasePosition))>,
     pub(super) allow_reuse: bool,

@@ -117,6 +117,11 @@ claims. Resource waiters leave capacity available for ordinary checks and
 their dependents. Resource members continue to use the shared validation and
 publication rules above.
 
+If a batch exhausts its source observation budget, Jig verifies source
+independently before cancelling unrelated checks. Cancellation skips or
+interrupts this independent observation; result publication still completes
+before claims are released.
+
 ## Ownership and recovery
 
 Claims live in a private, owner-checked per-user namespace under the fixed system

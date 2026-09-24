@@ -4,7 +4,7 @@ use super::*;
 mod queue;
 mod resources;
 use queue::ReadyQueue;
-use resources::{ResourceBatch, run_resource_batch};
+use resources::{ResourceBatch, run_resource_batch, validate_resource_source};
 
 type Publish<'a> = dyn FnMut(&TargetId, TargetRunResult, Option<Value>) -> Result<()> + 'a;
 
@@ -200,17 +200,11 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                             acknowledge,
                         } => {
                             if let Some(fingerprint) = fingerprint {
-                                // Resource observations use the wave's remaining
-                                // target budgets. An exhausted budget leaves that
-                                // wave's evidence incomplete, but cannot establish
-                                // a source failure for unrelated targets. Verify
-                                // independently before cancelling shared work.
-                                let fingerprint = fingerprint.or_else(|_| {
-                                    source_epoch.observe_read_only_layer_postcondition(finisher.ctx)
-                                });
-                                retain_source_failure(
+                                validate_resource_source(
+                                    finisher.ctx,
+                                    control,
                                     source_epoch,
-                                    &fingerprint,
+                                    fingerprint,
                                     &mut source_failure,
                                     &cancellation,
                                 );
