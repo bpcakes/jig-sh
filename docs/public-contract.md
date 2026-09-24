@@ -852,6 +852,15 @@ remain source changes. Staging or committing identical files may reuse a passing
 receipt only if configuration, runner, invocation, dependency identities, original
 execution proof and effective validity also remain current. A Git-sensitive
 dependency can therefore still invalidate a worktree-sensitive dependent.
+Freshness receipts may include a diagnostic source-content digest that excludes
+HEAD and branch identity without changing the authoritative source identity.
+When only Git identity changes, inspection reports `git_identity_changed` and
+still marks the target stale. Changed observed inputs report
+`direct_input_changed`; older receipts without the diagnostic digest use the
+conservative `source_changed` reason when they cannot prove which changed.
+For tracked Jig evidence, close a final-ready plan before committing only
+`.agent/state/` files; [the closure sequence](target-freshness-integration.md#closing-a-plan-with-tracked-jig-evidence)
+also applies to native Git checks.
 
 Use profile membership for independent checks that must all pass. Reserve action
 `depends_on` for actual execution prerequisites; an unrelated policy receipt

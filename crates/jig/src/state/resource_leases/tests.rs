@@ -208,6 +208,31 @@ fn killed_owner_keeps_its_claim_until_inherited_child_exits() {
 
 #[test]
 fn unrelated_exec_does_not_inherit_parent_claim() {
+    const ISOLATED: &str = "JIG_RESOURCE_LEASE_UNRELATED_EXEC_HELPER";
+    if std::env::var_os(ISOLATED).is_none() {
+        // Concurrent tests can fork while we hold the lease, retaining its FD
+        // until they exec. Keep the lease owner in a process running only this test.
+        let fixture = Fixture::new();
+        let mut isolated = OwnedHelper {
+            child: Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "state::resource_leases::tests::unrelated_exec_does_not_inherit_parent_claim",
+                    "--nocapture",
+                ])
+                .env(ISOLATED, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap(),
+            root: fixture.0.path().to_path_buf(),
+            slot: "isolated".into(),
+        };
+        isolated.finish();
+        return;
+    }
+
     let fixture = Fixture::new();
     let key = fixture.key("unrelated");
     let lease = ResourceLease::try_acquire(&[claim(key.clone(), ResourceClaimMode::Exclusive)])
@@ -218,7 +243,8 @@ fn unrelated_exec_does_not_inherit_parent_claim() {
     drop(lease);
     let next = ResourceLease::try_acquire(&[claim(key, ResourceClaimMode::Exclusive)])
         .unwrap()
-        .unwrap();
+        .expect("unrelated exec retained the parent's claim");
+    assert!(unrelated.child.try_wait().unwrap().is_none());
     fixture.release("unrelated");
     unrelated.finish();
     drop(next);

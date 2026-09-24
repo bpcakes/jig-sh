@@ -3,7 +3,11 @@ use super::*;
 mod adoption;
 mod cargo_alias;
 
-fn worktree_fixture(root: &Path, policy: &str, api_source: Option<&str>) -> (RepoContext, String) {
+pub(super) fn worktree_fixture(
+    root: &Path,
+    policy: &str,
+    api_source: Option<&str>,
+) -> (RepoContext, String) {
     let ctx = fixture(root, false, true);
     let config_path = root.join(".jig.toml");
     let mut config: toml::Value =
@@ -71,7 +75,7 @@ fn worktree_fixture(root: &Path, policy: &str, api_source: Option<&str>) -> (Rep
     (ctx, plan["plan_id"].as_str().unwrap().to_owned())
 }
 
-fn check(ctx: &RepoContext, plan_id: &str) -> Value {
+pub(super) fn check(ctx: &RepoContext, plan_id: &str) -> Value {
     crate::runtime::call_tool(
         ctx,
         crate::tool_defs::tool::WORK_CHECK,
@@ -80,7 +84,7 @@ fn check(ctx: &RepoContext, plan_id: &str) -> Value {
     .unwrap_or_else(|error| panic!("{error:#}\n{:#}", inspect(ctx, plan_id)))
 }
 
-fn inspect(ctx: &RepoContext, plan_id: &str) -> Value {
+pub(super) fn inspect(ctx: &RepoContext, plan_id: &str) -> Value {
     crate::runtime::call_tool(
         ctx,
         crate::tool_defs::tool::WORK_GATES,
@@ -103,7 +107,7 @@ fn receipt_ids(checked: &Value) -> BTreeMap<String, Value> {
         .collect()
 }
 
-fn invocations(ctx: &RepoContext) -> String {
+pub(super) fn invocations(ctx: &RepoContext) -> String {
     fs::read_to_string(ctx.root().join(".scratch/invocations")).unwrap()
 }
 
