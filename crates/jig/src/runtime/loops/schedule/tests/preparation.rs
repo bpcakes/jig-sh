@@ -312,7 +312,10 @@ fn timed_out_and_cancelled_preparation_never_launch_worker() {
             if cancelled { None } else { Some(1) },
         );
         let marker = bin.path().join("started");
-        let script = format!("#!/bin/sh\ntouch '{}'\nsleep 5\n", marker.display());
+        let script = format!(
+            "#!/bin/sh\nprintf 'partial stdout\\n'\nprintf 'partial stderr\\n' >&2\ntouch '{}'\nsleep 5\n",
+            marker.display()
+        );
         fs::write(repo.path().join("scripts/prepare.sh"), script).unwrap();
         commit_script(repo.path());
         let ctx = RepoContext::load_from(repo.path()).unwrap();
@@ -328,6 +331,8 @@ fn timed_out_and_cancelled_preparation_never_launch_worker() {
             if cancelled { "cancelled" } else { "timed_out" }
         );
         assert_eq!(task["worker_started"], false);
+        assert_eq!(task["preparation"]["stdout"], "partial stdout\n");
+        assert_eq!(task["preparation"]["stderr"], "partial stderr\n");
         assert!(Path::new(task["checkout"]["path"].as_str().unwrap()).exists());
         assert_eq!(fs::read_to_string(&log).unwrap(), "prepare::workspace\n");
         fs::remove_file(&marker).unwrap();

@@ -1,4 +1,45 @@
 use super::*;
+use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver, ExecutionStream};
+
+struct PreparationOutputObserver<'a> {
+    inner: &'a mut dyn ExecutionControl,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl<'a> PreparationOutputObserver<'a> {
+    fn new(inner: &'a mut dyn ExecutionControl) -> Self {
+        Self {
+            inner,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }
+    }
+}
+
+impl ExecutionObserver for PreparationOutputObserver<'_> {
+    fn event(&mut self, event: ExecutionEvent<'_>) {
+        if let ExecutionEvent::Output { stream, bytes } = event {
+            let output = match stream {
+                ExecutionStream::Stdout => &mut self.stdout,
+                ExecutionStream::Stderr => &mut self.stderr,
+            };
+            let remaining = (MAX_OUTPUT_CHARS * 4).saturating_sub(output.len());
+            output.extend_from_slice(&bytes[..remaining.min(bytes.len())]);
+        }
+        self.inner.event(event);
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl ExecutionCancellation for PreparationOutputObserver<'_> {
+    fn cancelled(&self) -> bool {
+        self.inner.cancelled()
+    }
+}
 
 pub(super) fn failed_preparation_tick(
     settings: &CodexTaskSettings,
@@ -121,12 +162,13 @@ pub(super) fn run_preparation(
     }
     let timeout = ctx.command_timeout();
     let output_limit = internal_execution_output_limit();
+    let mut output_observer = PreparationOutputObserver::new(observer);
     let output = run_supervised_execution_command(
         &mut command,
         timeout.duration(),
         output_limit,
         "Codex task preparation",
-        observer,
+        &mut output_observer,
     );
     match output {
         Ok(output) if output.status.success() => Ok(json!({
@@ -152,47 +194,27 @@ pub(super) fn run_preparation(
             &output.stderr,
         )),
         Err(error) => {
-            let (status, started, reason, stdout, stderr) = match &error {
-                SupervisedExecutionError::CancelledBeforeStart => (
-                    "cancelled",
-                    false,
-                    UnexecutedReason::CancelledBeforeStart,
-                    &[][..],
-                    &[][..],
-                ),
-                SupervisedExecutionError::Cancelled => (
-                    "cancelled",
-                    true,
-                    UnexecutedReason::CancelledBeforeStart,
-                    &[][..],
-                    &[][..],
-                ),
-                SupervisedExecutionError::TimedOut => (
-                    "timed_out",
-                    true,
-                    UnexecutedReason::PreExecutionError,
-                    &[][..],
-                    &[][..],
-                ),
-                SupervisedExecutionError::OutputLimitExceeded { stdout, stderr, .. } => (
-                    "failed",
-                    true,
-                    UnexecutedReason::PreExecutionError,
-                    stdout.as_slice(),
-                    stderr.as_slice(),
-                ),
+            let (status, started, reason) = match &error {
+                SupervisedExecutionError::CancelledBeforeStart => {
+                    ("cancelled", false, UnexecutedReason::CancelledBeforeStart)
+                }
+                SupervisedExecutionError::Cancelled => {
+                    ("cancelled", true, UnexecutedReason::CancelledBeforeStart)
+                }
+                SupervisedExecutionError::TimedOut => {
+                    ("timed_out", true, UnexecutedReason::PreExecutionError)
+                }
+                SupervisedExecutionError::OutputLimitExceeded { .. } => {
+                    ("failed", true, UnexecutedReason::PreExecutionError)
+                }
                 SupervisedExecutionError::Failed {
                     process_started, ..
                 } => (
                     "failed",
                     *process_started,
                     UnexecutedReason::PreExecutionError,
-                    &[][..],
-                    &[][..],
                 ),
             };
-            let stdout = stdout.to_vec();
-            let stderr = stderr.to_vec();
             Err(failure(
                 settings,
                 status,
@@ -202,8 +224,8 @@ pub(super) fn run_preparation(
                     "{}; inspect the retained worktree before acknowledging the occurrence",
                     execution_command_error(error, timeout, output_limit, "Codex task preparation")
                 ),
-                &stdout,
-                &stderr,
+                &output_observer.stdout,
+                &output_observer.stderr,
             ))
         }
     }
