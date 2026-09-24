@@ -21,6 +21,8 @@ struct Pending<'a> {
 struct Member {
     index: usize,
     lease: Option<ResourceLease>,
+    // Drop the lease before making its execution capacity available again.
+    _slot: ExecutionSlot,
 }
 
 type Publish<'a> = dyn FnMut(
@@ -38,6 +40,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer(
     source_epoch: &mut ExecutionSourceEpoch,
     targets: &[(&PlannedTarget, PhasePosition)],
     allow_reuse: bool,
+    slots: &ExecutionSlots,
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     let mut pending = targets
@@ -57,7 +60,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer(
         // This pass owns no build claim. Never run a resolver for a not-yet-
         // admitted candidate while retaining another candidate's resource.
         resolve_pending(finisher, control, &mut pending, publish)?;
-        let (wave, stopped) = admit_wave(finisher, control, &mut pending)?;
+        let (wave, stopped) = admit_wave(finisher, control, &mut pending, slots)?;
         if wave.is_empty() {
             publish_stopped(finisher, &mut pending, stopped, publish)?;
             if pending.iter().any(|pending| !pending.done) {
@@ -134,6 +137,7 @@ fn admit_wave(
     finisher: &TargetFinisher<'_>,
     control: &mut dyn RepositoryRunControl,
     pending: &mut [Pending<'_>],
+    slots: &ExecutionSlots,
 ) -> Result<(Vec<Member>, StoppedAdmissions)> {
     let mut wave = Vec::new();
     let mut stopped = Vec::new();
@@ -142,13 +146,17 @@ fn admit_wave(
         .enumerate()
         .filter(|(_, pending)| !pending.done)
     {
-        if wave.len() == MAX_PARALLEL_LAYER_TARGETS {
+        let Some(slot) = slots.try_acquire() else {
             break;
-        }
+        };
         if pending.planned.resources.is_empty() {
             // Unopted peers retain their ordinary execution-only timeout.
             // Admission and a resource sibling's preparation spend no budget.
-            wave.push(Member { index, lease: None });
+            wave.push(Member {
+                index,
+                lease: None,
+                _slot: slot,
+            });
             continue;
         }
         let budget = *pending
@@ -185,8 +193,14 @@ fn admit_wave(
             },
         };
         if let Some(lease) = lease {
-            wave.push(Member { index, lease });
+            wave.push(Member {
+                index,
+                lease,
+                _slot: slot,
+            });
         }
+        // A failed claim attempt releases its slot immediately; it must not
+        // reserve capacity while waiting for another member's resource.
     }
     // No lease waits, metadata, or receipt writes occur in the admission scan.
     // Flush may report an observer failure; dropping the vector then releases

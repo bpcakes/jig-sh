@@ -11,6 +11,9 @@ const MAX_EVENTS_PER_COORDINATOR_TICK: usize = 64;
 
 mod resource_waves;
 pub(super) use resource_waves::execute_resource_layer;
+mod slots;
+use slots::ExecutionSlot;
+pub(super) use slots::ExecutionSlots;
 mod ready;
 pub(super) use ready::execute_ready_read_only_targets;
 

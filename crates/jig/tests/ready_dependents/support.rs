@@ -18,6 +18,51 @@ pub fn wide_fixture() -> Fixture {
     configured_fixture(true, 8, None)
 }
 
+pub fn resource_batch_fixture(disjoint: bool) -> Fixture {
+    let fixture = resource_fixture();
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    let original = manifest["actions"].as_array().unwrap();
+    let resource = original
+        .iter()
+        .find(|action| action["target"]["action"] == "slow")
+        .unwrap();
+    let mut actions = (0..8)
+        .map(|index| {
+            let name = format!("cargo-{index}");
+            let mut action = resource.clone();
+            action["target"]["action"] = json!(name);
+            let environment = &mut action["runner"]["environment"];
+            environment["EXAMPLE_RUN_ID"] = json!(name);
+            if disjoint {
+                let artifacts = fixture.signals.join(format!("artifacts-{name}"));
+                fs::create_dir(&artifacts).unwrap();
+                environment["CARGO_TARGET_DIR"] = json!(artifacts);
+                environment["CARGO_BUILD_BUILD_DIR"] = json!(artifacts);
+            }
+            action
+        })
+        .collect::<Vec<_>>();
+    actions.extend(
+        original
+            .iter()
+            .filter(|action| action["target"]["action"] != "slow")
+            .cloned(),
+    );
+    manifest["profiles"][0]["targets"] = json!(
+        actions
+            .iter()
+            .map(|action| &action["target"])
+            .collect::<Vec<_>>()
+    );
+    manifest["actions"] = json!(actions);
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
 fn configured_fixture(
     resource_sibling: bool,
     extra_siblings: usize,
@@ -58,8 +103,6 @@ fn configured_fixture(
     let config_path = fixture.root.join(".jig.toml");
     let mut config: toml::Value =
         toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    config["repository"]["actions"] = toml::Value::try_from(&manifest["actions"]).unwrap();
-    config["repository"]["profiles"] = toml::Value::try_from(&manifest["profiles"]).unwrap();
     config["commands"]["example_check_command"] = toml::Value::String(
         r#"set -eu
 touch "$EXAMPLE_BARRIER_ROOT/active-$EXAMPLE_RUN_ID"
@@ -81,8 +124,23 @@ touch "$EXAMPLE_BARRIER_ROOT/completed-$EXAMPLE_RUN_ID"
 "#
         .into(),
     );
-    fs::write(config_path, toml::to_string(&config).unwrap()).unwrap();
-    fs::write(manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
+fn write_contract(fixture: &Fixture, manifest: &Value, mut config: toml::Value) {
+    config["repository"]["actions"] = toml::Value::try_from(&manifest["actions"]).unwrap();
+    config["repository"]["profiles"] = toml::Value::try_from(&manifest["profiles"]).unwrap();
+    fs::write(
+        fixture.root.join(".jig.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join(".agent/jig-contract.json"),
+        serde_json::to_vec_pretty(manifest).unwrap(),
+    )
+    .unwrap();
     for args in [
         vec!["add", "."],
         vec![
@@ -105,7 +163,6 @@ touch "$EXAMPLE_BARRIER_ROOT/completed-$EXAMPLE_RUN_ID"
             .unwrap();
         assert!(output.status.success(), "{output:?}");
     }
-    fixture
 }
 
 pub fn signal(fixture: &Fixture, name: &str) {

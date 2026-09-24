@@ -228,9 +228,11 @@ Evidence reuse still validates current inputs and execution authority.
 
 One resource-only batch may run alongside these ordinary checks. Its members
 retain their shared source postcondition and hold their claims through durable
-publication. The batch reserves its size against the same eight-target limit
-until all its claims are released. Simple chains, independent single-layer
-plans, effectful plans, and explicit fail-fast runs retain their existing
+publication. Admitted resource members and ordinary workers share eight
+execution slots; targets waiting for a resource claim reserve no slot.
+Resource members retain their slots until the wave releases its claims, and
+ordinary workers retain theirs through result publication. Simple chains,
+independent single-layer plans, effectful plans, and explicit fail-fast runs retain their existing
 execution paths. The persisted `execution_layers` describe dependency order;
 they do not impose a barrier on ordinary ready work in the parallel read-only
 case.

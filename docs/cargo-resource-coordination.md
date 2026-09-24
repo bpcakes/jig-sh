@@ -111,9 +111,11 @@ shared check.
 In read-only plans that combine parallel work with dependency chains, ordinary
 checks run outside the resource batch. Their validated results can release
 ordinary dependents while a Cargo sibling is still running. There is at most
-one active resource batch; its selected members reserve slots against the
-shared eight-target limit until the batch releases its claims. Resource members
-continue to use the shared validation and publication rules above.
+one active resource batch. Only members admitted to its current wave reserve
+slots against the shared eight-target limit, until that wave releases its
+claims. Resource waiters leave capacity available for ordinary checks and
+their dependents. Resource members continue to use the shared validation and
+publication rules above.
 
 ## Ownership and recovery
 

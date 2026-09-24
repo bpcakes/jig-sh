@@ -34,6 +34,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     let mut queue = ReadyQueue::new(&finisher.run.plan)?;
+    let slots = ExecutionSlots::new();
     let cancellation = Arc::new(ParallelCancellationState::default());
     let (event_tx, event_rx) = mpsc::sync_channel(PARALLEL_EVENT_QUEUE_CAPACITY);
     let (outcome_tx, outcome_rx) = mpsc::sync_channel(MAX_PARALLEL_LAYER_TARGETS);
@@ -42,15 +43,14 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
     thread::scope(|scope| {
         let mut workers = BTreeMap::new();
         let mut resource_worker = None;
-        let mut resource_count = 0;
         let result = (|| -> Result<()> {
             while queue.unfinished > 0 || resource_worker.is_some() {
                 cancellation.update(control.cancelled());
                 let mut ordinary = Vec::new();
                 let mut resource_targets = Vec::new();
-                // Reserve a whole resource batch until it releases all leases.
-                // Resource identities are never resolved beside another batch.
-                let mut capacity = MAX_PARALLEL_LAYER_TARGETS - workers.len() - resource_count;
+                // Bound resource preparation separately from execution. Only
+                // admitted wave members take slots, so resource waiters cannot
+                // prevent ordinary targets from using idle capacity.
                 for index in queue.ready.iter().copied().collect::<Vec<_>>() {
                     let stop = unstarted_reason(
                         control,
@@ -62,20 +62,24 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                         queue.finish_unstarted(index, finisher, conclusion, reason, publish)?;
                         continue;
                     }
-                    if capacity == 0 {
+                    if slots.is_full() {
                         break;
                     }
                     let target = queue.targets[index];
                     if !target.0.resources.is_empty() {
-                        if resource_worker.is_some() {
+                        if resource_worker.is_some()
+                            || resource_targets.len() == MAX_PARALLEL_LAYER_TARGETS
+                        {
                             continue;
                         }
                         resource_targets.push((index, target));
                     } else {
-                        ordinary.push((index, target));
+                        let Some(slot) = slots.try_acquire() else {
+                            break;
+                        };
+                        ordinary.push((index, target, slot));
                     }
                     queue.ready.remove(&index);
-                    capacity -= 1;
                 }
 
                 if !ordinary.is_empty() {
@@ -90,7 +94,11 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     if let Err(message) = precondition {
                         source_failure = Some(message.clone());
                         cancellation.cancelled.store(true, Ordering::Release);
-                        for (index, _) in ordinary.into_iter().chain(resource_targets) {
+                        for index in ordinary
+                            .into_iter()
+                            .map(|(index, _, _)| index)
+                            .chain(resource_targets.into_iter().map(|(index, _)| index))
+                        {
                             queue.finish_unstarted(
                                 index,
                                 finisher,
@@ -103,7 +111,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     }
                 }
 
-                for (index, target) in ordinary {
+                for (index, target, slot) in ordinary {
                     let outcomes = outcome_tx.clone();
                     let mut target_control = ParallelTargetControl {
                         cancellation: Arc::clone(&cancellation),
@@ -111,27 +119,30 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     };
                     workers.insert(
                         index,
-                        scope.spawn(move || {
-                            let execution = catch_worker(|| {
-                                execute_parallel_target(
-                                    finisher.ctx,
-                                    finisher.catalog,
-                                    finisher.run,
-                                    target,
-                                    &mut target_control,
-                                    None,
-                                    finisher.freshness,
-                                )
-                            });
-                            let _ = outcomes.send(ReadyOutcome::Ordinary { index, execution });
-                        }),
+                        (
+                            scope.spawn(move || {
+                                let execution = catch_worker(|| {
+                                    execute_parallel_target(
+                                        finisher.ctx,
+                                        finisher.catalog,
+                                        finisher.run,
+                                        target,
+                                        &mut target_control,
+                                        None,
+                                        finisher.freshness,
+                                    )
+                                });
+                                let _ = outcomes.send(ReadyOutcome::Ordinary { index, execution });
+                            }),
+                            slot,
+                        ),
                     );
                 }
                 if !resource_targets.is_empty() {
-                    resource_count = resource_targets.len();
                     let batch = ResourceBatch {
                         targets: resource_targets,
                         allow_reuse,
+                        slots: slots.clone(),
                         cancellation: Arc::clone(&cancellation),
                         events: event_tx.clone(),
                         outcomes: outcome_tx.clone(),
@@ -176,8 +187,10 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 for outcome in outcomes {
                     match outcome {
                         ReadyOutcome::Ordinary { index, execution } => {
-                            join_worker(workers.remove(&index).expect("ordinary worker exists"))?;
-                            ordinary.push((index, execution?));
+                            let (worker, slot) =
+                                workers.remove(&index).expect("ordinary worker exists");
+                            join_worker(worker)?;
+                            ordinary.push((index, execution?, slot));
                         }
                         ReadyOutcome::Resource {
                             index,
@@ -210,12 +223,11 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                         ReadyOutcome::ResourcesFinished { result, metrics } => {
                             source_epoch.include_metrics(metrics);
                             join_worker(resource_worker.take().expect("resource worker exists"))?;
-                            resource_count = 0;
                             result?;
                         }
                     }
                 }
-                let fingerprint = if ordinary.iter().any(|(_, execution)| {
+                let fingerprint = if ordinary.iter().any(|(_, execution, _)| {
                     matches!(execution, ParallelTargetExecution::Completed { .. })
                 }) {
                     let observed = source_epoch.observe_ready_read_only_postcondition(finisher.ctx);
@@ -232,7 +244,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 } else {
                     Err("no ordinary target in this completion batch started".into())
                 };
-                for (index, execution) in ordinary {
+                for (index, execution, slot) in ordinary {
                     let planned = queue.targets[index].0;
                     let (completed, fingerprint) = match execution {
                         ParallelTargetExecution::NotStarted {
@@ -252,6 +264,8 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     let (result, compatibility) =
                         finisher.finish(planned, completed, fingerprint)?;
                     queue.publish(index, result, compatibility, publish)?;
+                    // Bound retained captures as well as running children.
+                    drop(slot);
                 }
             }
             drain_parallel_events(&event_rx, control);
@@ -268,10 +282,15 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
         drop(event_tx);
         drop(outcome_tx);
         let mut joins = Ok(());
-        for worker in workers.into_values().chain(resource_worker) {
+        for (worker, _slot) in workers.into_values() {
             if let Err(error) = join_worker(worker) {
                 joins = Err(error);
             }
+        }
+        if let Some(worker) = resource_worker
+            && let Err(error) = join_worker(worker)
+        {
+            joins = Err(error);
         }
         result.and(joins)
     })
