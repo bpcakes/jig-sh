@@ -602,6 +602,35 @@ adapters = "inherited"
 id = "inferred"
 root = "inferred"
 
+# Run these before the workspace suite; final verification reuses their receipts.
+[[repository.profiles]]
+id = "preflight"
+description = "Local formatting, lint, and repository checks before workspace tests."
+
+[repository.profiles.provenance]
+id = "declared"
+targets = "declared"
+
+[[repository.profiles.targets]]
+component = "api"
+action = "fmt"
+
+[[repository.profiles.targets]]
+component = "api"
+action = "clippy"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "contract"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "file-budget"
+
+[[repository.profiles.targets]]
+component = "repo"
+action = "source-runtime-check"
+
 [[repository.profiles]]
 # Require independent checks together without making their receipts prerequisites
 # of tests. Reserve action depends_on for actual execution prerequisites.
@@ -640,6 +669,9 @@ component = "repo"
 allow_global = false
 scope = "repo"
 scope_id = "01M1A5GSHJ900Q1VN82A66PM1H"
+
+[work]
+iteration_profile = "preflight"
 
 [[work.gates]]
 conclusion = "success"
