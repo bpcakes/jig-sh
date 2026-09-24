@@ -181,7 +181,7 @@ fn preparation_runs_in_the_checkout_before_worker_and_no_hook_still_runs() {
 
     fs::write(&log, "").unwrap();
     let read_only = tempdir().unwrap();
-    fixture(read_only.path(), Some("/bin/true"), "read-only", None);
+    fixture(read_only.path(), Some("true"), "read-only", None);
     let _profile = EnvVarGuard::set("JIG_TEST_PROFILE", std::ffi::OsStr::new(":read-only"));
     let ctx = RepoContext::load_from(read_only.path()).unwrap();
     let (action, _) = dispatch(&ctx, &mut NoopExecutionObserver);
@@ -295,7 +295,7 @@ fn unsupported_codex_sandbox_retains_worktree_without_starting_worker() {
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex.as_os_str());
     let _log = EnvVarGuard::set("JIG_TEST_LOG", log.as_os_str());
     let repo = tempdir().unwrap();
-    fixture(repo.path(), Some("/bin/true"), "workspace-write", None);
+    fixture(repo.path(), Some("true"), "workspace-write", None);
     let ctx = RepoContext::load_from(repo.path()).unwrap();
 
     let (action, occurrences) = dispatch(&ctx, &mut NoopExecutionObserver);
