@@ -21,6 +21,44 @@ fn cancellation_interrupts_stalled_fallback_source_scan_and_releases_claims() {
     assert_cancellation_releases_claims(true);
 }
 
+#[test]
+fn cancellation_interrupts_stalled_ordinary_source_scan_and_releases_claims() {
+    let fixture = resource_fixture();
+    let mut command = blocked_git_command(&fixture);
+    let mut run = fixture.spawn_command(&fixture.root, "example-ordinary-scan", &mut command);
+    run.wait_named_entry("prerequisite");
+    run.wait_named_entry("slow");
+    let other = fixture.other_repository("example-resource-waiter", 30, false);
+    let mut waiter = fixture.spawn_in(&other, "waiter", &[]);
+    waiter.wait_resource_notice();
+    assert!(!waiter.entered(), "resource claim must still be held");
+
+    let _unblock = UnblockOnDrop(fixture.signals.join("release-source-scan"));
+    signal(&fixture, "block-source-scan");
+    release(&fixture, "prerequisite");
+    run.wait_signal("entered-source-scan");
+    assert!(!fixture.signals.join("entered-dependent").exists());
+    run.interrupt();
+    let cancelled_at = Instant::now();
+    while run.running() {
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(10),
+            "cancelled run retained its ordinary source scan/resource claim: {}",
+            run.output()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    run.finish_failure();
+    assert!(!fixture.signals.join("release-source-scan").exists());
+    assert!(!fixture.signals.join("entered-dependent").exists());
+    for receipt in records(&fixture, "receipts.jsonl") {
+        assert_eq!(receipt["target_freshness"]["state"], "incomplete");
+    }
+    waiter.wait_entered();
+    waiter.release();
+    waiter.finish_success();
+}
+
 fn assert_cancellation_releases_claims(during_scan: bool) {
     // All targets own the same resource, with a dependent to select the ready
     // scheduler. Only the prerequisite can enter the first resource wave.

@@ -212,11 +212,11 @@ impl ExecutionSourceEpoch {
         self.observe_read_only_layer_postcondition_with(|| collect_execution_fingerprint(ctx))
     }
 
-    pub(super) fn observe_ready_read_only_postcondition(
+    pub(super) fn observe_ready_read_only_postcondition_with(
         &mut self,
-        ctx: &RepoContext,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
     ) -> std::result::Result<String, String> {
-        let current = self.observe_read_only_layer_postcondition(ctx);
+        let current = self.observe_read_only_layer_postcondition_with(collect);
         // As in sequential execution, this checked completion can authorize
         // the next adjacent read-only admission. The coordinator discards it
         // before any wait or skipped target creates an unobserved gap.

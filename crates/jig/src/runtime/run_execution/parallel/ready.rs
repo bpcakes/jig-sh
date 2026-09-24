@@ -259,16 +259,30 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 let fingerprint = if ordinary.iter().any(|(_, execution, _)| {
                     matches!(execution, ParallelTargetExecution::Completed { .. })
                 }) {
-                    let observed = source_epoch.observe_ready_read_only_postcondition(finisher.ctx);
+                    let cancelled = || {
+                        cancellation.update(control.cancelled());
+                        cancellation.current().unwrap_or(true)
+                    };
+                    let observed = source_epoch.observe_ready_read_only_postcondition_with(|| {
+                        crate::git_receipts::repository_source_snapshot_with_cancellation(
+                            finisher.ctx.root(),
+                            &cancelled,
+                        )
+                        .map(|snapshot| snapshot.worktree_fingerprint)
+                        .map_err(|error| format!("{error:#}"))
+                    });
                     let fingerprint = source_failure
                         .as_ref()
                         .map_or_else(|| observed.clone(), |error: &String| Err(error.clone()));
-                    retain_source_failure(
-                        source_epoch,
-                        &observed,
-                        &mut source_failure,
-                        &cancellation,
-                    );
+                    // Cancellation is not evidence that the repository source changed.
+                    if !cancelled() {
+                        retain_source_failure(
+                            source_epoch,
+                            &observed,
+                            &mut source_failure,
+                            &cancellation,
+                        );
+                    }
                     fingerprint
                 } else {
                     Err("no ordinary target in this completion batch started".into())
