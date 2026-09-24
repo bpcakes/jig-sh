@@ -45,7 +45,7 @@ pub(super) fn render(report: &GateReport, command: &str, check: Option<&Value>) 
         plan_state: report.plan_state.into(),
         observed_at_ms: crate::state::now_ms(),
         finish_ready,
-        readiness_basis: "Current required-gate observation only; work finish independently revalidates under its execution lease.".into(),
+        readiness_basis: "Current required-gate observation only; work finish independently revalidates under its execution lease. If tracked Jig evidence is pending, finish before committing .agent/state; the commit can stale Git-sensitive targets.".into(),
         observation: ObservationSummary { status: inspection.into(), message, message_truncated },
         gates,
         gate_count: report.gates.len(),

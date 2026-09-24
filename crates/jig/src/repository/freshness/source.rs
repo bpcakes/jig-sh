@@ -285,6 +285,7 @@ impl SourceProblem {
 
 pub(super) struct SourceDigest {
     pub(super) digest: String,
+    pub(super) content_digest: String,
     pub(super) preview: Vec<SourceIdentityPreview>,
     pub(super) count: u64,
     pub(super) truncated: bool,

@@ -20,6 +20,7 @@ fn identity(target: &str) -> TargetIdentityV1 {
         inputs_policy: ActionInputsPolicy::Exhaustive,
         source_state: Some(jig_contract::ActionSourceState::Git),
         source_digest: "source".into(),
+        source_content_digest: None,
         authority_digest: "authority".into(),
         dependency_digest: "dependencies".into(),
         identity_digest: format!("identity:{target}"),
@@ -139,6 +140,34 @@ fn has(result: &TargetFreshness, code: Code) -> bool {
         .reasons
         .iter()
         .any(|reason| reason.code == code)
+}
+
+#[test]
+fn old_receipts_keep_proven_path_changes_and_leave_other_source_changes_unattributed() {
+    let mut record = receipt("receipt_old", "api:test", "run_one", 10, 20);
+    record["target_freshness"]["identity"]["source_preview"] =
+        json!([{"path":"api/example.go", "digest":"before"}]);
+    let temp = journal(&[record]);
+    let mut budget = CollectionBudget::new(
+        CollectionLimits::with_timeout(Duration::from_secs(2)),
+        &|| false,
+    );
+    let mut index =
+        OriginalReceiptIndex::open(&temp.path().join("receipts.jsonl"), &mut budget).unwrap();
+    let selected = index.get("receipt_old", &mut budget).unwrap().unwrap();
+    let mut expected = complete(&selected).unwrap().0.clone();
+    expected.source_digest = "changed".into();
+    expected.source_preview[0].digest = "after".into();
+    let mut result = empty();
+    comparison::compare(&mut result, &selected, &Ok(expected.clone()));
+    assert!(has(&result, Code::DirectInputChanged));
+    assert!(!has(&result, Code::SourceChanged));
+
+    expected.source_preview[0].digest = "before".into();
+    let mut result = empty();
+    comparison::compare(&mut result, &selected, &Ok(expected));
+    assert!(has(&result, Code::SourceChanged));
+    assert!(!has(&result, Code::DirectInputChanged));
 }
 
 #[test]
