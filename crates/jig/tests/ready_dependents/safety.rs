@@ -1,6 +1,62 @@
 use super::{fixture::jig, support::*};
 
 #[test]
+fn resource_timeout_does_not_cancel_unrelated_dependency_chain() {
+    let fixture = resource_timeout_fixture();
+    let plan = open_plan(&fixture);
+    let mut run = start(&fixture, &["--plan-id", &plan]);
+    // Keep the ordinary prerequisite active until the resource target has
+    // exhausted its budget and published its failed source observation.
+    run.wait_target_publication("slow");
+    assert!(!fixture.signals.join("completed-prerequisite").exists());
+    release(&fixture, "prerequisite");
+    run.wait_named_entry("dependent");
+    release(&fixture, "dependent");
+    run.finish_failure();
+
+    let events = records(&fixture, "runs.jsonl");
+    let receipts = records(&fixture, "receipts.jsonl");
+    for (action, conclusion, freshness) in [
+        ("slow", "timed_out", "incomplete"),
+        ("prerequisite", "success", "complete"),
+        ("dependent", "success", "complete"),
+    ] {
+        let completions = events
+            .iter()
+            .filter(|event| {
+                event["event"] == "target_completed" && event["target"]["action"] == action
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completions.len(), 1, "{events:#?}");
+        assert_eq!(completions[0]["result"]["conclusion"], conclusion);
+        assert_eq!(
+            receipt(&receipts, action)["target_freshness"]["state"],
+            freshness,
+            "{action}: {:#}",
+            receipt(&receipts, action)
+        );
+    }
+}
+
+#[test]
+fn source_mutation_during_resource_timeout_still_stops_unrelated_work() {
+    let fixture = resource_timeout_fixture();
+    let mut run = start(&fixture, &[]);
+    mutate(&fixture);
+    run.wait_target_publication("slow");
+    // A successful independent observation must still reject changed source.
+    release(&fixture, "prerequisite");
+    run.finish_failure();
+    assert_dependent_skipped(&fixture);
+    let receipts = records(&fixture, "receipts.jsonl");
+    for action in ["prerequisite", "slow"] {
+        let result = receipt(&receipts, action);
+        assert_ne!(result["exit_status"], 0);
+        assert_eq!(result["target_freshness"]["state"], "incomplete");
+    }
+}
+
+#[test]
 fn fail_fast_does_not_admit_siblings_or_dependents_after_failure() {
     let fixture = fixture();
     let mut run = fixture.spawn_args(

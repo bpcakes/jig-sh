@@ -186,10 +186,18 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                             fingerprint,
                             acknowledge,
                         } => {
-                            if let Some(fingerprint) = fingerprint.as_ref() {
+                            if let Some(fingerprint) = fingerprint {
+                                // Resource observations use the wave's remaining
+                                // target budgets. An exhausted budget leaves that
+                                // wave's evidence incomplete, but cannot establish
+                                // a source failure for unrelated targets. Verify
+                                // independently before cancelling shared work.
+                                let fingerprint = fingerprint.or_else(|_| {
+                                    source_epoch.observe_read_only_layer_postcondition(finisher.ctx)
+                                });
                                 retain_source_failure(
                                     source_epoch,
-                                    fingerprint,
+                                    &fingerprint,
                                     &mut source_failure,
                                     &cancellation,
                                 );

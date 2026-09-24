@@ -3,18 +3,26 @@ use serde_json::{Value, json};
 use std::{fs, process::Command};
 
 pub fn fixture() -> Fixture {
-    configured_fixture(false, 0)
+    configured_fixture(false, 0, None)
 }
 
 pub fn resource_fixture() -> Fixture {
-    configured_fixture(true, 0)
+    configured_fixture(true, 0, None)
+}
+
+pub fn resource_timeout_fixture() -> Fixture {
+    configured_fixture(true, 0, Some(4))
 }
 
 pub fn wide_fixture() -> Fixture {
-    configured_fixture(true, 8)
+    configured_fixture(true, 8, None)
 }
 
-fn configured_fixture(resource_sibling: bool, extra_siblings: usize) -> Fixture {
+fn configured_fixture(
+    resource_sibling: bool,
+    extra_siblings: usize,
+    resource_timeout_seconds: Option<u64>,
+) -> Fixture {
     let mut fixture = Fixture::new(false, 30);
     fixture.signals = fixture.root.join(".agent/.cache/signals");
     fs::create_dir_all(&fixture.signals).unwrap();
@@ -37,6 +45,9 @@ fn configured_fixture(resource_sibling: bool, extra_siblings: usize) -> Fixture 
             if name == "slow" && resource_sibling {
                 action["resources"] =
                     json!([{"kind":"cargo_v1", "workspace_manifest":"Cargo.toml"}]);
+                if let Some(timeout) = resource_timeout_seconds {
+                    action["timeout_seconds"] = json!(timeout);
+                }
             }
             action
         })
