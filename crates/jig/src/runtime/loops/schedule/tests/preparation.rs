@@ -367,7 +367,12 @@ fn installed_codex_read_only_profile_denies_preparation_writes() {
             "--cd",
         ])
         .arg(repo.path())
-        .args(["--", "/bin/sh", "-c", "touch blocked"])
+        .args([
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf 'sandbox-child-started\\n'; touch blocked",
+        ])
         .current_dir(repo.path())
         .output();
     let output = match output {
@@ -380,5 +385,18 @@ fn installed_codex_read_only_profile_denies_preparation_writes() {
         Err(error) => panic!("Failed to start Codex sandbox: {error}"),
     };
     assert!(!output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"sandbox-child-started\n", "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("blocked"), "{output:?}");
+    assert!(
+        [
+            "Read-only file system",
+            "Permission denied",
+            "Operation not permitted"
+        ]
+        .iter()
+        .any(|denial| stderr.contains(denial)),
+        "{output:?}"
+    );
     assert!(!repo.path().join("blocked").exists());
 }
