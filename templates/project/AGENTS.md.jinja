@@ -19,6 +19,15 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
+## Validation Cadence
+
+- During edits, run focused checks for the changed behavior. Use `scripts/jig work check --plan-id ID --phase iteration` when `work.iteration_profile` is configured; inspect its targets first because an iteration profile can still include broad tests. Without one, use focused component checks or the underlying test command.
+- In an external review controller that repeats validation after each repair, use focused underlying commands. Jig checks still journal runs with `--no-receipt`, so that flag does not prevent tracked state changes inside the review loop. Keep the full delivery matrix outside repeated repair validation.
+- Once implementation and review repairs stabilize, run `scripts/jig work check --plan-id ID --phase final`. Iteration results do not replace final requirements. If final validation finds a defect, repair it with focused checks, then refresh affected final evidence before finishing.
+- Before repeating expensive checks, inspect `scripts/jig work gates --plan-id ID --projection agent-v1 --json` and `scripts/jig work evidence --plan-id ID --projection agent-v1 --json`. Reuse current passing evidence; investigate unknown freshness read-only. Do not repeat a broad suite already satisfied by fresh final evidence.
+- Narrow freshness only after auditing the command: `inputs_policy = "exhaustive"` must cover every consumed file, including shared configuration and future workspace members; `source_state = "worktree"` requires results independent of Git placement and history. Keep conservative defaults when those claims cannot be established.
+- Action `depends_on` entries represent real execution prerequisites. Put independent delivery checks alongside each other in a profile instead of chaining them; retain dependencies on artifacts or checks actually required by a consumer.
+
 ## Compatibility And Cutovers
 
 - Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
@@ -81,14 +90,8 @@ Structured work uses four atomic path-aware gates per app; repository-wide TypeS
 Application contract freshness and public deployment boundaries have separate `application-contracts` and `public-artifacts` work gates; `jig-contract` remains limited to Jig harness wiring.
 [% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
-Jig validates those scripts during adoption; generated web CI validates them again before running.
-Generated install steps select the package-manager project from workspace membership, not root-lock presence: npm, pnpm, Bun, and Yarn Classic members use the root project, while standalone apps and nested Yarn Berry projects use their app-local project.
-Generated npm installs pin real writes, lock creation, workspace participation, platform packages, executable links, and all dependency classes despite ambient install-shaping variables; registry/authentication, dependency layout, peer resolution, and install-script approval remain project-owned.
-Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>` for the generated execution boundary; generated web and browser-E2E workflows do this for every package script. For npm it pins the exact current package and required-script behavior despite ambient npm selectors; explicit app environment plus registry, authentication, layout, peer, and lifecycle policy remain project-owned.
-The dependency checker supports stock macOS Bash 3.2, treats Yarn authority-enumeration failures as hard errors, and follows Bash-owned worker-job identity after an interrupted `wait` rather than probing a reaped PID.
-Dependency readiness treats a missing, empty, or exact cache-only real `node_modules` root equivalently. It ignores only real top-level tool-cache directories (`.cache`, `.vite`, `.vite-temp`, and `.tmp`) plus a regular `.DS_Store`; unknown entries, nested/type-replaced cache names, package entries, metadata, symlinks, and launchers remain attested.
-`[[frontend_apps]]` keeps CI, coverage, and semantic role metadata; generated `[[dev.apps]]` drives `scripts/jig dev` and takes precedence for local dev settings. When both sections are present, Jig requires a matching dev app name and dir for every frontend app. `kind` selects `vite` versus `env-port`; `role` selects `spa`, `admin`, or `astro` without guessing from the directory name. Extra `[[dev.apps]]` entries without `[[frontend_apps]]` are treated as dev-only and are not covered by generated web CI.
-Remove legacy `dev_command` keys; local dev now runs through `[dev]` and `[[dev.apps]]`.
+Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>` so the configured app and required script are selected consistently. Preserve repository-owned registry, authentication, dependency, and lifecycle policy.
+`[[frontend_apps]]` defines CI and coverage; `[dev]` and `[[dev.apps]]` define local development. Each frontend app needs a matching dev app name and directory. Extra dev-only apps are outside generated web CI; remove legacy `dev_command` keys.
 [% else -%]
 No web apps are configured in `.jig.toml`.
 [% endif %]
@@ -111,10 +114,11 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig work status`
 - `scripts/jig work evidence`
 [% if frontend_apps | length > 0 %]
-- `scripts/jig check typescript-lint`
-- `scripts/jig check typescript-typecheck`
-- `scripts/jig check typescript-build`
-- `scripts/jig check typescript-coverage`
+- `scripts/jig info targets` (find exact component IDs for the configured apps)
+- `scripts/jig check COMPONENT:lint`
+- `scripts/jig check COMPONENT:typecheck`
+- `scripts/jig check COMPONENT:build`
+- `scripts/jig check COMPONENT:test` (coverage)
 [% if application_contracts_enabled %]
 - `scripts/check-webapps.sh application-contracts`
 - `scripts/check-webapps.sh public-artifacts`
@@ -139,9 +143,9 @@ No web apps are configured in `.jig.toml`.
 ## Done Means
 
 - Run the relevant local verification for the area you changed.
-- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, finish with `scripts/jig check test`.
+- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, require passing `scripts/jig check test` evidence at completion; a fresh final run of the same suite satisfies this without a duplicate invocation.
 [% if frontend_apps | length > 0 %]
-- For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
+- For frontend changes, require the affected app component targets (`lint`, `typecheck`, `build`, and `test`) through final validation. Use the repository-wide `typescript-*` aliases only for an intentional full-matrix run.
 [% endif %]
 [% if sqlx_enabled %]
 - For SQLx or migration changes, run `scripts/jig check sqlx`.

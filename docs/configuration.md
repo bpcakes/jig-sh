@@ -573,6 +573,11 @@ The `work` block declares agent workflow defaults without adding repo-local laun
 
 ### Iteration and focused Rust checks
 
+Newly generated repositories select an `iteration` profile of application checks
+when available. Existing repositories preserve their selection or leave it unset.
+See [validation cadence](validation-cadence.md) for generated defaults, focused
+review checks, and safe adoption without changing final requirements.
+
 `work.iteration_profile` opts into an existing repository profile for
 `work check --phase iteration`. All selected actions and prerequisites must be
 read-only checks. `--phase final` retains the configured final requirements;

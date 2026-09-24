@@ -327,6 +327,12 @@ fn assert_frontend_readoption_and_minimal_transition(
             .iter()
             .any(|action| action.target.component.as_str() == web_id)
     );
+    assert!(ctx.work_iteration_profile().is_none());
+    assert!(
+        ctx.profile_specs()
+            .iter()
+            .all(|profile| profile.id.as_str() != "iteration")
+    );
 }
 
 #[test]

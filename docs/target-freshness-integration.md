@@ -35,6 +35,9 @@ for declaration and compatibility details.
 
 ## Adopt scoped freshness
 
+For when to run focused checks, final gates, and freshness adoption together,
+see [validation cadence](validation-cadence.md).
+
 Inspect current and proposed policies without running checks or writing repository files:
 
 ```sh
@@ -171,7 +174,7 @@ required gates are ready and only append-only Jig state remains to commit, close
 the plan before committing that state:
 
 ```sh
-scripts/jig work check --phase final --plan-id "$plan_id" --projection agent-v1
+scripts/jig work check --phase final --plan-id "$plan_id"
 scripts/jig work gates --plan-id "$plan_id" --projection agent-v1
 scripts/jig work finish --plan-id "$plan_id"
 git add .agent/state

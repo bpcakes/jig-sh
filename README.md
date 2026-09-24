@@ -252,6 +252,8 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Worktree policy preserves evidence through staging and commits; audited exhaustive inputs also avoid reruns after unrelated edits.
 
+Use focused checks during editing and review repairs, then run the required final gates after convergence. [Validation cadence](docs/validation-cadence.md) covers iteration profiles, prerequisite cleanup, audited receipt reuse, and project-owned check isolation.
+
 Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
 ### Orchestration and terminal dashboard
@@ -328,6 +330,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Adoption](docs/adoption.md): previewing and adding Jig to an existing repository
 - [Public Contract](docs/public-contract.md): contract epochs, CLI, MCP, receipts, runs, and state
 - [Target freshness](docs/target-freshness-integration.md): scoped receipts and adoption preview
+- [Validation cadence](docs/validation-cadence.md): focused iteration, final gates, and check optimization recipes
 - [Scheduled Codex Tasks](docs/codex-task-operations.md): unattended `codex_task` workflows
 - [Platform Support](docs/platform-support.md): supported hosts and feature limits
 - [`examples/`](examples/): visible `.jig.toml` answer files

@@ -140,6 +140,15 @@ pub(in crate::bootstrap) fn refresh(
             }
         }
     }
+    // A capability cutover (for example full frontend to tooling-only) may
+    // remove every application check. Retire only the empty generated profile;
+    // authored profiles still receive normal validation instead of being erased.
+    model.profiles.retain(|profile| {
+        !(profile.id.as_str() == "iteration"
+            && profile.targets.is_empty()
+            && profile.provenance.get("id") == Some(&FieldProvenance::Inferred)
+            && profile.provenance.get("targets") == Some(&FieldProvenance::Inherited))
+    });
     model.actions.sort_by(|a, b| a.target.cmp(&b.target));
     Ok((model, commands))
 }
