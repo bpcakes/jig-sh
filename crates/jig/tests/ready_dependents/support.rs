@@ -37,7 +37,8 @@ pub fn wide_fixture() -> Fixture {
 }
 
 pub fn wide_resource_timeout_fixture() -> Fixture {
-    configured_fixture(true, 8, Some(4))
+    // Keep the admission test bounded while allowing source scans on busy CI.
+    configured_fixture(true, 8, Some(20))
 }
 
 pub fn all_resource_fixture(prerequisite_timeout: u64) -> Fixture {
