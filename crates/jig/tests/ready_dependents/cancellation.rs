@@ -59,6 +59,33 @@ fn cancellation_interrupts_stalled_ordinary_source_scan_and_releases_claims() {
     waiter.finish_success();
 }
 
+#[test]
+fn publication_error_closes_resource_arrivals_and_terminalizes_run() {
+    // The resource worker has finished one root, but stays alive for the
+    // resource-backed dependent of the ordinary prerequisite.
+    let fixture = resource_dependent_fixture();
+    let mut run = start(&fixture, &[]);
+    release(&fixture, "slow");
+    run.wait_target_publication("slow");
+    assert!(!fixture.signals.join("entered-dependent").exists());
+
+    let journal = UnavailableReceiptJournal::new(&fixture);
+    release(&fixture, "prerequisite");
+    let failed_at = Instant::now();
+    while run.running() {
+        assert!(
+            failed_at.elapsed() < Duration::from_secs(10),
+            "receipt publication error left the resource worker waiting for arrivals"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    run.finish_failure();
+    drop(journal);
+    run.assert_single_completion("blocked");
+    assert!(!fixture.signals.join("entered-dependent").exists());
+    assert_eq!(records(&fixture, "receipts.jsonl").len(), 1);
+}
+
 fn assert_cancellation_releases_claims(during_scan: bool) {
     // All targets own the same resource, with a dependent to select the ready
     // scheduler. Only the prerequisite can enter the first resource wave.
@@ -161,5 +188,27 @@ struct UnblockOnDrop(PathBuf);
 impl Drop for UnblockOnDrop {
     fn drop(&mut self) {
         let _ = fs::write(&self.0, "release\n");
+    }
+}
+
+struct UnavailableReceiptJournal {
+    path: PathBuf,
+    backup: PathBuf,
+}
+
+impl UnavailableReceiptJournal {
+    fn new(fixture: &Fixture) -> Self {
+        let path = fixture.root.join(".agent/state/receipts.jsonl");
+        let backup = fixture.signals.join("receipts-backup.jsonl");
+        fs::rename(&path, &backup).unwrap();
+        fs::create_dir(&path).unwrap();
+        Self { path, backup }
+    }
+}
+
+impl Drop for UnavailableReceiptJournal {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+        let _ = fs::rename(&self.backup, &self.path);
     }
 }

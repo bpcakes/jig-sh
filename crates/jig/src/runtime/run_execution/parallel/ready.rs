@@ -315,11 +315,12 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
             control.flush()
         })();
 
-        // Release blocked event senders and publication acknowledgments before
-        // scoped joins. This path also runs after any persistence/observer error.
+        // Release arrivals, blocked event senders, and publication acknowledgments
+        // before scoped joins. This path also runs after persistence/observer errors.
         if result.is_err() {
             cancellation.cancelled.store(true, Ordering::Release);
         }
+        drop(resource_sender);
         drop(event_rx);
         drop(outcome_rx);
         drop(event_tx);
