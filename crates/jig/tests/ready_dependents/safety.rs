@@ -39,6 +39,27 @@ fn resource_timeout_does_not_cancel_unrelated_dependency_chain() {
 }
 
 #[test]
+fn timed_out_resource_wave_retries_source_only_once_for_all_members() {
+    let fixture = disjoint_resource_timeout_fixture();
+    let mut run = fixture.spawn_args(
+        "example-one-retry",
+        &["--json", "check", "--profile", "verify"],
+    );
+    run.wait_named_entry("prerequisite");
+    run.wait_named_entry("slow");
+    run.finish_failure();
+    let output: serde_json::Value = serde_json::from_str(&run.output()).unwrap();
+    assert_eq!(output["source_observations"]["count"], 3, "{output:#}");
+    let receipts = records(&fixture, "receipts.jsonl");
+    for action in ["prerequisite", "slow"] {
+        assert_eq!(
+            receipt(&receipts, action)["target_freshness"]["state"],
+            "incomplete"
+        );
+    }
+}
+
+#[test]
 fn source_mutation_during_resource_timeout_still_stops_unrelated_work() {
     let fixture = resource_timeout_fixture();
     let mut run = start(&fixture, &[]);

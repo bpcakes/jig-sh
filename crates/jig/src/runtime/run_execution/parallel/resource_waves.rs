@@ -30,6 +30,7 @@ type Publish<'a> = dyn FnMut(
         TargetRunResult,
         Option<Value>,
         Option<&std::result::Result<String, String>>,
+        Option<usize>,
     ) -> Result<()>
     + 'a;
 type StoppedAdmissions = Vec<(usize, TargetStop)>;
@@ -56,11 +57,18 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer(
         })
         .collect::<Vec<_>>();
     source_epoch.begin_read_only_layer();
+    let mut wave_number = 0;
     while pending.iter().any(|pending| !pending.done) {
         // This pass owns no build claim. Never run a resolver for a not-yet-
         // admitted candidate while retaining another candidate's resource.
         resolve_pending(finisher, control, &mut pending, publish)?;
         let (wave, stopped) = admit_wave(finisher, control, &mut pending, slots)?;
+        // A wave owns its admitted claims through publication. During that
+        // interval it cannot admit another member, so ordinary work may use
+        // every slot released by unrelated workers.
+        if !wave.is_empty() {
+            slots.set_resource_demand(false);
+        }
         if wave.is_empty() {
             publish_stopped(finisher, &mut pending, stopped, publish)?;
             if pending.iter().any(|pending| !pending.done) {
@@ -84,6 +92,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer(
         let fingerprint = source_epoch.observe_read_only_layer_postcondition_with(|| {
             wave_fingerprint(finisher.ctx, control, &pending, &wave)
         });
+        wave_number += 1;
         for (member, outcome) in wave.iter().zip(outcomes) {
             publish_outcome(
                 finisher,
@@ -93,6 +102,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer(
                 member,
                 outcome,
                 &fingerprint,
+                wave_number,
                 publish,
             )?;
         }
@@ -141,15 +151,16 @@ fn admit_wave(
 ) -> Result<(Vec<Member>, StoppedAdmissions)> {
     let mut wave = Vec::new();
     let mut stopped = Vec::new();
+    let mut waiting_for_slot = false;
     for (index, pending) in pending
         .iter_mut()
         .enumerate()
         .filter(|(_, pending)| !pending.done)
     {
-        let Some(slot) = slots.try_acquire() else {
-            break;
-        };
         if pending.planned.resources.is_empty() {
+            let Some(slot) = slots.try_acquire() else {
+                break;
+            };
             // Unopted peers retain their ordinary execution-only timeout.
             // Admission and a resource sibling's preparation spend no budget.
             wave.push(Member {
@@ -193,15 +204,24 @@ fn admit_wave(
             },
         };
         if let Some(lease) = lease {
-            wave.push(Member {
-                index,
-                lease,
-                _slot: slot,
-            });
+            if let Some(slot) = slots.try_acquire() {
+                wave.push(Member {
+                    index,
+                    lease,
+                    _slot: slot,
+                });
+            } else {
+                // The claim probe is nonblocking. Release it immediately and
+                // prefer this resource at the next free execution slot.
+                drop(lease);
+                waiting_for_slot = true;
+                break;
+            }
         }
-        // A failed claim attempt releases its slot immediately; it must not
-        // reserve capacity while waiting for another member's resource.
+        // Busy claims never consume a slot, and a successful probe without
+        // capacity releases its lease before the next admission attempt.
     }
+    slots.set_resource_demand(waiting_for_slot);
     // No lease waits, metadata, or receipt writes occur in the admission scan.
     // Flush may report an observer failure; dropping the vector then releases
     // every admitted claim without ever spawning a child.
@@ -236,7 +256,7 @@ fn publish_unstarted(
         CompletedTargetCapture::now(None, capture),
         Err("resource wave admission did not complete; no child was started".into()),
     )?;
-    publish(&pending.planned.target, result, compatibility, None)?;
+    publish(&pending.planned.target, result, compatibility, None, None)?;
     pending.done = true;
     Ok(())
 }
@@ -272,6 +292,7 @@ fn publish_outcome(
     member: &Member,
     outcome: WaveOutcome,
     fingerprint: &std::result::Result<String, String>,
+    wave_number: usize,
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     // Only opted-in resource owners budget through publication. An ordinary
@@ -289,7 +310,13 @@ fn publish_outcome(
             let result = finalize_wave_reuse(pending, source_epoch, fingerprint, result, now_ms());
             match result {
                 Ok(Some(result)) => {
-                    publish(&pending.planned.target, result, None, Some(fingerprint))?;
+                    publish(
+                        &pending.planned.target,
+                        result,
+                        None,
+                        Some(fingerprint),
+                        Some(wave_number),
+                    )?;
                     pending.done = true;
                 }
                 Ok(None) => {}
@@ -328,6 +355,7 @@ fn publish_outcome(
         result,
         compatibility,
         Some(fingerprint),
+        Some(wave_number),
     )?;
     pending.done = true;
     Ok(())

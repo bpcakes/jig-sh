@@ -18,6 +18,7 @@ enum ReadyOutcome {
         result: TargetRunResult,
         compatibility: Option<Value>,
         fingerprint: Option<std::result::Result<String, String>>,
+        wave_number: Option<usize>,
         acknowledge: mpsc::SyncSender<()>,
     },
     ResourcesFinished {
@@ -39,6 +40,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
     let (event_tx, event_rx) = mpsc::sync_channel(PARALLEL_EVENT_QUEUE_CAPACITY);
     let (outcome_tx, outcome_rx) = mpsc::sync_channel(MAX_PARALLEL_LAYER_TARGETS);
     let mut source_failure = None;
+    let mut observed_resource_wave = None;
 
     thread::scope(|scope| {
         let mut workers = BTreeMap::new();
@@ -48,6 +50,19 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 cancellation.update(control.cancelled());
                 let mut ordinary = Vec::new();
                 let mut resource_targets = Vec::new();
+                if resource_worker.is_none()
+                    && source_failure.is_none()
+                    && !cancellation.current().unwrap_or(true)
+                    && queue.ready.iter().any(|index| {
+                        !queue.targets[*index].0.resources.is_empty()
+                            && !queue.failed_dependency[*index]
+                    })
+                {
+                    // Give an eligible resource claim one admission opportunity.
+                    // The resource worker releases this preference when claims
+                    // are busy, so ordinary work can use all eight slots.
+                    slots.set_resource_demand(true);
+                }
                 // Bound resource preparation separately from execution. Only
                 // admitted wave members take slots, so resource waiters cannot
                 // prevent ordinary targets from using idle capacity.
@@ -62,20 +77,15 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                         queue.finish_unstarted(index, finisher, conclusion, reason, publish)?;
                         continue;
                     }
-                    if slots.is_full() {
-                        break;
-                    }
                     let target = queue.targets[index];
                     if !target.0.resources.is_empty() {
-                        if resource_worker.is_some()
-                            || resource_targets.len() == MAX_PARALLEL_LAYER_TARGETS
-                        {
+                        if resource_worker.is_some() {
                             continue;
                         }
                         resource_targets.push((index, target));
                     } else {
-                        let Some(slot) = slots.try_acquire() else {
-                            break;
+                        let Some(slot) = slots.try_acquire_ordinary() else {
+                            continue;
                         };
                         ordinary.push((index, target, slot));
                     }
@@ -149,6 +159,8 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     };
                     resource_worker =
                         Some(scope.spawn(move || run_resource_batch(finisher, batch)));
+                } else if resource_worker.is_none() {
+                    slots.set_resource_demand(false);
                 }
 
                 if workers.is_empty() && resource_worker.is_none() {
@@ -197,9 +209,13 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                             result,
                             compatibility,
                             fingerprint,
+                            wave_number,
                             acknowledge,
                         } => {
-                            if let Some(fingerprint) = fingerprint {
+                            if let (Some(fingerprint), Some(wave_number)) =
+                                (fingerprint, wave_number)
+                                && observed_resource_wave != Some(wave_number)
+                            {
                                 validate_resource_source(
                                     finisher.ctx,
                                     control,
@@ -208,6 +224,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                                     &mut source_failure,
                                     &cancellation,
                                 );
+                                observed_resource_wave = Some(wave_number);
                             }
                             queue.publish(index, result, compatibility, publish)?;
                             acknowledge.send(()).map_err(|_| {
@@ -215,6 +232,8 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                             })?;
                         }
                         ReadyOutcome::ResourcesFinished { result, metrics } => {
+                            observed_resource_wave = None;
+                            slots.set_resource_demand(false);
                             source_epoch.include_metrics(metrics);
                             join_worker(resource_worker.take().expect("resource worker exists"))?;
                             result?;

@@ -18,6 +18,10 @@ pub fn wide_fixture() -> Fixture {
     configured_fixture(true, 8, None)
 }
 
+pub fn wide_resource_timeout_fixture() -> Fixture {
+    configured_fixture(true, 8, Some(4))
+}
+
 pub fn all_resource_fixture(prerequisite_timeout: u64) -> Fixture {
     let fixture = resource_fixture();
     let mut manifest: Value =
@@ -29,6 +33,28 @@ pub fn all_resource_fixture(prerequisite_timeout: u64) -> Fixture {
             action["timeout_seconds"] = json!(prerequisite_timeout);
         }
     }
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
+pub fn disjoint_resource_timeout_fixture() -> Fixture {
+    let fixture = all_resource_fixture(2);
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    let slow = manifest["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["target"]["action"] == "slow")
+        .unwrap();
+    slow["timeout_seconds"] = json!(2);
+    let artifacts = fixture.signals.join("artifacts-slow");
+    fs::create_dir(&artifacts).unwrap();
+    slow["runner"]["environment"]["CARGO_TARGET_DIR"] = json!(artifacts);
+    slow["runner"]["environment"]["CARGO_BUILD_BUILD_DIR"] = json!(artifacts);
     let config =
         toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
     write_contract(&fixture, &manifest, config);
@@ -74,6 +100,29 @@ pub fn resource_batch_fixture(disjoint: bool) -> Fixture {
             .collect::<Vec<_>>()
     );
     manifest["actions"] = json!(actions);
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
+pub fn resource_batch_with_disjoint_ninth() -> Fixture {
+    let fixture = resource_batch_fixture(false);
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    let mut ninth = manifest["actions"].as_array().unwrap()[7].clone();
+    ninth["target"]["action"] = json!("cargo-8");
+    ninth["runner"]["environment"]["EXAMPLE_RUN_ID"] = json!("cargo-8");
+    let artifacts = fixture.signals.join("artifacts-cargo-8");
+    fs::create_dir(&artifacts).unwrap();
+    ninth["runner"]["environment"]["CARGO_TARGET_DIR"] = json!(artifacts);
+    ninth["runner"]["environment"]["CARGO_BUILD_BUILD_DIR"] = json!(artifacts);
+    manifest["profiles"][0]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(ninth["target"].clone());
+    manifest["actions"].as_array_mut().unwrap().push(ninth);
     let config =
         toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
     write_contract(&fixture, &manifest, config);

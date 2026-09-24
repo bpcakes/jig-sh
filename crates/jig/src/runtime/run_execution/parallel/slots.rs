@@ -2,26 +2,40 @@ use super::*;
 
 /// Capacity shared by ordinary workers and admitted resource wave members.
 #[derive(Clone)]
-pub(in crate::runtime::run_execution) struct ExecutionSlots(Arc<AtomicUsize>);
+pub(in crate::runtime::run_execution) struct ExecutionSlots {
+    available: Arc<AtomicUsize>,
+    resource_demand: Arc<AtomicBool>,
+}
 
 pub(super) struct ExecutionSlot(Arc<AtomicUsize>);
 
 impl ExecutionSlots {
     pub(in crate::runtime::run_execution) fn new() -> Self {
-        Self(Arc::new(AtomicUsize::new(MAX_PARALLEL_LAYER_TARGETS)))
+        Self {
+            available: Arc::new(AtomicUsize::new(MAX_PARALLEL_LAYER_TARGETS)),
+            resource_demand: Arc::new(AtomicBool::new(false)),
+        }
     }
 
-    pub(super) fn is_full(&self) -> bool {
-        self.0.load(Ordering::Acquire) == 0
+    pub(super) fn set_resource_demand(&self, demanded: bool) {
+        self.resource_demand.store(demanded, Ordering::Release);
     }
 
     pub(super) fn try_acquire(&self) -> Option<ExecutionSlot> {
-        self.0
+        self.acquire_with_minimum(0)
+    }
+
+    pub(super) fn try_acquire_ordinary(&self) -> Option<ExecutionSlot> {
+        self.acquire_with_minimum(usize::from(self.resource_demand.load(Ordering::Acquire)))
+    }
+
+    fn acquire_with_minimum(&self, minimum: usize) -> Option<ExecutionSlot> {
+        self.available
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |available| {
-                available.checked_sub(1)
+                (available > minimum).then(|| available - 1)
             })
             .ok()
-            .map(|_| ExecutionSlot(Arc::clone(&self.0)))
+            .map(|_| ExecutionSlot(Arc::clone(&self.available)))
     }
 }
 

@@ -64,7 +64,7 @@ pub(super) fn run_resource_batch(finisher: &TargetFinisher<'_>, batch: ResourceB
             &targets,
             batch.allow_reuse,
             &batch.slots,
-            &mut |target, result, compatibility, fingerprint| {
+            &mut |target, result, compatibility, fingerprint, wave_number| {
                 let index = batch
                     .targets
                     .iter()
@@ -79,6 +79,7 @@ pub(super) fn run_resource_batch(finisher: &TargetFinisher<'_>, batch: ResourceB
                         result,
                         compatibility,
                         fingerprint: fingerprint.cloned(),
+                        wave_number,
                         acknowledge,
                     })
                     .map_err(|_| {

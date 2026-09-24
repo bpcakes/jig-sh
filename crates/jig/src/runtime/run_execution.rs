@@ -417,7 +417,7 @@ fn execute_started_check_run_inner(
                     &positioned,
                     request.reuse_after_resource_wait,
                     &parallel::ExecutionSlots::new(),
-                    &mut |target, result, compatibility, _fingerprint| {
+                    &mut |target, result, compatibility, _fingerprint, _wave_number| {
                         record_finished_target(
                             ctx,
                             &run_id,

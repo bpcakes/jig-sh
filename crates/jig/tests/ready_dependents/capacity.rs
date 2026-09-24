@@ -56,6 +56,51 @@ fn contended_resource_waiters_leave_slots_for_an_ordinary_dependency_chain() {
 }
 
 #[test]
+fn ready_resource_starts_before_ordinary_workers_fill_every_slot() {
+    let fixture = wide_resource_timeout_fixture();
+    let mut run = fixture.spawn_args("example-resource-fair", &["check", "--profile", "verify"]);
+    run.wait_named_entry("slow");
+    assert!(fixture.signals.join("active-slow").exists());
+    for action in ["prerequisite", "dependent", "slow"]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((0..8).map(|index| format!("sibling-{index}")))
+    {
+        release(&fixture, &action);
+    }
+    run.finish_success();
+    assert_eight_target_bound(&fixture);
+}
+
+#[test]
+fn disjoint_ninth_resource_runs_while_first_eight_wait_for_an_external_claim() {
+    let fixture = resource_batch_with_disjoint_ninth();
+    let owner_root = fixture.other_repository("example-external-owner", 30, false);
+    let mut owner = fixture.spawn_in(&owner_root, "example-external-owner", &[]);
+    owner.wait_entered();
+    let mut run = fixture.spawn_args("example-disjoint-ninth", &["check", "--profile", "verify"]);
+    run.wait_named_entry("cargo-8");
+    for index in 0..8 {
+        assert!(
+            !fixture
+                .signals
+                .join(format!("entered-cargo-{index}"))
+                .exists()
+        );
+    }
+    release(&fixture, "cargo-8");
+    run.wait_target_publication("cargo-8");
+    release(&fixture, "prerequisite");
+    release(&fixture, "dependent");
+    owner.release();
+    owner.finish_success();
+    for index in 0..8 {
+        release(&fixture, &format!("cargo-{index}"));
+    }
+    run.finish_success();
+}
+
+#[test]
 fn ordinary_and_resource_workers_share_eight_execution_slots() {
     let fixture = wide_fixture();
     let mut run = fixture.spawn_args("example-wide", &["check", "--profile", "verify"]);
