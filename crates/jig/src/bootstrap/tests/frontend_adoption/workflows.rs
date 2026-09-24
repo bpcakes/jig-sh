@@ -75,6 +75,9 @@ fn generated_frontend_inputs_never_mask_nested_owned_scopes() {
     assert!(inputs("other", "lint").contains(&"apps/other/**/*"));
     assert!(inputs("other", "lint").contains(&"apps/suite/shared/**"));
     assert!(!inputs("other", "lint").contains(&"apps/suite/**/*"));
+
+    let workflow = fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
+    assert_eq!(workflow.matches("\"apps/suite/shared/**\"").count(), 2);
 }
 
 #[cfg(unix)]

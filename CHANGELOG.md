@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.
+
 ## v0.5.0 - 2026-09-22
 
 ### Added

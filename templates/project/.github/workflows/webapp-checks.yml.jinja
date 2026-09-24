@@ -18,6 +18,9 @@ on:
 [% for app in frontend_apps %]
       - <<[ (app.dir ~ "/**") | tojson ]>>
 [% endfor %]
+[% for root in frontend_workspace_roots %]
+      - <<[ ("**" if root == "." else root ~ "/**") | tojson ]>>
+[% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/contracts.mjs"
@@ -78,6 +81,9 @@ on:
       - "packages/admin-api-client/**"
 [% for app in frontend_apps %]
       - <<[ (app.dir ~ "/**") | tojson ]>>
+[% endfor %]
+[% for root in frontend_workspace_roots %]
+      - <<[ ("**" if root == "." else root ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
