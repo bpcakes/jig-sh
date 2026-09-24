@@ -1,0 +1,1 @@
+Reproduce cancellation with a stalled Git source scan after a resource fingerprint failure. Skip retries after cancellation and propagate live cancellation through independent scans, retaining timeout isolation. Add real CLI shutdown and lease-release coverage, run required gates, and update PR 46.

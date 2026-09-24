@@ -357,7 +357,31 @@ fn execute_started_check_run_inner(
     let target_count = run.plan.targets.len();
     let mut target_index = 0;
 
-    for layer in &run.plan.execution_layers {
+    let ready_dispatch = !request.fail_fast && has_parallel_dependencies(&run.plan);
+    if ready_dispatch {
+        execute_ready_read_only_targets(
+            &finisher,
+            control,
+            &mut source_epoch,
+            request.reuse_after_resource_wait,
+            &mut |target, result, compatibility| {
+                record_finished_target(
+                    ctx,
+                    &run_id,
+                    target,
+                    result,
+                    compatibility,
+                    false,
+                    &mut conclusions,
+                    &mut failed_targets,
+                    &mut compatibility_results,
+                    &mut stop_after_failure,
+                )
+            },
+        )?;
+    }
+
+    for layer in run.plan.execution_layers.iter().filter(|_| !ready_dispatch) {
         let planned_layer = layer
             .iter()
             .map(|target| planned_target(&run.plan, target))
@@ -366,10 +390,7 @@ fn execute_started_check_run_inner(
             && !stop_after_failure
             && planned_layer.len() > 1
             && planned_layer.iter().all(|planned| {
-                planned.intent == jig_contract::ActionIntent::Check
-                    && planned.effects.contains(&ActionEffect::ReadOnly)
-                    && !planned.effects.contains(&ActionEffect::Worktree)
-                    && !planned.effects.contains(&ActionEffect::External)
+                is_parallel_read_only_check(planned)
                     && planned.depends_on.iter().all(|dependency| {
                         conclusions.get(dependency) == Some(&RunConclusion::Success)
                     })
@@ -393,9 +414,13 @@ fn execute_started_check_run_inner(
                     &finisher,
                     control,
                     &mut source_epoch,
-                    &positioned,
+                    parallel::ResourceCandidates {
+                        initial: &positioned,
+                        arrivals: None,
+                    },
                     request.reuse_after_resource_wait,
-                    &mut |target, result, compatibility| {
+                    &parallel::ExecutionSlots::new(),
+                    &mut |target, result, compatibility, _fingerprint, _wave_number| {
                         record_finished_target(
                             ctx,
                             &run_id,
@@ -595,21 +620,7 @@ fn execute_started_check_run_inner(
 mod parallel;
 use parallel::*;
 
-pub(super) fn block_started_check_run(
-    ctx: &RepoContext,
-    run_id: &str,
-    error: &anyhow::Error,
-) -> Result<()> {
-    let message = format!("repository run worker stopped unexpectedly: {error:#}");
-    crate::state::block_nonterminal_run(ctx, run_id, &message)
-}
-
-fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a PlannedTarget> {
-    plan.targets
-        .iter()
-        .find(|planned| &planned.target == target)
-        .ok_or_else(|| anyhow::anyhow!("run plan references missing target '{target}'"))
-}
+pub(super) use target_result::block_started_check_run;
 
 use freshness::run_target_capture;
 

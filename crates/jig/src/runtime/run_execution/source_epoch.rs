@@ -51,6 +51,25 @@ impl ExecutionSourceEpoch {
         self.observed_fingerprint.clone()
     }
 
+    pub(super) fn include_metrics(&mut self, metrics: SourceObservationMetrics) {
+        self.observation_count = self.observation_count.saturating_add(metrics.count);
+        self.observation_elapsed = self
+            .observation_elapsed
+            .saturating_add(Duration::from_millis(metrics.elapsed_ms));
+    }
+
+    pub(super) fn finish_read_only_completion(
+        &self,
+        planned: &PlannedTarget,
+        current: &std::result::Result<String, String>,
+        completed: CompletedTargetCapture,
+    ) -> CompletedTargetCapture {
+        completed.map_capture(|capture| match self.trusted_fingerprint.as_deref() {
+            Ok(expected) => enforce_declared_worktree_effect(planned, expected, current, capture),
+            Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
+        })
+    }
+
     pub(super) fn discard_reusable_observation(&mut self) {
         self.reuse_observation_before_next_target = false;
     }
@@ -191,6 +210,18 @@ impl ExecutionSourceEpoch {
         ctx: &RepoContext,
     ) -> std::result::Result<String, String> {
         self.observe_read_only_layer_postcondition_with(|| collect_execution_fingerprint(ctx))
+    }
+
+    pub(super) fn observe_ready_read_only_postcondition_with(
+        &mut self,
+        collect: impl FnOnce() -> std::result::Result<String, String>,
+    ) -> std::result::Result<String, String> {
+        let current = self.observe_read_only_layer_postcondition_with(collect);
+        // As in sequential execution, this checked completion can authorize
+        // the next adjacent read-only admission. The coordinator discards it
+        // before any wait or skipped target creates an unobserved gap.
+        self.reuse_observation_before_next_target = self.read_only_postcondition_matches(&current);
+        current
     }
 
     pub(super) fn observe_read_only_layer_postcondition_with(
