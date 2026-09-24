@@ -6,9 +6,11 @@ use serde_json::{Value, json};
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
 
 use super::schedule::ScheduleSpec;
+mod codex_task_config;
 pub(super) use super::workflow_state::{
     RepositoryRevisionState, UnexecutedReason, WorkflowExecution, WorkflowOutcome,
 };
+use codex_task_config::config_codex_task;
 
 pub(super) const CODEX_TASK_KIND: &str = "codex_task";
 pub(super) const DEFAULT_WORKFLOW_ID: &str = "noop-status";
@@ -220,6 +222,7 @@ pub(super) struct CodexTaskSettings {
     pub(super) model: Option<String>,
     pub(super) sandbox: String,
     pub(super) checkout: CodexTaskCheckout,
+    pub(super) prepare_command: Option<Vec<String>>,
 }
 
 impl ResolvedWorkflow {
@@ -272,6 +275,7 @@ impl ResolvedWorkflow {
                 "model": task.model,
                 "sandbox": task.sandbox,
                 "checkout": task.checkout.as_str(),
+                "prepare_command": task.prepare_command,
             })),
         })
     }
@@ -400,35 +404,6 @@ fn config_schedule(workflow: &LoopWorkflowConfig) -> Result<Option<ScheduleSpec>
         .as_deref()
         .map(|schedule| ScheduleSpec::parse(schedule, workflow.timezone.as_deref()))
         .transpose()
-}
-
-fn config_codex_task(workflow: &LoopWorkflowConfig) -> Result<Option<CodexTaskSettings>> {
-    if workflow.kind != CODEX_TASK_KIND {
-        return Ok(None);
-    }
-    let prompt_file = workflow.prompt_file.clone().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Loop workflow '{}' is missing required codex_task prompt_file",
-            workflow.id
-        )
-    })?;
-    let checkout = match workflow.checkout.as_deref().unwrap_or("worktree") {
-        "repo" => CodexTaskCheckout::Repo,
-        "worktree" => CodexTaskCheckout::Worktree,
-        checkout => bail!(
-            "Loop workflow '{}' has unsupported codex_task checkout '{checkout}'",
-            workflow.id
-        ),
-    };
-    Ok(Some(CodexTaskSettings {
-        prompt_file,
-        model: workflow.model.clone(),
-        sandbox: workflow
-            .sandbox
-            .clone()
-            .unwrap_or_else(|| "read-only".into()),
-        checkout,
-    }))
 }
 
 fn validate_tuning(lease_ttl_seconds: u64, max_attempts: u32, backoff_seconds: u64) -> Result<()> {
@@ -776,6 +751,7 @@ mod tests {
                 model: None,
                 sandbox: "read-only".into(),
                 checkout,
+                prepare_command: None,
             }),
         }
     }
@@ -795,6 +771,7 @@ mod tests {
             model: None,
             sandbox: None,
             checkout: None,
+            prepare_command: None,
         }
     }
 }

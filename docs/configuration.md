@@ -399,7 +399,7 @@ Nested accepted keys are:
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
-- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`
+- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`, `prepare_command`
 - `[agent_tooling.codex]`: `marketplaces`
 - `[[agent_tooling.codex.marketplaces]]`: `id`, `source`, `plugins`
 
@@ -441,7 +441,10 @@ prompt_file = ".agent/tasks/nightly-maintenance.md"
 codex_home = "work"
 sandbox = "workspace-write"
 checkout = "worktree"
+prepare_command = ["./scripts/prepare-task.sh"]
 ```
+
+`prepare_command` is optional and applies only to isolated `codex_task` worktrees. It is a non-empty argument array executed directly, without a shell, after Git creates the detached checkout and before the worker starts. The command runs from that checkout through `codex sandbox` with the task's `read-only` or `workspace-write` policy, including managed Codex restrictions, and inherits the selected `codex_home`. It uses the configured command timeout and bounded output capture. A missing sandbox capability or command, failed exit, timeout, or cancellation prevents worker launch and retains the worktree for inspection. Jig records the preparation status and bounded output in the task action and tick receipt. The repository command owns dependency freshness and cache location; the example script should install only what its lockfiles authorize and keep writable caches inside the checkout. Removing the option restores the previous behavior for future tasks. Earlier Jig runtimes reject the unknown option at configuration load, so deploy the supporting runtime before enabling it.
 
 `worktree` is the safe default for inspection-only tasks, but Jig does not merge
 changes from that detached checkout. A task that must update the selected

@@ -158,3 +158,41 @@ prompt_file = ".agent/tasks/status.md"
     let error = validate_config(&config).unwrap_err().to_string();
     assert!(error.contains("can set prompt_file only when kind = 'codex_task'"));
 }
+
+#[test]
+fn loop_config_validates_isolated_preparation_command() {
+    let base = r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "nightly"
+kind = "codex_task"
+schedule = "0 2 * * *"
+prompt_file = "tasks/nightly.md"
+"#;
+    let valid: RepoConfig = toml::from_str(&format!(
+        "{base}prepare_command = [\"./scripts/prepare.sh\", \"--offline\"]\n"
+    ))
+    .unwrap();
+    validate_config(&valid).unwrap();
+
+    for (fields, expected) in [
+        ("prepare_command = []", "non-empty argument array"),
+        ("prepare_command = [\"\"]", "non-empty argument array"),
+        (
+            "checkout = \"repo\"\nprepare_command = [\"./scripts/prepare.sh\"]",
+            "requires a worktree checkout",
+        ),
+    ] {
+        let config: RepoConfig = toml::from_str(&format!("{base}{fields}\n")).unwrap();
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+    }
+}
