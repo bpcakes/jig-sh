@@ -100,12 +100,9 @@ jobs:
           cache: false
           rustflags: ""
           components: rustfmt
-      - name: Build current Jig binary
-        run: cargo build -p jig-sh --bin jig --locked
+      # This is the exact script behind api:fmt; formatting needs no Jig binary.
       - name: Run rustfmt check
-        env:
-          JIG_DEV_BIN: target/debug/jig
-        run: scripts/jig check fmt
+        run: bash scripts/check-rust-format.sh
 
   clippy:
     name: scripts/jig check clippy
@@ -299,8 +296,25 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
+      # Match test-locked's isolation: process-heavy tests, then crypto, then PTY.
+      # Nextest isolates the library tests' process-global environment mutexes.
       - name: Run no-default-features tests
-        run: cargo test -p jig-sh --no-default-features --locked
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --locked
+          -E 'not (test(vault) | binary(/vault_.*/))'
+          --status-level fail --final-status-level fail
+      - name: Run no-default-features vault tests
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --locked
+          -E '(test(vault) | binary(/vault_.*/)) & not binary(vault_tui)'
+          --status-level fail --final-status-level fail
+      - name: Run no-default-features vault PTY tests
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --test vault_tui --locked -j 1
+          --status-level fail --final-status-level fail
+      # Nextest does not run doctests. Preserve cargo test's documentation coverage.
+      - name: Run no-default-features doctests
+        run: cargo test -p jig-sh --no-default-features --doc --locked
 
   no-default-features-build:
     name: cargo build -p jig-sh --no-default-features
@@ -366,8 +380,25 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
+      # Match test-locked's isolation: process-heavy tests, then crypto, then PTY.
+      # Nextest isolates the library tests' process-global environment mutexes.
       - name: Run no-default-features tests
-        run: cargo test -p jig-sh --no-default-features --locked
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --locked
+          -E 'not (test(vault) | binary(/vault_.*/))'
+          --status-level fail --final-status-level fail
+      - name: Run no-default-features vault tests
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --locked
+          -E '(test(vault) | binary(/vault_.*/)) & not binary(vault_tui)'
+          --status-level fail --final-status-level fail
+      - name: Run no-default-features vault PTY tests
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --test vault_tui --locked -j 1
+          --status-level fail --final-status-level fail
+      # Nextest does not run doctests. Preserve cargo test's documentation coverage.
+      - name: Run no-default-features doctests
+        run: cargo test -p jig-sh --no-default-features --doc --locked
 
   no-default-features-clippy-macos:
     name: cargo clippy -p jig-sh --no-default-features --all-targets (macOS)
