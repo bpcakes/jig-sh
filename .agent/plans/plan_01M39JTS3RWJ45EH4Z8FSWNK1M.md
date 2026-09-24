@@ -10,12 +10,16 @@ final gates, authored workflows, and conservative freshness defaults remain inta
 - [x] Inspect bootstrap model, phase execution, generated guidance, and freshness policy.
 - [x] Generate an iteration profile for supported application checks and select it in new configurations.
 - [x] Update agent and plan guidance; document freshness, dependency, license isolation, and browser teardown patterns.
-- [ ] Verify generation, preservation of authored workflows, and required repository gates.
-- [ ] Commit and open a PR.
+- [x] Verify generation and preservation of authored workflows; run all required local gates.
+- [ ] Obtain a successful local full-suite receipt and finish structured work (local run timed out).
+- [x] Commit and open PR #48.
 
-Restart checkpoint: branch `feat/streamline-agent-gates`, baseline
-`689a512e`. Structured work is `plan_01M39JTS3RWJ45EH4Z8FSWNK1M`; the development binary is available. Two bounded agents own guidance and documentation;
-the main agent owns runtime, tests, integration, and delivery.
+Restart checkpoint: implementation commit `49c35d89` on
+`feat/streamline-agent-gates`, baseline `689a512e`, PR #48. Structured work is
+`plan_01M39JTS3RWJ45EH4Z8FSWNK1M` and remains open because the local full test
+receipt timed out. Source implementation is complete and independently reviewed.
+Before attempting closure, inspect current evidence and obtain successful local
+full-suite evidence on a host that can finish within the configured limit.
 
 ## Surprises & Discoveries
 
@@ -44,9 +48,31 @@ the main agent owns runtime, tests, integration, and delivery.
 
 ## Outcomes & Retrospective
 
-Implementation complete. Independent review found and resolved historical
-file-budget migration and empty-profile capability-cutover cases. Focused and
-required verification remain in progress.
+Delivered generated application iteration profiles, preserved final requirements
+and authored selection/omission, and updated generated guidance and reusable
+optimization recipes. Independent review found and resolved historical
+file-budget migration and empty-profile capability-cutover cases.
+
+Validation on 2026-09-24:
+
+- 37 focused regression tests and two isolated descriptor-limit tests passed.
+- Formatting, Clippy, contract, file-budget, and current-source runtime checks
+  passed through plan-linked Jig targets.
+- The initial broad bootstrap run used an intermediate build: 661 tests passed,
+  four failed, and one was ignored. All four failed cases passed against the final
+  build in the focused runs (including a helper whose executable was replaced
+  during the earlier rebuild).
+- The first local workspace attempt stopped on private-directory policy tests
+  under ambient umask 0002. Rerunning with umask 077 reported no test failures
+  before reaching the 1800-second limit while vault integration tests remained
+  active. This is incomplete local evidence, not a passing full-suite receipt.
+- PR #48 CI passed the complete locked workspace suite on Linux and macOS,
+  rendered fixtures, formatting, Clippy, file budgets, minimum-Rust checks, and
+  all four freshness command benchmark jobs on implementation commit `49c35d89`.
+  The macOS no-default-features test job was still running at this checkpoint.
+
+Do not weaken or bypass the final gate to close this plan. The PR can be reviewed
+using the completed CI evidence; local structured closure remains outstanding.
 
 ## Context and work sequence
 
