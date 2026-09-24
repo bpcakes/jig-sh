@@ -62,16 +62,11 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                 cancellation.update(control.cancelled());
                 let mut ordinary = Vec::new();
                 let mut resource_targets = Vec::new();
-                if resource_admission_needed(
-                    &queue,
-                    resource_worker.is_some(),
-                    source_failure.is_some(),
-                    &cancellation,
-                ) {
+                if resource_admission_needed(&queue, source_failure.is_some(), &cancellation) {
                     // Give an eligible resource claim one admission opportunity.
                     // The resource worker releases this preference when claims
                     // are busy, so ordinary work can use all eight slots.
-                    slots.set_resource_demand(true);
+                    slots.request_resource_admission();
                 }
                 // Bound resource preparation separately from execution. Only
                 // admitted wave members take slots, so resource waiters cannot
@@ -106,6 +101,7 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                     }
                     queue.ready.remove(&index);
                 }
+                slots.finish_resource_dispatch();
 
                 if !ordinary.is_empty() {
                     let precondition = crate::repository::validate_current_repository_authority(
@@ -331,12 +327,10 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
 
 fn resource_admission_needed(
     queue: &ReadyQueue<'_>,
-    worker_running: bool,
     source_failed: bool,
     cancellation: &ParallelCancellationState,
 ) -> bool {
-    !worker_running
-        && !source_failed
+    !source_failed
         && !cancellation.current().unwrap_or(true)
         && queue.ready.iter().any(|index| {
             !queue.targets[*index].0.resources.is_empty() && !queue.failed_dependency[*index]

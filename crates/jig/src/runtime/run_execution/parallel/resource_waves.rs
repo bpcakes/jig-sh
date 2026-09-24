@@ -1,4 +1,5 @@
 //! Admit without hold-and-wait, then publish only after the cohort source check.
+use super::slots::AdmissionSnapshot;
 use super::*;
 use crate::repository::execution_resources::{self, ResolvedResources};
 use crate::runtime::run_execution::resources;
@@ -62,11 +63,13 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
     source_epoch.begin_read_only_layer();
     let mut wave_number = 0;
     loop {
+        let admission_snapshot = slots.admission_snapshot();
         pending.retain(|pending| !pending.done);
         if let Some(arrivals) = candidates.arrivals {
             pending.extend(arrivals.try_iter().map(pending_target));
         }
         if pending.is_empty() {
+            slots.finish_admission(admission_snapshot, false);
             match candidates.arrivals {
                 Some(arrivals) => match arrivals.recv_timeout(Duration::from_millis(25)) {
                     Ok(target) => {
@@ -82,12 +85,12 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
         // This pass owns no build claim. Never run a resolver for a not-yet-
         // admitted candidate while retaining another candidate's resource.
         resolve_pending(finisher, control, &mut pending, publish)?;
-        let (wave, stopped) = admit_wave(finisher, control, &mut pending, slots)?;
-        // A wave owns its admitted claims through publication. During that
-        // interval it cannot admit another member, so ordinary work may use
-        // every slot released by unrelated workers.
+        let (wave, stopped) =
+            admit_wave(finisher, control, &mut pending, slots, admission_snapshot)?;
         if !wave.is_empty() {
-            slots.set_resource_demand(false);
+            // A wave cannot admit another member until its current leases
+            // have been published. Ordinary work may use released capacity.
+            slots.begin_wave();
         }
         if wave.is_empty() {
             publish_stopped(finisher, &mut pending, stopped, publish)?;
@@ -128,6 +131,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
         }
         // Every child is cleaned up and every wave receipt/result is published
         // before any claim can be released or another wave admitted.
+        slots.end_wave();
         drop(wave);
         publish_stopped(finisher, &mut pending, stopped, publish)?;
     }
@@ -180,6 +184,7 @@ fn admit_wave(
     control: &mut dyn RepositoryRunControl,
     pending: &mut [Pending<'_>],
     slots: &ExecutionSlots,
+    admission_snapshot: AdmissionSnapshot,
 ) -> Result<(Vec<Member>, StoppedAdmissions)> {
     let mut wave = Vec::new();
     let mut stopped = Vec::new();
@@ -253,7 +258,7 @@ fn admit_wave(
         // Busy claims never consume a slot, and a successful probe without
         // capacity releases its lease before the next admission attempt.
     }
-    slots.set_resource_demand(waiting_for_slot);
+    slots.finish_admission(admission_snapshot, waiting_for_slot);
     // No lease waits, metadata, or receipt writes occur in the admission scan.
     // Flush may report an observer failure; dropping the vector then releases
     // every admitted claim without ever spawning a child.

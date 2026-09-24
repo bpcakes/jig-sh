@@ -165,6 +165,40 @@ pub fn resource_batch_with_disjoint_dependent() -> Fixture {
     fixture
 }
 
+pub fn resource_batch_with_ordinary_backlog() -> Fixture {
+    let fixture = resource_batch_with_disjoint_dependent();
+    let mut manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
+            .unwrap();
+    let actions = manifest["actions"].as_array_mut().unwrap();
+    let ordinary = actions
+        .iter()
+        .find(|action| action["target"]["action"] == "dependent")
+        .unwrap()
+        .clone();
+    let insert_at = actions
+        .iter()
+        .position(|action| action["target"]["action"] == "cargo-8")
+        .unwrap();
+    for index in 0..8 {
+        let mut sibling = ordinary.clone();
+        let name = format!("ordinary-{index}");
+        sibling["target"]["action"] = json!(name);
+        sibling["runner"]["environment"]["EXAMPLE_RUN_ID"] = json!(name);
+        actions.insert(insert_at + index, sibling);
+    }
+    manifest["profiles"][0]["targets"] = json!(
+        actions
+            .iter()
+            .map(|action| action["target"].clone())
+            .collect::<Vec<_>>()
+    );
+    let config =
+        toml::from_str(&fs::read_to_string(fixture.root.join(".jig.toml")).unwrap()).unwrap();
+    write_contract(&fixture, &manifest, config);
+    fixture
+}
+
 fn configured_fixture(
     resource_sibling: bool,
     extra_siblings: usize,
