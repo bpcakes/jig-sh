@@ -173,7 +173,7 @@ fn resolve_pending(
         });
         match resolution {
             Ok(resolved) => pending.resolved = Some(resolved),
-            Err(stop) => publish_unstarted(finisher, pending, stop, publish)?,
+            Err(stop) => publish_unstarted(finisher, pending, stop, None, publish)?,
         }
     }
     Ok(())
@@ -273,7 +273,7 @@ fn publish_stopped(
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     for (index, stop) in stopped {
-        publish_unstarted(finisher, &mut pending[index], stop, publish)?;
+        publish_unstarted(finisher, &mut pending[index], stop, None, publish)?;
     }
     Ok(())
 }
@@ -282,6 +282,7 @@ fn publish_unstarted(
     finisher: &TargetFinisher<'_>,
     pending: &mut Pending<'_>,
     stop: TargetStop,
+    source: Option<(&std::result::Result<String, String>, usize)>,
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     let mut capture = stopped_before_start(pending.planned, stop);
@@ -293,7 +294,16 @@ fn publish_unstarted(
         CompletedTargetCapture::now(None, capture),
         Err("resource wave admission did not complete; no child was started".into()),
     )?;
-    publish(&pending.planned.target, result, compatibility, None, None)?;
+    let (fingerprint, wave_number) = source.map_or((None, None), |(fingerprint, wave_number)| {
+        (Some(fingerprint), Some(wave_number))
+    });
+    publish(
+        &pending.planned.target,
+        result,
+        compatibility,
+        fingerprint,
+        wave_number,
+    )?;
     pending.done = true;
     Ok(())
 }
@@ -342,7 +352,7 @@ fn publish_outcome(
     let (mut completed, phase) = match outcome {
         WaveOutcome::Reused(result) => {
             if let Some(stop) = stop {
-                return publish_unstarted(finisher, pending, stop, publish);
+                return publish_unstarted(finisher, pending, stop, None, publish);
             }
             let result = finalize_wave_reuse(pending, source_epoch, fingerprint, result, now_ms());
             match result {
@@ -357,7 +367,15 @@ fn publish_outcome(
                     pending.done = true;
                 }
                 Ok(None) => {}
-                Err(stop) => return publish_unstarted(finisher, pending, stop, publish),
+                Err(stop) => {
+                    return publish_unstarted(
+                        finisher,
+                        pending,
+                        stop,
+                        Some((fingerprint, wave_number)),
+                        publish,
+                    );
+                }
             }
             return Ok(());
         }
