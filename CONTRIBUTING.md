@@ -4,7 +4,7 @@
 
 Choose checks that validate the affected behavior. Broaden verification for shared
 behavior, failures, or unresolved risks; ordinary development does not require a Jig
-work plan, receipt inspection, or a full workspace test run. `scripts/jig file-budget`
+work plan, receipt inspection, or a full workspace test run. `scripts/jig file-budget audit`
 provides standalone source-size diagnostics without creating runs or receipts.
 
 The configured full Rust test commands use cargo-nextest 0.9.130 or newer so tests

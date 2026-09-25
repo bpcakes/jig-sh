@@ -86,7 +86,7 @@ cd ./ExampleProject
 scripts/jig setup
 
 scripts/jig info targets
-scripts/jig file-budget
+scripts/jig file-budget audit
 ```
 
 For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an existing repository, use `jig adopt .` to preview changes and `jig adopt . --write` to apply them.
@@ -94,7 +94,7 @@ For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an ex
 `setup` runs the read-only doctor, bootstraps project dependencies, registers configured agent tooling when needed, verifies the generated contract, and runs doctor again. Pass `--json` to Jig commands when automation needs structured output.
 
 Run checks that validate the behavior you change, using `scripts/jig check COMPONENT:ACTION`
-or a focused native test command. `scripts/jig file-budget` provides standalone diagnostics
+or a focused native test command. `scripts/jig file-budget audit` provides standalone diagnostics
 without creating runs or receipts. Work plans and receipt inspection are optional.
 
 ## What changes in the repository
@@ -249,7 +249,7 @@ Structured work is optional. When selected, `work start` captures an exact Git b
 
 Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Worktree policy preserves evidence through staging and commits; audited exhaustive inputs also avoid reruns after unrelated edits.
 
-Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
+Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget audit` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
 ### Orchestration and terminal dashboard
 
