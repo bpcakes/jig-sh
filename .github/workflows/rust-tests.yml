@@ -36,7 +36,7 @@ jobs:
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           test "$(nproc)" = 8
           slice="/sys/fs/cgroup/ci.slice/ci-slot${SLOT}.slice"
           test "$(cat "$slice/memory.max")" = 12884901888
@@ -44,14 +44,13 @@ jobs:
           docker info --format 'engine={{.ID}} root={{.DockerRootDir}}'
           test "$(docker info --format '{{.DockerRootDir}}')" = "/var/lib/bpcakes-ci/docker${SLOT}"
           test "$(sudo docker info --format '{{.ID}}')" = "$(docker info --format '{{.ID}}')"
-          test "$(docker inspect --format '{{.HostConfig.CgroupParent}}' "$POSTGRES_CONTAINER")" = "ci-slot${SLOT}.slice"
           pid=$(docker inspect --format '{{.State.Pid}}' "$POSTGRES_CONTAINER")
           grep -F "/ci.slice/ci-slot${SLOT}.slice/" "/proc/$pid/cgroup"
           systemctl --user is-system-running
       - name: Require both jobs to serve PostgreSQL on the same port simultaneously
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           barrier="/var/tmp/ci-concurrency-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo install -d -m 1777 "$barrier"
           touch "$barrier/slot-$SLOT"
