@@ -6,16 +6,14 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 ## Start Here
 
 - Use this file for repo-wide defaults.
-- Open [agent-map.md](./agent-map.md) before backend work.
+- Use [agent-map.md](./agent-map.md) to locate ownership guidance for backend work.
 - Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
-- Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
+- Use `.agent/PLANS.md` when an ExecPlan is requested or useful for uncertainty, coordination, or a durable handoff.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
-- Start notes use `work start --title "..." --body "..."` (or `--body-file`). `work status` is aggregate; inspect one plan with `work gates --plan-id ID --projection agent-v1 --json`. The same opt-in compact projection is available on `work check` and `work evidence`; `--summary` is not an option. Unknown freshness calls for read-only inspection, not an automatic full check.
-- Use `scripts/jig check COMPONENT:ACTION --plan-id ID` for native targets and `scripts/jig work check --plan-id ID --gate GATE` for configured evidence/check gates. `--tool` accepts only legacy execution tool names. Harness contract validation is `scripts/jig check contract`, not a top-level `contract` command.
-- Retire an open plan that will not be delivered with `scripts/jig work retire --plan-id ID --disposition <cancelled|superseded|duplicate|obsolete> --reason "..."`. It claims no success and runs no required gates; `work finish` stays evidence-gated.
+- Structured work and receipt inspection are optional unless explicitly requested. Apply skills within that scope; installing or selecting a skill does not require opening a Jig work plan.
+- Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
+- Use `scripts/jig file-budget` for standalone source-size diagnostics; it creates no runs or receipts.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -54,8 +52,8 @@ No web apps are configured in `.jig.toml`.
 
 - `scripts/jig check clippy`
 
-- `scripts/jig work status`
-- `scripts/jig work evidence`
+- `scripts/jig info targets`
+- `scripts/jig file-budget`
 
 
 
@@ -63,8 +61,8 @@ No web apps are configured in `.jig.toml`.
 
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For backend changes, finish with `scripts/jig check test`.
+- Validate the affected behavior with focused checks. Run broader suites when shared behavior, failures, or unresolved risks warrant them.
+- Once the affected behavior is verified, finish; repeat checks only for changed inputs or a concrete remaining concern.
 
 
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.
@@ -102,25 +100,15 @@ scripts/jig-dev --json info
 
 `scripts/jig-dev` incrementally builds the workspace binary and passes the resulting executable through the normal launcher. It respects Cargo's configured target directory and fails if the build fails. No environment override is needed for routine development.
 
-For substantial work, open structured work, run configured gates, then inspect gate status and receipts:
-
-```sh
-plan_id="$(scripts/jig work start --title "Describe the work" --body "Validation plan." --print-plan-id)"
-
-scripts/jig work check --plan-id "$plan_id"
-scripts/jig work gates --plan-id "$plan_id"
-scripts/jig work evidence --plan-id "$plan_id"
-scripts/jig work receipts --plan-id "$plan_id"
-scripts/jig work status
-```
-
-The required `verify` profile includes `repo:source-runtime-check`. For runtime, launcher, template, or build configuration changes, `work check` runs this target to build and validate the current implementation through the launcher before completion. Run `scripts/jig check repo:source-runtime-check` to request that validation directly. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
+For runtime, launcher, template, or build configuration changes, use `scripts/jig check repo:source-runtime-check` when validating the current implementation through the launcher. The same target is available in the `verify` profile. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
 
 <!-- bv-agent-instructions-v3 -->
 
 ---
 
 ## Beads Workflow Integration
+
+Use this section when selecting work from Beads or updating an existing tracked task. A direct request does not require creating an issue or a Jig work plan.
 
 This project uses [beads_rust](https://github.com/Dicklesworthstone/beads_rust) (`br`) for issue tracking and [beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) (`bv`) for graph-aware triage. Issues are stored in `.beads/` and tracked in git. Current `br` workspaces normally export `.beads/issues.jsonl`; older `bd`/legacy workspaces may use `.beads/beads.jsonl`. `bv` auto-discovers the supported JSONL files, so agents should use `br`/`bv` commands instead of hard-coding a single filename.
 

@@ -6,16 +6,14 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 ## Start Here
 
 - Use this file for repo-wide defaults.
-- Open [agent-map.md](./agent-map.md) before [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
+- Use [agent-map.md](./agent-map.md) to locate ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
-- Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
+- Use `.agent/PLANS.md` when an ExecPlan is requested or useful for uncertainty, coordination, or a durable handoff.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
-- Start notes use `work start --title "..." --body "..."` (or `--body-file`). `work status` is aggregate; inspect one plan with `work gates --plan-id ID --projection agent-v1 --json`. The same opt-in compact projection is available on `work check` and `work evidence`; `--summary` is not an option. Unknown freshness calls for read-only inspection, not an automatic full check.
-- Use `scripts/jig check COMPONENT:ACTION --plan-id ID` for native targets and `scripts/jig work check --plan-id ID --gate GATE` for configured evidence/check gates. `--tool` accepts only legacy execution tool names. Harness contract validation is `scripts/jig check contract`, not a top-level `contract` command.
-- Retire an open plan that will not be delivered with `scripts/jig work retire --plan-id ID --disposition <cancelled|superseded|duplicate|obsolete> --reason "..."`. It claims no success and runs no required gates; `work finish` stays evidence-gated.
+- Structured work and receipt inspection are optional unless explicitly requested. Apply skills within that scope; installing or selecting a skill does not require opening a Jig work plan.
+- Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
+- Use `scripts/jig file-budget` for standalone source-size diagnostics; it creates no runs or receipts.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -108,8 +106,8 @@ No web apps are configured in `.jig.toml`.
 [% if rust_backend_enabled %]
 - `scripts/jig check clippy`
 [% endif %]
-- `scripts/jig work status`
-- `scripts/jig work evidence`
+- `scripts/jig info targets`
+- `scripts/jig file-budget`
 [% if frontend_apps | length > 0 %]
 - `scripts/jig check typescript-lint`
 - `scripts/jig check typescript-typecheck`
@@ -138,15 +136,15 @@ No web apps are configured in `.jig.toml`.
 
 ## Done Means
 
-- Run the relevant local verification for the area you changed.
-- For [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] changes, finish with `scripts/jig check test`.
+- Validate the affected behavior with focused checks. Run broader suites when shared behavior, failures, or unresolved risks warrant them.
+- Once the affected behavior is verified, finish; repeat checks only for changed inputs or a concrete remaining concern.
 [% if frontend_apps | length > 0 %]
-- For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
+- For frontend changes, select the relevant `scripts/jig check typescript-*` checks.
 [% endif %]
 [% if sqlx_enabled %]
 - For SQLx or migration changes, run `scripts/jig check sqlx`.
 [% if schema_dump_enabled %]
-- For schema-doc-enabled repos, run `scripts/jig check schema`.
+- For schema or schema-documentation changes, run `scripts/jig check schema`.
 [% endif %]
 [% endif %]
 - Review the generated diff for stale docs, policy drift, or missing dependent updates.

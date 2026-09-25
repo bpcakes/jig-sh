@@ -187,7 +187,7 @@ fn adopted_full_harness_next_steps_cover_configured_capabilities() {
     assert_eq!(steps[0], "cd /tmp/demo");
     for expected in [
         "scripts/jig setup",
-        "scripts/jig check test",
+        "scripts/jig info targets",
         "scripts/jig dev",
     ] {
         assert!(steps.iter().any(|step| step == expected));
@@ -215,7 +215,7 @@ fn adopted_full_harness_next_steps_cover_configured_capabilities() {
 }
 
 #[test]
-fn initial_notes_cover_review_and_required_checks() {
+fn initial_notes_cover_review_and_available_checks() {
     let notes = initial_notes(Vec::new(), true, None, false);
     for expected in [
         "Review generated .jig.toml",

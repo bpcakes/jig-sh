@@ -148,6 +148,10 @@ Managed npm checks, browser E2E, and generated dev pin the exact app and require
 
 ## Day-To-Day Loop
 
+Choose commands for the current task and validate the affected behavior with focused
+checks. Structured work, receipt inspection, and ExecPlans are optional. A full test
+suite is useful when the affected behavior or remaining risk warrants it.
+
 The daily developer loop is built around a few stable verbs:
 
 - `scripts/jig setup` runs doctor, prepares local dependencies, registers configured agent tooling when needed, verifies the minimum contract, and runs doctor again.
@@ -155,6 +159,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux and macOS retain the exact child process-group identity until descendants are proven gone, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
+- `scripts/jig file-budget` provides standalone source-size diagnostics without creating runs or receipts.
 - `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, refuses to finish work without fresh required evidence, and can retire a plan that will not be delivered.
 - `scripts/jig status` collects local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
@@ -164,7 +169,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 - `scripts/jig info freshness` previews conservative target-freshness adoption without writing files.
 
-This is where Jig is most agent-friendly: repository targets, verification profiles, legacy checks, and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh.
+When structured work is selected, repository targets, verification profiles, legacy checks, and review skills can become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh. Direct checks do not require opening or closing a work plan.
 
 ### Repository targets and check plans
 
@@ -409,7 +414,7 @@ An agent can discover:
 - which checks exist for this repo profile
 - which tools are stable contract tools
 - which commands are runtime-owned local conveniences
-- whether required work gates have fresh receipts
+- whether work gates have fresh receipts when using structured work
 - whether local Codex-side Jig skills are available
 
 The contract v6 MCP surface is deliberately independent of repository size. Agents inspect components, targets, profiles, and durable runs with `jig.inspect`; resolve an exact immutable plan with `jig.plan_run`; submit that plan with `jig.execute_run`; and poll or cancel by run id. Effectful targets require explicit selection, closed plan-bound arguments, and exact worktree/external effect approval at execution. Adding another component or action changes catalog data rather than adding another MCP tool. Contracts v2 through v5 keep their direct manifest tools for compatibility.
@@ -434,7 +439,7 @@ The distinction matters for downstream repos because the harness is shared infra
 
 ## What Makes Jig Developer-Friendly
 
-In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or work commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. The required `repo:source-runtime-check` target in the `verify` profile performs this current-source validation automatically for applicable changes, and CI runs the same target.
+In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or work commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. `repo:source-runtime-check` is available directly and in the `verify` profile for current-source validation; CI runs the same target.
 
 Jig's developer friendliness comes from a few consistent product choices:
 

@@ -111,9 +111,8 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
 
     for expected in [
         "ownership guidance in crate-level guides",
-        "before Rust work",
+        "ownership guidance for Rust work",
         "## Rust Defaults",
-        "For Rust changes",
         "## Crate Guide Conventions",
     ] {
         assert!(initial_guide.contains(expected), "missing {expected}");
