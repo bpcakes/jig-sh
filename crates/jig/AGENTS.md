@@ -70,7 +70,7 @@
 - `cargo test -p jig-sh --test codex_launcher -- --nocapture` (requires a Unix PTY; set
   `JIG_ALLOW_PTY_TEST_SKIP=1` only when the environment is intentionally exempt)
 - `cargo test --workspace`
-- `scripts/jig file-budget` (standalone diagnostics; no runs or receipts)
+- `scripts/jig file-budget audit` (standalone diagnostics; no runs or receipts)
 - `scripts/jig check repo:source-runtime-check`
 - `scripts/jig-dev check contract`
 - `scripts/jig-dev check agent-guides`
