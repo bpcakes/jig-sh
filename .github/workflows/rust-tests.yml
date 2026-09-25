@@ -1,77 +1,69 @@
-# Temporary validation branch: dispatch only; do not merge over normal CI.
-name: Rust Tests
-
+# Manual infrastructure acceptance; do not replace normal repository CI.
+name: Shared runner concurrency smoke
 on:
   workflow_dispatch:
-    inputs:
-      remaining_checks_only:
-        description: Run proxy regressions and vault phases after the first acceptance run
-        type: boolean
-        default: false
-
 permissions:
   contents: read
-
-concurrency:
-  group: shared-runner-validation-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  test:
-    name: Linux shared-runner validation
+  smoke:
+    name: Concurrent slot ${{ matrix.slot }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        slot: [1, 2]
     runs-on:
       group: bpcakes
-      labels: bpcakes-ci
-    timeout-minutes: 30
+      labels: [bpcakes-ci, 'bpcakes-ci-slot-${{ matrix.slot }}']
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: smoke-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      SLOT: ${{ matrix.slot }}
+      POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          persist-credentials: false
-      - name: Install Node for generated-project tests
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22"
-          package-manager-cache: false
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
-        with:
-          cache: false
-          rustflags: ""
-      - name: Install Go toolchain
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version: "1.26.x"
-          cache: false
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
-        with:
-          tool: cargo-nextest@0.9.130
-      - name: Build current Jig binary
-        run: cargo build -p jig-sh --bin jig --locked
-      - name: Run locked Rust tests
-        if: ${{ !inputs.remaining_checks_only }}
-        env:
-          JIG_DEV_BIN: target/debug/jig
-          JIG_REQUIRE_GO_TOOLCHAIN: "1"
-        run: scripts/jig check test-locked
-      - name: Verify proxy cleanup with the runner user session
-        if: ${{ inputs.remaining_checks_only }}
-        run: >-
-          cargo nextest run -p jig-sh --test dev_lifecycle --locked
-          -E 'test(proxy_certificates)' --status-level fail --final-status-level fail
-      - name: Run remaining vault tests
-        if: ${{ inputs.remaining_checks_only }}
-        run: >-
-          cargo nextest run --workspace --locked
-          -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))'
-          --status-level fail --final-status-level fail
-      - name: Run remaining vault terminal tests
-        if: ${{ inputs.remaining_checks_only }}
-        run: >-
-          cargo nextest run -p jig-sh --test vault_tui --locked -j 1
-          --status-level fail --final-status-level fail
-      - name: Validate the current source runtime through the launcher
-        env:
-          JIG_DEV_BIN: target/debug/jig
-        run: scripts/jig check repo:source-runtime-check
+      - name: Check aggregate resource limits and Docker isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(nproc)" = 8
+          slice="/sys/fs/cgroup/ci.slice/ci-slot${SLOT}.slice"
+          test "$(cat "$slice/memory.max")" = 12884901888
+          test "$(cat "$slice/cpu.max")" = '800000 100000'
+          docker info --format 'engine={{.ID}} root={{.DockerRootDir}}'
+          test "$(docker info --format '{{.DockerRootDir}}')" = "/var/lib/bpcakes-ci/docker${SLOT}"
+          test "$(sudo docker info --format '{{.ID}}')" = "$(docker info --format '{{.ID}}')"
+          test "$(docker inspect --format '{{.HostConfig.CgroupParent}}' "$POSTGRES_CONTAINER")" = "ci-slot${SLOT}.slice"
+          pid=$(docker inspect --format '{{.State.Pid}}' "$POSTGRES_CONTAINER")
+          grep -F "/ci.slice/ci-slot${SLOT}.slice/" "/proc/$pid/cgroup"
+          systemctl --user is-system-running
+      - name: Require both jobs to serve PostgreSQL on the same port simultaneously
+        shell: bash
+        run: |
+          set -euo pipefail
+          barrier="/var/tmp/ci-concurrency-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -m 1777 "$barrier"
+          touch "$barrier/slot-$SLOT"
+          ready=false
+          for attempt in $(seq 1 90); do
+            if test -f "$barrier/slot-1" && test -f "$barrier/slot-2"; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          for attempt in $(seq 1 6); do
+            python3 -c 'import socket; socket.create_connection(("127.0.0.1", 5432), 5).close()'
+            docker run --rm --network host -e PGPASSWORD=smoke-only postgres:18 psql -h 127.0.0.1 -U postgres -c 'SELECT 1'
+            sleep 5
+          done
+          test "$(docker ps -q | wc -l | tr -d ' ')" = 1
+          echo "Slot $SLOT passed simultaneous port and resource checks."
