@@ -1,6 +1,6 @@
 use super::*;
 use crate::state::{DevProcessIdentity, DevSessionControl};
-use tempfile::tempdir;
+use crate::test_tempdir as tempdir;
 
 fn cleanup_required_session() -> DevSessionRecord {
     DevSessionRecord {
