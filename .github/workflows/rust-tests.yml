@@ -3,6 +3,11 @@ name: Rust Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      remaining_checks_only:
+        description: Run proxy regressions and vault phases after the first acceptance run
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,7 +18,7 @@ concurrency:
 
 jobs:
   test:
-    name: scripts/jig check test-locked
+    name: Linux shared-runner validation
     runs-on:
       group: bpcakes
       labels: bpcakes-ci
@@ -45,10 +50,27 @@ jobs:
       - name: Build current Jig binary
         run: cargo build -p jig-sh --bin jig --locked
       - name: Run locked Rust tests
+        if: ${{ !inputs.remaining_checks_only }}
         env:
           JIG_DEV_BIN: target/debug/jig
           JIG_REQUIRE_GO_TOOLCHAIN: "1"
         run: scripts/jig check test-locked
+      - name: Verify proxy cleanup with the runner user session
+        if: ${{ inputs.remaining_checks_only }}
+        run: >-
+          cargo nextest run -p jig-sh --test dev_lifecycle --locked
+          -E 'test(proxy_certificates)' --status-level fail --final-status-level fail
+      - name: Run remaining vault tests
+        if: ${{ inputs.remaining_checks_only }}
+        run: >-
+          cargo nextest run --workspace --locked
+          -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))'
+          --status-level fail --final-status-level fail
+      - name: Run remaining vault terminal tests
+        if: ${{ inputs.remaining_checks_only }}
+        run: >-
+          cargo nextest run -p jig-sh --test vault_tui --locked -j 1
+          --status-level fail --final-status-level fail
       - name: Validate the current source runtime through the launcher
         env:
           JIG_DEV_BIN: target/debug/jig
