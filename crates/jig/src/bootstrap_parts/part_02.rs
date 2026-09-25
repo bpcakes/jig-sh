@@ -93,7 +93,8 @@ fn initial_notes(
         ]
     };
     if scaffold_plan.is_some() {
-        notes.push(
+        notes.insert(
+            0,
             "Scaffolded project code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite project code."
                 .into(),
         );
