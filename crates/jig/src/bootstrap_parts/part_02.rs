@@ -90,10 +90,13 @@ fn initial_notes(
         ]
     };
     if scaffold_plan.is_some() {
-        notes.push(
-            "Scaffolded project code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite project code."
-                .into(),
-        );
+        let ownership_note = "Scaffolded project code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite project code.".into();
+        if minimal_footprint {
+            notes.push(ownership_note);
+        } else {
+            // Human init summaries show only five notes.
+            notes.insert(2, ownership_note);
+        }
     }
     if frontend_apps_configured && !minimal_footprint {
         notes.push(
