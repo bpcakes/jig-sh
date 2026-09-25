@@ -1174,6 +1174,48 @@ and is included in the generated default verification profile.
 
 The legacy `scripts/jig migration-add NAME`, `scripts/jig sqlx migration add NAME`, and `scripts/jig schema-dump` paths remain accepted as compatibility shims. New migration automation should use `scripts/jig migration add NAME`; SQLx schema commands remain under `scripts/jig sqlx schema ...`. Every migration-add path rejects `versioned_artifacts` repositories before creating files.
 
+### Runtime release pins
+
+With the updated generated installer, commit `.jig/runtime-version` to select an
+exact stable crates.io release independently of `_src_path` and `_commit`:
+
+```sh
+mkdir -p .jig
+printf '%s\n' '0.5.0' > .jig/runtime-version
+scripts/jig --version
+```
+
+The file is project-owned; `jig update` preserves it. Older launchers need to be
+updated to this installer before the pin takes effect. Keeping the pin outside
+`.jig.toml` lets existing releases such as 0.5.0 run without encountering an unknown
+configuration key. Do not add `runtime_version` to `.jig.toml`.
+
+The installer requires the exact version and a successful contract/profile
+compatibility probe. It first reuses a compatible cache or imports a matching
+native `jig` executable from `PATH`. Otherwise it runs
+`cargo install jig-sh --registry crates-io --version '=0.5.0' --locked` into the
+repository cache, adding `--no-default-features` for the runtime profile. A missing,
+unavailable, or incompatible release fails visibly; it never falls back to Git.
+An empty or malformed pin is an error. Remove the file to return to template-source
+installation, or use the explicit `JIG_DEV_BIN` override for development.
+
+Release executables live under
+`.git/jig-tools/release-VERSION-contract-EPOCH[-runtime]/bin/jig`, with
+`.agent/.cache/jig/` as the base when `.git` is not a directory. Full builds can
+serve runtime and MCP requests after compatibility validation. Changing template
+provenance does not invalidate a release cache. Changing the pin selects another
+release; `--refresh` or `JIG_INSTALL_REFRESH=1` reinstalls the same pinned version.
+MCP startup and `--resolve-only` never install or import a binary; run
+`scripts/jig --version` first to prepare the cache.
+
+Generated workflows that invoke Jig cache the runtime profile executable by
+operating system, architecture, profile, pin content, and launcher/installer
+content. Feature profiles use separate installation paths; lock files are not cached. A cold cache still
+compiles the published crate. Restoring the executable avoids compilation on later
+runs; crates.io does not distribute precompiled Jig binaries.
+
+### Generated runtime files
+
 Generated repos also get these runtime-owned files:
 
 - `.mcp.json`
@@ -1181,7 +1223,7 @@ Generated repos also get these runtime-owned files:
 - `scripts/jig`
 - `scripts/install-jig.sh`
 
-The generated `scripts/jig` launcher embeds the contract epoch it was rendered for and executes only a binary whose private compatibility probe accepts that epoch plus the requested `default`, `runtime`, or `mcp` profile. Ordinary commands then require that embedded epoch to equal `.agent/jig-contract.json` before the selected runtime strictly validates the complete repository contract; `doctor` and repair commands use the embedded epoch only for runtime selection so a malformed or missing manifest can reach its own diagnostic. Repo-local cache directories are keyed by contract epoch and profile rather than product release, while a source stamp inside each cache binds remote installs to the configured source and immutable `_commit` (or the legacy source tag for v2/v3) and binds local installs to their canonical source identity and relevant source-tree contents, including non-Git directories. Advancing `_commit`, editing local source, or switching its path within the same contract epoch invalidates the old stamp and refreshes the runtime; help and MCP resolution apply the same stamp check without installing during MCP startup. Generated launchers are never accepted as runtime binaries through the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` escape hatch. On first use the launcher may install a compatible runtime from the recorded template source and then exposes the configured command contract as:
+The generated `scripts/jig` launcher embeds the contract epoch it was rendered for and executes only a binary whose private compatibility probe accepts that epoch plus the requested `default`, `runtime`, or `mcp` profile. Ordinary commands then require that embedded epoch to equal `.agent/jig-contract.json` before the selected runtime strictly validates the complete repository contract; `doctor` and repair commands use the embedded epoch only for runtime selection so a malformed or missing manifest can reach its own diagnostic. Without a runtime release pin, repo-local cache directories are keyed by contract epoch and profile, while a source stamp inside each cache binds remote installs to the configured source and immutable `_commit` (or the legacy source tag for v2/v3) and binds local installs to their canonical source identity and relevant source-tree contents, including non-Git directories. Advancing `_commit`, editing local source, or switching its path within the same contract epoch invalidates the old stamp and refreshes the runtime; help and MCP resolution apply the same stamp check without installing during MCP startup. Generated launchers are never accepted as runtime binaries through the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` escape hatch. On first use the launcher may install a compatible runtime from the recorded template source and then exposes the configured command contract as:
 
 - CLI commands such as `scripts/jig check fmt`
 - bounded MCP tools such as `jig.plan_run` and `jig.execute_run` in contract v6; contracts v2 through v5 retain direct tools such as `jig.fmt_check`
@@ -1335,7 +1377,7 @@ their historical evidence is useful. `state diagnose` reports backup and archive
 bytes separately so this local cache does not become a second unbounded state
 store.
 
-The `jig-sh` source repository selects its routine harness runtime separately from the source being developed. Its committed `.jig/source-runtime-version` selects an exact released Jig version. On a cold checkout, a normal invocation copies the matching installed native `jig` executable from `PATH` after checking both that version and the required contract/profile compatibility. This automatic import is specific to the source checkout; generated repositories still require `JIG_INSTALL_ALLOW_PATH_BINARY=1` before reusing a binary from `PATH`. The executable is cached under `.git/jig-tools/source-release-VERSION/bin/jig` (or `.agent/.cache/jig/source-release-VERSION/bin/jig` when `.git` is not a directory). Source edits do not invalidate this release cache. An unavailable or incompatible selected release reports a recovery command instead of compiling the changing checkout or downloading a runtime. MCP startup only resolves an existing cache; run `scripts/jig --version` once to prepare it. This source-repository policy does not change the source stamps used by generated repositories.
+The `jig-sh` source repository selects its routine harness runtime separately from the source being developed. Its committed `.jig/source-runtime-version` selects an exact released Jig version. On a cold checkout, a normal invocation copies the matching installed native `jig` executable from `PATH` after checking both that version and the required contract/profile compatibility. Generated repositories without `.jig/runtime-version` still require `JIG_INSTALL_ALLOW_PATH_BINARY=1` before reusing a binary from `PATH`. Repositories with a release pin import only the exact pinned version. The executable is cached under `.git/jig-tools/source-release-VERSION/bin/jig` (or `.agent/.cache/jig/source-release-VERSION/bin/jig` when `.git` is not a directory). Source edits do not invalidate this release cache. An unavailable or incompatible selected release reports a recovery command instead of compiling the changing checkout or downloading a runtime. MCP startup only resolves an existing cache; run `scripts/jig --version` once to prepare it. This source-repository policy does not change the source stamps used by generated repositories.
 
 After preparing the cache, `python3 scripts/jig-source-runtime.py --info` reports `mode`, `release_pin`, `runtime_version`, `binary`, `profile`, and `contract_version`. Its mode identifies the selected release or an explicit development override. `JIG_INSTALL_REFRESH=1 scripts/jig <command>` reimports the exact selected release from the installed binary; it never advances the pin. Changing `.jig/source-runtime-version` is a deliberate runtime upgrade, independent of the source workspace's Cargo version.
 

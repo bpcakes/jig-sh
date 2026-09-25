@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Support `.jig/runtime-version` release pins in generated launchers, with exact
+  crates.io installation, compatible installed-binary reuse, and CI executable
+  caching independent of template source revisions.
+
 ### Fixed
 
 - Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.
