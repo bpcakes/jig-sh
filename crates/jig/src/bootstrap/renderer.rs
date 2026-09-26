@@ -667,4 +667,4 @@ use tail::*;
 
 #[cfg(test)]
 #[path = "renderer_tests.rs"]
-mod tests;
+mod renderer_tests;

@@ -588,4 +588,4 @@ fn array_len(value: &serde_json::Value) -> usize {
 
 #[cfg(test)]
 #[path = "bootstrap_run_tests.rs"]
-mod tests;
+mod bootstrap_run_tests;
