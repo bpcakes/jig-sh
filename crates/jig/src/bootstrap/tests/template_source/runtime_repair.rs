@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn pinned_render_rejects_runtime_script_retirement_before_any_mutation() {
+    for retired in ["scripts/jig", "scripts/install-jig.sh"] {
+        let staged_root = tempdir().unwrap();
+        let rendered_destination = staged_root.path().join("rendered");
+        fs::create_dir_all(&rendered_destination).unwrap();
+        fs::write(rendered_destination.join("a-safe"), "new\n").unwrap();
+        let destination = tempdir().unwrap();
+        let root = destination.path();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join(".jig")).unwrap();
+        fs::write(root.join("a-safe"), "original\n").unwrap();
+        fs::write(root.join("scripts/jig"), "launcher\n").unwrap();
+        fs::write(root.join("scripts/install-jig.sh"), "installer\n").unwrap();
+        let pin = root.join(".jig/runtime-version");
+        fs::write(&pin, "0.5.0\n").unwrap();
+        let staged = staged_render::StagedRender {
+            _root: staged_root,
+            destination: rendered_destination,
+            active_paths: BTreeSet::from([PathBuf::from("a-safe")]),
+            retirement_paths: BTreeSet::from([PathBuf::from(retired)]),
+        };
+        let apply = || {
+            apply_staged_render(
+                &staged,
+                root,
+                ApplyRenderOptions {
+                    conflict_policy: ApplyRenderConflictPolicy::Accept,
+                    dry_run: false,
+                    allow_answers_overwrite: false,
+                    allow_contract_overwrite: false,
+                    allow_manifest_overwrite: false,
+                    backup_root: None,
+                    progress: CliProgress::new("test"),
+                    init_transaction: None,
+                    update_transaction: None,
+                },
+            )
+        };
+        let error = apply().unwrap_err().to_string();
+        assert!(error.contains("Refusing to remove"), "{error}");
+        assert!(error.contains(retired), "{error}");
+        assert!(error.contains("runtime pin"), "{error}");
+        assert_eq!(fs::read(root.join("a-safe")).unwrap(), b"original\n");
+        assert_eq!(fs::read(root.join("scripts/jig")).unwrap(), b"launcher\n");
+        assert_eq!(
+            fs::read(root.join("scripts/install-jig.sh")).unwrap(),
+            b"installer\n"
+        );
+        assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
+
+        fs::remove_file(pin).unwrap();
+        apply().unwrap();
+        assert!(!root.join(retired).exists());
+        assert_eq!(fs::read(root.join("a-safe")).unwrap(), b"new\n");
+    }
+}
+
+#[test]
 fn full_update_recovers_missing_and_malformed_contract_manifests() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
