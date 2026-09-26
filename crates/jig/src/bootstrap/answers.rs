@@ -124,7 +124,7 @@ pub(super) struct AnswerResolution {
     notes: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct AnswerInput {
     raw: RawAnswers,
     shape: AnswerInputShape,

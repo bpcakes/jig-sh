@@ -234,6 +234,149 @@ fn initial_notes_cover_review_and_available_checks() {
 }
 
 #[test]
+fn initial_notes_cover_review_and_available_checks_for_minimal_init() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("minimal");
+    let answers_file = temp.path().join("minimal-answers.toml");
+    let mut authored = authored_mixed_repository_config();
+    let table = authored.as_table_mut().unwrap();
+    table.insert(
+        "repo_name".into(),
+        toml::Value::String("ExampleProject".into()),
+    );
+    table.insert(
+        "harness_footprint".into(),
+        toml::Value::String("minimal".into()),
+    );
+    table.insert("sqlx_enabled".into(), toml::Value::Boolean(false));
+    table.insert("schema_dump_enabled".into(), toml::Value::Boolean(false));
+    authored["commands"].as_table_mut().unwrap().insert(
+        "budget_check_command".into(),
+        toml::Value::String("true".into()),
+    );
+    let budget_action: toml::Value = toml::from_str(
+        r#"[[actions]]
+target = { component = "repo", action = "file-budget" }
+intent = "check"
+effects = ["read_only"]
+runner = { kind = "command", command = "budget_check_command" }
+"#,
+    )
+    .unwrap();
+    authored["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(budget_action["actions"][0].clone());
+    fs::write(&answers_file, toml::to_string_pretty(&authored).unwrap()).unwrap();
+
+    let output = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(!destination.join(".jig/file-budget.toml").exists());
+    assert!(!destination.join("scripts/jig").exists());
+    assert!(!output["notes"].to_string().contains("file-budget audit"));
+}
+
+#[test]
+fn initial_notes_cover_review_and_available_checks_in_scaffold_readmes() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let scaffold = |name: &str, preset: ScaffoldPreset, answers: AnswerOpts| {
+        let destination = temp.path().join(name);
+        run_init(InitOpts {
+            path: destination.clone(),
+            scaffold: ScaffoldOpts {
+                preset: Some(preset),
+                ..ScaffoldOpts::default()
+            },
+            template: Some(template.path().display().to_string()),
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: false,
+            no_input: true,
+            no_vault: true,
+            answers,
+        })
+        .unwrap();
+        destination
+    };
+    let with_policy = scaffold(
+        "with-policy",
+        ScaffoldPreset::RustReact,
+        AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            ..AnswerOpts::default()
+        },
+    );
+    let answers_file = temp.path().join("no-budget-answers.toml");
+    let mut authored: toml::Value =
+        toml::from_str(&fs::read_to_string(with_policy.join(".jig.toml")).unwrap()).unwrap();
+    authored["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|action| {
+            action["target"]["component"].as_str() != Some("repo")
+                || action["target"]["action"].as_str() != Some("file-budget")
+        });
+    for profile in authored["repository"]["profiles"].as_array_mut().unwrap() {
+        profile["targets"].as_array_mut().unwrap().retain(|target| {
+            target["component"].as_str() != Some("repo")
+                || target["action"].as_str() != Some("file-budget")
+        });
+    }
+    fs::write(&answers_file, toml::to_string_pretty(&authored).unwrap()).unwrap();
+    let no_policy = scaffold(
+        "no-policy",
+        ScaffoldPreset::RustReact,
+        AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    );
+    let rust_only = scaffold(
+        "rust-only",
+        ScaffoldPreset::RustLibrary,
+        AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            ..AnswerOpts::default()
+        },
+    );
+
+    for (name, destination) in [
+        ("no-policy", no_policy),
+        ("with-policy", with_policy),
+        ("rust-only", rust_only),
+    ] {
+        let policy = destination.join(".jig/file-budget.toml").exists();
+        let readme = fs::read_to_string(destination.join("README.md")).unwrap();
+        assert_eq!(
+            readme.contains("scripts/jig file-budget audit"),
+            policy,
+            "{name}"
+        );
+        assert_eq!(policy, name != "no-policy", "{name}");
+    }
+}
+
+#[test]
 fn preview_next_steps_do_not_run_generated_commands() {
     let steps = initial_next_steps(
         InitialCommand::Adopt,

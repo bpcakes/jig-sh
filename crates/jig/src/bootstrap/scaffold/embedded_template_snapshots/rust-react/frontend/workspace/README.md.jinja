@@ -131,8 +131,9 @@ Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, 
 ## Common checks
 
 Select checks for the affected behavior; a routine change does not require running
-the entire list or opening a Jig work plan. `scripts/jig file-budget audit` provides
-standalone source-size diagnostics with no runs or receipts.
+the entire list or opening a Jig work plan.
+[% if file_budget_policy_enabled %]`scripts/jig file-budget audit` provides standalone source-size diagnostics with no runs or receipts.
+[% endif %]
 
 ```sh
 scripts/jig check test
