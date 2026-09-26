@@ -107,12 +107,21 @@ For substantial work, open structured work, run configured gates, then inspect g
 ```sh
 plan_id="$(scripts/jig work start --title "Describe the work" --body "Validation plan." --print-plan-id)"
 
-scripts/jig work check --plan-id "$plan_id"
+scripts/check-local --plan-id "$plan_id"
 scripts/jig work gates --plan-id "$plan_id"
 scripts/jig work evidence --plan-id "$plan_id"
 scripts/jig work receipts --plan-id "$plan_id"
 scripts/jig work status
 ```
+
+Local validation cadence is described in [docs/local-validation.md](docs/local-validation.md).
+Use focused regressions while editing. `scripts/check-local --plan-id ID` runs the
+configured inexpensive `preflight` iteration profile first and starts final
+verification only if it succeeds. Final verification reuses fresh preflight
+receipts and retains all six required targets. Run it after the implementation
+commit; finish the work plan before committing its append-only evidence. A full
+suite already passed through that final check satisfies the backend test
+requirement; do not launch a second identical `scripts/jig check test` for closure.
 
 The required `verify` profile includes `repo:source-runtime-check`. For runtime, launcher, template, or build configuration changes, `work check` runs this target to build and validate the current implementation through the launcher before completion. Run `scripts/jig check repo:source-runtime-check` to request that validation directly. `JIG_DEV_BIN` remains an explicit override for an already-built binary; its freshness is the caller's responsibility.
 

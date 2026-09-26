@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Run inexpensive local checks before the final workspace verification."""
+
+import argparse
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+
+CANCEL_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+
+
+def signal_group(child, signum):
+    try:
+        os.killpg(child.pid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def group_is_running(pgid):
+    # ps supplies the same group/state columns on Linux and macOS, including
+    # Python versions without waitid. Zombies no longer execute or hold locks.
+    processes = subprocess.check_output(
+        ["ps", "-A", "-o", "pgid=,stat="], text=True, timeout=1
+    )
+    return any(
+        int(group) == pgid and not state.startswith("Z")
+        for group, state in (line.split() for line in processes.splitlines())
+    )
+
+
+def cancel_phase(child, signum):
+    # Keep the leader unreaped until its descendants have stopped. Its PID pins
+    # the group identity even if the shell exits before its installer does.
+    signal_group(child, signum)
+    grace = time.monotonic() + 5
+    deadline = grace + 5
+    try:
+        while True:
+            if time.monotonic() >= grace:
+                signal_group(child, signal.SIGKILL)
+            if not group_is_running(child.pid):
+                break
+            if time.monotonic() >= deadline:
+                raise OSError("local validation process group did not stop")
+            time.sleep(0.02)
+    except (OSError, subprocess.SubprocessError):
+        # A failed membership probe must not leave startup work running or
+        # report cancellation as complete. The leader is still unreaped here.
+        signal_group(child, signal.SIGKILL)
+        raise
+    child.wait()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--plan-id", required=True, help="Open Jig work plan to validate")
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    launcher = root / "scripts/jig"
+    command = [str(launcher), "work", "check", "--plan-id", args.plan_id]
+    interrupted = None
+
+    def cancel(signum, _frame):
+        nonlocal interrupted
+        if interrupted is None:
+            interrupted = signum
+
+    previous = {sig: signal.signal(sig, cancel) for sig in CANCEL_SIGNALS}
+    try:
+        # Jig owns freshness, exact invocation reuse, and the complete final
+        # requirements. Do not turn preflight checks into test dependencies.
+        for phase in ("iteration", "final"):
+            if interrupted is not None:
+                return 128 + interrupted
+            child = subprocess.Popen(
+                [*command, "--phase", phase], cwd=root, start_new_session=True
+            )
+            while True:
+                # Cancellation must be observed before reaping the group leader.
+                # Blocking around poll closes the signal/reap race; the handler
+                # only records intent and never signals a potentially reused PID.
+                mask = signal.pthread_sigmask(signal.SIG_BLOCK, CANCEL_SIGNALS)
+                try:
+                    status = child.poll() if interrupted is None else None
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+                if status is not None:
+                    break
+                if interrupted is not None:
+                    cancel_phase(child, interrupted)
+                    return 128 + interrupted
+                time.sleep(0.02)
+            if interrupted is not None:
+                return 128 + interrupted
+            if status:
+                return status if status > 0 else 128 - status
+        return 0
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Cannot run local validation: {error}", file=sys.stderr)
+        sys.exit(1)
