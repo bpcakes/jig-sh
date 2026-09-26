@@ -326,23 +326,18 @@ with (root / 'action.lock').open('w') as lock:
     // when a broken wrapper exits immediately with its action still alive.
     let lock_released = fs::File::open(fixture.root.path().join(".agent/action.lock"))
         .is_ok_and(|lock| FileExt::try_lock_exclusive(&lock).unwrap_or(false));
-    let heartbeat = fs::read(fixture.root.path().join(".agent/heartbeat")).ok();
-    thread::sleep(Duration::from_millis(100));
-    let stopped = heartbeat.is_some()
-        && heartbeat == fs::read(fixture.root.path().join(".agent/heartbeat")).ok();
+    let heartbeat_timeout = if stalled {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_millis(100)
+    };
+    let stopped = !heartbeat_changes(&fixture, heartbeat_timeout);
     let launches = fixture.launches();
     let journal = fixture.root.path().join(".agent/state/runs.jsonl");
     let events = fs::read_to_string(&journal).unwrap_or_default();
     let stderr = fs::read_to_string(fixture.root.path().join(".agent/stderr")).unwrap();
     if status.is_none() {
-        if suspended {
-            // Resume the still-owned phase leader so it can clean up on a
-            // test failure before we release the action and wrapper.
-            unsafe { libc::kill(runtime_pid.unwrap(), libc::SIGCONT) };
-            let _ = child.wait_timeout(Duration::from_secs(5));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+        stop_wrapper_after_timeout(&mut child, runtime_pid.filter(|_| suspended));
     }
     release_runtime_action(&fixture, started, stalled);
     assert!(started, "real runtime action did not start");
@@ -399,6 +394,32 @@ fn wait_for_runtime_action(fixture: &Fixture, child: &mut Child) -> bool {
         thread::sleep(Duration::from_millis(20));
     }
     ready.exists() && child.try_wait().unwrap().is_none()
+}
+
+fn stop_wrapper_after_timeout(child: &mut Child, suspended_runtime: Option<libc::pid_t>) {
+    if let Some(pid) = suspended_runtime {
+        // Resume the still-owned phase leader so it can clean up on a test
+        // failure before we release the action and wrapper.
+        unsafe { libc::kill(pid, libc::SIGCONT) };
+        let _ = child.wait_timeout(Duration::from_secs(5));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn heartbeat_changes(fixture: &Fixture, timeout: Duration) -> bool {
+    let path = fixture.root.path().join(".agent/heartbeat");
+    let initial = fs::read(&path).ok();
+    let deadline = Instant::now() + timeout;
+    // A live action need not be scheduled within a single short sleep on CI.
+    // Poll for positive progress; ignore the empty interval during a write.
+    while Instant::now() < deadline {
+        if fs::read(&path).is_ok_and(|current| !current.is_empty() && Some(current) != initial) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
 }
 
 fn release_runtime_action(fixture: &Fixture, started: bool, stalled: bool) {
