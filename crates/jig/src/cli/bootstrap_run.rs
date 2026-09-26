@@ -381,11 +381,8 @@ pub(super) fn format_init_human_summary(output: &bootstrap::InitReport) -> Strin
     let notes = output.notes();
     if !notes.is_empty() {
         summary.push_str("  notes:\n");
-        for note in notes.iter().take(5) {
+        for note in notes {
             let _ = writeln!(summary, "    - {note}");
-        }
-        if notes.len() > 5 {
-            let _ = writeln!(summary, "    - and {} more", notes.len() - 5);
         }
     }
 

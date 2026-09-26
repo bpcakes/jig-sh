@@ -101,9 +101,41 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
     assert!(human.contains("scaffold: rust-cli for exampleclihuman (db: none)"));
     assert!(human.contains("scaffold files: 6 created, 0 modified, 0 unchanged"));
     assert!(human.contains("Scaffolded project code is project-owned"));
+    assert!(human.contains("scripts/jig file-budget audit"));
+    assert!(human.contains("scripts/jig check contract"));
+    assert!(human.contains("scripts/jig check agent-guides"));
     assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));
     assert!(!human.contains("scripts/jig dev"));
+
+    let harness_destination = destinations.path().join("ExampleHarnessHuman");
+    let harness_output = jig()
+        .args([
+            "init",
+            harness_destination.to_str().unwrap(),
+            "--preset",
+            "harness-only",
+            "--template",
+            template.to_str().unwrap(),
+            "--template-mode",
+            "committed",
+            "--defaults",
+            "--no-vault",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        harness_output.status.success(),
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        harness_output.status,
+        String::from_utf8_lossy(&harness_output.stdout),
+        String::from_utf8_lossy(&harness_output.stderr)
+    );
+    let harness = String::from_utf8(harness_output.stdout).unwrap();
+    assert!(harness.contains("scripts/jig file-budget audit"));
+    assert!(harness.contains("scripts/jig check contract"));
+    assert!(harness.contains("scripts/jig check agent-guides"));
+    assert!(!harness.contains("Scaffolded project code is project-owned"));
 }
 
 #[test]
