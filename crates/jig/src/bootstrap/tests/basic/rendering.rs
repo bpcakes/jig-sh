@@ -447,6 +447,12 @@ fn initial_notes_cover_review_and_available_checks_in_scaffold_readmes() {
             policy,
             "{name}"
         );
+        let guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
+        assert_eq!(
+            guide.contains("scripts/jig file-budget audit"),
+            policy,
+            "{name}"
+        );
         assert_eq!(policy, name != "no-policy", "{name}");
     }
 }
