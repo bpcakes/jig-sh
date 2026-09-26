@@ -95,6 +95,9 @@ pub fn resource_batch_fixture(disjoint: bool) -> Fixture {
             let name = format!("cargo-{index}");
             let mut action = resource.clone();
             action["target"]["action"] = json!(name);
+            // These tests hold the external claim while checking admission order.
+            // Leave room for metadata and source scans on slower machines.
+            action["timeout_seconds"] = json!(60);
             let environment = &mut action["runner"]["environment"];
             environment["EXAMPLE_RUN_ID"] = json!(name);
             if disjoint {
