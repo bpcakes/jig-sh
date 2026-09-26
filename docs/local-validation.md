@@ -35,7 +35,9 @@ group members and allows five more seconds to confirm that group has stopped.
 Forced termination returns 1 with an explicit incomplete-cleanup error: Jig's
 actions use separate process groups, and killing their runtime owner prevents
 confirmation that those actions have stopped. Child processes may still be
-running and need inspection. Other cleanup failures also return 1. An interrupted
+running and need inspection. Probe and cleanup errors also return 1 with that
+warning and the original error. Before the first escalation, the wrapper checks
+whether cooperative cleanup has already finished. An interrupted
 preflight cannot proceed to final validation.
 
 When testing an edited implementation, build it first and select the resulting
