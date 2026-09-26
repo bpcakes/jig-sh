@@ -478,11 +478,8 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         && !notes.is_empty()
     {
         summary.push_str("  notes:\n");
-        for note in notes.iter().take(8).filter_map(serde_json::Value::as_str) {
+        for note in notes.iter().filter_map(serde_json::Value::as_str) {
             let _ = writeln!(summary, "    - {note}");
-        }
-        if notes.len() > 8 {
-            let _ = writeln!(summary, "    - and {} more", notes.len() - 8);
         }
     }
 
