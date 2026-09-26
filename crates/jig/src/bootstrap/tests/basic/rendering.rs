@@ -156,6 +156,7 @@ fn copy_result(bootstrap: bool, dry_run: bool, minimal: bool) -> initial_copy::B
         bootstrap_command_configured: bootstrap,
         frontend_apps_configured: bootstrap,
         dev_apps_configured: bootstrap,
+        file_budget_ci_enabled: !minimal,
         sqlx_enabled: bootstrap,
         schema_dump_enabled: bootstrap,
         minimal_footprint: minimal,
@@ -216,7 +217,7 @@ fn adopted_full_harness_next_steps_cover_configured_capabilities() {
 
 #[test]
 fn initial_notes_cover_review_and_available_checks() {
-    let notes = initial_notes(Vec::new(), true, None, false);
+    let notes = initial_notes(Vec::new(), true, None, false, true);
     for expected in [
         "Review generated .jig.toml",
         "scripts/jig check typescript-lint",
@@ -224,6 +225,12 @@ fn initial_notes_cover_review_and_available_checks() {
     ] {
         assert!(notes.iter().any(|note| note.contains(expected)));
     }
+    assert!(notes.iter().any(|note| note.contains("file-budget audit")));
+    assert!(
+        !initial_notes(Vec::new(), false, None, true, true)
+            .iter()
+            .any(|note| note.contains("file-budget audit"))
+    );
 }
 
 #[test]

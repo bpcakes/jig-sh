@@ -14,7 +14,9 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Structured work and receipt inspection are optional unless explicitly requested. Apply skills within that scope; installing or selecting a skill does not require opening a Jig work plan.
 - When structured work is selected, open a plan with `scripts/jig work start`, run its configured gates with `scripts/jig work check`, and close it with `scripts/jig work finish` after required evidence is current. Use `scripts/jig work retire` if the work will not be delivered.
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
+[% if file_budget_ci_enabled %]
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
+[% endif %]
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
 - Treat `.agent/state/*.jsonl` as append-only repo memory.
 
@@ -108,7 +110,9 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig check clippy`
 [% endif %]
 - `scripts/jig info targets`
+[% if file_budget_ci_enabled %]
 - `scripts/jig file-budget audit`
+[% endif %]
 [% if frontend_apps | length > 0 %]
 - `scripts/jig check typescript-lint`
 - `scripts/jig check typescript-typecheck`

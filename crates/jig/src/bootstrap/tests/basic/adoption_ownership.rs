@@ -44,6 +44,17 @@ fn adopt_defaults_to_tooling_only_when_sqlx_answers_are_omitted() {
     assert!(answers.contains("repo_name = \"repo\""));
     assert!(answers.contains("sqlx_enabled = false"));
     assert!(answers.contains("schema_dump_enabled = false"));
+    assert!(!repo.join(".jig/file-budget.toml").exists());
+    assert!(
+        !fs::read_to_string(repo.join("AGENTS.md"))
+            .unwrap()
+            .contains("scripts/jig file-budget audit")
+    );
+    assert!(!output["notes"].as_array().unwrap().iter().any(|note| {
+        note.as_str()
+            .unwrap()
+            .contains("scripts/jig file-budget audit")
+    }));
     assert!(!repo.join(".github/workflows/webapp-checks.yml").exists());
     assert!(!repo.join("scripts/check-webapps.sh").exists());
     assert!(!repo.join("scripts/check-webapp-scripts.mjs").exists());

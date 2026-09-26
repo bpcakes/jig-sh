@@ -265,6 +265,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 copy_result.frontend_apps_configured,
                 scaffold_plan.as_ref(),
                 false,
+                copy_result.file_budget_ci_enabled,
             ),
             vault: None,
             #[cfg(test)]

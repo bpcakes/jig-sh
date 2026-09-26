@@ -90,6 +90,8 @@ When a backend package or crate has an `AGENTS.md`, use these sections:
 
 This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and receipt paths that generated repos use.
 
+When structured work is selected in this source repository, follow [local validation](docs/local-validation.md) for its preflight, final verification, and finish sequence.
+
 In this source checkout, `scripts/jig` uses the released runtime selected by `.jig/source-runtime-version`. Routine checks and work commands remain available while the source is changing or does not compile. Rust tests still compile and exercise the edited source.
 
 Use the development entrypoint when validating behavior of the current `jig` implementation:

@@ -76,6 +76,7 @@ fn initial_notes(
     frontend_apps_configured: bool,
     scaffold_plan: Option<&scaffold::InitScaffoldPlan>,
     minimal_footprint: bool,
+    file_budget_ci_enabled: bool,
 ) -> Vec<String> {
     let mut notes = if minimal_footprint {
         vec![
@@ -89,9 +90,13 @@ fn initial_notes(
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
             "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
             "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION; structured work and receipt inspection are optional.".into(),
-            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.".into(),
         ]
     };
+    if file_budget_ci_enabled && !minimal_footprint {
+        notes.push(
+            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.".into(),
+        );
+    }
     if scaffold_plan.is_some() {
         notes.insert(
             0,
