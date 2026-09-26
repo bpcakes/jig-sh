@@ -458,6 +458,54 @@ fn initial_notes_cover_review_and_available_checks_in_scaffold_readmes() {
 }
 
 #[test]
+fn initial_notes_cover_review_and_available_checks_for_custom_template_without_policy() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    for missing in [true, false] {
+        let template = materialize_template_worktree();
+        let policy_template = template
+            .path()
+            .join("templates/project/.jig/file-budget.toml.jinja");
+        if missing {
+            fs::remove_file(&policy_template).unwrap();
+        } else {
+            fs::write(&policy_template, "").unwrap();
+        }
+        let destination = temp.path().join(if missing {
+            "missing-policy"
+        } else {
+            "empty-policy"
+        });
+        let output = run_init(InitOpts {
+            path: destination.clone(),
+            scaffold: ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                ..ScaffoldOpts::default()
+            },
+            template: Some(template.path().display().to_string()),
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: false,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("ExampleProject".into()),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap();
+        let policy = destination.join(".jig/file-budget.toml");
+        assert!(!policy.exists() || fs::read(policy).unwrap().is_empty());
+        assert!(!output["notes"].to_string().contains("file-budget audit"));
+        for path in ["AGENTS.md", "README.md"] {
+            let content = fs::read_to_string(destination.join(path)).unwrap();
+            assert!(!content.contains("scripts/jig file-budget audit"), "{path}");
+        }
+    }
+}
+
+#[test]
 fn preview_next_steps_do_not_run_generated_commands() {
     let steps = initial_next_steps(
         InitialCommand::Adopt,

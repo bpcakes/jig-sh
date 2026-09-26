@@ -190,10 +190,6 @@ pub(super) fn render_context(
         let repository_commands_toml = repository.commands_toml()?;
         let file_budget_policy_toml = repository.file_budget_policy_toml()?.unwrap_or_default();
         context.insert(
-            "file_budget_audit_available".into(),
-            JsonValue::Bool(answers.file_budget_audit_available()?),
-        );
-        context.insert(
             "frontend_contracts_enabled".into(),
             JsonValue::Bool(repository.frontend_contracts_enabled()),
         );

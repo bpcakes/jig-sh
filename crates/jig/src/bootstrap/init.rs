@@ -95,17 +95,6 @@ fn prepare_init(
     ))?;
     if let Some(plan) = &mut scaffold_plan {
         plan.apply_answer_defaults(&mut answers);
-        let (resolved, _) = progress.log_blocked_on_err(
-            AnswerResolution::from_input(
-                answer_input.clone(),
-                &answers,
-                &destination,
-                opts.defaults,
-            )
-            .map(AnswerResolution::into_parts),
-        )?;
-        plan.file_budget_policy_enabled =
-            progress.log_blocked_on_err(resolved.file_budget_audit_available())?;
     }
     progress.step(
         "resolve template",
@@ -120,6 +109,20 @@ fn prepare_init(
         opts.template_mode,
         &invocation_cwd,
     ))?;
+    if let Some(plan) = &mut scaffold_plan {
+        let (resolved, _) = progress.log_blocked_on_err(
+            AnswerResolution::from_input(
+                answer_input.clone(),
+                &answers,
+                &destination,
+                opts.defaults,
+            )
+            .map(AnswerResolution::into_parts),
+        )?;
+        plan.file_budget_policy_enabled = progress.log_blocked_on_err(
+            super::renderer::preview_file_budget_audit_available(&template, &resolved),
+        )?;
+    }
     Ok(PreparedInit {
         destination,
         answers,
