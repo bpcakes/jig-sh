@@ -1,5 +1,5 @@
 #[test]
-fn rust_cli_init_has_exact_json_and_human_process_summaries() {
+fn rust_cli_init_has_exact_json_process_summary() {
     let template_parent = tempdir().unwrap();
     let template = template_parent.path().join("ExampleProject-template");
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -73,7 +73,25 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
             .as_str()
             .is_some_and(|note| note.contains("Scaffolded application code"))
     }));
+}
 
+#[test]
+fn rust_cli_init_has_human_process_summary() {
+    let template_parent = tempdir().unwrap();
+    let template = template_parent.path().join("ExampleProject-template");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--local", "--no-hardlinks"])
+        .arg(&workspace)
+        .arg(&template)
+        .status()
+        .unwrap();
+    assert!(clone.success());
+
+    let destinations = tempdir().unwrap();
     let human_destination = destinations.path().join("ExampleCliHuman");
     let human_output = jig()
         .args([
@@ -107,7 +125,25 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
     assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));
     assert!(!human.contains("scripts/jig dev"));
+}
 
+#[test]
+fn harness_only_init_has_optional_check_guidance_in_human_summary() {
+    let template_parent = tempdir().unwrap();
+    let template = template_parent.path().join("ExampleProject-template");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--local", "--no-hardlinks"])
+        .arg(&workspace)
+        .arg(&template)
+        .status()
+        .unwrap();
+    assert!(clone.success());
+
+    let destinations = tempdir().unwrap();
     let harness_destination = destinations.path().join("ExampleHarnessHuman");
     let harness_output = jig()
         .args([
