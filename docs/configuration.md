@@ -1201,6 +1201,11 @@ directly, or select it for one command with
 `JIG_DEV_BIN=/path/to/jig scripts/jig update`. The pin file remains in place
 for normal runtime selection.
 
+Launcher repair and embedded-template updates skip source-cache seeding when the
+installer uses a release pin. Doctor also ignores existing repair seeds that
+normal pinned launches do not use. Removing the pin restores source-cache
+selection and its repair diagnostics.
+
 Before applying managed files to a pinned repository, Jig also rejects staged
 launcher or installer scripts that lack release-pin support. This includes
 `update --recopy --force` from an older stored template commit. Select a

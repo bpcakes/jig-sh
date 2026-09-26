@@ -3,6 +3,16 @@ const GENERATED_RUNTIME_INSTALLER_MARKER: &str = "# jig-generated-runtime-instal
 const RUNTIME_REPOSITORY_SCOPE_MARKER: &str = "# jig-runtime-repository-scope:v1";
 const RELEASE_RUNTIME_PIN_MARKER: &str = "# jig-release-runtime-pin:v1";
 
+/// Whether ordinary launches bypass source caches because the installer sees a
+/// release pin. Invalid pins also prevent source fallback; validation remains
+/// the installer's responsibility. Ignore JIG_DEV_BIN here: repair seeding and
+/// doctor describe subsequent ordinary launches, not the current override.
+pub(crate) fn release_pin_bypasses_source_cache(root: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(root.join(".jig/runtime-version")).is_ok()
+        && std::fs::read_to_string(root.join("scripts/install-jig.sh"))
+            .is_ok_and(|text| inspect_installer(&text).supports_release_runtime_pin())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ParsedField<T> {
     Missing,

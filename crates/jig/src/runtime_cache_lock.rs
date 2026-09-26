@@ -91,7 +91,6 @@ impl RuntimeCacheLocks {
         Ok(held)
     }
 
-    #[cfg(test)]
     pub(crate) const fn empty() -> Self {
         Self { locks: Vec::new() }
     }

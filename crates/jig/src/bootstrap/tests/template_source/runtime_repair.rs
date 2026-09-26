@@ -57,6 +57,83 @@ fn full_update_recovers_missing_and_malformed_contract_manifests() {
 }
 
 #[test]
+fn pinned_updates_preserve_release_support_without_seeding_source_caches() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("ExampleProject");
+    write_test_crate_guide(&repo);
+    fs::create_dir_all(repo.join(".jig")).unwrap();
+    let pin = repo.join(".jig/runtime-version");
+    fs::write(&pin, "0.5.0\n").unwrap();
+
+    // The common seed boundary must skip both purposes, even if publishing a
+    // source seed would fail. This also exercises the production skip policy
+    // before the test-only seed implementation.
+    let _seed_failure = EnvVarGuard::set(TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV, "1");
+    let adopted = run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(EMBEDDED_TEMPLATE_SOURCE.into()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+    assert_eq!(adopted["warnings"], serde_json::json!([]));
+
+    for (launcher_only, recopy) in [(false, false), (true, false), (false, true)] {
+        for script in ["scripts/jig", "scripts/install-jig.sh"] {
+            let path = repo.join(script);
+            let mut contents = fs::read_to_string(&path).unwrap();
+            contents.push_str("\n# ExampleProject local change\n");
+            fs::write(path, contents).unwrap();
+        }
+        let updated = run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy,
+            launcher_only,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+        assert_eq!(updated["warnings"], serde_json::json!([]));
+        assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
+        let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
+        let installer = fs::read_to_string(repo.join("scripts/install-jig.sh")).unwrap();
+        assert!(!launcher.contains("ExampleProject local change"));
+        assert!(!installer.contains("ExampleProject local change"));
+        assert!(
+            crate::runtime_artifacts::inspect_launcher(&launcher).supports_release_runtime_pin()
+        );
+        assert!(
+            crate::runtime_artifacts::inspect_installer(&installer).supports_release_runtime_pin()
+        );
+        let cache = crate::context::runtime_cache_base(&repo);
+        for suffix in ["", "-runtime"] {
+            assert!(
+                !cache
+                    .join(format!("contract-{CURRENT_CONTRACT_VERSION}{suffix}"))
+                    .exists()
+            );
+        }
+    }
+}
+
+#[test]
 fn pinned_recopy_rejects_template_that_would_remove_runtime_pin_support() {
     let _guard = lock_env();
     for (legacy_script, rendered_script) in [

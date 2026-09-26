@@ -12,6 +12,9 @@
 
 ### Fixed
 
+- Skip unused source-runtime repair seeds in release-pinned repositories and
+  suppress doctor warnings about those inactive caches.
+
 - Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.
 
 ## v0.5.0 - 2026-09-22

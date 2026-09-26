@@ -1,0 +1,1 @@
+Address the three imported review findings. Validate pinned and unpinned repair-cache behavior, real successful pinned updates, and script-retirement rejection; run formatting, Clippy, source-runtime validation, and backend tests through the review-fix controller.
