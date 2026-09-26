@@ -468,6 +468,35 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
 }
 
 #[test]
+fn adopt_human_summary_preserves_detection_warnings_after_fifth() {
+    let output = serde_json::json!({
+        "render_mode": "preview",
+        "render_report": {
+            "files_created": [],
+            "files_modified": [],
+            "files_removed": []
+        },
+        "detection_report": {
+            "warnings": [
+                "Could not inspect the Rust workspace",
+                "Could not inspect the SQLx migrations",
+                "Could not inspect the frontend workspace",
+                "Could not inspect the package manager",
+                "Could not inspect the CI workflow",
+                "Review the unsupported GitHub runner before adoption"
+            ]
+        }
+    });
+
+    let summary = format_adopt_human_summary(&output);
+
+    assert!(summary.contains("warnings: 6"));
+    assert!(summary.contains("Could not inspect the Rust workspace"));
+    assert!(summary.contains("Review the unsupported GitHub runner before adoption"));
+    assert!(!summary.contains("and 1 more"));
+}
+
+#[test]
 fn init_human_summary_includes_scaffold_and_next_steps() {
     let output = init_report(serde_json::json!({
         "ok": true,

@@ -493,15 +493,8 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         && !warnings.is_empty()
     {
         let _ = writeln!(summary, "  warnings: {}", warnings.len());
-        for warning in warnings
-            .iter()
-            .take(5)
-            .filter_map(serde_json::Value::as_str)
-        {
+        for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
             let _ = writeln!(summary, "    - {warning}");
-        }
-        if warnings.len() > 5 {
-            let _ = writeln!(summary, "    - and {} more", warnings.len() - 5);
         }
     }
 

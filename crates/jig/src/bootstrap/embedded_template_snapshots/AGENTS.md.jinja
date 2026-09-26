@@ -12,6 +12,7 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
 - Structured work and receipt inspection are optional unless explicitly requested. Apply skills within that scope; installing or selecting a skill does not require opening a Jig work plan.
+- When structured work is selected, open a plan with `scripts/jig work start`, run its configured gates with `scripts/jig work check`, and close it with `scripts/jig work finish` after required evidence is current. Use `scripts/jig work retire` if the work will not be delivered.
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
