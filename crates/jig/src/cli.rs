@@ -438,7 +438,9 @@ pub(crate) enum CommandKind {
 pub(crate) struct RuntimeCompatibleOpts {
     #[arg(long, value_enum)]
     pub(crate) profile: RuntimeCompatibilityProfile,
-    #[arg(long, hide = true)]
+    // The alias lets pin-aware launchers distinguish this runtime from older
+    // releases before an update can replace their generated scripts.
+    #[arg(long, alias = "require-runtime-pin-update", hide = true)]
     pub(crate) capability_only: bool,
     #[arg(long, hide = true)]
     pub(crate) contract_version: Option<u32>,

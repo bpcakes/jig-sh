@@ -1192,6 +1192,22 @@ updated to this installer before the pin takes effect. Keeping the pin outside
 `.jig.toml` lets existing releases such as 0.5.0 run without encountering an unknown
 configuration key. Do not add `runtime_version` to `.jig.toml`.
 
+An older pinned release can run ordinary commands, but it may contain templates
+that predate this pin. The generated launcher checks for pin-aware support before
+running `scripts/jig update`, `adopt --write`, or `init --force` from a pinned
+repository. Help and adoption previews remain available. Release 0.5.0 is one
+runtime that cannot write managed scripts this way. Use a pin-aware binary
+directly, or select it for one command with
+`JIG_DEV_BIN=/path/to/jig scripts/jig update`. The pin file remains in place
+for normal runtime selection.
+
+Before applying managed files to a pinned repository, Jig also rejects staged
+launcher or installer scripts that lack release-pin support. This includes
+`update --recopy --force` from an older stored template commit. Select a
+pin-aware template revision and retry; a newer runtime alone cannot make older
+template output safe. Remove the pin only if you intend to return to
+template-source runtime selection.
+
 The installer requires the exact version and a successful contract/profile
 compatibility probe. It first reuses a compatible cache or imports a matching
 native `jig` executable from `PATH`. Otherwise it runs

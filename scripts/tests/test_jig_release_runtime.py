@@ -25,7 +25,8 @@ class ReleaseRuntimeTests(unittest.TestCase):
                                         ("0.5.1", "0.5.1", "8"),
                                         ("incompatible", "0.5.0", "7")]:
             subprocess.run(["cc", str(source), "-o", str(cls.binaries / name),
-                            f'-DVERSION="{version}"', f'-DCONTRACT="{contract}"'],
+                            f'-DVERSION="{version}"', f'-DCONTRACT="{contract}"',
+                            f'-DPIN_AWARE_UPDATE={int(version == "0.5.1")}'],
                            check=True, capture_output=True)
 
     def setUp(self):
@@ -220,6 +221,33 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assertEqual(result.stdout, "jig 0.5.1\n")
         self.assertFalse(self.calls())
 
+    def test_old_pin_cannot_run_script_writing_commands(self):
+        original_launcher = (self.root / "scripts/jig").read_bytes()
+        original_installer = (self.root / "scripts/install-jig.sh").read_bytes()
+        for args in [("update",), ("update", "--launcher-only", "--force"),
+                     ("adopt", ".", "--write"), ("adopt", ".", "--force", "--write"),
+                     ("init", ".", "--force")]:
+            with self.subTest(args=args):
+                result = self.launcher(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"cannot safely run {args[0]}", result.stderr)
+                self.assertEqual((self.root / "scripts/jig").read_bytes(), original_launcher)
+                self.assertEqual((self.root / "scripts/install-jig.sh").read_bytes(), original_installer)
+        self.assert_ok(self.launcher("update", "--help"))
+        self.assert_ok(self.launcher("adopt", "."))
+        self.assert_ok(self.launcher("adopt", "--help"))
+        self.assert_ok(self.launcher("init", "--help"))
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_pin_aware_runtime_and_development_override_can_update(self):
+        self.pin.write_text("0.5.1\n")
+        self.assert_ok(self.launcher("update", "--launcher-only", "--force"))
+        self.pin.write_text("0.5.0\n")
+        self.assert_ok(self.launcher("update", env=dict(self.env, JIG_DEV_BIN=str(self.binaries / "0.5.1"))))
+        self.assert_ok(self.launcher("adopt", ".", "--write",
+                                     env=dict(self.env, JIG_DEV_BIN=str(self.binaries / "0.5.1"))))
+        self.assertEqual(len(self.calls()), 1)
+
     def test_absent_pin_keeps_source_revision_installation(self):
         self.pin.unlink()
         result = self.installer()
@@ -228,6 +256,7 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assertIn("--git", args)
         self.assertIn("0123456789abcdef", args)
         self.assertNotIn("--version", args)
+        self.assert_ok(self.launcher("update"))
 
     def test_concurrent_requests_install_once(self):
         with ThreadPoolExecutor(max_workers=3) as executor:

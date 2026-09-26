@@ -3,6 +3,7 @@ set -euo pipefail
 INSTALLER_ORIGINAL_ARGS=("$@")
 # jig-generated-runtime-installer:v1
 # jig-runtime-repository-scope:v1
+# jig-release-runtime-pin:v1
 # jig-runtime-cache-layout:git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime
 # jig-runtime-cache-lock:directory-suffix=.lock;guard-suffix=.lock.guard;mechanism=os-exclusive+legacy-directory;record=owner-v1;attempts=30;retry-seconds=1
 

@@ -6,7 +6,9 @@
 
 - Support `.jig/runtime-version` release pins in generated launchers, with exact
   crates.io installation, compatible installed-binary reuse, and CI executable
-  caching independent of template source revisions.
+  caching independent of template source revisions. Generated launchers and
+  staged-render checks prevent older runtimes or templates from replacing
+  pin-aware scripts during updates and re-adoption.
 
 ### Fixed
 

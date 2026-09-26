@@ -57,6 +57,92 @@ fn full_update_recovers_missing_and_malformed_contract_manifests() {
 }
 
 #[test]
+fn pinned_recopy_rejects_template_that_would_remove_runtime_pin_support() {
+    let _guard = lock_env();
+    for (legacy_script, rendered_script) in [
+        ("jig.jinja", "scripts/jig"),
+        ("install-jig.sh.jinja", "scripts/install-jig.sh"),
+    ] {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        let template = materialize_template_git_worktree();
+        write_test_crate_guide(&repo);
+
+        let path = template
+            .path()
+            .join("templates/project/scripts")
+            .join(legacy_script);
+        let legacy = fs::read_to_string(&path)
+            .unwrap()
+            .replace("# jig-release-runtime-pin:v1\n", "")
+            .replace(".jig/runtime-version", ".jig/obsolete-runtime-version");
+        fs::write(path, legacy).unwrap();
+        git(template.path(), ["add", "."]).unwrap();
+        git(template.path(), ["commit", "-m", "legacy runtime fixture"]).unwrap();
+
+        run_adopt(AdoptOpts {
+            components: Default::default(),
+            path: repo.clone(),
+            template: Some(template.path().display().to_string()),
+            template_mode: Some(TemplateMode::Committed),
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("ExampleProject".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap();
+
+        run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: false,
+            launcher_only: true,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+        fs::create_dir_all(repo.join(".jig")).unwrap();
+        let pin = repo.join(".jig/runtime-version");
+        fs::write(&pin, "0.5.0\n").unwrap();
+        let launcher = fs::read(repo.join("scripts/jig")).unwrap();
+        let installer = fs::read(repo.join("scripts/install-jig.sh")).unwrap();
+
+        let error = run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: true,
+            launcher_only: false,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("runtime pin"), "{error}");
+        assert!(error.contains(rendered_script), "{error}");
+        assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), launcher);
+        assert_eq!(
+            fs::read(repo.join("scripts/install-jig.sh")).unwrap(),
+            installer
+        );
+        assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
+    }
+}
+
+#[test]
 fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
