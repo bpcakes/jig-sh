@@ -177,13 +177,15 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
             .position(|window| window == FULL_CLEAR_MARKER.as_bytes())
             .expect("resize redraw emitted the awaited full-clear marker")
         + FULL_CLEAR_MARKER.len();
+    // Wait for the status line near the end of the resized frame before sending a new key.
     read_until_from(
         &mut master,
         &mut output,
         resized_frame_offset,
-        "Production",
+        "Controlled preview cleared after",
         PTY_EVENT_TIMEOUT,
     );
+    assert!(String::from_utf8_lossy(&output[resized_frame_offset..]).contains("Production"));
     let lock_offset = output.len();
     master.write_all(b"L").unwrap();
     read_until_from(
