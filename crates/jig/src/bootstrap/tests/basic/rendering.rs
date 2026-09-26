@@ -156,7 +156,7 @@ fn copy_result(bootstrap: bool, dry_run: bool, minimal: bool) -> initial_copy::B
         bootstrap_command_configured: bootstrap,
         frontend_apps_configured: bootstrap,
         dev_apps_configured: bootstrap,
-        file_budget_ci_enabled: !minimal,
+        file_budget_audit_available: !minimal,
         sqlx_enabled: bootstrap,
         schema_dump_enabled: bootstrap,
         minimal_footprint: minimal,
@@ -291,6 +291,81 @@ runner = { kind = "command", command = "budget_check_command" }
     assert!(!destination.join(".jig/file-budget.toml").exists());
     assert!(!destination.join("scripts/jig").exists());
     assert!(!output["notes"].to_string().contains("file-budget audit"));
+}
+
+#[test]
+fn initial_notes_cover_review_and_available_checks_when_policy_seed_is_empty() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("repo");
+    let answers_file = temp.path().join("answers.toml");
+    let mut authored = authored_mixed_repository_config();
+    let table = authored.as_table_mut().unwrap();
+    table.insert(
+        "repo_name".into(),
+        toml::Value::String("ExampleProject".into()),
+    );
+    table.insert("sqlx_enabled".into(), toml::Value::Boolean(false));
+    table.insert("schema_dump_enabled".into(), toml::Value::Boolean(false));
+    authored["commands"].as_table_mut().unwrap().insert(
+        "budget_check_command".into(),
+        toml::Value::String("true".into()),
+    );
+    authored["repository"]["components"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|component| component["id"].as_str() == Some("repo"));
+    authored["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|action| action["target"]["component"].as_str() == Some("repo"));
+    for profile in authored["repository"]["profiles"].as_array_mut().unwrap() {
+        profile["targets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|target| target["component"].as_str() == Some("repo"));
+    }
+    let budget_action: toml::Value = toml::from_str(
+        r#"[[actions]]
+target = { component = "repo", action = "file-budget" }
+intent = "check"
+effects = ["read_only"]
+runner = { kind = "command", command = "budget_check_command" }
+"#,
+    )
+    .unwrap();
+    authored["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(budget_action["actions"][0].clone());
+    fs::write(&answers_file, toml::to_string_pretty(&authored).unwrap()).unwrap();
+
+    let output = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(
+        fs::read(destination.join(".jig/file-budget.toml"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!output["notes"].to_string().contains("file-budget audit"));
+    let guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
+    assert!(!guide.contains("file-budget audit"));
 }
 
 #[test]

@@ -33,6 +33,17 @@ impl RenderAnswers {
         )
     }
 
+    pub(in crate::bootstrap) fn file_budget_audit_available(&self) -> Result<bool> {
+        if self.is_minimal_footprint() || !self.file_budget_ci_enabled() {
+            return Ok(false);
+        }
+        Ok(
+            crate::bootstrap::repository_model::RepositoryRenderModel::from_answers(self)?
+                .file_budget_policy_toml()?
+                .is_some_and(|policy| !policy.is_empty()),
+        )
+    }
+
     pub(in crate::bootstrap) fn repo_policy_ci_enabled(&self) -> bool {
         self.go_ci_workflow_enabled()
             || self.sqlx_enabled()

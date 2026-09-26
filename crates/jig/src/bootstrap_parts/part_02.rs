@@ -76,7 +76,7 @@ fn initial_notes(
     frontend_apps_configured: bool,
     scaffold_plan: Option<&scaffold::InitScaffoldPlan>,
     minimal_footprint: bool,
-    file_budget_ci_enabled: bool,
+    file_budget_audit_available: bool,
 ) -> Vec<String> {
     let mut notes = if minimal_footprint {
         vec![
@@ -92,7 +92,7 @@ fn initial_notes(
             "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION; structured work and receipt inspection are optional.".into(),
         ]
     };
-    if file_budget_ci_enabled && !minimal_footprint {
+    if file_budget_audit_available && !minimal_footprint {
         notes.push(
             "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.".into(),
         );

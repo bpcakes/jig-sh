@@ -105,7 +105,7 @@ fn prepare_init(
             .map(AnswerResolution::into_parts),
         )?;
         plan.file_budget_policy_enabled =
-            !resolved.is_minimal_footprint() && resolved.file_budget_ci_enabled();
+            progress.log_blocked_on_err(resolved.file_budget_audit_available())?;
     }
     progress.step(
         "resolve template",
@@ -276,7 +276,7 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 copy_result.frontend_apps_configured,
                 scaffold_plan.as_ref(),
                 copy_result.minimal_footprint,
-                copy_result.file_budget_ci_enabled,
+                copy_result.file_budget_audit_available,
             ),
             vault: None,
             #[cfg(test)]

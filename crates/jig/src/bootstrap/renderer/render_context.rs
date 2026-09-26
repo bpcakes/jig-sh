@@ -91,6 +91,7 @@ pub(super) fn render_context(
         "file_budget_ci_enabled".into(),
         JsonValue::Bool(answers.file_budget_ci_enabled()),
     );
+    context.insert("file_budget_audit_available".into(), JsonValue::Bool(false));
     context.insert(
         "go_postgres_enabled".into(),
         JsonValue::Bool(answers.go_postgres_enabled()),
@@ -188,6 +189,10 @@ pub(super) fn render_context(
         let repository_toml = repository.authored_toml()?;
         let repository_commands_toml = repository.commands_toml()?;
         let file_budget_policy_toml = repository.file_budget_policy_toml()?.unwrap_or_default();
+        context.insert(
+            "file_budget_audit_available".into(),
+            JsonValue::Bool(!file_budget_policy_toml.is_empty()),
+        );
         context.insert(
             "frontend_contracts_enabled".into(),
             JsonValue::Bool(repository.frontend_contracts_enabled()),
