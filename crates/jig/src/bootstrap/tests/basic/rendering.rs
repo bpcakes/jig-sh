@@ -458,24 +458,36 @@ fn initial_notes_cover_review_and_available_checks_in_scaffold_readmes() {
 }
 
 #[test]
-fn initial_notes_cover_review_and_available_checks_for_custom_template_without_policy() {
+fn initial_notes_cover_review_and_available_checks_for_custom_template_without_usable_policy() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
-    for missing in [true, false] {
+    let expired_policy = r#"version=1
+[[rules]]
+id="source"
+include=["**/*.rs"]
+max_lines=10
+[[waivers]]
+id="legacy"
+rule="source"
+path="src/legacy.rs"
+ceiling_lines=20
+reason="tracked"
+expires=2001-01-01
+"#;
+    for (name, policy_contents) in [
+        ("missing-policy", None),
+        ("empty-policy", Some("")),
+        ("expired-policy", Some(expired_policy)),
+    ] {
         let template = materialize_template_worktree();
         let policy_template = template
             .path()
             .join("templates/project/.jig/file-budget.toml.jinja");
-        if missing {
-            fs::remove_file(&policy_template).unwrap();
-        } else {
-            fs::write(&policy_template, "").unwrap();
+        match policy_contents {
+            Some(contents) => fs::write(&policy_template, contents).unwrap(),
+            None => fs::remove_file(&policy_template).unwrap(),
         }
-        let destination = temp.path().join(if missing {
-            "missing-policy"
-        } else {
-            "empty-policy"
-        });
+        let destination = temp.path().join(name);
         let output = run_init(InitOpts {
             path: destination.clone(),
             scaffold: ScaffoldOpts {
@@ -496,11 +508,20 @@ fn initial_notes_cover_review_and_available_checks_for_custom_template_without_p
         })
         .unwrap();
         let policy = destination.join(".jig/file-budget.toml");
-        assert!(!policy.exists() || fs::read(policy).unwrap().is_empty());
+        if name == "expired-policy" {
+            let rendered = fs::read(&policy).unwrap();
+            let historical_date = jig_file_budget::PolicyDateV1::new(2000, 1, 1).unwrap();
+            assert!(jig_file_budget::parse_policy_v1(&rendered, historical_date).is_ok());
+        } else {
+            assert!(!policy.exists() || fs::read(&policy).unwrap().is_empty());
+        }
         assert!(!output["notes"].to_string().contains("file-budget audit"));
         for path in ["AGENTS.md", "README.md"] {
             let content = fs::read_to_string(destination.join(path)).unwrap();
-            assert!(!content.contains("scripts/jig file-budget audit"), "{path}");
+            assert!(
+                !content.contains("scripts/jig file-budget audit"),
+                "{name}: {path}"
+            );
         }
     }
 }

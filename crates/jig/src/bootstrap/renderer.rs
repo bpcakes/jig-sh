@@ -376,9 +376,11 @@ pub(super) fn rendered_file_budget_audit_available(
             return Err(error).with_context(|| format!("Failed to read {}", path.display()));
         }
     };
-    let seed_date = jig_file_budget::PolicyDateV1::new(2000, 1, 1)
-        .expect("the fixed seed validation date is valid");
-    Ok(jig_file_budget::parse_policy_v1(&policy, seed_date).is_ok())
+    let now = time::OffsetDateTime::now_utc().date();
+    let current_date =
+        jig_file_budget::PolicyDateV1::new(now.year() as u16, now.month() as u8, now.day())
+            .map_err(anyhow::Error::msg)?;
+    Ok(jig_file_budget::parse_policy_v1(&policy, current_date).is_ok())
 }
 
 pub(super) fn preview_file_budget_audit_available(
