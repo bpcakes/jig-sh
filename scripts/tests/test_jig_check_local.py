@@ -82,7 +82,10 @@ class LocalCheckCancellationTests(unittest.TestCase):
                         time.sleep(0.1)
                         self.assertIsNone(child.poll(), "returned before helper cleanup")
                         (root / "release").touch()
-                    self.assertEqual(child.wait(timeout=15), 128 + signum)
+                    self.assertEqual(child.wait(timeout=15), 1 if stubborn else 128 + signum)
+                    if stubborn:
+                        output.seek(0)
+                        self.assertIn(b"descendant cleanup could not be confirmed", output.read())
                     self.assertEqual((root / "signals").read_text(), f"{signum}\n")
                     # The helper must have stopped and released the startup lock
                     # before the wrapper reports cancellation complete.

@@ -38,9 +38,11 @@ def cancel_phase(child, signum):
     signal_group(child, signum)
     grace = time.monotonic() + 5
     deadline = grace + 5
+    forced = False
     try:
         while True:
             if time.monotonic() >= grace:
+                forced = True
                 signal_group(child, signal.SIGKILL)
             if not group_is_running(child.pid):
                 break
@@ -53,6 +55,13 @@ def cancel_phase(child, signum):
         signal_group(child, signal.SIGKILL)
         raise
     child.wait()
+    if forced:
+        # Jig supervises action groups outside this phase group. Killing their
+        # owner prevents it from confirming that those actions have stopped.
+        raise OSError(
+            "forced termination: descendant cleanup could not be confirmed; "
+            "child processes may still be running"
+        )
 
 
 def main():
