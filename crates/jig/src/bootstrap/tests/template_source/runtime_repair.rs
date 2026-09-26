@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn pinned_render_rejects_runtime_script_retirement_before_any_mutation() {
+    for retired in ["scripts/jig", "scripts/install-jig.sh"] {
+        let staged_root = tempdir().unwrap();
+        let rendered_destination = staged_root.path().join("rendered");
+        fs::create_dir_all(&rendered_destination).unwrap();
+        fs::write(rendered_destination.join("a-safe"), "new\n").unwrap();
+        let destination = tempdir().unwrap();
+        let root = destination.path();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join(".jig")).unwrap();
+        fs::write(root.join("a-safe"), "original\n").unwrap();
+        fs::write(root.join("scripts/jig"), "launcher\n").unwrap();
+        fs::write(root.join("scripts/install-jig.sh"), "installer\n").unwrap();
+        let pin = root.join(".jig/runtime-version");
+        fs::write(&pin, "0.5.0\n").unwrap();
+        let staged = staged_render::StagedRender {
+            _root: staged_root,
+            destination: rendered_destination,
+            active_paths: BTreeSet::from([PathBuf::from("a-safe")]),
+            retirement_paths: BTreeSet::from([PathBuf::from(retired)]),
+        };
+        let apply = || {
+            apply_staged_render(
+                &staged,
+                root,
+                ApplyRenderOptions {
+                    conflict_policy: ApplyRenderConflictPolicy::Accept,
+                    dry_run: false,
+                    allow_answers_overwrite: false,
+                    allow_contract_overwrite: false,
+                    allow_manifest_overwrite: false,
+                    backup_root: None,
+                    progress: CliProgress::new("test"),
+                    init_transaction: None,
+                    update_transaction: None,
+                },
+            )
+        };
+        let error = apply().unwrap_err().to_string();
+        assert!(error.contains("Refusing to remove"), "{error}");
+        assert!(error.contains(retired), "{error}");
+        assert!(error.contains("runtime pin"), "{error}");
+        assert_eq!(fs::read(root.join("a-safe")).unwrap(), b"original\n");
+        assert_eq!(fs::read(root.join("scripts/jig")).unwrap(), b"launcher\n");
+        assert_eq!(
+            fs::read(root.join("scripts/install-jig.sh")).unwrap(),
+            b"installer\n"
+        );
+        assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
+
+        fs::remove_file(pin).unwrap();
+        apply().unwrap();
+        assert!(!root.join(retired).exists());
+        assert_eq!(fs::read(root.join("a-safe")).unwrap(), b"new\n");
+    }
+}
+
+#[test]
 fn full_update_recovers_missing_and_malformed_contract_manifests() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -53,6 +111,169 @@ fn full_update_recovers_missing_and_malformed_contract_manifests() {
             serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
         assert_eq!(contract["contract_version"], CURRENT_CONTRACT_VERSION);
         RepoContext::load_from_root(repo.clone()).unwrap();
+    }
+}
+
+#[test]
+fn pinned_updates_preserve_release_support_without_seeding_source_caches() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("ExampleProject");
+    write_test_crate_guide(&repo);
+    fs::create_dir_all(repo.join(".jig")).unwrap();
+    let pin = repo.join(".jig/runtime-version");
+    fs::write(&pin, "0.5.0\n").unwrap();
+
+    // The common seed boundary must skip both purposes, even if publishing a
+    // source seed would fail. This also exercises the production skip policy
+    // before the test-only seed implementation.
+    let _seed_failure = EnvVarGuard::set(TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV, "1");
+    let adopted = run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(EMBEDDED_TEMPLATE_SOURCE.into()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+    assert_eq!(adopted["warnings"], serde_json::json!([]));
+
+    for (launcher_only, recopy) in [(false, false), (true, false), (false, true)] {
+        for script in ["scripts/jig", "scripts/install-jig.sh"] {
+            let path = repo.join(script);
+            let mut contents = fs::read_to_string(&path).unwrap();
+            contents.push_str("\n# ExampleProject local change\n");
+            fs::write(path, contents).unwrap();
+        }
+        let updated = run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy,
+            launcher_only,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+        assert_eq!(updated["warnings"], serde_json::json!([]));
+        assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
+        let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
+        let installer = fs::read_to_string(repo.join("scripts/install-jig.sh")).unwrap();
+        assert!(!launcher.contains("ExampleProject local change"));
+        assert!(!installer.contains("ExampleProject local change"));
+        assert!(
+            crate::runtime_artifacts::inspect_launcher(&launcher).supports_release_runtime_pin()
+        );
+        assert!(
+            crate::runtime_artifacts::inspect_installer(&installer).supports_release_runtime_pin()
+        );
+        let cache = crate::context::runtime_cache_base(&repo);
+        for suffix in ["", "-runtime"] {
+            assert!(
+                !cache
+                    .join(format!("contract-{CURRENT_CONTRACT_VERSION}{suffix}"))
+                    .exists()
+            );
+        }
+    }
+}
+
+#[test]
+fn pinned_recopy_rejects_template_that_would_remove_runtime_pin_support() {
+    let _guard = lock_env();
+    for (legacy_script, rendered_script) in [
+        ("jig.jinja", "scripts/jig"),
+        ("install-jig.sh.jinja", "scripts/install-jig.sh"),
+    ] {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        let template = materialize_template_git_worktree();
+        write_test_crate_guide(&repo);
+
+        let path = template
+            .path()
+            .join("templates/project/scripts")
+            .join(legacy_script);
+        let legacy = fs::read_to_string(&path)
+            .unwrap()
+            .replace("# jig-release-runtime-pin:v1\n", "")
+            .replace(".jig/runtime-version", ".jig/obsolete-runtime-version");
+        fs::write(path, legacy).unwrap();
+        git(template.path(), ["add", "."]).unwrap();
+        git(template.path(), ["commit", "-m", "legacy runtime fixture"]).unwrap();
+
+        run_adopt(AdoptOpts {
+            components: Default::default(),
+            path: repo.clone(),
+            template: Some(template.path().display().to_string()),
+            template_mode: Some(TemplateMode::Committed),
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("ExampleProject".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap();
+
+        run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: false,
+            launcher_only: true,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+        fs::create_dir_all(repo.join(".jig")).unwrap();
+        let pin = repo.join(".jig/runtime-version");
+        fs::write(&pin, "0.5.0\n").unwrap();
+        let launcher = fs::read(repo.join("scripts/jig")).unwrap();
+        let installer = fs::read(repo.join("scripts/install-jig.sh")).unwrap();
+
+        let error = run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: true,
+            launcher_only: false,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("runtime pin"), "{error}");
+        assert!(error.contains(rendered_script), "{error}");
+        assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), launcher);
+        assert_eq!(
+            fs::read(repo.join("scripts/install-jig.sh")).unwrap(),
+            installer
+        );
+        assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
     }
 }
 

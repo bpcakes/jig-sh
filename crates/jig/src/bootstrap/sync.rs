@@ -26,6 +26,8 @@ use super::staged_render::StagedRender;
 use super::update_transaction::RepositoryUpdateTransaction;
 use crate::progress::CliProgress;
 
+mod pinned_runtime;
+
 pub(super) struct ApplyRenderOptions<'a, 'lock> {
     pub(super) conflict_policy: ApplyRenderConflictPolicy<'a>,
     pub(super) dry_run: bool,
@@ -92,6 +94,7 @@ pub(super) fn apply_staged_render(
     }
     validate_portable_planned_file_collisions(&staged.active_paths)?;
     preflight_apply_paths(staged, destination, options.backup_root)?;
+    pinned_runtime::validate_pinned_runtime_scripts(staged, destination, options.dry_run)?;
 
     let conflicts = resolve_render_conflicts(staged, destination, &options)?;
 

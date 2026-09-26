@@ -2,6 +2,7 @@
 set -eu
 # jig-generated-runtime-launcher:v1
 # jig-runtime-repository-scope:v1
+# jig-release-runtime-pin:v1
 # jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test
 # jig-capability-only-subcommands:adopt,claude,codex,doctor,init,presets,update
 # jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work
@@ -90,6 +91,17 @@ jig_subcommand() {
         return 0
         ;;
     esac
+  done
+  return 1
+}
+
+jig_has_argument() {
+  expected="$1"
+  shift
+  for arg in "$@"; do
+    if [ "$arg" = "$expected" ]; then
+      return 0
+    fi
   done
   return 1
 }
@@ -308,6 +320,37 @@ case "$subcommand" in
     fi
     ;;
 esac
+
+# Older pinned runtimes can rewrite managed scripts from templates that do not
+# understand .jig/runtime-version. Probe before a script-writing command.
+pin_write_requested=0
+case "$subcommand" in
+  update)
+    pin_write_requested=1
+    ;;
+  adopt)
+    if jig_has_argument --write "$@"; then
+      pin_write_requested=1
+    fi
+    ;;
+  init)
+    if jig_has_argument --force "$@"; then
+      pin_write_requested=1
+    fi
+    ;;
+esac
+if [ "$pin_write_requested" -eq 1 ] && [ "$info_requested" -eq 0 ] \
+  && [ -z "${JIG_DEV_BIN:-}" ] && [ -f "$ROOT_DIR/.jig/runtime-version" ]; then
+  if ! "$bin_path" __runtime-compatible \
+    --require-runtime-pin-update \
+    --contract-version "$CONTRACT_VERSION" \
+    --profile runtime "$ROOT_DIR" >/dev/null 2>&1; then
+    printf '%s\n' \
+      "The pinned Jig runtime cannot safely run $subcommand here: its templates may remove .jig/runtime-version support." \
+      "Run a pin-aware Jig binary directly, or set JIG_DEV_BIN to one for this command." >&2
+    exit 1
+  fi
+fi
 
 # Repo-local commands run with the binary's working directory set to the owning
 # repository, even when this launcher is invoked by absolute path from another

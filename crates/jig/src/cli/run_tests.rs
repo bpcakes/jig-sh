@@ -785,3 +785,4 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
 }
 
 mod child_exit;
+mod runtime_pin;

@@ -89,8 +89,19 @@ pub(in crate::bootstrap) fn seed_embedded_template_runtime(
     )
 }
 
-#[cfg(test)]
 fn seed_runtime_from_current_executable(
+    destination: &Path,
+    contract_version: u32,
+    purpose: RuntimeSeedPurpose,
+) -> Result<LauncherRepairCachePublication> {
+    if crate::runtime_artifacts::release_pin_bypasses_source_cache(destination) {
+        return Ok(LauncherRepairCachePublication::empty());
+    }
+    publish_runtime_from_current_executable(destination, contract_version, purpose)
+}
+
+#[cfg(test)]
+fn publish_runtime_from_current_executable(
     destination: &Path,
     contract_version: u32,
     purpose: RuntimeSeedPurpose,
@@ -124,7 +135,7 @@ fn seed_runtime_from_current_executable(
 }
 
 #[cfg(not(test))]
-fn seed_runtime_from_current_executable(
+fn publish_runtime_from_current_executable(
     destination: &Path,
     contract_version: u32,
     purpose: RuntimeSeedPurpose,
