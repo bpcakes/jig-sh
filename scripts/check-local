@@ -10,7 +10,7 @@ import sys
 import time
 
 
-CANCEL_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+CANCEL_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
 def signal_group(child, signum):

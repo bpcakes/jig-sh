@@ -33,7 +33,7 @@ class LocalCheckCancellationTests(unittest.TestCase):
             executable("install-jig.sh", """\
                 import os, pathlib, signal, subprocess, sys
                 # Exit promptly, leaving the helper to finish its own cleanup.
-                for sig in (signal.SIGINT, signal.SIGTERM):
+                for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
                     signal.signal(sig, lambda sig, frame: os._exit(128 + sig))
                 with open('installer-calls', 'a') as calls:
                     calls.write('startup\\n')
@@ -49,7 +49,7 @@ class LocalCheckCancellationTests(unittest.TestCase):
                         while not pathlib.Path('release').exists():
                             time.sleep(0.01)
                         raise SystemExit(128 + sig)
-                for sig in (signal.SIGINT, signal.SIGTERM):
+                for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
                     signal.signal(sig, cancel)
                 with open('import.lock', 'w') as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
@@ -123,6 +123,15 @@ class LocalCheckCancellationTests(unittest.TestCase):
 
     def test_terminal_sigint_reaches_startup_descendants_once(self):
         self.exercise_startup(signal.SIGINT, terminal=True)
+
+    def test_sighup_waits_for_startup_descendant_cleanup(self):
+        self.exercise_startup(signal.SIGHUP)
+
+    def test_sighup_kills_uncooperative_startup_descendants(self):
+        self.exercise_startup(signal.SIGHUP, stubborn=True)
+
+    def test_terminal_sighup_reaches_startup_descendants_once(self):
+        self.exercise_startup(signal.SIGHUP, terminal=True)
 
 
 if __name__ == "__main__":

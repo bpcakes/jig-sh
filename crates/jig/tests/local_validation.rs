@@ -2,11 +2,13 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use wait_timeout::ChildExt;
@@ -18,6 +20,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_preflight("printf 'preflight\\n' >> .agent/launches; test ! -f .agent/reject")
+    }
+
+    fn with_preflight(preflight_command: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         for dir in [".agent", "scripts", "src"] {
             fs::create_dir(root.path().join(dir)).unwrap();
@@ -34,7 +40,7 @@ impl Fixture {
         let components = json!([{"id":"example","root":".","adapters":[]}]);
         let actions = ["preflight", "test"].map(|name| {
             let command = if name == "preflight" {
-                "printf 'preflight\\n' >> .agent/launches; test ! -f .agent/reject"
+                preflight_command
             } else {
                 "printf 'test\\n' >> .agent/launches; test ! -f .agent/reject-test"
             };
@@ -254,4 +260,89 @@ fn cancellation_reaches_preflight_and_never_starts_final() {
         "iteration\n"
     );
     assert!(fixture.launches().is_empty());
+}
+
+#[test]
+fn sighup_cleans_real_runtime_action_before_wrapper_returns() {
+    for foreground_group in [false, true] {
+        let fixture = Fixture::with_preflight("exec python3 scripts/waiting-check");
+        fs::write(
+            fixture.root.path().join("scripts/waiting-check"),
+            r#"import fcntl, pathlib, time
+root = pathlib.Path('.agent')
+with (root / 'action.lock').open('w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    (root / 'launches').write_text('preflight\n')
+    (root / 'heartbeat').write_text(str(time.monotonic_ns()))
+    (root / 'ready').touch()
+    deadline = time.monotonic() + 30
+    while not (root / 'release').exists() and time.monotonic() < deadline:
+        (root / 'heartbeat').write_text(str(time.monotonic_ns()))
+        time.sleep(0.02)
+"#,
+        )
+        .unwrap();
+        let mut child = fixture
+            .local()
+            .process_group(0)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let ready = fixture.root.path().join(".agent/ready");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !ready.exists() && Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let started = ready.exists() && child.try_wait().unwrap().is_none();
+        let sent = started && {
+            let pid = child.id() as libc::pid_t;
+            let target = if foreground_group { -pid } else { pid };
+            // SAFETY: the owned, unreaped wrapper pins this PID/process group.
+            unsafe { libc::kill(target, libc::SIGHUP) == 0 }
+        };
+        let status = child.wait_timeout(Duration::from_secs(15)).unwrap();
+        // Observe cleanup before releasing the fixture ourselves, including
+        // when a broken wrapper exits immediately with its action still alive.
+        let lock_released = fs::File::open(fixture.root.path().join(".agent/action.lock"))
+            .is_ok_and(|lock| FileExt::try_lock_exclusive(&lock).unwrap_or(false));
+        let heartbeat = fs::read(fixture.root.path().join(".agent/heartbeat")).ok();
+        thread::sleep(Duration::from_millis(100));
+        let stopped = heartbeat.is_some()
+            && heartbeat == fs::read(fixture.root.path().join(".agent/heartbeat")).ok();
+        let launches = fixture.launches();
+        let journal = fixture.root.path().join(".agent/state/runs.jsonl");
+        let events = fs::read_to_string(&journal).unwrap_or_default();
+        if status.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // Let a surviving runtime finish before deleting its fixture on failure.
+        fs::write(fixture.root.path().join(".agent/release"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while started && Instant::now() < deadline {
+            let current_events = fs::read_to_string(&journal).unwrap_or_default();
+            if current_events.lines().any(|line| {
+                serde_json::from_str::<Value>(line).is_ok_and(|event| event["event"] == "completed")
+            }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(started, "real runtime action did not start");
+        assert!(sent, "could not send SIGHUP");
+        assert_eq!(status.and_then(|status| status.code()), Some(129));
+        assert!(
+            lock_released,
+            "action still held its lock after cancellation"
+        );
+        assert!(stopped, "action heartbeat continued after cancellation");
+        assert_eq!(launches, "preflight\n");
+        assert!(events.lines().any(|line| {
+            let event: Value = serde_json::from_str(line).unwrap();
+            event["event"] == "completed" && event["conclusion"] == "cancelled"
+        }));
+    }
 }
