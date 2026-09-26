@@ -13,11 +13,8 @@ use cap_std::{
 };
 use jig_owned_process::{OwnedProcessOutputStream, ProcessOutputOverflowPolicy};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
-use super::managed_path::{ensure_managed_directory, inspect_managed_directory};
 use super::occurrence::OccurrenceWorktreeReservation;
-use super::state::LOOP_RUNTIME_DIR;
 use super::workflow::{
     CodexTaskCheckout, CodexTaskSettings, RepositoryRevisionState, ResolvedWorkflow,
     UnexecutedReason, WorkflowCompletion, WorkflowExecution, WorkflowOutcome, WorkflowTick,
@@ -36,12 +33,15 @@ use crate::runtime::worker_runner::{
 
 mod checkout;
 mod pre_execution;
+mod preparation;
 
+#[cfg(test)]
+use super::state::LOOP_RUNTIME_DIR;
 use checkout::{PreparedCheckout, TaskOutcome};
-use pre_execution::{
-    CheckoutPreparationFailure, classify_checkout_preflight, prepare_repository_checkout,
-    require_ignored_task_worktree_root, unexecuted_task_failure,
-};
+#[cfg(test)]
+use pre_execution::classify_checkout_preflight;
+use pre_execution::{CheckoutPreparationFailure, prepare_checkout, unexecuted_task_failure};
+use preparation::{failed_preparation_tick, run_preparation};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
@@ -114,6 +114,29 @@ pub(super) fn codex_task_tick(
             ));
         }
     };
+    let preparation = if settings.prepare_command.is_some() {
+        match run_preparation(
+            ctx,
+            settings,
+            checkout.path(),
+            codex_home.as_deref(),
+            observer,
+        ) {
+            Ok(evidence) => Some(evidence),
+            Err(failure) => {
+                let checkout = checkout.finish(TaskOutcome::Failed, ctx, None);
+                return Ok(failed_preparation_tick(
+                    settings,
+                    execution.item_key,
+                    codex_home.as_deref(),
+                    checkout,
+                    failure,
+                ));
+            }
+        }
+    } else {
+        None
+    };
     let worker = run_codex_exec(
         ctx,
         CodexExecRequest {
@@ -141,7 +164,7 @@ pub(super) fn codex_task_tick(
         observer,
     );
 
-    let (action, completion) = match worker {
+    let (mut action, completion) = match worker {
         Ok(CodexExecOutcome::Completed(worker)) => {
             let worker_succeeded = worker.status().success();
             let checkout = checkout.finish(
@@ -201,7 +224,7 @@ pub(super) fn codex_task_tick(
             worker_receipt_id,
         }) => {
             let checkout = checkout.finish(
-                if before_start {
+                if before_start && preparation.is_none() {
                     TaskOutcome::Succeeded
                 } else {
                     TaskOutcome::Failed
@@ -264,7 +287,7 @@ pub(super) fn codex_task_tick(
                     UnexecutedReason::PreExecutionError
                 };
             let checkout = checkout.finish(
-                if unexecuted {
+                if unexecuted && preparation.is_none() {
                     TaskOutcome::Succeeded
                 } else {
                     TaskOutcome::Failed
@@ -310,6 +333,9 @@ pub(super) fn codex_task_tick(
             (action, completion)
         }
     };
+    if let Some(preparation) = preparation {
+        action["preparation"] = preparation;
+    }
 
     Ok(WorkflowTick::with_completion(
         json!({
@@ -447,109 +473,6 @@ const fn task_outcome_status(outcome: WorkflowOutcome) -> &'static str {
         WorkflowOutcome::Failed => "failed",
         WorkflowOutcome::NeedsAttention => "needs_attention",
     }
-}
-
-fn prepare_checkout(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
-    item_key: &str,
-    checkout: CodexTaskCheckout,
-    worktree_reservation: Option<&OccurrenceWorktreeReservation>,
-    observer: &mut dyn ExecutionControl,
-) -> std::result::Result<PreparedCheckout, CheckoutPreparationFailure> {
-    if checkout == CodexTaskCheckout::Repo {
-        return prepare_repository_checkout(ctx, observer);
-    }
-
-    if observer.cancelled() {
-        return Err(CheckoutPreparationFailure::cancelled(anyhow!(
-            "Scheduled Codex task was cancelled before worktree preflight"
-        )));
-    }
-    let digest = Sha256::digest(format!("{}\0{item_key}", workflow.id).as_bytes());
-    let name = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let path = ctx
-        .root()
-        .join(LOOP_RUNTIME_DIR)
-        .join("worktrees")
-        .join("tasks")
-        .join(name);
-    let path_exists = classify_checkout_preflight(
-        inspect_managed_directory(ctx.root(), &path, "Codex task worktree"),
-        observer,
-    )?;
-    if path_exists {
-        return Err(CheckoutPreparationFailure::retained(
-            &path,
-            anyhow!("Codex task worktree already exists: {}", path.display()),
-        ));
-    }
-    if let Err(error) = require_ignored_task_worktree_root(ctx, observer) {
-        return Err(if observer.cancelled() {
-            CheckoutPreparationFailure::cancelled(error)
-        } else {
-            CheckoutPreparationFailure::new(error)
-        });
-    }
-    if let Some(parent) = path.parent() {
-        classify_checkout_preflight(
-            ensure_managed_directory(ctx.root(), parent, "Codex task worktree parent"),
-            observer,
-        )?;
-    }
-    let initial_head = classify_checkout_preflight(
-        git_stdout(ctx, ctx.root(), ["rev-parse", "HEAD"], observer),
-        observer,
-    )?;
-    if let Some(reservation) = worktree_reservation {
-        classify_checkout_preflight(reservation.reserve(&path), observer)?;
-    }
-    let output = match git_output(
-        ctx,
-        ctx.root(),
-        [
-            OsString::from("worktree"),
-            OsString::from("add"),
-            OsString::from("--detach"),
-            path.as_os_str().to_os_string(),
-            OsString::from(&initial_head),
-        ],
-        observer,
-    ) {
-        Ok(output) => output,
-        Err(error) => {
-            let cancelled = observer.cancelled();
-            let mut cleanup_observer = NoopExecutionObserver;
-            let cleanup =
-                cleanup_failed_worktree(ctx, &path, worktree_reservation, &mut cleanup_observer);
-            return Err(checkout_preparation_error(
-                &path,
-                error,
-                cleanup.err(),
-                cancelled,
-            ));
-        }
-    };
-    if !output.status.success() {
-        let error = git_error("Failed to create Codex task worktree", output);
-        let mut cleanup_observer = NoopExecutionObserver;
-        let cleanup =
-            cleanup_failed_worktree(ctx, &path, worktree_reservation, &mut cleanup_observer);
-        return Err(checkout_preparation_error(
-            &path,
-            error,
-            cleanup.err(),
-            false,
-        ));
-    }
-    Ok(PreparedCheckout::Worktree {
-        repo_root: ctx.root().to_path_buf(),
-        path,
-        initial_head,
-    })
 }
 
 fn cleanup_failed_worktree(

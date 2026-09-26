@@ -10,7 +10,35 @@ const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;
 const MAX_EVENTS_PER_COORDINATOR_TICK: usize = 64;
 
 mod resource_waves;
-pub(super) use resource_waves::execute_resource_layer;
+pub(super) use resource_waves::{ResourceCandidates, execute_resource_layer};
+mod slots;
+use slots::ExecutionSlot;
+pub(super) use slots::ExecutionSlots;
+mod ready;
+pub(super) use ready::execute_ready_read_only_targets;
+
+pub(super) fn has_parallel_dependencies(plan: &RunPlan) -> bool {
+    plan.execution_layers.len() > 1
+        && plan.execution_layers.iter().any(|layer| layer.len() > 1)
+        && plan.targets.iter().all(is_parallel_read_only_check)
+}
+
+pub(super) fn is_parallel_read_only_check(planned: &PlannedTarget) -> bool {
+    planned.intent == jig_contract::ActionIntent::Check
+        && planned.effects.contains(&ActionEffect::ReadOnly)
+        && !planned.effects.contains(&ActionEffect::Worktree)
+        && !planned.effects.contains(&ActionEffect::External)
+}
+
+pub(super) fn planned_target<'a>(
+    plan: &'a RunPlan,
+    target: &TargetId,
+) -> Result<&'a PlannedTarget> {
+    plan.targets
+        .iter()
+        .find(|planned| &planned.target == target)
+        .ok_or_else(|| anyhow::anyhow!("run plan references missing target '{target}'"))
+}
 
 pub(super) struct ParallelTargetOutcome {
     pub(super) completed: CompletedTargetCapture,
