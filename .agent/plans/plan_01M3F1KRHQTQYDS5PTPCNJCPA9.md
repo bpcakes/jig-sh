@@ -20,6 +20,14 @@ normal child polling blocks cancellation signals across the reap decision.
 Use portable ps group/state columns because older macOS Python versions do not
 provide waitid. Zombies no longer execute or hold locks.
 
-Remaining validation: run the complete Python launcher suite, the configured
-local verification gates, and GitHub CI on the pushed branch. Inspect gate and
-receipt freshness, finish this plan, and commit the resulting evidence.
+Verification on implementation commit `a0c1854d`:
+
+- `python3 -m unittest discover -s scripts/tests -p 'test_jig_*.py'`: 25 passed.
+- `cargo test -p jig-sh --test local_validation`: 5 passed during implementation.
+- `scripts/check-local --plan-id plan_01M3F1KRHQTQYDS5PTPCNJCPA9`: all six
+  required targets passed. The final phase reused all five preflight receipts;
+  `api:test` passed 4,684 tests across 53 binaries, with four configured skips.
+  Test receipt: `receipt_01M3F2HAES812KPM3BBS4Q6T2J`.
+
+The fix and local verification are complete. GitHub CI is being monitored on the
+pushed PR branch; its final status is reported in the task response.
