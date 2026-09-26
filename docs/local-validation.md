@@ -27,8 +27,12 @@ The helper requires Python 3 and an open `--plan-id`. It resolves the repository
 from its own location, inherits the normal launcher's runtime selection and
 streams both phases' human output. Use native Jig commands for structured JSON
 or phase previews. Help exits 0 without launching Jig; invalid arguments exit 2;
-child failures propagate. SIGINT/SIGTERM are forwarded to the current Jig child,
-and an interrupted preflight cannot proceed to final validation.
+child failures propagate. Each phase runs in its own process group. SIGINT/SIGTERM
+reach the launcher and its startup descendants as well as the Jig runtime. The
+wrapper waits for that group to stop before returning 130/143; after five seconds
+it kills remaining group members and allows five more seconds to confirm cleanup.
+Cleanup failures are reported as errors. An interrupted preflight cannot proceed
+to final validation.
 
 When testing an edited implementation, build it first and select the resulting
 binary with `JIG_DEV_BIN`, or use `scripts/jig-dev` for the individual phases.
