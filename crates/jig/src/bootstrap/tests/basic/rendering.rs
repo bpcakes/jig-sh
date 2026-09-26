@@ -156,6 +156,7 @@ fn copy_result(bootstrap: bool, dry_run: bool, minimal: bool) -> initial_copy::B
         bootstrap_command_configured: bootstrap,
         frontend_apps_configured: bootstrap,
         dev_apps_configured: bootstrap,
+        file_budget_audit_available: !minimal,
         sqlx_enabled: bootstrap,
         schema_dump_enabled: bootstrap,
         minimal_footprint: minimal,
@@ -187,7 +188,7 @@ fn adopted_full_harness_next_steps_cover_configured_capabilities() {
     assert_eq!(steps[0], "cd /tmp/demo");
     for expected in [
         "scripts/jig setup",
-        "scripts/jig check test",
+        "scripts/jig info targets",
         "scripts/jig dev",
     ] {
         assert!(steps.iter().any(|step| step == expected));
@@ -212,18 +213,6 @@ fn adopted_full_harness_next_steps_cover_configured_capabilities() {
             .iter()
             .all(|command| command.contains("scripts/jig"))
     );
-}
-
-#[test]
-fn initial_notes_cover_review_and_required_checks() {
-    let notes = initial_notes(Vec::new(), true, None, false);
-    for expected in [
-        "Review generated .jig.toml",
-        "scripts/jig check typescript-lint",
-        "scripts/jig check contract",
-    ] {
-        assert!(notes.iter().any(|note| note.contains(expected)));
-    }
 }
 
 #[test]
@@ -939,4 +928,5 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
 
 include!("rendering/leaf_conflicts.rs");
 
+mod guidance;
 mod guide_preview;

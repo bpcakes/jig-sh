@@ -95,6 +95,7 @@ impl InitScaffoldPlan {
             "package_name": self.package_name,
             "artifact_kind": project.artifact.as_str(),
             "rust_version": RUST_ONLY_RUST_VERSION,
+            "file_budget_policy_enabled": self.file_budget_policy_enabled,
         })
     }
 }

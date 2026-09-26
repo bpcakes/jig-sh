@@ -25,7 +25,7 @@ Agents should not have to infer how to operate a repository from scattered scrip
 
 - **Agent guidance** through `AGENTS.md` and `agent-map.md`.
 - **A typed command catalog** in `.agent/jig-contract.json`, executed through the repo-local `scripts/jig` launcher.
-- **Structured work and gates** that let `work finish` close a plan only when every required gate has current evidence.
+- **Optional structured work and gates** that let `work finish` close a plan only when every required gate has current evidence.
 - **Append-only receipts** under `.agent/state/` for checks, plans, decisions, and runs.
 - **Affected checks and file budgets** so agents can select work from checked-in component policy and enforce repository-owned source limits.
 - **A bounded MCP runtime** for repository inspection, immutable planning, execution, and cancellation.
@@ -78,27 +78,24 @@ You only need a global installation for the first `jig init` or `jig adopt`. Gen
 
 ## Quick start
 
-Create a harness-only repository without prompts, prepare it, and complete one structured work plan:
+Create a harness-only repository without prompts, prepare it, and inspect its commands:
 
 ```sh
 jig init ./ExampleProject --preset harness-only --no-input --no-vault
 cd ./ExampleProject
 scripts/jig setup
 
-plan_id="$(scripts/jig work start \
-  --title "First change" \
-  --body "Validate the harness loop." \
-  --print-plan-id)"
-scripts/jig work check --plan-id "$plan_id"
-scripts/jig work finish \
-  --plan-id "$plan_id" \
-  --resolution "Harness loop verified" \
-  --outcome success
+scripts/jig info targets
+scripts/jig file-budget audit
 ```
 
 For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an existing repository, use `jig adopt .` to preview changes and `jig adopt . --write` to apply them.
 
 `setup` runs the read-only doctor, bootstraps project dependencies, registers configured agent tooling when needed, verifies the generated contract, and runs doctor again. Pass `--json` to Jig commands when automation needs structured output.
+
+Run checks that validate the behavior you change, using `scripts/jig check COMPONENT:ACTION`
+or a focused native test command. `scripts/jig file-budget audit` provides standalone diagnostics
+without creating runs or receipts. Work plans and receipt inspection are optional.
 
 ## What changes in the repository
 
@@ -132,14 +129,14 @@ Checks append receipt records. A simplified record looks like this:
 }
 ```
 
-Inspect the current evidence with `scripts/jig work status`, `scripts/jig work evidence`, or `scripts/jig work receipts`.
+When using structured work, you can inspect its evidence with `scripts/jig work status`, `scripts/jig work evidence`, or `scripts/jig work receipts`.
 
 ## How it works
 
 1. **Render or adopt the harness.** `jig init` creates a supported project shape; `jig adopt` previews and then adds the harness to an existing repository.
 2. **Discover the repository contract.** Humans, CI, and agents use the same checked-in components, actions, profiles, and command runners through `scripts/jig`.
-3. **Plan and check work.** A work plan captures an exact Git baseline. Required gates execute only when their checked-in path policy applies and record explicit not-applicable evidence otherwise.
-4. **Review the receipts.** Checks and structured work append evidence under `.agent/state/`; `jig ui` and status commands present that state without changing it.
+3. **Validate the affected behavior.** Select focused checks; use `--affected BASE` when selecting targets by changed paths is useful. Broaden verification for shared behavior, failures, or unresolved risks.
+4. **Use structured work when useful.** Work plans capture a Git baseline and enforce configured gates at closure. Receipt inspection and this lifecycle are optional for ordinary development.
 5. **Update conservatively.** `jig update` advances managed harness files while preserving project-owned code and customized managed files unless replacement is explicitly forced.
 
 ## Command contract
@@ -248,11 +245,11 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 ### Structured work, affected checks, and file budgets
 
-`work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence across staging, unrelated edits, and, on contract v8, compatible original receipts from other plans. `work finish` refuses to close a plan until every required gate has current evidence. `work retire` closes a plan that will not be delivered without running gates.
+Structured work is optional. When selected, `work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence across staging, unrelated edits, and, on contract v8, compatible original receipts from other plans. `work finish` refuses to close a plan until every required gate has current evidence. `work retire` closes a plan that will not be delivered without running gates.
 
 Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Worktree policy preserves evidence through staging and commits; audited exhaustive inputs also avoid reruns after unrelated edits.
 
-Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
+Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget audit` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
 ### Orchestration and terminal dashboard
 

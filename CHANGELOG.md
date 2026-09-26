@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Make structured work, receipt inspection, and ExecPlans optional in generated and
+  repository guidance. Recommend checks for the affected behavior instead of a full
+  backend suite for every change, and retain standalone `jig file-budget` diagnostics.
+
 ### Fixed
 
 - Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.

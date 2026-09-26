@@ -702,6 +702,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
             copy_result.frontend_apps_configured,
             None,
             copy_result.minimal_footprint,
+            copy_result.file_budget_audit_available,
         ),
     }))
 }

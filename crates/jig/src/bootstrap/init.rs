@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::answers::{AnswerInput, PreparedInitAnswers};
+use super::answers::{AnswerInput, AnswerResolution, PreparedInitAnswers};
 use super::git::init_git_repo_with_validation;
 use super::init_transaction::InitMutationTransaction;
 use super::initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
@@ -88,12 +88,12 @@ fn prepare_init(
     opts.scaffold.apply_init_answer_defaults(&mut opts.answers);
     let answer_input = progress.log_blocked_on_err(prepared_answers.into_input())?;
     let mut answers = opts.answers;
-    let scaffold_plan = progress.log_blocked_on_err(scaffold::InitScaffoldPlan::from_opts(
+    let mut scaffold_plan = progress.log_blocked_on_err(scaffold::InitScaffoldPlan::from_opts(
         &opts.scaffold,
         &answers,
         &destination,
     ))?;
-    if let Some(plan) = &scaffold_plan {
+    if let Some(plan) = &mut scaffold_plan {
         plan.apply_answer_defaults(&mut answers);
     }
     progress.step(
@@ -109,6 +109,20 @@ fn prepare_init(
         opts.template_mode,
         &invocation_cwd,
     ))?;
+    if let Some(plan) = &mut scaffold_plan {
+        let (resolved, _) = progress.log_blocked_on_err(
+            AnswerResolution::from_input(
+                answer_input.clone(),
+                &answers,
+                &destination,
+                opts.defaults,
+            )
+            .map(AnswerResolution::into_parts),
+        )?;
+        plan.file_budget_policy_enabled = progress.log_blocked_on_err(
+            super::renderer::preview_file_budget_audit_available(&template, &resolved),
+        )?;
+    }
     Ok(PreparedInit {
         destination,
         answers,
@@ -264,7 +278,8 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 copy_result.notes,
                 copy_result.frontend_apps_configured,
                 scaffold_plan.as_ref(),
-                false,
+                copy_result.minimal_footprint,
+                copy_result.file_budget_audit_available,
             ),
             vault: None,
             #[cfg(test)]

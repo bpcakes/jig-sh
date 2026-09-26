@@ -6,10 +6,13 @@ competence but no prior knowledge of this repository or conversation.
 
 ## When to Use an ExecPlan
 
-Use an ExecPlan for complex features, significant refactors, uncertain designs, or work
-that needs a durable handoff. Small, routine edits do not need one unless requested.
-Read this file before authoring or resuming a plan; follow applicable `AGENTS.md`
-instructions and repository workflow requirements.
+Use an ExecPlan when requested or when uncertainty, coordination, or a durable handoff
+makes one useful. Complexity alone does not require a plan. Read this file when
+authoring or resuming a plan; follow applicable `AGENTS.md` instructions.
+
+An ExecPlan does not require a Jig work plan, receipt inspection, or gate bookkeeping.
+Use structured work only when explicitly requested or chosen for the task; its
+configured closure rules apply when that workflow is used.
 
 A request to investigate, review, or plan does not authorize implementation. When
 implementation is requested, continue through the agreed scope without asking for
@@ -80,9 +83,9 @@ directory, prerequisites, exact invocation, and expected result. Clearly label e
 output separately from observed output. Reference existing repository documentation
 precisely and include the task-specific explanation needed to use it.
 
-Use the repository's established location for plans and evidence. For Jig-managed work,
-connect the narrative to the existing structured-work workflow and receipts rather than
-creating a competing gate ledger. Keep secrets out of plans and evidence.
+Use the repository's established location for plans. If structured work is being used,
+reference its existing plan and receipts where useful. Otherwise, record relevant
+verification results directly in the plan. Keep secrets out of plans and evidence.
 
 ## Suggested Skeleton
 
@@ -104,16 +107,17 @@ material omissions.
 
 ## Verification and Recovery
 
-Tie completion to evidence of the requested behavior. Run change-appropriate checks and
-all applicable repository-required gates. For bug fixes, include a regression check that
-distinguishes the faulty behavior from the fix when practical. Use the relevant
-functional, visual, performance, or compatibility checks for the outcome being changed.
+Tie completion to evidence of the requested behavior. Use focused checks; broaden them
+for affected shared behavior, failures, or unresolved risks. For bug fixes, include a
+regression check that distinguishes the faulty behavior from the fix when practical.
+Use the relevant functional, visual, performance, or compatibility checks for the
+outcome being changed.
 
 Record what actually ran and its result, including failures and checks that were not
 run. Explain blockers and remaining verification. Never present an expected result or
-stale receipt as current proof. Once acceptance and required checks are satisfied,
-finish; additional testing needs a concrete unresolved concern, changed input, or
-repository requirement.
+stale receipt as current proof. Once the requested behavior is verified, finish;
+additional testing needs changed inputs or a concrete remaining concern. Honor any
+explicitly selected CI, release, or structured-work requirements within their scope.
 
 For durable-state or compatibility-sensitive changes, specify rollout order,
 mixed-version behavior, and recovery. Explain which operations are repeatable and how to

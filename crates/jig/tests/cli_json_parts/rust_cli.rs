@@ -1,5 +1,5 @@
 #[test]
-fn rust_cli_init_has_exact_json_and_human_process_summaries() {
+fn rust_cli_init_has_exact_json_process_summary() {
     let template_parent = tempdir().unwrap();
     let template = template_parent.path().join("ExampleProject-template");
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -73,7 +73,25 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
             .as_str()
             .is_some_and(|note| note.contains("Scaffolded application code"))
     }));
+}
 
+#[test]
+fn rust_cli_init_has_human_process_summary() {
+    let template_parent = tempdir().unwrap();
+    let template = template_parent.path().join("ExampleProject-template");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--local", "--no-hardlinks"])
+        .arg(&workspace)
+        .arg(&template)
+        .status()
+        .unwrap();
+    assert!(clone.success());
+
+    let destinations = tempdir().unwrap();
     let human_destination = destinations.path().join("ExampleCliHuman");
     let human_output = jig()
         .args([
@@ -101,9 +119,59 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
     assert!(human.contains("scaffold: rust-cli for exampleclihuman (db: none)"));
     assert!(human.contains("scaffold files: 6 created, 0 modified, 0 unchanged"));
     assert!(human.contains("Scaffolded project code is project-owned"));
+    assert!(human.contains("scripts/jig file-budget audit"));
+    assert!(human.contains("scripts/jig check contract"));
+    assert!(human.contains("scripts/jig check agent-guides"));
     assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));
     assert!(!human.contains("scripts/jig dev"));
+}
+
+#[test]
+fn harness_only_init_has_optional_check_guidance_in_human_summary() {
+    let template_parent = tempdir().unwrap();
+    let template = template_parent.path().join("ExampleProject-template");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--local", "--no-hardlinks"])
+        .arg(&workspace)
+        .arg(&template)
+        .status()
+        .unwrap();
+    assert!(clone.success());
+
+    let destinations = tempdir().unwrap();
+    let harness_destination = destinations.path().join("ExampleHarnessHuman");
+    let harness_output = jig()
+        .args([
+            "init",
+            harness_destination.to_str().unwrap(),
+            "--preset",
+            "harness-only",
+            "--template",
+            template.to_str().unwrap(),
+            "--template-mode",
+            "committed",
+            "--defaults",
+            "--no-vault",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        harness_output.status.success(),
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        harness_output.status,
+        String::from_utf8_lossy(&harness_output.stdout),
+        String::from_utf8_lossy(&harness_output.stderr)
+    );
+    let harness = String::from_utf8(harness_output.stdout).unwrap();
+    assert!(harness.contains("scripts/jig file-budget audit"));
+    assert!(harness.contains("scripts/jig check contract"));
+    assert!(harness.contains("scripts/jig check agent-guides"));
+    assert!(!harness.contains("Scaffolded project code is project-owned"));
 }
 
 #[test]

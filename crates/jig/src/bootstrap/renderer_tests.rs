@@ -111,9 +111,8 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
 
     for expected in [
         "ownership guidance in crate-level guides",
-        "before Rust work",
+        "ownership guidance for Rust work",
         "## Rust Defaults",
-        "For Rust changes",
         "## Crate Guide Conventions",
     ] {
         assert!(initial_guide.contains(expected), "missing {expected}");
@@ -150,7 +149,7 @@ fn neutral_rust_workspace_guidance_survives_authored_recopy() {
 }
 
 #[test]
-fn existing_rust_backend_guidance_branch_remains_unchanged() {
+fn backend_guidance_keeps_ownership_and_focused_checks() {
     let destination = tempfile::tempdir().unwrap();
     render_template_files(
         &live_template_source(),
@@ -164,14 +163,17 @@ fn existing_rust_backend_guidance_branch_remains_unchanged() {
 
     for expected in [
         "ownership guidance in backend-level guides",
-        "before backend work",
+        "ownership guidance for backend work",
         "## Backend Defaults",
         "Keep transport logic thin and business logic in the owning crate.",
         "- `scripts/jig dev`",
-        "For backend changes",
+        "Validate the affected behavior with focused checks.",
         "## Backend Guide Conventions",
     ] {
         assert!(guide.contains(expected), "missing {expected}");
+    }
+    for absent in ["before backend work", "For backend changes"] {
+        assert!(!guide.contains(absent), "unexpected {absent}");
     }
     assert!(!guide.contains("## Rust Defaults"));
     assert!(!guide.contains("## Crate Guide Conventions"));

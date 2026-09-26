@@ -1,11 +1,28 @@
 # Local validation in the Jig source repository
 
-Use focused tests while changing code, then run the inexpensive checks before
-the full workspace suite:
+## Ordinary tasks
+
+Choose checks for the affected behavior. For example, run a focused Rust regression:
+
+```sh
+cargo test -p jig-sh --lib repository::freshness::proof::tests
+```
+
+Use `scripts/jig info targets` to discover configured checks, then run the relevant
+`scripts/jig check COMPONENT:ACTION` targets directly. Broaden validation when
+shared behavior, failures, or unresolved risks warrant it. These commands do not
+require a Jig work plan.
+
+## When using structured work
+
+For a selected work plan, use focused tests while changing code, then run the
+inexpensive preflight before the configured final suite:
 
 ```sh
 # While editing, choose the owning package and relevant regression filter.
 cargo test -p jig-sh --lib repository::freshness::proof::tests
+
+plan_id="$(scripts/jig work start --title 'Example change' --body 'Validate the change.' --print-plan-id)"
 
 # Preflight alone; it does not satisfy the full verification gate.
 scripts/jig work check --plan-id "$plan_id" --phase iteration
@@ -45,7 +62,7 @@ runtime selected by `.jig/source-runtime-version`.
 The source repository now pins 0.5.0, which supports iteration/final phases;
 the previous 0.4.0 runtime cannot parse `work.iteration_profile`.
 
-## Finish without another full suite
+## Finish a selected plan without another full suite
 
 Run final validation after the last implementation commit, then finish the plan
 before committing the resulting evidence:
@@ -60,8 +77,8 @@ git commit -m 'Record validation evidence'
 
 `work finish` independently verifies readiness. If inspection reports unknown
 freshness, follow its read-only recovery instruction instead of rerunning the
-suite. A passing final `api:test` already satisfies the backend test requirement;
-there is no separate mandatory full-suite invocation for closure. New source
+suite. A passing final `api:test` satisfies that plan's configured test gate;
+there is no separate full-suite invocation for its closure. New source
 changes or unresolved failures still require appropriate validation.
 
 Do not make `api:test` or `api:clippy` worktree-only just to avoid a rerun:

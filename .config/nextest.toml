@@ -42,9 +42,9 @@ test-group = 'frontend-node-local'
 
 [[profile.local.overrides]]
 # These checks intentionally enforce short transport and process-cleanup
-# deadlines. Run them without other local-profile CPU/process-tree contention
-# so the deadlines measure Jig rather than host saturation.
-filter = 'package(jig-sh) & (binary(runtime_signal_policy) | test(mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions) | test(mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport))'
+# deadlines. Git receipt tests also supervise Git process trees and need the
+# same isolation from generated-frontend process contention.
+filter = 'package(jig-sh) & (binary(runtime_signal_policy) | test(mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions) | test(mcp_work_refine_rejects_final_check_lease_contention_without_blocking_the_transport) | test(git_receipts::tests))'
 test-group = 'process-signals'
 threads-required = "num-test-threads"
 

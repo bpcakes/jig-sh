@@ -381,11 +381,8 @@ pub(super) fn format_init_human_summary(output: &bootstrap::InitReport) -> Strin
     let notes = output.notes();
     if !notes.is_empty() {
         summary.push_str("  notes:\n");
-        for note in notes.iter().take(5) {
+        for note in notes {
             let _ = writeln!(summary, "    - {note}");
-        }
-        if notes.len() > 5 {
-            let _ = writeln!(summary, "    - and {} more", notes.len() - 5);
         }
     }
 
@@ -481,11 +478,8 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         && !notes.is_empty()
     {
         summary.push_str("  notes:\n");
-        for note in notes.iter().take(8).filter_map(serde_json::Value::as_str) {
+        for note in notes.iter().filter_map(serde_json::Value::as_str) {
             let _ = writeln!(summary, "    - {note}");
-        }
-        if notes.len() > 8 {
-            let _ = writeln!(summary, "    - and {} more", notes.len() - 8);
         }
     }
 
@@ -499,15 +493,8 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         && !warnings.is_empty()
     {
         let _ = writeln!(summary, "  warnings: {}", warnings.len());
-        for warning in warnings
-            .iter()
-            .take(5)
-            .filter_map(serde_json::Value::as_str)
-        {
+        for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
             let _ = writeln!(summary, "    - {warning}");
-        }
-        if warnings.len() > 5 {
-            let _ = writeln!(summary, "    - and {} more", warnings.len() - 5);
         }
     }
 
@@ -601,4 +588,4 @@ fn array_len(value: &serde_json::Value) -> usize {
 
 #[cfg(test)]
 #[path = "bootstrap_run_tests.rs"]
-mod tests;
+mod bootstrap_run_tests;

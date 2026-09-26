@@ -333,7 +333,77 @@ fn render_template_files(
     selected_paths: Option<&BTreeSet<PathBuf>>,
     contract_version: Option<u32>,
 ) -> Result<BTreeSet<PathBuf>> {
-    let context = render_context(template, answers, contract_version)?;
+    let mut context = render_context(template, answers, contract_version)?;
+    let active_paths = render_template_files_pass(
+        template,
+        answers,
+        destination,
+        selected_paths,
+        &context,
+        false,
+    )?;
+    if active_paths.contains(Path::new(FILE_BUDGET_POLICY_PATH))
+        && rendered_file_budget_audit_available(destination, answers)?
+    {
+        context
+            .as_object_mut()
+            .expect("render context is an object")
+            .insert("file_budget_audit_available".into(), JsonValue::Bool(true));
+        render_template_files_pass(
+            template,
+            answers,
+            destination,
+            selected_paths,
+            &context,
+            true,
+        )?;
+    }
+    Ok(active_paths)
+}
+
+pub(super) fn rendered_file_budget_audit_available(
+    destination: &Path,
+    answers: &RenderAnswers,
+) -> Result<bool> {
+    if answers.is_minimal_footprint() || !answers.file_budget_ci_enabled() {
+        return Ok(false);
+    }
+    let path = destination.join(FILE_BUDGET_POLICY_PATH);
+    let policy = match fs::read(&path) {
+        Ok(policy) => policy,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to read {}", path.display()));
+        }
+    };
+    let now = time::OffsetDateTime::now_utc().date();
+    let current_date =
+        jig_file_budget::PolicyDateV1::new(now.year() as u16, now.month() as u8, now.day())
+            .map_err(anyhow::Error::msg)?;
+    Ok(jig_file_budget::parse_policy_v1(&policy, current_date).is_ok())
+}
+
+pub(super) fn preview_file_budget_audit_available(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+) -> Result<bool> {
+    let preview = TempDir::new().context("Failed to create file-budget policy preview")?;
+    let selected = BTreeSet::from([PathBuf::from(FILE_BUDGET_POLICY_PATH)]);
+    let rendered = render_template_files(template, answers, preview.path(), Some(&selected), None)?;
+    if !rendered.contains(Path::new(FILE_BUDGET_POLICY_PATH)) {
+        return Ok(false);
+    }
+    rendered_file_budget_audit_available(preview.path(), answers)
+}
+
+fn render_template_files_pass(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    destination: &Path,
+    selected_paths: Option<&BTreeSet<PathBuf>>,
+    context: &JsonValue,
+    skip_policy: bool,
+) -> Result<BTreeSet<PathBuf>> {
     let mut environment = Environment::new();
     environment.set_syntax(
         SyntaxConfig::builder()
@@ -346,10 +416,11 @@ fn render_template_files(
 
     let mut render = TemplateRender {
         environment: &mut environment,
-        context: &context,
+        context,
         answers,
         destination,
         selected_paths,
+        skip_policy,
         managed_paths: BTreeSet::new(),
     };
     match template.render_source() {
@@ -402,12 +473,16 @@ struct TemplateRender<'a, 'env> {
     answers: &'a RenderAnswers,
     destination: &'a Path,
     selected_paths: Option<&'a BTreeSet<PathBuf>>,
+    skip_policy: bool,
     managed_paths: BTreeSet<PathBuf>,
 }
 
 impl TemplateRender<'_, '_> {
     fn entry(&mut self, relative_template: &Path, source_label: &str, source: &str) -> Result<()> {
         let relative = output_relative_path(relative_template)?;
+        if self.skip_policy && relative == Path::new(FILE_BUDGET_POLICY_PATH) {
+            return Ok(());
+        }
         if self
             .selected_paths
             .is_some_and(|selected_paths| !selected_paths.contains(&relative))
@@ -667,4 +742,4 @@ use tail::*;
 
 #[cfg(test)]
 #[path = "renderer_tests.rs"]
-mod tests;
+mod renderer_tests;

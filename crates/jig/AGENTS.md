@@ -62,7 +62,7 @@
 - Generated Rust/React source must be rustfmt-stable and pass its generated strict Clippy gate for every supported normalized package stem, database branch, and valid migration path. Validate the 216-byte Cargo artifact boundary before destination mutation, keep rendered identifiers behind fixed aliases, narrowly scope any lint acknowledgement required by intentional formatter-stability constructs, and keep long fallback API labels DNS-safe without changing short-name output.
 - Classify each `node_modules` install root independently: missing, empty, and exact ignored-only real roots share the absent proof, while any unknown/type-replaced/nested entry makes the root present and fully attested. Preserve package metadata, links, member receipt-like files, launcher bytes/modes, and the v5/v3/v2 receipt formats.
 - Rust/React scaffolds require Rust 1.94. Database-enabled variants pin SQLx 0.9 and use `.sqlx`; Doctor must enforce the active Rust floor and matching SQLx CLI minor line. PostgreSQL browser E2E owns its Linux service-container runner independently of the repository-wide runner; managed Rust workflow triggers and offline environments must follow configured migration and metadata authorities.
-- Use `scripts/jig` with the repository's selected release for routine checks and work commands. Validate edited runtime behavior with `scripts/jig-dev ...`, which incrementally builds the current source before invoking the launcher. The required `repo:source-runtime-check` target automates current-source contract validation at completion.
+- Use `scripts/jig` with the repository's selected release for routine checks. Validate edited runtime behavior with `scripts/jig-dev ...`, which incrementally builds the current source before invoking the launcher. `repo:source-runtime-check` is available for current-source contract validation; select checks for the affected behavior.
 
 ## Common commands
 
@@ -70,7 +70,7 @@
 - `cargo test -p jig-sh --test codex_launcher -- --nocapture` (requires a Unix PTY; set
   `JIG_ALLOW_PTY_TEST_SKIP=1` only when the environment is intentionally exempt)
 - `cargo test --workspace`
-- `scripts/jig work status`
+- `scripts/jig file-budget audit` (standalone diagnostics; no runs or receipts)
 - `scripts/jig check repo:source-runtime-check`
 - `scripts/jig-dev check contract`
 - `scripts/jig-dev check agent-guides`

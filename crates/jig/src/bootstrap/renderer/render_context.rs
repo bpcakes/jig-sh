@@ -91,6 +91,7 @@ pub(super) fn render_context(
         "file_budget_ci_enabled".into(),
         JsonValue::Bool(answers.file_budget_ci_enabled()),
     );
+    context.insert("file_budget_audit_available".into(), JsonValue::Bool(false));
     context.insert(
         "go_postgres_enabled".into(),
         JsonValue::Bool(answers.go_postgres_enabled()),
