@@ -419,7 +419,7 @@ fn tampered_manifest_cannot_make_update_or_adopt_remove_project_directory() {
             "project metadata\n",
         )
         .unwrap();
-        fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+        fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
         let existing_backup = repo.join(".agent/.cache/adopt/backups/existing");
         fs::create_dir_all(&existing_backup).unwrap();
         fs::write(existing_backup.join("project-sentinel"), "backup\n").unwrap();
@@ -482,8 +482,8 @@ fn tampered_manifest_cannot_make_update_or_adopt_remove_project_directory() {
             "{mode}: existing backup changed"
         );
         assert_eq!(
-            fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-            "project plan notes\n",
+            fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+            "project notes\n",
             "{mode}: an earlier managed path changed"
         );
     }
@@ -524,7 +524,7 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
 
             assert!(repo.join(".git").is_file());
             let git_metadata_before = fs::read_to_string(repo.join(".git")).unwrap();
-            fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+            fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
             let existing_backup = repo.join(".agent/.cache/adopt/backups/existing");
             fs::create_dir_all(&existing_backup).unwrap();
             fs::write(existing_backup.join("project-sentinel"), "backup\n").unwrap();
@@ -579,8 +579,8 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
                 "{alias}/{mode}: existing backup changed"
             );
             assert_eq!(
-                fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-                "project plan notes\n",
+                fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+                "project notes\n",
                 "{alias}/{mode}: an earlier managed path changed"
             );
         }

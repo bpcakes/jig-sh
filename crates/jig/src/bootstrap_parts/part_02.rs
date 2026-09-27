@@ -90,7 +90,7 @@ fn initial_notes(
             "To pin a published runtime independently of template updates, commit .jig/runtime-version containing an exact stable release such as 0.5.0; generated CI caches that executable.".into(),
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
             "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
-            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION; structured work and receipt inspection are optional.".into(),
+            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION.".into(),
         ]
     };
     if file_budget_audit_available && !minimal_footprint {

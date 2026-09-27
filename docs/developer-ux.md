@@ -13,7 +13,7 @@ Jig splits the first-run experience into two cases:
 - `jig init` creates a new repository with the harness already present, optionally with generated starter application code from a preset.
 - `jig adopt` adds the harness to an existing repository while preserving project-owned files and guidance.
 
-Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, `.mcp.json`, root agent guidance, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, plans, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
+Both flows generate the same core assets: `.jig.toml`, `scripts/jig`, `.mcp.json`, root agent guidance, `agent-map.md`, `.agent/jig-contract.json`, scripts, and CI workflows. Existing root `AGENTS.md` content is preserved; Jig only manages the marked block between the Jig comments. Existing root `Makefile` content also remains project-owned, because generated commands are routed through `scripts/jig`. For loop-only onboarding on an existing repo, `jig adopt . --minimal` renders `.jig.toml` plus `.agent/` scaffolding (contract, state, cache ignore rules, and block-managed gitignore/gitattributes) without scripts, workflows, or agent context files.
 
 The entry commands are intentionally separate. Start a new repo with `jig init`; add Jig to a repo that already exists with `jig adopt .`, which previews by default and applies only when re-run with `--write`. A bare terminal `jig init /path/to/new-repo` guides the project shape using the same five descriptions as `jig presets`; only the Rust React and Go React application choices continue to database and frontend questions. `--defaults` skips only the project-shape wizard and fills omitted shape choices with Rust React, no database, and `web`; initial vault setup can still request a passphrase unless `JIG_VAULT_PASSPHRASE` or `--no-vault` is used. `--no-input` skips the wizard but requires a complete explicit shape and never prompts for a vault passphrase. Non-terminal init follows the strict behavior unless `--defaults` is supplied. `harness-only`, `rust-library`, and `rust-cli` are complete when named explicitly and reject application-shape flags. Use `--preset harness-only --no-input --no-vault` for an unattended full harness without starter project code. An answers file with `harness_footprint = "minimal"` is itself a complete harness-only shape in every interaction mode and rejects Rust/database/frontend scaffold choices. Global `--json` only selects output format and never changes these interaction rules.
 
@@ -149,8 +149,8 @@ Managed npm checks, browser E2E, and generated dev pin the exact app and require
 ## Day-To-Day Loop
 
 Choose commands for the current task and validate the affected behavior with focused
-checks. Structured work, receipt inspection, and ExecPlans are optional. A full test
-suite is useful when the affected behavior or remaining risk warrants it.
+checks. Structured work and receipt inspection are optional. A full test suite is
+useful when the affected behavior or remaining risk warrants it.
 
 The daily developer loop is built around a few stable verbs:
 

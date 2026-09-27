@@ -22,7 +22,6 @@ plugins = [
     "jig-rust@jig-skills",
     "jig-swift@jig-skills",
     "jig-typescript@jig-skills",
-    "jig-exec-plans@jig-skills",
 ]
 source = "bpcakes/jig-skills"
 

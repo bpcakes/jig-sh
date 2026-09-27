@@ -113,7 +113,6 @@ A full harness contains this core structure:
 ├── AGENTS.md                   # repo-wide agent guidance
 ├── agent-map.md                # index of nested agent guides
 ├── .agent/
-│   ├── PLANS.md                # ExecPlan guidance
 │   ├── jig-contract.json       # versioned command catalog
 │   └── state/                  # append-only plans, receipts, and decisions
 ├── scripts/

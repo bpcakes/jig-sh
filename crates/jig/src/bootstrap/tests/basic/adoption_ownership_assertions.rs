@@ -33,8 +33,6 @@ pub(super) fn assert_minimal_files(repo: &Path) {
     assert!(config.contains("harness_footprint = \"minimal\""));
     for path in [
         ".agent/jig-contract.json",
-        ".agent/PLANS.md",
-        ".agent/plans/.gitkeep",
         ".agent/state/.gitkeep",
         ".agent/.cache/.gitignore",
         managed_paths::MANIFEST_PATH,
@@ -42,6 +40,9 @@ pub(super) fn assert_minimal_files(repo: &Path) {
         ".gitattributes",
     ] {
         assert!(repo.join(path).is_file(), "missing minimal path {path}");
+    }
+    for path in [".agent/PLANS.md", ".agent/plans/.gitkeep"] {
+        assert!(!repo.join(path).exists(), "unexpected retired path {path}");
     }
     for path in [
         "scripts/jig",

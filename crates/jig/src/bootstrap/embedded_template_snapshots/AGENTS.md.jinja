@@ -8,11 +8,8 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use this file for repo-wide defaults.
 - Use [agent-map.md](./agent-map.md) to locate ownership guidance for [% if rust_workspace_guidance_enabled %]Rust[% else %]backend[% endif %] work.
 - Read the nearest [% if rust_workspace_guidance_enabled %]crate-level[% else %]backend-level[% endif %] `AGENTS.md` before changing a [% if rust_workspace_guidance_enabled %]crate[% else %]package or crate[% endif %] when one exists.
-- Use `.agent/PLANS.md` when an ExecPlan is requested or useful for uncertainty, coordination, or a durable handoff.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- Structured work and receipt inspection are optional unless explicitly requested. Apply skills within that scope; installing or selecting a skill does not require opening a Jig work plan.
-- When structured work is selected, open a plan with `scripts/jig work start`, run its configured gates with `scripts/jig work check`, and close it with `scripts/jig work finish` after required evidence is current. Use `scripts/jig work retire` if the work will not be delivered.
 - Discover available targets with `scripts/jig info targets`; run a focused target with `scripts/jig check COMPONENT:ACTION`. Use `--affected BASE` when selecting checks by changed paths is useful.
 [% if file_budget_audit_available %]
 - Use `scripts/jig file-budget audit` for standalone source-size diagnostics; it creates no runs or receipts.
@@ -77,9 +74,8 @@ Configured web apps:
 [% endfor %]
 
 Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, and `test:coverage`.
-Structured work uses four atomic path-aware gates per app; repository-wide TypeScript checks remain available for an intentional full-matrix run.
 [% if application_contracts_enabled -%]
-Application contract freshness and public deployment boundaries have separate `application-contracts` and `public-artifacts` work gates; `jig-contract` remains limited to Jig harness wiring.
+Application contract freshness and public deployment boundaries have separate `scripts/check-webapps.sh application-contracts` and `scripts/check-webapps.sh public-artifacts` checks; `jig-contract` remains limited to Jig harness wiring.
 [% endif -%]
 `test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
 Jig validates those scripts during adoption; generated web CI validates them again before running.

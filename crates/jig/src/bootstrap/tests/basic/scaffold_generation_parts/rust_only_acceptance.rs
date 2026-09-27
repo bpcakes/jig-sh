@@ -116,7 +116,6 @@ fn assert_rust_only_layout(destination: &Path, case: RustOnlyAcceptanceCase) {
         case.source_path(),
         ".jig.toml".to_string(),
         ".agent/jig-contract.json".to_string(),
-        ".agent/PLANS.md".to_string(),
         ".github/workflows/rust-tests.yml".to_string(),
         ".github/workflows/repo-policy.yml".to_string(),
         "AGENTS.md".to_string(),
@@ -130,6 +129,7 @@ fn assert_rust_only_layout(destination: &Path, case: RustOnlyAcceptanceCase) {
     }
     let forbidden = [
         "Cargo.lock".to_string(),
+        ".agent/PLANS.md".to_string(),
         "LICENSE".to_string(),
         "LICENSE.md".to_string(),
         "LICENSE.txt".to_string(),
