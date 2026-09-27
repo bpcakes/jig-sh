@@ -77,6 +77,7 @@ pub(crate) use work::{
 #[command(
     name = "jig",
     version = env!("JIG_DISPLAY_VERSION"),
+    propagate_version = true,
     about = "Repo-local agent runtime and bootstrapper for jig.sh",
     after_help = root_after_help()
 )]

@@ -21,3 +21,15 @@ fn runtime_pin_update_probe_parses_as_capability_only() {
         other => panic!("expected runtime compatibility command, got {other:?}"),
     }
 }
+
+#[test]
+fn version_after_script_writing_options_is_informational() {
+    for args in [
+        &["jig", "update", "--force", "--version"][..],
+        &["jig", "adopt", ".", "--write", "-V"][..],
+        &["jig", "init", ".", "--force", "--version"][..],
+    ] {
+        let error = Cli::try_parse_from(args.iter().copied()).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
+}
