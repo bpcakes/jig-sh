@@ -108,17 +108,28 @@ struct ProxyCleanup<'a> {
 
 impl Drop for ProxyCleanup<'_> {
     fn drop(&mut self) {
-        let output = base_command(self.repo)
-            .args(["proxy", "stop", "--state-dir"])
-            .arg(self.state)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "proxy stop failed with {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        loop {
+            let output = base_command(self.repo)
+                .args(["--json", "proxy", "stop", "--state-dir"])
+                .arg(self.state)
+                .output()
+                .unwrap();
+            if output.status.success() {
+                return;
+            }
+            let report = serde_json::from_slice::<Value>(&output.stdout).unwrap_or(Value::Null);
+            if report["service_status_uncertain"] == true && Instant::now() < deadline {
+                thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+            assert!(
+                output.status.success(),
+                "proxy stop failed with {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
