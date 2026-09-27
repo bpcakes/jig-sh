@@ -18,7 +18,7 @@ fn check_fresh_https_launch(dev: bool) {
     let repo = temp.path().join("ExampleProject");
     let state = temp.path().join("proxy-state");
     fs::create_dir(&repo).unwrap();
-    write_repo_fixture(&repo, "ExampleProject");
+    let app_port = write_repo_fixture(&repo, "ExampleProject");
     // Reserve distinct ephemeral ports together, then release immediately before launch.
     let http = TcpListener::bind("127.0.0.1:0").unwrap();
     let https = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -70,7 +70,7 @@ fn check_fresh_https_launch(dev: bool) {
             .arg(std::env::current_exe().unwrap())
             .args(["--exact", "lifecycle_env_port_helper", "--nocapture"]);
     }
-    drop((http, https));
+    drop((http, https, app_port));
     let child = command
         .process_group(0)
         .env(HELPER_ENV, "1")
@@ -115,7 +115,9 @@ impl Drop for ProxyCleanup<'_> {
             .unwrap();
         assert!(
             output.status.success(),
-            "{}",
+            "proxy stop failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }
