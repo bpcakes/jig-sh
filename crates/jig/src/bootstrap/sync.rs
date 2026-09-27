@@ -94,7 +94,7 @@ pub(super) fn apply_staged_render(
     }
     validate_portable_planned_file_collisions(&staged.active_paths)?;
     preflight_apply_paths(staged, destination, options.backup_root)?;
-    pinned_runtime::validate_pinned_runtime_scripts(staged, destination, options.dry_run)?;
+    pinned_runtime::validate_pinned_runtime_scripts(staged, destination)?;
 
     let conflicts = resolve_render_conflicts(staged, destination, &options)?;
 

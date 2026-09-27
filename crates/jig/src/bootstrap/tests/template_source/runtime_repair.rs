@@ -22,13 +22,13 @@ fn pinned_render_rejects_runtime_script_retirement_before_any_mutation() {
             active_paths: BTreeSet::from([PathBuf::from("a-safe")]),
             retirement_paths: BTreeSet::from([PathBuf::from(retired)]),
         };
-        let apply = || {
+        let apply = |dry_run| {
             apply_staged_render(
                 &staged,
                 root,
                 ApplyRenderOptions {
                     conflict_policy: ApplyRenderConflictPolicy::Accept,
-                    dry_run: false,
+                    dry_run,
                     allow_answers_overwrite: false,
                     allow_contract_overwrite: false,
                     allow_manifest_overwrite: false,
@@ -39,10 +39,12 @@ fn pinned_render_rejects_runtime_script_retirement_before_any_mutation() {
                 },
             )
         };
-        let error = apply().unwrap_err().to_string();
-        assert!(error.contains("Refusing to remove"), "{error}");
-        assert!(error.contains(retired), "{error}");
-        assert!(error.contains("runtime pin"), "{error}");
+        for dry_run in [true, false] {
+            let error = apply(dry_run).unwrap_err().to_string();
+            assert!(error.contains("Refusing to remove"), "{error}");
+            assert!(error.contains(retired), "{error}");
+            assert!(error.contains("runtime pin"), "{error}");
+        }
         assert_eq!(fs::read(root.join("a-safe")).unwrap(), b"original\n");
         assert_eq!(fs::read(root.join("scripts/jig")).unwrap(), b"launcher\n");
         assert_eq!(
@@ -52,7 +54,7 @@ fn pinned_render_rejects_runtime_script_retirement_before_any_mutation() {
         assert_eq!(fs::read(&pin).unwrap(), b"0.5.0\n");
 
         fs::remove_file(pin).unwrap();
-        apply().unwrap();
+        apply(false).unwrap();
         assert!(!root.join(retired).exists());
         assert_eq!(fs::read(root.join("a-safe")).unwrap(), b"new\n");
     }
@@ -252,6 +254,34 @@ fn pinned_recopy_rejects_template_that_would_remove_runtime_pin_support() {
         fs::write(&pin, "0.5.0\n").unwrap();
         let launcher = fs::read(repo.join("scripts/jig")).unwrap();
         let installer = fs::read(repo.join("scripts/install-jig.sh")).unwrap();
+
+        let preview_error = run_adopt(AdoptOpts {
+            components: Default::default(),
+            path: repo.clone(),
+            template: Some(template.path().display().to_string()),
+            template_mode: Some(TemplateMode::Committed),
+            vcs_ref: None,
+            force: true,
+            write: false,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("ExampleProject".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(preview_error.contains("runtime pin"), "{preview_error}");
+        assert!(preview_error.contains(rendered_script), "{preview_error}");
+        assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), launcher);
+        assert_eq!(
+            fs::read(repo.join("scripts/install-jig.sh")).unwrap(),
+            installer
+        );
 
         let error = run_update(UpdateOpts {
             path: repo.clone(),

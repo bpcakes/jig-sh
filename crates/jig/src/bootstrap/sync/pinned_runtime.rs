@@ -9,11 +9,7 @@ use super::super::staged_render::StagedRender;
 pub(super) fn validate_pinned_runtime_scripts(
     staged: &StagedRender,
     destination: &Path,
-    dry_run: bool,
 ) -> Result<()> {
-    if dry_run {
-        return Ok(());
-    }
     let pin = destination.join(".jig/runtime-version");
     match fs::symlink_metadata(&pin) {
         Ok(_) => {}

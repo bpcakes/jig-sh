@@ -73,9 +73,9 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
                               cwd=self.root, env=env or self.env,
                               capture_output=True, text=True, timeout=20)
 
-    def launcher(self, *args, env=None):
+    def launcher(self, *args, env=None, cwd=None):
         return subprocess.run([str(self.root / "scripts/jig"), *args],
-                              cwd=self.root, env=env or self.env,
+                              cwd=cwd or self.root, env=env or self.env,
                               capture_output=True, text=True, timeout=20)
 
     def calls(self):
@@ -234,10 +234,56 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
                 self.assertEqual((self.root / "scripts/jig").read_bytes(), original_launcher)
                 self.assertEqual((self.root / "scripts/install-jig.sh").read_bytes(), original_installer)
         self.assert_ok(self.launcher("update", "--help"))
+        self.assert_ok(self.launcher("update", "-h"))
         self.assert_ok(self.launcher("adopt", "."))
         self.assert_ok(self.launcher("adopt", "--help"))
         self.assert_ok(self.launcher("init", "--help"))
         self.assertEqual(len(self.calls()), 1)
+
+    def test_script_write_guard_uses_destination_pin(self):
+        target = self.root / "ExampleProject"
+        (target / ".jig").mkdir(parents=True)
+        target_pin = target / ".jig/runtime-version"
+        target_pin.write_text("0.5.0\n")
+        template = self.root / "ExampleTemplate"
+        (template / ".jig").mkdir(parents=True)
+
+        self.pin.unlink()
+        for args in [
+            ("update", "ExampleProject", "--launcher-only", "--force"),
+            ("update", "--template", str(template), str(target), "--force"),
+            ("adopt", "--write", str(target)),
+            ("init", str(target), "--force"),
+        ]:
+            with self.subTest(args=args):
+                result = self.launcher(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"cannot safely run {args[0]}", result.stderr)
+                self.assertNotIn("fixture runtime", result.stdout)
+
+        result = self.launcher("--json", "update", "--force", cwd=target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot safely run update", result.stderr)
+
+        target_pin.unlink()
+        target_pin.symlink_to("missing-pin")
+        result = self.launcher("update", str(target), "--force")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot safely run update", result.stderr)
+        target_pin.unlink()
+
+        self.pin.write_text("0.5.0\n")
+        (template / ".jig/runtime-version").write_text("0.5.0\n")
+        for args in [
+            ("update", "--template", str(template), str(target), "--force"),
+            ("update", f"--template={template}", str(target), "--force"),
+            ("adopt", "--write", str(target)),
+            ("init", "--force", str(target), "--repo-name", "ExampleProject"),
+        ]:
+            with self.subTest(args=args):
+                result = self.launcher(*args)
+                self.assert_ok(result)
+                self.assertIn("fixture runtime 0.5.0", result.stdout)
 
     def test_pin_aware_runtime_and_development_override_can_update(self):
         self.pin.write_text("0.5.1\n")
