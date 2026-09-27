@@ -929,4 +929,5 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
 include!("rendering/leaf_conflicts.rs");
 
 mod guidance;
+mod guidance_policy;
 mod guide_preview;

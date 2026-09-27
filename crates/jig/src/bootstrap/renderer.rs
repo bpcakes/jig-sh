@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -72,6 +73,8 @@ pub(super) struct RenderStageRequest<'a> {
     pub(super) template: &'a PreparedTemplateSource,
     pub(super) answers: &'a RenderAnswers,
     pub(super) seed_repo_path: Option<&'a Path>,
+    // Init does not seed other repository content, but can preserve an authored policy.
+    pub(super) policy_repo_path: Option<&'a Path>,
     pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
     pub(super) reconcile_runtime_config: bool,
     pub(super) preferred_rendered_commands: BTreeSet<String>,
@@ -96,16 +99,17 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     request
         .progress
         .step("render templates", "managed files, scripts, and workflows");
-    let mut active_paths = request
-        .progress
-        .log_blocked_on_err(render_template_files_with_seed(
-            request.template,
-            request.answers,
-            &destination,
-            request.seed_repo_path,
-            None,
-            request.contract_version,
-        ))?;
+    let mut active_paths =
+        request
+            .progress
+            .log_blocked_on_err(render_template_files_with_policy(
+                request.template,
+                request.answers,
+                &destination,
+                request.policy_repo_path,
+                None,
+                request.contract_version,
+            ))?;
     let answers_path = destination.join(ANSWERS_FILE);
     if !answers_path.exists() {
         request
@@ -336,7 +340,7 @@ fn render_template_files(
     selected_paths: Option<&BTreeSet<PathBuf>>,
     contract_version: Option<u32>,
 ) -> Result<BTreeSet<PathBuf>> {
-    render_template_files_with_seed(
+    render_template_files_with_policy(
         template,
         answers,
         destination,
@@ -346,11 +350,11 @@ fn render_template_files(
     )
 }
 
-fn render_template_files_with_seed(
+fn render_template_files_with_policy(
     template: &PreparedTemplateSource,
     answers: &RenderAnswers,
     destination: &Path,
-    seed_repo_path: Option<&Path>,
+    policy_repo_path: Option<&Path>,
     selected_paths: Option<&BTreeSet<PathBuf>>,
     contract_version: Option<u32>,
 ) -> Result<BTreeSet<PathBuf>> {
@@ -363,7 +367,7 @@ fn render_template_files_with_seed(
         &context,
         false,
     )?;
-    if file_budget_audit_available(destination, seed_repo_path, answers)? {
+    if file_budget_audit_available(destination, policy_repo_path, answers)? {
         context
             .as_object_mut()
             .expect("render context is an object")
@@ -382,15 +386,15 @@ fn render_template_files_with_seed(
 
 pub(super) fn file_budget_audit_available(
     destination: &Path,
-    seed_repo_path: Option<&Path>,
+    policy_repo_path: Option<&Path>,
     answers: &RenderAnswers,
 ) -> Result<bool> {
     if answers.is_minimal_footprint() {
         return Ok(false);
     }
     let staged_path = destination.join(FILE_BUDGET_POLICY_PATH);
-    let path = if let Some(seed_repo_path) = seed_repo_path {
-        let authored_path = seed_repo_path.join(FILE_BUDGET_POLICY_PATH);
+    let path = if let Some(policy_repo_path) = policy_repo_path {
+        let authored_path = policy_repo_path.join(FILE_BUDGET_POLICY_PATH);
         match fs::symlink_metadata(&authored_path) {
             Ok(metadata) if metadata.file_type().is_file() => authored_path,
             Ok(_) => return Ok(false),
@@ -403,13 +407,23 @@ pub(super) fn file_budget_audit_available(
     } else {
         staged_path
     };
-    let policy = match fs::read(&path) {
-        Ok(policy) => policy,
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
         Err(error) => {
             return Err(error).with_context(|| format!("Failed to read {}", path.display()));
         }
     };
+    if file.metadata()?.len() > jig_file_budget::MAX_POLICY_BYTES_V1 as u64 {
+        return Ok(false);
+    }
+    let mut policy = Vec::new();
+    file.take((jig_file_budget::MAX_POLICY_BYTES_V1 + 1) as u64)
+        .read_to_end(&mut policy)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if policy.len() > jig_file_budget::MAX_POLICY_BYTES_V1 {
+        return Ok(false);
+    }
     let now = time::OffsetDateTime::now_utc().date();
     let current_date =
         jig_file_budget::PolicyDateV1::new(now.year() as u16, now.month() as u8, now.day())
@@ -420,14 +434,12 @@ pub(super) fn file_budget_audit_available(
 pub(super) fn preview_file_budget_audit_available(
     template: &PreparedTemplateSource,
     answers: &RenderAnswers,
+    policy_repo_path: Option<&Path>,
 ) -> Result<bool> {
     let preview = TempDir::new().context("Failed to create file-budget policy preview")?;
     let selected = BTreeSet::from([PathBuf::from(FILE_BUDGET_POLICY_PATH)]);
-    let rendered = render_template_files(template, answers, preview.path(), Some(&selected), None)?;
-    if !rendered.contains(Path::new(FILE_BUDGET_POLICY_PATH)) {
-        return Ok(false);
-    }
-    file_budget_audit_available(preview.path(), None, answers)
+    render_template_files(template, answers, preview.path(), Some(&selected), None)?;
+    file_budget_audit_available(preview.path(), policy_repo_path, answers)
 }
 
 fn render_template_files_pass(

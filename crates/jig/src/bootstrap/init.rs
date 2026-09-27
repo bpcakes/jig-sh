@@ -119,9 +119,12 @@ fn prepare_init(
             )
             .map(AnswerResolution::into_parts),
         )?;
-        plan.file_budget_policy_enabled = progress.log_blocked_on_err(
-            super::renderer::preview_file_budget_audit_available(&template, &resolved),
-        )?;
+        plan.file_budget_policy_enabled =
+            progress.log_blocked_on_err(super::renderer::preview_file_budget_audit_available(
+                &template,
+                &resolved,
+                Some(&destination),
+            ))?;
     }
     Ok(PreparedInit {
         destination,

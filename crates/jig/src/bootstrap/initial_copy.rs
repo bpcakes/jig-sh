@@ -131,6 +131,7 @@ pub(super) fn render_and_copy_bootstrap_template(
         template: request.template,
         answers: &answers,
         seed_repo_path: request.seed_repo_path,
+        policy_repo_path: Some(request.destination),
         prior_managed_paths: request.prior_managed_paths,
         reconcile_runtime_config: request.reconcile_runtime_config,
         preferred_rendered_commands,
@@ -139,7 +140,7 @@ pub(super) fn render_and_copy_bootstrap_template(
     })?;
     let file_budget_audit_available = super::renderer::file_budget_audit_available(
         &staged.destination,
-        request.seed_repo_path,
+        Some(request.destination),
         &answers,
     )?;
     let no_prior_paths = BTreeSet::new();
