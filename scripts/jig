@@ -43,7 +43,6 @@ jig_is_global_flag() {
 
 jig_info_requested_before_separator() {
   [ "$#" -gt 0 ] || return 0
-  command_seen=0
   for arg in "$@"; do
     if jig_is_global_flag "$arg"; then
       continue
@@ -52,20 +51,8 @@ jig_info_requested_before_separator() {
       --)
         return 1
         ;;
-      -h | --help)
+      -h | --help | -V | --version)
         return 0
-        ;;
-      -V | --version)
-        if [ "$command_seen" -eq 0 ]; then
-          return 0
-        fi
-        return 1
-        ;;
-      -*)
-        return 1
-        ;;
-      *)
-        command_seen=1
         ;;
     esac
   done
@@ -411,8 +398,7 @@ case "$subcommand" in
     fi
     ;;
 esac
-if [ "${pin_write_requested:-0}" -eq 1 ] && [ "$info_requested" -eq 0 ] \
-  && [ -z "${JIG_DEV_BIN:-}" ]; then
+if [ "${pin_write_requested:-0}" -eq 1 ] && [ "$info_requested" -eq 0 ]; then
   case "$pin_target" in
     /*) pin_repository="$pin_target" ;;
     *) pin_repository="$PWD/$pin_target" ;;

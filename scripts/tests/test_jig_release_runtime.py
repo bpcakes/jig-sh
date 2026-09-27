@@ -10,7 +10,10 @@ import sys
 import tempfile
 import unittest
 
-from test_jig_source_runtime import NATIVE_FIXTURE, REPO
+if __package__:
+    from .test_jig_source_runtime import NATIVE_FIXTURE, REPO
+else:
+    from test_jig_source_runtime import NATIVE_FIXTURE, REPO
 
 
 class ReleaseRuntimeTests(unittest.TestCase):
@@ -239,6 +242,49 @@ shutil.copy2(pathlib.Path(os.environ["EXAMPLE_BINARIES"]) / version, root / "bin
         self.assert_ok(self.launcher("adopt", "--help"))
         self.assert_ok(self.launcher("init", "--help"))
         self.assertEqual(len(self.calls()), 1)
+
+    def test_help_after_options_stays_read_only_with_or_without_a_pin(self):
+        original_launcher = (self.root / "scripts/jig").read_bytes()
+        original_installer = (self.root / "scripts/install-jig.sh").read_bytes()
+        commands = [
+            ("update", "--force", "-h"),
+            ("update", "--force", "--help"),
+            ("adopt", ".", "--write", "--help"),
+            ("init", ".", "--force", "-h"),
+        ]
+        for pinned in [True, False]:
+            if not pinned:
+                self.pin.unlink()
+            for args in commands:
+                with self.subTest(pinned=pinned, args=args):
+                    result = self.launcher(*args)
+                    self.assert_ok(result)
+                    self.assertIn("fixture runtime", result.stdout)
+                    self.assertEqual((self.root / "scripts/jig").read_bytes(), original_launcher)
+                    self.assertEqual((self.root / "scripts/install-jig.sh").read_bytes(), original_installer)
+
+    def test_old_development_override_cannot_write_a_pinned_destination(self):
+        older_override = dict(self.env, JIG_DEV_BIN=str(self.binaries / "0.5.0"))
+        original_launcher = (self.root / "scripts/jig").read_bytes()
+        original_installer = (self.root / "scripts/install-jig.sh").read_bytes()
+        for args in [("update", "--launcher-only", "--force"),
+                     ("adopt", ".", "--write"),
+                     ("init", ".", "--force")]:
+            with self.subTest(args=args):
+                result = self.launcher(*args, env=older_override)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"cannot safely run {args[0]}", result.stderr)
+                self.assertEqual((self.root / "scripts/jig").read_bytes(), original_launcher)
+                self.assertEqual((self.root / "scripts/install-jig.sh").read_bytes(), original_installer)
+
+        target = self.root / "ExampleProject"
+        (target / ".jig").mkdir(parents=True)
+        (target / ".jig/runtime-version").write_text("0.5.0\n")
+        self.pin.unlink()
+        result = self.launcher("update", str(target), "--force", env=older_override)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot safely run update", result.stderr)
+        self.assertEqual((self.root / "scripts/jig").read_bytes(), original_launcher)
 
     def test_script_write_guard_uses_destination_pin(self):
         target = self.root / "ExampleProject"
