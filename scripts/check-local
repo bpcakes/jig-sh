@@ -11,6 +11,9 @@ import time
 
 
 CANCEL_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+INCOMPLETE_CLEANUP = (
+    "descendant cleanup could not be confirmed; child processes may still be running"
+)
 
 
 def signal_group(child, signum):
@@ -35,33 +38,37 @@ def group_is_running(pgid):
 def cancel_phase(child, signum):
     # Keep the leader unreaped until its descendants have stopped. Its PID pins
     # the group identity even if the shell exits before its installer does.
-    signal_group(child, signum)
     grace = time.monotonic() + 5
     deadline = grace + 5
     forced = False
     try:
+        signal_group(child, signum)
         while True:
-            if time.monotonic() >= grace:
-                forced = True
+            if forced:
+                # Once escalation begins, re-signal before every membership
+                # proof while the unreaped leader still pins the group.
                 signal_group(child, signal.SIGKILL)
             if not group_is_running(child.pid):
                 break
             if time.monotonic() >= deadline:
                 raise OSError("local validation process group did not stop")
+            if not forced and time.monotonic() >= grace:
+                forced = True
+                continue
             time.sleep(0.02)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as error:
         # A failed membership probe must not leave startup work running or
         # report cancellation as complete. The leader is still unreaped here.
-        signal_group(child, signal.SIGKILL)
-        raise
+        try:
+            signal_group(child, signal.SIGKILL)
+        except OSError as cleanup_error:
+            raise OSError(f"{error}; {cleanup_error}; {INCOMPLETE_CLEANUP}") from error
+        raise OSError(f"{error}; {INCOMPLETE_CLEANUP}") from error
     child.wait()
     if forced:
         # Jig supervises action groups outside this phase group. Killing their
         # owner prevents it from confirming that those actions have stopped.
-        raise OSError(
-            "forced termination: descendant cleanup could not be confirmed; "
-            "child processes may still be running"
-        )
+        raise OSError(f"forced termination: {INCOMPLETE_CLEANUP}")
 
 
 def main():
