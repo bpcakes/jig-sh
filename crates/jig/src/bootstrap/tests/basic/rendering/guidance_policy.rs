@@ -71,7 +71,7 @@ fn forced_init_guidance_uses_the_policy_preserved_in_the_destination() {
 }
 
 #[test]
-fn oversized_authored_policy_is_unavailable_for_bootstrap_guidance() {
+fn authored_policy_at_the_size_limit_is_available_but_oversized_is_not() {
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir_all(repo.join(".jig")).unwrap();
@@ -86,16 +86,19 @@ fn oversized_authored_policy_is_unavailable_for_bootstrap_guidance() {
     )
     .unwrap();
     let answers = RenderAnswers::from_answers_file(&repo.join(".jig.toml")).unwrap();
-    let oversized_policy = vec![b' '; jig_file_budget::MAX_POLICY_BYTES_V1 + 1];
-    fs::write(repo.join(".jig/file-budget.toml"), &oversized_policy).unwrap();
-
+    let policy_path = repo.join(".jig/file-budget.toml");
+    let mut policy = VALID_POLICY.as_bytes().to_vec();
+    policy.resize(jig_file_budget::MAX_POLICY_BYTES_V1, b' ');
+    fs::write(&policy_path, &policy).unwrap();
     assert!(
-        !crate::bootstrap::renderer::file_budget_audit_available(&repo, Some(&repo), &answers)
+        crate::bootstrap::renderer::file_budget_audit_available(&repo, Some(&repo), &answers)
             .unwrap()
     );
 
-    assert_eq!(
-        fs::read(repo.join(".jig/file-budget.toml")).unwrap(),
-        oversized_policy
+    policy.push(b' ');
+    fs::write(&policy_path, &policy).unwrap();
+    assert!(
+        !crate::bootstrap::renderer::file_budget_audit_available(&repo, Some(&repo), &answers)
+            .unwrap()
     );
 }
