@@ -1,6 +1,5 @@
 use super::*;
 use crate::state::{DevProcessIdentity, DevSessionControl};
-use crate::test_tempdir as tempdir;
 
 fn cleanup_required_session() -> DevSessionRecord {
     DevSessionRecord {
@@ -27,7 +26,7 @@ fn cleanup_required_session() -> DevSessionRecord {
 
 #[test]
 fn contextless_inspection_finds_deleted_root_legacy_blocker_without_mutation() {
-    let temp = tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");
     let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
     let mut legacy = cleanup_required_session();
@@ -81,7 +80,7 @@ fn contextless_inspection_finds_deleted_root_legacy_blocker_without_mutation() {
 
 #[test]
 fn exact_recovery_is_idempotent_and_preserves_unrelated_sessions() {
-    let temp = tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");
     let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
     let mut target = cleanup_required_session();
@@ -173,7 +172,7 @@ fn exact_recovery_refuses_pending_live_and_uncertain_evidence() {
     }
 
     for (session, reason) in cases {
-        let temp = tempdir().unwrap();
+        let temp = crate::test_tempdir().unwrap();
         let state_dir = temp.path().join("proxy-state");
         let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
         store
@@ -191,7 +190,7 @@ fn exact_recovery_refuses_pending_live_and_uncertain_evidence() {
 
 #[test]
 fn exact_recovery_removes_only_selected_owned_process_route() {
-    let temp = tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");
     let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
     let mut target = cleanup_required_session();

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Support `.jig/runtime-version` release pins in generated launchers, with exact
+  crates.io installation, compatible installed-binary reuse, and CI executable
+  caching independent of template source revisions. Generated launchers and
+  staged-render checks prevent older runtimes or templates from replacing
+  pin-aware scripts during updates and re-adoption.
+
 ### Changed
 
 - Make structured work, receipt inspection, and ExecPlans optional in generated and
@@ -9,6 +17,9 @@
   backend suite for every change, and retain standalone `jig file-budget` diagnostics.
 
 ### Fixed
+
+- Skip unused source-runtime repair seeds in release-pinned repositories and
+  suppress doctor warnings about those inactive caches.
 
 - Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.
 

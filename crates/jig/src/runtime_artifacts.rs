@@ -1,6 +1,17 @@
 const GENERATED_RUNTIME_LAUNCHER_MARKER: &str = "# jig-generated-runtime-launcher:v1";
 const GENERATED_RUNTIME_INSTALLER_MARKER: &str = "# jig-generated-runtime-installer:v1";
 const RUNTIME_REPOSITORY_SCOPE_MARKER: &str = "# jig-runtime-repository-scope:v1";
+const RELEASE_RUNTIME_PIN_MARKER: &str = "# jig-release-runtime-pin:v1";
+
+/// Whether ordinary launches bypass source caches because the installer sees a
+/// release pin. Invalid pins also prevent source fallback; validation remains
+/// the installer's responsibility. Ignore JIG_DEV_BIN here: repair seeding and
+/// doctor describe subsequent ordinary launches, not the current override.
+pub(crate) fn release_pin_bypasses_source_cache(root: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(root.join(".jig/runtime-version")).is_ok()
+        && std::fs::read_to_string(root.join("scripts/install-jig.sh"))
+            .is_ok_and(|text| inspect_installer(&text).supports_release_runtime_pin())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ParsedField<T> {
@@ -16,6 +27,7 @@ pub(crate) struct LauncherInspection {
     readable_contract_version: Option<u32>,
     generated: bool,
     repository_scoped: bool,
+    release_runtime_pin: bool,
 }
 
 impl LauncherInspection {
@@ -38,12 +50,17 @@ impl LauncherInspection {
     pub(crate) fn uses_repository_scope_protocol(&self) -> bool {
         self.repository_scoped
     }
+
+    pub(crate) fn supports_release_runtime_pin(&self) -> bool {
+        self.release_runtime_pin
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct InstallerInspection {
     generated: bool,
     repository_scoped: bool,
+    release_runtime_pin: bool,
 }
 
 impl InstallerInspection {
@@ -53,6 +70,10 @@ impl InstallerInspection {
 
     pub(crate) fn uses_repository_scope_protocol(&self) -> bool {
         self.repository_scoped
+    }
+
+    pub(crate) fn supports_release_runtime_pin(&self) -> bool {
+        self.release_runtime_pin
     }
 }
 
@@ -94,6 +115,7 @@ pub(crate) fn inspect_launcher(text: &str) -> LauncherInspection {
         readable_contract_version,
         generated,
         repository_scoped,
+        release_runtime_pin: repository_scoped && text.contains(RELEASE_RUNTIME_PIN_MARKER),
     }
 }
 
@@ -102,6 +124,9 @@ pub(crate) fn inspect_installer(text: &str) -> InstallerInspection {
         generated: recognizable_generated_installer(text),
         repository_scoped: text.contains(GENERATED_RUNTIME_INSTALLER_MARKER)
             && text.contains(RUNTIME_REPOSITORY_SCOPE_MARKER),
+        release_runtime_pin: text.contains(GENERATED_RUNTIME_INSTALLER_MARKER)
+            && text.contains(RUNTIME_REPOSITORY_SCOPE_MARKER)
+            && text.contains(RELEASE_RUNTIME_PIN_MARKER),
     }
 }
 

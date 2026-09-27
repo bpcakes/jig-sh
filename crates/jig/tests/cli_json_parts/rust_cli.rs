@@ -122,6 +122,7 @@ fn rust_cli_init_has_human_process_summary() {
     assert!(human.contains("scripts/jig file-budget audit"));
     assert!(human.contains("scripts/jig check contract"));
     assert!(human.contains("scripts/jig check agent-guides"));
+    assert!(human.contains("To pin a published runtime independently of template updates"));
     assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));
     assert!(!human.contains("scripts/jig dev"));

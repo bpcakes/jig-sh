@@ -23,13 +23,20 @@ NATIVE_FIXTURE = r'''
 #ifndef CONTRACT
 #define CONTRACT "8"
 #endif
+#ifndef PIN_AWARE_UPDATE
+#define PIN_AWARE_UPDATE 0
+#endif
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "__runtime-compatible") == 0) {
+        int contract_matches = 0;
+        int requires_pin_aware_update = 0;
         for (int i = 2; i + 1 < argc; i++) {
             if (strcmp(argv[i], "--contract-version") == 0)
-                return strcmp(argv[i + 1], CONTRACT) != 0;
+                contract_matches = strcmp(argv[i + 1], CONTRACT) == 0;
+            if (strcmp(argv[i], "--require-runtime-pin-update") == 0)
+                requires_pin_aware_update = 1;
         }
-        return 1;
+        return !contract_matches || (requires_pin_aware_update && !PIN_AWARE_UPDATE);
     }
     int i = 1;
     while (i + 1 < argc && strncmp(argv[i], "--__launcher-", 13) == 0) i += 2;
