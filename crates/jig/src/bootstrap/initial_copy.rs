@@ -137,8 +137,11 @@ pub(super) fn render_and_copy_bootstrap_template(
         contract_version: None,
         progress: request.progress,
     })?;
-    let file_budget_audit_available =
-        super::renderer::rendered_file_budget_audit_available(&staged.destination, &answers)?;
+    let file_budget_audit_available = super::renderer::file_budget_audit_available(
+        &staged.destination,
+        request.seed_repo_path,
+        &answers,
+    )?;
     let no_prior_paths = BTreeSet::new();
     let prior_paths = request.prior_managed_paths.unwrap_or(&no_prior_paths);
     let lifecycle = prepare_legacy_migration(request.destination, &mut staged, prior_paths)?;

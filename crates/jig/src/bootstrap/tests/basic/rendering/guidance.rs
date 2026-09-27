@@ -76,6 +76,12 @@ runner = { kind = "command", command = "budget_check_command" }
     assert!(!destination.join(".jig/file-budget.toml").exists());
     assert!(!destination.join("scripts/jig").exists());
     assert!(!output["notes"].to_string().contains("file-budget audit"));
+    assert!(output["notes"].to_string().contains("Minimal setup wrote"));
+    assert!(
+        !output["notes"]
+            .to_string()
+            .contains("Minimal adoption wrote")
+    );
 }
 
 #[test]
@@ -151,6 +157,78 @@ runner = { kind = "command", command = "budget_check_command" }
     assert!(!output["notes"].to_string().contains("file-budget audit"));
     let guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
     assert!(!guide.contains("file-budget audit"));
+}
+
+#[test]
+fn adoption_and_update_advertise_preserved_file_budget_policy_without_seed() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::write(
+        template
+            .path()
+            .join("templates/project/.jig/file-budget.toml.jinja"),
+        "",
+    )
+    .unwrap();
+    fs::create_dir_all(repo.join(".jig")).unwrap();
+    let policy = "version=1\n[[rules]]\nid=\"source\"\ninclude=[\"**/*.rs\"]\nmax_lines=100000\n";
+    fs::write(repo.join(".jig/file-budget.toml"), policy).unwrap();
+
+    let output = run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts::default(),
+    })
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.join(".jig/file-budget.toml")).unwrap(),
+        policy
+    );
+    assert!(
+        fs::read_to_string(repo.join("AGENTS.md"))
+            .unwrap()
+            .contains("scripts/jig file-budget audit")
+    );
+    assert!(
+        output["notes"]
+            .to_string()
+            .contains("scripts/jig file-budget audit")
+    );
+
+    run_update(UpdateOpts {
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        recopy: true,
+        launcher_only: false,
+        force: false,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.join(".jig/file-budget.toml")).unwrap(),
+        policy
+    );
+    assert!(
+        fs::read_to_string(repo.join("AGENTS.md"))
+            .unwrap()
+            .contains("scripts/jig file-budget audit")
+    );
 }
 
 #[test]

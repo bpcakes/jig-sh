@@ -96,13 +96,16 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     request
         .progress
         .step("render templates", "managed files, scripts, and workflows");
-    let mut active_paths = request.progress.log_blocked_on_err(render_template_files(
-        request.template,
-        request.answers,
-        &destination,
-        None,
-        request.contract_version,
-    ))?;
+    let mut active_paths = request
+        .progress
+        .log_blocked_on_err(render_template_files_with_seed(
+            request.template,
+            request.answers,
+            &destination,
+            request.seed_repo_path,
+            None,
+            request.contract_version,
+        ))?;
     let answers_path = destination.join(ANSWERS_FILE);
     if !answers_path.exists() {
         request
@@ -333,6 +336,24 @@ fn render_template_files(
     selected_paths: Option<&BTreeSet<PathBuf>>,
     contract_version: Option<u32>,
 ) -> Result<BTreeSet<PathBuf>> {
+    render_template_files_with_seed(
+        template,
+        answers,
+        destination,
+        None,
+        selected_paths,
+        contract_version,
+    )
+}
+
+fn render_template_files_with_seed(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    destination: &Path,
+    seed_repo_path: Option<&Path>,
+    selected_paths: Option<&BTreeSet<PathBuf>>,
+    contract_version: Option<u32>,
+) -> Result<BTreeSet<PathBuf>> {
     let mut context = render_context(template, answers, contract_version)?;
     let active_paths = render_template_files_pass(
         template,
@@ -342,9 +363,7 @@ fn render_template_files(
         &context,
         false,
     )?;
-    if active_paths.contains(Path::new(FILE_BUDGET_POLICY_PATH))
-        && rendered_file_budget_audit_available(destination, answers)?
-    {
+    if file_budget_audit_available(destination, seed_repo_path, answers)? {
         context
             .as_object_mut()
             .expect("render context is an object")
@@ -361,14 +380,29 @@ fn render_template_files(
     Ok(active_paths)
 }
 
-pub(super) fn rendered_file_budget_audit_available(
+pub(super) fn file_budget_audit_available(
     destination: &Path,
+    seed_repo_path: Option<&Path>,
     answers: &RenderAnswers,
 ) -> Result<bool> {
-    if answers.is_minimal_footprint() || !answers.file_budget_ci_enabled() {
+    if answers.is_minimal_footprint() {
         return Ok(false);
     }
-    let path = destination.join(FILE_BUDGET_POLICY_PATH);
+    let staged_path = destination.join(FILE_BUDGET_POLICY_PATH);
+    let path = if let Some(seed_repo_path) = seed_repo_path {
+        let authored_path = seed_repo_path.join(FILE_BUDGET_POLICY_PATH);
+        match fs::symlink_metadata(&authored_path) {
+            Ok(metadata) if metadata.file_type().is_file() => authored_path,
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == ErrorKind::NotFound => staged_path,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect {}", authored_path.display()));
+            }
+        }
+    } else {
+        staged_path
+    };
     let policy = match fs::read(&path) {
         Ok(policy) => policy,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
@@ -393,7 +427,7 @@ pub(super) fn preview_file_budget_audit_available(
     if !rendered.contains(Path::new(FILE_BUDGET_POLICY_PATH)) {
         return Ok(false);
     }
-    rendered_file_budget_audit_available(preview.path(), answers)
+    file_budget_audit_available(preview.path(), None, answers)
 }
 
 fn render_template_files_pass(
