@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- Stop shipping ExecPlan and structured-work guidance. Generated repositories no
+  longer receive `.agent/PLANS.md` or `.agent/plans/.gitkeep`, generated `AGENTS.md`
+  no longer directs agents to ExecPlans or `jig work`, and the default Codex skills
+  omit `jig-exec-plans@jig-skills`. `jig update` reports both formerly managed files
+  as removed paths and deletes them with `--force`; move any local edits to
+  `.agent/PLANS.md` first. Existing `.jig.toml` skill lists are preserved, so remove
+  `jig-exec-plans@jig-skills` there to stop expecting it. `jig work` commands and
+  receipts are unchanged.
+
 ## v0.6.0 - 2026-09-27
 
 ### Added
@@ -16,25 +29,14 @@
 
 ### Changed
 
-- Make structured work and receipt inspection optional in generated and repository
-  guidance. Recommend checks for the affected behavior instead of a full
+- Make structured work, receipt inspection, and ExecPlans optional in generated and
+  repository guidance. Recommend checks for the affected behavior instead of a full
   backend suite for every change, and retain standalone `jig file-budget` diagnostics.
 - Start ready read-only dependent checks when their own prerequisites complete,
   without waiting for unrelated checks in the same execution layer. Preserve
   resource admission, effectful execution, and fail-fast ordering constraints.
 - Run inexpensive local preflight checks before the full workspace suite in this
   source repository, and reduce CI test serialization and redundant check builds.
-
-### Removed
-
-- Stop shipping ExecPlan and structured-work guidance. Generated repositories no
-  longer receive `.agent/PLANS.md` or `.agent/plans/.gitkeep`, generated `AGENTS.md`
-  no longer directs agents to ExecPlans or `jig work`, and the default Codex skills
-  omit `jig-exec-plans@jig-skills`. `jig update` reports both formerly managed files
-  as removed paths and deletes them with `--force`; move any local edits to
-  `.agent/PLANS.md` first. Existing `.jig.toml` skill lists are preserved, so remove
-  `jig-exec-plans@jig-skills` there to stop expecting it. `jig work` commands and
-  receipts are unchanged.
 
 ### Fixed
 
