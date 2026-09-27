@@ -101,6 +101,7 @@ fn rust_cli_init_has_exact_json_and_human_process_summaries() {
     assert!(human.contains("scaffold: rust-cli for exampleclihuman (db: none)"));
     assert!(human.contains("scaffold files: 6 created, 0 modified, 0 unchanged"));
     assert!(human.contains("Scaffolded project code is project-owned"));
+    assert!(human.contains("To pin a published runtime independently of template updates"));
     assert!(!human.contains("Scaffolded application code"));
     assert!(!human.contains("frontends:"));
     assert!(!human.contains("scripts/jig dev"));

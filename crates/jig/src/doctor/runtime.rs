@@ -259,6 +259,9 @@ pub(super) fn runtime_check(
 }
 
 pub(super) fn launcher_repair_seed_stamp_is_present(root: &Path, contract_version: u32) -> bool {
+    if crate::runtime_artifacts::release_pin_bypasses_source_cache(root) {
+        return false;
+    }
     [RuntimeCacheProfile::Default, RuntimeCacheProfile::Runtime]
         .into_iter()
         .map(|profile| {

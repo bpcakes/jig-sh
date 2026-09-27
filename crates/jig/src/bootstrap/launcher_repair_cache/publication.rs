@@ -30,7 +30,6 @@ pub(in crate::bootstrap) struct LauncherRepairCachePublication {
 }
 
 impl LauncherRepairCachePublication {
-    #[cfg(test)]
     pub(super) fn empty() -> Self {
         Self {
             staging: None,

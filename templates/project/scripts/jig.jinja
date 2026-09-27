@@ -2,6 +2,7 @@
 set -eu
 # jig-generated-runtime-launcher:v1
 # jig-runtime-repository-scope:v1
+# jig-release-runtime-pin:v1
 # jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,migration-immutability,sqlx-unchecked-non-test
 # jig-capability-only-subcommands:adopt,claude,codex,doctor,init,presets,update
 # jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,file-budget,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,proxy,run,schema-dump,setup,sqlx,state,status,ui,vault,work
@@ -42,7 +43,6 @@ jig_is_global_flag() {
 
 jig_info_requested_before_separator() {
   [ "$#" -gt 0 ] || return 0
-  command_seen=0
   for arg in "$@"; do
     if jig_is_global_flag "$arg"; then
       continue
@@ -51,20 +51,8 @@ jig_info_requested_before_separator() {
       --)
         return 1
         ;;
-      -h | --help)
+      -h | --help | -V | --version)
         return 0
-        ;;
-      -V | --version)
-        if [ "$command_seen" -eq 0 ]; then
-          return 0
-        fi
-        return 1
-        ;;
-      -*)
-        return 1
-        ;;
-      *)
-        command_seen=1
         ;;
     esac
   done
@@ -92,6 +80,100 @@ jig_subcommand() {
     esac
   done
   return 1
+}
+
+jig_pin_value_option() {
+  case "$1" in
+    --template|--template-mode|--vcs-ref|--answers-file|--repo-name|--go-module|\
+    --default-branch|--ci-github-runner|--jig-version|--template-source-url|\
+    --sqlx-enabled|--rust-crate-root|--rust-migration-dir|--rust-migration-layout|\
+    --rust-sqlx-metadata-dir|--schema-dump-enabled|--schema-dump-command|\
+    --schema-docs-dir|--schema-check-command|--sqlx-check-command|\
+    --migration-add-command|--bootstrap-command|--contract-check-command|\
+    --dev-command|--rust-fmt-check-command|--rust-clippy-command|\
+    --rust-test-command|--rust-test-locked-command|--web-package-manager|\
+    --application-contracts-enabled|--frontend-app|--preset|--db|--frontend|\
+    --frontends|--include-component|--exclude-component)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Find the same positional destination that init/adopt/update resolve from the
+# invocation directory. Skip option values so a template path cannot stand in
+# for the repository whose managed scripts will be written.
+jig_pin_write_target() {
+  pin_target=.
+  pin_target_seen=0
+  pin_write_requested=0
+  pin_command_seen=0
+  pin_options=1
+  pin_value_next=0
+  for pin_arg in "$@"; do
+    if [ "$pin_command_seen" -eq 0 ]; then
+      if [ "$pin_arg" = "$subcommand" ]; then
+        pin_command_seen=1
+      fi
+      continue
+    fi
+    if [ "$pin_value_next" -eq 1 ]; then
+      pin_value_next=0
+      continue
+    fi
+    if [ "$pin_options" -eq 1 ]; then
+      case "$pin_arg" in
+        --)
+          pin_options=0
+          continue
+          ;;
+        --write)
+          if [ "$subcommand" = adopt ]; then pin_write_requested=1; fi
+          continue
+          ;;
+        --force)
+          if [ "$subcommand" = init ]; then pin_write_requested=1; fi
+          continue
+          ;;
+        --json|--minimal|--defaults|--no-input|--no-vault|--recopy|--launcher-only|--help|--version)
+          continue
+          ;;
+        --*=*)
+          pin_option=${pin_arg%%=*}
+          if jig_pin_value_option "$pin_option"; then continue; fi
+          ;;
+        --*)
+          if jig_pin_value_option "$pin_arg"; then
+            pin_value_next=1
+            continue
+          fi
+          ;;
+        -*)
+          ;;
+        *)
+          if [ "$pin_target_seen" -eq 0 ]; then
+            pin_target="$pin_arg"
+            pin_target_seen=1
+          fi
+          continue
+          ;;
+      esac
+      printf '%s\n' "Cannot determine the $subcommand destination from option $pin_arg; update scripts/jig before using this option." >&2
+      return 1
+    fi
+    if [ "$pin_target_seen" -eq 0 ]; then
+      pin_target="$pin_arg"
+      pin_target_seen=1
+    fi
+  done
+  if [ "$pin_value_next" -eq 1 ]; then
+    printf '%s\n' "Missing value for a $subcommand option." >&2
+    return 1
+  fi
+  if [ "$subcommand" = update ]; then pin_write_requested=1; fi
+  if [ "$subcommand" = init ] && [ "$pin_target_seen" -eq 0 ]; then
+    pin_write_requested=0
+  fi
 }
 
 jig_capability_only_requested() {
@@ -308,6 +390,34 @@ case "$subcommand" in
     fi
     ;;
 esac
+
+# Older runtimes can rewrite a pinned destination's managed scripts from
+# templates that do not understand .jig/runtime-version.
+case "$subcommand" in
+  update | adopt | init)
+    if [ "$info_requested" -eq 0 ]; then
+      jig_pin_write_target "$@" || exit $?
+    fi
+    ;;
+esac
+if [ "${pin_write_requested:-0}" -eq 1 ] && [ "$info_requested" -eq 0 ]; then
+  case "$pin_target" in
+    /*) pin_repository="$pin_target" ;;
+    *) pin_repository="$PWD/$pin_target" ;;
+  esac
+  pin_file="$pin_repository/.jig/runtime-version"
+  if [ -e "$pin_file" ] || [ -L "$pin_file" ]; then
+  if ! "$bin_path" __runtime-compatible \
+    --require-runtime-pin-update \
+    --contract-version "$CONTRACT_VERSION" \
+    --profile runtime "$pin_repository" >/dev/null 2>&1; then
+    printf '%s\n' \
+      "The selected Jig runtime cannot safely run $subcommand on $pin_repository: its templates may remove .jig/runtime-version support." \
+      "Run a pin-aware Jig binary directly, or set JIG_DEV_BIN to one for this command." >&2
+    exit 1
+  fi
+  fi
+fi
 
 # Repo-local commands run with the binary's working directory set to the owning
 # repository, even when this launcher is invoked by absolute path from another

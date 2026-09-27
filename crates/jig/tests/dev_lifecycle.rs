@@ -115,10 +115,11 @@ fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     let state_dir = temp.path().join("proxy-state");
     fs::create_dir(&repo_a).expect("create first repo");
     fs::create_dir(&repo_b).expect("create second repo");
-    write_repo_fixture(&repo_a, "lifecycle-one");
-    write_repo_fixture(&repo_b, "lifecycle-two");
+    let first_app_port = write_repo_fixture(&repo_a, "lifecycle-one");
+    let other_app_port = write_repo_fixture(&repo_b, "lifecycle-two");
 
     let first_ready = temp.path().join("first-ready");
+    drop(first_app_port);
     let mut first = ForegroundDev::spawn(&repo_a, &state_dir, &first_ready, false);
     first.wait_until_ready(&first_ready);
 
@@ -129,6 +130,7 @@ fn dev_status_stop_and_replace_manage_repo_scoped_sessions() {
     assert_same_repo_conflict(&conflict, &mut first);
 
     let other_ready = temp.path().join("other-ready");
+    drop(other_app_port);
     let mut other = ForegroundDev::spawn(&repo_b, &state_dir, &other_ready, true);
     other.wait_until_ready(&other_ready);
     assert!(
@@ -399,7 +401,14 @@ impl Drop for ForegroundDev {
     }
 }
 
-fn write_repo_fixture(root: &Path, repo_name: &str) {
+fn write_repo_fixture(root: &Path, repo_name: &str) -> TcpListener {
+    // Separate concurrent test processes from Jig's shared 4000-4999 app scan.
+    let start = 10_000 + (std::process::id() % 20_000) as u16;
+    let app_port = (start..30_000)
+        .chain(10_000..start)
+        .find_map(|port| TcpListener::bind(("127.0.0.1", port)).ok())
+        .expect("reserve fixture app port");
+    let port = app_port.local_addr().unwrap().port();
     let test_exe = serde_json::to_string(&std::env::current_exe().expect("resolve test binary"))
         .expect("quote test binary path");
     fs::write(
@@ -419,6 +428,7 @@ name = "lifecycle-helper"
 kind = "env-port"
 dir = "."
 argv = [{test_exe}, "--exact", "lifecycle_env_port_helper", "--nocapture"]
+port = {port}
 host = "127.0.0.1"
 proxy = false
 
@@ -448,4 +458,5 @@ marketplaces = []
     )
     .expect("write lifecycle Jig contract");
     fs::write(root.join(".mcp.json"), "{}\n").expect("write MCP config");
+    app_port
 }

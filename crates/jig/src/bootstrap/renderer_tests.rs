@@ -2,7 +2,9 @@ use crate::backend::BackendLanguage;
 use crate::bootstrap::AnswerOpts;
 use crate::bootstrap::answers::AnswerResolution;
 use crate::bootstrap::repository_model::RepositoryProjectionHint;
+use crate::bootstrap::scaffold::InitScaffoldPlan;
 use crate::bootstrap::template_source::PrivateAnswerOverrides;
+use crate::bootstrap::{ScaffoldDb, ScaffoldOpts, ScaffoldPreset};
 
 use super::*;
 
@@ -33,6 +35,161 @@ fn live_template_source() -> PreparedTemplateSource {
         None,
         PrivateAnswerOverrides::default(),
     )
+}
+
+fn assert_jig_jobs_cache_release_runtime(workflow: &str, name: &str) -> usize {
+    let rendered: JsonValue = serde_yaml_ng::from_str(workflow).unwrap();
+    let jobs = rendered["jobs"].as_object().unwrap();
+    let mut jig_jobs = 0;
+    for (job_name, job) in jobs {
+        let steps = job["steps"].as_array().unwrap();
+        let jig_step = steps.iter().position(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("scripts/jig "))
+        });
+        let Some(jig_step) = jig_step else { continue };
+        jig_jobs += 1;
+        let cache_steps: Vec<_> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step["name"] == "Cache pinned Jig runtime")
+            .collect();
+        assert_eq!(
+            cache_steps.len(),
+            1,
+            "{name}/{job_name} needs one Jig cache"
+        );
+        let (cache_index, cache) = cache_steps[0];
+        assert!(
+            cache_index < jig_step,
+            "{name}/{job_name} caches after running Jig"
+        );
+        assert_eq!(
+            cache["if"],
+            "${{ hashFiles('.jig/runtime-version') != '' }}"
+        );
+        assert_eq!(cache["uses"], "actions/cache@v5");
+        let paths: Vec<_> = cache["with"]["path"].as_str().unwrap().lines().collect();
+        assert_eq!(
+            paths,
+            [
+                ".git/jig-tools/release-*-runtime/bin/jig",
+                ".agent/.cache/jig/release-*-runtime/bin/jig",
+            ],
+            "{name}/{job_name} cache path must match the runtime installer"
+        );
+        assert_eq!(
+            cache["with"]["key"],
+            "jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}",
+            "{name}/{job_name} cache key must track the selected runtime"
+        );
+    }
+    assert!(jig_jobs > 0, "{name} rendered no Jig-invoking jobs");
+    jig_jobs
+}
+
+#[test]
+fn rendered_jig_workflows_cache_the_installer_runtime_profile() {
+    let selected = BTreeSet::from([
+        PathBuf::from("scripts/install-jig.sh"),
+        PathBuf::from(".github/workflows/agent-map-check.yml"),
+        PathBuf::from(".github/workflows/go-tests.yml"),
+        PathBuf::from(".github/workflows/repo-policy.yml"),
+        PathBuf::from(".github/workflows/rust-tests.yml"),
+    ]);
+    let rust = rust_render_answers(RepositoryProjectionHint::Backend);
+    let go_destination = tempfile::tempdir().unwrap();
+    let go = AnswerResolution::from_opts(
+        &AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            backend_language: Some(BackendLanguage::Go),
+            go_database: Some(crate::backend::GoDatabase::Postgres),
+            go_module: Some("example.com/ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            schema_dump_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+        go_destination.path(),
+        false,
+    )
+    .unwrap()
+    .into_parts()
+    .0;
+
+    let mut checked_jobs = 0;
+    for (answers, workflows) in [
+        (
+            rust,
+            ["rust-tests.yml", "repo-policy.yml", "agent-map-check.yml"],
+        ),
+        (
+            go,
+            ["go-tests.yml", "repo-policy.yml", "agent-map-check.yml"],
+        ),
+    ] {
+        let destination = tempfile::tempdir().unwrap();
+        render_template_files(
+            &live_template_source(),
+            &answers,
+            destination.path(),
+            Some(&selected),
+            Some(crate::context::CURRENT_CONTRACT_VERSION),
+        )
+        .unwrap();
+        let installer =
+            fs::read_to_string(destination.path().join("scripts/install-jig.sh")).unwrap();
+        for expected in [
+            "CONTRACT_CACHE_KEY=\"release-$RUNTIME_VERSION-$CONTRACT_CACHE_KEY\"",
+            "DEFAULT_INSTALL_ROOT=\"$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY-runtime\"",
+            "DEFAULT_INSTALL_BASE=\"$ROOT_DIR/.git/jig-tools\"",
+            "DEFAULT_INSTALL_BASE=\"$ROOT_DIR/.agent/.cache/jig\"",
+        ] {
+            assert!(
+                installer.contains(expected),
+                "rendered installer lacks {expected}"
+            );
+        }
+        for workflow_name in workflows {
+            let workflow = fs::read_to_string(
+                destination
+                    .path()
+                    .join(".github/workflows")
+                    .join(workflow_name),
+            )
+            .unwrap();
+            checked_jobs += assert_jig_jobs_cache_release_runtime(&workflow, workflow_name);
+        }
+    }
+
+    let scaffold_destination = tempfile::tempdir().unwrap();
+    let scaffold = InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::Postgres),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            go_module: Some("example.com/ExampleProject".into()),
+            ..AnswerOpts::default()
+        },
+        scaffold_destination.path(),
+    )
+    .unwrap()
+    .unwrap();
+    scaffold.write(scaffold_destination.path(), false).unwrap();
+    let e2e = fs::read_to_string(
+        scaffold_destination
+            .path()
+            .join(".github/workflows/e2e.yml"),
+    )
+    .unwrap();
+    checked_jobs += assert_jig_jobs_cache_release_runtime(&e2e, "go-react/e2e.yml");
+    assert!(
+        checked_jobs >= 10,
+        "expected all generated Jig workflow jobs"
+    );
 }
 
 #[test]

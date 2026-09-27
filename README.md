@@ -76,6 +76,11 @@ The Jig workspace MSRV is Rust 1.88. Generated application requirements vary by 
 
 You only need a global installation for the first `jig init` or `jig adopt`. Generated repositories install and select a contract-compatible runtime through `scripts/install-jig.sh`, then expose it through `scripts/jig`.
 
+To select an exact published runtime independently of the template revision, commit
+a `.jig/runtime-version` file containing a stable version such as `0.5.0`. The
+generated installer reuses that installed release or installs it from crates.io;
+generated CI workflows cache the executable. See [runtime release pins](docs/configuration.md#runtime-release-pins).
+
 ## Quick start
 
 Create a harness-only repository without prompts, prepare it, and complete one structured work plan:

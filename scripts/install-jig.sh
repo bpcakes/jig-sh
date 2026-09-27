@@ -3,6 +3,7 @@ set -euo pipefail
 INSTALLER_ORIGINAL_ARGS=("$@")
 # jig-generated-runtime-installer:v1
 # jig-runtime-repository-scope:v1
+# jig-release-runtime-pin:v1
 # jig-runtime-cache-layout:git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime
 # jig-runtime-cache-lock:directory-suffix=.lock;guard-suffix=.lock.guard;mechanism=os-exclusive+legacy-directory;record=owner-v1;attempts=30;retry-seconds=1
 
@@ -324,6 +325,34 @@ OFFICIAL_JIG_SOURCE="https://github.com/bpcakes/jig-sh.git"
 UNPINNED_REMOTE_APPROVED=0
 
 CONTRACT_CACHE_KEY="contract-$CONTRACT_VERSION"
+
+# Keep the runtime pin outside .jig.toml: already-published runtimes reject
+# unknown configuration keys. Template provenance remains independent.
+RUNTIME_VERSION=""
+if [[ -z "${JIG_DEV_BIN:-}" && ( -e "$ROOT_DIR/.jig/runtime-version" || -L "$ROOT_DIR/.jig/runtime-version" ) ]]; then
+  require_python3
+  RUNTIME_VERSION="$(python3 -I - "$ROOT_DIR/.jig/runtime-version" <<'PY'
+import pathlib
+import re
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 128:
+        raise ValueError("expected a regular file of at most 128 bytes")
+    version = path.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+        raise ValueError("expected one exact stable version, for example 0.5.0")
+except (OSError, ValueError) as error:
+    print(f"Invalid .jig/runtime-version: {error}", file=sys.stderr)
+    raise SystemExit(1)
+print(version)
+PY
+  )" || exit 1
+  CONTRACT_CACHE_KEY="release-$RUNTIME_VERSION-$CONTRACT_CACHE_KEY"
+fi
 
 is_remote_source() {
   local source="$1"
@@ -1504,6 +1533,66 @@ install_from_git_source() {
   fi
 }
 
+released_binary_is_compatible() {
+  local bin_path="$1"
+  binary_is_compatible "$bin_path" || return 1
+  [[ "$(binary_version "$bin_path")" == "$RUNTIME_VERSION" ]]
+}
+
+resolve_released_runtime() {
+  local full_bin="$DEFAULT_INSTALL_BASE/release-$RUNTIME_VERSION-contract-$CONTRACT_VERSION/bin/jig"
+  local path_bin temporary
+  if [[ "$RESOLVE_ONLY" == "0" ]]; then
+    acquire_install_lock
+  fi
+  if [[ "$REFRESH_CACHE" == "0" ]]; then
+    if [[ "$INSTALL_PROFILE" != "default" && -z "$INSTALL_ROOT_ARG" ]] \
+      && released_binary_is_compatible "$full_bin"; then
+      printf '%s\n' "$full_bin"
+      return 0
+    fi
+    if released_binary_is_compatible "$BIN_PATH"; then
+      printf '%s\n' "$BIN_PATH"
+      return 0
+    fi
+    # An exact release pin authorizes reuse of that installed native version.
+    # MCP remains cache-only, and an explicit install root must be populated.
+    if [[ "$RESOLVE_ONLY" == "0" && "$INSTALL_PROFILE" != "mcp" && -z "$INSTALL_ROOT_ARG" ]] \
+      && path_bin="$(resolve_compatible_path_jig)" \
+      && [[ "$(binary_version "$path_bin")" == "$RUNTIME_VERSION" ]]; then
+      mkdir -p "$INSTALL_ROOT/bin"
+      temporary="$(mktemp "$INSTALL_ROOT/bin/.jig-release.XXXXXX")" || return 1
+      if ! cp "$path_bin" "$temporary" || ! chmod 755 "$temporary" \
+        || ! released_binary_is_compatible "$temporary" \
+        || ! mv -f "$temporary" "$BIN_PATH"; then
+        rm -f "$temporary"
+        echo "Failed to cache installed Jig $RUNTIME_VERSION." >&2
+        return 1
+      fi
+      printf '%s\n' "$BIN_PATH"
+      return 0
+    fi
+  fi
+  if [[ "$RESOLVE_ONLY" == "1" ]]; then
+    return 1
+  fi
+  if [[ "$INSTALL_PROFILE" == "mcp" ]]; then
+    echo "Jig $RUNTIME_VERSION is not cached for MCP; run scripts/jig --version first to prepare the pinned release." >&2
+    return 1
+  fi
+  local cargo_args=(install jig-sh --registry crates-io --version "=$RUNTIME_VERSION" --locked --root "$INSTALL_ROOT" --force)
+  if [[ -n "$CARGO_INSTALL_FEATURE_ARG" ]]; then
+    cargo_args+=("$CARGO_INSTALL_FEATURE_ARG")
+  fi
+  echo "Installing pinned Jig $RUNTIME_VERSION from crates.io ($INSTALL_PROFILE profile)." >&2
+  cargo "${cargo_args[@]}" >&2 || return $?
+  if ! released_binary_is_compatible "$BIN_PATH"; then
+    echo "Installed Jig does not match release $RUNTIME_VERSION or cannot run contract $CONTRACT_VERSION with profile $INSTALL_PROFILE." >&2
+    return 1
+  fi
+  printf '%s\n' "$BIN_PATH"
+}
+
 native_binary_header_is_supported() {
   local bin_path="$1"
   require_python3
@@ -1634,6 +1723,11 @@ fi
 if [[ "$SEED_DEV_BIN" == "1" ]]; then
   echo "--seed-dev-bin requires JIG_DEV_BIN." >&2
   exit 2
+fi
+
+if [[ -n "$RUNTIME_VERSION" ]]; then
+  resolve_released_runtime
+  exit $?
 fi
 
 # Source development uses an explicitly pinned installed runtime. Keep this

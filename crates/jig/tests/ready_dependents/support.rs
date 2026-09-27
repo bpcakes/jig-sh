@@ -59,7 +59,9 @@ pub fn all_resource_fixture(prerequisite_timeout: u64) -> Fixture {
 }
 
 pub fn disjoint_resource_timeout_fixture() -> Fixture {
-    let fixture = all_resource_fixture(2);
+    // The timeout must leave enough room for both resource owners to enter
+    // their barriers after metadata and source checks on a busy runner.
+    let fixture = all_resource_fixture(8);
     let mut manifest: Value =
         serde_json::from_slice(&fs::read(fixture.root.join(".agent/jig-contract.json")).unwrap())
             .unwrap();
@@ -69,7 +71,7 @@ pub fn disjoint_resource_timeout_fixture() -> Fixture {
         .iter_mut()
         .find(|action| action["target"]["action"] == "slow")
         .unwrap();
-    slow["timeout_seconds"] = json!(2);
+    slow["timeout_seconds"] = json!(8);
     let artifacts = fixture.signals.join("artifacts-slow");
     fs::create_dir(&artifacts).unwrap();
     slow["runner"]["environment"]["CARGO_TARGET_DIR"] = json!(artifacts);
@@ -95,6 +97,9 @@ pub fn resource_batch_fixture(disjoint: bool) -> Fixture {
             let name = format!("cargo-{index}");
             let mut action = resource.clone();
             action["target"]["action"] = json!(name);
+            // These tests hold the external claim while checking admission order.
+            // Leave room for metadata and source scans on slower machines.
+            action["timeout_seconds"] = json!(60);
             let environment = &mut action["runner"]["environment"];
             environment["EXAMPLE_RUN_ID"] = json!(name);
             if disjoint {
