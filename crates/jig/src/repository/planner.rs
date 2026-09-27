@@ -28,9 +28,7 @@ use super::{
 
 const SELECTION_REASONS_DIGEST_DOMAIN: &[u8] = b"jig-selection-reasons-v2\0";
 
-mod focused;
 pub(super) mod resources;
-pub(crate) use focused::plan_focused_check_run_with_cancellation;
 use resources::conservative_action_input_digest;
 
 #[derive(Clone, Debug, Default)]

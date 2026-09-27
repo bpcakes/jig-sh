@@ -551,32 +551,37 @@ fn rejects_working_tree_template_mode() {
 }
 
 #[test]
-fn parses_work_receipts_filters() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "receipts",
-        "--session-id",
-        "session_1",
-        "--plan-id",
-        "plan_1",
-        "--tool-name",
-        tool::TEST,
-        "--failed-only",
-        "--limit",
-        "5",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Receipts(opts)) => {
-            assert_eq!(opts.session_id.as_deref(), Some("session_1"));
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
-            assert_eq!(opts.tool_name.as_deref(), Some(tool::TEST));
-            assert!(opts.failed_only);
-            assert_eq!(opts.limit, 5);
-        }
-        other => panic!("expected work receipts command, got {other:?}"),
+fn retired_work_commands_parse_only_to_report_the_replacement() {
+    for args in [
+        vec!["jig", "work", "status"],
+        vec![
+            "jig",
+            "work",
+            "receipts",
+            "--plan-id",
+            "plan_1",
+            "--failed-only",
+        ],
+        vec![
+            "jig",
+            "--json",
+            "work",
+            "start",
+            "--title",
+            "Example",
+            "--print-plan-id",
+        ],
+        vec!["jig", "work", "--help"],
+        vec!["jig", "work"],
+    ] {
+        let cli = Cli::try_parse_from(&args).unwrap();
+        assert!(matches!(cli.command, CommandKind::Work(_)), "{args:?}");
+        let error = super::run::post_parse_usage_error(&cli)
+            .expect("retired work commands must be rejected")
+            .to_string();
+        assert!(error.contains("`jig work` was removed"), "{error}");
+        assert!(error.contains("jig check COMPONENT:ACTION"), "{error}");
+        assert!(error.contains("jig state summary"), "{error}");
     }
 }
 
@@ -697,48 +702,6 @@ fn parses_tool_no_receipt_flag() {
 }
 
 #[test]
-fn parses_work_goal() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "work",
-        "goal",
-        "--objective",
-        "Migrate the API",
-        "--success",
-        "all handlers use the new type",
-        "--validation",
-        "scripts/jig check test",
-        "--validation",
-        "scripts/jig check clippy",
-        "--constraint",
-        "do not change public routes",
-        "--checkpoint",
-        "baseline current tests",
-        "--title",
-        "API migration",
-        "--notes",
-        "Keep changes small.",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Work(WorkCommand::Goal(opts)) => {
-            assert_eq!(opts.objective, "Migrate the API");
-            assert_eq!(opts.success, "all handlers use the new type");
-            assert_eq!(
-                opts.validations,
-                vec!["scripts/jig check test", "scripts/jig check clippy"]
-            );
-            assert_eq!(opts.constraints, vec!["do not change public routes"]);
-            assert_eq!(opts.checkpoints, vec!["baseline current tests"]);
-            assert_eq!(opts.title.as_deref(), Some("API migration"));
-            assert_eq!(opts.notes.as_deref(), Some("Keep changes small."));
-        }
-        other => panic!("expected work goal command, got {other:?}"),
-    }
-}
-
-#[test]
 fn parses_agent_doctor_command() {
     let cli = Cli::try_parse_from(["jig", "agent", "doctor"]).unwrap();
 
@@ -821,4 +784,3 @@ include!("tests/proxy_and_vault.rs");
 
 mod info;
 mod launcher_only;
-mod work_commands;

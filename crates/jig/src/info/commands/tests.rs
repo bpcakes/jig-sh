@@ -66,7 +66,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
     for heading in [
         "Get started:",
         "Develop:",
-        "Structured work:",
+        "Workflows:",
         "Project data:",
         "Local services:",
         "Agent and automation:",
@@ -350,7 +350,7 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
     for heading in [
         "Get started:",
         "Develop:",
-        "Structured work:",
+        "Workflows:",
         "Project data:",
         "Local services:",
         "Agent and automation:",

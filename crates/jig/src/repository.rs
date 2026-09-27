@@ -21,9 +21,9 @@ pub(crate) use inspect::{
     inspect_repository_data, inspect_repository_data_agent_v1,
 };
 pub(crate) use planner::{
-    PlanRunRequest, plan_action_run_with_cancellation, plan_focused_check_run_with_cancellation,
-    plan_run_with_cancellation, target_input_digest, validate_current_repository_authority,
-    validate_run_plan, validate_run_plan_source,
+    PlanRunRequest, plan_action_run_with_cancellation, plan_run_with_cancellation,
+    target_input_digest, validate_current_repository_authority, validate_run_plan,
+    validate_run_plan_source,
 };
 #[cfg(test)]
 pub(crate) use planner::{plan_action_run, plan_run};
@@ -32,8 +32,7 @@ pub(crate) mod cargo_discovery;
 mod cargo_impact;
 mod native_input;
 pub(crate) use native_input::{
-    prepare_file_budget_input_v1, prepare_gate_file_budget_input, read_policy_bytes,
-    revalidate_freshness_native_input,
+    prepare_file_budget_input_v1, read_policy_bytes, revalidate_freshness_native_input,
 };
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
@@ -111,9 +110,7 @@ fn parse_selector_part<T>(
 }
 
 mod evidence;
-pub(crate) use evidence::{
-    cross_plan_evidence_targets, plan_independent_targets, resolve_evidence_targets,
-};
+pub(crate) use evidence::{plan_independent_targets, resolve_evidence_targets};
 
 pub(crate) fn validate_read_only_check_closure<'a, 'b>(
     actions: impl IntoIterator<Item = &'a ActionSpec>,

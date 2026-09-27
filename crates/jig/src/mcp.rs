@@ -162,7 +162,6 @@ fn handle_tool_call(
         );
         let progress_result = observer.flush();
         let tool_result = combine_tool_and_progress_results(tool_result, progress_result)?;
-        let is_error = tool_result_is_error(name, &tool_result);
         Ok(json!({
             "content": [
                 {
@@ -171,7 +170,7 @@ fn handle_tool_call(
                 }
             ],
             "structuredContent": tool_result,
-            "isError": is_error
+            "isError": false
         }))
     })();
 
@@ -181,23 +180,12 @@ fn handle_tool_call(
             "id": id,
             "result": result
         }),
-        Err(error) => {
-            let mut response = json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": { "code": -32000, "message": error.to_string() }
-            });
-            if let Some(partial) = error.downcast_ref::<crate::state::PlanClosurePartialFailure>() {
-                response["error"]["message"] = json!(format!("{error:#}"));
-                response["error"]["data"] = json!({ "partial_completion": partial.details() });
-            }
-            response
-        }
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32000, "message": error.to_string() }
+        }),
     }
-}
-
-fn tool_result_is_error(name: &str, result: &Value) -> bool {
-    name == tool_defs::tool::WORK_CHECK && result["ok"] == false
 }
 
 fn combine_tool_and_progress_results<T>(

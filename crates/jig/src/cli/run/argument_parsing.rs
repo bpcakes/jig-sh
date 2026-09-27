@@ -155,8 +155,8 @@ pub(in crate::cli) fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {
         {
             "`--timeline-limit` cannot be combined with `--plan` in JSON mode"
         }
-        CommandKind::Work(WorkCommand::Start(opts)) if cli.json && opts.print_plan_id => {
-            "`--print-plan-id` cannot be combined with `--json`"
+        CommandKind::Work(_) => {
+            "`jig work` was removed; validate changes with `jig check COMPONENT:ACTION` and inspect recorded state with `jig state summary`"
         }
         _ => return None,
     };
@@ -409,7 +409,7 @@ mod argument_normalization_tests {
 
     #[test]
     fn check_text_used_as_an_option_value_is_not_a_root_command() {
-        let original = args(&["jig", "work", "start", "--goal", "check", "--json"]);
+        let original = args(&["jig", "status", "run", "check", "--json"]);
 
         assert_eq!(
             normalize_external_check_global_flags(original.clone()),

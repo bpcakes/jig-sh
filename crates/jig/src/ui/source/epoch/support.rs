@@ -168,14 +168,12 @@ pub(super) fn plan_decisions(
 pub(super) struct PlanReceiptReduction {
     pub(super) rows: Vec<Receipt>,
     pub(super) total: Option<usize>,
-    pub(super) indexes: Option<crate::state::WorkGateReceiptIndexes>,
     pub(super) error: Option<SnapshotError>,
 }
 
-pub(super) fn plan_receipts_and_indexes(
+pub(super) fn plan_receipts(
     context: &RepoContext,
     plan_id: &str,
-    mut indexes: crate::state::WorkGateReceiptIndexes,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<PlanReceiptReduction, SourceError> {
     let path = context.state_file("receipts.jsonl");
@@ -183,7 +181,6 @@ pub(super) fn plan_receipts_and_indexes(
     let mut total = 0usize;
     let result = scan_dashboard_jsonl_raw(&path, cancelled, |raw| {
         let receipt = serde_json::from_slice::<DashboardReceiptRecord>(raw.bytes)?;
-        indexes.observe(&receipt);
         if receipt.plan_id.as_deref() == Some(plan_id) {
             total = total.saturating_add(1);
             push_recent_file_order(
@@ -198,7 +195,6 @@ pub(super) fn plan_receipts_and_indexes(
         return Ok(PlanReceiptReduction {
             rows: Vec::new(),
             total: None,
-            indexes: None,
             error: Some(error),
         });
     }
@@ -206,7 +202,6 @@ pub(super) fn plan_receipts_and_indexes(
     Ok(PlanReceiptReduction {
         rows,
         total: Some(total),
-        indexes: Some(indexes),
         error: None,
     })
 }

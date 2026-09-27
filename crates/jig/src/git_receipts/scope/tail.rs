@@ -40,32 +40,6 @@ pub(super) fn literal_path_chunks<T>(
     chunks
 }
 
-pub(super) fn literal_pathspec_chunks<'a>(paths: &'a [&'a String]) -> Vec<&'a [&'a String]> {
-    literal_path_chunks(paths, |path| path.len())
-}
-
-pub(super) fn ensure_selected_gitlinks_are_stable(
-    root: &Path,
-    paths: &[&String],
-    collection: GitReceiptCollection<'_>,
-) -> Result<()> {
-    for chunk in literal_pathspec_chunks(paths) {
-        let mut args = vec![
-            "ls-files".to_string(),
-            "--stage".to_string(),
-            "-z".to_string(),
-            "--".to_string(),
-        ];
-        args.extend(chunk.iter().map(|path| format!(":(top,literal){path}")));
-        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-        let output = collection.git_output(root, &arg_refs, "git ls-files gate gitlinks")?;
-        for gitlink in parse_gitlinks(&output.stdout)? {
-            ensure_gitlink_checkout_is_stable(root, &gitlink, collection)?;
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn ensure_worktree_gitlinks_are_stable(
     root: &Path,
     changed_tracked_paths: &[PathBuf],
@@ -286,23 +260,6 @@ pub(super) fn git_status_is_dirty(
     })?;
     collection.ensure_active()?;
     Ok(!output.stdout.is_empty())
-}
-
-pub(super) fn is_global_gate_authority(path: &str) -> bool {
-    GLOBAL_GATE_AUTHORITY_PATHS.contains(&path)
-}
-
-pub(super) fn gate_scope_fingerprint(
-    baseline_oid: &str,
-    gate_signature: &str,
-    input_fingerprint: &str,
-) -> String {
-    let mut digest = Sha256::new();
-    digest.update(GATE_SCOPE_FINGERPRINT_DOMAIN);
-    hash_field(&mut digest, baseline_oid.as_bytes());
-    hash_field(&mut digest, gate_signature.as_bytes());
-    hash_field(&mut digest, input_fingerprint.as_bytes());
-    format!("sha256:{:x}", digest.finalize())
 }
 
 pub(super) fn hash_field(digest: &mut Sha256, value: &[u8]) {

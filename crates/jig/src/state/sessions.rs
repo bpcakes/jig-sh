@@ -1,29 +1,24 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
-#[cfg(test)]
-use anyhow::anyhow;
 use anyhow::{Context, Result, bail};
-#[cfg(test)]
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
-use crate::tool_defs::{args, tool};
 
-use super::jsonl::{
-    append_jsonl, read_dashboard_jsonl, read_jsonl, scan_dashboard_jsonl_raw, scan_jsonl_raw,
-};
+use super::jsonl::{read_dashboard_jsonl, read_jsonl, scan_dashboard_jsonl_raw, scan_jsonl_raw};
 use super::plans::open_plans;
 use super::privacy::{redact_repository_root, repository_root_spellings};
-use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_state_tool};
+use super::receipts::receipt_diff_summary;
 use super::records::{
     DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, SessionEventEnvelope,
 };
-use super::session_pointer::write_locked as write_current_session_locked;
-use super::session_pointer::{read_unlocked as read_current_session_unlocked, with_write_lock};
-use super::support::{ensure_state_layout, new_id, now_ms};
+
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::session_start;
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
 
@@ -32,142 +27,6 @@ pub(crate) fn public_source_path(ctx: &RepoContext) -> String {
 }
 
 #[cfg(test)]
-#[derive(Deserialize)]
-pub(crate) struct SessionEndRequest {
-    pub(crate) session_id: Option<String>,
-    pub(crate) outcome: Option<String>,
-}
-
-/// Result of ending a session only if it still owns the current-session slot.
-///
-/// The observed non-matching session is returned from the same locked snapshot
-/// as the comparison, so callers never need to assemble a racy read/check/end
-/// sequence themselves.
-pub(crate) enum SessionEndIfCurrent {
-    Ended(Value),
-    NotCurrent(Option<String>),
-}
-
-pub(crate) fn session_start(ctx: &RepoContext) -> Result<Value> {
-    ensure_state_layout(ctx)?;
-    let session_id = new_id("session");
-    let summary = build_summary(ctx)?;
-    let event = SessionEvent::start(
-        new_id("session-event"),
-        session_id.clone(),
-        now_ms(),
-        summary.clone(),
-    );
-    with_write_lock(ctx, || {
-        append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
-        write_current_session_locked(ctx, Some(&session_id))
-    })?;
-
-    let receipt_id = record_successful_state_tool(
-        ctx,
-        StateToolReceipt {
-            tool_name: tool::SESSION_START,
-            args: json!({
-                args::OPERATION: "session_start",
-            }),
-            started_at_ms: event.timestamp_ms(),
-            plan_id: None,
-            session_override: Some(session_id.clone()),
-        },
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "session_id": session_id,
-        "summary": summary,
-        "receipt_id": receipt_id,
-    }))
-}
-
-#[cfg(test)]
-pub(crate) fn session_end(ctx: &RepoContext, request: SessionEndRequest) -> Result<Value> {
-    ensure_state_layout(ctx)?;
-    let outcome = request.outcome;
-    let event = with_write_lock(ctx, || {
-        let current = read_current_session_unlocked(ctx)?;
-        let session_id = request
-            .session_id
-            .clone()
-            .or_else(|| current.clone())
-            .ok_or_else(|| anyhow!("No active session."))?;
-        let event = append_session_end(ctx, session_id, outcome.clone())?;
-        if current.as_deref() == Some(event.session_id()) {
-            write_current_session_locked(ctx, None)?;
-        }
-        Ok(event)
-    })?;
-
-    record_session_end(ctx, event, outcome)
-}
-
-/// End `expected_session_id` iff it is still current, as one synchronized
-/// compare-and-clear transition shared with every current-session writer.
-pub(crate) fn session_end_if_current(
-    ctx: &RepoContext,
-    expected_session_id: &str,
-    outcome: Option<String>,
-) -> Result<SessionEndIfCurrent> {
-    ensure_state_layout(ctx)?;
-    let transition = with_write_lock(ctx, || {
-        let current = read_current_session_unlocked(ctx)?;
-        if current.as_deref() != Some(expected_session_id) {
-            return Ok(Err(current));
-        }
-        let event = append_session_end(ctx, expected_session_id.to_string(), outcome.clone())?;
-        write_current_session_locked(ctx, None)?;
-        Ok(Ok(event))
-    })?;
-
-    match transition {
-        Ok(event) => record_session_end(ctx, event, outcome).map(SessionEndIfCurrent::Ended),
-        Err(current) => Ok(SessionEndIfCurrent::NotCurrent(current)),
-    }
-}
-
-fn append_session_end(
-    ctx: &RepoContext,
-    session_id: String,
-    outcome: Option<String>,
-) -> Result<SessionEvent> {
-    let event = SessionEvent::end(new_id("session-event"), session_id, now_ms(), outcome);
-    append_jsonl(&ctx.state_file("sessions.jsonl"), &event)?;
-    Ok(event)
-}
-
-fn record_session_end(
-    ctx: &RepoContext,
-    event: SessionEvent,
-    outcome: Option<String>,
-) -> Result<Value> {
-    let session_id = event.session_id().to_string();
-
-    let receipt_id = record_successful_state_tool(
-        ctx,
-        StateToolReceipt {
-            tool_name: tool::SESSION_END,
-            args: json!({
-                args::OPERATION: "session_end",
-                "session_id": session_id,
-                "outcome": outcome,
-            }),
-            started_at_ms: event.timestamp_ms(),
-            plan_id: None,
-            session_override: Some(event.session_id().to_string()),
-        },
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "session_id": event.session_id(),
-        "receipt_id": receipt_id,
-    }))
-}
-
 pub(crate) fn current_session(ctx: &RepoContext) -> Result<Option<String>> {
     super::session_pointer::read(ctx)
 }
@@ -243,6 +102,7 @@ fn read_session_events_impl(
         .collect())
 }
 
+#[cfg(test)]
 pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
     let sessions = read_session_events(&ctx.state_file("sessions.jsonl"))?;
     let plans = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
@@ -292,6 +152,7 @@ pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
     state_summary_impl(ctx, &|| false, false)
 }

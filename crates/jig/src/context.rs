@@ -43,9 +43,7 @@ pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cr
 pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migration_backend};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
-    ReviewScopeArg, WorkCheckGate, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
-    WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg, parse_work_gate,
-    validate_gate_path_pattern,
+    WorkConfig, WorkEvidenceSelector, WorkGate, parse_work_gate, validate_gate_path_pattern,
 };
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -442,12 +440,9 @@ impl RepoContext {
         self.config.schema_dump_enabled
     }
 
-    pub(crate) fn rust_sqlx_metadata_dir(&self) -> &str {
-        &self.config.rust_sqlx_metadata_dir
-    }
-
-    pub(crate) fn schema_dump_command(&self) -> &str {
-        &self.config.schema_dump_command
+    #[cfg(test)]
+    pub(crate) fn work_refinements(&self) -> &[work_config::WorkRefinementConfig] {
+        self.config.work.refinements()
     }
 
     pub(crate) fn schema_docs_dir(&self) -> &str {
@@ -657,10 +652,6 @@ impl RepoContext {
 
     pub(crate) fn work_check_tools(&self) -> Vec<String> {
         self.config.work.check_tools()
-    }
-
-    pub(crate) fn work_refinements(&self) -> &[WorkRefinementConfig] {
-        self.config.work.refinements()
     }
 
     pub(crate) const fn loop_config(&self) -> &LoopConfig {

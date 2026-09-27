@@ -66,7 +66,6 @@ mod root_commands;
 mod runtime;
 mod runtime_artifacts;
 mod runtime_cache_lock;
-mod serde_helpers;
 mod shell;
 mod signal_supervision;
 mod source_projection;
@@ -77,7 +76,6 @@ mod surface;
 mod test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod test_process;
-mod text;
 mod tool_defs;
 mod tracker;
 mod ui;

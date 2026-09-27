@@ -6,7 +6,6 @@ use jig_contract::freshness::{
 };
 
 pub(crate) const RECORDING_TIMEOUT_MS: u64 = 30_000;
-pub(crate) const INSPECTION_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CollectionLimits {

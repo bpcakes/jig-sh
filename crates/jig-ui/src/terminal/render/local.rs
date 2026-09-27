@@ -444,7 +444,7 @@ fn draw_plan_detail(frame: &mut Frame, area: Rect, app: &App, plan: &PlanDetailV
             (
                 "Gates",
                 plan.gates_document.as_ref(),
-                "Gate detail is unavailable.",
+                "Gate evaluation was removed with `jig work`.",
             ),
             plan,
             scroll,

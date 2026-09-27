@@ -64,10 +64,10 @@ fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
 #[test]
 fn json_request_detection_ignores_child_arguments_after_separator() {
     assert!(args_request_json(
-        ["work", "status", "--json"].map(OsString::from)
+        ["state", "summary", "--json"].map(OsString::from)
     ));
     assert!(args_request_json(
-        ["--json", "work", "status"].map(OsString::from)
+        ["--json", "state", "summary"].map(OsString::from)
     ));
     assert!(!args_request_json(
         ["vault", "run", "--", "tool", "--json"].map(OsString::from)

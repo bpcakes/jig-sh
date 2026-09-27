@@ -15,7 +15,6 @@ struct Pending<'a> {
     budget: Option<TargetBudget>,
     resolved: Option<ResolvedResources>,
     waited: bool,
-    force_execution: bool,
     done: bool,
 }
 
@@ -50,7 +49,6 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     candidates: ResourceCandidates<'plan, '_>,
-    allow_reuse: bool,
     slots: &ExecutionSlots,
     publish: &mut Publish<'_>,
 ) -> Result<()> {
@@ -106,7 +104,7 @@ pub(in crate::runtime::run_execution) fn execute_resource_layer<'plan>(
             }
             continue;
         }
-        let prepared = prepare_wave(finisher, control, &pending, &wave, allow_reuse);
+        let prepared = prepare_wave(finisher, control, &pending, &wave);
         source_epoch.begin_read_only_layer();
         let precondition = source_epoch.prepare_read_only_layer_with(wave.len(), || {
             wave_fingerprint(finisher.ctx, control, &pending, &wave)
@@ -145,7 +143,6 @@ fn pending_target<'a>((planned, position): (&'a PlannedTarget, PhasePosition)) -
         budget: None,
         resolved: None,
         waited: false,
-        force_execution: false,
         done: false,
     }
 }
@@ -349,44 +346,7 @@ fn publish_outcome(
             .remaining()
             .err()
     });
-    let (mut completed, phase) = match outcome {
-        WaveOutcome::Reused(result) => {
-            if let Some(stop) = stop {
-                return publish_unstarted(
-                    finisher,
-                    pending,
-                    stop,
-                    Some((fingerprint, wave_number)),
-                    publish,
-                );
-            }
-            let result = finalize_wave_reuse(pending, source_epoch, fingerprint, result, now_ms());
-            match result {
-                Ok(Some(result)) => {
-                    publish(
-                        &pending.planned.target,
-                        result,
-                        None,
-                        Some(fingerprint),
-                        Some(wave_number),
-                    )?;
-                    pending.done = true;
-                }
-                Ok(None) => {}
-                Err(stop) => {
-                    return publish_unstarted(
-                        finisher,
-                        pending,
-                        stop,
-                        Some((fingerprint, wave_number)),
-                        publish,
-                    );
-                }
-            }
-            return Ok(());
-        }
-        WaveOutcome::Captured(completed, phase) => (completed, phase),
-    };
+    let WaveOutcome::Captured(mut completed, phase) = outcome;
     if completed.was_started() {
         completed = source_epoch
             .finish_started_read_only_layer_target(pending.planned, fingerprint, completed)
@@ -421,34 +381,3 @@ fn publish_outcome(
     pending.done = true;
     Ok(())
 }
-
-fn finalize_wave_reuse(
-    pending: &mut Pending<'_>,
-    source_epoch: &ExecutionSourceEpoch,
-    fingerprint: &std::result::Result<String, String>,
-    result: TargetRunResult,
-    observed_at_ms: u64,
-) -> std::result::Result<Option<TargetRunResult>, TargetStop> {
-    if !source_epoch.read_only_postcondition_matches(fingerprint) {
-        return Err(TargetStop::Blocked(
-            "repository source changed during the resource wave; original evidence cannot be reused"
-                .into(),
-        ));
-    }
-    let result = resources::reuse::finalize_reuse(
-        result,
-        pending
-            .resolved
-            .as_ref()
-            .and_then(|resolved| resolved.partial_reason),
-        observed_at_ms,
-    );
-    if result.is_none() {
-        pending.force_execution = true;
-        pending.resolved = None;
-    }
-    Ok(result)
-}
-
-#[cfg(test)]
-mod tests;

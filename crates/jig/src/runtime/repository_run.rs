@@ -52,7 +52,6 @@ pub(super) fn dispatch(
         &catalog,
         plan.clone(),
         ExecuteCheckRunRequest {
-            reuse_after_resource_wait: false,
             alias_override: None,
             work_plan_id,
             record_receipts,

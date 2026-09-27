@@ -939,7 +939,7 @@ PY
   printf '%s\n' '{"contract_version":4,' >"$rendered_dir/.agent/jig-contract.json"
   if (
     cd "$rendered_dir"
-    env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" scripts/jig work status \
+    env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" scripts/jig state summary \
       >/dev/null 2>"$launcher_stderr"
   ); then
     echo "Ordinary launcher command accepted malformed contract JSON." >&2

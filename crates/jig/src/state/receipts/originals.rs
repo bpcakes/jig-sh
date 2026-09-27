@@ -40,17 +40,6 @@ impl OriginalReceiptIndex {
         Self::open_inner(path, None, &BTreeSet::new(), false, budget)
     }
 
-    /// Work reuse selects global outcomes only for plan-independent targets;
-    /// other targets keep the consuming plan's latest outcome.
-    pub(crate) fn open_for_work_reuse(
-        path: &Path,
-        plan_id: &str,
-        reusable_targets: &BTreeSet<jig_contract::TargetId>,
-        budget: &mut CollectionBudget<'_>,
-    ) -> CollectionResult<Self> {
-        Self::open_inner(path, Some(plan_id), reusable_targets, true, budget)
-    }
-
     #[cfg(test)]
     pub(crate) fn open_for_plan(
         path: &Path,

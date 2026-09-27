@@ -49,15 +49,6 @@ impl OriginalProofValidator {
         }
     }
 
-    /// Consumption by another work plan does not change execution provenance.
-    /// Each original node still requires dependencies from its own plan.
-    pub(crate) fn for_work_reuse(originals: OriginalReceiptIndex, now_ms: u64) -> Self {
-        Self {
-            use_original_plan: true,
-            ..Self::for_receipt_plan(originals, None, now_ms)
-        }
-    }
-
     pub(crate) fn evaluate(
         &mut self,
         selected: &TargetReceiptStatus,

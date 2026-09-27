@@ -47,18 +47,10 @@ fn work_dashboard_options(opts: UiOpts, timeline_limit: TimelineLimit) -> Result
     .with_initial_plan(opts.plan))
 }
 
-pub(crate) fn run_status(
-    ctx: RepoContext,
-    refresh_interval: Duration,
-    freshness_timeout_ms: Option<u64>,
-) -> Result<()> {
+pub(crate) fn run_status(ctx: RepoContext, refresh_interval: Duration) -> Result<()> {
     let options = status_dashboard_options(refresh_interval);
     supervised(|cancelled| {
-        jig_ui::terminal::run_with_cancellation(
-            RepoDashboardSource::new(ctx).with_freshness_timeout(freshness_timeout_ms),
-            options,
-            cancelled,
-        )
+        jig_ui::terminal::run_with_cancellation(RepoDashboardSource::new(ctx), options, cancelled)
     })
 }
 

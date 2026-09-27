@@ -105,7 +105,7 @@ For local git template checkouts, `jig init` / `jig adopt` use a committed sourc
   `ubuntu-latest` because service containers and the Docker daemon require Linux.
   Other generated jobs retain this configured runner and select Bash explicitly
   for repository-owned `run` steps.
-- `work.gates`: required work evidence gates evaluated before `scripts/jig work finish` (never evaluated by `scripts/jig work retire`)
+- `work.gates`: gate declarations that are still parsed and validated but no longer evaluated as completion policy; on legacy contract v2–v5 repositories they define the default check profile, and adoption uses them for its gate preview. See [`work` Shape](#work-shape)
 - `agent_tooling`: agent-client tooling expected for this repository, including Jig Codex skills
 - `template_source_url`: optional canonical template source URL for portable recopy/update
 - `sqlx_enabled`: whether to generate SQLx and migration-specific contract pieces
@@ -145,9 +145,9 @@ Generated Go repositories use the root `go.mod` as their Go toolchain authority.
   only `kind = "beads"`, requires a portable canonical ULID `workspace_id`, fixes the
   store at the repository-root `.beads/`, and defaults `export` to `"manual"`.
 
-The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
+The generated no-root-`Cargo.toml` Cargo defaults exit 0 and print a stable stdout prefix. The removed `work check` summary rendered that prefix as an intentional harness skip; no current command gives it special treatment.
 
-Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the bounded prefix captured before termination remains in the receipt for diagnosis. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex review, refinement, and PR-repair workers use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while receipt evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contracts 6 through 7 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions use their declared process runner even when their launcher selector also begins with `scripts/jig check`.
+Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400), and retain at most `[execution].command_output_limit_bytes` from each stdout/stderr stream (default 67,108,864; valid range 1–1,073,741,824). Exceeding the capture limit terminates and reaps the process tree as an explicit failure; it is never reported as partial success, and the bounded prefix captured before termination remains in the receipt for diagnosis. Internal Git and GitHub protocol commands keep a separate fixed 4 MiB bound. Codex workers, such as PR-repair workers, use a separately bounded last-message file as their authoritative result channel; their diagnostic transcripts may truncate at 4 MiB while receipt evidence reports that truncation. Human-mode CLI progress is buffered within 64 KiB and delivered with a bounded best effort after supervision; JSON mode disables progress, while MCP defers progress writes until execution returns and retains at most a 4 KiB preview per stream. Contracts 6 through 7 write configured commands under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. An action runner's optional `environment` map is the same checked-in execution authority: it intentionally inherits the caller environment and may override sensitive names such as `PATH`, loader controls, or Git variables, just as the reviewed shell command itself can. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, flat-layout `scripts/jig migration add NAME`, `scripts/jig check schema`, and the native `repo:file-budget` action run inside the binary; other repository-defined actions use their declared process runner even when their launcher selector also begins with `scripts/jig check`.
 
 Full-harness templates seed `.jig/file-budget.toml` once and declare the language-neutral native `repo:file-budget` action. The repository-owned policy defines governed paths, exact physical-line and byte budgets, exclusions, and bounded expiring waivers; Jig supplies deterministic Git comparison, evaluation, findings, and evidence. Use `scripts/jig check repo:file-budget` for the authored action or `scripts/jig file-budget check|audit|explain|validate` for direct diagnostics. A repository may replace or remove the action, its `jig.file_budget` compatibility alias, or its verification-profile membership without changing the contract schema.
 
@@ -393,11 +393,11 @@ Nested accepted keys are:
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
-- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`
+- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted but ignored
 - `[work.tracker]`: `kind`, `workspace_id`, `export`, `manual_export_guidance`; the
   current `beads` kind accepts only manual export and no configurable store root
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
-- `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
+- `[[work.refinements]]`: `id`, `skill`, `mode`, `model` (validated but ignored)
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
 - `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`, `prepare_command`
 - `[agent_tooling.codex]`: `marketplaces`
@@ -503,7 +503,7 @@ plugins = [
 Jig Codex skills are optional Codex plugin bundles used by agents working in generated Jig repos; the default marketplace source is `bpcakes/jig-skills`.
 
 Apply a skill only when it serves the requested task. Skill installation does not
-require structured work, receipt inspection, or a full test suite. Generated
+require receipt inspection or a full test suite. Generated
 `AGENTS.md` guides task-appropriate validation; the separate skills repository owns
 the plugin instructions.
 
@@ -576,33 +576,26 @@ Claude documents [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars)
 
 ## `work` Shape
 
-The `work` block declares agent workflow defaults without adding repo-local launcher scripts:
+The `jig work` commands were removed, but the `work` block is still parsed and
+validated strictly, so existing repositories load unchanged and the
+execution-authority digest does not change. `receipt_metadata` and `tracker`
+keep working. `checks` and `gates` still define the default check profile for
+legacy contract v2–v5 repositories and adoption's gate preview, and generated
+repositories still render `[[work.gates]]`. `iteration_profile` and
+`refinements` are accepted but ignored. See
+[Removed Work Commands](public-contract.md#removed-work-commands) for the
+command-level compatibility rules.
 
-### Iteration and focused Rust checks
+### Focused Rust checks
 
-`work.iteration_profile` opts into an existing repository profile for
-`work check --phase iteration`. All selected actions and prerequisites must be
-read-only checks. `--phase final` retains the configured final requirements;
-neither phase runs review gates or closes the plan. `--explain` previews exact
-invocations and pending final requirements without creating runs or receipts.
-An iteration can pass while `final_gates_ok` is false. `work finish` always
-checks current final evidence independently. Explicit phases cannot be combined
-with `--gate` or `--tool`; the unphased force-selection interface remains available.
-Phase/explain reports require the standard projection: `agent-v1` is rejected
-before execution because its compact completion schema does not describe phase scope.
-Phases and previews retain the gate evaluator's existing cross-plan receipt
-selection: eligible exact invocations can reuse original evidence, newer failed
-outcomes cannot revive older passes, and native actions and their dependents
-remain plan-local. Explicit `--gate` selection still forces execution.
+`work.iteration_profile` is accepted for compatibility but ignored; it selected
+the profile for the removed `work check --phase iteration`.
 
 Contract-v8-or-later repositories may declare the opt-in, versioned
 `rust_nextest_v1` runner. The following action uses ordinary target execution,
-supervision, and receipts, but permits typed iteration focus:
+supervision, and receipts, but permits typed focus:
 
 ```toml
-[work]
-iteration_profile = "iteration"
-
 [[repository.actions]]
 target = { component = "api", action = "test-focused" }
 intent = "check"
@@ -611,7 +604,7 @@ runner = { kind = "rust_nextest_v1", configuration = { workspace_manifest = "Car
 arguments = { focus = { type = "rust_focus_v1" } }
 
 [[repository.profiles]]
-id = "iteration"
+id = "focused"
 targets = [{ component = "api", action = "test-focused" }]
 ```
 
@@ -621,7 +614,7 @@ Existing shell/argv actions are not reinterpreted. This runner has no legacy
 tool aliases and requires whole-repository input authority. A fixed full action
 uses `focused = false` (the default) and no argument declarations; it cannot
 accept focus. Omitting focus on a focused action also runs its broad workspace
-scope. Keep the full-suite action in the final verification profile.
+scope. Keep the full-suite action in the verification profile.
 
 Read-only Cargo actions can separately opt into
 [Cargo resource coordination](cargo-resource-coordination.md). Resource claims
@@ -636,16 +629,14 @@ generated action or CI job is automatically enrolled. See
 [browser endpoint coordination](browser-resource-coordination.md).
 
 ```sh
-scripts/jig --json work check --plan-id PLAN --phase iteration --explain \
-  --rust-focus 'api:test-focused={"kind":"explicit","packages":["example-api@0.1.0"],"targets":[{"kind":"lib"}],"filter":"test(example)"}'
-scripts/jig work check --plan-id PLAN --phase iteration \
-  --rust-focus 'api:test-focused={"kind":"automatic"}'
+scripts/jig run api:test-focused --explain \
+  --arg 'api:test-focused:focus={"kind":"explicit","packages":["example-api@0.1.0"],"targets":[{"kind":"lib"}],"filter":"test(example)"}'
 ```
 
-Repeat `--rust-focus TARGET=JSON` for distinct targets, at most 32. MCP uses
-the equivalent `rust_focus` map in `jig.work_check`. Explicit selections require
-1–32 exact `name@version` workspace package selectors and at most 32 target
-selectors (`lib`, or named `bin`, `test`, `example`, `bench`). Empty targets means
+Supply the focus JSON as the action's declared `focus` argument, through
+`--arg TARGET:focus=JSON` or MCP `jig.plan_run` `arguments`. Explicit selections
+require 1–32 exact `name@version` workspace package selectors and at most 32
+target selectors (`lib`, or named `bin`, `test`, `example`, `bench`). Empty targets means
 all targets in the selected packages. Names and flags are validated and lowered
 to whole argv positions, never shell fragments. A library selection includes
 `--package` and `--lib`, without `--workspace`; a runtime filter alone is not
@@ -670,9 +661,12 @@ creating or rewriting the lock; prepare the lockfile separately before retrying.
 Raw Cargo package IDs and absolute manifest paths remain in memory; only
 validated portable selectors enter plans and receipts.
 
-Automatic focus uses the open plan's recorded Git baseline and all current
-changes, including earlier commits. It uses conservative Cargo package and
-reverse-consumer ownership, never inferred test names. Missing comparison,
+Automatic focus compares against the recorded Git baseline of the plan named by
+its optional `plan_id`, which must still be open, and all current changes,
+including earlier commits. Plans can no longer be opened, so without such a plan
+automatic focus has no comparison and broadens as described below. It uses
+conservative Cargo package and reverse-consumer ownership, never inferred test
+names. Missing comparison,
 metadata, or ownership broadens to the declared workspace invocation with a
 reason. Named features retain narrowed scope only when each is qualified by a
 package still selected. Unqualified features or features owned outside the
@@ -685,8 +679,7 @@ target or reject explicit user-selected package/target focus.
 Automatic requests on unsupported custom runners retain their configured
 default check with an explicit fallback report. Explicit unprovable selections
 are rejected; run the configured full check to recover. Changing a filter,
-feature policy, or comparison changes invocation authority. A passing focused
-receipt cannot satisfy a differently scoped full invocation.
+feature policy, or comparison changes invocation authority.
 
 Nextest runs with `--no-tests=fail`. Zero matching tests produces failed
 `empty_selection` evidence, not a behavioral pass. Ordinary source/config
@@ -694,8 +687,8 @@ revalidation, cancellation, deadlines, output limits, and failure recording
 still apply. Repositories must upgrade their runtime before adopting the new
 runner/argument tags: unsupported runtimes reject them rather than execute a
 silently weakened check. Existing string arguments and old receipts retain
-their meaning. Probe CLI help or MCP input schemas before sending new phase
-or focus fields to an older endpoint.
+their meaning. Probe CLI help or MCP input schemas before sending focus
+arguments to an older endpoint.
 
 ### Optional Beads task snapshots
 
@@ -733,51 +726,21 @@ profile = "verify"
 conclusion = "success"
 ```
 
-An `evidence` gate names exactly one canonical `target = "api:test"` or checked-in `profile = "verify"`. `conclusion` currently accepts only `success` and defaults to it. A target gate requires a successful receipt for that exact target. A profile gate requires receipts for every current profile target from one compatible run; Jig never stitches individually successful targets from different runs into profile evidence.
+Gate declarations are still parsed and validated, but no command evaluates
+them as completion policy. An `evidence` gate names exactly one canonical
+`target = "api:test"` or checked-in `profile = "verify"`; `conclusion` currently
+accepts only `success` and defaults to it. Contract-v6 repositories generate a
+single gate for their default verification profile. Legacy `kind: check` gates
+must reference no-argument execution tools declared in `.agent/jig-contract.json`.
+Check gates may also declare repository-relative `paths` and `paths_ignore`
+globs and `reuse` on contract version 5 or later; these fields remain accepted
+but no longer select or reuse evidence.
 
-Contract-v6 repositories generate a single gate for their default verification profile. `scripts/jig work check --plan-id ...` expands all configured evidence gates to exact targets, runs their union once, and records target receipts linked to the work plan. Legacy `kind: check` gates remain supported and must reference no-argument execution tools declared in `.agent/jig-contract.json`; they run in configured order. When both forms exist, default `work check` runs both. Passing one or more `--tool` values explicitly selects only those legacy tools. Human-readable output is the default. Pass `--json` for structured automation output.
+For compatibility, older repos may still use `work.checks`; Jig backfills entries that are not already declared in `work.gates` as required `kind: check` gates with generated IDs. When a tool is declared in both places, the explicit `work.gates` entry is authoritative. On legacy contract v2–v5 repositories these checks and gates define the default check profile used by bare `scripts/jig check`.
 
-Check gates may narrow applicability with repository-relative `paths` and `paths_ignore` globs. Each newly opened work plan records an exact Git baseline; Jig classifies the baseline-to-current changes once, emits explicit `not_applicable` evidence when no scoped input changed, and fails closed when applicability cannot be proven. `reuse = true` permits only exact-input evidence from a direct successful execution to be reused across plans. `scripts/jig work check --gate ID` forces named check gates to execute, but forced execution does not turn unknown applicability into closure evidence. These fields require contract version 5 or later and apply equally when legacy check gates coexist with contract-v6 evidence gates.
+Generated v6 profiles include applicable SQLx, sqlc, schema, language, frontend, and contract targets. Generated legacy repositories continue to emit the corresponding tool gates such as `jig.sqlx_check`, `jig.schema_check`, and `jig.schema_dump`. The legacy catalog's derived default verification profile excludes the one known effectful historical gate, `jig.schema_dump`, instead of making it part of bare `jig check`. Any other configured legacy gate that is not a read-only check is rejected instead of being silently omitted.
 
-`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. A syntactically valid gate whose check tool, target, or profile was renamed remains inspectable as `unsupported` with a reason; contract validation and `work check` still reject the stale reference before execution. Pass `--json` when automation needs the full structured payload. `scripts/jig work evidence` is the higher-level human view: it shows the latest gate evidence per tool, target, or profile, whether it matches current inputs, changed paths covered by its receipts, and the exact stale or unknown reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are bounded repo-relative previews from `git status --porcelain=v1 -z`; they exclude `.agent/**` but can include untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Legacy check freshness uses the non-`.agent/` worktree fingerprint from its latest check or check-batch receipt. Target evidence additionally requires the current contract digest and deterministic target input digest; receipts missing any of those metadata fields are `unknown`, not passing.
-
-Required check gates should not create or modify non-`.agent/` files during `work check`. Build outputs, generated metadata, and lockfiles should be committed when they are source-of-truth, ignored when they are disposable, or generated before running the fingerprinted check. If a check does intentionally settle generated files, rerun `scripts/jig work check --plan-id ...` after reviewing those changes so the gate evidence matches the final worktree.
-
-After upgrading an in-flight repo from a Jig version that recorded receipts without `worktree_fingerprint` or target digests, rerun `scripts/jig work check --plan-id ...` before `scripts/jig work finish --plan-id ...`. Older successful receipts deserialize correctly, but their freshness is `unknown` and required gates block finish until fresh evidence exists.
-
-For compatibility, older repos may still use `work.checks`; Jig backfills entries that are not already declared in `work.gates` as required `kind: check` gates with generated IDs. When a tool is declared in both places, the explicit `work.gates` entry is authoritative. New repos should use `work.gates`.
-
-Generated v6 profiles include applicable SQLx, sqlc, schema, language, frontend, and contract targets. Generated legacy repositories continue to emit the corresponding tool gates such as `jig.sqlx_check`, `jig.schema_check`, and `jig.schema_dump`. The legacy catalog's derived default verification profile excludes the one known effectful historical gate, `jig.schema_dump`; that gate retains its direct `work check` behavior instead of becoming part of bare `jig check`. Any other configured legacy gate that is not a read-only check is rejected instead of being silently omitted.
-
-Review gates are intentionally separate from native check gates. A `codex_review` gate runs a configured Codex skill through `codex exec review --output-schema`, records a structured `jig.work_review` receipt, and is enforced by `work gates`, `work evidence`, and `work finish` like check evidence:
-
-```toml
-[[work.gates]]
-id = "rust-error-handling"
-kind = "codex_review"
-skill = "jig-rust:rust-error-handling-review"
-severity = "high"
-required = true
-```
-
-Use `scripts/jig work review --plan-id ...` to run all configured review gates, or pass `--gate <id>` to run a subset. Review findings are normalized to `critical`, `warning`, or `suggestion`; both `fail_on` and `severity` accept the normalized names plus these aliases:
-
-| alias | normalized threshold |
-| --- | --- |
-| `high` | `critical` |
-| `medium` | `warning` |
-| `low` | `suggestion` |
-
-Omitted thresholds default to `critical`. If both `fail_on` and `severity` are present, `fail_on` chooses the active threshold, but both values must be valid. `scope` defaults to `uncommitted`; supported values are `uncommitted`, `base:<ref>`, `base=<ref>`, `commit:<sha>`, and `commit=<sha>`. `model` is passed to Codex when present.
-
-`scripts/jig work refine --plan-id ...` runs a review-driven fixer loop. It runs review gates, passes actionable findings to `codex --ask-for-approval never exec --sandbox workspace-write` for direct repository edits, reruns review gates, then reruns normal check gates. Enabling refinement opts into unattended Codex workspace writes: the prompt tells the fixer not to run git, but the sandbox still permits repository edits. Review skills used with refinement are trusted inputs because their finding text is handed to an auto-approved workspace-writing fixer; keep refinement-enabled review skills sourced from trusted Codex marketplaces or repos and review the resulting diff before closing work. Refinement requires one explicit `[[work.refinements]]` entry before Jig will invoke the workspace-writing fixer. Without a refinement `model`, the fixer uses the first selected review gate model when present. `--max-iterations` controls fixer attempts and defaults to 1, meaning Jig fixes once and then verifies. Passing `--gate` narrows only the review gates; the final verification step still runs all configured check gates. An optional `[[work.refinements]]` entry provides a repo-local refinement profile for the fixer prompt:
-
-```toml
-[[work.refinements]]
-id = "rust-simplify"
-skill = "jig-rust:rust-simplify"
-mode = "fix-actionable-review-findings"
-```
+`kind = "codex_review"` gates and `[[work.refinements]]` entries are still validated but never run. Review thresholds in `fail_on` and `severity` must name `critical`, `warning`, or `suggestion`, or the aliases `high`, `medium`, and `low`; `scope` must be `uncommitted`, `base:<ref>`, `base=<ref>`, `commit:<sha>`, or `commit=<sha>`. At most one refinement entry is accepted.
 
 ## `frontend_apps` Shape
 
@@ -1262,7 +1225,7 @@ binary so `scripts/jig --help` and nested `--help` calls stay fast after the
 first install. On a cold checkout it prints an explicit first-run install
 message before preparing the runtime needed to render command help.
 
-It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` through the structured work namespace:
+It also provides runtime-owned commands, including maintenance of append-only memory under `.agent/state/*.jsonl`:
 
 - `scripts/jig doctor`
 - `scripts/jig doctor --json`
@@ -1275,26 +1238,6 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig codex launch HOME --dry-run --json -- [CODEX_ARGS...]`
 - `scripts/jig codex resume SESSION_ID [--home HOME] -- [CODEX_ARGS...]`
 - `scripts/jig codex resume SESSION_ID [--home HOME] --dry-run --json -- [CODEX_ARGS...]`
-- `scripts/jig work start --title ...`
-- `scripts/jig work start --title ... --print-plan-id`
-- `scripts/jig work append --plan-id ... --body "Progress update"`
-- `scripts/jig work check --plan-id ...`
-- `scripts/jig work check --plan-id ... --json`
-- `scripts/jig work gates --plan-id ...`
-- `scripts/jig work gates --plan-id ... --json`
-- `scripts/jig work evidence`
-- `scripts/jig work evidence --plan-id ...`
-- `scripts/jig work review --plan-id ...`
-- `scripts/jig work review --plan-id ... --json`
-- `scripts/jig work refine --plan-id ...`
-- `scripts/jig work refine --plan-id ... --json`
-- `scripts/jig work decide --plan-id ...`
-- `scripts/jig work receipts --plan-id ...`
-- `scripts/jig work receipts --plan-id ... --json`
-- `scripts/jig work status`
-- `scripts/jig work status --json`
-- `scripts/jig work finish --plan-id ...`
-- `scripts/jig work retire --plan-id ... --disposition <cancelled|superseded|duplicate|obsolete> --reason ...`
 - `scripts/jig state summary`
 - `scripts/jig state diagnose`
 - `scripts/jig state diagnose --deep`
@@ -1305,15 +1248,15 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`
 - `scripts/jig state archive --before YYYY-MM-DD`
 
-`work finish` closes the plan with `--resolution`. If the session proven to have opened that plan is still current, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`. An unrelated current session remains active. Gate evaluation and plan closure hold a shared checkout lease as one decision window, so an effectful repository action cannot invalidate accepted evidence immediately before the close commit point.
+The former `scripts/jig work ...` commands were removed; every invocation fails
+as a usage error that points to `scripts/jig check COMPONENT:ACTION` and
+`scripts/jig state summary`. Plans that were open at upgrade stay open and remain
+visible in `status`, `state summary`, and `ui`, but no command can close them.
 
-`work retire` is the non-success counterpart. It closes an open plan that will not be delivered with a required structured `--disposition` (`cancelled`, `superseded`, `duplicate`, or `obsolete`), a required nonblank `--reason`, and an optional `--superseded-by` reference to the plan or issue that replaces the work. It evaluates no required gates and records no gate evidence, so it never weakens `work finish`; there is no force flag on either command. Retirement takes the same exclusive plan-close lease as `work finish`, so it rejects an unknown plan, an already-closed plan, and a plan with an active linked repository run. Like finish, it ends a session only when the plan's `jig.plans_open` receipt proves that session opened the plan; an unrelated current session stays active and the result's `session_status` reports what happened. `scripts/jig work gates` and `scripts/jig work evidence` report retirement disposition and reason in their default human output as well as `plan_state: "closed"` with a `plan_retirement` object in JSON; a completed plan keeps `plan_retirement: null`. Default `work receipts` output also shows each state receipt's `args.operation`, distinguishing `plan_retire` from `plan_close` while retaining the historical `jig.plans_close` tool name.
-
-Contract tools and work checks intentionally append receipts under `.agent/state/`.
-Read-only inspection commands such as `work status` and `work gates` do not add
+Contract tools and checks intentionally append receipts under `.agent/state/`.
+Read-only inspection commands such as `state summary` and `status` do not add
 new receipts. For one-off contract command runs that should not record evidence,
-pass `--no-receipt`; `--no-receipt` conflicts with `--plan-id` because
-plan-linked checks must leave evidence for `work finish` gate enforcement. When
+pass `--no-receipt`; `--no-receipt` conflicts with `--plan-id`. When
 receipt recording is skipped, command JSON still includes `"receipt_id": null`.
 Native execution still writes its run journal with `--no-receipt`; this flag is
 not a promise of a clean checkout. Repo-mode scheduled workers accept only their
@@ -1326,18 +1269,15 @@ before selecting validation commands for a worker prompt.
 Timeout, process-await, cleanup, and output-capture failures after a configured
 command starts append a failed child receipt. In-flight cancellation appends a
 child receipt with supervised evidence status `cancelled`; cancellation before
-spawn appends no child receipt because no command ran. A cancelled or failing
-`work check` batch records that child receipt ID in `args.receipt_ids` and keeps
-the supervision diagnostic in its failed stderr preview, so gate evaluation
-does not confuse an interrupted check with missing evidence.
+spawn appends no child receipt because no command ran.
 
 Use `scripts/jig state diagnose` for a read-only size and integrity report.
 `--deep` additionally analyzes recursive session summaries, projected
 compaction savings, receipt payload categories, and archive recommendations
 for oversized receipt or run journals. `--deep` also joins every receipt run
-reference, including child receipts named by `jig.work_check_targets/v1` and
-`jig.work_check/v2` batch evidence, to the run journal, verified run archives,
-and manifested run backups under `.agent/.cache/`. The `run_linkage` report
+reference, including child receipts named by historical
+`jig.work_check_targets/v1` and `jig.work_check/v2` batch evidence, to the run
+journal, verified run archives, and manifested run backups under `.agent/.cache/`. The `run_linkage` report
 names each run whose lifecycle is missing, unverifiable, inconsistent, or
 recoverable from an exact backup, together with the affected receipt and batch
 receipt IDs, and the human summary repeats the first findings. Shallow mode
@@ -1385,7 +1325,7 @@ preview capped at 100 entries; `changed_path_count`,
 `changed_paths_truncated`, and `changed_paths_digest` describe the full set.
 Successful stdout and stderr previews use a 512-byte truncation threshold, while
 failed previews retain the existing 4,000-byte diagnostic threshold. These
-limits constrain future growth without weakening worktree fingerprints or gate
+limits constrain future growth without weakening worktree fingerprints or receipt
 relationships.
 
 These commands repair or reduce the current working-tree files only. They never
@@ -1410,7 +1350,7 @@ The `jig-sh` source repository selects its routine harness runtime separately fr
 
 After preparing the cache, `python3 scripts/jig-source-runtime.py --info` reports `mode`, `release_pin`, `runtime_version`, `binary`, `profile`, and `contract_version`. Its mode identifies the selected release or an explicit development override. `JIG_INSTALL_REFRESH=1 scripts/jig <command>` reimports the exact selected release from the installed binary; it never advances the pin. Changing `.jig/source-runtime-version` is a deliberate runtime upgrade, independent of the source workspace's Cargo version.
 
-Use `scripts/jig` for routine checks and work commands in the source repository. To exercise the edited implementation, use `scripts/jig-dev <command>`. It runs `cargo build --locked -p jig-sh --bin jig` incrementally with the normal default features, reads Cargo's reported executable path, and invokes the normal launcher with that artifact. Cargo target-directory and build-target configuration are respected, relative CLI arguments keep the caller's working directory, and a failed build never launches an older artifact. Build diagnostics go to stderr so JSON command output remains parseable. The required `verify` profile includes `repo:source-runtime-check`, which uses this entrypoint for current-source contract validation; `work check` selects it for runtime, template, launcher, and build configuration changes, and CI exercises the same target.
+Use `scripts/jig` for routine checks and other commands in the source repository. To exercise the edited implementation, use `scripts/jig-dev <command>`. It runs `cargo build --locked -p jig-sh --bin jig` incrementally with the normal default features, reads Cargo's reported executable path, and invokes the normal launcher with that artifact. Cargo target-directory and build-target configuration are respected, relative CLI arguments keep the caller's working directory, and a failed build never launches an older artifact. Build diagnostics go to stderr so JSON command output remains parseable. The required `verify` profile includes `repo:source-runtime-check`, which uses this entrypoint for current-source contract validation; run `scripts/jig check repo:source-runtime-check` for runtime, template, launcher, and build configuration changes, and CI exercises the same target.
 
 `JIG_DEV_BIN` remains available to select an already-built `jig` binary explicitly. The installer resolves that path to an absolute path and requires its repository/profile compatibility probe to pass. A missing, non-executable, or incompatible override is a hard error. This override performs no build or freshness check; `scripts/jig-dev` replaces an inherited override with its fresh artifact. Avoid rebuilding that binary while a long-running `JIG_DEV_BIN` process, such as `jig proxy start --foreground`, is still active.
 

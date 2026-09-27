@@ -1,10 +1,13 @@
 //! State helpers that are independent of durable record schemas and JSONL mechanics.
 
 use std::fs::{self, File};
+#[cfg(test)]
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
 use fs4::fs_std::FileExt;
 use ulid::Ulid;
 
@@ -90,6 +93,7 @@ pub(super) fn ensure_state_layout(ctx: &RepoContext) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn rel_path(root: &Path, path: &Path) -> Result<String> {
     Ok(path
         .strip_prefix(root)

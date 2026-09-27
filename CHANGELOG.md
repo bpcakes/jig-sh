@@ -10,8 +10,18 @@
   omit `jig-exec-plans@jig-skills`. `jig update` reports both formerly managed files
   as removed paths and deletes them with `--force`; move any local edits to
   `.agent/PLANS.md` first. Existing `.jig.toml` skill lists are preserved, so remove
-  `jig-exec-plans@jig-skills` there to stop expecting it. `jig work` commands and
-  receipts are unchanged.
+  `jig-exec-plans@jig-skills` there to stop expecting it.
+- **Breaking:** remove the `jig work` commands and the `jig.work_*` MCP tools. Former
+  `jig work` invocations fail with a usage error that points to
+  `jig check COMPONENT:ACTION` and `jig state summary`; removed MCP tools return
+  the standard unsupported-tool error. Work-gate evaluation and the receipt reuse
+  it performed are gone, so every check executes its targets. `jig status` keeps
+  `work.gates` as an empty array, `jig ui` plan and recorder documents keep `gates`
+  as `null`, and `status --freshness-timeout-ms` is accepted but ignored. `[work]`
+  configuration, `--plan-id`, MCP `work_plan_id`, and existing plan, session, and
+  decision records remain readable, but plans can no longer be opened or closed;
+  plans open at upgrade stay open. New receipts no longer inherit the
+  current-session pointer. The contract version is unchanged.
 
 ## v0.6.0 - 2026-09-27
 

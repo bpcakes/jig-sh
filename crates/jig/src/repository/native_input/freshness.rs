@@ -1,32 +1,6 @@
 use super::*;
 use crate::repository::freshness::{CollectionBudget, CollectionFailure, CollectionResult};
-use crate::state::PlanBaseline;
 use jig_contract::freshness::FreshnessReasonCode;
-
-/// A gate uses its durable exact work-plan baseline and the normal native
-/// policy/comparison preparation. It never borrows a receipt's explicit request.
-pub(crate) fn prepare_gate_file_budget_input(
-    ctx: &RepoContext,
-    configuration: NativeFileBudgetConfigV1,
-    plan_id: &str,
-    baseline: Option<&PlanBaseline>,
-    budget: &mut CollectionBudget<'_>,
-) -> CollectionResult<PreparedNativeInputV1> {
-    budget.ensure_active()?;
-    let baseline = baseline
-        .filter(|baseline| baseline.error.is_none())
-        .ok_or_else(unavailable)?;
-    let oid = baseline
-        .commit_oid
-        .as_ref()
-        .or(baseline.empty_tree_oid.as_ref())
-        .ok_or_else(unavailable)?;
-    let request = ComparisonRequestV1::ExactTree {
-        requested_oid: oid.clone(),
-        provenance: jig_contract::ExactTreeProvenanceV1::WorkPlan,
-    };
-    prepare_observed_input(ctx, request, configuration, Some(plan_id.into()), budget)
-}
 
 pub(crate) fn revalidate_freshness_native_input(
     ctx: &RepoContext,

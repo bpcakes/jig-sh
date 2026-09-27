@@ -1,7 +1,7 @@
 //! One preparation boundary for typed Rust execution; raw Cargo IDs stay private.
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use jig_contract::{
     ActionRunner, CargoImpactDispositionV1, PreparedRustInputV1, RunPlan, RustFocusV1,
     RustNextestConfigV1, RustScopeDispositionV1, TargetId,
@@ -11,29 +11,6 @@ use crate::{
     context::RepoContext,
     execution::{ExecutionCancellation, ExecutionObserver},
 };
-
-pub(crate) fn parse_cli(values: Vec<String>) -> Result<BTreeMap<TargetId, RustFocusV1>> {
-    ensure!(
-        values.len() <= 32,
-        "at most 32 Rust focus targets are supported"
-    );
-    let mut result = BTreeMap::new();
-    for value in values {
-        let (target, value) = value
-            .split_once('=')
-            .context("--rust-focus requires TARGET=JSON")?;
-        ensure!(value.len() <= 65536, "Rust focus exceeds 65536 bytes");
-        let target: TargetId = target.parse()?;
-        let mut focus: RustFocusV1 =
-            serde_json::from_str(value).context("invalid typed Rust focus")?;
-        jig_rust::rust_focus::normalize_focus(&mut focus).map_err(anyhow::Error::msg)?;
-        ensure!(
-            result.insert(target, focus).is_none(),
-            "duplicate Rust focus target"
-        );
-    }
-    Ok(result)
-}
 
 struct Control<'a>(&'a dyn Fn() -> bool);
 impl ExecutionObserver for Control<'_> {}

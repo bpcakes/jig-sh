@@ -1,6 +1,9 @@
 # Agent-Native Repository Product Model
 
-Status: accepted for implementation on 2026-08-21.
+Status: accepted for implementation on 2026-08-21. Structured work and
+work-gate evaluation were later removed with `jig work`; see
+[Removed Work Commands](public-contract.md#removed-work-commands). The migration
+slices and acceptance criteria below are the historical record.
 
 ## Product statement
 
@@ -11,7 +14,7 @@ produces durable evidence tied to the exact repository state it validated.
 Jig is a repository API and evidence control plane. It is not a replacement for
 Cargo, Go tooling, package managers, Nx, Turborepo, Dagger, Taskfile, or a CI
 provider. It gives those systems one stack-neutral interface and connects their
-results to repository guidance, structured work, and completion gates.
+results to repository guidance and durable receipts.
 
 ## Problem
 
@@ -37,10 +40,6 @@ The repository model has the following relationships:
      |         `-- Target = component:action
      |-- Profiles ------------------ named target selections
      `-- RunPlan --> Run --> TargetRuns --> Evidence
-                                              |
-                                     Gates evaluate evidence
-                                              |
-                                          Work plan
 
 A **workspace** is the repository, its version-control state, defaults, and
 resolved Jig contract.
@@ -91,10 +90,9 @@ identity, configuration digest, input digest, and worktree fingerprint. Raw
 logs remain available, but consumers must not need to parse human text to learn
 the target, result, affected files, or normalized findings.
 
-A **gate** is a policy over evidence. It can require a target or profile to have
-a successful, current result, or require an agent review to contain no finding
-at or above a threshold. A gate does not name a command and does not execute
-work itself.
+A **gate** was a policy over evidence evaluated by the removed `jig work`
+commands. `[work]` gate configuration is still accepted, but no command
+evaluates it.
 
 An **adapter** discovers or contributes component and action defaults for a
 stack or delegated runner. Rust, Go, TypeScript, SQLx, Nx, Turborepo, and
@@ -209,9 +207,7 @@ read-only members of one execution layer use a bounded worker pool and bounded,
 backpressured event and outcome queues. The layer-entry source observation
 authorizes the initial worker cohort; every later queue claim takes a fresh
 precondition so a target cannot start against drift introduced while it was
-waiting. Effectful and fail-fast layers remain sequential. `work finish` holds a shared checkout lease while it evaluates gate
-freshness and commits plan closure, preventing an effectful run from invalidating
-the evidence inside that decision window. The execution phase therefore
+waiting. Effectful and fail-fast layers remain sequential. The execution phase therefore
 reports the actual fingerprint scan `count` and `elapsed_ms` as
 `source_observations` in structured check output. Sequential targets reuse safe
 adjacent observations, while a parallel layer takes an entry observation, one
@@ -224,7 +220,6 @@ receipt publication. An unrelated running check does not delay that release.
 Source observations cover completions already available to the coordinator;
 they do not wait for the other workers. A later source mutation fails the run
 and stops admission, while earlier validated results remain historical successes.
-Evidence reuse still validates current inputs and execution authority.
 
 One resource-only batch may run alongside these ordinary checks. Its members
 retain their shared source postcondition and hold their claims through durable
@@ -274,7 +269,7 @@ selectors.
 
 `jig info` is the static discovery surface for workspace, component, action,
 target, profile, and configuration provenance. `jig status` is the dynamic
-surface for local runs, work, gates, loops, and repository state. The distinction
+surface for local runs, recorded plans, loops, and repository state. The distinction
 prevents another overlapping inspection command.
 
 ## Agent and MCP experience
@@ -284,8 +279,7 @@ every target:
 
 - `jig.inspect` reads workspace, component, target, profile, and durable run
   information. Inspecting a nonterminal run also reconciles it to a blocked
-  terminal result when its process-owned worker lease has disappeared. Bounded
-  `jig.work_*` tools own work lifecycle information.
+  terminal result when its process-owned worker lease has disappeared.
 - `jig.plan_run` resolves selectors and closed per-target arguments, then
   returns an immutable run plan without executing it. Effectful actions require
   explicit selectors.
@@ -295,8 +289,8 @@ every target:
   worker to a terminal durable state even if its MCP transport reaches EOF or
   fails while the worker is still running.
 - `jig.cancel_run` requests cancellation of a running execution.
-- Structured work lifecycle tools remain a separate, bounded `jig.work_*`
-  namespace.
+- `jig.agent_doctor` is the only tool outside these repository operations; the
+  former `jig.work_*` lifecycle tools were removed.
 
 MCP resources are a compatible later projection, not a prerequisite for the
 repository model. A future client-capability-aware surface can publish:
@@ -305,7 +299,6 @@ repository model. A future client-capability-aware surface can publish:
     jig://components/COMPONENT_ID
     jig://targets/COMPONENT_ID:ACTION_ID
     jig://runs/RUN_ID
-    jig://work/PLAN_ID
     jig://guidance/COMPONENT_ID
 
 Tools have strict input and output JSON schemas. The canonical response is
@@ -342,28 +335,26 @@ that could change behavior without a reviewable contract diff.
 
 Contract versions 2 through 5 remain readable. For those contracts, the
 runtime synthesizes a `repo` component and maps each legacy manifest tool onto
-a compatible repo-scoped action. Existing command names, tool calls, receipts,
-and work gates keep working. Contract version 6 templates emit native component
-and action records and may use target-aware gates.
+a compatible repo-scoped action. Existing command names, tool calls, and
+receipts keep working. Contract version 6 templates emit native component and
+action records and still render target-aware `[[work.gates]]` entries, which are
+accepted but no longer evaluated.
 
 The singular `backend_language` and legacy language command keys remain
 accepted for version 5 and earlier migrations. Version 6 does not use them as
 the source of runtime identity. Rust, Go, TypeScript, and SQL integrations
 contribute adapter metadata and component-scoped actions instead.
 
-## Evidence, gates, and structured work
+## Evidence
 
 Receipt records gain optional `run_id`, structured target identity,
 configuration digest, input digest, and normalized findings. Existing JSONL
 records remain readable and append-only. A run produces one receipt for every
 target result and an aggregate receipt only when compatibility requires it.
 
-Gate configuration references a target or profile plus an evidence predicate.
-Check and agent-review executions share the target result envelope. Review
-evidence additionally records finding severity and source metadata. Gate
-freshness compares the current worktree, contract digest, and target input
-digest with the recorded evidence. Structured work links its plan to runs and
-evidence but does not own or duplicate action definitions.
+Gate evaluation, agent-review gates, and structured work plans were removed
+with `jig work`. Receipts linked to plans recorded before that removal remain
+readable, and `--plan-id` can still link new runs to a plan that remains open.
 
 ## Caching policy
 

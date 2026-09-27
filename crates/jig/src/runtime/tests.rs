@@ -311,7 +311,6 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Dev(opts) => RuntimeCommand::Dev(opts.into()),
         CommandKind::Proxy(command) => RuntimeCommand::Proxy(command.into()),
         CommandKind::Agent(command) => RuntimeCommand::Agent(command.into()),
-        CommandKind::Work(command) => RuntimeCommand::Work(command.try_into().unwrap()),
         CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)
@@ -328,6 +327,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Codex(_)
         | CommandKind::Vault(_)
         | CommandKind::Ui(_)
+        | CommandKind::Work(_)
         | CommandKind::Mcp(_) => {
             panic!("runtime test helper only accepts runtime commands")
         }
@@ -345,18 +345,6 @@ fn dispatch_routes_state_summary() {
     assert_eq!(output["ok"], true);
     assert_eq!(output["command"], "state summary");
     assert_eq!(output["counts"]["receipts"], 0);
-}
-
-#[test]
-fn dispatch_distinguishes_work_status_from_state_summary() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = dispatch(&ctx, CommandKind::Work(crate::cli::WorkCommand::Status)).unwrap();
-
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["command"], "work status");
 }
 
 #[test]
@@ -387,50 +375,6 @@ fn runtime_state_summary_polls_operation_cancellation_during_collection() {
     .to_string();
 
     assert_eq!(error, "status collection was cancelled");
-}
-
-#[test]
-fn runtime_does_not_reclassify_committed_work_as_cancelled() {
-    struct CancelAfterEntry(std::cell::Cell<usize>);
-
-    impl crate::execution::ExecutionObserver for CancelAfterEntry {}
-
-    impl crate::execution::ExecutionCancellation for CancelAfterEntry {
-        fn cancelled(&self) -> bool {
-            let polls = self.0.get() + 1;
-            self.0.set(polls);
-            polls > 1
-        }
-    }
-
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut observer = CancelAfterEntry(std::cell::Cell::new(0));
-
-    let output = dispatch_with_observer(
-        &ctx,
-        RuntimeCommand::Work(crate::command::WorkCommand::Start(
-            crate::command::WorkStartRequest {
-                title: "Example committed work".into(),
-                body: Some("Regression fixture for the durable commit boundary.".into()),
-                body_file: None,
-                base: None,
-            },
-        )),
-        &mut observer,
-    )
-    .unwrap();
-
-    let plan_id = output["plan"]["plan_id"].as_str().unwrap();
-    assert!(
-        crate::state::open_plan_summaries(&ctx)
-            .unwrap()
-            .iter()
-            .any(|plan| plan["plan_id"] == plan_id),
-        "the successful result must identify the committed plan"
-    );
-    assert_eq!(observer.0.get(), 1, "dispatch must not poll after commit");
 }
 
 #[cfg(feature = "dev-proxy")]
@@ -641,18 +585,12 @@ checks = ["jig.fmt_check", "jig.test"]
             .all(|target| target.receipt_id.is_some())
     );
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: Some("plan_work".into()),
-            tool_name: None,
-            failed_only: false,
-            limit: 20,
-        },
-    )
-    .unwrap();
-    let receipts = receipts["receipts"].as_array().unwrap();
+    let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|receipt| receipt["plan_id"] == "plan_work")
+        .collect::<Vec<_>>();
     assert_eq!(receipts.len(), 2);
     assert!(receipts.iter().all(|receipt| receipt["run_id"] == run_id));
     assert!(receipts.iter().all(|receipt| receipt["target"].is_object()));
@@ -703,7 +641,6 @@ checks = ["jig.test"]
         &catalog,
         plan,
         super::run_execution::ExecuteCheckRunRequest {
-            reuse_after_resource_wait: false,
             alias_override: None,
             work_plan_id: None,
             record_receipts: true,
@@ -726,4 +663,3 @@ mod loops;
 mod mcp;
 mod repository_execution;
 mod validation_contexts;
-mod work;

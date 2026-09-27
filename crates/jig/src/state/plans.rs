@@ -2,24 +2,25 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
-use crate::git_receipts::{resolve_empty_tree_for_unborn_repository, resolve_git_commit};
-use crate::tool_defs::{args, tool};
 
-use super::jsonl::{append_jsonl, read_dashboard_jsonl, read_jsonl, read_receipts_reverse};
-use super::plan_files::{append_plan_body, create_plan_body, plan_body_path, validate_plan_id};
-use super::receipts::{StateToolReceipt, record_successful_state_tool};
-use super::records::{PlanBaseline, PlanEvent, PlanRetirement};
-use super::support::{AdvisoryLeaseFile, ensure_state_layout, new_id, now_ms, rel_path};
+use super::jsonl::{read_dashboard_jsonl, read_jsonl};
+use super::plan_files::validate_plan_id;
+use super::records::{PlanBaseline, PlanEvent};
+use super::support::{AdvisoryLeaseFile, ensure_state_layout};
+
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+pub(crate) use test_support::{
+    PlanOpenRequest, plans_open, seed_closed_plan_for_test, seed_open_plan_for_test,
+};
 
 const PLAN_EXECUTION_LEASE_DIR: &str = ".agent/.cache/plan-execution-leases";
 
@@ -32,369 +33,10 @@ pub(super) struct ActivePlanRunLease {
     _file: AdvisoryLeaseFile,
 }
 
-struct PlanFinishLease {
-    _file: AdvisoryLeaseFile,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PlanOpenRequest {
-    pub(crate) title: String,
-    pub(crate) body: Option<String>,
-    pub(crate) body_file: Option<PathBuf>,
-    pub(crate) base: Option<String>,
-}
-
-pub(crate) struct PreparedPlanOpen {
-    title: String,
-    body: String,
-    baseline: PlanBaseline,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PlanAppendRequest {
-    pub(crate) plan_id: String,
-    pub(crate) body: Option<String>,
-    pub(crate) body_file: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct PlanCloseRequest {
-    pub(crate) plan_id: String,
-    pub(crate) resolution: Option<String>,
-}
-
-/// Explicit non-success closure of an open plan.
-///
-/// `disposition` is already validated by the caller; `reason` is already
-/// trimmed and known nonblank.
-#[derive(Debug)]
-pub(crate) struct PlanRetireRequest {
-    pub(crate) plan_id: String,
-    pub(crate) disposition: &'static str,
-    pub(crate) reason: String,
-    pub(crate) superseded_by: Option<String>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PlanStatus {
     Open,
     Closed,
-}
-
-#[cfg(test)]
-pub(crate) fn plans_open(ctx: &RepoContext, request: PlanOpenRequest) -> Result<Value> {
-    plans_open_prepared(ctx, prepare_plan_open(ctx, request)?, None)
-}
-
-pub(crate) fn prepare_plan_open(
-    ctx: &RepoContext,
-    request: PlanOpenRequest,
-) -> Result<PreparedPlanOpen> {
-    let baseline = plan_baseline_for_open(ctx, request.base.as_deref())?;
-    Ok(PreparedPlanOpen {
-        title: request.title,
-        body: plan_open_body(request.body, request.body_file)?,
-        baseline,
-    })
-}
-
-pub(crate) fn plans_open_prepared(
-    ctx: &RepoContext,
-    request: PreparedPlanOpen,
-    owner_session_id: Option<String>,
-) -> Result<Value> {
-    let plan_id = new_id("plan");
-    let plan_path = create_plan_body(ctx, &plan_id, &request.body)?;
-
-    let event = PlanEvent::open_with_baseline(
-        new_id("plan-event"),
-        plan_id.clone(),
-        now_ms(),
-        request.title.clone(),
-        Some(rel_path(ctx.root(), &plan_path)?),
-        request.baseline.clone(),
-    );
-    append_jsonl(&ctx.state_file("plans.jsonl"), &event)?;
-
-    let receipt_id = record_successful_state_tool(
-        ctx,
-        StateToolReceipt {
-            tool_name: tool::PLANS_OPEN,
-            args: json!({
-                args::OPERATION: "plan_open",
-                "title": request.title,
-                "baseline": event.baseline(),
-            }),
-            started_at_ms: event.timestamp_ms(),
-            plan_id: Some(plan_id.clone()),
-            // A work start already knows the session it created. Never infer
-            // this ownership edge from the mutable repository-global pointer:
-            // another concurrent start may have replaced it by the time the
-            // plan-open receipt is appended.
-            session_override: owner_session_id,
-        },
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "plan_id": plan_id,
-        "body_path": event.body_path(),
-        "baseline": event.baseline(),
-        "receipt_id": receipt_id,
-    }))
-}
-
-fn plan_baseline_for_open(ctx: &RepoContext, requested: Option<&str>) -> Result<PlanBaseline> {
-    let reference = requested.unwrap_or("HEAD").trim();
-    if reference.is_empty() {
-        bail!("Plan baseline ref must not be blank");
-    }
-    match resolve_git_commit(ctx.root(), reference) {
-        Ok(commit_oid) => Ok(PlanBaseline {
-            requested_ref: reference.to_string(),
-            commit_oid: Some(commit_oid),
-            empty_tree_oid: None,
-            error: None,
-        }),
-        Err(error) if requested.is_some() => Err(error)
-            .with_context(|| format!("Failed to resolve explicit plan baseline ref '{reference}'")),
-        Err(error) => match resolve_empty_tree_for_unborn_repository(ctx.root()) {
-            Ok(Some(empty_tree_oid)) => Ok(PlanBaseline {
-                requested_ref: reference.to_string(),
-                commit_oid: None,
-                empty_tree_oid: Some(empty_tree_oid),
-                error: None,
-            }),
-            Ok(None) | Err(_) => Ok(PlanBaseline {
-                requested_ref: reference.to_string(),
-                commit_oid: None,
-                empty_tree_oid: None,
-                error: Some(format!("{error:#}")),
-            }),
-        },
-    }
-}
-
-pub(crate) fn plans_append(ctx: &RepoContext, request: PlanAppendRequest) -> Result<Value> {
-    validate_plan_id(&request.plan_id)?;
-    ensure_plan_is_open(ctx, &request.plan_id)?;
-    let body = plan_append_body(request.body, request.body_file)?;
-    let plan_path = plan_body_path(ctx, &request.plan_id)?;
-    append_plan_body(ctx, &request.plan_id, format!("\n\n{body}").as_bytes())?;
-
-    let event = PlanEvent::append(
-        new_id("plan-event"),
-        request.plan_id.clone(),
-        now_ms(),
-        Some(rel_path(ctx.root(), &plan_path)?),
-    );
-    append_jsonl(&ctx.state_file("plans.jsonl"), &event)?;
-
-    let receipt_id = record_successful_state_tool(
-        ctx,
-        StateToolReceipt {
-            tool_name: tool::PLANS_APPEND,
-            args: json!({
-                args::OPERATION: "plan_append",
-                "plan_id": request.plan_id,
-            }),
-            started_at_ms: event.timestamp_ms(),
-            plan_id: Some(event.plan_id().to_string()),
-            session_override: None,
-        },
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "plan_id": event.plan_id(),
-        "receipt_id": receipt_id,
-    }))
-}
-
-pub(crate) fn plans_close(ctx: &RepoContext, request: PlanCloseRequest) -> Result<Value> {
-    let (event, receipt_id) = commit_plan_closure(
-        ctx,
-        &request.plan_id,
-        request.resolution.clone(),
-        None,
-        json!({
-            args::OPERATION: "plan_close",
-            "plan_id": request.plan_id,
-            "resolution": request.resolution,
-        }),
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "plan_id": event.plan_id(),
-        "receipt_id": receipt_id,
-        "close_event_id": event.id(),
-    }))
-}
-
-/// Close an open plan without claiming delivery.
-///
-/// This deliberately shares every close-time safety primitive with
-/// [`plans_close`] and deliberately evaluates no work gates: retirement is a
-/// lifecycle transition, not evidence of completed work.
-pub(crate) fn plans_retire(ctx: &RepoContext, request: PlanRetireRequest) -> Result<Value> {
-    let retirement = PlanRetirement {
-        disposition: request.disposition.to_string(),
-        reason: request.reason.clone(),
-        superseded_by: request.superseded_by.clone(),
-    };
-    let (event, receipt_id) = commit_plan_closure(
-        ctx,
-        &request.plan_id,
-        // Keep the historical free-text close field populated so readers that
-        // only know `resolution` still see why the plan ended.
-        Some(format!("{}: {}", request.disposition, request.reason)),
-        Some(retirement.clone()),
-        json!({
-            args::OPERATION: "plan_retire",
-            "plan_id": request.plan_id,
-            "disposition": request.disposition,
-            "reason": request.reason,
-            "superseded_by": request.superseded_by,
-        }),
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "plan_id": event.plan_id(),
-        "receipt_id": receipt_id,
-        "close_event_id": event.id(),
-        "retirement": retirement.to_value(),
-    }))
-}
-
-/// Append the single append-only close event for a plan and its state receipt.
-///
-/// Both close paths share the exclusive plan-finish lease, the open-state
-/// recheck under that lease, and the linked-run rejection it implies.
-fn commit_plan_closure(
-    ctx: &RepoContext,
-    plan_id: &str,
-    resolution: Option<String>,
-    retirement: Option<PlanRetirement>,
-    receipt_args: Value,
-) -> Result<(PlanEvent, String)> {
-    ensure_state_layout(ctx)?;
-    ensure_plan_is_open(ctx, plan_id)?;
-    let _finish_lease = acquire_plan_finish_lease(ctx, plan_id)?;
-    // A linked run that was waiting for the lease may have observed the plan
-    // before this closer won exclusivity. Recheck under the exclusive lease so
-    // no new linked run can cross the close transition.
-    ensure_plan_is_open(ctx, plan_id)?;
-
-    let event = match retirement {
-        Some(retirement) => PlanEvent::retire(
-            new_id("plan-event"),
-            plan_id.to_string(),
-            now_ms(),
-            resolution,
-            retirement,
-        ),
-        None => PlanEvent::close(
-            new_id("plan-event"),
-            plan_id.to_string(),
-            now_ms(),
-            resolution,
-        ),
-    };
-    append_jsonl(&ctx.state_file("plans.jsonl"), &event)?;
-
-    let receipt_id = record_successful_state_tool(
-        ctx,
-        StateToolReceipt {
-            tool_name: tool::PLANS_CLOSE,
-            args: receipt_args,
-            started_at_ms: event.timestamp_ms(),
-            plan_id: Some(event.plan_id().to_string()),
-            session_override: None,
-        },
-    )
-    .map_err(|error| super::PlanClosurePartialFailure::receipt(&event, error))?;
-
-    Ok((event, receipt_id))
-}
-
-/// A plan's terminal state plus the structured retirement recorded on its
-/// close, resolved in a single pass over the plan stream.
-///
-/// A successful close keeps `retirement` at `None`, which is how existing
-/// closes retain their historical meaning.
-#[derive(Clone, Debug)]
-pub(crate) struct PlanLifecycle {
-    pub(crate) status: PlanStatus,
-    pub(crate) retirement: Option<PlanRetirement>,
-}
-
-pub(crate) fn plan_lifecycle(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanLifecycle>> {
-    let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
-    Ok(plan_lifecycle_from_events(&events, plan_id))
-}
-
-pub(crate) fn plan_lifecycle_with_cancellation(
-    ctx: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Option<PlanLifecycle>> {
-    ensure_plan_scan_active(cancelled)?;
-    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
-    ensure_plan_scan_active(cancelled)?;
-    Ok(plan_lifecycle_from_events(&events, plan_id))
-}
-
-fn plan_lifecycle_from_events(events: &[PlanEvent], plan_id: &str) -> Option<PlanLifecycle> {
-    let mut opened = false;
-    let mut closed = false;
-    let mut retirement = None;
-
-    for event in events.iter().filter(|event| event.plan_id() == plan_id) {
-        match event {
-            PlanEvent::Open { .. } => {
-                opened = true;
-                closed = false;
-                retirement = None;
-            }
-            PlanEvent::Close { .. } => {
-                closed = true;
-                retirement = event.retirement().cloned();
-            }
-            _ => {}
-        }
-    }
-
-    match (opened, closed) {
-        (true, false) => Some(PlanLifecycle {
-            status: PlanStatus::Open,
-            retirement: None,
-        }),
-        (true, true) => Some(PlanLifecycle {
-            status: PlanStatus::Closed,
-            retirement,
-        }),
-        (false, _) => None,
-    }
-}
-
-/// The session that durably owns a plan, proven by the plan's open receipt.
-///
-/// Plan-open records its receipt after the owning session is current, so the
-/// receipt's session is the only durable proof of ownership. A plan opened
-/// without a session, or whose open receipt has been archived away, has no
-/// provable owner and must never end an unrelated session.
-pub(crate) fn plan_owner_session(ctx: &RepoContext, plan_id: &str) -> Result<Option<String>> {
-    let (receipts, _) = read_receipts_reverse(&ctx.state_file("receipts.jsonl"), 1, |receipt| {
-        receipt.tool_name == tool::PLANS_OPEN
-            && receipt.plan_id.as_deref() == Some(plan_id)
-            && receipt.session_id.is_some()
-    })?;
-    Ok(receipts
-        .into_iter()
-        .next()
-        .and_then(|receipt| receipt.session_id))
 }
 
 pub(super) fn acquire_active_plan_run_lease(
@@ -411,23 +53,6 @@ pub(super) fn acquire_active_plan_run_lease(
     Ok(ActivePlanRunLease {
         _file: AdvisoryLeaseFile::new(file),
     })
-}
-
-fn acquire_plan_finish_lease(ctx: &RepoContext, plan_id: &str) -> Result<PlanFinishLease> {
-    let file = open_plan_execution_lease(ctx, plan_id)?;
-    match FileExt::try_lock_exclusive(&file) {
-        Ok(true) => Ok(PlanFinishLease {
-            _file: AdvisoryLeaseFile::new(file),
-        }),
-        Ok(false) => bail!(
-            "Plan has active linked repository runs: {plan_id}; wait for them to finish or cancel them before retrying"
-        ),
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => bail!(
-            "Plan has active linked repository runs: {plan_id}; wait for them to finish or cancel them before retrying"
-        ),
-        Err(error) => Err(error)
-            .with_context(|| format!("Failed to inspect active runs for work plan '{plan_id}'")),
-    }
 }
 
 fn open_plan_execution_lease(ctx: &RepoContext, plan_id: &str) -> Result<File> {
@@ -460,27 +85,17 @@ pub(crate) fn ensure_plan_is_open(ctx: &RepoContext, plan_id: &str) -> Result<()
     }
 }
 
-pub(crate) fn ensure_plan_exists(ctx: &RepoContext, plan_id: &str) -> Result<()> {
-    match plan_status(ctx, plan_id)? {
-        Some(_) => Ok(()),
-        None => bail!("Plan not found: {plan_id}"),
-    }
-}
-
-pub(crate) fn ensure_plan_exists_with_cancellation(
-    ctx: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<()> {
-    match plan_status_with_cancellation(ctx, plan_id, cancelled)? {
-        Some(_) => Ok(()),
-        None => bail!("Plan not found: {plan_id}"),
-    }
-}
-
 pub(crate) fn plan_status(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanStatus>> {
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     Ok(plan_status_from_events(&events, plan_id))
+}
+
+/// Plan existence for the reserved work-link journal.
+pub(crate) fn ensure_plan_exists(ctx: &RepoContext, plan_id: &str) -> Result<()> {
+    match plan_status_with_cancellation(ctx, plan_id, &|| false)? {
+        Some(_) => Ok(()),
+        None => bail!("Plan not found: {plan_id}"),
+    }
 }
 
 pub(crate) fn plan_status_with_cancellation(
@@ -543,20 +158,6 @@ pub(crate) fn plan_baseline_with_cancellation(
         .ok_or_else(|| anyhow::anyhow!("Plan baseline resolver omitted requested plan {plan_id}"))
 }
 
-pub(crate) fn plan_baselines_with_cancellation(
-    ctx: &RepoContext,
-    plan_ids: &BTreeSet<String>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<BTreeMap<String, Option<PlanBaseline>>> {
-    #[cfg(test)]
-    PLAN_BASELINE_SCAN_COUNT.set(PLAN_BASELINE_SCAN_COUNT.get() + 1);
-    ensure_plan_scan_active(cancelled)?;
-    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
-    let baselines = unique_plan_baselines(&events, plan_ids)?;
-    ensure_plan_scan_active(cancelled)?;
-    Ok(baselines)
-}
-
 fn unique_plan_baselines(
     events: &[PlanEvent],
     plan_ids: &BTreeSet<String>,
@@ -587,70 +188,8 @@ fn unique_plan_baselines(
     Ok(baselines)
 }
 
-pub(crate) fn open_plan_summaries_with_cancellation(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Vec<Value>> {
-    ensure_plan_scan_active(cancelled)?;
-    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
-    let mut closed = HashSet::new();
-    let mut opened = BTreeMap::<String, (&str, Option<&str>, Option<&PlanBaseline>)>::new();
-    for event in &events {
-        ensure_plan_scan_active(cancelled)?;
-        match event {
-            PlanEvent::Open {
-                plan_id,
-                title,
-                body_path,
-                baseline,
-                ..
-            } => {
-                opened.insert(
-                    plan_id.clone(),
-                    (title.as_str(), body_path.as_deref(), baseline.as_ref()),
-                );
-            }
-            PlanEvent::Close { plan_id, .. } => {
-                closed.insert(plan_id.clone());
-            }
-            _ => {}
-        }
-    }
-    ensure_plan_scan_active(cancelled)?;
-    Ok(opened
-        .into_iter()
-        .filter(|(plan_id, _)| !closed.contains(plan_id))
-        .map(|(plan_id, (title, body_path, baseline))| {
-            json!({
-                "plan_id": plan_id,
-                "title": title,
-                "body_path": body_path,
-                "baseline": baseline,
-            })
-        })
-        .collect())
-}
-
 fn ensure_plan_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
     ensure_status_collection_active(cancelled)
-}
-
-#[cfg(test)]
-pub(crate) fn seed_open_plan_for_test(
-    ctx: &RepoContext,
-    plan_id: &str,
-    title: &str,
-    body: &str,
-) -> Result<()> {
-    let plan_path = create_plan_body(ctx, plan_id, body)?;
-    let event = PlanEvent::open(
-        new_id("plan-event"),
-        plan_id.to_string(),
-        now_ms(),
-        title.to_string(),
-        Some(rel_path(ctx.root(), &plan_path)?),
-    );
-    append_jsonl(&ctx.state_file("plans.jsonl"), &event)
 }
 
 pub(super) fn open_plans(events: &[PlanEvent]) -> Vec<Value> {
@@ -711,26 +250,4 @@ fn plan_status_from_events(events: &[PlanEvent], plan_id: &str) -> Option<PlanSt
         (true, true) => Some(PlanStatus::Closed),
         (false, _) => None,
     }
-}
-
-fn plan_open_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<String> {
-    match (body, body_file) {
-        (Some(text), None) => Ok(text),
-        (None, Some(path)) => fs::read_to_string(path).context("Failed to read plan body file"),
-        (None, None) => Ok(String::from("# Plan\n")),
-        (Some(_), Some(_)) => bail!("Provide either `body` or `body_file`, not both."),
-    }
-}
-
-fn plan_append_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<String> {
-    let body = match (body, body_file) {
-        (Some(text), None) => Ok(text),
-        (None, Some(path)) => fs::read_to_string(path).context("Failed to read plan body file"),
-        (None, None) => bail!("Progress text is required; provide `body` or `body_file`."),
-        (Some(_), Some(_)) => bail!("Provide either `body` or `body_file`, not both."),
-    }?;
-    if body.trim().is_empty() {
-        bail!("Progress text must not be empty.");
-    }
-    Ok(body)
 }

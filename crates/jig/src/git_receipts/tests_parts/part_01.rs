@@ -49,86 +49,6 @@ fn read_only_git_commands_scrub_repository_and_command_config_redirects() {
 }
 
 #[test]
-fn repository_redirect_environment_cannot_change_scope_or_whole_worktree_proofs() {
-    let root = tempdir().unwrap();
-    let decoy = tempdir().unwrap();
-    for repo in [root.path(), decoy.path()] {
-        run_git(repo, &["init"]);
-        run_git(repo, &["config", "user.email", "fixture@example.com"]);
-        run_git(repo, &["config", "user.name", "Fixture"]);
-        std::fs::write(repo.join("tracked.txt"), "baseline\n").unwrap();
-        run_git(repo, &["add", "."]);
-        run_git(repo, &["commit", "-m", "baseline"]);
-    }
-    let baseline = resolve_git_commit(root.path(), "HEAD").unwrap();
-    std::fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
-    let expected_whole = repo_worktree_fingerprint(root.path()).unwrap();
-    let expected_scope = gate_scope_snapshot(
-        root.path(),
-        &baseline,
-        Some(&["tracked.txt".into()]),
-        &[],
-        "fixture",
-    )
-    .unwrap();
-
-    for (name, value) in [
-        ("GIT_DIR", decoy.path().join(".git")),
-        ("GIT_WORK_TREE", decoy.path().to_path_buf()),
-        ("GIT_INDEX_FILE", decoy.path().join(".git/index")),
-    ] {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args(["--exact", REDIRECT_HELPER_TEST, "--nocapture"])
-            .env(REDIRECT_HELPER_ENV, name)
-            .env(REDIRECT_HELPER_ROOT_ENV, root.path())
-            .env(REDIRECT_HELPER_WHOLE_ENV, &expected_whole)
-            .env(REDIRECT_HELPER_SCOPE_ENV, &expected_scope.scope_fingerprint);
-        configure_read_only_git_environment(&mut command);
-        let output = command.env(name, value).output().unwrap();
-        assert!(
-            output.status.success(),
-            "ambient {name} helper failed with {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-}
-
-#[test]
-fn repository_redirect_environment_helper() {
-    let Some(redirect) = std::env::var_os(REDIRECT_HELPER_ENV) else {
-        return;
-    };
-    let root = PathBuf::from(std::env::var_os(REDIRECT_HELPER_ROOT_ENV).unwrap());
-    let baseline = resolve_git_commit(&root, "HEAD").unwrap();
-    let expected_whole = std::env::var(REDIRECT_HELPER_WHOLE_ENV).unwrap();
-    let expected_scope = std::env::var(REDIRECT_HELPER_SCOPE_ENV).unwrap();
-
-    assert_eq!(
-        repo_worktree_fingerprint(&root).unwrap(),
-        expected_whole,
-        "ambient {} changed the whole-worktree proof",
-        redirect.to_string_lossy(),
-    );
-    assert_eq!(
-        gate_scope_snapshot(
-            &root,
-            &baseline,
-            Some(&["tracked.txt".into()]),
-            &[],
-            "fixture",
-        )
-        .unwrap()
-        .scope_fingerprint,
-        expected_scope,
-        "ambient {} changed the scoped proof",
-        redirect.to_string_lossy(),
-    );
-}
-
-#[test]
 fn whole_worktree_fingerprint_disables_external_diff_and_textconv_configuration() {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -225,50 +145,6 @@ fn whole_worktree_fingerprint_fails_closed_on_large_binary_diff_output() {
 
     assert!(
         format!("{error:#}").contains("worktree proof Git output limit of 256 bytes"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn gate_scope_fingerprint_fails_closed_on_oversized_committed_binary_diff() {
-    let _env = crate::test_env::lock_env();
-    let temp = tempdir().unwrap();
-    run_git(temp.path(), &["init"]);
-    run_git(
-        temp.path(),
-        &["config", "user.email", "fixture@example.com"],
-    );
-    run_git(temp.path(), &["config", "user.name", "Fixture"]);
-    std::fs::write(temp.path().join("asset.bin"), [0_u8; 32]).unwrap();
-    run_git(temp.path(), &["add", "."]);
-    run_git(temp.path(), &["commit", "-m", "baseline"]);
-    let baseline = resolve_git_commit(temp.path(), "HEAD").unwrap();
-    let mut state = 0x0bad_f00d_u32;
-    let changed = (0..16_384)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            state as u8
-        })
-        .collect::<Vec<_>>();
-    std::fs::write(temp.path().join("asset.bin"), changed).unwrap();
-    run_git(temp.path(), &["add", "."]);
-    run_git(temp.path(), &["commit", "-m", "large binary"]);
-
-    GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE.set(Some(256));
-    let result = gate_scope_snapshot(
-        temp.path(),
-        &baseline,
-        Some(&["asset.bin".into()]),
-        &[],
-        "fixture",
-    );
-    GATE_SCOPE_DIFF_OUTPUT_LIMIT_OVERRIDE.set(None);
-    let error = result.unwrap_err();
-
-    assert!(
-        format!("{error:#}").contains("gate-scope proof Git output limit of 256 bytes"),
         "{error:#}"
     );
 }
@@ -460,4 +336,58 @@ fn changed_path_preview_is_bounded_sorted_and_digest_covers_the_full_set() {
 
     let preview_only_digest = changed_paths_digest(&bounded.preview);
     assert_ne!(bounded.digest, preview_only_digest);
+}
+
+#[test]
+fn repository_redirect_environment_cannot_change_whole_worktree_proofs() {
+    let root = tempdir().unwrap();
+    let decoy = tempdir().unwrap();
+    for repo in [root.path(), decoy.path()] {
+        run_git(repo, &["init"]);
+        run_git(repo, &["config", "user.email", "fixture@example.com"]);
+        run_git(repo, &["config", "user.name", "Fixture"]);
+        std::fs::write(repo.join("tracked.txt"), "baseline\n").unwrap();
+        run_git(repo, &["add", "."]);
+        run_git(repo, &["commit", "-m", "baseline"]);
+    }
+    std::fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
+    let expected_whole = repo_worktree_fingerprint(root.path()).unwrap();
+
+    for (name, value) in [
+        ("GIT_DIR", decoy.path().join(".git")),
+        ("GIT_WORK_TREE", decoy.path().to_path_buf()),
+        ("GIT_INDEX_FILE", decoy.path().join(".git/index")),
+    ] {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", REDIRECT_HELPER_TEST, "--nocapture"])
+            .env(REDIRECT_HELPER_ENV, name)
+            .env(REDIRECT_HELPER_ROOT_ENV, root.path())
+            .env(REDIRECT_HELPER_WHOLE_ENV, &expected_whole);
+        configure_read_only_git_environment(&mut command);
+        let output = command.env(name, value).output().unwrap();
+        assert!(
+            output.status.success(),
+            "ambient {name} helper failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+}
+
+#[test]
+fn repository_redirect_environment_helper() {
+    let Some(redirect) = std::env::var_os(REDIRECT_HELPER_ENV) else {
+        return;
+    };
+    let root = PathBuf::from(std::env::var_os(REDIRECT_HELPER_ROOT_ENV).unwrap());
+    let expected_whole = std::env::var(REDIRECT_HELPER_WHOLE_ENV).unwrap();
+
+    assert_eq!(
+        repo_worktree_fingerprint(&root).unwrap(),
+        expected_whole,
+        "ambient {} changed the whole-worktree proof",
+        redirect.to_string_lossy(),
+    );
 }

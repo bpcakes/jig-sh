@@ -32,35 +32,30 @@ const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(1
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CodexExecMode {
     Exec,
-    Review,
 }
 
 impl CodexExecMode {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Exec => "exec",
-            Self::Review => "review",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CodexPrompt<'a> {
-    Argument(&'a str),
     Stdin(&'a str),
 }
 
 impl<'a> CodexPrompt<'a> {
     const fn delivery(self) -> &'static str {
         match self {
-            Self::Argument(_) => "argument",
             Self::Stdin(_) => "stdin",
         }
     }
 
     fn stdin_prompt(self) -> Option<&'a str> {
         match self {
-            Self::Argument(_) => None,
             Self::Stdin(prompt) => Some(prompt),
         }
     }
@@ -125,10 +120,6 @@ impl CodexExecOutput {
     pub(crate) fn worker_receipt_id(&self) -> &str {
         &self.worker_receipt_id
     }
-
-    pub(crate) fn into_process_output(self) -> Output {
-        self.output
-    }
 }
 
 #[derive(Debug)]
@@ -190,24 +181,7 @@ pub(crate) enum CodexExecOutcome {
     },
 }
 
-impl CodexExecOutcome {
-    pub(crate) fn into_completed(self) -> Result<CodexExecOutput> {
-        match self {
-            Self::Completed(output) => Ok(output),
-            Self::Cancelled {
-                before_start,
-                worker_receipt_id,
-            } => {
-                let timing = if before_start {
-                    " before it started"
-                } else {
-                    ""
-                };
-                bail!("Codex worker was cancelled{timing}; receipt {worker_receipt_id}")
-            }
-        }
-    }
-}
+impl CodexExecOutcome {}
 
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
@@ -436,9 +410,6 @@ fn build_codex_command(
         command.arg("--ask-for-approval").arg(approval_policy);
     }
     command.arg("exec");
-    if matches!(request.mode, CodexExecMode::Review) {
-        command.arg("review");
-    }
     if let Some(sandbox) = request.sandbox {
         command.arg("--sandbox").arg(sandbox);
     }
@@ -454,9 +425,6 @@ fn build_codex_command(
     }
     command.arg("-o").arg(output_path);
     match request.prompt {
-        CodexPrompt::Argument(prompt) => {
-            command.arg(prompt);
-        }
         CodexPrompt::Stdin(_) => {
             command.arg("-");
         }

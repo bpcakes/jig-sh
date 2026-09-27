@@ -59,17 +59,7 @@ fn loop_status_surfaces_exhausted_attempts_as_needs_attention() {
     assert_eq!(tick["ok"], false);
     assert_eq!(tick["idle"], false);
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: false,
-            limit: 10,
-        },
-    )
-    .unwrap();
+    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, false)});
     assert_eq!(receipts["receipts"][0]["exit_status"], 1);
 }
 

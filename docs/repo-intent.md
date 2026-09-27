@@ -11,8 +11,7 @@ The core idea is to turn a repository into an operating environment for coding a
 - repo-wide and crate-level agent guidance
 - a typed `scripts/jig` CLI for repo-local commands
 - an MCP server exposing a bounded repository inspection and execution model to clients
-- append-only session, plan, receipt, and decision state under `.agent/`
-- required work gates evaluated from plan-linked receipts
+- append-only receipt and run state under `.agent/`
 - native agent tooling checks for client-side Jig skills
 - policy scripts and CI workflows that keep the generated contract honest
 
@@ -45,7 +44,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
 The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 8`, with explicit components, actions, profiles, adapter provenance, literal argv and explicit shell runners, compatibility `jig.*` aliases, typed native configuration, declared bounded string arguments, target-local matching for non-empty action inputs, and versioned target receipt freshness with original dependency proof and inherited expiry. Input policies default to whole-repository. Audited command actions may set `source_state = "worktree"` when their results depend only on working-file content, allowing receipts to survive staging and commits of unchanged checked files; the default `git` policy retains Git placement and HEAD/branch authority. Native checks retain their Git and comparison dependencies. Contracts v6/v7 retain their released command behavior; v6 keeps component-aggregate matching, and versions 2 through 5 remain readable through the legacy repository projection.
 
-Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
+Runtime-owned commands such as `state`, `status`, and `agent doctor` are intentionally not part of `.agent/jig-contract.json`. They are conveniences exposed by the CLI, and `agent doctor` also by the MCP server as `jig.agent_doctor`.
 
 The root `AGENTS.md` is block-managed during adoption and update. Existing repo-specific content outside the Jig managed block is preserved.
 
@@ -63,7 +62,6 @@ The repo appears to be designing for a future where agents work repeatedly insid
 - a clear command contract
 - machine-readable tool definitions
 - a way to run checks without guessing project conventions
-- required gates that stop work from finishing without evidence
 - durable traces of plans, decisions, and command results
 - compatibility rules so generated tooling can evolve without surprising downstream repos
 
@@ -100,7 +98,7 @@ human-authored waiver.
 
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It does not load repositories or own runtime aggregation policy.
 
-`crates/jig/src/status.rs` owns read-only aggregation of local Git, structured work, gate, lease, and attempt state.
+`crates/jig/src/status.rs` owns read-only aggregation of local Git, recorded plan, lease, and attempt state.
 
 `crates/jig-ui` owns the unified interactive terminal application used by both `scripts/jig ui` and `scripts/jig status --tui`. Its typed `DashboardSource` boundary carries local recorder and plan-detail snapshots without exposing `RepoContext`, state storage, or runtime policy. The CLI adapter in `crates/jig/src/ui.rs` and `crates/jig/src/ui/source/` owns repository collection and status aggregation. The TUI is read-only: it does not write receipts, fetch remotes, run actions, or launch agents.
 
@@ -110,16 +108,16 @@ human-authored waiver.
 
 The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` and `jig ui --plan PLAN_ID --json` use bounded recorder schema 1 without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
 
-`crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
+`crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
-`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 and later it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. The transport surface stays fixed for the server lifetime, while catalog inspection, planning, and execution reload current repository authority before reusing the same planner, executor, and append-only state as the CLI.
+`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 and later it lists four closed repository operations with strict input and output schemas plus `jig.agent_doctor`; contracts v2 through v5 list their manifest execution tools. The transport surface stays fixed for the server lifetime, while catalog inspection, planning, and execution reload current repository authority before reusing the same planner, executor, and append-only state as the CLI.
 
 `crates/jig/src/state/` stores append-only JSONL records:
 
 - `sessions.jsonl`: session start/end events and write-time summaries; recent-session references inside new summaries are shallow so history cannot recurse
-- `plans.jsonl`: plan open/append/close events
+- `plans.jsonl`: plan open/append/close events; readable, but no current command writes new ones
 - `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
-- `decisions.jsonl`: structured decision records
+- `decisions.jsonl`: structured decision records; readable, but no current command writes new ones
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
 - `work-links.jsonl`: immutable joins from Jig plans to portable external-work
   identities and their observed task snapshots
@@ -203,5 +201,5 @@ When changing runtime behavior, build a dev binary and dogfood through the launc
 
 ```sh
 cargo build -p jig-sh --bin jig
-JIG_DEV_BIN=target/debug/jig scripts/jig work status
+JIG_DEV_BIN=target/debug/jig scripts/jig state summary
 ```

@@ -19,7 +19,7 @@
 - Change tabs, navigation, selection preservation, filters, or detail state: `src/terminal/model/`.
 - Change terminal layout or presentation: `src/terminal/render/`.
 - Change refresh timing, preemption, keyboard events, or terminal cleanup: `src/terminal/runtime/`.
-- Change how repository state, gates, or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
+- Change how repository state or loops become snapshots: `crates/jig/src/ui/source/`, not this crate.
 
 ## Invariants
 

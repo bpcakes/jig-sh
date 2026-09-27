@@ -766,6 +766,4 @@ mod session_and_plans;
 
 mod archive_validation;
 
-mod plan_retirement;
-
 include!("tests_parts/part_01.rs");

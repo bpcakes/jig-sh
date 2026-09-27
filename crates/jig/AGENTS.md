@@ -12,10 +12,10 @@
 - `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
 - `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
 - `src/mcp.rs`: JSON-RPC/MCP stdio server.
-- `src/state.rs`: sessions, plans, receipts, and decisions stored under `.agent/state`.
+- `src/state.rs`: receipts and runs recorded under `.agent/state`, plus readers for legacy session, plan, and decision streams.
 - `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
 - `src/ui/source.rs`: typed recorder, plan, and status source with retained local epochs.
-- `src/status.rs`: read-only local repository, work, and loop aggregate snapshots.
+- `src/status.rs`: read-only local repository, recorded-state, and loop aggregate snapshots.
 - `src/runtime/vault/tui.rs`: fixed-scope, process-local credential adapter for the separately owned `jig-vault-tui` crate.
 - `src/bootstrap.rs`: init/adopt/update command surface.
 - `src/bootstrap/`: bootstrap support for native template rendering, git, staged renders, and template-source handling.
@@ -31,7 +31,7 @@
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change make-tool behavior or receipt recording around command execution: `src/runtime.rs`.
 - Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
-- Change session, plan, receipt, or decision persistence: `src/state.rs`.
+- Change receipt or run persistence, or legacy session, plan, and decision readers: `src/state.rs`.
 - Change the data exposed by the unified dashboard: `src/ui/source/`.
 - Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.
 - Change local status aggregation: `src/status.rs` and `src/status/`.

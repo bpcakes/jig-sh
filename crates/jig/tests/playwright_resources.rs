@@ -261,14 +261,11 @@ fn browser_admission_timeout_starts_nothing_and_retains_owner() {
 }
 
 #[test]
-fn browser_work_waiter_executes_live_validator_after_passing_receipt_publication() {
+fn browser_waiter_executes_live_validator_after_receipt_publication() {
     let fixture = BrowserFixture::new();
-    let plan = fixture.open_plan();
-    let mut owner = fixture.inner.spawn("publisher", &["--plan-id", &plan]);
+    let mut owner = fixture.inner.spawn("publisher", &[]);
     owner.wait_entered();
-    let mut waiter = fixture
-        .inner
-        .spawn_args("waiter", &["work", "check", "--plan-id", &plan]);
+    let mut waiter = fixture.inner.spawn("waiter", &[]);
     fixture.wait_notice(&mut waiter, "waiter");
     assert!(!waiter.entered());
     owner.release();
@@ -299,12 +296,9 @@ fn current_wrapper_readiness_is_checked_after_wait_and_repair_runs_validator() {
     // This is a generic owning-wrapper guard oracle. Actual SQLx/database
     // behavior remains bounded by the recorded T-03 evidence, not this fixture.
     let fixture = BrowserFixture::new();
-    let plan = fixture.open_plan();
-    let mut owner = fixture.inner.spawn("publisher", &["--plan-id", &plan]);
+    let mut owner = fixture.inner.spawn("publisher", &[]);
     owner.wait_entered();
-    let mut waiter = fixture
-        .inner
-        .spawn_args("waiter", &["work", "check", "--plan-id", &plan]);
+    let mut waiter = fixture.inner.spawn("waiter", &[]);
     fixture.wait_notice(&mut waiter, "waiter");
     assert!(!waiter.entered());
 
@@ -322,7 +316,7 @@ fn current_wrapper_readiness_is_checked_after_wait_and_repair_runs_validator() {
     assert_eq!(fs::read_to_string(&expensive).unwrap(), "publisher\n");
 
     fs::remove_file(denied).unwrap();
-    let mut repaired = fixture.inner.spawn("repaired", &["--plan-id", &plan]);
+    let mut repaired = fixture.inner.spawn("repaired", &[]);
     repaired.wait_entered();
     repaired.release();
     repaired.finish_success();

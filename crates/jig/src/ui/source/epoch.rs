@@ -19,7 +19,6 @@ pub(super) struct LocalObservationEpoch {
     id: RecorderEpochId,
     observed_at_ms: u64,
     context: RepoContext,
-    freshness_timeout_ms: Option<u64>,
     repository: StatusRepositoryObservation,
     status_repository_errors: Vec<StatusCollectionError>,
     current_session_id: Option<String>,
@@ -30,7 +29,6 @@ pub(super) struct LocalObservationEpoch {
     receipts: StreamSection<ReceiptFacts>,
     loops: Option<StatusLoopObservation>,
     loop_error: Option<SnapshotError>,
-    gates: BTreeMap<String, GateFacts>,
 }
 
 #[derive(Clone)]
@@ -52,7 +50,6 @@ struct PlanFacts {
     open_events: u64,
     events: u64,
     timeline: Vec<TimelineRow>,
-    gate_errors: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Default)]
@@ -104,19 +101,11 @@ struct PlanInfo {
     closed: bool,
 }
 
-#[derive(Clone, Default)]
-struct GateFacts {
-    status: Option<StatusGateReport>,
-    recorder: Option<GatesObservation>,
-    error: Option<String>,
-}
-
 impl LocalObservationEpoch {
     pub(super) fn collect(
         context: &RepoContext,
         id: RecorderEpochId,
         cancelled: &dyn Fn() -> bool,
-        freshness_timeout_ms: Option<u64>,
     ) -> Result<Self, SourceError> {
         ensure_active(cancelled)?;
         let observed_at_ms = crate::state::now_ms();
@@ -129,17 +118,7 @@ impl LocalObservationEpoch {
         let sessions = collect_sessions(context, cancelled)?;
         let plans = collect_plans(context, cancelled)?;
         let decisions = collect_decisions(context, cancelled)?;
-        let open_plan_ids = plans
-            .data
-            .distinct
-            .iter()
-            .filter(|(_, plan)| plan.opened && !plan.closed)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let gate_indexes =
-            crate::runtime::dashboard_gate_receipt_indexes(context, &open_plan_ids, cancelled)
-                .map_err(|error| collection_error_for(CollectionDomain::Gates, error, cancelled))?;
-        let (receipts, gate_indexes) = collect_receipts(context, gate_indexes, cancelled)?;
+        let receipts = collect_receipts(context, cancelled)?;
         ensure_active(cancelled)?;
         let (current_session_id, current_session_error) =
             match current_session_with_cancellation(context, cancelled) {
@@ -177,65 +156,10 @@ impl LocalObservationEpoch {
         };
         ensure_active(cancelled)?;
 
-        let open_plan_baselines = plans
-            .data
-            .distinct
-            .iter()
-            .filter(|(_, plan)| plan.opened && !plan.closed)
-            .map(|(id, plan)| (id.clone(), plan.baseline.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let gate_collection_error = plans
-            .error
-            .as_ref()
-            .or(receipts.error.as_ref())
-            .map(|error| {
-                format!(
-                    "gate evidence is unavailable because {} failed: {}",
-                    error.scope(),
-                    error.message()
-                )
-            });
-        let mut gates = match &gate_collection_error {
-            Some(message) => open_plan_baselines
-                .keys()
-                .map(|plan_id| {
-                    (
-                        plan_id.clone(),
-                        GateFacts {
-                            error: Some(message.clone()),
-                            ..GateFacts::default()
-                        },
-                    )
-                })
-                .collect(),
-            None => collect_gates(
-                context,
-                &open_plan_baselines,
-                gate_indexes.into_indexes(),
-                "open",
-                cancelled,
-                freshness_timeout_ms,
-            )?,
-        };
-        if gate_collection_error.is_none() {
-            for (plan_id, error) in &plans.data.gate_errors {
-                if open_plan_baselines.contains_key(plan_id) {
-                    gates.insert(
-                        plan_id.clone(),
-                        GateFacts {
-                            error: Some(error.clone()),
-                            ..GateFacts::default()
-                        },
-                    );
-                }
-            }
-        }
-
         Ok(Self {
             id,
             observed_at_ms,
             context: context.clone(),
-            freshness_timeout_ms,
             repository,
             status_repository_errors,
             current_session_id,
@@ -246,7 +170,6 @@ impl LocalObservationEpoch {
             receipts,
             loops,
             loop_error,
-            gates,
         })
     }
 
@@ -264,11 +187,9 @@ impl LocalObservationEpoch {
             repository: self.repository.clone(),
             work: StatusWorkSnapshot {
                 state: state_available.then(|| self.status_state()),
-                gates: if state_available {
-                    self.status_gates()
-                } else {
-                    Vec::new()
-                },
+                // Gate evaluation was removed with `jig work`; the documented
+                // field remains present and empty.
+                gates: Vec::new(),
             },
             loops: self.loops.clone(),
             errors,
@@ -371,9 +292,8 @@ impl LocalObservationEpoch {
         id: RecorderEpochId,
         plan_id: &str,
         cancelled: &dyn Fn() -> bool,
-        freshness_timeout_ms: Option<u64>,
     ) -> Result<PlanSnapshotResult, SourceError> {
-        fresh_plan(context, id, plan_id, cancelled, freshness_timeout_ms)
+        fresh_plan(context, id, plan_id, cancelled)
     }
 
     fn status_state(&self) -> StatusStateSnapshot {
@@ -409,23 +329,6 @@ impl LocalObservationEpoch {
         }
     }
 
-    fn status_gates(&self) -> Vec<StatusPlanGates> {
-        self.plans
-            .data
-            .distinct
-            .iter()
-            .filter(|(_, plan)| plan.opened && !plan.closed)
-            .map(|(plan_id, _)| {
-                let gate = self.gates.get(plan_id).cloned().unwrap_or_default();
-                StatusPlanGates {
-                    plan_id: plan_id.clone(),
-                    snapshot: gate.status,
-                    error: gate.error,
-                }
-            })
-            .collect()
-    }
-
     fn recorder_open_plans(&self) -> Vec<OpenPlan> {
         let mut plans = self
             .plans
@@ -433,27 +336,24 @@ impl LocalObservationEpoch {
             .distinct
             .iter()
             .filter(|(_, plan)| plan.opened && !plan.closed)
-            .map(|(id, plan)| {
-                let gate = self.gates.get(id).cloned().unwrap_or_default();
-                OpenPlan {
-                    plan_id: id.clone(),
-                    title: plan.title.clone(),
-                    body_path: plan.body_path.clone(),
-                    opened_at_ms: plan.opened_at_ms,
-                    baseline_ref: plan
-                        .baseline
-                        .as_ref()
-                        .map(|value| value.requested_ref.clone()),
-                    baseline_oid: plan.baseline.as_ref().and_then(|value| {
-                        value
-                            .commit_oid
-                            .clone()
-                            .or_else(|| value.empty_tree_oid.clone())
-                    }),
-                    baseline_error: plan.baseline.as_ref().and_then(|value| value.error.clone()),
-                    gates: gate.recorder,
-                    gates_error: gate.error,
-                }
+            .map(|(id, plan)| OpenPlan {
+                plan_id: id.clone(),
+                title: plan.title.clone(),
+                body_path: plan.body_path.clone(),
+                opened_at_ms: plan.opened_at_ms,
+                baseline_ref: plan
+                    .baseline
+                    .as_ref()
+                    .map(|value| value.requested_ref.clone()),
+                baseline_oid: plan.baseline.as_ref().and_then(|value| {
+                    value
+                        .commit_oid
+                        .clone()
+                        .or_else(|| value.empty_tree_oid.clone())
+                }),
+                baseline_error: plan.baseline.as_ref().and_then(|value| value.error.clone()),
+                gates: None,
+                gates_error: None,
             })
             .collect::<Vec<_>>();
         plans.sort_by(|left, right| {
@@ -548,19 +448,6 @@ impl LocalObservationEpoch {
         ]
         .into_iter()
         .flatten()
-        .chain(
-            self.gates
-                .iter()
-                .filter_map(|(id, gate)| gate.error.as_ref().map(|error| (id, error)))
-                .map(|(id, error)| {
-                    SnapshotError::new(
-                        CollectionDomain::Gates,
-                        SnapshotErrorCode::GateObservationFailed,
-                        Some(id.clone()),
-                        error,
-                    )
-                }),
-        )
         .collect()
     }
 
@@ -575,20 +462,7 @@ impl LocalObservationEpoch {
     }
 
     fn status_snapshot_errors(&self) -> Vec<SnapshotError> {
-        let state_error = self.state_error().cloned();
-        let mut errors = state_error.clone().into_iter().collect::<Vec<_>>();
-        if state_error.is_none() {
-            errors.extend(self.gates.iter().filter_map(|(id, gate)| {
-                gate.error.as_ref().map(|error| {
-                    SnapshotError::new(
-                        CollectionDomain::Gates,
-                        SnapshotErrorCode::GateObservationFailed,
-                        Some(id.clone()),
-                        error,
-                    )
-                })
-            }));
-        }
+        let mut errors = self.state_error().cloned().into_iter().collect::<Vec<_>>();
         errors.extend(self.loop_error.clone());
         errors
     }

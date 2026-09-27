@@ -33,7 +33,6 @@ fn targets_without_a_worktree_effect_cannot_mutate_the_repository() {
             &catalog,
             run,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
-                reuse_after_resource_wait: false,
                 alias_override: None,
                 work_plan_id: None,
                 record_receipts: true,
@@ -153,63 +152,6 @@ fn parallel_read_only_layer_observes_mcp_cancellation() {
             .iter()
             .all(|target| target["conclusion"] == "cancelled")
     );
-}
-
-#[test]
-fn active_plan_linked_mcp_run_blocks_plan_close_until_terminal() {
-    let temp = tempdir().unwrap();
-    write_v6_evidence_fixture_repo(temp.path(), "");
-    let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap();
-    fs::write(
-        &config_path,
-        config.replace("printf 'api tests passed\\n'", "sleep 30"),
-    )
-    .unwrap();
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    crate::state::seed_open_plan_for_test(&ctx, "plan_active", "Active", "Body").unwrap();
-    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
-    let accepted = call_tool(
-        &ctx,
-        tool::EXECUTE_RUN,
-        json!({
-            "plan": planned["plan"].clone(),
-            "work_plan_id": "plan_active"
-        }),
-    )
-    .unwrap();
-    let run_id = accepted["run_id"].as_str().unwrap();
-
-    let error = crate::state::plans_close(
-        &ctx,
-        crate::state::PlanCloseRequest {
-            plan_id: "plan_active".into(),
-            resolution: Some("too early".into()),
-        },
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("active linked repository runs"), "{error}");
-    call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
-    let terminal = wait_for_repository_run(&ctx, run_id);
-    assert_eq!(
-        terminal["result"]["run"]["result"]["conclusion"],
-        "cancelled"
-    );
-    // The terminal event is durable before the worker drops its execution
-    // guards. Wait for that cleanup boundary so this assertion tests plan
-    // lease release rather than racing the worker's final stack unwinding.
-    crate::runtime::mcp_repository::wait_for_live_runs(&ctx);
-    crate::state::plans_close(
-        &ctx,
-        crate::state::PlanCloseRequest {
-            plan_id: "plan_active".into(),
-            resolution: Some("done".into()),
-        },
-    )
-    .unwrap();
 }
 
 #[test]
@@ -677,5 +619,3 @@ fn mcp_does_not_expose_dev_or_proxy_commands() {
         assert!(error.contains("Unsupported tool"));
     }
 }
-
-mod work_tools;

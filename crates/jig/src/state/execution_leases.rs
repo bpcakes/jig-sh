@@ -30,25 +30,6 @@ impl fmt::Display for RepositoryExecutionBusy {
 
 impl std::error::Error for RepositoryExecutionBusy {}
 
-pub(crate) fn acquire_repository_execution_lease(
-    ctx: &RepoContext,
-    effects: &[ActionEffect],
-) -> Result<RepositoryExecutionLease> {
-    let file = open_repository_execution_lease(ctx)?;
-    let exclusive = requires_exclusive_execution(effects);
-    if exclusive {
-        FileExt::lock_exclusive(&file)
-            .context("Failed to acquire exclusive repository execution lease")?;
-    } else {
-        FileExt::lock_shared(&file)
-            .context("Failed to acquire shared repository execution lease")?;
-    }
-    Ok(RepositoryExecutionLease {
-        _file: AdvisoryLeaseFile::new(file),
-        exclusive,
-    })
-}
-
 pub(crate) fn try_acquire_repository_execution_lease(
     ctx: &RepoContext,
     effects: &[ActionEffect],
@@ -72,6 +53,26 @@ pub(crate) fn try_acquire_repository_execution_lease(
         _file: AdvisoryLeaseFile::new(file),
         exclusive,
     }))
+}
+
+#[cfg(test)]
+pub(crate) fn acquire_repository_execution_lease(
+    ctx: &RepoContext,
+    effects: &[ActionEffect],
+) -> Result<RepositoryExecutionLease> {
+    let file = open_repository_execution_lease(ctx)?;
+    let exclusive = requires_exclusive_execution(effects);
+    if exclusive {
+        FileExt::lock_exclusive(&file)
+            .context("Failed to acquire exclusive repository execution lease")?;
+    } else {
+        FileExt::lock_shared(&file)
+            .context("Failed to acquire shared repository execution lease")?;
+    }
+    Ok(RepositoryExecutionLease {
+        _file: AdvisoryLeaseFile::new(file),
+        exclusive,
+    })
 }
 
 pub(crate) fn acquire_repository_execution_lease_without_wait(

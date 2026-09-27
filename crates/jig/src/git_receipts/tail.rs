@@ -36,10 +36,12 @@ pub(super) fn changed_paths_digest(paths: &[String]) -> String {
     format!("sha256:{:x}", digest.finalize())
 }
 
+#[cfg(test)]
 pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
     repo_worktree_fingerprint_inner(root, GitReceiptCollection::Blocking)
 }
 
+#[cfg(test)]
 pub(crate) fn repo_worktree_fingerprint_with_cancellation(
     root: &Path,
     cancelled: &dyn Fn() -> bool,

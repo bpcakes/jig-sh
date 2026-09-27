@@ -2,8 +2,8 @@
 """Measure dependency scheduling with real invocations, receipts, and source scans.
 
 Run each binary with a distinct --phase (before/after) and a fresh --outdir.
-Each case gets three fresh generic Git repositories. Setup and work start are
-outside the timed interval; check planning, commands, validation, and publication
+Each case gets three fresh generic Git repositories. Setup is outside the timed
+interval; check planning, commands, validation, and publication
 are inside it. Keep builds and other tests idle during measurement. Outputs are
 retained without overwriting earlier samples. Timing is evidence, not a test gate.
 """
@@ -107,9 +107,7 @@ def find_key(value, key):
 
 def run_sample(binary, root, case, phase, repetition):
     make_fixture(root, case)
-    plan_id = checked([binary, 'work', 'start', '--title', 'Example velocity benchmark', '--body',
-                       'Measure dependency scheduling and source observation overhead.', '--print-plan-id'], root).stdout.strip()
-    argv = [binary, 'check', '--profile', 'verify', '--plan-id', plan_id, '--json']
+    argv = [binary, 'check', '--profile', 'verify', '--json']
     started_wall_ms = time.time_ns() // 1_000_000
     started = time.perf_counter()
     result = checked(argv, root)

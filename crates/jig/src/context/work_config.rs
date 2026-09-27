@@ -149,15 +149,17 @@ impl super::RepoContext {
     pub(crate) fn work_tracker(&self) -> Option<&WorkTrackerConfig> {
         self.config.work.tracker()
     }
-
-    pub(crate) fn work_iteration_profile(&self) -> Option<&ProfileId> {
-        self.config.work.iteration_profile()
-    }
 }
 
 impl WorkConfig {
+    #[cfg(test)]
     pub(crate) fn iteration_profile(&self) -> Option<&ProfileId> {
         self.iteration_profile.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn refinements(&self) -> &[WorkRefinementConfig] {
+        &self.refinements
     }
 
     pub(crate) fn receipt_metadata_paths(&self) -> Vec<&'static str> {
@@ -220,10 +222,6 @@ impl WorkConfig {
                 _ => None,
             })
             .collect()
-    }
-
-    pub(crate) fn refinements(&self) -> &[WorkRefinementConfig] {
-        &self.refinements
     }
 
     pub(crate) fn validate(&self) -> Result<()> {

@@ -9,6 +9,8 @@ use jig_ui::dashboard::{
     PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 
+#[path = "shared/legacy_plan.rs"]
+mod legacy_plan;
 mod support;
 
 fn fixture() -> tempfile::TempDir {
@@ -103,20 +105,7 @@ fn recorder_plan_and_status_json_entrypoints_remain_portable_after_deletion() {
     assert_eq!(recorder["snapshot_kind"], "recorder");
     assert_exact_root_fields(&recorder, RECORDER_ROOT_FIELDS);
 
-    let started = jig(
-        root.path(),
-        &[
-            "work",
-            "start",
-            "--title",
-            "Example plan",
-            "--body",
-            "# Example plan",
-            "--print-plan-id",
-        ],
-    );
-    assert!(started.status.success());
-    let plan_id = String::from_utf8(started.stdout).unwrap();
+    let plan_id = legacy_plan::seed_open_plan(root.path(), "plan_example", "Example plan");
     let plan = success_json(jig(
         root.path(),
         &["ui", "--plan", plan_id.trim(), "--json"],

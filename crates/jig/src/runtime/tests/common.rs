@@ -5,7 +5,6 @@ use std::process::Command;
 
 use serde_json::json;
 
-use crate::state::{ReceiptInput, record_receipt};
 use crate::test_env::TestRepoBuilder;
 
 pub(super) fn write_fixture_repo(root: &Path) {
@@ -56,42 +55,6 @@ tool = "jig.custom_check"
             "kind": "command",
             "description": "Run configured custom check.",
             "command": "rust_test_command"
-        }))
-        .write();
-    write_open_plan(root);
-}
-
-pub(super) fn write_mutating_check_fixture_repo(root: &Path) {
-    TestRepoBuilder::new(root)
-        .config(
-            r#"
-[commands]
-first_check_command = "printf 'first ran\n'"
-mutating_check_command = "printf 'generated\n' > generated.txt"
-
-[[work.gates]]
-id = "first"
-kind = "check"
-tool = "jig.first_check"
-
-[[work.gates]]
-id = "mutating"
-kind = "check"
-tool = "jig.mutating_check"
-"#,
-        )
-        .required_commands(["first_check_command", "mutating_check_command"])
-        .tool(json!({
-            "name": "jig.first_check",
-            "kind": "command",
-            "description": "Run configured first check.",
-            "command": "first_check_command"
-        }))
-        .tool(json!({
-            "name": "jig.mutating_check",
-            "kind": "command",
-            "description": "Run configured mutating check.",
-            "command": "mutating_check_command"
         }))
         .write();
     write_open_plan(root);
@@ -198,66 +161,6 @@ targets = [
     )
     .unwrap();
     write_open_plan(root);
-}
-
-pub(super) fn enable_v6_iteration_profile(root: &Path) {
-    let config_path = root.join(".jig.toml");
-    let config = fs::read_to_string(&config_path)
-        .unwrap()
-        .replace(
-            "[commands]",
-            "[work]\niteration_profile = \"iteration\"\n\n[commands]",
-        )
-        .replace(
-            "api_test_command = \"printf 'api tests passed\\n'\"",
-            "api_test_command = \"printf 'api tests passed\\n'; printf 'api\\n' >> .agent/launch.log\"",
-        )
-        .replace(
-            "web_test_command = \"printf 'web tests passed\\n'\"",
-            "web_test_command = \"printf 'web tests passed\\n'; printf 'web\\n' >> .agent/launch.log\"",
-        );
-    let config = format!(
-        "{config}\n[[repository.profiles]]\nid = \"iteration\"\ntargets = [{{ component = \"api\", action = \"test\" }}]\n"
-    );
-    fs::write(&config_path, config).unwrap();
-
-    let manifest_path = root.join(".agent/jig-contract.json");
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["profiles"].as_array_mut().unwrap().push(json!({
-        "id": "iteration",
-        "targets": [{"component": "api", "action": "test"}]
-    }));
-    fs::write(
-        manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
-}
-
-pub(super) fn enable_v6_legacy_web_tool(root: &Path) {
-    let config_path = root.join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replacen(
-        "inputs = [\"web/**\"]",
-        "inputs = [\"web/**\"]\nlegacy_aliases = [\"jig.web_test\"]",
-        1,
-    );
-    fs::write(&config_path, config).unwrap();
-    let manifest_path = root.join(".agent/jig-contract.json");
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["actions"][1]["legacy_aliases"] = json!(["jig.web_test"]);
-    manifest["tools"].as_array_mut().unwrap().push(json!({
-        "name": "jig.web_test",
-        "kind": "command",
-        "description": "Run the full web check.",
-        "command": "web_test_command"
-    }));
-    fs::write(
-        manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
 }
 
 pub(super) fn write_non_rust_file_budget_fixture_repo(root: &Path) {
@@ -494,204 +397,9 @@ depends_on = [{ component = "api", action = "generate" }]
     .unwrap();
 }
 
-pub(super) fn write_failing_check_fixture_repo(root: &Path) {
-    TestRepoBuilder::new(root)
-        .config(
-            r#"
-[commands]
-custom_check_command = "printf 'check failed\n' >&2; exit 7"
-
-[[work.gates]]
-id = "custom"
-kind = "check"
-tool = "jig.custom_check"
-"#,
-        )
-        .required_commands(["custom_check_command"])
-        .tool(json!({
-            "name": "jig.custom_check",
-            "kind": "command",
-            "description": "Run configured custom check.",
-            "command": "custom_check_command"
-        }))
-        .write();
-    write_open_plan(root);
-}
-
-pub(super) fn write_timeout_check_fixture_repo(root: &Path) {
-    TestRepoBuilder::new(root)
-        .config(
-            r#"
-[commands]
-timeout_check_command = "sleep 30"
-
-[execution]
-command_timeout_seconds = 1
-
-[[work.gates]]
-id = "timeout"
-kind = "check"
-tool = "jig.timeout_check"
-"#,
-        )
-        .required_commands(["timeout_check_command"])
-        .tool(json!({
-            "name": "jig.timeout_check",
-            "kind": "command",
-            "description": "Run configured timeout check.",
-            "command": "timeout_check_command"
-        }))
-        .write();
-    write_open_plan(root);
-}
-
-pub(super) fn write_fail_fast_check_fixture_repo(root: &Path) {
-    TestRepoBuilder::new(root)
-        .config(
-            r#"
-[commands]
-failing_check_command = "printf 'check failed\n' >&2; exit 7"
-later_check_command = "printf 'later check ran\n' > later-check-ran.txt"
-
-[[work.gates]]
-id = "failing"
-kind = "check"
-tool = "jig.failing_check"
-
-[[work.gates]]
-id = "later"
-kind = "check"
-tool = "jig.later_check"
-"#,
-        )
-        .required_commands(["failing_check_command", "later_check_command"])
-        .tool(json!({
-            "name": "jig.failing_check",
-            "kind": "command",
-            "description": "Run configured failing check.",
-            "command": "failing_check_command"
-        }))
-        .tool(json!({
-            "name": "jig.later_check",
-            "kind": "command",
-            "description": "Run configured later check.",
-            "command": "later_check_command"
-        }))
-        .write();
-    write_open_plan(root);
-}
-
-pub(super) fn write_review_fixture_repo(root: &Path) {
-    write_review_fixture_repo_with_check(root, "printf 'check ok\\n'");
-}
-
-pub(super) fn write_review_fixture_repo_with_check(root: &Path, check_command: &str) {
-    write_review_fixture_repo_with_options(root, check_command, true);
-}
-
-pub(super) fn write_review_fixture_repo_without_refinement(root: &Path) {
-    write_review_fixture_repo_with_options(root, "printf 'check ok\\n'", false);
-}
-
-fn write_review_fixture_repo_with_options(root: &Path, check_command: &str, refinement: bool) {
-    let refinement_config = if refinement {
-        r#"
-[[work.refinements]]
-id = "test-refinement"
-skill = "jig-rust:rust-simplify"
-"#
-    } else {
-        ""
-    };
-    TestRepoBuilder::new(root)
-        .contract_version(5)
-        .config(format!(
-            r#"
-[commands]
-custom_check_command = "{check_command}"
-
-[[work.gates]]
-id = "rust-error-handling"
-kind = "codex_review"
-skill = "jig-rust:rust-error-handling-review"
-severity = "high"
-required = true
-
-[[work.gates]]
-id = "custom"
-kind = "check"
-tool = "jig.custom_check"
-{refinement_config}
-"#
-        ))
-        .required_commands(["custom_check_command"])
-        .tool(json!({
-            "name": "jig.custom_check",
-            "kind": "command",
-            "description": "Run configured custom check.",
-            "command": "custom_check_command"
-        }))
-        .write();
-    write_open_plan(root);
-}
-
 pub(super) fn write_open_plan(root: &Path) {
     let ctx = RepoContext::load_from(root).unwrap();
     crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Test plan", "# Test plan\n").unwrap();
-}
-
-pub(super) fn open_test_plan(ctx: &RepoContext) -> String {
-    // Most runtime fixtures seed plan_1 because work-check tests exercise that
-    // stable id directly. Reuse it while it remains open; otherwise fall back to
-    // opening a fresh plan for tests that deliberately closed the seeded one.
-    if crate::state::ensure_plan_is_open(ctx, "plan_1").is_ok() {
-        return "plan_1".into();
-    }
-
-    let plan = crate::state::plans_open(
-        ctx,
-        crate::state::PlanOpenRequest {
-            title: "Test plan".into(),
-            body: Some("Test body".into()),
-            body_file: None,
-            base: None,
-        },
-    )
-    .unwrap();
-
-    plan["plan_id"].as_str().unwrap().to_string()
-}
-
-pub(super) struct TestReceipt<'a> {
-    pub(super) tool_name: &'a str,
-    pub(super) args: Value,
-    pub(super) plan_id: &'a str,
-    pub(super) started_at_ms: u64,
-    pub(super) ended_at_ms: u64,
-    pub(super) worktree_fingerprint: Option<String>,
-}
-
-pub(super) fn record_test_receipt(ctx: &RepoContext, receipt: TestReceipt<'_>) -> String {
-    record_receipt(
-        ctx,
-        ReceiptInput {
-            tool_name: receipt.tool_name,
-            args: receipt.args,
-            invoked_command_key: None,
-            plan_id: Some(receipt.plan_id.to_string()),
-            started_at_ms: receipt.started_at_ms,
-            ended_at_ms: receipt.ended_at_ms,
-            exit_status: 0,
-            stdout: "",
-            stderr: "",
-            evidence: None,
-            session_override: None,
-            collect_git_metadata: false,
-            collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: receipt.worktree_fingerprint.map(Ok),
-        },
-    )
-    .unwrap()
 }
 
 pub(super) fn init_git_repo(root: &Path) {
@@ -724,4 +432,22 @@ pub(super) fn write_codex_stub(path: &Path, body: &str) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
+}
+
+/// Newest-first receipt records for one tool, read directly from the journal.
+pub(crate) fn tool_receipts(
+    ctx: &RepoContext,
+    tool_name: &str,
+    failed_only: bool,
+) -> Vec<serde_json::Value> {
+    let path = ctx.state_file("receipts.jsonl");
+    let mut receipts = std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|receipt| receipt["tool_name"] == tool_name)
+        .filter(|receipt| !failed_only || receipt["exit_status"] != 0)
+        .collect::<Vec<_>>();
+    receipts.reverse();
+    receipts
 }

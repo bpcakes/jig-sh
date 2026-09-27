@@ -133,37 +133,10 @@ fn launcher_recovery_preserves_repository_ownership_from_another_directory() {
     let caller = temp.path().join("Example caller");
     fs::create_dir_all(&caller).unwrap();
     fixture(&root);
-    let plan = open(&root, "Example owner");
     for args in [
-        vec![
-            "work",
-            "start",
-            "--title",
-            "Example",
-            "--description",
-            "notes",
-            "--json",
-        ],
         vec!["info", "--summary", "--json"],
-        vec!["--summary", "work", "status", "--json"],
-        vec![
-            "work",
-            "check",
-            "--plan-id",
-            &plan,
-            "--tool",
-            "api:test",
-            "--json",
-        ],
-        vec![
-            "work",
-            "check",
-            "--plan-id",
-            &plan,
-            "--tool",
-            "api:missing",
-            "--json",
-        ],
+        vec!["--summary", "status", "--json"],
+        vec!["contract", "--help", "--json"],
     ] {
         let before = journal(&root);
         let output = Command::new(root.join("scripts/jig"))
@@ -179,11 +152,8 @@ fn launcher_recovery_preserves_repository_ownership_from_another_directory() {
         let retried = apply_from(&root, &caller, &message);
         assert!(retried.status.success(), "{message}\n{retried:?}");
         assert!(!caller.join(".agent").exists());
-        if args[0] != "work" || args.contains(&"api:missing") {
-            assert_eq!(journal(&root), before);
-        }
+        assert_eq!(journal(&root), before);
     }
-    assert!(root.join(".agent/state/plans.jsonl").exists());
 }
 
 #[test]
@@ -202,124 +172,14 @@ fn direct_binary_recovery_preserves_the_invoked_executable() {
     assert_eq!(journal(repo.path()), before);
 }
 
-fn open(root: &Path, title: &str) -> String {
-    let output = invoke(
-        root,
-        &[
-            "work",
-            "start",
-            "--title",
-            title,
-            "--body",
-            "Example notes",
-            "--json",
-        ],
-    );
-    assert!(output.status.success(), "{:?}", output);
-    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    value["plan"]["plan_id"].as_str().unwrap().to_owned()
-}
-
-#[test]
-fn description_recovery_runs_only_on_explicit_retry_and_preserves_shell_literals() {
-    for json_output in [false, true] {
-        let repo = tempdir().unwrap();
-        fixture(repo.path());
-        let title = "Example '$(touch SHOULD_NOT_EXIST)' title";
-        let mut args = vec![
-            "work",
-            "start",
-            "--title",
-            title,
-            "--description",
-            "Example notes with spaces",
-        ];
-        if json_output {
-            args.push("--json");
-        }
-        let before = journal(repo.path());
-        let output = invoke(repo.path(), &args);
-        let message = error_message(&output, json_output);
-        assert_eq!(before, journal(repo.path()));
-        assert!(!repo.path().join(".agent/state/plans.jsonl").exists());
-        let retried = apply(repo.path(), &message);
-        assert!(retried.status.success(), "{message}\n{retried:?}");
-        assert!(!repo.path().join("SHOULD_NOT_EXIST").exists());
-        let records = fs::read_to_string(repo.path().join(".agent/state/plans.jsonl")).unwrap();
-        assert!(
-            records
-                .lines()
-                .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                .any(|plan| plan["title"] == title),
-            "{records}"
-        );
-    }
-}
-
-#[test]
-fn plan_status_recovery_keeps_explicit_plan_even_with_multiple_open_plans() {
-    let repo = tempdir().unwrap();
-    fixture(repo.path());
-    let selected = open(repo.path(), "Example first");
-    open(repo.path(), "Example second");
-    let before = journal(repo.path());
-    let output = invoke(
-        repo.path(),
-        &["work", "status", "--plan-id", &selected, "--json"],
-    );
-    let message = error_message(&output, true);
-    assert_eq!(before, journal(repo.path()));
-    let retried = apply(repo.path(), &message);
-    assert!(retried.status.success(), "{retried:?}");
-    let value: Value = serde_json::from_slice(&retried.stdout).unwrap();
-    assert_eq!(value["plan_id"], selected);
-    assert!(value.get("gates_ok").is_some());
-    assert_eq!(before, journal(repo.path()));
-    assert!(
-        invoke(repo.path(), &["work", "status", "--json"])
-            .status
-            .success()
-    );
-}
-
-#[test]
-fn summary_recovery_uses_existing_projection_or_truthful_help_without_auto_execution() {
-    for command in ["check", "gates", "evidence", "status"] {
-        let repo = tempdir().unwrap();
-        fixture(repo.path());
-        let plan = open(repo.path(), "Example projection");
-        let mut args = vec!["work", command, "--summary", "--json"];
-        if command != "status" {
-            args.extend(["--plan-id", &plan]);
-        }
-        let before = journal(repo.path());
-        let output = invoke(repo.path(), &args);
-        let message = error_message(&output, true);
-        assert_eq!(before, journal(repo.path()));
-        let retried = apply(repo.path(), &message);
-        assert!(retried.status.success(), "{message}\n{retried:?}");
-        if command == "status" {
-            assert!(message.contains("--help"));
-        } else {
-            let value: Value = serde_json::from_slice(&retried.stdout).unwrap();
-            assert_eq!(value["schema_version"], 1, "{value:#}");
-            assert_eq!(value["command"], format!("work {command}"));
-            assert!(value["finish_ready"].is_boolean());
-        }
-        if command != "check" {
-            assert_eq!(before, journal(repo.path()));
-        }
-    }
-}
-
 #[test]
 fn summary_before_a_command_returns_executable_scoped_help() {
     let repo = tempdir().unwrap();
     fixture(repo.path());
     for args in [
-        vec!["work", "--summary", "status", "--json"],
-        vec!["work", "--json", "--summary", "status"],
-        vec!["--json", "--summary", "work", "status"],
+        vec!["status", "--summary", "--json"],
+        vec!["status", "--json", "--summary"],
+        vec!["--json", "--summary", "status"],
     ] {
         let before = journal(repo.path());
         let output = invoke(repo.path(), &args);
@@ -386,60 +246,6 @@ fn info_summary_recovery_preserves_supported_target_subjects() {
         );
         assert_eq!(before, journal(repo.path()));
     }
-}
-
-#[test]
-fn native_tool_recovery_executes_the_requested_target_only_after_retry() {
-    let repo = tempdir().unwrap();
-    fixture(repo.path());
-    let plan = open(repo.path(), "Example native retry");
-    let before = journal(repo.path());
-    let output = invoke(
-        repo.path(),
-        &[
-            "work",
-            "check",
-            "--plan-id",
-            &plan,
-            "--tool",
-            "api:test",
-            "--json",
-        ],
-    );
-    let message = error_message(&output, true);
-    assert_eq!(before, journal(repo.path()));
-    assert!(message.contains("scripts/jig check api:test --plan-id"));
-    let retried = apply(repo.path(), &message);
-    assert!(retried.status.success(), "{message}\n{retried:?}");
-    let records = String::from_utf8(journal(repo.path()).unwrap()).unwrap();
-    assert!(
-        records
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .any(
-                |receipt| receipt["target"] == json!({"component":"api","action":"test"})
-                    && receipt["exit_status"] == 0
-            )
-    );
-    let before = journal(repo.path());
-    let output = invoke(
-        repo.path(),
-        &[
-            "work",
-            "check",
-            "--plan-id",
-            &plan,
-            "--tool",
-            "api:test",
-            "--tool",
-            "api:missing",
-            "--json",
-        ],
-    );
-    let message = error_message(&output, true);
-    assert!(message.contains("no unambiguous equivalent"));
-    assert!(apply(repo.path(), &message).status.success());
-    assert_eq!(before, journal(repo.path()));
 }
 
 #[test]

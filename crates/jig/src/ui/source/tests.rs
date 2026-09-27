@@ -15,7 +15,6 @@ use super::RepoDashboardSource;
 
 mod details;
 mod edge_cases;
-mod gates;
 mod limits;
 
 fn source_fixture() -> (tempfile::TempDir, RepoDashboardSource) {
@@ -304,16 +303,14 @@ fn stale_missing_fresh_and_failed_refresh_retention_are_distinct() {
 }
 
 #[test]
-fn typed_gate_and_loop_fields_reach_the_recorder_without_json_reparse() {
+fn typed_loop_fields_reach_the_recorder_without_json_reparse() {
     let (_root, source) = source_fixture();
     let refresh = source
         .recorder(recorder_request(RecorderMode::Refresh), &|| false)
         .unwrap();
     let plan = &refresh.recorder.open_plans[0];
-    let gate = &plan.gates.as_ref().unwrap().gates.items()[0];
-    assert_eq!(gate.id, "custom");
-    assert_eq!(gate.tool.as_deref(), Some("jig.custom_check"));
-    assert_eq!(gate.remediation.as_ref().unwrap().argv[4], "plan_example");
+    assert!(plan.gates.is_none());
+    assert!(plan.gates_error.is_none());
     let loops = refresh.recorder.loops.as_ref().unwrap();
     assert!(!loops.workflows.items().is_empty());
 }
@@ -374,32 +371,6 @@ fn real_loop_attempt_identity_and_recovery_argv_survive_the_source_boundary() {
     );
     assert!(attempt.remediation.as_ref().unwrap().display.contains("'"));
     assert!(!root.path().join("nope").exists());
-}
-
-#[test]
-fn local_epoch_traverses_each_state_stream_once_and_gates_do_not_rescan() {
-    let (_root, source) = source_fixture();
-    crate::state::reset_dashboard_scan_counts();
-    crate::state::reset_work_gate_receipt_index_scan_count();
-    let refresh = source
-        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
-        .unwrap();
-    let context = &source.context;
-
-    for stream in [
-        "sessions.jsonl",
-        "plans.jsonl",
-        "decisions.jsonl",
-        "receipts.jsonl",
-    ] {
-        assert_eq!(
-            crate::state::dashboard_scan_count(&context.state_file(stream)),
-            1,
-            "{stream} should be traversed exactly once"
-        );
-    }
-    assert_eq!(crate::state::work_gate_receipt_index_scan_count(), 0);
-    assert_eq!(refresh.recorder.open_plans.len(), 1);
 }
 
 #[test]
@@ -503,7 +474,7 @@ fn recorder_status_projection_matches_local_status_command_data() {
 }
 
 #[test]
-fn recorder_status_projection_preserves_gate_then_loop_error_order() {
+fn recorder_status_projection_matches_status_errors() {
     let (root, source) = source_fixture();
     let plans_path = root.path().join(".agent/state/plans.jsonl");
     let mut plans = fs::read_to_string(&plans_path).unwrap();
@@ -545,5 +516,29 @@ fn recorder_status_projection_preserves_gate_then_loop_error_order() {
         .filter_map(|error| error["scope"].as_str())
         .filter(|scope| scope.starts_with("work.gates") || *scope == "loops")
         .collect::<Vec<_>>();
-    assert_eq!(relevant_scopes, ["work.gates.plan_example", "loops"]);
+    assert_eq!(relevant_scopes, ["loops"]);
+}
+
+#[test]
+fn local_epoch_traverses_each_state_stream_once() {
+    let (_root, source) = source_fixture();
+    crate::state::reset_dashboard_scan_counts();
+    let refresh = source
+        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
+        .unwrap();
+    let context = &source.context;
+
+    for stream in [
+        "sessions.jsonl",
+        "plans.jsonl",
+        "decisions.jsonl",
+        "receipts.jsonl",
+    ] {
+        assert_eq!(
+            crate::state::dashboard_scan_count(&context.state_file(stream)),
+            1,
+            "{stream} should be traversed exactly once"
+        );
+    }
+    assert_eq!(refresh.recorder.open_plans.len(), 1);
 }

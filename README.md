@@ -5,7 +5,7 @@
 
 > **Keep coding agents on contract.**
 
-Jig is a repo-local operating harness for coding agents. It gives supported Rust, Go, and TypeScript repositories a versioned command catalog, gated work plans, and append-only receipts. You can adopt an existing repository or scaffold one of Jig's supported project shapes.
+Jig is a repo-local operating harness for coding agents. It gives supported Rust, Go, and TypeScript repositories a versioned command catalog and append-only receipts. You can adopt an existing repository or scaffold one of Jig's supported project shapes.
 
 Agents should not have to infer how to operate a repository from scattered scripts and prose. Jig makes the repository's commands, ownership boundaries, checks, and definition of done explicit to humans, CI, CLI clients, and MCP clients.
 
@@ -25,8 +25,7 @@ Agents should not have to infer how to operate a repository from scattered scrip
 
 - **Agent guidance** through `AGENTS.md` and `agent-map.md`.
 - **A typed command catalog** in `.agent/jig-contract.json`, executed through the repo-local `scripts/jig` launcher.
-- **Optional structured work and gates** that let `work finish` close a plan only when every required gate has current evidence.
-- **Append-only receipts** under `.agent/state/` for checks, plans, decisions, and runs.
+- **Append-only receipts** under `.agent/state/` for checks and runs.
 - **Affected checks and file budgets** so agents can select work from checked-in component policy and enforce repository-owned source limits.
 - **A bounded MCP runtime** for repository inspection, immutable planning, execution, and cancellation.
 - **Local runtime tools** for orchestration loops, a terminal dashboard, development hostnames, and encrypted local secrets.
@@ -100,7 +99,7 @@ For the guided path, run `jig init ./ExampleProject` in a terminal. Inside an ex
 
 Run checks that validate the behavior you change, using `scripts/jig check COMPONENT:ACTION`
 or a focused native test command. `scripts/jig file-budget audit` provides standalone diagnostics
-without creating runs or receipts. Work plans and receipt inspection are optional.
+without creating runs or receipts. Receipt inspection is optional.
 
 ## What changes in the repository
 
@@ -114,7 +113,7 @@ A full harness contains this core structure:
 ├── agent-map.md                # index of nested agent guides
 ├── .agent/
 │   ├── jig-contract.json       # versioned command catalog
-│   └── state/                  # append-only plans, receipts, and decisions
+│   └── state/                  # append-only receipts and runtime records
 ├── scripts/
 │   ├── jig                     # repo-local launcher
 │   └── install-jig.sh          # compatible runtime installer
@@ -126,22 +125,21 @@ Checks append receipt records. A simplified record looks like this:
 ```json
 {
   "tool_name": "jig.test",
-  "plan_id": "plan_...",
+  "plan_id": null,
   "exit_status": 0,
   "changed_paths": ["README.md"],
   "diff_stat": { "files": 1, "insertions": 8, "deletions": 2 }
 }
 ```
 
-When using structured work, you can inspect its evidence with `scripts/jig work status`, `scripts/jig work evidence`, or `scripts/jig work receipts`.
+Inspect recorded state with `scripts/jig state summary`.
 
 ## How it works
 
 1. **Render or adopt the harness.** `jig init` creates a supported project shape; `jig adopt` previews and then adds the harness to an existing repository.
 2. **Discover the repository contract.** Humans, CI, and agents use the same checked-in components, actions, profiles, and command runners through `scripts/jig`.
 3. **Validate the affected behavior.** Select focused checks; use `--affected BASE` when selecting targets by changed paths is useful. Broaden verification for shared behavior, failures, or unresolved risks.
-4. **Use structured work when useful.** Work plans capture a Git baseline and enforce configured gates at closure. Receipt inspection and this lifecycle are optional for ordinary development.
-5. **Update conservatively.** `jig update` advances managed harness files while preserving project-owned code and customized managed files unless replacement is explicitly forced.
+4. **Update conservatively.** `jig update` advances managed harness files while preserving project-owned code and customized managed files unless replacement is explicitly forced.
 
 ## Command contract
 
@@ -152,7 +150,7 @@ Contract v6 and later expose four bounded MCP repository operations: inspect, pl
 | Surface | Stable contract? | Records receipts? | Machine-local? |
 | --- | --- | --- | --- |
 | `check` / `run` | yes | yes | no |
-| `work` / `loop` | runtime-owned | yes | no |
+| `loop` | runtime-owned | yes | no |
 | `state` | runtime-owned | no | partly |
 | `status` / `ui` | runtime-owned | no | partly |
 | `dev` / `proxy` | runtime-owned | no | yes |
@@ -247,13 +245,11 @@ jig update --recopy    # re-render from the stored .jig.toml answers
 
 ## Feature guide
 
-### Structured work, affected checks, and file budgets
+### Affected checks and file budgets
 
-Structured work is optional. When selected, `work start` captures an exact Git baseline. `work check` evaluates required gates against checked-in path policy, records executed or not-applicable evidence, and can reuse eligible exact-input evidence across staging, unrelated edits, and, on contract v8, compatible original receipts from other plans. `work finish` refuses to close a plan until every required gate has current evidence. `work retire` closes a plan that will not be delivered without running gates.
+Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Receipts record target freshness metadata; every check run still executes its targets.
 
-Use `scripts/jig info freshness` to preview [scoped freshness adoption](docs/target-freshness-integration.md#adopt-scoped-freshness). Worktree policy preserves evidence through staging and commits; audited exhaustive inputs also avoid reruns after unrelated edits.
-
-Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget audit` for diagnostics without opening a run, or let the configured work gate and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
+Contract v7 also provides the native `repo:file-budget` action backed by the repository-owned `.jig/file-budget.toml` policy. Run `scripts/jig file-budget audit` for diagnostics without opening a run, or let the configured check profile and CI policy enforce it. See [Day-to-day workflow](docs/developer-ux.md#day-to-day-loop) and [Public Contract](docs/public-contract.md#repository-catalog-and-check-plans).
 
 ### Orchestration and terminal dashboard
 

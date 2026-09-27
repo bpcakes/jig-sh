@@ -6,8 +6,7 @@ use crate::repository::{
 use crate::state::ResourceLease;
 use target::TargetBudget;
 mod execution;
-pub(super) mod reuse;
-pub(super) use execution::{capture_admitted, reuse_candidate};
+pub(super) use execution::capture_admitted;
 
 pub(super) struct CoordinatedOutcome {
     pub(super) result: TargetRunResult,
@@ -21,7 +20,6 @@ pub(super) fn execute_coordinated_target(
     run_control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
     position: PhasePosition,
-    allow_reuse: bool,
 ) -> Result<CoordinatedOutcome> {
     let budget = TargetBudget::new(finisher.ctx, planned);
     source_epoch.discard_reusable_observation();
@@ -29,7 +27,7 @@ pub(super) fn execute_coordinated_target(
         let mut control = TargetExecutionControl::with_budget(budget, run_control, None);
         acquire(finisher.ctx, planned, &mut control)
     };
-    let (lease, resolved, waited) = match admission {
+    let (lease, resolved) = match admission {
         Ok(admission) => admission,
         Err(stop) => {
             let capture = stopped_before_start(planned, stop);
@@ -53,7 +51,6 @@ pub(super) fn execute_coordinated_target(
         source_epoch,
         position,
         &resolved,
-        allow_reuse && waited,
     );
     drop(control);
     let (result, compatibility) = outcome?;
@@ -68,7 +65,7 @@ fn acquire(
     ctx: &RepoContext,
     planned: &PlannedTarget,
     control: &mut TargetExecutionControl<'_>,
-) -> std::result::Result<(ResourceLease, ResolvedResources, bool), TargetStop> {
+) -> std::result::Result<(ResourceLease, ResolvedResources), TargetStop> {
     let resolved = resolve(ctx, planned, control)?;
     if let Some(reason) = resolved.partial_reason {
         let message = format!("Cargo resource coordination is partial: {reason}\n");
@@ -86,7 +83,7 @@ fn acquire(
         match ResourceLease::try_acquire(&resolved.claims) {
             Ok(Some(lease)) => {
                 control.remaining()?;
-                return Ok((lease, resolved, waited));
+                return Ok((lease, resolved));
             }
             Ok(None) => {}
             Err(_) => {
@@ -177,29 +174,10 @@ fn execute_admitted(
     source_epoch: &mut ExecutionSourceEpoch,
     position: PhasePosition,
     resolved: &ResolvedResources,
-    allow_reuse: bool,
 ) -> Result<(TargetRunResult, Option<Value>)> {
     let preparation = post_admission(finisher, planned, control, source_epoch, resolved);
     if let Err(stop) = preparation {
         return finish_unstarted(finisher, planned, source_epoch, resolved, stop);
-    }
-    match reuse_candidate(finisher, planned, control, allow_reuse) {
-        Err(stop) => return finish_unstarted(finisher, planned, source_epoch, resolved, stop),
-        Ok(Some(result)) => {
-            if let Err(stop) = post_admission(finisher, planned, control, source_epoch, resolved) {
-                return finish_unstarted(finisher, planned, source_epoch, resolved, stop);
-            }
-            if let Some(result) = reuse::finalize_reuse(result, resolved.partial_reason, now_ms()) {
-                control.event(ExecutionEvent::Output {
-                    stream: ExecutionStream::Stderr,
-                    bytes: b"Reusing verified original target evidence after the Cargo resource wait.\n",
-                });
-                return Ok((result, None));
-            }
-            // Expiry during the final admission scan requires actual execution,
-            // using the same remaining target budget.
-        }
-        Ok(None) => {}
     }
     let (completed, phase) = capture_admitted(finisher, planned, control, position)?;
     let started = completed.started_at_ms;

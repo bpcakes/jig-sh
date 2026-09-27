@@ -669,9 +669,6 @@ allow_global = false
 scope = "repo"
 scope_id = "01M1A5GSHJ900Q1VN82A66PM1H"
 
-[work]
-iteration_profile = "preflight"
-
 [[work.gates]]
 conclusion = "success"
 id = "verify"

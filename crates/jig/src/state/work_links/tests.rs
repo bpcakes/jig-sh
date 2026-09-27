@@ -406,18 +406,12 @@ fn corruption_for_one_plan_blocks_writes_but_not_reads_for_another_plan() {
 fn closed_plan_can_be_attached_without_rewriting_plan_or_receipt_bytes() {
     let (_temp, ctx) = context();
     seed_plan(&ctx, "plan_example");
-    super::super::plans::plans_close(
-        &ctx,
-        super::super::plans::PlanCloseRequest {
-            plan_id: "plan_example".into(),
-            resolution: Some("Example work completed".into()),
-        },
-    )
-    .unwrap();
+    super::super::plans::seed_closed_plan_for_test(&ctx, "plan_example", "Example work completed")
+        .unwrap();
     let plans_path = ctx.state_file("plans.jsonl");
     let receipts_path = ctx.state_file("receipts.jsonl");
     let plans_before = fs::read(&plans_path).unwrap();
-    let receipts_before = fs::read(&receipts_path).unwrap();
+    let receipts_before = fs::read(&receipts_path).ok();
 
     attach_work_link(&ctx, &request("plan_example", "example-123")).unwrap();
 
@@ -426,7 +420,7 @@ fn closed_plan_can_be_attached_without_rewriting_plan_or_receipt_bytes() {
         WorkLinkProjection::Supported(_)
     ));
     assert_eq!(fs::read(plans_path).unwrap(), plans_before);
-    assert_eq!(fs::read(receipts_path).unwrap(), receipts_before);
+    assert_eq!(fs::read(receipts_path).ok(), receipts_before);
 }
 
 #[test]

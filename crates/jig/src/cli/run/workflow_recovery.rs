@@ -35,44 +35,17 @@ pub(super) fn hint(args: &[OsString], error: &clap::Error) -> Option<String> {
     if error.kind() != ErrorKind::UnknownArgument {
         return None;
     }
-    let nested = (command + 1..retry.len()).find(|index| retry[*index] != "--json");
-    let work = (retry[command] == "work")
-        .then_some(nested)
-        .flatten()
-        .filter(|index| !retry[*index].starts_with('-'));
-    if let Some(nested) = work {
-        if retry[nested] == "start" && invalid_option(error, "--description") {
-            replace_option(&mut retry, "--description", "--body")?;
-            return Some(suggestion(
-                retry,
-                &format!("{quoted_executable} work start --help"),
-            ));
-        }
-        if retry[nested] == "status" && invalid_option(error, "--plan-id") {
-            retry[nested] = "gates".into();
-            return Some(suggestion(
-                retry,
-                &format!("{quoted_executable} work gates --help"),
-            ));
-        }
-    }
     if invalid_option(error, "--summary") {
-        let projected = work
-            .is_some_and(|index| matches!(retry[index].as_str(), "check" | "gates" | "evidence"))
-            || retry[command] == "info";
-        let help = work.map_or_else(
-            || format!("{quoted_executable} {} --help", retry[command]),
-            |index| format!("{quoted_executable} work {} --help", retry[index]),
-        );
-        if projected {
+        let help = format!("{quoted_executable} {} --help", retry[command]);
+        if retry[command] == "info" {
             let flag = retry.iter().position(|arg| arg == "--summary");
             if let Some(flag) = flag {
                 retry.splice(flag..=flag, ["--projection".into(), "agent-v1".into()]);
                 return Some(suggestion(retry, &help));
             }
         }
-        // No equivalent compact operation exists here. Do not guess a plan or
-        // redirect an unrelated command to a receipt-producing operation.
+        // No equivalent compact operation exists here. Do not redirect an
+        // unrelated command to a receipt-producing operation.
         return Some(format!(
             "No --summary option exists for this command. See:\n  {help}"
         ));
@@ -124,17 +97,6 @@ fn invalid_option(error: &clap::Error, option: &str) -> bool {
     })
 }
 
-fn replace_option(args: &mut [String], old: &str, new: &str) -> Option<()> {
-    let arg = args.iter_mut().find(|arg| {
-        arg.as_str() == old
-            || arg
-                .strip_prefix(old)
-                .is_some_and(|suffix| suffix.starts_with('='))
-    })?;
-    *arg = format!("{new}{}", &arg[old.len()..]);
-    Some(())
-}
-
 fn suggestion(args: Vec<String>, help: &str) -> String {
     let valid = match Cli::try_parse_from(&args) {
         Ok(cli) => {
@@ -180,47 +142,32 @@ mod tests {
             "--__launcher-repo-root",
             "/tmp/Example Project",
             "--json",
-            "work",
-            "start",
-            "--title",
-            "Example 'quoted' title",
-            "--description=Some notes",
+            "contract",
         ])
         .unwrap();
-        assert!(hint.contains("--body=Some notes"), "{hint}");
-        assert!(hint.contains("--json work start"), "{hint}");
+        assert!(hint.contains("--json check contract"), "{hint}");
         assert!(!hint.contains("launcher"));
         assert!(
             hint.contains("'/tmp/Example Project/scripts/jig'"),
             "{hint}"
         );
-        assert!(hint.contains("'Example '\\''quoted'\\'' title'"), "{hint}");
+    }
+
+    #[test]
+    fn recovery_projects_info_summary_to_agent_v1() {
+        let hint = recovery(&["jig", "info", "targets", "--summary"]).unwrap();
+        assert!(hint.contains("Suggested retry"), "{hint}");
+        assert!(
+            hint.contains("info targets --projection agent-v1"),
+            "{hint}"
+        );
     }
 
     #[test]
     fn recovery_uses_help_when_correction_is_not_parseable() {
         for args in [
-            vec!["jig", "work", "start", "--description", "notes"],
-            vec![
-                "jig",
-                "work",
-                "start",
-                "--title",
-                "Example",
-                "--body",
-                "one",
-                "--description",
-                "two",
-            ],
-            vec![
-                "jig",
-                "work",
-                "gates",
-                "--summary",
-                "--projection",
-                "standard",
-            ],
-            vec!["jig", "work", "status", "--summary"],
+            vec!["jig", "info", "--summary", "--projection", "standard"],
+            vec!["jig", "status", "--summary"],
         ] {
             let hint = recovery(&args).unwrap();
             assert!(hint.ends_with("--help"), "{hint}");
@@ -230,10 +177,6 @@ mod tests {
 
     #[test]
     fn recovery_does_not_reinterpret_unrelated_commands_or_bad_values() {
-        assert!(recovery(&["jig", "work", "append", "--description", "notes"]).is_none());
-        assert!(recovery(&["jig", "work", "contract"]).is_none());
-        let hint = recovery(&["jig", "work", "gates", "--projection", "--summary"]).unwrap();
-        assert!(hint.ends_with("jig work gates --help"), "{hint}");
-        assert!(!hint.contains("Suggested retry"));
+        assert!(recovery(&["jig", "status", "--description", "notes"]).is_none());
     }
 }

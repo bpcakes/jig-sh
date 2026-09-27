@@ -39,7 +39,6 @@ pub(super) struct ResourceBatch<'a> {
     pub(super) targets: Vec<(usize, (&'a PlannedTarget, PhasePosition))>,
     pub(super) arrivals: mpsc::Receiver<(&'a PlannedTarget, PhasePosition)>,
     pub(super) indices: BTreeMap<TargetId, usize>,
-    pub(super) allow_reuse: bool,
     pub(super) slots: ExecutionSlots,
     pub(super) cancellation: Arc<ParallelCancellationState>,
     pub(super) events: mpsc::SyncSender<OwnedExecutionEvent>,
@@ -67,7 +66,6 @@ pub(super) fn run_resource_batch(finisher: &TargetFinisher<'_>, batch: ResourceB
                 initial: &targets,
                 arrivals: Some(&batch.arrivals),
             },
-            batch.allow_reuse,
             &batch.slots,
             &mut |target, result, compatibility, fingerprint, wave_number| {
                 let index = *batch

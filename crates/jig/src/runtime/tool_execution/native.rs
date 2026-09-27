@@ -329,6 +329,7 @@ fn receipt_id_or_preserve_tool_error(
     }
 }
 
+#[cfg(test)]
 fn receipt_id_or_preserve_receipt_recording_context(
     tool_failure: Option<String>,
     receipt_result: Result<Option<String>>,
@@ -350,6 +351,7 @@ pub(super) fn receipt_id_for_failure_mode(
         ToolFailureMode::FailFast => {
             receipt_id_or_preserve_tool_error(tool_failure, receipt_result)
         }
+        #[cfg(test)]
         ToolFailureMode::CollectResult => {
             receipt_id_or_preserve_receipt_recording_context(tool_failure, receipt_result)
         }
