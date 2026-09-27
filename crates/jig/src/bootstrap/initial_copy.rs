@@ -60,6 +60,7 @@ pub(super) struct BootstrapCopyResult {
     pub(super) bootstrap_command_configured: bool,
     pub(super) frontend_apps_configured: bool,
     pub(super) dev_apps_configured: bool,
+    pub(super) file_budget_audit_available: bool,
     pub(super) sqlx_enabled: bool,
     pub(super) schema_dump_enabled: bool,
     pub(super) minimal_footprint: bool,
@@ -130,12 +131,18 @@ pub(super) fn render_and_copy_bootstrap_template(
         template: request.template,
         answers: &answers,
         seed_repo_path: request.seed_repo_path,
+        policy_repo_path: Some(request.destination),
         prior_managed_paths: request.prior_managed_paths,
         reconcile_runtime_config: request.reconcile_runtime_config,
         preferred_rendered_commands,
         contract_version: None,
         progress: request.progress,
     })?;
+    let file_budget_audit_available = super::renderer::file_budget_audit_available(
+        &staged.destination,
+        Some(request.destination),
+        &answers,
+    )?;
     let no_prior_paths = BTreeSet::new();
     let prior_paths = request.prior_managed_paths.unwrap_or(&no_prior_paths);
     let lifecycle = prepare_legacy_migration(request.destination, &mut staged, prior_paths)?;
@@ -247,6 +254,7 @@ pub(super) fn render_and_copy_bootstrap_template(
         bootstrap_command_configured: answers.bootstrap_command_configured(),
         frontend_apps_configured: !answers.frontend_apps().is_empty(),
         dev_apps_configured: answers.dev_apps_configured(),
+        file_budget_audit_available,
         sqlx_enabled: answers.sqlx_enabled(),
         schema_dump_enabled: answers.schema_dump_enabled(),
         minimal_footprint: answers.is_minimal_footprint(),

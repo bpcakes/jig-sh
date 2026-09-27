@@ -73,6 +73,17 @@ fn adopt_components_write_selected_roots_and_preserve_them_on_recopy_and_readopt
     }
     opts.write = true;
     let written = run_adopt(opts.clone()).unwrap();
+    assert!(repo.join(".jig/file-budget.toml").is_file());
+    assert!(
+        fs::read_to_string(repo.join("AGENTS.md"))
+            .unwrap()
+            .contains("scripts/jig file-budget audit")
+    );
+    assert!(written["notes"].as_array().unwrap().iter().any(|note| {
+        note.as_str()
+            .unwrap()
+            .contains("scripts/jig file-budget audit")
+    }));
     assert_eq!(
         preview["detection_report"]["component_candidates"],
         written["detection_report"]["component_candidates"]

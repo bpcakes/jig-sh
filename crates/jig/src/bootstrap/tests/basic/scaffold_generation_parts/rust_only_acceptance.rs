@@ -94,7 +94,7 @@ fn assert_rust_only_init_report(report: &serde_json::Value, case: RustOnlyAccept
             .filter_map(serde_json::Value::as_str)
             .filter(|step| step.contains("scripts/jig"))
             .collect::<Vec<_>>(),
-        ["scripts/jig setup", "scripts/jig check test"]
+        ["scripts/jig setup", "scripts/jig info targets"]
     );
     assert!(
         report["next_steps"]
@@ -406,9 +406,8 @@ fn assert_rust_only_guides_and_workflow(destination: &Path, case: RustOnlyAccept
     assert_contains_all(
         &root_guide,
         &[
-            "before Rust work",
+            "ownership guidance for Rust work",
             "## Rust Defaults",
-            "For Rust changes",
             "## Crate Guide Conventions",
         ],
     );

@@ -30,6 +30,7 @@ pub(in crate::bootstrap::scaffold) fn render_frontend_workspace_files_for_backen
     package_name: &str,
     default_branch: &str,
     ci_github_runner: &str,
+    file_budget_policy_enabled: bool,
     frontends: &[FrontendScaffold],
 ) -> Result<Vec<ScaffoldFile>> {
     let FrontendBackendContext {
@@ -70,6 +71,7 @@ pub(in crate::bootstrap::scaffold) fn render_frontend_workspace_files_for_backen
         "sqlx_metadata_dir": sqlx_metadata_dir,
         "default_branch_yaml": default_branch_yaml,
         "ci_github_runner": ci_github_runner,
+        "file_budget_policy_enabled": file_budget_policy_enabled,
         "admin_api_enabled": admin_api_enabled,
         "react_frontend_enabled": frontends.iter().any(|frontend| matches!(
             frontend.kind,

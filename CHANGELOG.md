@@ -10,6 +10,12 @@
   staged-render checks prevent older runtimes or templates from replacing
   pin-aware scripts during updates and re-adoption.
 
+### Changed
+
+- Make structured work, receipt inspection, and ExecPlans optional in generated and
+  repository guidance. Recommend checks for the affected behavior instead of a full
+  backend suite for every change, and retain standalone `jig file-budget` diagnostics.
+
 ### Fixed
 
 - Skip unused source-runtime repair seeds in release-pinned repositories and

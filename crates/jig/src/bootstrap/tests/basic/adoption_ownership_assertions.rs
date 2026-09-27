@@ -95,13 +95,11 @@ pub(super) fn assert_minimal_manifest(repo: &Path, output: &serde_json::Value) {
 }
 
 pub(super) fn assert_minimal_guidance(output: &serde_json::Value) {
-    assert!(
-        output["notes"]
-            .as_array()
+    assert!(output["notes"].as_array().unwrap().iter().any(|note| {
+        note.as_str()
             .unwrap()
-            .iter()
-            .any(|note| note.as_str().unwrap().contains("Minimal adoption"))
-    );
+            .contains("The minimal footprint allows")
+    }));
     assert!(
         output["next_steps"]
             .as_array()
