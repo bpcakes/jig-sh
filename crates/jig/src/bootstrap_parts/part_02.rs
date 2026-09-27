@@ -80,7 +80,7 @@ fn initial_notes(
 ) -> Vec<String> {
     let mut notes = if minimal_footprint {
         vec![
-            "Minimal setup wrote .jig.toml and .agent/ scaffolding only; scripts/, workflows, AGENTS.md, agent-map.md, and .mcp.json were omitted.".into(),
+            "Minimal harness includes .jig.toml, .agent/ scaffolding, and root .gitignore and .gitattributes; it omits scripts/, workflows, AGENTS.md, agent-map.md, and .mcp.json.".into(),
             "harness_footprint = \"minimal\" is stored in .jig.toml so jig update keeps the same footprint until you re-adopt without --minimal.".into(),
             "Invoke the installed jig binary directly for loop commands; there is no scripts/jig launcher yet.".into(),
         ]

@@ -76,12 +76,56 @@ runner = { kind = "command", command = "budget_check_command" }
     assert!(!destination.join(".jig/file-budget.toml").exists());
     assert!(!destination.join("scripts/jig").exists());
     assert!(!output["notes"].to_string().contains("file-budget audit"));
-    assert!(output["notes"].to_string().contains("Minimal setup wrote"));
     assert!(
-        !output["notes"]
+        output["notes"]
             .to_string()
-            .contains("Minimal adoption wrote")
+            .contains("Minimal harness includes")
     );
+    assert!(!output["notes"].to_string().contains("wrote"));
+    assert!(output["notes"].to_string().contains(".gitignore"));
+    assert!(output["notes"].to_string().contains(".gitattributes"));
+}
+
+#[test]
+fn minimal_adoption_preview_describes_footprint_without_claiming_a_write() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("README.md"), "ExampleProject\n").unwrap();
+
+    let output = run_adopt(AdoptOpts {
+        components: Default::default(),
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: false,
+        minimal: true,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("ExampleProject".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let notes = output["notes"].to_string();
+    assert!(notes.contains("Minimal harness includes"));
+    assert!(notes.contains(".gitignore"));
+    assert!(notes.contains(".gitattributes"));
+    assert!(!notes.contains("wrote"));
+    assert!(
+        output["next_steps"]
+            .to_string()
+            .contains("No files were changed")
+    );
+    assert!(!repo.join(".jig.toml").exists());
 }
 
 #[test]

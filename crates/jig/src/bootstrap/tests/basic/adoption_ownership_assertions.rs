@@ -100,7 +100,7 @@ pub(super) fn assert_minimal_guidance(output: &serde_json::Value) {
             .as_array()
             .unwrap()
             .iter()
-            .any(|note| note.as_str().unwrap().contains("Minimal setup"))
+            .any(|note| note.as_str().unwrap().contains("Minimal harness includes"))
     );
     assert!(
         output["next_steps"]
