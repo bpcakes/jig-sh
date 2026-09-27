@@ -3,6 +3,7 @@
 import fcntl
 import os
 from pathlib import Path
+import runpy
 import shutil
 import signal
 import subprocess
@@ -10,7 +11,9 @@ import sys
 import tempfile
 import textwrap
 import time
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -135,6 +138,76 @@ class LocalCheckCancellationTests(unittest.TestCase):
 
     def test_terminal_sighup_reaches_startup_descendants_once(self):
         self.exercise_startup(signal.SIGHUP, terminal=True)
+
+
+class CancellationBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.cancel = runpy.run_path(str(SCRIPTS / "check-local"))["cancel_phase"]
+
+    def test_cooperative_exit_between_probes_at_grace_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="ExampleGraceBoundary-") as directory:
+            root = Path(directory)
+            child = subprocess.Popen([sys.executable, "-c", textwrap.dedent("""\
+                import pathlib, signal, sys, time
+                root = pathlib.Path(sys.argv[1])
+                signal.signal(signal.SIGTERM, lambda *_: (root / 'cancelled').touch())
+                (root / 'ready').touch()
+                while not (root / 'release').exists():
+                    time.sleep(.002)
+                """), str(root)], start_new_session=True)
+            clock = [0.0]
+            is_running = self.cancel.__globals__["group_is_running"]
+
+            def wait_for(predicate):
+                deadline = time.monotonic() + 5
+                while not predicate():
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.002)
+
+            def complete_between_probes(_duration):
+                wait_for(lambda: (root / "cancelled").exists())
+                (root / "release").touch()
+                # Keep the dead child unreaped, as the wrapper does.
+                wait_for(lambda: not is_running(child.pid))
+                clock[0] = 5.001
+
+            try:
+                wait_for(lambda: (root / "ready").exists())
+                controlled_time = SimpleNamespace(
+                    monotonic=lambda: clock[0], sleep=complete_between_probes
+                )
+                with mock.patch.dict(self.cancel.__globals__, time=controlled_time):
+                    self.cancel(child, signal.SIGTERM)
+                self.assertEqual(child.returncode, 0)
+            finally:
+                if child.returncode is None:
+                    child.kill()
+                    child.wait()
+
+    def test_failed_emergency_signal_preserves_probe_error_and_warning(self):
+        child = SimpleNamespace(pid=123)
+        signals = mock.Mock(side_effect=[None, PermissionError("kill denied")])
+        with mock.patch.dict(self.cancel.__globals__,
+                             signal_group=signals,
+                             group_is_running=mock.Mock(side_effect=OSError("probe failed"))):
+            with self.assertRaises(OSError) as caught:
+                self.cancel(child, signal.SIGTERM)
+        self.assertIn("probe failed", str(caught.exception))
+        self.assertIn("kill denied", str(caught.exception))
+        self.assertIn("child processes may still be running", str(caught.exception))
+
+    def test_confirmation_deadline_preserves_error_and_warning(self):
+        child = SimpleNamespace(pid=123)
+        signals = mock.Mock()
+        clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 11]))
+        with mock.patch.dict(self.cancel.__globals__, time=clock,
+                             signal_group=signals,
+                             group_is_running=lambda _pid: True):
+            with self.assertRaises(OSError) as caught:
+                self.cancel(child, signal.SIGTERM)
+        self.assertIn("process group did not stop", str(caught.exception))
+        self.assertIn("child processes may still be running", str(caught.exception))
+        self.assertEqual(signals.call_args_list[-1], mock.call(child, signal.SIGKILL))
 
 
 if __name__ == "__main__":
