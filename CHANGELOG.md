@@ -9,12 +9,21 @@
   caching independent of template source revisions. Generated launchers and
   staged-render checks prevent older runtimes or templates from replacing
   pin-aware scripts during updates and re-adoption.
+- Allow isolated scheduled Codex tasks to run an optional `prepare_command` in
+  their new worktree before agent launch. The command runs under the configured
+  Codex sandbox; failures retain the worktree and report bounded output without
+  starting the agent. Existing task configurations need no changes.
 
 ### Changed
 
 - Make structured work, receipt inspection, and ExecPlans optional in generated and
   repository guidance. Recommend checks for the affected behavior instead of a full
   backend suite for every change, and retain standalone `jig file-budget` diagnostics.
+- Start ready read-only dependent checks when their own prerequisites complete,
+  without waiting for unrelated checks in the same execution layer. Preserve
+  resource admission, effectful execution, and fail-fast ordering constraints.
+- Run inexpensive local preflight checks before the full workspace suite in this
+  source repository, and reduce CI test serialization and redundant check builds.
 
 ### Fixed
 
@@ -22,6 +31,12 @@
   suppress doctor warnings about those inactive caches.
 
 - Include configured shared frontend workspace roots in both web workflow path filters, so changes to shared frontend code run web checks.
+- Forward available `vault exec` output promptly even when a child writes no
+  newline, while retaining enough trailing bytes to redact concealed values.
+- Keep ready check scheduling and cancellation responsive when resource admission,
+  source observation, reuse publication, or local validation cleanup is delayed.
+- Explain when a receipt is stale only because Git identity changed, while still
+  requiring fresh evidence before reuse.
 
 ## v0.5.0 - 2026-09-22
 
