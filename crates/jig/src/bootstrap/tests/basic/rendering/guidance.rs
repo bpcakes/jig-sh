@@ -67,7 +67,7 @@ runner = { kind = "command", command = "budget_check_command" }
         no_input: true,
         no_vault: true,
         answers: AnswerOpts {
-            answers_file: Some(answers_file),
+            answers_file: Some(answers_file.clone()),
             ..AnswerOpts::default()
         },
     })
@@ -79,11 +79,40 @@ runner = { kind = "command", command = "budget_check_command" }
     assert!(
         output["notes"]
             .to_string()
-            .contains("Minimal harness includes")
+            .contains("The minimal footprint allows")
     );
     assert!(!output["notes"].to_string().contains("wrote"));
     assert!(output["notes"].to_string().contains(".gitignore"));
     assert!(output["notes"].to_string().contains(".gitattributes"));
+    assert!(destination.join(".gitignore").exists());
+    assert!(destination.join(".gitattributes").exists());
+
+    for name in [".gitignore.jinja", ".gitattributes.jinja"] {
+        fs::remove_file(template.path().join("templates/project").join(name)).unwrap();
+    }
+    let without_root_files = temp.path().join("minimal-without-root-files");
+    let output = run_init(InitOpts {
+        path: without_root_files.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(!without_root_files.join(".gitignore").exists());
+    assert!(!without_root_files.join(".gitattributes").exists());
+    let notes = output["notes"].to_string();
+    assert!(notes.contains("when supplied by the template"));
+    assert!(!notes.contains("Minimal harness includes"));
 }
 
 #[test]
@@ -116,7 +145,7 @@ fn minimal_adoption_preview_describes_footprint_without_claiming_a_write() {
     .unwrap();
 
     let notes = output["notes"].to_string();
-    assert!(notes.contains("Minimal harness includes"));
+    assert!(notes.contains("The minimal footprint allows"));
     assert!(notes.contains(".gitignore"));
     assert!(notes.contains(".gitattributes"));
     assert!(!notes.contains("wrote"));
