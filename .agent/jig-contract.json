@@ -706,6 +706,36 @@
 ],
   "profiles": [
   {
+    "id": "preflight",
+    "description": "Local formatting, lint, and repository checks before workspace tests.",
+    "provenance": {
+      "id": "declared",
+      "targets": "declared"
+    },
+    "targets": [
+      {
+        "component": "api",
+        "action": "fmt"
+      },
+      {
+        "component": "api",
+        "action": "clippy"
+      },
+      {
+        "component": "repo",
+        "action": "contract"
+      },
+      {
+        "component": "repo",
+        "action": "file-budget"
+      },
+      {
+        "component": "repo",
+        "action": "source-runtime-check"
+      }
+    ]
+  },
+  {
     "description": "Default repository verification targets.",
     "id": "verify",
     "provenance": {

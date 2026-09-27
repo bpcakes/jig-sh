@@ -53,6 +53,7 @@ pub(super) struct InitScaffoldPlan {
     module_name: String,
     default_branch: String,
     ci_github_runner: String,
+    pub(super) file_budget_policy_enabled: bool,
 }
 
 pub(crate) fn validate_go_module(value: &str) -> Result<()> {
@@ -363,6 +364,7 @@ impl InitScaffoldPlan {
             &self.package_name,
             &self.default_branch,
             &self.ci_github_runner,
+            self.file_budget_policy_enabled,
             &react.frontends,
         )?);
         for frontend in &react.frontends {
@@ -495,6 +497,7 @@ impl InitScaffoldPlan {
             module_name,
             default_branch,
             ci_github_runner,
+            file_budget_policy_enabled: true,
         })
     }
 
@@ -600,6 +603,7 @@ impl InitScaffoldPlan {
             module_name,
             default_branch,
             ci_github_runner,
+            file_budget_policy_enabled: true,
         })
     }
 
@@ -629,6 +633,7 @@ impl InitScaffoldPlan {
                 .ci_github_runner
                 .clone()
                 .unwrap_or_else(|| "ubuntu-latest".into()),
+            file_budget_policy_enabled: true,
         })
     }
 

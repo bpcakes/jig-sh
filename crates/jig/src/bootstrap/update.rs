@@ -289,6 +289,7 @@ fn run_full_update(opts: &UpdateOpts, prepared: PreparedUpdate) -> Result<Value>
         template: &update_template,
         answers: &answers,
         seed_repo_path: Some(&destination),
+        policy_repo_path: Some(&destination),
         prior_managed_paths: Some(&prior_managed_paths),
         reconcile_runtime_config,
         preferred_rendered_commands: BTreeSet::new(),

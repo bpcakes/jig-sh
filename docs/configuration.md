@@ -399,7 +399,7 @@ Nested accepted keys are:
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
-- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`
+- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`, `prepare_command`
 - `[agent_tooling.codex]`: `marketplaces`
 - `[[agent_tooling.codex.marketplaces]]`: `id`, `source`, `plugins`
 
@@ -441,7 +441,10 @@ prompt_file = ".agent/tasks/nightly-maintenance.md"
 codex_home = "work"
 sandbox = "workspace-write"
 checkout = "worktree"
+prepare_command = ["./scripts/prepare-task.sh"]
 ```
+
+`prepare_command` is optional and applies only to isolated `codex_task` worktrees. It is a non-empty argument array executed directly, without a shell, after Git creates the detached checkout and before the worker starts. The command runs from that checkout through `codex sandbox` with the task's `read-only` or `workspace-write` policy, including managed Codex restrictions, and inherits the selected `codex_home`. It uses the configured command timeout and bounded output capture. A missing sandbox capability or command, failed exit, timeout, or cancellation prevents worker launch and retains the worktree for inspection. Jig records the preparation status and bounded output in the task action and tick receipt. The repository command owns dependency freshness and cache location; the example script should install only what its lockfiles authorize and keep writable caches inside the checkout. Removing the option restores the previous behavior for future tasks. Earlier Jig runtimes reject the unknown option at configuration load, so deploy the supporting runtime before enabling it.
 
 `worktree` is the safe default for inspection-only tasks, but Jig does not merge
 changes from that detached checkout. A task that must update the selected
@@ -499,6 +502,11 @@ plugins = [
 ```
 
 Jig Codex skills are optional Codex plugin bundles used by agents working in generated Jig repos; the default marketplace source is `bpcakes/jig-skills`.
+
+Apply a skill only when it serves the requested task. Skill installation does not
+require an ExecPlan, structured work, receipt inspection, or a full test suite.
+Generated `AGENTS.md` and `.agent/PLANS.md` guide task-appropriate validation; the
+separate skills repository owns the plugin instructions.
 
 Use `scripts/jig doctor` as the first readiness check for a repo. It reports runtime/contract compatibility, `.jig.toml` validity, required command executables, agent skills, proxy status, vault status, and the next setup command. Raw configured command bodies are always redacted because arguments may contain credentials. Fresh SQLx-enabled scaffolds use a direct `sqlx prepare` command so a trusted CLI can be capability-probed. For recognizable direct `sqlx`, `cargo-sqlx sqlx`, and Cargo-dispatched forms, doctor honors literal long or `-D` database-URL flags, then the effective command-prefix environment reaching the executable, then the captured environment and nearest dotenv file in a proven literal repo-contained cwd. Prefix analysis is ordered: `env -i`, `env -u DATABASE_URL`, and `exec -c` remove earlier assignments, while a later literal `env DATABASE_URL=...` can restore one. External `env` assignment operands follow `env` grammar rather than Bash identifier grammar, so names such as `FOO.BAR` do not get mistaken for executables. Recognized literal external `env`, `nohup`, and external `time` chains are reported in execution order, with every wrapper and terminal target checked under the lookup context that applies at that stage. Bash `command`, `exec`, and `builtin` remain shell syntax, as does bare keyword `time`; unsupported or dynamic wrapper targets retain any known external wrapper checks while the unresolved portion stays visibly unverified. Quoted or escaped heredoc delimiters make their bodies inert for this analysis. Expansion-capable heredocs containing command substitution, command substitutions hidden in arguments or redirections, ambiguous control flow, redirects, cwd or environment mutation, unsupported wrapper options, `env -S` / `--split-string`, and alternate wrapper search paths are visible as present but unverified and point to the authoritative `scripts/jig check sqlx` gate. Prior `hash`, `enable`, and active `trap` mutations also taint later dispatch. Inherited `BASH_ENV`, `ENV`, `CDPATH`, or exported Bash functions make the whole configured command unverified while retaining any literal wrapper and executable presence rows doctor can still prove. Ambiguity never becomes the “No external executable required” pass; JSON uses `present: null` without exposing the command payload. Capability probing is stricter than executable presence: doctor only executes a bare `sqlx` or `cargo-sqlx` found through a trusted absolute PATH entry outside the repository. A literal command-local `PATH` is resolved with the repository root as the command cwd, including relative and empty entries, but those cwd-sensitive entries are never trusted for a SQLx capability probe. Dynamic, cleared, alternate, or persistently mutated lookup state is reported with JSON `present: null`; doctor neither substitutes the captured ambient path nor probes through that boundary. An explicit executable path remains independently checkable after such a mutation. A `cargo sqlx` dispatcher remains present but unverified because Cargo aliases, included configuration, home overrides, or a PATH wrapper can change what the real command runs. Explicit, relative, repo-local, symlink-mediated, identity-ambiguous, or inherited-shell-state-sensitive executables are likewise presence-only. Authorized probes run in a bounded process tree with an isolated home/temp directory and scrubbed environment, never the repository command's ambient credentials. The PostgreSQL probe treats only one driver-specific diagnostic line containing the synthetic sentinel, the `sslmode` option, and an invalid-value error as proof of support; unrelated output cannot produce a compatible result. On Unix, one serialized signal owner covers every external check in a doctor invocation: SQLx capability probes, the configured Codex marketplace-support probe, and the launcher-backed proxy diagnostic in either feature mode. Its mutex guard remains held through process-tree retirement, handler restoration, and restored-signal redelivery. A clean retirement permits a later invocation in the same process with a fresh generation; unsafe handler, generation, or quiescence retirement permanently poisons later sessions, and a recorded termination request always redelivers after safe restoration or exits fail-closed with its conventional signal status. Ctrl-C cancels and reaps the exact active tree before the original signal behavior is restored and redelivered, and a retained cancellation prevents later check families from starting. Codex probe output uses the ordinary 16 KiB-per-stream diagnostic bound and a finite timeout. Jig removes Bash startup, option, trace, and exported-function controls from that owned capability child while preserving ordinary Codex/authentication environment. Proxy-list stdout is capped separately at 8 MiB so every valid 4 MiB route-state document plus its status envelope remains representable, while diagnostic stderr retains the 16 KiB cap. A confidently detected missing SQLx driver still blocks readiness. No command, URL, credential, cwd, probe environment, or probe output is included in human or JSON reports. Use `scripts/jig agent doctor` when you only need to report whether the local Codex installation can use the configured marketplace and to show diagnostic plugin enablement flags. Human-readable output is the default. Pass `--json` for stable structured automation output. `agent doctor` exits nonzero until required setup is complete. The agent check requires Codex marketplace support and registered marketplace sources; plugin enablement is reported separately because the supported Codex bootstrap path is marketplace registration. Use `scripts/jig agent bootstrap` to run `codex plugin marketplace add` when exactly one marketplace is configured. If multiple marketplaces are configured, `agent bootstrap` requires `--marketplace <source>` so a repo cannot install several user-level Codex marketplaces by default. `agent bootstrap` mutates user-level Codex config, so it is intentionally separate from the project-owned `bootstrap_command`.
 
@@ -1076,6 +1084,8 @@ The TUI retains only a process-local credential, reopens and authenticates curre
 
 `scripts/jig vault exec --env-file FILE -- COMMAND...` parses a bounded restricted UTF-8 dotenv file before passphrase capture. The source must be a non-symlink regular file; FIFOs, devices, directories, and other special files are rejected without waiting for a producer. It accepts blank/full-comment lines and exact `NAME=VALUE` assignments with a documented small quote/escape grammar, rejects duplicates, interpolation, substitution, NUL, malformed references, and assignments to either reserved passphrase variable, and rejects `--env-file -` so stdin remains inherited by the child. A decoded whole value of `jig://ITEM/FIELD` binds that field; any other accepted value is a literal. Jig invokes the command directly without a shell, inherits the ordinary environment and stdin, applies the file's assignments, removes the passphrase variables, independently streams/redacts stdout and stderr, imposes no timeout or output cap, and mirrors nonzero or signal status without appending a second Jig error. Only concealed referenced fields become redaction needles. `exec` is transparent process plumbing, not process-tree containment or a sandbox.
 
+`vault exec` forwards and flushes available output without waiting for a newline or a fixed buffer to fill. Redaction retains only a trailing sequence that could still become a concealed value or one of its encoded forms; that sequence is released or redacted once subsequent bytes resolve the match, or at end of stream. The child sees pipes for stdout and stderr, so programs that buffer their own output may still need their native unbuffered-output option.
+
 `scripts/jig vault import onepassword --env-file SOURCE --item ITEM --out-env DESTINATION` is a one-time conversion tool, not synchronization. Its source must be a non-symlink regular file and uses the same restricted dotenv grammar. A decoded whole `op://VAULT/ITEM/FIELD` or `op://VAULT/ITEM/SECTION/FIELD` value is resolved by exact direct argv `op read --no-newline REF` with null stdin and bounded output; raw `op` diagnostics are never surfaced. Resolved values become concealed fields, literals become encrypted text, and the destination contains only `NAME=jig://ITEM/NAME` assignments in stable source order. `--dry-run` validates paths and input, invokes no `op`, unlocks the version 2 vault read-only, and reports create/replace metadata without mutation. Normal import resolves every external value before one atomic vault batch. Existing fields need `--replace`; an existing destination needs `--overwrite`. If final destination installation loses a race after the vault commit, Jig explicitly reports that the import succeeded and prints a safe exact rerun using `--replace --overwrite`. Private destination installation currently requires Unix filesystem guarantees, so other platforms fail before passphrase capture or `op` execution.
 
 The vault file is encrypted at rest with a passphrase-derived wrapping key and a random data-encryption key. Field and secret listing commands return names, kinds, lengths, and timestamps, never values. `scripts/jig vault field set REF` defaults to hidden UTF-8 terminal entry without a trailing newline; `--value-stdin` is the byte-exact automation path. Concealed values must be between 4 bytes and 1 MiB so redaction can match them safely; text values may be empty and are bounded at 1 MiB. The compatible `scripts/jig vault secret set NAME` has the same input modes and always writes a concealed field on version 2. Piped input stores bytes exactly, including a trailing newline from `echo`; use `printf` when a newline is not part of the value. Non-interactive set commands without `--value-stdin` fail instead of waiting for input.
@@ -1176,6 +1186,71 @@ and is included in the generated default verification profile.
 
 The legacy `scripts/jig migration-add NAME`, `scripts/jig sqlx migration add NAME`, and `scripts/jig schema-dump` paths remain accepted as compatibility shims. New migration automation should use `scripts/jig migration add NAME`; SQLx schema commands remain under `scripts/jig sqlx schema ...`. Every migration-add path rejects `versioned_artifacts` repositories before creating files.
 
+### Runtime release pins
+
+With the updated generated installer, commit `.jig/runtime-version` to select an
+exact stable crates.io release independently of `_src_path` and `_commit`:
+
+```sh
+mkdir -p .jig
+printf '%s\n' '0.5.0' > .jig/runtime-version
+scripts/jig --version
+```
+
+The file is project-owned; `jig update` preserves it. Older launchers need to be
+updated to this installer before the pin takes effect. Keeping the pin outside
+`.jig.toml` lets existing releases such as 0.5.0 run without encountering an unknown
+configuration key. Do not add `runtime_version` to `.jig.toml`.
+
+An older pinned release can run ordinary commands, but it may contain templates
+that predate this pin. Before `scripts/jig update`, `adopt --write`, or
+`init --force` writes to a pinned destination, the generated launcher checks its
+selected binary for pin-aware support, even when invoked from another repository.
+Help remains available, and pin-aware binaries report incompatible template
+scripts during adoption previews. Release 0.5.0 is one runtime that cannot write
+managed scripts this way.
+Use a pin-aware binary directly, or select it for one command with
+`JIG_DEV_BIN=/path/to/jig scripts/jig update`. The pin file remains in place
+for normal runtime selection.
+
+Launcher repair and embedded-template updates skip source-cache seeding when the
+installer uses a release pin. Doctor also ignores existing repair seeds that
+normal pinned launches do not use. Removing the pin restores source-cache
+selection and its repair diagnostics.
+
+Before applying managed files to a pinned repository, Jig also rejects staged
+launcher or installer scripts that lack release-pin support. This includes
+`update --recopy --force` from an older stored template commit. Select a
+pin-aware template revision and retry; a newer runtime alone cannot make older
+template output safe. Remove the pin only if you intend to return to
+template-source runtime selection.
+
+The installer requires the exact version and a successful contract/profile
+compatibility probe. It first reuses a compatible cache or imports a matching
+native `jig` executable from `PATH`. Otherwise it runs
+`cargo install jig-sh --registry crates-io --version '=0.5.0' --locked` into the
+repository cache, adding `--no-default-features` for the runtime profile. A missing,
+unavailable, or incompatible release fails visibly; it never falls back to Git.
+An empty or malformed pin is an error. Remove the file to return to template-source
+installation, or use the explicit `JIG_DEV_BIN` override for development.
+
+Release executables live under
+`.git/jig-tools/release-VERSION-contract-EPOCH[-runtime]/bin/jig`, with
+`.agent/.cache/jig/` as the base when `.git` is not a directory. Full builds can
+serve runtime and MCP requests after compatibility validation. Changing template
+provenance does not invalidate a release cache. Changing the pin selects another
+release; `--refresh` or `JIG_INSTALL_REFRESH=1` reinstalls the same pinned version.
+MCP startup and `--resolve-only` never install or import a binary; run
+`scripts/jig --version` first to prepare the cache.
+
+Generated workflows that invoke Jig cache the runtime profile executable by
+operating system, architecture, profile, pin content, and launcher/installer
+content. Feature profiles use separate installation paths; lock files are not cached. A cold cache still
+compiles the published crate. Restoring the executable avoids compilation on later
+runs; crates.io does not distribute precompiled Jig binaries.
+
+### Generated runtime files
+
 Generated repos also get these runtime-owned files:
 
 - `.mcp.json`
@@ -1183,7 +1258,7 @@ Generated repos also get these runtime-owned files:
 - `scripts/jig`
 - `scripts/install-jig.sh`
 
-The generated `scripts/jig` launcher embeds the contract epoch it was rendered for and executes only a binary whose private compatibility probe accepts that epoch plus the requested `default`, `runtime`, or `mcp` profile. Ordinary commands then require that embedded epoch to equal `.agent/jig-contract.json` before the selected runtime strictly validates the complete repository contract; `doctor` and repair commands use the embedded epoch only for runtime selection so a malformed or missing manifest can reach its own diagnostic. Repo-local cache directories are keyed by contract epoch and profile rather than product release, while a source stamp inside each cache binds remote installs to the configured source and immutable `_commit` (or the legacy source tag for v2/v3) and binds local installs to their canonical source identity and relevant source-tree contents, including non-Git directories. Advancing `_commit`, editing local source, or switching its path within the same contract epoch invalidates the old stamp and refreshes the runtime; help and MCP resolution apply the same stamp check without installing during MCP startup. Generated launchers are never accepted as runtime binaries through the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` escape hatch. On first use the launcher may install a compatible runtime from the recorded template source and then exposes the configured command contract as:
+The generated `scripts/jig` launcher embeds the contract epoch it was rendered for and executes only a binary whose private compatibility probe accepts that epoch plus the requested `default`, `runtime`, or `mcp` profile. Ordinary commands then require that embedded epoch to equal `.agent/jig-contract.json` before the selected runtime strictly validates the complete repository contract; `doctor` and repair commands use the embedded epoch only for runtime selection so a malformed or missing manifest can reach its own diagnostic. Without a runtime release pin, repo-local cache directories are keyed by contract epoch and profile, while a source stamp inside each cache binds remote installs to the configured source and immutable `_commit` (or the legacy source tag for v2/v3) and binds local installs to their canonical source identity and relevant source-tree contents, including non-Git directories. Advancing `_commit`, editing local source, or switching its path within the same contract epoch invalidates the old stamp and refreshes the runtime; help and MCP resolution apply the same stamp check without installing during MCP startup. Generated launchers are never accepted as runtime binaries through the explicit `JIG_INSTALL_ALLOW_PATH_BINARY=1` escape hatch. On first use the launcher may install a compatible runtime from the recorded template source and then exposes the configured command contract as:
 
 - CLI commands such as `scripts/jig check fmt`
 - bounded MCP tools such as `jig.plan_run` and `jig.execute_run` in contract v6; contracts v2 through v5 retain direct tools such as `jig.fmt_check`
@@ -1337,7 +1412,7 @@ their historical evidence is useful. `state diagnose` reports backup and archive
 bytes separately so this local cache does not become a second unbounded state
 store.
 
-The `jig-sh` source repository selects its routine harness runtime separately from the source being developed. Its committed `.jig/source-runtime-version` selects an exact released Jig version. On a cold checkout, a normal invocation copies the matching installed native `jig` executable from `PATH` after checking both that version and the required contract/profile compatibility. This automatic import is specific to the source checkout; generated repositories still require `JIG_INSTALL_ALLOW_PATH_BINARY=1` before reusing a binary from `PATH`. The executable is cached under `.git/jig-tools/source-release-VERSION/bin/jig` (or `.agent/.cache/jig/source-release-VERSION/bin/jig` when `.git` is not a directory). Source edits do not invalidate this release cache. An unavailable or incompatible selected release reports a recovery command instead of compiling the changing checkout or downloading a runtime. MCP startup only resolves an existing cache; run `scripts/jig --version` once to prepare it. This source-repository policy does not change the source stamps used by generated repositories.
+The `jig-sh` source repository selects its routine harness runtime separately from the source being developed. Its committed `.jig/source-runtime-version` selects an exact released Jig version. On a cold checkout, a normal invocation copies the matching installed native `jig` executable from `PATH` after checking both that version and the required contract/profile compatibility. Generated repositories without `.jig/runtime-version` still require `JIG_INSTALL_ALLOW_PATH_BINARY=1` before reusing a binary from `PATH`. Repositories with a release pin import only the exact pinned version. The executable is cached under `.git/jig-tools/source-release-VERSION/bin/jig` (or `.agent/.cache/jig/source-release-VERSION/bin/jig` when `.git` is not a directory). Source edits do not invalidate this release cache. An unavailable or incompatible selected release reports a recovery command instead of compiling the changing checkout or downloading a runtime. MCP startup only resolves an existing cache; run `scripts/jig --version` once to prepare it. This source-repository policy does not change the source stamps used by generated repositories.
 
 After preparing the cache, `python3 scripts/jig-source-runtime.py --info` reports `mode`, `release_pin`, `runtime_version`, `binary`, `profile`, and `contract_version`. Its mode identifies the selected release or an explicit development override. `JIG_INSTALL_REFRESH=1 scripts/jig <command>` reimports the exact selected release from the installed binary; it never advances the pin. Changing `.jig/source-runtime-version` is a deliberate runtime upgrade, independent of the source workspace's Cargo version.
 

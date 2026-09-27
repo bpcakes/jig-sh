@@ -49,13 +49,13 @@ fn initial_next_steps(
         );
         steps.push("bash scripts/setup-database.sh".into());
     }
-    steps.push("scripts/jig check test".into());
+    steps.push("scripts/jig info targets".into());
     if result.dev_apps_configured {
         steps.push("scripts/jig dev".into());
     }
     if result.sqlx_enabled {
         steps.push(
-            "Run scripts/jig check sqlx after database access is configured; doctor flags missing cargo-sqlx or a build that lacks the configured database driver."
+            "For SQL query validation, use scripts/jig check sqlx after database access is configured; doctor flags missing cargo-sqlx or a build that lacks the configured database driver."
                 .into(),
         );
     }
@@ -63,7 +63,10 @@ fn initial_next_steps(
         steps.push("Provide scripts/dump-schema.sh, then run scripts/jig sqlx schema dump.".into());
     }
     if command == InitialCommand::Adopt {
-        steps.push("Commit the adoption diff after generated checks pass.".into());
+        steps.push(
+            "Commit the adoption diff after reviewing it and validating the affected behavior."
+                .into(),
+        );
     }
     steps
 }
@@ -73,23 +76,31 @@ fn initial_notes(
     frontend_apps_configured: bool,
     scaffold_plan: Option<&scaffold::InitScaffoldPlan>,
     minimal_footprint: bool,
+    file_budget_audit_available: bool,
 ) -> Vec<String> {
     let mut notes = if minimal_footprint {
         vec![
-            "Minimal adoption wrote .jig.toml and .agent/ scaffolding only; scripts/, workflows, AGENTS.md, agent-map.md, and .mcp.json were omitted.".into(),
+            "The minimal footprint allows .jig.toml, .agent/ scaffolding, and root .gitignore and .gitattributes when supplied by the template; it omits scripts/, workflows, AGENTS.md, agent-map.md, and .mcp.json.".into(),
             "harness_footprint = \"minimal\" is stored in .jig.toml so jig update keeps the same footprint until you re-adopt without --minimal.".into(),
             "Invoke the installed jig binary directly for loop commands; there is no scripts/jig launcher yet.".into(),
         ]
     } else {
         vec![
             "The first scripts/jig command may install or compile a compatible Jig runtime into this repo's contract/profile cache.".into(),
+            "To pin a published runtime independently of template updates, commit .jig/runtime-version containing an exact stable release such as 0.5.0; generated CI caches that executable.".into(),
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
             "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
-            "Full gates remain available through scripts/jig work gates or scripts/jig check <gate>.".into(),
+            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION; structured work and receipt inspection are optional.".into(),
         ]
     };
-    if scaffold_plan.is_some() {
+    if file_budget_audit_available && !minimal_footprint {
         notes.push(
+            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.".into(),
+        );
+    }
+    if scaffold_plan.is_some() {
+        notes.insert(
+            0,
             "Scaffolded project code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite project code."
                 .into(),
         );
@@ -100,13 +111,13 @@ fn initial_notes(
                 .into(),
         );
         notes.push(
-            "Frontend gates are available as scripts/jig check typescript-lint, typescript-typecheck, typescript-build, and typescript-coverage."
+            "Frontend checks are available as scripts/jig check typescript-lint, typescript-typecheck, typescript-build, and typescript-coverage; select those relevant to the change."
                 .into(),
         );
     }
     if !minimal_footprint {
         notes.push(
-            "Policy gates are available as scripts/jig check contract and scripts/jig check agent-guides when evidence is needed."
+            "Use scripts/jig check contract for harness wiring changes and scripts/jig check agent-guides for ownership guidance changes."
                 .into(),
         );
     }

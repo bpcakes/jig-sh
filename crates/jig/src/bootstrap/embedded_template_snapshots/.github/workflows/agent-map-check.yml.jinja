@@ -11,6 +11,7 @@ on:
 [% endfor %]
       - "scripts/jig"
       - "scripts/install-jig.sh"
+      - ".jig/runtime-version"
       - ".github/workflows/agent-map-check.yml"
   push:
     branches:
@@ -24,6 +25,7 @@ on:
 [% endfor %]
       - "scripts/jig"
       - "scripts/install-jig.sh"
+      - ".jig/runtime-version"
       - ".github/workflows/agent-map-check.yml"
   merge_group:
     types:
@@ -48,6 +50,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Cache pinned Jig runtime
+        if: ${{ hashFiles('.jig/runtime-version') != '' }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            .git/jig-tools/release-*-runtime/bin/jig
+            .agent/.cache/jig/release-*-runtime/bin/jig
+          key: jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

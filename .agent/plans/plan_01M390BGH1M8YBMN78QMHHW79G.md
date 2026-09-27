@@ -1,0 +1,1 @@
+Reproduce the reviewed A/R/B timeout failure with process barriers. Keep the resource timeout and incomplete evidence while independently verifying source authority for unrelated targets. Verify unchanged and mutated source, run required repository gates, and update PR 46.

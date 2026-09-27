@@ -8,6 +8,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::{Result, VaultError, VaultErrorKind};
 
+mod prefix;
+use prefix::PrefixMatcher;
+
 pub(crate) const EXEC_REDACTION_MARKER: &[u8] = b"[REDACTED]";
 pub(crate) const MAX_EXEC_REDACTION_PATTERNS: usize = 4_096;
 pub(crate) const MAX_EXEC_REDACTION_PATTERN_BYTES: usize = 16 * 1024 * 1024;
@@ -21,6 +24,7 @@ pub(crate) const MAX_EXEC_OUTPUT_CHUNK_LEN: usize = 64 * 1024;
 /// compaction and on drop.
 pub(crate) struct StreamingRedactor {
     matcher: Option<Arc<AhoCorasick>>,
+    prefixes: Option<Arc<PrefixMatcher>>,
     pattern_count: usize,
     max_pattern_len: usize,
     pending: Zeroizing<Vec<u8>>,
@@ -54,6 +58,11 @@ impl StreamingRedactor {
                     })?,
             ))
         };
+        let prefixes = if patterns.is_empty() {
+            None
+        } else {
+            Some(Arc::new(PrefixMatcher::new(&patterns)?))
+        };
         let pending_capacity = max_pattern_len
             .saturating_sub(1)
             .checked_add(MAX_EXEC_OUTPUT_CHUNK_LEN)
@@ -65,6 +74,7 @@ impl StreamingRedactor {
             })?;
         Ok(Self {
             matcher,
+            prefixes,
             pattern_count,
             max_pattern_len,
             pending: Zeroizing::new(Vec::with_capacity(pending_capacity)),
@@ -75,6 +85,7 @@ impl StreamingRedactor {
     pub(crate) fn independent_stream(&self) -> Self {
         Self {
             matcher: self.matcher.clone(),
+            prefixes: self.prefixes.clone(),
             pattern_count: self.pattern_count,
             max_pattern_len: self.max_pattern_len,
             pending: Zeroizing::new(Vec::with_capacity(self.pending.capacity())),
@@ -106,10 +117,14 @@ impl StreamingRedactor {
             "streaming redaction pending allocation exceeded its constructor bound"
         );
         self.pending.extend_from_slice(chunk);
-        let safe_start_limit = self
-            .pending
-            .len()
-            .saturating_sub(self.max_pattern_len.saturating_sub(1));
+        // Only an actual secret prefix needs more input. Holding back a fixed
+        // maximum-pattern-length tail delays unrelated logs and prompts.
+        let safe_start_limit = self.pending.len()
+            - self
+                .prefixes
+                .as_ref()
+                .expect("a nonempty matcher has a prefix matcher")
+                .suffix_len(&self.pending);
         if safe_start_limit == 0 {
             return Ok(());
         }
@@ -254,6 +269,53 @@ mod tests {
     }
 
     #[test]
+    fn emits_unrelated_output_immediately_even_with_a_long_pattern() {
+        let mut redactor = StreamingRedactor::new(patterns(&[
+            b"secret-value",
+            &vec![b'x'; MAX_EXEC_REDACTION_PATTERN_LEN],
+        ]))
+        .unwrap();
+        let mut output = Vec::new();
+        for chunk in [b"ready\n".as_slice(), b"prompt> ", b"\rprogress: 1%"] {
+            let before = output.len();
+            redactor.push_chunk(chunk, &mut output).unwrap();
+            assert_eq!(&output[before..], chunk);
+            assert_eq!(redactor.pending_len(), 0);
+        }
+    }
+
+    #[test]
+    fn withholds_only_a_possible_secret_prefix_and_releases_it_on_mismatch() {
+        let mut redactor = StreamingRedactor::new(patterns(&[b"secret-value"])).unwrap();
+        let mut output = Vec::new();
+        redactor.push_chunk(b"ready: secr", &mut output).unwrap();
+        assert_eq!(output, b"ready: ");
+        assert_eq!(redactor.pending_len(), 4);
+        redactor.push_chunk(b"ond> ", &mut output).unwrap();
+        assert_eq!(output, b"ready: secrond> ");
+        assert_eq!(redactor.pending_len(), 0);
+        redactor.push_chunk(b"secret-value", &mut output).unwrap();
+        assert_eq!(output, b"ready: secrond> [REDACTED]");
+        assert_eq!(redactor.pending_len(), 0);
+    }
+
+    #[test]
+    fn defers_a_complete_match_while_an_earlier_or_longer_match_is_possible() {
+        for needles in [
+            vec![b"abcd".as_slice(), b"abcdefgh"],
+            vec![b"bcde".as_slice(), b"abcdefgh"],
+        ] {
+            let mut redactor = StreamingRedactor::new(patterns(&needles)).unwrap();
+            let mut output = Vec::new();
+            redactor.push_chunk(b"ready: abcde", &mut output).unwrap();
+            assert_eq!(output, b"ready: ");
+            redactor.push_chunk(b"fgh", &mut output).unwrap();
+            assert_eq!(output, b"ready: [REDACTED]");
+            assert_eq!(redactor.pending_len(), 0);
+        }
+    }
+
+    #[test]
     fn redacts_matches_split_at_every_byte_boundary() {
         let input = b"prefix<secret-value>middle<c2VjcmV0LXZhbHVl>suffix";
         let expected = b"prefix<[REDACTED]>middle<[REDACTED]>suffix";
@@ -296,6 +358,32 @@ mod tests {
                 expected,
                 "overlap split at byte {split}"
             );
+        }
+    }
+
+    #[test]
+    fn arbitrary_chunking_agrees_with_whole_output_for_repeated_overlaps() {
+        let needles: &[&[u8]] = &[b"aaaa", b"aaab", b"aabaa", b"baaaa", b"babab", b"ababab"];
+        let redactor = StreamingRedactor::new(patterns(needles)).unwrap();
+        let matcher = redactor.matcher.as_ref().unwrap();
+        for bits in 0..1024 {
+            let input: Vec<u8> = (0..10)
+                .map(|index| if bits & (1 << index) == 0 { b'a' } else { b'b' })
+                .collect();
+            let expected =
+                matcher.replace_all_bytes(&input, &vec![EXEC_REDACTION_MARKER; needles.len()]);
+            for chunk_len in 1..=input.len() {
+                let mut stream = redactor.independent_stream();
+                let mut output = Vec::new();
+                for chunk in input.chunks(chunk_len) {
+                    stream.push_chunk(chunk, &mut output).unwrap();
+                }
+                stream.finish(&mut output).unwrap();
+                assert_eq!(
+                    output, expected,
+                    "input {input:?}, chunk length {chunk_len}"
+                );
+            }
         }
     }
 

@@ -66,6 +66,8 @@ pub(crate) struct LoopWorkflowConfig {
     pub(crate) sandbox: Option<String>,
     #[serde(default)]
     pub(crate) checkout: Option<String>,
+    #[serde(default)]
+    pub(crate) prepare_command: Option<Vec<String>>,
 }
 
 impl LoopConfig {
@@ -245,6 +247,24 @@ fn validate_codex_task_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
                 workflow.id
             );
         }
+        if let Some(command) = workflow.prepare_command.as_deref() {
+            if workflow.checkout.as_deref() == Some("repo") {
+                bail!(
+                    "loop workflow '{}' prepare_command requires a worktree checkout",
+                    workflow.id
+                );
+            }
+            if command.is_empty()
+                || command
+                    .iter()
+                    .any(|arg| arg.is_empty() || arg.contains('\0'))
+            {
+                bail!(
+                    "loop workflow '{}' prepare_command must be a non-empty argument array without empty or NUL arguments",
+                    workflow.id
+                );
+            }
+        }
         return Ok(());
     }
 
@@ -253,6 +273,7 @@ fn validate_codex_task_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
         ("model", workflow.model.is_some()),
         ("sandbox", workflow.sandbox.is_some()),
         ("checkout", workflow.checkout.is_some()),
+        ("prepare_command", workflow.prepare_command.is_some()),
     ] {
         if configured {
             bail!(

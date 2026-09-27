@@ -468,6 +468,35 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
 }
 
 #[test]
+fn adopt_human_summary_preserves_detection_warnings_after_fifth() {
+    let output = serde_json::json!({
+        "render_mode": "preview",
+        "render_report": {
+            "files_created": [],
+            "files_modified": [],
+            "files_removed": []
+        },
+        "detection_report": {
+            "warnings": [
+                "Could not inspect the Rust workspace",
+                "Could not inspect the SQLx migrations",
+                "Could not inspect the frontend workspace",
+                "Could not inspect the package manager",
+                "Could not inspect the CI workflow",
+                "Review the unsupported GitHub runner before adoption"
+            ]
+        }
+    });
+
+    let summary = format_adopt_human_summary(&output);
+
+    assert!(summary.contains("warnings: 6"));
+    assert!(summary.contains("Could not inspect the Rust workspace"));
+    assert!(summary.contains("Review the unsupported GitHub runner before adoption"));
+    assert!(!summary.contains("and 1 more"));
+}
+
+#[test]
 fn init_human_summary_includes_scaffold_and_next_steps() {
     let output = init_report(serde_json::json!({
         "ok": true,
@@ -528,7 +557,7 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
 }
 
 #[test]
-fn adopt_human_summary_includes_notes() {
+fn adopt_human_summary_includes_repository_notes_after_frontend_guidance() {
     let summary = format_adopt_human_summary(&json!({
         "render_mode": "preview",
         "destination": "/tmp/repo",
@@ -543,6 +572,15 @@ fn adopt_human_summary_includes_notes() {
         },
         "adoption_review": [],
         "notes": [
+            "The first scripts/jig command may install or compile a compatible Jig runtime into this repo's contract/profile cache.",
+            "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.",
+            "Re-run scripts/jig doctor after setup changes to confirm readiness.",
+            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION; structured work and receipt inspection are optional.",
+            "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.",
+            "Frontend checks expect package scripts for lint, typecheck, build:bundle, and test:coverage plus a package-manager lockfile; generated preset apps include them.",
+            "Frontend checks are available as scripts/jig check typescript-lint, typescript-typecheck, typescript-build, and typescript-coverage; select those relevant to the change.",
+            "Use scripts/jig check contract for harness wiring changes and scripts/jig check agent-guides for ownership guidance changes.",
+            "Preserved deprecated dev_command for migration; generated commands ignore it. Move that value into [dev] / [[dev.apps]] when ready.",
             "Existing .jig.toml had no [vault] block, so Jig added a new repo-scoped vault scope."
         ],
         "detection_report": {
@@ -552,6 +590,12 @@ fn adopt_human_summary_includes_notes() {
     }));
 
     assert!(summary.contains("notes:"));
+    assert!(summary.contains("Frontend checks are available"));
+    assert!(
+        summary.contains(
+            "Preserved deprecated dev_command for migration; generated commands ignore it."
+        )
+    );
     assert!(summary.contains("repo-scoped vault scope"));
 }
 

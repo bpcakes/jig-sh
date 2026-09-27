@@ -246,6 +246,46 @@ fn repaired_legacy_runtime_reports_its_seeded_cache_dependency() {
 }
 
 #[test]
+fn pinned_runtime_does_not_report_an_inactive_repair_seed() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    let contract = crate::context::CURRENT_CONTRACT_VERSION;
+    fs::create_dir_all(root.join("scripts")).unwrap();
+    fs::write(root.join("scripts/jig"), current_generated_launcher()).unwrap();
+    let installer = root.join("scripts/install-jig.sh");
+    fs::write(&installer, CURRENT_GENERATED_INSTALLER).unwrap();
+    let stamp_dir = root.join(format!(".agent/.cache/jig/contract-{contract}-runtime"));
+    fs::create_dir_all(&stamp_dir).unwrap();
+    let stamp = stamp_dir.join(".jig-source-stamp");
+    fs::write(&stamp, "jig-seeded-runtime-v1\nsource:fixture\n").unwrap();
+    assert!(launcher_repair_seed_stamp_is_present(root, contract));
+
+    fs::create_dir_all(root.join(".jig")).unwrap();
+    let pin = root.join(".jig/runtime-version");
+    fs::write(&pin, "0.5.0\n").unwrap();
+    assert!(!launcher_repair_seed_stamp_is_present(root, contract));
+    let output = runtime_check(root, Some(contract), None, true);
+    assert!(output.ok, "{}", output.detail);
+    assert_eq!(output.data["launcher_repair_seeded_cache"], false);
+    assert!(!output.detail.contains("launcher-repair seeded cache"));
+    assert!(
+        stamp.exists(),
+        "doctor must leave inactive caches untouched"
+    );
+
+    // A pin file alone does not change an older installer's cache selection.
+    fs::write(
+        &installer,
+        CURRENT_GENERATED_INSTALLER.replace("# jig-release-runtime-pin:v1\n", ""),
+    )
+    .unwrap();
+    assert!(launcher_repair_seed_stamp_is_present(root, contract));
+    fs::write(&installer, CURRENT_GENERATED_INSTALLER).unwrap();
+    fs::remove_file(pin).unwrap();
+    assert!(launcher_repair_seed_stamp_is_present(root, contract));
+}
+
+#[test]
 fn repaired_current_runtime_exposes_a_structured_cache_rebuild_fix() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();

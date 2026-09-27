@@ -6,6 +6,11 @@ on:
   # otherwise remove pull_request.paths before making its job a required check.
   pull_request:
     paths:
+[% if backend_language == "go" %]
+      - ".jig/runtime-version"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+[% endif %]
 [% for path in e2e_workflow_paths %]
       - <<[ path | tojson ]>>
 [% endfor %]
@@ -13,6 +18,11 @@ on:
     branches:
       - <<[ default_branch_yaml ]>>
     paths:
+[% if backend_language == "go" %]
+      - ".jig/runtime-version"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+[% endif %]
 [% for path in e2e_workflow_paths %]
       - <<[ path | tojson ]>>
 [% endfor %]
@@ -83,6 +93,14 @@ jobs:
         with:
           node-version: <<[ node_version | tojson ]>>
 [% if backend_language == "go" %]
+      - name: Cache pinned Jig runtime
+        if: ${{ hashFiles('.jig/runtime-version') != '' }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            .git/jig-tools/release-*-runtime/bin/jig
+            .agent/.cache/jig/release-*-runtime/bin/jig
+          key: jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}
       - name: Install Rust toolchain for Jig
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

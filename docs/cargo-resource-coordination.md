@@ -108,6 +108,20 @@ A source mutation during a batch invalidates its otherwise successful results;
 an earlier-finishing sibling cannot publish a passing receipt ahead of that
 shared check.
 
+In read-only plans that combine parallel work with dependency chains, ordinary
+checks run outside the resource batch. Their validated results can release
+ordinary dependents while a Cargo sibling is still running. There is at most
+one active resource batch. Only members admitted to its current wave reserve
+slots against the shared eight-target limit, until that wave releases its
+claims. Resource waiters leave capacity available for ordinary checks and
+their dependents. Resource members continue to use the shared validation and
+publication rules above.
+
+If a batch exhausts its source observation budget, Jig verifies source
+independently before cancelling unrelated checks. Cancellation skips or
+interrupts this independent observation; result publication still completes
+before claims are released.
+
 ## Ownership and recovery
 
 Claims live in a private, owner-checked per-user namespace under the fixed system

@@ -201,6 +201,7 @@ fn frontend_workspace_declared_paths_match_rendered_outputs_for_all_shapes() {
                     "demo",
                     "main",
                     "ubuntu-latest",
+                    true,
                     &frontends,
                 )
                 .unwrap()

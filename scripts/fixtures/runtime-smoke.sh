@@ -214,7 +214,7 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
   local invalid_check_stderr="$repo_dir/.agent/.cache/capability-invalid-check.stderr"
   local unknown_check_stderr="$repo_dir/.agent/.cache/capability-unknown-check.stderr"
   local unknown_command_stderr="$repo_dir/.agent/.cache/capability-unknown-command.stderr"
-  local misplaced_version_stderr="$repo_dir/.agent/.cache/capability-misplaced-version.stderr"
+  local inline_version_stderr="$repo_dir/.agent/.cache/capability-inline-version.stderr"
 
   mkdir -p "$fake_dir"
   printf '%s\n' \
@@ -316,18 +316,22 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
     exit 1
   fi
 
-  if (
+  if ! (
     cd "$repo_dir"
     JIG_DEV_BIN="$fake_dir/jig" \
       JIG_FIXTURE_PROBE_LOG="$probe_log" \
       JIG_FIXTURE_CARGO_LOG="$cargo_log" \
       PATH="$fake_dir:$PATH" \
-      scripts/jig check test -V >/dev/null 2>"$misplaced_version_stderr"
+      scripts/jig check test -V >/dev/null 2>"$inline_version_stderr"
   ); then
-    echo "A misplaced version flag unexpectedly bypassed strict repository validation." >&2
+    echo "A version flag after command options unexpectedly failed." >&2
     exit 1
   fi
-  grep -q 'fixture strict repository validation failed' "$misplaced_version_stderr"
+  grep -Fxq -- 'check test -V' "$probe_log"
+  if grep -q 'fixture strict repository validation failed' "$inline_version_stderr"; then
+    echo "An informational version flag triggered strict repository validation." >&2
+    exit 1
+  fi
 
   (
     cd "$repo_dir"

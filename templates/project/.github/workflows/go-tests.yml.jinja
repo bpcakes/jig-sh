@@ -17,6 +17,7 @@ on:
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
+      - ".jig/runtime-version"
       - ".github/workflows/go-tests.yml"
   push:
     branches:
@@ -36,6 +37,7 @@ on:
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
+      - ".jig/runtime-version"
       - ".github/workflows/go-tests.yml"
   merge_group:
     types:
@@ -57,6 +59,14 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v6
+      - name: Cache pinned Jig runtime
+        if: ${{ hashFiles('.jig/runtime-version') != '' }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            .git/jig-tools/release-*-runtime/bin/jig
+            .agent/.cache/jig/release-*-runtime/bin/jig
+          key: jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: false
@@ -93,6 +103,14 @@ jobs:
     runs-on: "ubuntu-latest"
     steps:
       - uses: actions/checkout@v6
+      - name: Cache pinned Jig runtime
+        if: ${{ hashFiles('.jig/runtime-version') != '' }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            .git/jig-tools/release-*-runtime/bin/jig
+            .agent/.cache/jig/release-*-runtime/bin/jig
+          key: jig-release-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.jig/runtime-version', 'scripts/install-jig.sh', 'scripts/jig') }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: false

@@ -1,0 +1,1 @@
+Reproduce a wide resource batch blocking an unrelated dependency chain. Account only admitted resource members against the shared eight-target bound, preserving leases through publication and one resource resolver batch. Validate contention, disjoint capacity, cancellation and source checks, then run required gates and update PR 46.

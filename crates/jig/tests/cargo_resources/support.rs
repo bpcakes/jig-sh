@@ -66,10 +66,13 @@ impl Fixture {
     }
 
     fn spawn_args_in(&self, root: &Path, id: &str, args: &[&str]) -> Running {
+        self.spawn_command(root, id, jig(root).args(args))
+    }
+
+    pub fn spawn_command(&self, root: &Path, id: &str, command: &mut Command) -> Running {
         let output = self.signals.join(format!("{id}.json"));
         let stderr = self.signals.join(format!("{id}.stderr"));
-        let child = jig(root)
-            .args(args)
+        let child = command
             .env("EXAMPLE_RUN_ID", id)
             .stdout(fs::File::create(&output).unwrap())
             .stderr(fs::File::create(&stderr).unwrap())
@@ -329,9 +332,15 @@ impl Running {
         }
     }
     pub fn cancel(&self) {
+        self.send_signal(libc::SIGTERM);
+    }
+    pub fn interrupt(&self) {
+        self.send_signal(libc::SIGINT);
+    }
+    fn send_signal(&self, signal: libc::c_int) {
         // SAFETY: the live Child retains ownership of this PID until reaped.
         assert_eq!(
-            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) },
+            unsafe { libc::kill(self.child.id() as libc::pid_t, signal) },
             0
         );
     }
