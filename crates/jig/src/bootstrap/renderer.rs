@@ -414,7 +414,8 @@ pub(super) fn file_budget_audit_available(
             return Err(error).with_context(|| format!("Failed to read {}", path.display()));
         }
     };
-    if file.metadata()?.len() > jig_file_budget::MAX_POLICY_BYTES_V1 as u64 {
+    let before = file.metadata()?;
+    if !before.file_type().is_file() || before.len() > jig_file_budget::MAX_POLICY_BYTES_V1 as u64 {
         return Ok(false);
     }
     let mut policy = Vec::new();
@@ -422,15 +423,12 @@ pub(super) fn file_budget_audit_available(
         .take(jig_file_budget::MAX_POLICY_BYTES_V1 as u64)
         .read_to_end(&mut policy)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    if policy.len() == jig_file_budget::MAX_POLICY_BYTES_V1 {
-        let mut overflow = [0];
-        if file
-            .read(&mut overflow)
-            .with_context(|| format!("Failed to read {}", path.display()))?
-            != 0
-        {
-            return Ok(false);
-        }
+    let after = file.metadata()?;
+    if !after.file_type().is_file()
+        || before.len() != after.len()
+        || before.modified().ok() != after.modified().ok()
+    {
+        return Ok(false);
     }
     let now = time::OffsetDateTime::now_utc().date();
     let current_date =
