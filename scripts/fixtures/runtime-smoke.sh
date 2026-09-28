@@ -691,7 +691,9 @@ PY
       scripts/jig sqlx migration add "$migration_name" >/dev/null
     fi
 
-    scripts/jig check >/dev/null
+    # Fixtures may name a default branch that does not exist locally; compare
+    # native checks with the current commit, as the removed plan baseline did.
+    scripts/jig check --comparison-base HEAD >/dev/null
 
     RECEIPTS_PATH=.agent/state/receipts.jsonl EXPECT_SQLX="$expect_sqlx" EXPECT_SCHEMA_DUMP="$expect_schema_dump" python3 <<'PY'
 import json
