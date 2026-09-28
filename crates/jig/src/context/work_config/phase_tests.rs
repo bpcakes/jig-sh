@@ -1,25 +1,26 @@
 use super::*;
 
 #[test]
-fn iteration_profile_is_optional_and_omitted_when_disabled() {
-    let default = WorkConfig::default();
-    assert!(default.iteration_profile().is_none());
-    assert!(
-        !toml::to_string(&default)
-            .unwrap()
-            .contains("iteration_profile")
-    );
+fn retired_work_settings_are_accepted_without_changing_authority() {
+    let configured = toml::from_str::<WorkConfig>(
+        r#"
+iteration_profile = "iteration"
 
-    let configured = toml::from_str::<WorkConfig>("iteration_profile = \"iteration\"\n").unwrap();
+[[refinements]]
+id = "rust-simplify"
+skill = "jig-rust:rust-simplify"
+
+[[refinements]]
+id = "second-refinement"
+"#,
+    )
+    .unwrap();
+    configured.validate().unwrap();
+
+    // Retired values never reach execution authority: the serialized shape
+    // matches a configuration that never set them.
     assert_eq!(
-        configured
-            .iteration_profile()
-            .map(|profile| profile.as_str()),
-        Some("iteration")
-    );
-    assert!(
-        toml::to_string(&configured)
-            .unwrap()
-            .contains("iteration_profile = \"iteration\"")
+        serde_json::to_value(&configured).unwrap(),
+        serde_json::to_value(WorkConfig::default()).unwrap()
     );
 }

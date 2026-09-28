@@ -262,100 +262,6 @@ fn foreground_run_affected_explain_and_execution_match_mcp() {
 }
 
 #[test]
-fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
-    for (native, check) in [(false, false), (true, false), (false, true), (true, true)] {
-        let temp = tempdir().unwrap();
-        write_non_rust_file_budget_fixture_repo(temp.path());
-        if native {
-            let config_path = temp.path().join(".jig.toml");
-            let config = fs::read_to_string(&config_path).unwrap().replace(
-                "runner = { kind = \"command\", command = \"web_file_loc_command\" }",
-                "runner = { kind = \"native\", operation = \"jig.file_budget\" }",
-            );
-            fs::write(
-                config_path,
-                config.replace("inputs = [\"web/**\"]", "inputs = [\"**\"]"),
-            )
-            .unwrap();
-            let manifest_path = temp.path().join(".agent/jig-contract.json");
-            let mut manifest: Value =
-                serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-            manifest["contract_version"] = json!(7);
-            manifest["actions"][0]["inputs"] = json!(["**"]);
-            manifest["actions"][0]["runner"] =
-                json!({"kind": "native", "operation": "jig.file_budget"});
-            fs::write(
-                manifest_path,
-                serde_json::to_string_pretty(&manifest).unwrap(),
-            )
-            .unwrap();
-            fs::create_dir_all(temp.path().join(".jig")).unwrap();
-            fs::write(
-                temp.path().join(".jig/file-budget.toml"),
-                "version=1\n[[rules]]\nid=\"web\"\ninclude=[\"web/**\"]\nmax_lines=100\n",
-            )
-            .unwrap();
-        }
-        init_git_repo(temp.path());
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let started = crate::runtime::dispatch(
-            &ctx,
-            RuntimeCommand::Work(crate::command::WorkCommand::Start(
-                crate::command::WorkStartRequest {
-                    title: "Native run fixture".into(),
-                    body: Some("Validate native work identity".into()),
-                    body_file: None,
-                    base: None,
-                },
-            )),
-        )
-        .unwrap();
-        let id = started["plan"]["plan_id"].as_str().unwrap().to_owned();
-        let mut args = request(&["web:file-loc"]);
-        if native {
-            args.comparison = Some(jig_contract::ComparisonRequestV1::StrictInventory {
-                reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck,
-            });
-        }
-        args.tool = ToolRequest::new(Some(id.clone()), true);
-        let command = if check {
-            RuntimeCommand::Check(crate::command::CheckCommand::Repository(
-                crate::command::RepositoryCheckRequest {
-                    selectors: args.selectors,
-                    profile: args.profile,
-                    affected_base: args.affected_base,
-                    comparison: args.comparison,
-                    explain: args.explain,
-                    fail_fast: args.fail_fast,
-                    tool: args.tool,
-                },
-            ))
-        } else {
-            RuntimeCommand::Run(args)
-        };
-        let output = crate::runtime::dispatch(&ctx, command).unwrap();
-        assert_eq!(output["ok"], true, "{output:#}");
-        if native {
-            assert_eq!(
-                output["plan"]["targets"][0]["prepared_native_input"]["work_plan_id"],
-                id
-            );
-        }
-        let durable =
-            crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
-        assert_eq!(durable.work_plan_id.as_deref(), Some(id.as_str()));
-        let receipt = output["run"]["targets"][0]["receipt_id"].as_str().unwrap();
-        let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap();
-        let receipt: Value = receipts
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .find(|r| r["id"] == receipt)
-            .unwrap();
-        assert_eq!(receipt["plan_id"], id);
-    }
-}
-
-#[test]
 fn foreground_run_rejects_legacy_contract_with_migration_guidance() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path()).write();
@@ -429,7 +335,6 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
             &catalog,
             plan,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
-                reuse_after_resource_wait: false,
                 alias_override: None,
                 work_plan_id: None,
                 record_receipts: true,
@@ -473,4 +378,96 @@ fn foreground_explain_defers_work_plan_openness_to_execution() {
     let error = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args)).unwrap_err();
     assert!(error.to_string().contains("plan_missing"), "{error:#}");
     assert!(!ctx.state_file("runs.jsonl").exists());
+}
+
+#[test]
+fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
+    for (native, check) in [(false, false), (true, false), (false, true), (true, true)] {
+        let temp = tempdir().unwrap();
+        write_non_rust_file_budget_fixture_repo(temp.path());
+        if native {
+            let config_path = temp.path().join(".jig.toml");
+            let config = fs::read_to_string(&config_path).unwrap().replace(
+                "runner = { kind = \"command\", command = \"web_file_loc_command\" }",
+                "runner = { kind = \"native\", operation = \"jig.file_budget\" }",
+            );
+            fs::write(
+                config_path,
+                config.replace("inputs = [\"web/**\"]", "inputs = [\"**\"]"),
+            )
+            .unwrap();
+            let manifest_path = temp.path().join(".agent/jig-contract.json");
+            let mut manifest: Value =
+                serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+            manifest["contract_version"] = json!(7);
+            manifest["actions"][0]["inputs"] = json!(["**"]);
+            manifest["actions"][0]["runner"] =
+                json!({"kind": "native", "operation": "jig.file_budget"});
+            fs::write(
+                manifest_path,
+                serde_json::to_string_pretty(&manifest).unwrap(),
+            )
+            .unwrap();
+            fs::create_dir_all(temp.path().join(".jig")).unwrap();
+            fs::write(
+                temp.path().join(".jig/file-budget.toml"),
+                "version=1\n[[rules]]\nid=\"web\"\ninclude=[\"web/**\"]\nmax_lines=100\n",
+            )
+            .unwrap();
+        }
+        init_git_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let started = crate::state::plans_open(
+            &ctx,
+            crate::state::PlanOpenRequest {
+                title: "Native run fixture".into(),
+                body: Some("Validate native work identity".into()),
+                body_file: None,
+                base: None,
+            },
+        )
+        .unwrap();
+        let id = started["plan_id"].as_str().unwrap().to_owned();
+        let mut args = request(&["web:file-loc"]);
+        if native {
+            args.comparison = Some(jig_contract::ComparisonRequestV1::StrictInventory {
+                reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck,
+            });
+        }
+        args.tool = ToolRequest::new(Some(id.clone()), true);
+        let command = if check {
+            RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+                crate::command::RepositoryCheckRequest {
+                    selectors: args.selectors,
+                    profile: args.profile,
+                    affected_base: args.affected_base,
+                    comparison: args.comparison,
+                    explain: args.explain,
+                    fail_fast: args.fail_fast,
+                    tool: args.tool,
+                },
+            ))
+        } else {
+            RuntimeCommand::Run(args)
+        };
+        let output = crate::runtime::dispatch(&ctx, command).unwrap();
+        assert_eq!(output["ok"], true, "{output:#}");
+        if native {
+            assert_eq!(
+                output["plan"]["targets"][0]["prepared_native_input"]["work_plan_id"],
+                id
+            );
+        }
+        let durable =
+            crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
+        assert_eq!(durable.work_plan_id.as_deref(), Some(id.as_str()));
+        let receipt = output["run"]["targets"][0]["receipt_id"].as_str().unwrap();
+        let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap();
+        let receipt: Value = receipts
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|r| r["id"] == receipt)
+            .unwrap();
+        assert_eq!(receipt["plan_id"], id);
+    }
 }

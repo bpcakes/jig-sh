@@ -11,7 +11,7 @@ if ! declare -F write_backend_stub_repo >/dev/null; then
 fi
 
 settle_fixture_cargo_workspace() {
-  # Keep the first structured work check from being invalidated by Cargo settling the repo.
+  # Keep the first check from being invalidated by Cargo settling the repo.
   cargo generate-lockfile >/dev/null
 }
 

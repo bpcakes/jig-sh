@@ -25,7 +25,7 @@ const MAX_SYMBOLIC_COMPARISON_REF_BYTES_V1: usize = 1_024;
 const MAX_EXACT_OBJECT_ID_BYTES_V1: usize = 64;
 
 mod freshness;
-pub(crate) use freshness::{prepare_gate_file_budget_input, revalidate_freshness_native_input};
+pub(crate) use freshness::revalidate_freshness_native_input;
 
 pub(crate) fn prepare_file_budget_input_v1(
     ctx: &RepoContext,

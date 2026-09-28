@@ -18,13 +18,6 @@ use self::state::{
     format_state_export_summary, format_state_restore_summary, format_state_summary,
 };
 use self::vault::{format_vault_generic_summary, format_vault_run_summary};
-use self::work::{
-    format_work_append_summary, format_work_check_summary, format_work_decide_summary,
-    format_work_evidence_summary, format_work_finish_summary, format_work_gates_summary,
-    format_work_goal_summary, format_work_receipts_summary, format_work_refine_summary,
-    format_work_retire_summary, format_work_review_summary, format_work_start_plan_id,
-    format_work_start_summary, format_work_status_summary,
-};
 
 mod agent;
 mod claude;
@@ -38,7 +31,6 @@ mod state;
 mod status;
 mod usage;
 mod vault;
-mod work;
 
 pub(super) enum HumanOutput {
     Doctor,
@@ -55,20 +47,6 @@ pub(super) enum HumanOutput {
     CodexHomes,
     CodexLaunch,
     CodexResume,
-    WorkCheck,
-    WorkGates,
-    WorkEvidence,
-    WorkReview,
-    WorkRefine,
-    WorkStart,
-    WorkStartPlanId,
-    WorkGoal,
-    WorkAppend,
-    WorkDecide,
-    WorkFinish,
-    WorkRetire,
-    WorkReceipts,
-    WorkStatus,
     Check,
     RepositoryRun,
     ToolExecution,
@@ -120,20 +98,6 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::CodexHomes => format_codex_homes_summary(value),
         HumanOutput::CodexLaunch => format_codex_launch_summary(value),
         HumanOutput::CodexResume => format_codex_resume_summary(value),
-        HumanOutput::WorkCheck => format_work_check_summary(value),
-        HumanOutput::WorkGates => format_work_gates_summary(value),
-        HumanOutput::WorkEvidence => format_work_evidence_summary(value),
-        HumanOutput::WorkReview => format_work_review_summary(value),
-        HumanOutput::WorkRefine => format_work_refine_summary(value),
-        HumanOutput::WorkStart => format_work_start_summary(value),
-        HumanOutput::WorkStartPlanId => format_work_start_plan_id(value)?,
-        HumanOutput::WorkGoal => format_work_goal_summary(value),
-        HumanOutput::WorkAppend => format_work_append_summary(value),
-        HumanOutput::WorkDecide => format_work_decide_summary(value),
-        HumanOutput::WorkFinish => format_work_finish_summary(value),
-        HumanOutput::WorkRetire => format_work_retire_summary(value),
-        HumanOutput::WorkReceipts => format_work_receipts_summary(value),
-        HumanOutput::WorkStatus => format_work_status_summary(value),
         HumanOutput::Check => format_check_output(value),
         HumanOutput::RepositoryRun => format_repository_execution_summary(value, "Run", "run"),
         HumanOutput::ToolExecution => format_tool_execution_summary(value),

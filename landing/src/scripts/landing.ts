@@ -139,7 +139,7 @@ function runTerminalDemo(termBody: HTMLElement) {
     { t: 600, s: "" },
     {
       t: 0,
-      s: '<span class="p">~/repos/target-repo</span> <span class="d">$</span> <span class="c">scripts/jig work check --summary</span>',
+      s: '<span class="p">~/repos/target-repo</span> <span class="d">$</span> <span class="c">scripts/jig check</span>',
     },
     {
       t: 320,
@@ -160,10 +160,6 @@ function runTerminalDemo(termBody: HTMLElement) {
     {
       t: 320,
       s: '<span class="d">→ scripts/jig check agent-map ............ </span><span class="ok">ok</span>',
-    },
-    {
-      t: 320,
-      s: '<span class="d">→ scripts/jig work gates      ............ </span><span class="ok">fresh</span>',
     },
     {
       t: 480,

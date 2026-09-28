@@ -288,7 +288,6 @@ fn run_command(cli: Cli) -> Result<()> {
                 return ui::run_status(
                     ctx,
                     std::time::Duration::from_secs(opts.effective_refresh_seconds()),
-                    opts.freshness_timeout_ms,
                 );
             }
             #[cfg(all(unix, not(test)))]
@@ -298,11 +297,7 @@ fn run_command(cli: Cli) -> Result<()> {
             #[cfg(all(unix, not(test)))]
             let cancellation = signal_session.cancellation();
             #[cfg(all(unix, not(test)))]
-            let outcome = status::snapshot_with_freshness_timeout(
-                &ctx,
-                &|| cancellation.cancelled(),
-                opts.freshness_timeout_ms,
-            );
+            let outcome = status::snapshot_with_cancellation(&ctx, &|| cancellation.cancelled());
             #[cfg(all(unix, not(test)))]
             let outcome = crate::signal_supervision::finish(
                 outcome,
@@ -310,8 +305,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 "Status signal supervision could not retire safely",
             );
             #[cfg(any(not(unix), test))]
-            let outcome =
-                status::snapshot_with_freshness_timeout(&ctx, &|| false, opts.freshness_timeout_ms);
+            let outcome = status::snapshot_with_cancellation(&ctx, &|| false);
             let output = outcome?;
             emit(json_output, HumanOutput::Status, &output)
         }
@@ -438,16 +432,8 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Claude(command) => super::claude_run::run_claude_command(command, json_output),
         CommandKind::Codex(command) => run_codex_command(command, json_output),
-        CommandKind::Work(command) => {
-            let human_output = work_human_output(&command);
-            let require_ok = work_command_reports_failure_with_ok(&command);
-            dispatch_runtime_command(
-                crate::command::RuntimeCommand::Work(command.try_into()?),
-                require_ok,
-                json_output,
-                human_output,
-            )
-        }
+        // Argument parsing rejects the retired namespace before dispatch.
+        CommandKind::Work(_) => anyhow::bail!("`jig work` was removed"),
         CommandKind::Loop(command) => {
             let require_ok = loop_command_reports_failure_with_ok(&command);
             let human_output = loop_human_output(&command);
@@ -627,11 +613,11 @@ fn report_json_command_error(result: Result<()>) -> Result<()> {
             Err(json_reported_error(1))
         }
         Err(error) => {
-            let mut payload = json_error_payload("command_failed", &format!("{error:#}"), 1);
-            if let Some(partial) = error.downcast_ref::<crate::state::PlanClosurePartialFailure>() {
-                payload["partial_completion"] = partial.details();
-            }
-            print_json(&payload)?;
+            print_json(&json_error_payload(
+                "command_failed",
+                &format!("{error:#}"),
+                1,
+            ))?;
             Err(json_reported_error(1))
         }
     }
@@ -673,7 +659,6 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
-        CommandKind::Work(command) => work_command_reports_failure_with_ok(command),
         CommandKind::Loop(command) => loop_command_reports_failure_with_ok(command),
         CommandKind::Check(_) | CommandKind::Run(_) => true,
         _ => false,
@@ -691,32 +676,10 @@ const fn loop_command_reports_failure_with_ok(command: &LoopCommand) -> bool {
     )
 }
 
-const fn work_command_reports_failure_with_ok(command: &WorkCommand) -> bool {
-    matches!(command, WorkCommand::Check(_))
-}
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {
         AgentCommand::Doctor => HumanOutput::AgentDoctor,
         AgentCommand::Bootstrap(_) => HumanOutput::AgentBootstrap,
-    }
-}
-
-const fn work_human_output(command: &WorkCommand) -> HumanOutput {
-    match command {
-        WorkCommand::Start(opts) if opts.print_plan_id => HumanOutput::WorkStartPlanId,
-        WorkCommand::Start(_) => HumanOutput::WorkStart,
-        WorkCommand::Goal(_) => HumanOutput::WorkGoal,
-        WorkCommand::Append(_) => HumanOutput::WorkAppend,
-        WorkCommand::Check(_) => HumanOutput::WorkCheck,
-        WorkCommand::Gates(_) => HumanOutput::WorkGates,
-        WorkCommand::Evidence(_) => HumanOutput::WorkEvidence,
-        WorkCommand::Review(_) => HumanOutput::WorkReview,
-        WorkCommand::Refine(_) => HumanOutput::WorkRefine,
-        WorkCommand::Decide(_) => HumanOutput::WorkDecide,
-        WorkCommand::Receipts(_) => HumanOutput::WorkReceipts,
-        WorkCommand::Status => HumanOutput::WorkStatus,
-        WorkCommand::Finish(_) => HumanOutput::WorkFinish,
-        WorkCommand::Retire(_) => HumanOutput::WorkRetire,
     }
 }
 

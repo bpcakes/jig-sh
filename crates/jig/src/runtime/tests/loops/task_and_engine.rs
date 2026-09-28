@@ -24,17 +24,7 @@ fn loop_tick_noop_records_idle_receipt() {
     assert_eq!(output["observed"]["open_plan_count"], 1);
     assert!(output["receipt_id"].as_str().is_some());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: false,
-            limit: 10,
-        },
-    )
-    .unwrap();
+    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, false)});
     assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
 }
 

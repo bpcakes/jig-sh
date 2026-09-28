@@ -305,7 +305,7 @@ fn fresh_detail_is_monotonic_and_transient_and_epoch_exhaustion_keeps_cache() {
 }
 
 #[test]
-fn duplicate_open_is_gate_corruption_and_close_remains_sticky() {
+fn duplicate_open_stays_inspectable_and_close_remains_sticky() {
     let (root, source) = source_fixture();
     let plans_path = root.path().join(".agent/state/plans.jsonl");
     let mut plans = fs::read_to_string(&plans_path).unwrap();
@@ -325,15 +325,16 @@ fn duplicate_open_is_gate_corruption_and_close_remains_sticky() {
     let epoch = source
         .recorder(recorder_request(RecorderMode::Refresh), &|| false)
         .unwrap();
+    // Gate evaluation was removed, so duplicate opens no longer surface as
+    // gate-observation errors.
+    assert!(epoch.recorder.open_plans[0].gates_error.is_none());
     assert!(
-        epoch.recorder.open_plans[0]
-            .gates_error
-            .as_deref()
-            .is_some_and(|error| error.contains("multiple Open records"))
+        !epoch
+            .status_local
+            .errors
+            .iter()
+            .any(|error| error.scope.starts_with("work.gates"))
     );
-    assert!(epoch.status_local.errors.iter().any(|error| {
-        error.scope == "work.gates.plan_example" && error.code == "work_gates_unavailable"
-    }));
     let PlanSnapshotResult::Found(detail) = source
         .plan(
             PlanBasis::RecorderEpoch(epoch.recorder.epoch_id),
@@ -344,10 +345,13 @@ fn duplicate_open_is_gate_corruption_and_close_remains_sticky() {
     else {
         panic!("duplicate-open plan should remain inspectable");
     };
-    assert!(detail.errors.iter().any(|error| {
-        error.scope() == CollectionDomain::Gates.as_str()
-            && error.message().contains("multiple Open records")
-    }));
+    assert!(detail.gates.is_none());
+    assert!(
+        !detail
+            .errors
+            .iter()
+            .any(|error| error.scope() == CollectionDomain::Gates.as_str())
+    );
 
     plans.push_str(&format!(
         "{}\n{}\n{}\n",

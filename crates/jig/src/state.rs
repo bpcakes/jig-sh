@@ -1,14 +1,15 @@
 use anyhow::Result;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
-use crate::tool_defs::tool;
 
+#[cfg(test)]
+pub(crate) use execution_leases::acquire_repository_execution_lease;
 pub(crate) use execution_leases::{
-    RepositoryExecutionLease, acquire_repository_execution_lease,
-    acquire_repository_execution_lease_without_wait, try_acquire_repository_execution_lease,
+    RepositoryExecutionLease, acquire_repository_execution_lease_without_wait,
+    try_acquire_repository_execution_lease,
 };
+#[cfg(test)]
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
@@ -16,57 +17,37 @@ pub(crate) use jsonl::read_receipts_reverse_with_cancellation;
 pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl_raw};
 #[cfg(test)]
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
-pub(crate) use plan_closure_failure::PlanClosurePartialFailure;
-pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, plan_body_path, read_plan_body};
-pub(crate) use plans::{
-    PlanAppendRequest, PlanCloseRequest, PlanLifecycle, PlanOpenRequest, PlanRetireRequest,
-    PlanStatus, ensure_plan_exists, ensure_plan_exists_with_cancellation, ensure_plan_is_open,
-    open_plan_summaries, open_plan_summaries_with_cancellation, plan_baseline,
-    plan_baseline_with_cancellation, plan_baselines_with_cancellation, plan_lifecycle,
-    plan_lifecycle_with_cancellation, plan_owner_session, plans_append, plans_close,
-    plans_open_prepared, plans_retire, prepare_plan_open,
-};
+pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, read_plan_body};
 #[cfg(test)]
-pub(crate) use plans::{plan_status, plans_open, seed_open_plan_for_test};
-pub(crate) use receipts::effective_time_from_value;
+use plans::ensure_plan_exists;
+#[cfg(test)]
+pub(crate) use plans::{PlanOpenRequest, plans_open, seed_open_plan_for_test};
+pub(crate) use plans::{
+    ensure_plan_is_open, open_plan_summaries, plan_baseline, plan_baseline_with_cancellation,
+};
+pub(crate) use receipts::WORK_CHECK_TARGETS_SCHEMA;
 pub(crate) use receipts::evidence_requires_time_validity;
 pub(crate) use receipts::metadata_time;
 #[cfg(test)]
 pub(crate) use receipts::receipt_append_may_have_landed_for_test;
 pub(crate) use receipts::receipt_diff_summary;
-pub(crate) use receipts::{
-    CurrentWorktreeFingerprint, ReusableWorkCheckEvidence, ReusableWorkCheckQuery,
-    TargetReceiptStatus, ToolReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence,
-    WorkCheckGateEvidence, WorkCheckGateReceiptStatus, WorkGateReceiptIndex,
-    WorkGateReceiptIndexes, WorkReviewFinding, WorkReviewReceiptEvidence, WorkReviewReceiptStatus,
-    current_worktree_fingerprint, current_worktree_fingerprint_for_receipt_with_cancellation,
-    current_worktree_fingerprint_with_cancellation,
-    reusable_work_check_evidence_batch_with_cancellation, target_receipt_index_with_cancellation,
-    time_validity_is_current, work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
-    work_gate_receipt_indexes_with_cancellation,
-};
+#[cfg(test)]
+pub(crate) use receipts::record_receipt;
 pub(crate) use receipts::{OriginalReceiptIndex, TargetReceiptMetadata, record_target_receipt};
 pub(crate) use receipts::{
-    ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
-    record_receipt_with_cancellation,
-    record_receipt_with_cancellation_if_no_current_plan_gate_evidence,
-    record_receipt_with_cancellation_until,
+    ReceiptInput, record_receipt_with_cancellation, record_receipt_with_cancellation_until,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
-use receipts::{StateToolReceipt, record_successful_state_tool};
-pub(crate) use receipts::{WORK_CHECK_TARGETS_SCHEMA, work_check_targets_evidence};
+pub(crate) use receipts::{
+    TargetReceiptStatus, WORK_CHECK_EVIDENCE_SCHEMA, time_validity_is_current,
+};
 pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
 pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
-#[cfg(test)]
-pub(crate) use receipts::{
-    reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,
-};
-use records::DecisionRecord;
+pub(crate) use records::PlanBaseline;
 pub(crate) use records::{
     DecisionRecord as DashboardDecisionRecord, PlanEvent as DashboardPlanEvent,
     ReceiptRecord as DashboardReceiptRecord, SessionEventEnvelope as DashboardSessionEvent,
 };
-pub(crate) use records::{PlanBaseline, PlanDisposition, PlanRetirement};
 #[cfg(test)]
 use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
@@ -79,18 +60,18 @@ pub(crate) use runs::{
 pub(crate) use runs::{start_run, start_run_with_event_cursor};
 #[cfg(test)]
 use sessions::build_summary;
+#[cfg(test)]
+pub(crate) use sessions::{current_session, session_start, state_summary};
 pub(crate) use sessions::{
-    SessionEndIfCurrent, current_session, current_session_with_cancellation, public_source_path,
-    session_end_if_current, session_start, state_summary, state_summary_with_cancellation,
+    current_session_with_cancellation, public_source_path, state_summary_with_cancellation,
 };
 #[cfg(test)]
-pub(crate) use sessions::{SessionEndRequest, session_end};
+use support::ensure_state_layout;
 pub(crate) use support::now_ms;
 #[cfg(test)]
 pub(crate) use support::set_test_now_ms;
 #[cfg(test)]
 use support::truncate;
-use support::{ensure_state_layout, new_id};
 
 mod compression;
 mod diagnostics;
@@ -100,7 +81,6 @@ pub(crate) use resource_leases::{ResourceClaim, ResourceClaimMode, ResourceLease
 mod json_scan;
 mod jsonl;
 mod maintenance;
-mod plan_closure_failure;
 mod plan_files;
 mod session_pointer;
 pub(crate) use plan_files::validate_plan_id;
@@ -188,52 +168,6 @@ fn decorate_receipt_archive_failure(
     anyhow::anyhow!(
         "{error:#}\nRun archival completed before receipt archival failed: {archived} run(s) were archived; exact run recovery backup: {backup}; run-event archive: {archive}"
     )
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct DecisionAddRequest {
-    pub(crate) title: String,
-    pub(crate) selected_option: String,
-    pub(crate) rationale: String,
-    #[serde(default, deserialize_with = "crate::serde_helpers::null_or_default")]
-    pub(crate) alternatives: Vec<String>,
-    pub(crate) plan_id: Option<String>,
-}
-
-pub(crate) fn decisions_add(ctx: &RepoContext, request: DecisionAddRequest) -> Result<Value> {
-    ensure_state_layout(ctx)?;
-    let record = DecisionRecord {
-        id: new_id("decision"),
-        session_id: current_session(ctx)?,
-        plan_id: request.plan_id.clone(),
-        title: request.title.clone(),
-        selected_option: request.selected_option.clone(),
-        rationale: request.rationale.clone(),
-        alternatives: request.alternatives.clone(),
-        timestamp_ms: now_ms(),
-    };
-    append_jsonl(&ctx.state_file("decisions.jsonl"), &record)?;
-
-    let receipt_id = record_successful_state_tool(
-        ctx,
-        StateToolReceipt {
-            tool_name: tool::DECISIONS_ADD,
-            args: json!({
-                "title": request.title,
-                "selected_option": request.selected_option,
-                "plan_id": request.plan_id,
-            }),
-            started_at_ms: record.timestamp_ms,
-            plan_id: record.plan_id.clone(),
-            session_override: record.session_id.clone(),
-        },
-    )?;
-
-    Ok(json!({
-        "ok": true,
-        "decision_id": record.id,
-        "receipt_id": receipt_id,
-    }))
 }
 
 #[cfg(test)]

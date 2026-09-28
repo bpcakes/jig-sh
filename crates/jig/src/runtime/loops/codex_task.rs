@@ -27,8 +27,7 @@ use crate::execution::{
     run_supervised_execution_command,
 };
 use crate::runtime::worker_runner::{
-    CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
-    run_codex_exec,
+    CodexExecOutcome, CodexExecRequest, WorkerReceiptRequest, run_codex_exec,
 };
 
 mod checkout;
@@ -142,7 +141,6 @@ pub(super) fn codex_task_tick(
         CodexExecRequest {
             root: checkout.path(),
             codex_home: codex_home.as_deref(),
-            mode: CodexExecMode::Exec,
             model: settings.model.as_deref(),
             approval_policy: Some("never"),
             sandbox: Some(&settings.sandbox),
@@ -150,7 +148,7 @@ pub(super) fn codex_task_tick(
             extra_args: Vec::new(),
             output_schema: None,
             transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
-            prompt: CodexPrompt::Stdin(&prompt),
+            prompt: &prompt,
             receipt: WorkerReceiptRequest {
                 purpose: "scheduled_codex_task",
                 plan_id: None,

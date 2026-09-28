@@ -8,15 +8,15 @@
 
 Generated repositories declare a `contract_version` in `.agent/jig-contract.json`. During discovery, `scripts/jig` accepts a candidate only when the binary supports that contract epoch and requested build profile; this capability-only probe intentionally does not validate unrelated repository policy. Immediately before ordinary command dispatch, the launcher passes its epoch, selected profile, and repository root through hidden root options so the chosen binary validates the complete repository contract in-process and reuses the loaded context; malformed configuration therefore produces its specific validation error without a redundant startup subprocess or reinstall loop. Those `--__launcher-*` options are a private generated-launcher protocol, not a supported user interface; direct callers should select repositories through cwd or `JIG_REPO_ROOT`. `doctor` and `check contract` retain the capability-only final probe because they must remain reachable to report strict repository validation failures themselves. Generated repositories may pin an exact published release with `.jig/runtime-version`; release caches require that version plus contract/profile compatibility, independently of template provenance. Without a release pin, managed caches are trusted only while their source stamp matches the repository's configured source revision; local-source stamps additionally cover the source checkout contents. When `.jig.toml` is unreadable, capability-only commands may use an existing contract-compatible cache without proving source-stamp freshness so diagnostics remain reachable; mutating commands still reparse their required inputs before applying changes. Explicit `JIG_DEV_BIN` values remain authoritative trusted runtime sources. Without a release pin, reuse of an otherwise compatible binary found on `PATH` is disabled unless `JIG_INSTALL_ALLOW_PATH_BINARY=1` is set, in which case the installer reports the selected absolute path on stderr. Opted-in PATH candidates must have a validated ELF or Mach-O header and pass the direct compatibility probe; shell wrappers are never accepted through this path.
 
-That final strict validation is a deliberate fail-closed launcher boundary and runs once inside the selected process before every ordinary command, including MCP startup. The launcher-provided canonical root is authoritative over inherited `JIG_REPO_ROOT`, and the validated context remains available process-wide if dispatch later crosses a worker thread. Validation expands beyond `check contract`: commands such as `check fmt`, `work`, and `info` do not execute while required contract configuration is invalid. Help, version output, `init`, `presets`, `adopt`, `codex`, `claude`, `doctor`, `update`, and `check contract` remain reachable through capability-only validation so failures can be explained or repaired and account-scoped agent homes remain independent of repository policy. Bare `check` and selector-shaped values after it require strict repository validation because contract v6 resolves them against checked-in targets; unrecognized top-level commands still reach Clap without strict validation so their usage diagnostics are not hidden by unrelated repository errors.
+That final strict validation is a deliberate fail-closed launcher boundary and runs once inside the selected process before every ordinary command, including MCP startup. The launcher-provided canonical root is authoritative over inherited `JIG_REPO_ROOT`, and the validated context remains available process-wide if dispatch later crosses a worker thread. Validation expands beyond `check contract`: commands such as `check fmt` and `info` do not execute while required contract configuration is invalid. Help, version output, `init`, `presets`, `adopt`, `codex`, `claude`, `doctor`, `update`, and `check contract` remain reachable through capability-only validation so failures can be explained or repaired and account-scoped agent homes remain independent of repository policy. Bare `check` and selector-shaped values after it require strict repository validation because contract v6 resolves them against checked-in targets; unrecognized top-level commands still reach Clap without strict validation so their usage diagnostics are not hidden by unrelated repository errors.
 
 Without `.jig/runtime-version`, `_commit` selects the source revision when the installer must build a runtime; it is not a product-version or binary-provenance lock. Once a binary has proven the requested contract and profile, the cache may reuse it while its recorded configured-source state remains current. Git-backed local-source caches recompute their Git/content fingerprint on every resolution so an edit invalidates the runtime immediately. Non-Git and unborn-Git sources first compare a path, identity, size, mode, and nanosecond timestamp summary; unchanged trees avoid rereading file contents, while a metadata change triggers a stable full-content comparison before reuse. Local source inputs under `Cargo.toml`, `Cargo.lock`, and `crates` may not be symbolic links: links fail closed because changing content behind one does not necessarily change the Git blob or link metadata being fingerprinted. This includes tracked regular files replaced by worktree symlinks, not only symlinks recorded in the Git index. The non-Git fallback also fails closed rather than traversing more than 100,000 entries, 512 MiB of regular-file content, or 128 directory levels; unusually large or symlinked source trees should use regular committed source entries or an explicitly rebuilt `JIG_DEV_BIN`. Launcher-only repair seeds are recorded distinctly with the seeded binary digest, a cheap file-identity key used to avoid rehashing an unchanged binary, and the source state they shadow, rather than pretending the binary was built from that source. Full refresh runtime policy combines the rendered source and harness footprint: minimal harnesses do not seed a removed installer, while full repositories rendered from embedded templates try to publish the running binary with durable embedded-runtime provenance. Cache publication occurs after repository rendering is committed; a failure is returned as a warning and does not misreport the durable render as rolled back, and an existing launcher-repair seed is retained as the last known fallback. Repair provenance across supported contract epochs is retired only after replacement is available or the rendered policy no longer manages an embedded runtime. A changed file identity falls back to the recorded digest check, while a source change invalidates either kind of seeded stamp. Deliberately unpinned mutable-source caches emit a periodic refresh reminder; `--refresh` or `JIG_INSTALL_REFRESH=1` forces the installer to recheck the source. Installer `--resolve-only` calls are read-only: they neither refresh seeded identity/source metadata nor write mutable-source reminder state.
 
 Runtime seeding selects Bash and its helper-command path as one platform policy. Linux and macOS accept only root-owned, non-writable Bash and helper directories, preventing repository-local and unrelated ambient directories from entering the seeding path.
 
-Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v8 is the current compatibility epoch. Contract v6 remains supported with its original component-aggregate affected selection, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` and `claude` namespaces remain CLI-only.
+State hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and the MCP tool `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. The former runtime-owned `scripts/jig work ...` commands and `jig.work_*` MCP tools were removed without a contract-version bump; see [Removed Work Commands](#removed-work-commands). Contract v8 is the current compatibility epoch. Contract v6 remains supported with its original component-aggregate affected selection, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. The removal of the runtime-owned `jig work` commands and `jig.work_*` MCP tools is such an explicit end of support in every epoch; see [Removed Work Commands](#removed-work-commands). Status text, JSON, and TUI modes and the `codex` and `claude` namespaces remain CLI-only.
 
-CLI commands print human-readable output by default. Long-running human-mode commands collect bounded child-output previews, phase changes, and periodic heartbeats while supervised work runs, then make a deadline-bounded best-effort write of that progress to stderr after supervised execution returns and before any restored terminating signal is redelivered. A stalled presentation sink may therefore lose the remaining preview, but it cannot indefinitely delay command completion or signal retirement. Because delivery is deferred, heartbeat wording is historical (for example, a phase “reached 25s”) rather than a claim that it is still running when rendered. The deferred boundary keeps transport backpressure from suspending timeout, cancellation, or cleanup and preserves already-collected progress during ordinary interruption. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, `scripts/jig work status --json`, or `scripts/jig work evidence --json`); JSON mode disables that human progress output. Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document, and `scripts/jig mcp` always reserves stdout for MCP framing. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. `scripts/jig work start --print-plan-id` remains a shell-capture override that prints only the new plan id. Human text, TUI presentation, and `--print-plan-id` output are for terminal use and are not stable machine-readable contract output; automation should pass `--json` or use MCP tools.
+CLI commands print human-readable output by default. Long-running human-mode commands collect bounded child-output previews, phase changes, and periodic heartbeats while supervised work runs, then make a deadline-bounded best-effort write of that progress to stderr after supervised execution returns and before any restored terminating signal is redelivered. A stalled presentation sink may therefore lose the remaining preview, but it cannot indefinitely delay command completion or signal retirement. Because delivery is deferred, heartbeat wording is historical (for example, a phase “reached 25s”) rather than a claim that it is still running when rendered. The deferred boundary keeps transport backpressure from suspending timeout, cancellation, or cleanup and preserves already-collected progress during ordinary interruption. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, or `scripts/jig state summary --json`); JSON mode disables that human progress output. Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document, and `scripts/jig mcp` always reserves stdout for MCP framing. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. Human text and TUI presentation are for terminal use and are not stable machine-readable contract output; automation should pass `--json` or use MCP tools.
 
 Contract v4 introduced structured runtime identity through `runtime_version`, and later epochs retain it. The former `jig_version` key remains as a compatibility alias in `info`, `doctor`, and UI snapshots: it contains the legacy generated pin for v2/v3 repositories and is `null` for v4 and later repositories. Doctor runtime data likewise retains deprecated `current_version`, `launcher_version`, and `config_jig_version` aliases alongside the clearer epoch-aware fields.
 
@@ -24,7 +24,7 @@ Contract v4 introduced structured runtime identity through `runtime_version`, an
 
 `scripts/jig codex homes --json` returns a runtime-owned `schema_version: 1` report of local Codex home paths, account identity, plan type, and per-home errors. A home's `status` records stable account state such as `not logged in` or `unknown`; `inspection_error` records account/app-server inspection failure, while `usage_error` records a rate-limit failure after a logged-in account was observed. Both are mirrored in the top-level `errors` array with distinct `kind` values. A logged-out home is a complete observation even when usage was requested: rate-limit usage is not applicable, so an app-server usage failure is not surfaced as `usage_error` and does not change `outcome` to `partial`. Add `--usage` to include every rate-limit bucket and the server-reported durations and reset times. If account inspection succeeds for a logged-in account but usage inspection fails, the report retains the account and records the usage failure. Account and usage data come from the Codex app-server API; Jig does not parse `auth.json`. This output contains local paths and account email addresses and should be handled as user data. Its top-level `representation_lossy` boolean reports whether any non-UTF-8 home path or Codex executable value had to be replaced for JSON display. `scripts/jig codex launch HOME --dry-run --json` and `scripts/jig codex resume SESSION_ID --dry-run --json` are `schema_version: 1` structured launch previews; the latter reports `command: "codex resume"` and includes the injected `resume` and normalized session-ID arguments before caller-supplied arguments. Their `representation_lossy` boolean additionally covers forwarded arguments. Human terminal previews replace control characters before display and explicitly warn when the shown shell command is therefore not launch-equivalent; JSON retains the original string values except for reported non-UTF-8 conversion. A real launch or resume replaces the Jig process on Unix and therefore rejects `--json`; forwarded Codex arguments begin after `--` and retain their original boundaries. On platforms without process replacement, Jig waits for Codex and exits with Codex's shell-compatible status.
 
-`scripts/jig status --json` returns a runtime-owned local aggregate with `schema_version: 2`. Its top-level sections are `repository`, `work`, `loops`, and `errors`. Top-level `ok: true` means inspection completed, while `outcome` is `complete` or `partial`. Dirty repositories and blocked gates are observed facts rather than collection errors. The aggregate schema version is independent of generated `contract_version`.
+`scripts/jig status --json` returns a runtime-owned local aggregate with `schema_version: 2`. Its top-level sections are `repository`, `work`, `loops`, and `errors`. Top-level `ok: true` means inspection completed, while `outcome` is `complete` or `partial`. Dirty repositories are observed facts rather than collection errors. The `work` section is retained for compatibility; its `work.gates` array is always empty because work-gate evaluation was removed. The aggregate schema version is independent of generated `contract_version`.
 
 `scripts/jig info --commands --json` returns the runtime-owned command-availability inventory with `command: "info commands"` and `schema_version: 4`. Its `commands` array follows the visible root-command order and each entry contains `name`, `category`, `status`, `reason_code`, `reason`, and `next_step`. Schema version 4 adds foreground `run` availability and upgrade guidance; schema version 3 added the backend-neutral `migration` command family; schema version 2 grouped migration authoring under `sqlx`, and schema version 1 described the legacy flattened roots. The stable status values are `ready`, `not_configured`, `needs_setup`, and `unavailable`; reason codes are stable within a schema version, while human-facing reason and remediation text may improve without a schema-version change. Status describes whether the root command's primary workflow can dispatch, not whether every argument combination or command-specific preflight will succeed. Setup, status, stop, and diagnostic subcommands or flags can therefore remain usable when the root entry is not ready. Ready entries have null `reason_code`, `reason`, and `next_step` fields.
 
@@ -32,7 +32,7 @@ Contract v4 introduced structured runtime identity through `runtime_version`, an
 
 The built-in `noop-status` workflow keeps `loop` ready without configured custom workflows. In a valid adopted repository, the proxy family is ready when either the current binary includes dev-proxy support or an executable full-footprint `scripts/jig` plus `scripts/install-jig.sh` launcher chain can route `dev` and `proxy` through its feature-enabled profile. It remains ready without configured dev apps because its primary ad-hoc run, alias, certificate, service, and diagnostic workflows do not require dev-app configuration; `jig doctor` separately reports whether dev-proxy integration is configured for the repository. Before adoption, the primary `proxy run` workflow remains `needs_setup`, while contextless status, cleanup, certificate, and service diagnostics may still work. The inventory reports other commands that can run without a repository and marks repository-dependent primary workflows `needs_setup` with `reason_code: "repo_context_unavailable"`. When a repository is discovered but its configuration or generated contract is invalid, commands whose dispatch consults optional repository context are also marked `needs_setup`, even if they can run when no repository exists. In valid context, `repo.context_error` is null; in fallback states, `repo.name` and `repo.root` are null and `repo.context_error` contains the load diagnostic. The inventory is read-only. Vault and Codex readiness are machine-local observations: when Codex marketplaces are configured, collection reads the local Codex configuration and may spend up to five seconds probing the configured Codex binary.
 
-The schema-version 4 `reason_code` values are `agent_readiness_unknown`, `bootstrap_tool_invalid`, `bootstrap_tool_missing`, `codex_marketplace_support_unavailable`, `codex_marketplace_unregistered`, `dev_apps_not_configured`, `dev_proxy_feature_not_built`, `migration_add_tool_invalid`, `migration_add_tool_missing`, `migration_backend_not_configured`, `migration_directory_not_configured`, `repo_context_unavailable`, `repository_contract_upgrade_required`, `sqlx_disabled`, `vault_not_initialized`, and `vault_status_unavailable`. Schema version 3 omitted `repository_contract_upgrade_required`; schema version 2 also omitted `migration_backend_not_configured`; schema version 1 additionally used `schema_dump_tool_invalid`, `schema_dump_tool_missing`, and `schema_dumps_disabled` for the former root-level schema entry. The stable category values are `get_started`, `develop`, `structured_work`, `project_data`, `local_services`, and `agent_automation`.
+The schema-version 4 `reason_code` values are `agent_readiness_unknown`, `bootstrap_tool_invalid`, `bootstrap_tool_missing`, `codex_marketplace_support_unavailable`, `codex_marketplace_unregistered`, `dev_apps_not_configured`, `dev_proxy_feature_not_built`, `migration_add_tool_invalid`, `migration_add_tool_missing`, `migration_backend_not_configured`, `migration_directory_not_configured`, `repo_context_unavailable`, `repository_contract_upgrade_required`, `sqlx_disabled`, `vault_not_initialized`, and `vault_status_unavailable`. Schema version 3 omitted `repository_contract_upgrade_required`; schema version 2 also omitted `migration_backend_not_configured`; schema version 1 additionally used `schema_dump_tool_invalid`, `schema_dump_tool_missing`, and `schema_dumps_disabled` for the former root-level schema entry. The stable category values are `get_started`, `develop`, `structured_work`, `project_data`, `local_services`, and `agent_automation`. The inventory no longer lists `work`; `loop` is now the only command in `structured_work`, whose human label is "Workflows".
 
 An invalid or stale `JIG_REPO_ROOT` remains a blocker for workflows that use strict repository lookup, including the primary `proxy run` workflow. Workflows using tolerant optional-context lookup instead ignore the invalid override, quietly try the current directory, and fall back to no repository when appropriate. When that lookup recovers a valid current repository, the inventory uses it for `dev` and vault readiness even though `repo.name` and `repo.root` remain null because the explicit override is invalid.
 
@@ -70,13 +70,9 @@ Agent-guide check JSON keeps `missing_guides` as an empty compatibility field in
 
 Dev proxy and vault JSON are also runtime-owned. Proxy status may include machine-local health fields such as `pid`, `pid_alive`, `pid_observation`, `health_pid`, `handshake_ok`, `pid_matches_proxy`, `running`, listener addresses, and route URLs; `pid_alive` means positively observed alive while `pid_observation` preserves an `alive`, `absent`, or `uncertain` result. Status and listing commands may perform a loopback HTTP health probe to populate those fields. Strict cross-machine automation should rely on the stable generated command contract instead of treating those runtime diagnostics as a contract schema.
 
-The structured work namespace includes native check gates. Gates are configured in `.jig.toml`, evaluated from receipts, and enforced by `scripts/jig work finish`. They remain runtime-owned because they compose stable execution tools with append-only work state rather than adding new generated contract tools.
-
-`scripts/jig work gates` and `scripts/jig work evidence` include the current source/worktree fingerprint in their runtime-owned JSON so humans and agents can tell whether receipts are fresh. The token covers the committed non-`.agent/` source tree plus non-`.agent/` staged, unstaged, and untracked state. Commits containing only `.agent/` state therefore preserve source freshness. The token is an opaque same-contract-epoch comparison value, not a stable public hash contract; consumers should compare it for equality only while the repository remains on the same contract epoch.
-
 Local development proxy commands are also runtime-owned. `scripts/jig dev`, `scripts/jig dev status`, `scripts/jig dev recover`, `scripts/jig dev stop`, and `scripts/jig proxy ...` manage machine-local processes, ports, routes, certificates, and optional user services. Repository-scoped forms use `.jig.toml`; the contextless selectors use persisted state. These commands are intentionally absent from `.agent/jig-contract.json` because they do not represent repository checks.
 
-Runtime-owned local development commands include `dev`, `dev status`, `dev recover`, `dev stop`, `proxy start`, `proxy stop`, `proxy list`, `proxy prune`, `proxy run`, `proxy alias`, `proxy cert generate`, `proxy cert status`, `proxy cert trust --accept-trust-scope`, `proxy cert untrust --accept-trust-scope`, `proxy service install --accept-service-scope`, `proxy service status`, and `proxy service uninstall`. Bare `dev` launches apps, while its `--replace` option retires only conflicting registered sessions owned by the same canonical repository; it is not a general process takeover option. Foreground `dev` and `proxy run` interruption is structured same-contract-epoch output with `interrupted`, numeric `exit_signal`, named `termination_signal`, and shell `exit_status`; SIGINT, SIGHUP, and SIGTERM map to 130, 129, and 143 on Unix. Builds made with `--no-default-features` keep the contract, MCP, and work-receipt runtime but return clear errors for every `dev` action and `proxy`; the launcher profile probe prevents such a binary from serving `dev` or `proxy` execution.
+Runtime-owned local development commands include `dev`, `dev status`, `dev recover`, `dev stop`, `proxy start`, `proxy stop`, `proxy list`, `proxy prune`, `proxy run`, `proxy alias`, `proxy cert generate`, `proxy cert status`, `proxy cert trust --accept-trust-scope`, `proxy cert untrust --accept-trust-scope`, `proxy service install --accept-service-scope`, `proxy service status`, and `proxy service uninstall`. Bare `dev` launches apps, while its `--replace` option retires only conflicting registered sessions owned by the same canonical repository; it is not a general process takeover option. Foreground `dev` and `proxy run` interruption is structured same-contract-epoch output with `interrupted`, numeric `exit_signal`, named `termination_signal`, and shell `exit_status`; SIGINT, SIGHUP, and SIGTERM map to 130, 129, and 143 on Unix. Builds made with `--no-default-features` keep the contract, MCP, and receipt runtime but return clear errors for every `dev` action and `proxy`; the launcher profile probe prevents such a binary from serving `dev` or `proxy` execution.
 
 `dev status --all` and `dev status --session ID` inspect the selected proxy state directory without repository discovery, including saved roots of deleted repositories and sessions with no hostname. `--all` and `--session` cannot be combined. Every session includes its saved repository name and root. `dev recover --session ID` performs strict metadata-only retirement of one eligible exact record and its exact-owned routes; it never requests process shutdown. Missing IDs return success with zero retired sessions. `dev stop --session ID` selects one record without repository discovery and retains authenticated live-supervisor shutdown and the explicit stop-only `--forget-ambiguous-orphans` repair. Exact selectors never expand prefixes or wildcards, never signal persisted PIDs, and accept `--state-dir` to choose an isolated registry. Bare status and stop remain scoped to the current canonical repository.
 
@@ -207,6 +203,18 @@ Make-backed tools return:
 
 Command-backed tools return the same common fields plus `command_key`, which identifies the `.jig.toml` command key that was executed.
 
+Common usage errors include contextual recovery without executing a correction.
+`--summary` points to the existing `--projection agent-v1` only on commands
+supporting it, otherwise to scoped help. Top-level `contract` points to `check
+contract`. CLI retries are parse-checked, checked against the existing info
+projection policy, and shell-quoted, with private launcher handoff arguments
+omitted. Launcher-backed retries and scoped help name the owning repository's
+absolute `scripts/jig` path, so they work without a global installation and from
+another directory. Direct CLI recovery preserves the invoked executable. Other
+invalid arguments still require attention. These are diagnostic hints, not
+aliases or automatic retries. Standard error envelope fields and exit statuses
+remain unchanged.
+
 ## Dashboard And Status Output
 
 `jig ui` and `jig status --tui` are one unified read-only terminal dashboard. Upgrading from 0.3.0 replaces the browser dashboard and external status providers. Remove retired `[status]` and `[[status.providers]]` tables as described in [Configuration](configuration.md#accepted-key-summary). Callers that still need the 0.3.0 browser transport must stay on that release.
@@ -221,7 +229,7 @@ The full-screen output from `scripts/jig ui` and `scripts/jig status --tui` is h
 | Plan | `ok`, `command`, `schema_version`, `snapshot_kind`, `generated_at_ms`, `basis_epoch`, `detail_observed_at_ms`, `gates_observed_at_ms`, `decisions_observed_at_ms`, `plan`, `body`, `gates`, `decisions`, `receipts`, `limits`, `errors` |
 | Status | `ok`, `command`, `schema_version`, `observed_at_ms`, `outcome`, `repository`, `work`, `loops`, `errors` |
 
-For recorder and plan documents, `ok` is boolean and is `true` for a successfully emitted snapshot; `command` is the string `"ui"`; `schema_version` is the unsigned integer `1`; `snapshot_kind` is the string `"recorder"` or `"plan"`; timestamps and epoch identities are unsigned integers. Observation and `limits` fields are objects, collection fields and `errors` are arrays, and identity/status/filter fields are strings unless their DTO says otherwise. `current_session_id`, `loops`, `body`, and `gates` are object/string-or-null fields and remain present when null. Empty arrays remain present. The Status document instead uses command `"status"`, schema version 2, and `outcome` string `"complete"` or `"partial"`.
+For recorder and plan documents, `ok` is boolean and is `true` for a successfully emitted snapshot; `command` is the string `"ui"`; `schema_version` is the unsigned integer `1`; `snapshot_kind` is the string `"recorder"` or `"plan"`; timestamps and epoch identities are unsigned integers. Observation and `limits` fields are objects, collection fields and `errors` are arrays, and identity/status/filter fields are strings unless their DTO says otherwise. `current_session_id`, `loops`, `body`, and `gates` are object/string-or-null fields and remain present when null. Work-gate evaluation was removed with `jig work`, so the gate fields are retained only for compatibility: the plan document's `gates` is always `null` and its `gates_observed_at_ms` is the retained recorder epoch's observation time for a retained basis and `detail_observed_at_ms` for a fresh read, and recorder `open_plans[].gates` and `open_plans[].gates_error` are always `null`. Empty arrays remain present. The Status document instead uses command `"status"`, schema version 2, and `outcome` string `"complete"` or `"partial"`.
 
 Nested bounded rows serialize as `{"items": [...], "applied": N, "omitted": N|null}`. Bounded text serializes as `{"text": "...", "applied_chars": N, "omitted_chars": N|null}` and counts Unicode scalar values. Recorder and plan root arrays remain ordinary arrays; the root `limits` object maps each root collection name to `{"applied": N, "omitted": N|null}`.
 
@@ -254,7 +262,7 @@ Nested bounded rows serialize as `{"items": [...], "applied": N, "omitted": N|nu
 
 `--timeline-limit 1..1000` controls recorder activity rows and defaults to 120, so the applied `timeline` limit can be below its ceiling. `--timeline-limit` is invalid with plan JSON, and either refresh option is invalid with all UI JSON modes. Argument conflicts use the standard usage envelope and exit status 2. An unknown plan is a command failure with exit status 1.
 
-Each partial collection error is `{"scope": string, "code": string, "subject_id": string|null, "message": string}`. Scopes are `repository`, `state.sessions`, `state.plans`, `state.decisions`, `state.receipts`, `loops`, `gates`, and `body`. Codes are `git_observation_failed`, `git_upstream_comparison_failed`, `git_upstream_output_invalid`, `stream_open_failed`, `stream_read_failed`, `record_too_large`, `record_decode_failed`, `loop_observation_failed`, `gate_observation_failed`, `body_not_found`, `body_unsafe_path`, `body_unsafe_type`, `body_read_failed`, `body_invalid_utf8`, and `unsupported_platform`.
+Each partial collection error is `{"scope": string, "code": string, "subject_id": string|null, "message": string}`. Scopes are `repository`, `state.sessions`, `state.plans`, `state.decisions`, `state.receipts`, `loops`, `gates`, and `body`. Codes are `git_observation_failed`, `git_upstream_comparison_failed`, `git_upstream_output_invalid`, `stream_open_failed`, `stream_read_failed`, `record_too_large`, `record_decode_failed`, `loop_observation_failed`, `gate_observation_failed`, `body_not_found`, `body_unsafe_path`, `body_unsafe_type`, `body_read_failed`, `body_invalid_utf8`, and `unsupported_platform`. The `gates` scope and `gate_observation_failed` code remain valid schema values but no longer occur.
 
 A nonempty `errors` array is partial observation, not command failure: recorder and plan documents retain `ok: true`, preserve usable data, and exit 0 after one complete JSON document is written. Status JSON likewise preserves usable data, exits 0 after successful collection, and changes `outcome` to `"partial"`. Failures before a snapshot can be constructed use the ordinary command-error envelope and a nonzero exit.
 
@@ -273,8 +281,7 @@ match the CLI vocabulary, for example `jig.test` becomes `repo:test` and
 receive deterministic digest suffixes. The projected default verification
 profile includes only read-only check actions. Historical effectful tools that
 were configured as `kind: check` gates, notably `jig.schema_dump`, remain
-addressable actions and retain direct legacy work-gate behavior but are omitted
-from bare repository checks.
+addressable actions but are omitted from bare repository checks.
 
 Contract 6 reads the resolved records directly. A component declares its root,
 adapters, dependency/affected policy, guidance, and field provenance. An action
@@ -334,7 +341,7 @@ unchanged and the additive shape is isolated behind an explicitly versioned
 projection.
 
 Input globs alone do not identify source authority. These otherwise identical
-policies have different reuse behavior:
+policies record different freshness identities:
 
 ```json
 {
@@ -352,8 +359,8 @@ policies have different reuse behavior:
 
 Both may describe the same `inputs`, but the first retains Git placement,
 HEAD, and branch identity while the second depends only on the checked working
-files. Current receipt evaluation remains on the work gate and evidence
-surfaces described below.
+files. Receipts record the resulting identity in `target_freshness`; no check
+execution reuses a recorded receipt.
 
 `jig check --explain` returns `command: "check plan"`, `executed: false`, and a
 `plan` object without running a command or writing a receipt. A newly written
@@ -401,8 +408,9 @@ Cargo context; omitted lists retain legacy behavior. Declarations participate
 in configuration, invocation and replay authority. Unsupported runtimes reject
 the field or variant rather than silently dropping the scheduling promise.
 Resource ownership is machine-local scheduling state, never an evidence
-dependency. An unstarted successful target with `reused_from` references the
-original receipt/run/plan and does not claim a new execution proof. See
+dependency. A resource wait never substitutes an earlier receipt for execution;
+older run records with `reused_from` from the removed `work check` path remain
+readable. See
 [Cargo resource coordination](cargo-resource-coordination.md) for supported
 aliases, partial coordination, deadline and ownership boundaries.
 
@@ -413,20 +421,6 @@ contract. It owns individual loopback endpoints only without a trimmed nonempty
 the tag; omitted declarations keep prior behavior. See
 [browser endpoint coordination](browser-resource-coordination.md) for authority,
 compatibility, external URL and current-readiness limits.
-
-`jig.work_check` accepts optional `phase` (`iteration` or `final`), `explain`,
-and a `rust_focus` object keyed by canonical target strings. The CLI equivalent
-is `work check --phase iteration --rust-focus TARGET=JSON`. Work focus is legal
-only during iteration. Automatic requests bind to the owning open plan's exact
-baseline; explicit requests bind package, target, feature, and test filter choices.
-Both transports share normalization. Phase reports distinguish selected scope,
-`selected_ok`, `final_requirements`, `pending_final_requirements`, and
-`final_gates_ok`; they never confer closure authority. An execution report with
-`ok: false` is retained in MCP `structuredContent` with `isError: true`.
-Explain performs no check or review execution and writes no run or receipt.
-Explicit phase/explain plus projection `agent-v1` is rejected before execution;
-the existing unphased compact completion shape is unchanged. Configuration and
-examples are in [focused Rust checks](configuration.md#iteration-and-focused-rust-checks).
 
 For a selected contract-v7 action that still uses the built-in
 `jig.file_budget` runner, the target also carries one bounded
@@ -604,8 +598,13 @@ silently strand a live-looking handle.
 
 Contract v6 manifest tools are compatibility aliases and are not individually
 advertised or callable over MCP. Contracts v2 through v5 retain their existing
-per-manifest-tool discovery, calls, and response shapes. The bounded
-`jig.work_*` lifecycle tools remain available in every supported epoch.
+per-manifest-tool discovery, calls, and response shapes. The 13 `jig.work_*`
+lifecycle tools were removed without a contract-version bump; calling one returns
+the ordinary `Unsupported tool` JSON-RPC error. `jig.agent_doctor` is the only
+remaining tool outside the repository operations. Successful tool results always
+report `isError: false`; it was previously true only for a failing
+`jig.work_check`. `work_plan_id` remains accepted and links a run to a plan that
+was open before the upgrade.
 
 ## Runtime State
 
@@ -626,13 +625,13 @@ Current JSONL state files:
 
 State readers should tolerate missing files by treating them as empty. JSONL readers should ignore blank lines and fail loudly on malformed nonblank records. Session-start records retain their durable write-time summary, but `summary.recent_sessions` contains shallow event references whose nested `summary` is `null`; historical records that recursively embedded older summaries remain readable. Canonical session readers collapse duplicate IDs with identical event envelopes, as can arise after a line-union merge, and reject the same ID with a conflicting envelope.
 
-A plan `close` record may carry an additive `retirement` object with a `disposition` string, a nonblank `reason`, and an optional `superseded_by` reference. A retired plan is still a closed plan, so `plan_state` stays `open`/`closed` and every existing close record keeps its historical meaning with no `retirement` key. Readers must treat a missing `retirement` as a successful completion and must tolerate a `disposition` value they do not recognize. `scripts/jig work gates` and `scripts/jig work evidence` expose this as a `plan_retirement` object beside `plan_state`, null for a plan that was completed rather than retired.
+A plan `close` record may carry an additive `retirement` object with a `disposition` string, a nonblank `reason`, and an optional `superseded_by` reference. A retired plan is still a closed plan, so `plan_state` stays `open`/`closed` and every existing close record keeps its historical meaning with no `retirement` key. Readers must treat a missing `retirement` as a successful completion and must tolerate a `disposition` value they do not recognize. No current command writes new close records.
 
-Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, normalized `findings`, complete `finding_count`/`findings_truncated`/`findings_digest` metadata, `evaluated_at_ms`, and `valid_until_ms`; older records deserialize with those fields absent. A validity boundary is fresh only while `now_ms < valid_until_ms`, so equality is expired. That boundary is enforced, not merely displayed, by direct target status, work-check batch and scoped evidence, reusable and latest evidence, and archive protection. Historical receipts without the field retain their prior semantics, except new file-budget evidence proving active waivers without a required boundary is unknown rather than indefinitely fresh. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Configured-command timeout, await, cleanup, and capture failures use `evidence.kind = "supervised_command"`, `status = "error"`, and retain the diagnostic in the failed stderr preview. Cancellation after spawn uses the same evidence kind with `status = "cancelled"`; cancellation before spawn records no child receipt, and a work-check batch references only children that actually started. Older receipts without the new evidence or path-summary fields remain readable. A Codex worker receipt uses its separately bounded last-message file as authoritative `stdout_preview`; provider stdout is diagnostic transcript data in additive `evidence.provider_stdout_preview`. `provider_stdout_preview_truncated` reports bounding of that evidence preview, and `provider_stdout_truncated` reports truncation by the process supervisor. The legacy additive `stdout_truncated` evidence field remains an alias for provider-transcript truncation, while `stderr_truncated` continues to describe provider stderr. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
+Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, normalized `findings`, complete `finding_count`/`findings_truncated`/`findings_digest` metadata, `evaluated_at_ms`, and `valid_until_ms`; older records deserialize with those fields absent. A validity boundary is fresh only while `now_ms < valid_until_ms`, so equality is expired. That boundary is enforced, not merely displayed, by archive protection and file-budget adoption/update proof. Historical receipts without the field retain their prior semantics, except new file-budget evidence proving active waivers without a required boundary is unknown rather than indefinitely fresh. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Configured-command timeout, await, cleanup, and capture failures use `evidence.kind = "supervised_command"`, `status = "error"`, and retain the diagnostic in the failed stderr preview. Cancellation after spawn uses the same evidence kind with `status = "cancelled"`; cancellation before spawn records no child receipt. Historical work-check batch receipts reference only children that actually started. Older receipts without the new evidence or path-summary fields remain readable. A Codex worker receipt uses its separately bounded last-message file as authoritative `stdout_preview`; provider stdout is diagnostic transcript data in additive `evidence.provider_stdout_preview`. `provider_stdout_preview_truncated` reports bounding of that evidence preview, and `provider_stdout_truncated` reports truncation by the process supervisor. The legacy additive `stdout_truncated` evidence field remains an alias for provider-transcript truncation, while `stderr_truncated` continues to describe provider stderr. Historical Codex review receipts from the removed `work review` command use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing review. Their receipt `exit_status` is the review verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Historical Codex refinement receipts from the removed `work refine` command use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
 
-Receipt publication shares one lock deadline across current-session lookup and receipt-journal acquisition. Ordinary recording starts a 30-second lock budget after optional Git enrichment and continues finalization after command cancellation so the cancellation outcome can still be recorded. If the locks remain unavailable, recording returns a timeout instead of waiting indefinitely or silently omitting session attribution. Rollback-sensitive operations such as loop maintenance instead pass their existing absolute deadline and cancellation through both lock stages; cancellation aborts publication so provisional state can be restored.
+Receipt publication applies one lock deadline to receipt-journal acquisition. New receipts no longer read the repository-global current-session pointer, so their `session_id` is null. Ordinary recording starts a 30-second lock budget after optional Git enrichment and continues finalization after command cancellation so the cancellation outcome can still be recorded. If the lock remains unavailable, recording returns a timeout instead of waiting indefinitely. Rollback-sensitive operations such as loop maintenance instead pass their existing absolute deadline and cancellation through lock acquisition; cancellation aborts publication so provisional state can be restored.
 
-The active-session pointer is cache state, currently resolved through git as `jig-current-session.txt` and falling back under `.agent/.cache/`. Generated repos should not treat that path as a durable JSONL record. Current runtimes serialize pointer reads and writes through a sibling advisory lock; conditional session teardown compares and clears the pointer while holding that lock. Inspection opens an existing sidecar read-only, waits cancellably, and does not create a missing sidecar for a legacy pointer.
+The active-session pointer is cache state, currently resolved through git as `jig-current-session.txt` and falling back under `.agent/.cache/`. Generated repos should not treat that path as a durable JSONL record. Current runtimes read the pointer through a sibling advisory lock; the commands that set and cleared it were removed with `jig work`, and new receipts do not read it. Inspection opens an existing sidecar read-only, waits cancellably, and does not create a missing sidecar for a legacy pointer.
 
 Worktree-specific loop lease authority applies to workflow execution leases and attempt budgets. PR-manager branch leases instead use `jig/loop/branch_leases.json` below the repository's common Git directory, serializing mutation of one remote branch across linked worktrees; manual and scheduled PR-manager runs validate that repository-common authority before claiming an occurrence, and operators must stop older dispatchers during this writer cutover. GitHub snapshot normalization derives PR head identity strictly from `headRepositoryOwner.login` plus `headRepository.name`, and policy code never falls back to a version-dependent raw composite field. Review-reply idempotency binds the trusted-feedback generation and reply intent in addition to the repair commit. An unexecuted PR retry may clean only a worktree created by that retry; a pre-existing retained checkout remains operator evidence and is never force-removed by the later pre-execution failure.
 
@@ -656,7 +655,7 @@ Manual ticks join this durable safety boundary after acquiring their workflow ex
 
 An authenticated existing PR repair worktree is removed and recreated after branch-head and occurrence reservation preflight; it is never treated as a cache because ignored files and nested repositories are outside ordinary Git cleanup. The path's branch component combines a bounded readable prefix with a digest of the complete branch name, preventing both filesystem component overflow and sanitization collisions. Jig supplies its PR-manager author identity only to the merge or commit command, leaving repository-local identity configuration unchanged. A conflicted `ort` merge validates the worker result against Git's `AUTO_MERGE` tree, so incoming base-branch whitespace is not misclassified as worker output. Immediately before commit, Jig recollects the complete bounded pull-request review-thread snapshot and retains the completed local repair without pushing if the PR head or any actionable thread's membership, trusted-author projection, content generation, or viewer capability differs from the worker snapshot. Before either a later reply or resolution mutation, Jig recollects the complete live review-thread witness and skips the mutation when feedback was edited, added, or resolved after that snapshot. Only GitHub-confirmed viewer-authored marker comments are excluded from the trusted-feedback generation, so trusted human quotations of marker text still advance the witness. A missing or false observed viewer capability skips the corresponding reply or resolution without issuing a known-impossible mutation.
 
-`scripts/jig work append` requires exactly one nonblank progress source through `--body` or `--body-file`. `scripts/jig state summary` focuses its human output on persisted record and event counts, while `scripts/jig work status` presents the same runtime-owned state as an operational work overview. `scripts/jig state diagnose` is read-only; `--deep` adds recursive-session and receipt-payload analysis and a receipt-to-run linkage check. Deep diagnosis joins each receipt `run_id` and each child receipt named by supported `jig.work_check_targets/v1` or `jig.work_check/v2` batch evidence to the active run journal, then to run archives under `.agent/.cache/state-archives/runs-*.jsonl.gz` and manifested run backups under `.agent/.cache/state-backups/` for any run the journal lacks. The `run_linkage` object lists affected run IDs, child receipt IDs, and batch receipt IDs with explicit counts and truncation flags, and distinguishes `missing` (absent from every local source, which does not prove deletion elsewhere), `unverifiable` (damaged journal, unreadable or tampered source, incomplete archived lifecycle, or unrecognized events), `inconsistent` (journal events that do not form a valid lifecycle), and `recoverable_from_backup` (an exact manifested backup holds the lifecycle). Recovery status proves exact-source availability only: its structured facts require manual destination preflight and current-journal comparison, expose nonterminal runs and held worker leases that block whole-stream replacement, and diagnosis does not emit a directly runnable restore command. Live and completed journal lifecycles, verified complete archived lifecycles, and receipts without a run reference are never reported as orphans. Diagnosis never reconciles runs, creates leases, caches, or indexes, or rewrites a stream; a failed or truncated scan yields `incomplete` rather than `clean`. Shallow mode reports the check as `not_checked`. `ok` reports command completion only; integrity is summarized in the `integrity` object. Recommendations preserve existing evidence: export affected receipts and record a decision naming the affected IDs, or restore a verified exact backup after preserving newer appends. They never fabricate `queued`, `target_completed`, or `completed` events, and rebuilding derived caches never restores missing history. Diagnostics also report disk usage from local maintenance artifacts under `.agent/.cache/state-backups/` and `.agent/.cache/state-archives/`. `scripts/jig state compact sessions --dry-run` validates and projects a legacy-session rewrite without changing state. Apply mode preserves root summaries and ordered direct references, removes recursively embedded summaries, validates the result, and first writes an exact gzip backup and checksum manifest under ignored `.agent/.cache/state-backups/`. `scripts/jig state restore --backup <directory-or-manifest>` verifies that artifact before restoring the exact pre-compaction stream.
+`scripts/jig state summary` returns the runtime-owned state summary that the removed `work status` presented; its human output focuses on persisted record and event counts. `scripts/jig state diagnose` is read-only; `--deep` adds recursive-session and receipt-payload analysis and a receipt-to-run linkage check. Deep diagnosis joins each receipt `run_id` and each child receipt named by historical `jig.work_check_targets/v1` or `jig.work_check/v2` batch evidence to the active run journal, then to run archives under `.agent/.cache/state-archives/runs-*.jsonl.gz` and manifested run backups under `.agent/.cache/state-backups/` for any run the journal lacks. The `run_linkage` object lists affected run IDs, child receipt IDs, and batch receipt IDs with explicit counts and truncation flags, and distinguishes `missing` (absent from every local source, which does not prove deletion elsewhere), `unverifiable` (damaged journal, unreadable or tampered source, incomplete archived lifecycle, or unrecognized events), `inconsistent` (journal events that do not form a valid lifecycle), and `recoverable_from_backup` (an exact manifested backup holds the lifecycle). Recovery status proves exact-source availability only: its structured facts require manual destination preflight and current-journal comparison, expose nonterminal runs and held worker leases that block whole-stream replacement, and diagnosis does not emit a directly runnable restore command. Live and completed journal lifecycles, verified complete archived lifecycles, and receipts without a run reference are never reported as orphans. Diagnosis never reconciles runs, creates leases, caches, or indexes, or rewrites a stream; a failed or truncated scan yields `incomplete` rather than `clean`. Shallow mode reports the check as `not_checked`. `ok` reports command completion only; integrity is summarized in the `integrity` object. Recommendations preserve existing evidence: export affected receipts and record a decision naming the affected IDs, or restore a verified exact backup after preserving newer appends. They never fabricate `queued`, `target_completed`, or `completed` events, and rebuilding derived caches never restores missing history. Diagnostics also report disk usage from local maintenance artifacts under `.agent/.cache/state-backups/` and `.agent/.cache/state-archives/`. `scripts/jig state compact sessions --dry-run` validates and projects a legacy-session rewrite without changing state. Apply mode preserves root summaries and ordered direct references, removes recursively embedded summaries, validates the result, and first writes an exact gzip backup and checksum manifest under ignored `.agent/.cache/state-backups/`. `scripts/jig state restore --backup <directory-or-manifest>` verifies that artifact before restoring the exact pre-compaction stream.
 
 `scripts/jig state archive --before <YYYY-MM-DD|unix-ms>` writes eligible old receipts as gzip JSONL under ignored `.agent/.cache/state-archives/` and rewrites `receipts.jsonl`. With explicit `--include-runs`, it also writes completed run-event groups to a separate artifact and rewrites `runs.jsonl`. Receipt evidence and run history linked to currently open plans remain active. Apply mode first reconciles an abandoned nonterminal run to `blocked` when its stable worker lease proves that no worker remains; ordinary foreground execution errors also terminalize their accepted run before returning. Run archival then refuses while any known run is nonterminal so rewriting cannot invalidate a live reader's durable byte cursor. A read-only preview never performs reconciliation and therefore reports abandoned runs until inspection or apply mode repairs them. Applying both streams prevalidates both and archives the harder run journal first; if the subsequent receipt operation fails, the error identifies the completed run artifact and exact recovery backup. Run archive and restore prevalidation applies the same complete queued-plan structure contract as execution, including unique targets, complete execution-layer coverage, and dependency ordering; structurally invalid hand-edited or cross-version journals are rejected before any replacement. Before each replacement Jig creates a complete manifested stream backup under `.agent/.cache/state-backups/`; `state restore --backup ...` recovers that exact stream's pre-archive bytes and physical order. A changing run-journal restore refuses while any current run is nonterminal or any current run worker still holds its lease; an identical checksum no-op remains safe. Use `--dry-run` to validate the selected streams and inspect counts without mutation. `scripts/jig state export receipts --before <cutoff> --output <file.jsonl.gz>` writes selected receipt records without changing active state and refuses to replace an existing destination. Legacy `.agent/state/archive/` files remain untouched and appear in diagnostics.
 
@@ -664,7 +663,7 @@ Compaction and archiving change only the current working-tree streams. They neve
 
 Applying compaction, archive rewrites, and restore require a writer cutover from pre-cache-lock Jig runtimes: stop older Jig processes before mutation. Current runtimes serialize on the repository state lock, while a legacy writer already waiting on a pre-opened inode cannot safely follow an atomic replacement. Keep the newest recovery backup until the rewrite is verified, copy long-lived artifacts outside `.agent/.cache/`, and remove obsolete cache backups or archives; diagnostics report their separate disk usage.
 
-Structured work commands use the `jig.work_*` CLI and MCP namespace, but state-operation receipts keep their historical tool names for compatibility with existing receipt history and filters:
+The removed work commands used the `jig.work_*` CLI and MCP namespace, but their state-operation receipts keep their historical tool names and remain readable for compatibility with existing receipt history and filters:
 
 - `jig.session_start`
 - `jig.session_end`
@@ -693,74 +692,54 @@ Doctor is the only public consumer in this foundation milestone. It validates JS
 
 Native task mutation is intentionally absent. A later `jig beads` writer must preserve fields it does not own, publish a complete snapshot atomically, serialize ownership handoff with `br`, and report divergent state instead of assuming ordinary auto-import performs a three-way merge. Claim, backlink, comment, and close behavior will be Jig operations with their own acceptance policy; they are not promised to emulate every `br` behavior.
 
-## Work Gates
+## Removed Work Commands
 
-Common usage errors include contextual recovery without executing a correction.
-`work start --description` points to `--body`; `work status --plan-id ID` points
-to that explicit plan's `work gates` inspection. `--summary` points to the existing
-`--projection agent-v1` only on commands supporting it, otherwise to scoped help.
-Top-level `contract` points to `check contract`. A single known check target
-passed to `work check --tool` points to `check COMPONENT:ACTION --plan-id ID`;
-ambiguous or unknown target/tool combinations point to selection help.
-CLI retries are parse-checked, checked against the existing info projection
-policy, and shell-quoted, with private launcher handoff arguments omitted.
-Launcher-backed retries and scoped help name the owning repository's absolute
-`scripts/jig` path, so they work without a global installation and from another
-directory. Direct CLI recovery preserves the invoked executable.
-Other invalid arguments still require attention; no active
-plan is guessed. These are diagnostic hints, not aliases or automatic retries.
-Standard error envelope fields and exit statuses remain unchanged.
+`jig work` and its 13 subcommands (`goal`, `start`, `append`, `check`, `gates`,
+`evidence`, `review`, `refine`, `decide`, `receipts`, `status`, `finish`, and
+`retire`) were removed without a contract-version bump. A hidden `work` stub
+remains only so every former invocation, including `jig work --help`, fails as a
+usage error with exit status 2 and the message "`jig work` was removed; validate
+changes with `jig check COMPONENT:ACTION` and inspect recorded state with `jig
+state summary`". In `--json` mode it writes the standard `ok: false`,
+`error.kind: "usage"` envelope. `jig state summary` returns the same state
+summary `jig work status` returned. The `partial_completion` error data that
+`work finish` and `work retire` reported no longer occurs in CLI JSON or MCP
+errors. The matching MCP tools are covered in
+[MCP Repository Operations](#mcp-repository-operations).
 
-The explicit CLI `--projection agent-v1` option on `work check`, `work gates`,
-and `work evidence` selects a shared strict compact result. MCP selects the same
-result through `mcp --surface agent-v1`; work-tool input schemas do not change.
-Omitted selection and `standard` preserve existing response and descriptor
-shapes. Unknown CLI selections are rejected before the operation starts.
+Work-gate evaluation is removed everywhere, but the JSON shapes that carried it
+are unchanged: `jig status` keeps its `work` object with `work.gates` always
+`[]`, and `jig ui` plan and recorder documents keep their `gates` fields as
+`null` (see [Dashboard And Status Output](#dashboard-and-status-output)). The
+`work.gates.*` and `gates` error scopes and the `gate_observation_failed` code no
+longer occur. `jig status --freshness-timeout-ms` is still accepted for
+compatibility but is hidden and ignored; it only bounded gate evaluation.
 
-The compact result reports `activity` (execution versus evidence reuse),
-current gate `status` and `freshness`, `observation` diagnostics, and
-`finish_ready`. Inspection `ok` means observation succeeded, while check `ok`
-reports the selected check result; neither substitutes for `finish_ready`.
-Failed compact checks return their structured summary with a nonzero CLI exit.
-MCP preserves that summary in `structuredContent` and sets `isError: true` for
-an agent-v1 work check whose `ok` is false.
-Invalid requests, recording errors and cancellations retain ordinary error
-behavior. Required reviews and unsupported/external policies remain visible,
-without acquiring approval or launching reviews automatically.
+Receipt reuse is removed with it. Reuse only ever happened inside `jig work
+check`, through its reuse-after-resource-wait path and `reused_from` references;
+`jig check`, `jig run`, and MCP `jig.execute_run` never reused receipts and still
+do not. Every check run executes its targets. Receipts in
+`.agent/state/receipts.jsonl` and their `target_freshness` metadata are still
+recorded, and older reused-evidence and work-check batch records remain readable.
 
-Previews retain at most 50 gates, 50 target rows across those gates, and 50
-activity rows. Full counts and truncation flags accompany those previews;
-readiness evaluates every required gate, including omitted rows. Reasons and
-observation messages are limited to 256 Unicode characters. `next_step`,
-`evidence`, and `receipts` contain literal argv plus a read-only flag, with
-shell-safe human rendering. Unknown observation yields read-only recovery.
-Detailed evidence remains reachable using the emitted standard CLI commands
-or standard-surface MCP. The summary shares one gate observation across its
-rendered fields; it neither persists nor caches closure authorization.
-`observed_at_ms` is diagnostic, and `work finish` independently revalidates
-source, configuration and evidence under its existing execution lease.
+`.jig.toml` `[work]` is still parsed and validated strictly, so existing
+repositories load unchanged and the execution-authority digest does not change.
+`receipt_metadata` and `tracker` keep working. `checks` and `gates` still define
+the default check profile for legacy contract v2–v5 repositories and adoption's
+gate preview; `iteration_profile` and `refinements` are accepted with any value but
+ignored, and `jig update` drops them.
+Generated repositories still render `[[work.gates]]`. See
+[Configuration](configuration.md) for the accepted keys.
 
-`work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. Each explicitly required target uses its latest original receipt in the same work plan, ordered by completion time then receipt ID. A newer failure or unverifiable result supersedes an older pass. Epochs 6–7 also select the latest receipts for execution dependencies. Epoch 8 validates implicit dependencies through the selected target's original execution proof; a dependency that is explicitly required still uses its own latest receipt. Locally recorded receipts from the former unreleased epochs 9 and 10 remain readable with their original proof shapes, but v9 and v10 repository contracts are rejected. Current authority and time-validity checks follow the recorded receipt epoch. A profile may combine current receipts from separate runs; its aggregate `run_id` is null in that case, while every target retains its actual `run_id` and `receipt_id`. Archive protection retains the latest target outcomes, including failures and expired results, so removing history cannot reveal an older pass.
+`--plan-id` (on `check`, `run`, `migration add`, `sqlx`, and similar commands)
+and MCP `work_plan_id` are still accepted and still link runs and receipts to a
+plan recorded before the upgrade, but no command can open, append to, decide on,
+finish, or retire a plan. Plans that were open at upgrade stay open: `jig
+status`, `jig state summary`, and `jig ui` still list them, and `state archive`
+keeps protecting their receipts and runs. Plan, session, and decision streams
+and `.agent/plans/*.md` remain readable.
 
-`scripts/jig work check --plan-id ...` executes missing, failed, stale or unknown targets, their normal execution dependencies, and required dependents invalidated by those executions. It reuses fresh independent passes. Final validation reassesses all required targets and records `jig.work_check_targets/v1` evidence referencing their original receipts with `executed`, `not_started`, or `reused` disposition derived from the actual selected receipt and target-run result. The result exposes `target_evidence` and `target_validation_receipt_id`; when all targets are reused, `plan` and `run` are null and `results` is empty. Use `scripts/jig check COMPONENT:ACTION --plan-id ...` to force native target execution. Explicit `work check --gate ID` forces a configured native evidence or legacy check gate, including optional gates. Multiple gate IDs may mix those kinds; native targets and their prerequisites execute once per invocation even when selectors overlap. All gate IDs and native selectors are resolved before any child starts; unknown, unsupported, and review gates are rejected. Only selected native targets are assessed in the returned target batch; a successful partial selection does not satisfy unselected required gates or authorize `work finish`. CLI and MCP `gates` use the same selection semantics. Contract-v6-and-later templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only and cannot be combined with gate IDs. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
-
-Contract 5 and later check gates may declare strict `paths`, `paths_ignore`, and `reuse` policy. Work-plan open records an immutable commit or empty-tree baseline. Scoped checks compare that baseline with the current staged, unstaged, untracked, and committed inputs; their evidence records applicability, gate signature, scope fingerprint, and bounded changed-path metadata. A non-applicable gate closes with explicit evidence rather than a synthetic pass. Reuse is opt-in and accepts only a direct successful execution with the exact current gate and input identity; failed, cancelled, malformed, mutating, or transitively reused batches supersede older proof instead of revealing it. `work check --gate ID` forces a named check to execute while retaining its applicability facts.
-
-`scripts/jig work gates --plan-id ...` reports gate status from the latest compatible evidence for each gate on any existing plan, including a closed plan. `scripts/jig work evidence` presents the same gate evidence as a human inspection report with target/profile identity, run and receipt ids, input match status, changed paths, and stale reasons. Latest evidence entries expose `tool`, `target`, or `profile` for execution evidence and `skill` for review evidence. For an evidence gate, the gate-level `target` is the canonical `component:action` selector string, while each member of its `targets` array carries the structured `{component, action}` receipt identity; profile gates use the same structured member rows and expose their selector in `profile`. A check, target, or profile reference that no longer resolves is an in-band `unsupported` gate with a reason, so read-only gate and open-plan status remain available; contract validation and execution still reject it. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; callers must read `overall`, `gates_ok`, and each gate `status` to detect blocked work. Receipt `changed_paths` are bounded repo-relative previews collected from `git status --porcelain=v1 -z`; they include untracked filenames but exclude `.agent/**`. These commands print human-readable output by default; pass global `--json` for structured automation output.
-
-`scripts/jig work finish --plan-id ...` fails when any required gate is missing, failed, stale, unknown, or unsupported. Older `work.checks` entries are still accepted for compatibility and backfill missing required check gates during migration. If the same tool is declared in `work.gates`, that explicit gate entry is authoritative.
-
-`scripts/jig work retire --plan-id ... --disposition <cancelled|superseded|duplicate|obsolete> --reason ...` is the only public way to close a plan that will not be delivered. It requires a structured disposition and a nonblank reason, accepts an optional `--superseded-by` reference to the plan or issue that replaces the work, and evaluates no required gates: it never executes a gate and never records successful gate evidence. Retirement uses the same exclusive plan-close lease, open-state recheck, and linked-run rejection as `work finish`, so it rejects an unknown plan, an already-closed plan, and a plan with an active linked repository run. `work finish` keeps its existing evidence-gated behavior; there is no force flag and no other bypass of required gates.
-
-`scripts/jig work finish` and `scripts/jig work retire` end a session only when durable state proves that session opened the named plan, using the plan's `jig.plans_open` receipt. Work start binds that receipt to the session created by the same operation instead of sampling the mutable current-session pointer. An unrelated current session is left active; each result's `session_status` object reports `action` (`ended`, `left_active`, or `none`), the proven `owner_session_id`, the `current_session_id`, and a human `detail`. The MCP tools return the same result shapes.
-
-Plan closure, closure-receipt publication, and session teardown are separate writes. If a later step fails after the close event was confirmed, `work finish` and `work retire` still return failure and explicitly report that the plan is already closed. CLI JSON adds `partial_completion` to its error envelope; MCP adds the same object at `error.data.partial_completion`. It contains `plan_id`, `plan_state: "closed"`, `close_event_id`, retirement metadata when applicable, `failed_stage`, receipt publication status, and session-teardown status. Successful closure results also expose `plan.close_event_id`.
-
-A receipt-publication failure reports receipt status `not_recorded` if no append was attempted, or `unknown` if bytes may have been written, and session teardown `not_attempted`. A later session-teardown failure reports the closure receipt as `recorded` with its ID and session teardown as `unknown`, because session state may already have changed. These errors retain the underlying cause and provide read-only `work status` and `work receipts --plan-id ...` inspection commands. `retry_safe` is false: automatic finalization recovery is not supported, and repeating finish or retire remains rejected without another close event. Inspect persisted state before repairing the failed finalization step; the error does not imply rollback. Failures before a confirmed close are ordinary errors and do not carry this partial-completion claim.
-
-Fresh legacy check evidence means the committed non-`.agent/` source tree and non-`.agent/` worktree projection did not change while `work check` ran and still match the current source. At epochs 6–7, fresh target evidence additionally requires the receipt's contract digest and target input digest to match the currently resolved catalog and target. Target input digests conservatively cover the same complete source/worktree identity plus declared input patterns, so an unrelated local change can invalidate evidence; they are not cache keys. Append-only `.agent/` state and evidence-only commits are outside that identity. Missing target metadata produces `unknown`; a known mismatch produces `stale`. Generated outputs should therefore be committed, ignored, or settled before required gates are used as finish evidence. If a check creates expected files, review those files and rerun `work check` to record fresh evidence. Epoch 8 target evidence uses the separate identity and original execution proof described in [Target Freshness Policy v1](#target-freshness-policy-v1-design); explicitly exhaustive targets can retain freshness after unrelated source edits, and audited working-file targets can reuse evidence after staging or committing unchanged files. Legacy digest fields and global execution/adoption safety retain their existing meaning.
-
-After upgrading an in-flight repo from a Jig version that recorded receipts without `worktree_fingerprint` or target digests, rerun `scripts/jig work check --plan-id ...` before `scripts/jig work finish --plan-id ...`. Older receipts deserialize, but their gate freshness is `unknown`.
+### Tracker receipt metadata
 
 A repository that uses the root `.beads/` directory only for issue tracking can
 explicitly classify it as receipt metadata:
@@ -770,19 +749,18 @@ explicitly classify it as receipt metadata:
 receipt_metadata = ["beads"]
 ```
 
-This is an ownership declaration that no gated application, test, build or
-policy command consumes that tracker store. Leave it unset if a check validates
-tracker content. The conservative default includes `.beads/`; opting in excludes
-only that root store from dirty, staged and committed freshness projections.
-Changing this configuration invalidates previous evidence. Arbitrary paths and
-globs are rejected. Source, packaged documentation, runner and configuration
-changes still invalidate receipts, as do nested fixture directories named
-`.beads`. Changed-path previews still report tracker changes for inspection.
+This is an ownership declaration that no application, test, build or policy
+check consumes that tracker store. Leave it unset if a check validates tracker
+content. The conservative default includes `.beads/`; opting in excludes only
+that root store from dirty, staged and committed freshness projections. Changing
+this configuration changes the freshness identity of later receipts. Arbitrary
+paths and globs are rejected. Source, packaged documentation, runner and
+configuration changes still change recorded freshness, as do nested fixture
+directories named `.beads`. Changed-path previews still report tracker changes
+for inspection.
 This option is separate from `repository.affected_ignore`, which only affects
 target selection and never authorizes freshness exclusions. It does not turn
 target input digests into per-target cache keys.
-
-Unknown non-`check` gate kinds are parsed and reported as unsupported. Required unsupported gates block finish.
 
 ## Target Freshness Policy v1 (Design)
 
@@ -795,7 +773,14 @@ See [receipt integration](target-freshness-integration.md) and the
 Normal rendering and the source repository use epoch 8. It combines the original
 unreleased freshness and source-state work into one release epoch.
 
-### Contract epoch 8: working-file receipt reuse
+Work-gate evaluation and receipt reuse were removed with `jig work` (see
+[Removed Work Commands](#removed-work-commands)). Receipts still record the
+`target_freshness` metadata specified here, but no check execution reuses a
+receipt. Passages below about gate evaluation, `work check` reuse, inspection
+deadlines, and plan closure describe the removed runtime and remain as the design
+record for metadata that existing receipts carry.
+
+### Contract epoch 8: working-file source state
 
 Epoch 8 adds optional `ActionSpec.source_state` with values `git` and `worktree`.
 Omission means `git`. Newly generated exact root Cargo formatting checks
@@ -820,7 +805,7 @@ Use `worktree` only for commands whose result does not depend on Git placement,
 HEAD, branch, history, or a Git comparison. Keep `git` for commands that read those
 inputs. All native actions reject `worktree`, preserving their existing native
 configuration and prepared comparison authority. This opt-in does not make an
-arbitrary Git-aware command safe to reuse.
+arbitrary Git-aware command independent of Git.
 
 For example, an audited command that reads only these working files may declare:
 
@@ -848,19 +833,13 @@ unobservable inputs, races and exhausted collection limits never establish
 freshness.
 
 Edits, additions, deletions, renames, executable-mode changes and type replacements
-remain source changes. Staging or committing identical files may reuse a passing
-receipt only if configuration, runner, invocation, dependency identities, original
-execution proof and effective validity also remain current. A Git-sensitive
-dependency can therefore still invalidate a worktree-sensitive dependent.
+remain source changes. Staging or committing identical files leaves a worktree
+target's recorded source identity unchanged; configuration, runner, invocation,
+dependency identities, original execution proof and effective validity remain
+separate parts of its recorded freshness. A Git-sensitive dependency can
+therefore still change a worktree-sensitive dependent's identity.
 Freshness receipts may include a diagnostic source-content digest that excludes
 HEAD and branch identity without changing the authoritative source identity.
-When only Git identity changes, inspection reports `git_identity_changed` and
-still marks the target stale. Changed observed inputs report
-`direct_input_changed`; older receipts without the diagnostic digest use the
-conservative `source_changed` reason when they cannot prove which changed.
-For tracked Jig evidence, close a final-ready plan before committing only
-`.agent/state/` files; [the closure sequence](target-freshness-integration.md#closing-a-plan-with-tracked-jig-evidence)
-also applies to native Git checks.
 
 Use profile membership for independent checks that must all pass. Reserve action
 `depends_on` for actual execution prerequisites; an unrelated policy receipt
@@ -868,13 +847,13 @@ should not become a test prerequisite. Generated test, formatting, contract and
 file-budget checks already follow this profile model. Authored dependencies are
 preserved during updates and need review by the repository owner.
 
-Use an epoch-8-compatible runtime to update, then run `work check` to record
+Use an epoch-8-compatible runtime to update, then run `jig check` to record
 new epoch-8 receipts. Epoch-7 repositories retain their existing semantics;
-old receipts remain readable but cannot satisfy the new epoch's identity.
-Changing `source_state` also requires new evidence. No historical record is
-rewritten. Submitted execution plans, before/after mutation checks and adoption
-transactions retain their complete Git/source safety checks. Worktree policy
-changes later receipt reuse, not those execution safeguards.
+old receipts remain readable without the new epoch's identity. Changing
+`source_state` changes the identity recorded by later receipts. No historical
+record is rewritten. Submitted execution plans, before/after mutation checks and
+adoption transactions retain their complete Git/source safety checks. Worktree
+policy changes only the recorded source identity, not those execution safeguards.
 
 ### Version and completeness declaration
 
@@ -887,9 +866,9 @@ action type.
 
 For the epoch-8 cutover, source configuration, resolved manifests, renderer,
 loader and launcher capabilities use epoch 8 together. Existing repositories
-retain their recorded epoch until updated with a compatible runtime. Rerun `work
-check` after upgrading: receipts without new metadata remain readable but are
-unknown at epoch 8.
+retain their recorded epoch until updated with a compatible runtime. Rerun checks
+after upgrading to record the new metadata; receipts without it remain readable
+but are unknown at epoch 8.
 No historical receipt or identifier is rewritten. The target identity format
 has independent `schema_version: 1` and distinct digest domains from the existing
 `jig-target-input-v1` and `jig-target-input-v2`.
@@ -1110,7 +1089,7 @@ These are opaque equality tokens within the supported epoch and schema, not
 artifact cache keys. Check metadata presence, then decode epoch, schema, and
 domain before comparing digest values. Missing new metadata is `unknown` with
 `legacy_metadata`. A recognized, decodable older epoch/schema/domain is `stale`
-with `authority_version_changed`; rerun `work check` under the current epoch.
+with `authority_version_changed`; rerun the check under the current epoch.
 An unrecognized or newer unsupported version/domain is `unsupported` with
 `unsupported_authority` and requires a compatible reader before rerunning.
 Never compare digest bytes across versions unless a later version explicitly
@@ -1137,49 +1116,31 @@ conflicting, missing, changed, or oversized required original cannot supply proo
 Conflicting envelopes make their receipt ID permanently ambiguous for that
 snapshot. Reject every selected or transitive dependency original using that ID;
 unrelated historical IDs do not invalidate otherwise unambiguous originals.
-Read-only status, gates, and evidence inspections default to an earlier two-second
-deadline on the entire new freshness collection/comparison phase, including
-dependency proof resolution. At epoch `E`, their CLI surfaces accept
-`--freshness-timeout-ms`, and corresponding MCP inspection requests accept
-`freshness_timeout_ms`, with an integer range of 1 through 30,000 and a default
-of 2,000. Invalid values are request errors. Report the effective deadline with
-`collection_limit` diagnostics; suggest rerunning the inspection with 30,000 ms
-when the default expires. Changing this request-only budget does not change
-repository configuration or receipt identity and does not narrow the proof.
-
-`work check` uses the 30-second ceiling both to record evidence and for any
-post-execution freshness evaluation. `work finish` also evaluates required gates
-under that ceiling; it does not inherit the two-second inspection default.
-In every path an earlier caller deadline still wins. On expiry return `unknown`
-with `collection_limit` and never silently retry with a different policy or
-compare partial results. Existing unrelated command work, including legacy plan
-change scans, retains its own limits. Aggregate status/dashboard requests share
-one new-phase allowance across their plans. Recording carries resource counters
-and cumulative observation time across before/after target observations; time
-spent executing a target is excluded. Archive maintenance uses its writer-locked
-streaming retention scan independently of these inspection ceilings, so an
-oversized journal can still be shrunk without deleting required originals.
-Consequently, later plans in an aggregate inspection can report a collection
-limit even when inspecting that plan alone succeeds. Per-plan collection counters
-in that aggregate are cumulative. Use `work gates --plan-id ...` to inspect one
-plan independently. Active journal growth also spends the shared entry and byte
-allowance; archive eligible old receipts when that history makes inspection too
-large. A longer timeout does not increase any resource ceiling.
+Recording uses the 30-second ceiling for its freshness collection; an earlier
+caller deadline still wins. On expiry return `unknown` with `collection_limit`
+and never silently retry with a different policy or compare partial results.
+Existing unrelated command work retains its own limits. Recording carries
+resource counters and cumulative observation time across before/after target
+observations; time spent executing a target is excluded. Archive maintenance
+uses its writer-locked streaming retention scan independently of these ceilings,
+so an oversized journal can still be shrunk without deleting required originals.
+A longer timeout does not increase any resource ceiling. The two-second
+read-only inspection default and its `--freshness-timeout-ms` and MCP
+`freshness_timeout_ms` overrides applied only to the removed gate and evidence
+inspections; `jig status --freshness-timeout-ms` is still accepted but ignored.
 If exhaustive source collection remains impractical even within 30 seconds,
 authors can explicitly restore `inputs_policy = "whole_repository"` on affected
-actions, prepare new plans, and rerun checks. This changes repository authority
-and invalidates existing evidence; it is not an automatic or free fallback.
-The rollout measurements below must exercise each command's budget and remedy.
+actions and rerun checks. This changes repository authority; it is not an
+automatic or free fallback.
 
 Bracket collection with source and configuration observations and revalidate
 file identity/type/size/metadata around reads. Any observed race, disappearing
 path, permission error, Git failure, unsupported path encoding, exhausted limit,
 or incomplete cleanup yields `unknown` with a specific collection reason.
 Sharing a successfully observed file within one evaluation is allowed; persistent
-caching and performance shortcuts require separate evidence. Status/gate reads
-return these failures in-band and block finish. If collection prevents safe
-planning, execution fails before acceptance; a post-execution collection failure
-must be recorded as unusable evidence, never a successful reusable proof.
+caching and performance shortcuts require separate evidence. If collection
+prevents safe planning, execution fails before acceptance; a post-execution
+collection failure must be recorded as unusable evidence, never a successful proof.
 
 The proposed runtime `TargetFreshness` result separates identity validity from
 the receipt's pass/fail conclusion. It contains `status`, bounded `reasons`,
@@ -1437,10 +1398,9 @@ receipts:
 | A dependency proof entry has no original receipt, or names a failed original | The dependent is unknown with `dependency_proof_missing` or `dependency_proof_invalid`; matching dependency digests cannot supply proof |
 | Repository/native runner authority changes between preparation, launch, and completion | Execution evidence is unusable even if the target's other inputs match |
 | Only `.4.2` is delivered, before receipt/gate integration | Existing epoch and conservative gates remain active; epoch `E` is limited to development fixtures |
-| New identity metadata uses a recognized older epoch/schema/domain | Stale with `authority_version_changed`; rerun `work check`. A legacy receipt without this metadata remains unknown |
+| New identity metadata uses a recognized older epoch/schema/domain | Stale with `authority_version_changed`; rerun the check. A legacy receipt without this metadata remains unknown |
 | New identity metadata uses an unreadable epoch/schema/domain, or mixed unknown/stale targets are present | Unsupported authority is explicit; otherwise existing missing/stale/unknown precedence is preserved; `freshness_reasons` carries machine-readable codes |
 | A resolved gate contains a failed target and an unreadable-authority target | Gate outcome is failed; aggregate freshness is unsupported; reasons retain both targets |
-| Complete recording under 30 seconds, but exceed the two-second default on a later inspection | Inspection reports unknown with the effective deadline and the explicit 30,000 ms retry; work-check post-evaluation and work finish use the 30-second ceiling with unchanged authority |
 | Exceed the absolute 30-second ceiling, or explicitly revert an action to whole-repository inputs policy | Collection remains unknown; a configuration revert requires new plans and rerun evidence, never reuse across the authority change |
 | Reach a recorded validity boundary or lose a required boundary | Stale at equality, unknown when required metadata is missing |
 | An implicit dependency's original execution/reuse evidence expires | The dependent is stale at the inherited earliest boundary; reuse cannot extend it |
@@ -1494,8 +1454,8 @@ gate fixture for the read-only example, alongside the existing effectful-depende
 rejection regression, and pin both freshness and outcome precedence. Test the
 per-command deadlines and explicit inspection override, plus legacy receipts
 inside epoch-`E` repositories. Both delivery
-tasks must build the development binary, run applicable `scripts/jig work check`
-gates through `JIG_DEV_BIN`, and finish backend changes with `scripts/jig check test`.
+tasks built the development binary, ran the then-current work-check gates
+through `JIG_DEV_BIN`, and finished backend changes with `scripts/jig check test`.
 The integration notes and retained measurements record the implementation,
 review, and qualification evidence for these delivery requirements.
 

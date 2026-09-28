@@ -60,7 +60,6 @@ pub(super) fn execute(
             work_plan_id: plan_id,
             record_receipts: options.record_receipt,
             fail_fast: true,
-            reuse_after_resource_wait: false,
             alias_override: Some(ExecutionAliasOverride {
                 target: target.clone(),
                 tool_name: tool.name.clone(),
@@ -119,7 +118,7 @@ pub(super) fn execute(
         return Ok(ManifestToolExecutionOutcome::Cancelled(response));
     }
     let failure = manifest_tool_result_failure(&response)?.map(|(_, message)| message);
-    receipt_id_for_failure_mode(options.failure_mode, failure, Ok(result.receipt_id.clone()))?;
+    receipt_id_or_preserve_tool_error(failure, Ok(result.receipt_id.clone()))?;
     Ok(ManifestToolExecutionOutcome::Completed(response))
 }
 

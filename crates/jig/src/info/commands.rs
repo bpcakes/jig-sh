@@ -170,7 +170,6 @@ pub(super) fn info_with_capabilities(
         ready_command(root_commands::FILE_BUDGET),
         ready_command(root_commands::STATUS),
         ready_command(root_commands::UI),
-        ready_command(root_commands::WORK),
     ]);
     // `noop-status` is built in and remains available when no custom workflow
     // is configured or every configured custom workflow is disabled.
@@ -254,7 +253,6 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         repo_context_command_with_next_step(root_commands::FILE_BUDGET, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::STATUS, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::WORK, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::LOOP, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::MIGRATION, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::SQLX, repo_context_next_step),

@@ -71,10 +71,6 @@ impl IndexedTargetReceipts {
     pub(super) fn selected(&self) -> &BTreeMap<TargetId, TargetReceiptStatus> {
         &self.selected
     }
-
-    pub(super) fn into_selected(self) -> BTreeMap<TargetId, TargetReceiptStatus> {
-        self.selected
-    }
 }
 
 #[cfg(test)]

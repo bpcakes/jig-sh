@@ -1,4 +1,6 @@
-use std::fs::{self, File, OpenOptions};
+#[cfg(test)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io;
 use std::path::Path;
 use std::thread;
@@ -23,14 +25,6 @@ pub(super) fn read_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<String>> {
     read_inner(ctx, cancelled, None)
-}
-
-pub(super) fn read_with_cancellation_until(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-    deadline: Instant,
-) -> Result<Option<String>> {
-    read_inner(ctx, cancelled, Some(deadline))
 }
 
 fn read_inner(
@@ -59,6 +53,7 @@ fn read_inner(
     Ok(current)
 }
 
+#[cfg(test)]
 pub(super) fn with_write_lock<T>(
     ctx: &RepoContext,
     operation: impl FnOnce() -> Result<T>,
@@ -102,6 +97,7 @@ pub(super) fn read_unlocked(ctx: &RepoContext) -> Result<Option<String>> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn write_locked(ctx: &RepoContext, session_id: Option<&str>) -> Result<()> {
     let path = ctx.current_session_path();
     if let Some(parent) = path.parent() {

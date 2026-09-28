@@ -35,7 +35,6 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
     finisher: &TargetFinisher<'_>,
     control: &mut dyn RepositoryRunControl,
     source_epoch: &mut ExecutionSourceEpoch,
-    allow_reuse: bool,
     publish: &mut Publish<'_>,
 ) -> Result<()> {
     let mut queue = ReadyQueue::new(&finisher.run.plan)?;
@@ -170,7 +169,6 @@ pub(in crate::runtime::run_execution) fn execute_ready_read_only_targets(
                             .enumerate()
                             .map(|(index, (planned, _))| (planned.target.clone(), index))
                             .collect(),
-                        allow_reuse,
                         slots: slots.clone(),
                         cancellation: Arc::clone(&cancellation),
                         events: event_tx.clone(),

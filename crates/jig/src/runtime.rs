@@ -25,7 +25,6 @@ mod tool_execution;
 mod vault;
 mod vault_env;
 mod vault_import;
-mod work;
 
 pub(crate) use file_budget::{FileBudgetEvaluationMode, run_direct_file_budget};
 mod worker_runner;
@@ -107,7 +106,6 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Dev(opts) => crate::dev_proxy::commands::dev(ctx, opts),
         RuntimeCommand::Proxy(command) => crate::dev_proxy::commands::proxy(ctx, command),
         RuntimeCommand::Agent(command) => agent::dispatch_with_observer(ctx, command, observer),
-        RuntimeCommand::Work(command) => work::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
     }
@@ -135,46 +133,6 @@ fn dispatch_state(
         }
         StateCommand::Archive(request) => crate::state::state_archive(ctx, request),
     }
-}
-
-pub(crate) fn open_plan_gate_snapshots_with_cancellation(
-    ctx: &RepoContext,
-    plan_ids: &[String],
-    cancelled: &dyn Fn() -> bool,
-    freshness_timeout_ms: Option<u64>,
-) -> Result<std::collections::BTreeMap<String, Value>> {
-    crate::cancellation::ensure_status_collection_active(cancelled)?;
-    if plan_ids.is_empty() {
-        return Ok(std::collections::BTreeMap::new());
-    }
-    let current = refreshed_repository_context(ctx)?;
-    crate::cancellation::ensure_status_collection_active(cancelled)?;
-    work::open_plan_gate_snapshots_with_cancellation(
-        &current,
-        plan_ids,
-        cancelled,
-        freshness_timeout_ms,
-    )
-}
-
-pub(crate) use work::{DashboardGateReport, dashboard_gate_receipt_indexes};
-
-pub(crate) fn dashboard_open_plan_reports_with_cancellation(
-    ctx: &RepoContext,
-    baselines: &std::collections::BTreeMap<String, Option<crate::state::PlanBaseline>>,
-    indexes: std::collections::BTreeMap<String, crate::state::WorkGateReceiptIndex>,
-    plan_state: &'static str,
-    cancelled: &dyn Fn() -> bool,
-    freshness_timeout_ms: Option<u64>,
-) -> Result<std::collections::BTreeMap<String, DashboardGateReport>> {
-    work::dashboard_open_plan_reports_with_cancellation(
-        ctx,
-        baselines,
-        indexes,
-        plan_state,
-        cancelled,
-        freshness_timeout_ms,
-    )
 }
 
 pub(crate) fn refreshed_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
@@ -510,7 +468,6 @@ fn execute_repository_check_plan(
         catalog,
         plan.clone(),
         run_execution::ExecuteCheckRunRequest {
-            reuse_after_resource_wait: false,
             alias_override: None,
             work_plan_id,
             record_receipts,
@@ -592,40 +549,11 @@ pub(crate) fn call_tool_with_observer_on_surface(
         }
     }
 
-    let current_ctx = memory_tool
-        .filter(|tool| tool.uses_repository_authority())
-        .map(|_| refreshed_repository_context(ctx))
-        .transpose()?;
-    let memory_ctx = current_ctx.as_ref().unwrap_or(ctx);
-
     // MCP dispatch is intentionally allowlisted here. CLI-only dev/proxy
     // commands can start processes, install services, or mutate trust stores
     // and must not become agent-callable by adding names to tool_defs.
     match memory_tool {
-        Some(MemoryTool::AgentDoctor) => Ok(agent::doctor(memory_ctx)),
-        Some(MemoryTool::Goal) => work::goal_from_args(memory_ctx, args),
-        Some(MemoryTool::Start) => work::start_from_args(memory_ctx, args),
-        Some(MemoryTool::Append) => work::append_from_args(ctx, args),
-        Some(MemoryTool::Check) => {
-            work::check_from_args_with_observer(memory_ctx, args, observer, surface)
-        }
-        Some(MemoryTool::Gates) => {
-            work::gates_from_args(memory_ctx, args, surface, &|| observer.cancelled())
-        }
-        Some(MemoryTool::Evidence) => {
-            work::evidence_from_args(memory_ctx, args, surface, &|| observer.cancelled())
-        }
-        Some(MemoryTool::Review) => {
-            work::review_from_args_with_observer(memory_ctx, args, observer)
-        }
-        Some(MemoryTool::Refine) => {
-            work::refine_from_args_with_observer(memory_ctx, args, observer)
-        }
-        Some(MemoryTool::Decide) => work::decide_from_args(ctx, args),
-        Some(MemoryTool::Receipts) => work::receipts_from_args(ctx, args),
-        Some(MemoryTool::Status) => crate::state::state_summary(memory_ctx),
-        Some(MemoryTool::Finish) => work::finish_from_args(memory_ctx, args),
-        Some(MemoryTool::Retire) => work::retire_from_args(ctx, args),
+        Some(MemoryTool::AgentDoctor) => Ok(agent::doctor(&refreshed_repository_context(ctx)?)),
         None => bail!("Unsupported tool: {name}"),
     }
 }

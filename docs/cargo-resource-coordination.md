@@ -25,8 +25,9 @@ using an unsupported pinned runtime. No release pin changes automatically.
 
 Upgrade the selected runtime before opting in. To stop acquiring claims, remove
 the declarations and regenerate configuration; retain historical receipts and
-runs. Disabling the policy does not make new `reused_from` run records readable by
-older strict readers, so keep a capable runtime when rolling configuration back.
+runs. Disabling the policy does not make run records written with `reused_from`
+by the removed `work check` path readable by older strict readers, so keep a
+capable runtime when rolling configuration back.
 
 ## Declaration and identity
 
@@ -77,14 +78,11 @@ An expired or canceled waiter does not start its target or unlock another
 request's claim. Source or resource-authority changes while waiting require
 replanning.
 
-After an actual wait, ordinary `work check` may reuse the latest equivalent
-passing receipt under the existing exact-invocation and original-proof policy.
-It retains the original receipt, run and plan IDs in `reused_from`; the waiting
-run does not fabricate a child start, exit status or new target receipt. Failed,
-narrower, stale or unprovable evidence does not suppress execution. Direct checks,
-direct runs and explicitly forced gates still execute. Targets with scheduled
-consumers execute conservatively so their dependency proof retains its current
-meaning. Resource sharing never grants cross-worktree receipt sharing.
+After an actual wait, the target executes; a wait never substitutes an earlier
+passing receipt. The removed `work check` command could reuse one at this point
+and recorded the original receipt, run and plan IDs in `reused_from`; those
+historical run records remain readable. Resource sharing never grants
+cross-worktree receipt sharing.
 
 Legacy tool aliases for opted-in actions enter the same prepared-target executor,
 including declared read-only prerequisites. The requested alias and literal

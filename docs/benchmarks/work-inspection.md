@@ -1,5 +1,10 @@
 # Request-local work inspection measurements
 
+> **Historical record.** The compact work inspection measured here and its
+> harness, `scripts/benchmark-work-inspection.py`, were removed with `jig work`
+> in the release after v0.6.0. The numbers below are historical and cannot be
+> reproduced with current Jig.
+
 T-05 (`jig-sh-ndz2.5`) profiles the shared compact projection delivered by
 `b871f4e8` and aggregate status before and after retaining an eligible observation
 within one request. Raw results are [baseline](work-inspection-baseline.json) and

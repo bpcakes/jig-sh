@@ -181,10 +181,7 @@ fn corrupt_receipts_leave_open_and_closed_plan_metadata_available() {
         panic!("open plan should remain available");
     };
     assert!(open.body.is_some());
-    assert!(
-        open.gates.is_some(),
-        "retained epoch gates remain trustworthy"
-    );
+    assert!(open.gates.is_none());
     assert!(open.receipts.is_empty());
     assert!(open.errors.iter().any(|error| {
         error.scope() == CollectionDomain::Receipts.as_str()
@@ -229,10 +226,12 @@ fn corrupt_receipts_leave_open_and_closed_plan_metadata_available() {
         error.scope() == CollectionDomain::Receipts.as_str()
             && error.code() == "record_decode_failed"
     }));
-    assert!(closed.errors.iter().any(|error| {
-        error.scope() == CollectionDomain::Gates.as_str()
-            && error.code() == "gate_observation_failed"
-    }));
+    assert!(
+        !closed
+            .errors
+            .iter()
+            .any(|error| error.scope() == CollectionDomain::Gates.as_str())
+    );
 }
 
 #[test]

@@ -6,7 +6,9 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Read, Write};
+#[cfg(test)]
+use std::io::Write;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -88,6 +90,7 @@ pub(crate) fn plan_body_path(ctx: &RepoContext, plan_id: &str) -> Result<PathBuf
         .join(plan_body_name(plan_id)))
 }
 
+#[cfg(test)]
 pub(crate) fn create_plan_body(ctx: &RepoContext, plan_id: &str, body: &str) -> Result<PathBuf> {
     validate_plan_id(plan_id)?;
     let path = plan_body_path(ctx, plan_id)?;
@@ -100,64 +103,6 @@ pub(crate) fn create_plan_body(ctx: &RepoContext, plan_id: &str, body: &str) -> 
     file.sync_data()
         .with_context(|| format!("Failed to sync plan body {}", path.display()))?;
     Ok(path)
-}
-
-pub(crate) fn append_plan_body(ctx: &RepoContext, plan_id: &str, body: &[u8]) -> Result<()> {
-    validate_plan_id(plan_id)?;
-    let path = plan_body_path(ctx, plan_id)?;
-    let directory = open_plan_directory(ctx.root(), false, &|| false)?.ok_or_else(|| {
-        plan_error(
-            PlanFileErrorKind::NotFound,
-            format!("Plan body directory does not exist for {}", path.display()),
-        )
-    })?;
-    let mut body_options = regular_options(true, false, false);
-    body_options.append(true);
-    let mut file = open_regular(
-        &directory,
-        &plan_body_name(plan_id),
-        &mut body_options,
-        &path,
-    )
-    .map_err(|error| missing_body_append_error(error, &path))?;
-    file.lock_exclusive()
-        .with_context(|| format!("Failed to lock plan body {}", path.display()))?;
-
-    let lock_path = path.with_extension("md.lock");
-    let mut lock_options = regular_options(false, true, false);
-    lock_options.read(true).write(true);
-    let lock = match open_regular(
-        &directory,
-        &plan_lock_name(plan_id),
-        &mut lock_options,
-        &lock_path,
-    ) {
-        Ok(lock) => lock,
-        Err(error) => {
-            let _ = FileExt::unlock(&file);
-            return Err(error);
-        }
-    };
-    if let Err(error) = lock.lock_exclusive() {
-        let _ = FileExt::unlock(&file);
-        return Err(error).with_context(|| format!("Failed to lock {}", lock_path.display()));
-    }
-
-    let result = file
-        .write_all(body)
-        .with_context(|| format!("Failed to append plan body {}", path.display()))
-        .and_then(|()| {
-            file.sync_data()
-                .with_context(|| format!("Failed to sync plan body {}", path.display()))
-        });
-    let lock_unlock =
-        FileExt::unlock(&lock).with_context(|| format!("Failed to unlock {}", lock_path.display()));
-    let body_unlock = FileExt::unlock(&file)
-        .with_context(|| format!("Failed to unlock plan body {}", path.display()));
-    match (result, lock_unlock, body_unlock) {
-        (Ok(()), Ok(()), Ok(())) => Ok(()),
-        (Err(error), _, _) | (Ok(()), Err(error), _) | (Ok(()), Ok(()), Err(error)) => Err(error),
-    }
 }
 
 pub(crate) fn read_plan_body(
@@ -303,28 +248,8 @@ fn complete_utf8_prefix<'a>(bytes: &'a [u8], file_len: u64, path: &Path) -> Resu
     Ok(&bytes[..end])
 }
 
-fn missing_body_append_error(error: anyhow::Error, path: &Path) -> anyhow::Error {
-    if error
-        .downcast_ref::<PlanFileError>()
-        .is_some_and(|error| error.kind() == PlanFileErrorKind::NotFound)
-    {
-        return plan_error(
-            PlanFileErrorKind::NotFound,
-            format!(
-                "Plan body {} is missing; restore the original body before appending so prior progress is not silently lost",
-                path.display()
-            ),
-        );
-    }
-    error
-}
-
 fn plan_body_name(plan_id: &str) -> OsString {
     OsString::from(format!("{plan_id}.md"))
-}
-
-fn plan_lock_name(plan_id: &str) -> OsString {
-    OsString::from(format!("{plan_id}.md.lock"))
 }
 
 fn regular_options(writable: bool, create: bool, create_new: bool) -> OpenOptions {

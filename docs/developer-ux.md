@@ -1,6 +1,6 @@
 # Developer UX
 
-Jig is designed to make a repository feel immediately operable to a developer, an agent, or a CI job without requiring any of them to rediscover the same local conventions. The core UX promise is simple: after a repo is initialized or adopted, `scripts/jig` becomes the stable front door for setup, checks, local development, work evidence, agent readiness, and selected machine-local secrets.
+Jig is designed to make a repository feel immediately operable to a developer, an agent, or a CI job without requiring any of them to rediscover the same local conventions. The core UX promise is simple: after a repo is initialized or adopted, `scripts/jig` becomes the stable front door for setup, checks, local development, check evidence, agent readiness, and selected machine-local secrets.
 
 This workflow is supported on Linux and macOS hosts. See [Platform Support](platform-support.md) for the CI guarantee, unsupported-host policy, and feature-specific limits.
 
@@ -149,7 +149,7 @@ Managed npm checks, browser E2E, and generated dev pin the exact app and require
 ## Day-To-Day Loop
 
 Choose commands for the current task and validate the affected behavior with focused
-checks. Structured work and receipt inspection are optional. A full test suite is
+checks. Receipt inspection is optional. A full test suite is
 useful when the affected behavior or remaining risk warrants it.
 
 The daily developer loop is built around a few stable verbs:
@@ -160,8 +160,8 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs or receipts.
-- `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, refuses to finish work without fresh required evidence, and can retire a plan that will not be delivered.
-- `scripts/jig status` collects local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
+- `scripts/jig state summary` summarizes recorded state, including any plans still open from before `jig work` was removed. Former `scripts/jig work ...` invocations fail with a usage error that points to `check` and `state summary`.
+- `scripts/jig status` collects local repository, recorded plan, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
@@ -169,7 +169,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 - `scripts/jig info freshness` previews conservative target-freshness adoption without writing files.
 
-When structured work is selected, repository targets, verification profiles, legacy checks, and review skills can become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh. Direct checks do not require opening or closing a work plan.
+Checks record structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, the contract and input digests, and the recorded target freshness metadata. Every check run executes its targets; recorded receipts are never reused in place of execution.
 
 ### Repository targets and check plans
 
@@ -249,14 +249,6 @@ selection is a no-op. Action dependencies are added only after this filtering,
 and versions 2 through 5 retain their legacy check behavior without affected
 selection.
 
-Contract-v6 work gates name the same target/profile vocabulary. A default
-`scripts/jig work check --plan-id ...` resolves all configured evidence gates
-and executes their target union once, allowing a profile gate to prove that all
-members succeeded in one compatible run. An exact target receipt cannot satisfy
-a different target, and separate partial runs cannot be combined into profile
-evidence. Legacy tool gates remain available for older contracts and explicit
-`work check --tool ...` compatibility.
-
 `--explain` is read-only: it prints the immutable plan, bounded target-reason
 previews (with total-count metadata when truncated), dependency layers, effects,
 configuration digest, source identity, and input
@@ -300,7 +292,7 @@ scripts/jig --json ui --plan PLAN_ID   # one plan snapshot
 scripts/jig status --json              # one local status snapshot
 ```
 
-The four tabs are Status, Work, Timeline, and Health. Status summarizes local repository, work, loop, and collection observations. Work shows open and completed plans and their gates. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, gates, decisions, receipts, changed paths, and captured output.
+The four tabs are Status, Work, Timeline, and Health. Status summarizes local repository, work, loop, and collection observations. Work shows open and completed plans recorded before `jig work` was removed; work-gate evaluation was removed, so plans no longer show gate results. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, decisions, receipts, changed paths, and captured output.
 
 At the top level, use Tab or Shift-Tab, left/right, or `1` through `4` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Work, Timeline, or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys; plan detail uses Tab between sections, `h`/`l` or left/right scroll horizontally, and Enter can open a selected receipt or nested detail.
 
@@ -406,7 +398,7 @@ The friendliness here is in the workflow shape: developers get an auditable secr
 
 ## Agent And MCP Friendliness
 
-Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, MCP server, and work receipts all serve the same goal: reduce guessing.
+Jig treats agents as first-class repo operators. The generated root `AGENTS.md`, `agent-map.md`, optional crate-level guide conventions, MCP server, and receipts all serve the same goal: reduce guessing.
 
 An agent can discover:
 
@@ -414,7 +406,6 @@ An agent can discover:
 - which checks exist for this repo profile
 - which tools are stable contract tools
 - which commands are runtime-owned local conveniences
-- whether work gates have fresh receipts when using structured work
 - whether local Codex-side Jig skills are available
 
 The contract v6 MCP surface is deliberately independent of repository size. Agents inspect components, targets, profiles, and durable runs with `jig.inspect`; resolve an exact immutable plan with `jig.plan_run`; submit that plan with `jig.execute_run`; and poll or cancel by run id. Effectful targets require explicit selection, closed plan-bound arguments, and exact worktree/external effect approval at execution. Adding another component or action changes catalog data rather than adding another MCP tool. Contracts v2 through v5 keep their direct manifest tools for compatibility.
@@ -439,14 +430,14 @@ The distinction matters for downstream repos because the harness is shared infra
 
 ## What Makes Jig Developer-Friendly
 
-In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or work commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. `repo:source-runtime-check` is available directly and in the `verify` profile for current-source validation; CI runs the same target.
+In Jig's own source checkout, ordinary `scripts/jig` commands use the released runtime selected in `.jig/source-runtime-version`. Editing Jig therefore does not rebuild the check runner before it can run formatting, tests, or other commands. Cargo still compiles the edited source for tests. Use `scripts/jig-dev <command>` when you need to exercise a change to the CLI itself; it builds incrementally in the workspace and runs the resulting executable through the same launcher. `repo:source-runtime-check` is available directly and in the `verify` profile for current-source validation; CI runs the same target.
 
 Jig's developer friendliness comes from a few consistent product choices:
 
 - It gives every repo a small, stable command vocabulary.
 - It records repo conventions in committed configuration instead of tribal memory.
 - It preserves existing repo ownership during adoption.
-- It makes local checks and work evidence inspectable.
+- It makes local checks and their receipts inspectable.
 - It makes MCP and CLI use converge on the same runtime contract.
 - It keeps machine-local proxy and vault state out of repo history.
 - It makes broad trust changes explicit at the command line.

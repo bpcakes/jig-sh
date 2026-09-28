@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
@@ -10,10 +9,7 @@ use crate::cancellation::{
     status_collection_cancellation,
 };
 use crate::context::RepoContext;
-use crate::runtime::{
-    loop_status_snapshot_with_cancellation, open_plan_gate_snapshots_with_cancellation,
-    refreshed_repository_context,
-};
+use crate::runtime::{loop_status_snapshot_with_cancellation, refreshed_repository_context};
 use crate::state::{now_ms, state_summary_with_cancellation};
 
 pub(crate) mod git;
@@ -27,18 +23,9 @@ pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {
     snapshot_with_cancellation(ctx, &|| false)
 }
 
-#[cfg(test)]
 pub(crate) fn snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    snapshot_with_freshness_timeout(ctx, cancelled, None)
-}
-
-pub(crate) fn snapshot_with_freshness_timeout(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-    freshness_timeout_ms: Option<u64>,
 ) -> Result<Value> {
     ensure_collection_active(cancelled)?;
     let current = refreshed_repository_context(ctx)?;
@@ -46,7 +33,7 @@ pub(crate) fn snapshot_with_freshness_timeout(
     let ctx = &current;
     let (repository, mut errors) = repository_snapshot(ctx, cancelled)?;
     ensure_collection_active(cancelled)?;
-    let (work, work_errors) = work_snapshot(ctx, cancelled, freshness_timeout_ms)?;
+    let (work, work_errors) = work_snapshot(ctx, cancelled)?;
     errors.extend(work_errors);
     ensure_collection_active(cancelled)?;
     let (loops, loop_error) = loop_snapshot(ctx, cancelled)?;
@@ -235,98 +222,27 @@ fn local_upstream_snapshot(
 fn work_snapshot(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
-    freshness_timeout_ms: Option<u64>,
 ) -> Result<(Value, Vec<StatusCollectionError>)> {
     ensure_collection_active(cancelled)?;
-    let state = match state_summary_with_cancellation(ctx, cancelled) {
-        Ok(state) => state,
+    let (state, errors) = match state_summary_with_cancellation(ctx, cancelled) {
+        Ok(state) => (state, Vec::new()),
         Err(error) if is_status_collection_cancellation(&error) => return Err(error),
-        Err(error) => {
-            ensure_collection_active(cancelled)?;
-            return Ok((
-                json!({
-                    "state": null,
-                    "gates": [],
-                }),
-                vec![StatusCollectionError {
-                    scope: "work.state".into(),
-                    code: "work_state_unavailable",
-                    message: format!("{error:#}"),
-                }],
-            ));
-        }
+        Err(error) => (
+            Value::Null,
+            vec![StatusCollectionError {
+                scope: "work.state".into(),
+                code: "work_state_unavailable",
+                message: format!("{error:#}"),
+            }],
+        ),
     };
     ensure_collection_active(cancelled)?;
-
-    let mut errors = Vec::new();
-    let open_plan_ids = state["open_plans"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(|plan| plan["plan_id"].as_str())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let gate_snapshots = if open_plan_ids.is_empty() {
-        Ok(BTreeMap::new())
-    } else {
-        open_plan_gate_snapshots_with_cancellation(
-            ctx,
-            &open_plan_ids,
-            cancelled,
-            freshness_timeout_ms,
-        )
-    };
-    let mut gates = Vec::with_capacity(open_plan_ids.len());
-    for plan_id in open_plan_ids {
-        ensure_collection_active(cancelled)?;
-        gates.push(match &gate_snapshots {
-            Ok(snapshots) => match snapshots.get(&plan_id) {
-                Some(snapshot) => json!({
-                    "plan_id": plan_id,
-                    "snapshot": snapshot,
-                    "error": null,
-                }),
-                None => {
-                    let message = format!(
-                        "Batched gate evaluation did not return requested plan '{plan_id}'"
-                    );
-                    errors.push(StatusCollectionError {
-                        scope: format!("work.gates.{plan_id}"),
-                        code: "work_gates_unavailable",
-                        message: message.clone(),
-                    });
-                    json!({
-                        "plan_id": plan_id,
-                        "snapshot": null,
-                        "error": message,
-                    })
-                }
-            },
-            Err(error) if is_status_collection_cancellation(error) => {
-                return Err(status_collection_cancellation());
-            }
-            Err(error) => {
-                let message = format!("{error:#}");
-                errors.push(StatusCollectionError {
-                    scope: format!("work.gates.{plan_id}"),
-                    code: "work_gates_unavailable",
-                    message: message.clone(),
-                });
-                json!({
-                    "plan_id": plan_id,
-                    "snapshot": null,
-                    "error": message,
-                })
-            }
-        });
-        ensure_collection_active(cancelled)?;
-    }
-
+    // Gate evaluation was removed with `jig work`; the documented field
+    // remains present and empty.
     Ok((
         json!({
             "state": state,
-            "gates": gates,
+            "gates": [],
         }),
         errors,
     ))

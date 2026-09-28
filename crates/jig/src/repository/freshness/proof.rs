@@ -21,7 +21,6 @@ mod tests;
 /// target are distinct proof nodes, even when their identity tokens are equal.
 pub(crate) struct OriginalProofValidator {
     plan_id: Option<String>,
-    use_original_plan: bool,
     now_ms: u64,
     originals: OriginalReceiptIndex,
     loaded: BTreeMap<String, Rc<TargetReceiptStatus>>,
@@ -41,20 +40,10 @@ impl OriginalProofValidator {
     ) -> Self {
         Self {
             plan_id: plan_id.map(str::to_owned),
-            use_original_plan: false,
             now_ms,
             originals,
             loaded: BTreeMap::new(),
             validated: BTreeMap::new(),
-        }
-    }
-
-    /// Consumption by another work plan does not change execution provenance.
-    /// Each original node still requires dependencies from its own plan.
-    pub(crate) fn for_work_reuse(originals: OriginalReceiptIndex, now_ms: u64) -> Self {
-        Self {
-            use_original_plan: true,
-            ..Self::for_receipt_plan(originals, None, now_ms)
         }
     }
 
@@ -117,12 +106,7 @@ impl OriginalProofValidator {
             }
             if exiting {
                 let receipt = self.loaded[&id].clone();
-                let plan_id = if self.use_original_plan {
-                    receipt.plan_id.as_deref()
-                } else {
-                    self.plan_id.as_deref()
-                };
-                let result = self.validate_original(&receipt, plan_id, self.now_ms);
+                let result = self.validate_original(&receipt, self.plan_id.as_deref(), self.now_ms);
                 self.validated.insert(id.clone(), result);
                 visiting.remove(&id);
                 continue;

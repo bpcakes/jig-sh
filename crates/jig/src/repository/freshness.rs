@@ -23,12 +23,11 @@ pub(crate) mod proof;
 mod source;
 
 pub(crate) use budget::{
-    CollectionBudget, CollectionFailure, CollectionLimits, CollectionResult, INSPECTION_TIMEOUT_MS,
-    RECORDING_TIMEOUT_MS,
+    CollectionBudget, CollectionFailure, CollectionLimits, CollectionResult, RECORDING_TIMEOUT_MS,
 };
 use encoding::IdentityEncoder;
 pub(crate) use source::ExecutionAuthorityGuard;
-pub(crate) use source::{read_native_authority_bytes, revalidate_whole_source};
+pub(crate) use source::read_native_authority_bytes;
 
 pub(crate) fn validate_inputs_policy(epoch: u32, action: &ActionSpec) -> Result<()> {
     ensure!(

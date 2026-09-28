@@ -47,21 +47,6 @@ pub(in crate::state) fn read_receipts_reverse(
 
 // Dashboard collection uses nonblocking lock acquisition so cancellation can
 // interrupt a reader waiting behind a state writer.
-pub(crate) fn read_receipts_reverse_with_cancellation(
-    path: &Path,
-    limit: usize,
-    predicate: impl Fn(&ReceiptRecord) -> bool,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<(Vec<ReceiptRecord>, u64)> {
-    read_receipts_reverse_with_lock(
-        path,
-        limit,
-        predicate,
-        cancelled,
-        Some(DASHBOARD_JSONL_RECORD_BYTES),
-        FileExt::try_lock_shared,
-    )
-}
 
 fn read_receipts_reverse_with_lock(
     path: &Path,
@@ -348,6 +333,22 @@ fn skip_unterminated_tail(
         }
     }
     Ok((0, bytes_read))
+}
+
+pub(crate) fn read_receipts_reverse_with_cancellation(
+    path: &Path,
+    limit: usize,
+    predicate: impl Fn(&ReceiptRecord) -> bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Vec<ReceiptRecord>, u64)> {
+    read_receipts_reverse_with_lock(
+        path,
+        limit,
+        predicate,
+        cancelled,
+        Some(DASHBOARD_JSONL_RECORD_BYTES),
+        FileExt::try_lock_shared,
+    )
 }
 
 #[cfg(test)]

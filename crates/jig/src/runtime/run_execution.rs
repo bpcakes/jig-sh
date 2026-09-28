@@ -51,7 +51,6 @@ pub(super) struct SourceObservationMetrics {
 
 pub(super) struct ExecuteCheckRunRequest {
     pub(super) alias_override: Option<ExecutionAliasOverride>,
-    pub(super) reuse_after_resource_wait: bool,
     pub(super) work_plan_id: Option<String>,
     pub(super) record_receipts: bool,
     pub(super) fail_fast: bool,
@@ -111,26 +110,6 @@ pub(super) fn execute_freshly_planned_check_run(
 ) -> Result<CheckRunExecution> {
     let repository_execution =
         acquire_observed_repository_execution_lease(ctx, &plan.effects, observer)?;
-    execute_freshly_planned_check_run_with_lease(
-        ctx,
-        catalog,
-        plan,
-        request,
-        observer,
-        repository_execution,
-        false,
-    )
-}
-
-pub(super) fn execute_freshly_planned_check_run_without_lease_wait(
-    ctx: &RepoContext,
-    catalog: &RepositoryCatalog,
-    plan: RunPlan,
-    request: ExecuteCheckRunRequest,
-    observer: &mut dyn ExecutionControl,
-) -> Result<CheckRunExecution> {
-    let repository_execution =
-        crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
     execute_freshly_planned_check_run_with_lease(
         ctx,
         catalog,
@@ -363,7 +342,6 @@ fn execute_started_check_run_inner(
             &finisher,
             control,
             &mut source_epoch,
-            request.reuse_after_resource_wait,
             &mut |target, result, compatibility| {
                 record_finished_target(
                     ctx,
@@ -418,7 +396,6 @@ fn execute_started_check_run_inner(
                         initial: &positioned,
                         arrivals: None,
                     },
-                    request.reuse_after_resource_wait,
                     &parallel::ExecutionSlots::new(),
                     &mut |target, result, compatibility, _fingerprint, _wave_number| {
                         record_finished_target(
@@ -521,7 +498,6 @@ fn execute_started_check_run_inner(
                     &mut source_epoch,
                     PhasePosition::new(target_index, target_count)
                         .expect("planned target position must be valid"),
-                    request.reuse_after_resource_wait,
                 )?;
                 resource_lease = outcome.lease;
                 (outcome.result, outcome.compatibility)

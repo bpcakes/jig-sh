@@ -1,6 +1,5 @@
 #[cfg(test)]
 use std::cell::Cell;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
@@ -11,7 +10,6 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 #[cfg(test)]
 use jig_contract::StrictInventoryReasonV1;
 use jig_contract::{
@@ -62,11 +60,8 @@ const MAX_WORKTREE_STATUS_ENTRIES: usize = 250_000;
 const MAX_GIT_LITERAL_PATHS_PER_DIFF: usize = 512;
 const MAX_GIT_LITERAL_PATHSPEC_BYTES_PER_DIFF: usize = 64 * 1024;
 const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
-const GATE_SCOPE_FINGERPRINT_DOMAIN: &[u8] = b"jig-gate-scope-v1\0";
-const GATE_SCOPE_INPUT_FINGERPRINT_DOMAIN: &[u8] = b"jig-gate-scope-input-v2\0";
 const WORKTREE_FINGERPRINT_DOMAIN: &[u8] = b"jig-worktree-fingerprint-v4\0";
 const MAX_GIT_ERROR_PREVIEW_BYTES: u64 = 64 * 1024;
-const GLOBAL_GATE_AUTHORITY_PATHS: &[&str] = &[".jig.toml", ".agent/jig-contract.json"];
 
 #[cfg(test)]
 thread_local! {
@@ -79,119 +74,10 @@ thread_local! {
     static WORKTREE_FINGERPRINT_COLLECTION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GateApplicability {
-    Applicable,
-    NotApplicable,
-}
-
-impl GateApplicability {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Applicable => "applicable",
-            Self::NotApplicable => "not_applicable",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GateScopeFacts {
-    pub(crate) baseline_oid: String,
-    pub(crate) applicability: GateApplicability,
-    pub(crate) reason: String,
-    pub(crate) changed_paths: Vec<String>,
-    pub(crate) changed_path_count: usize,
-    pub(crate) changed_paths_truncated: bool,
-    pub(crate) changed_paths_digest: String,
-    pub(crate) matching_paths: Vec<String>,
-    pub(crate) matching_path_count: usize,
-    pub(crate) matching_paths_truncated: bool,
-    pub(crate) matching_paths_digest: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct GateScopeSnapshot {
-    pub(crate) facts: GateScopeFacts,
-    pub(crate) scope_fingerprint: String,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct GateScopePolicyKey {
-    paths: Option<Vec<String>>,
-    paths_ignore: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-struct GateScopeInputSnapshot {
-    facts: GateScopeFacts,
-    input_fingerprint: String,
-}
-
-impl GateScopeInputSnapshot {
-    fn for_gate_signature(self, gate_signature: &str) -> GateScopeSnapshot {
-        let scope_fingerprint = gate_scope_fingerprint(
-            &self.facts.baseline_oid,
-            gate_signature,
-            &self.input_fingerprint,
-        );
-        GateScopeSnapshot {
-            facts: self.facts,
-            scope_fingerprint,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct PlanChangeSnapshot {
-    baseline_oid: String,
     changed_paths: Vec<String>,
     untracked_paths: Vec<String>,
-    scope_cache:
-        RefCell<BTreeMap<GateScopePolicyKey, std::result::Result<GateScopeInputSnapshot, String>>>,
-}
-
-#[cfg(test)]
-pub(crate) fn gate_scope_snapshot(
-    root: &Path,
-    baseline_oid: &str,
-    paths: Option<&[String]>,
-    paths_ignore: &[String],
-    gate_signature: &str,
-) -> Result<GateScopeSnapshot> {
-    let plan = plan_change_snapshot(root, baseline_oid)?;
-    gate_scope_snapshot_from_plan_change_inner(
-        root,
-        &plan,
-        paths,
-        paths_ignore,
-        gate_signature,
-        GitReceiptCollection::Blocking,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn gate_scope_snapshot_with_cancellation(
-    root: &Path,
-    baseline_oid: &str,
-    paths: Option<&[String]>,
-    paths_ignore: &[String],
-    gate_signature: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<GateScopeSnapshot> {
-    let collection = GitReceiptCollection::Cancellable(cancelled);
-    let plan = plan_change_snapshot_inner(root, baseline_oid, collection)?;
-    gate_scope_snapshot_from_plan_change_inner(
-        root,
-        &plan,
-        paths,
-        paths_ignore,
-        gate_signature,
-        collection,
-    )
-}
-
-pub(crate) fn plan_change_snapshot(root: &Path, baseline_oid: &str) -> Result<PlanChangeSnapshot> {
-    plan_change_snapshot_inner(root, baseline_oid, GitReceiptCollection::Blocking)
 }
 
 pub(crate) fn plan_change_snapshot_with_cancellation(
@@ -206,13 +92,6 @@ pub(crate) fn plan_change_snapshot_with_cancellation(
     )
 }
 
-pub(crate) fn plan_change_snapshot_from_empty_tree(
-    root: &Path,
-    expected_oid: &str,
-) -> Result<PlanChangeSnapshot> {
-    plan_change_snapshot_from_empty_tree_inner(root, expected_oid, GitReceiptCollection::Blocking)
-}
-
 pub(crate) fn plan_change_snapshot_from_empty_tree_with_cancellation(
     root: &Path,
     expected_oid: &str,
@@ -221,41 +100,6 @@ pub(crate) fn plan_change_snapshot_from_empty_tree_with_cancellation(
     plan_change_snapshot_from_empty_tree_inner(
         root,
         expected_oid,
-        GitReceiptCollection::Cancellable(cancelled),
-    )
-}
-
-pub(crate) fn gate_scope_snapshot_from_plan_change(
-    root: &Path,
-    plan: &PlanChangeSnapshot,
-    paths: Option<&[String]>,
-    paths_ignore: &[String],
-    gate_signature: &str,
-) -> Result<GateScopeSnapshot> {
-    gate_scope_snapshot_from_plan_change_inner(
-        root,
-        plan,
-        paths,
-        paths_ignore,
-        gate_signature,
-        GitReceiptCollection::Blocking,
-    )
-}
-
-pub(crate) fn gate_scope_snapshot_from_plan_change_with_cancellation(
-    root: &Path,
-    plan: &PlanChangeSnapshot,
-    paths: Option<&[String]>,
-    paths_ignore: &[String],
-    gate_signature: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<GateScopeSnapshot> {
-    gate_scope_snapshot_from_plan_change_inner(
-        root,
-        plan,
-        paths,
-        paths_ignore,
-        gate_signature,
         GitReceiptCollection::Cancellable(cancelled),
     )
 }
@@ -698,10 +542,9 @@ mod tail;
 use tail::bounded_changed_paths;
 #[cfg(test)]
 use tail::changed_paths_digest;
-pub(crate) use tail::{
-    is_git_receipt_collection_cancellation, parse_diff_stat_output, repo_worktree_fingerprint,
-    repo_worktree_fingerprint_with_cancellation,
-};
+pub(crate) use tail::{is_git_receipt_collection_cancellation, parse_diff_stat_output};
+#[cfg(test)]
+pub(crate) use tail::{repo_worktree_fingerprint, repo_worktree_fingerprint_with_cancellation};
 
 #[derive(Clone, Copy)]
 enum GitReceiptCollection<'a> {

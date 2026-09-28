@@ -6,6 +6,8 @@ mod cancellation;
 mod capacity;
 #[path = "cargo_resources/support.rs"]
 mod fixture;
+#[path = "shared/legacy_plan.rs"]
+mod legacy_plan;
 #[path = "ready_dependents/safety.rs"]
 mod safety;
 #[path = "ready_dependents/support.rs"]

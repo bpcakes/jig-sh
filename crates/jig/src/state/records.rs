@@ -63,14 +63,7 @@ impl SessionEvent {
         matches!(self, Self::Start { .. })
     }
 
-    pub(super) fn session_id(&self) -> &str {
-        match self {
-            Self::Start { session_id, .. }
-            | Self::End { session_id, .. }
-            | Self::Unknown { session_id, .. } => session_id,
-        }
-    }
-
+    #[cfg(test)]
     pub(super) const fn timestamp_ms(&self) -> u64 {
         match self {
             Self::Start { timestamp_ms, .. }
@@ -79,6 +72,7 @@ impl SessionEvent {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_summary_reference(self) -> Self {
         match self {
             Self::Start {
@@ -121,42 +115,7 @@ pub(crate) struct PlanRetirement {
     pub(crate) superseded_by: Option<String>,
 }
 
-impl PlanRetirement {
-    pub(crate) fn to_value(&self) -> Value {
-        serde_json::json!({
-            "disposition": self.disposition,
-            "reason": self.reason,
-            "superseded_by": self.superseded_by,
-        })
-    }
-}
-
-/// Terminal dispositions accepted when retiring a work plan.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PlanDisposition {
-    Cancelled,
-    Superseded,
-    Duplicate,
-    Obsolete,
-}
-
-impl PlanDisposition {
-    pub(crate) const ALL: &'static [Self] = &[
-        Self::Cancelled,
-        Self::Superseded,
-        Self::Duplicate,
-        Self::Obsolete,
-    ];
-
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Cancelled => "cancelled",
-            Self::Superseded => "superseded",
-            Self::Duplicate => "duplicate",
-            Self::Obsolete => "obsolete",
-        }
-    }
-}
+impl PlanRetirement {}
 
 #[derive(Clone, Debug)]
 pub(crate) enum PlanEvent {
@@ -190,15 +149,6 @@ pub(crate) enum PlanEvent {
 }
 
 impl PlanEvent {
-    pub(super) fn id(&self) -> &str {
-        match self {
-            Self::Open { id, .. }
-            | Self::Append { id, .. }
-            | Self::Close { id, .. }
-            | Self::Unknown { id, .. } => id,
-        }
-    }
-
     pub(super) const fn open(
         id: String,
         plan_id: String,
@@ -288,6 +238,7 @@ impl PlanEvent {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn timestamp_ms(&self) -> u64 {
         match self {
             Self::Open { timestamp_ms, .. }
@@ -297,6 +248,7 @@ impl PlanEvent {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn body_path(&self) -> Option<&str> {
         match self {
             Self::Open { body_path, .. } | Self::Append { body_path, .. } => body_path.as_deref(),
@@ -308,16 +260,10 @@ impl PlanEvent {
         matches!(self, Self::Open { .. })
     }
 
+    #[cfg(test)]
     pub(super) fn baseline(&self) -> Option<&PlanBaseline> {
         match self {
             Self::Open { baseline, .. } => baseline.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub(super) fn retirement(&self) -> Option<&PlanRetirement> {
-        match self {
-            Self::Close { retirement, .. } => retirement.as_ref(),
             _ => None,
         }
     }

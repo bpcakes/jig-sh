@@ -396,34 +396,9 @@ fn reconcile_work(
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("Rendered [work] is not a TOML table"))?;
-    reconcile_work_iteration_profile(existing_work, rendered_work, staged_context);
     reconcile_work_checks(existing_work, rendered_work, staged_context);
     reconcile_work_gates(existing_work, rendered_work, staged_context)?;
-    reconcile_work_refinements(existing_work, rendered_work);
     Ok(())
-}
-
-fn reconcile_work_iteration_profile(
-    existing: &toml::Table,
-    rendered: &mut toml::Table,
-    staged_context: &RepoContext,
-) {
-    let Some(profile) = existing
-        .get("iteration_profile")
-        .and_then(toml::Value::as_str)
-    else {
-        return;
-    };
-    if staged_context
-        .profile_specs()
-        .iter()
-        .any(|spec| spec.id.as_str() == profile)
-    {
-        rendered.insert(
-            "iteration_profile".into(),
-            toml::Value::String(profile.to_string()),
-        );
-    }
 }
 
 fn reconcile_work_checks(
@@ -620,20 +595,6 @@ fn is_retired_generated_check_gate(table: &toml::Table) -> bool {
             | (Some("typescript-coverage"), Some("jig.typescript_coverage"))
             | (Some("schema-dump"), Some("jig.schema_dump"))
     )
-}
-
-fn reconcile_work_refinements(existing: &toml::Table, rendered: &mut toml::Table) {
-    let Some(existing_refinements) = existing.get("refinements").and_then(toml::Value::as_array)
-    else {
-        return;
-    };
-    let refinements = existing_refinements
-        .iter()
-        .find(|entry| schema_valid_work_entry("refinements", entry))
-        .cloned()
-        .into_iter()
-        .collect();
-    rendered.insert("refinements".into(), toml::Value::Array(refinements));
 }
 
 fn schema_valid_work_entry(field: &str, entry: &toml::Value) -> bool {

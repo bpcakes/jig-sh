@@ -8,7 +8,7 @@ fn parses_top_level_status_command() {
     assert!(matches!(
         cli.command,
         CommandKind::Status(StatusOpts {
-            freshness_timeout_ms: None,
+            _retired_freshness_timeout_ms: None,
             command: None,
             tui: false,
             refresh_seconds: None
@@ -39,7 +39,7 @@ fn parses_top_level_status_command() {
     assert!(matches!(
         run.command,
         CommandKind::Status(StatusOpts {
-            freshness_timeout_ms: None,
+            _retired_freshness_timeout_ms: None,
             command: Some(StatusCommand::Run { run_id }),
             tui: false,
             refresh_seconds: None,

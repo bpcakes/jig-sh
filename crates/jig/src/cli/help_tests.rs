@@ -50,7 +50,7 @@ fn top_level_help_describes_common_commands() {
     assert_help_contains(&help, "Report repo harness readiness");
     assert_help_contains(&help, "info");
     assert_help_contains(&help, "Summarize repo Jig configuration");
-    assert_help_contains(&help, "Manage structured work plans");
+    assert_help_omits(&help, "Manage structured work plans");
     assert_help_contains(&help, "Inspect or bootstrap local agent tooling");
     assert_help_contains(
         &help,
@@ -74,7 +74,6 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  check ",
         "  status ",
         "  ui ",
-        "  work ",
         "  loop ",
         "  migration ",
         "  sqlx ",
@@ -129,7 +128,8 @@ fn top_level_help_includes_common_workflows() {
     assert_help_contains(&help, "jig info --commands");
     assert_help_contains(&help, "jig dev");
     assert_help_contains(&help, "jig check test");
-    assert_help_contains(&help, "jig work status");
+    assert_help_contains(&help, "jig state summary");
+    assert_help_omits(&help, "jig work");
 }
 
 #[test]
@@ -201,19 +201,7 @@ fn presets_help_includes_harness_only_automation_example() {
 }
 
 #[test]
-fn nested_help_describes_work_and_agent_commands() {
-    let work_help = Cli::command()
-        .find_subcommand_mut("work")
-        .unwrap()
-        .render_help()
-        .to_string();
-    assert_help_contains(&work_help, "start");
-    assert_help_contains(&work_help, "Start a structured work plan");
-    assert_help_contains(&work_help, "gates");
-    assert_help_contains(&work_help, "Show required gate status");
-    assert_help_contains(&work_help, "evidence");
-    assert_help_contains(&work_help, "Summarize receipt evidence");
-
+fn nested_help_describes_agent_commands() {
     let agent_help = Cli::command()
         .find_subcommand_mut("agent")
         .unwrap()
@@ -226,56 +214,6 @@ fn nested_help_describes_work_and_agent_commands() {
         &agent_help,
         "Register the configured Codex skills marketplace",
     );
-}
-
-#[test]
-fn work_start_help_includes_examples() {
-    let work_start_help = rendered_help(&["work", "start"]);
-    assert_help_contains(&work_start_help, "jig work start --title \"Add auth\"");
-    assert_help_contains(&work_start_help, "--print-plan-id");
-    assert_help_contains(&work_start_help, "plan_id=\"$(jig work start");
-}
-
-#[test]
-fn work_check_help_includes_examples() {
-    let work_check_help = rendered_help(&["work", "check"]);
-    assert_help_contains(&work_check_help, "jig work check --plan-id plan_abc123");
-    assert_help_contains(&work_check_help, "--tool jig.test");
-}
-
-#[test]
-fn work_evidence_help_includes_examples() {
-    let work_evidence_help = rendered_help(&["work", "evidence"]);
-    assert_help_contains(&work_evidence_help, "jig work evidence");
-    assert_help_contains(&work_evidence_help, "--plan-id plan_abc123");
-    assert_help_contains(&work_evidence_help, "changed paths covered");
-}
-
-#[test]
-fn work_finish_help_includes_examples() {
-    let work_finish_help = rendered_help(&["work", "finish"]);
-    assert_help_contains(&work_finish_help, "jig work finish --plan-id plan_abc123");
-    assert_help_contains(&work_finish_help, "--outcome success");
-}
-
-#[test]
-fn work_retire_help_documents_the_non_success_transition() {
-    let work_retire_help = rendered_help(&["work", "retire"]);
-    assert_help_contains(&work_retire_help, "jig work retire --plan-id plan_abc123");
-    assert_help_contains(&work_retire_help, "--disposition superseded");
-    assert_help_contains(&work_retire_help, "--superseded-by plan_def456");
-    assert_help_contains(&work_retire_help, "without claiming success");
-    assert_help_contains(&work_retire_help, "no gate evidence is written");
-    for disposition in ["cancelled", "superseded", "duplicate", "obsolete"] {
-        assert_help_contains(&work_retire_help, disposition);
-    }
-}
-
-#[test]
-fn work_help_lists_retire_next_to_finish() {
-    let work_help = rendered_help(&["work"]);
-    assert_help_contains(&work_help, "finish");
-    assert_help_contains(&work_help, "retire");
 }
 
 #[test]
@@ -554,19 +492,12 @@ fn json_output_flag_is_discoverable() {
         "Print structured JSON results and errors; does not disable interactive prompts",
     );
 
-    let work_receipts_help = rendered_help(&["work", "receipts"]);
-    assert_help_contains(&work_receipts_help, "work receipts --failed-only");
-    assert_help_contains(&work_receipts_help, "--json");
-
-    let work_evidence_help = rendered_help(&["work", "evidence"]);
-    assert_help_contains(&work_evidence_help, "jig work evidence --json");
-
     let vault_run_help = rendered_help(&["vault", "run"]);
     assert_help_contains(&vault_run_help, "--json");
     assert_help_contains(&vault_run_help, "--file");
 
     assert_help_omits(&rendered_help(&["doctor"]), "--summary");
-    assert_help_omits(&rendered_help(&["work", "status"]), "--summary");
+    assert_help_omits(&rendered_help(&["state", "summary"]), "--summary");
     assert_help_omits(&rendered_help(&["agent", "doctor"]), "--summary");
 }
 

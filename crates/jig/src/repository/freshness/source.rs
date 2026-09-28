@@ -16,8 +16,6 @@ mod digest;
 mod files;
 mod git;
 mod matches;
-mod whole;
-pub(crate) use whole::revalidate_whole_source;
 
 pub(crate) use files::read_native_authority_bytes;
 use files::{FileProjection, observable_dotenv, source_excluded};

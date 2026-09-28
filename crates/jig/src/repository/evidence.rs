@@ -83,19 +83,3 @@ pub(crate) fn plan_independent_targets(
         .cloned()
         .collect()
 }
-
-pub(crate) fn cross_plan_evidence_targets(
-    ctx: &RepoContext,
-    gates: &BTreeMap<String, BTreeSet<TargetId>>,
-) -> Result<BTreeSet<TargetId>> {
-    if gates.is_empty()
-        || ctx.contract_version() < jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
-    {
-        return Ok(BTreeSet::new());
-    }
-    let catalog = RepositoryCatalog::from_context(ctx)?;
-    Ok(plan_independent_targets(
-        &catalog,
-        &gates.values().flatten().cloned().collect(),
-    ))
-}

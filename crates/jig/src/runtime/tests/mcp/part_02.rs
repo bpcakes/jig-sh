@@ -1,122 +1,4 @@
 #[test]
-fn mcp_work_check_aggregates_a_late_non_contention_error_and_preserves_prior_results() {
-    let temp = tempdir().unwrap();
-    write_v6_evidence_fixture_repo(temp.path(), "");
-    let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path)
-        .unwrap()
-        .replace(
-            "api_test_command = \"printf 'api tests passed\\n'\"",
-            "api_test_command = \"mv .jig.toml .jig.toml.hidden; printf 'first passed\\n'\"",
-        )
-        .replacen(
-            "inputs = [\"api/**\"]",
-            "inputs = [\"api/**\"]\nlegacy_aliases = [\"jig.first_check\"]",
-            1,
-        )
-        .replacen(
-            "inputs = [\"web/**\"]",
-            "inputs = [\"web/**\"]\nlegacy_aliases = [\"jig.second_check\"]",
-            1,
-        );
-    fs::write(&config_path, config).unwrap();
-    let manifest_path = temp.path().join(".agent/jig-contract.json");
-    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["tools"] = json!([
-        {
-            "name": "jig.first_check",
-            "kind": "command",
-            "description": "Run the first check.",
-            "command": "api_test_command"
-        },
-        {
-            "name": "jig.second_check",
-            "kind": "command",
-            "description": "Run the second check.",
-            "command": "web_test_command"
-        }
-    ]);
-    manifest["actions"][0]["legacy_aliases"] = json!(["jig.first_check"]);
-    manifest["actions"][1]["legacy_aliases"] = json!(["jig.second_check"]);
-    fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = call_tool(
-        &ctx,
-        tool::WORK_CHECK,
-        json!({
-            "plan_id": "plan_1",
-            "tools": ["jig.first_check", "jig.second_check"]
-        }),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(
-        error.contains("Failed to refresh repository authority") && error.contains(".jig.toml"),
-        "{error}"
-    );
-    let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .collect::<Vec<_>>();
-    let child = receipts
-        .iter()
-        .find(|receipt| receipt["tool_name"] == "jig.first_check")
-        .expect("the successful earlier check must retain its receipt");
-    let batch = receipts
-        .iter()
-        .find(|receipt| receipt["tool_name"] == "jig.work_check")
-        .expect("the late execution error must retain the batch receipt");
-    assert_eq!(child["stdout_preview"], "first passed\n");
-    assert_eq!(batch["exit_status"], 1);
-    assert_eq!(batch["args"]["receipt_ids"], json!([child["id"]]));
-    assert!(
-        batch["stderr_preview"]
-            .as_str()
-            .unwrap()
-            .contains("Failed to refresh repository authority"),
-        "{batch:#}"
-    );
-}
-
-#[test]
-fn mcp_work_start_and_status_refresh_repository_metadata_after_server_start() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path)
-        .unwrap()
-        .replace("repo_name = \"demo\"", "repo_name = \"ExampleProject\"");
-    assert!(
-        config.contains("repo_name = \"ExampleProject\""),
-        "{config}"
-    );
-    fs::write(config_path, config).unwrap();
-
-    let status = call_tool(&ctx, tool::WORK_STATUS, json!({})).unwrap();
-    let started = call_tool(
-        &ctx,
-        tool::WORK_START,
-        json!({"title": "Example work", "body": "Validation plan."}),
-    )
-    .unwrap();
-
-    assert_eq!(status["repo"]["name"], "ExampleProject", "{status:#}");
-    assert_eq!(
-        started["session"]["summary"]["repo_name"], "ExampleProject",
-        "{started:#}"
-    );
-}
-
-#[test]
 fn mcp_agent_doctor_refreshes_marketplace_requirements_after_server_start() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -132,63 +14,6 @@ fn mcp_agent_doctor_refreshes_marketplace_requirements_after_server_start() {
     assert_eq!(doctor["codex"]["required"], false, "{doctor:#}");
     assert_eq!(doctor["codex"]["probe_skipped"], true, "{doctor:#}");
     assert!(doctor["marketplaces"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn mcp_and_dashboard_work_gates_refresh_manifest_authority_after_startup() {
-    let temp = tempdir().unwrap();
-    write_v6_evidence_fixture_repo(
-        temp.path(),
-        r#"
-[[work.gates]]
-id = "api-tests"
-kind = "evidence"
-target = "api:test"
-"#,
-    );
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    call_tool(&ctx, tool::WORK_CHECK, json!({"plan_id": "plan_1"})).unwrap();
-    let manifest_path = temp.path().join(".agent/jig-contract.json");
-    let mut manifest: Value =
-        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["jig_version"] = json!("semantic-contract-drift");
-    fs::write(
-        manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
-
-    let gates = call_tool(&ctx, tool::WORK_GATES, json!({"plan_id": "plan_1"})).unwrap();
-    let dashboard_gates = super::super::open_plan_gate_snapshots_with_cancellation(
-        &ctx,
-        &["plan_1".into()],
-        &|| false,
-     None)
-    .unwrap();
-    let finish_error = call_tool(
-        &ctx,
-        tool::WORK_FINISH,
-        json!({
-            "plan_id": "plan_1",
-            "resolution": "done",
-            "outcome": "success"
-        }),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert_eq!(gates["overall"], "blocked", "{gates:#}");
-    assert_eq!(gates["gates"][0]["status"], "stale", "{gates:#}");
-    assert_eq!(
-        dashboard_gates["plan_1"]["gates"][0]["status"],
-        "stale",
-        "{dashboard_gates:#?}"
-    );
-    assert!(
-        finish_error.contains("Stale: [api-tests]"),
-        "{finish_error}"
-    );
 }
 
 #[test]
@@ -403,73 +228,6 @@ fn repository_execution_fails_a_read_only_action_that_mutates_the_worktree() {
 }
 
 #[test]
-fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
-    let temp = tempdir().unwrap();
-    write_v6_evidence_fixture_repo(temp.path(), "");
-    add_v6_generate_action(temp.path());
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let planned = call_tool(
-        &ctx,
-        tool::PLAN_RUN,
-        json!({"selectors": ["api:generate", "api:test"]}),
-    )
-    .unwrap();
-    let planned_fingerprint = planned["plan"]["source"]["worktree_fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let planned_test_input_digest = planned["plan"]["targets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|target| target["target"]["action"] == "test")
-        .unwrap()["input_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let accepted = call_tool(
-        &ctx,
-        tool::EXECUTE_RUN,
-        json!({
-            "plan": planned["plan"].clone(),
-            "approved_effects": ["worktree"]
-        }),
-    )
-    .unwrap();
-
-    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
-
-    assert_eq!(
-        terminal["result"]["run"]["result"]["conclusion"], "success",
-        "{terminal:#}"
-    );
-    assert_eq!(
-        fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
-        "generated"
-    );
-    let current_fingerprint = crate::state::current_worktree_fingerprint(&ctx)
-        .fingerprint
-        .unwrap();
-    assert_ne!(planned_fingerprint, current_fingerprint);
-    let test_result = terminal["result"]["run"]["result"]["targets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|target| target["target"]["action"] == "test")
-        .unwrap();
-    assert_ne!(test_result["input_digest"], planned_test_input_digest);
-    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .find(|receipt| receipt["target"]["action"] == "test")
-        .unwrap();
-    assert_eq!(receipt["worktree_fingerprint"], current_fingerprint);
-    assert_eq!(receipt["input_digest"], test_result["input_digest"]);
-}
-
-#[test]
 fn read_only_target_rejects_stable_drift_after_plan_validation() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
@@ -503,7 +261,6 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
         &catalog,
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
-            reuse_after_resource_wait: false,
             alias_override: None,
             work_plan_id: None,
             record_receipts: true,
@@ -556,7 +313,6 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
         &catalog,
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
-            reuse_after_resource_wait: false,
             alias_override: None,
             work_plan_id: None,
             record_receipts: true,
@@ -591,4 +347,71 @@ fn mcp_plan_receives_cancellation_after_outer_dispatch() {
     let error = call_tool_with_observer(&ctx, "jig.plan_run", json!({"selectors":["api:test"]}), &mut observer).unwrap_err();
     assert!(error.to_string().contains("cancelled"), "{error:#}");
     assert!(observer.0.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+}
+
+#[test]
+fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_generate_action(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(
+        &ctx,
+        tool::PLAN_RUN,
+        json!({"selectors": ["api:generate", "api:test"]}),
+    )
+    .unwrap();
+    let planned_fingerprint = planned["plan"]["source"]["worktree_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let planned_test_input_digest = planned["plan"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["target"]["action"] == "test")
+        .unwrap()["input_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "success",
+        "{terminal:#}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
+        "generated"
+    );
+    let current_fingerprint = crate::git_receipts::repository_source_snapshot(ctx.root())
+        .unwrap()
+        .worktree_fingerprint;
+    assert_ne!(planned_fingerprint, current_fingerprint);
+    let test_result = terminal["result"]["run"]["result"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["target"]["action"] == "test")
+        .unwrap();
+    assert_ne!(test_result["input_digest"], planned_test_input_digest);
+    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|receipt| receipt["target"]["action"] == "test")
+        .unwrap();
+    assert_eq!(receipt["worktree_fingerprint"], current_fingerprint);
+    assert_eq!(receipt["input_digest"], test_result["input_digest"]);
 }

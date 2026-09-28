@@ -26,17 +26,7 @@ fn loop_tick_releases_lease_and_records_failed_receipt_on_workflow_error() {
     .unwrap();
     assert!(status["leases"].as_array().unwrap().is_empty());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: true,
-            limit: 10,
-        },
-    )
-    .unwrap();
+    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, true)});
     assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
 }
 
@@ -224,17 +214,7 @@ exit 4
     .unwrap();
     assert!(status["leases"].as_array().unwrap().is_empty());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: true,
-            limit: 10,
-        },
-    )
-    .unwrap();
+    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, true)});
     assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
 }
 
@@ -458,17 +438,7 @@ exit 2
     assert!(gh_mutations.contains("resolveReviewThread"));
     assert!(!gh_mutations.contains("PRRT_FOREIGN"));
 
-    let worker_receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(WORKER_RUN_TOOL.into()),
-            failed_only: false,
-            limit: 10,
-        },
-    )
-    .unwrap();
+    let worker_receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, WORKER_RUN_TOOL, false)});
     assert_eq!(worker_receipts["receipts"].as_array().unwrap().len(), 1);
     assert_eq!(
         worker_receipts["receipts"][0]["evidence"]["purpose"],
@@ -511,17 +481,7 @@ fn invalid_pr_manager_codex_home_does_not_consume_attempt_budget() {
     .unwrap();
     assert!(status["attempts"].as_array().unwrap().is_empty());
 
-    let receipts = crate::state::receipts_list(
-        &ctx,
-        crate::state::ReceiptListFilter {
-            session_id: None,
-            plan_id: None,
-            tool_name: Some(LOOP_TICK_TOOL.into()),
-            failed_only: true,
-            limit: 10,
-        },
-    )
-    .unwrap();
+    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, true)});
     assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
     assert_eq!(receipts["receipts"][0]["evidence"]["observed"], Value::Null);
     let actions = receipts["receipts"][0]["evidence"]["actions"]

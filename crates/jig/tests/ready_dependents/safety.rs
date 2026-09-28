@@ -1,4 +1,4 @@
-use super::{fixture::jig, support::*};
+use super::support::*;
 
 #[test]
 fn resource_timeout_does_not_cancel_unrelated_dependency_chain() {
@@ -143,7 +143,7 @@ fn mutation_during_dependent_rejects_its_success() {
 }
 
 #[test]
-fn late_mutation_preserves_historical_success_but_prevents_reuse() {
+fn late_mutation_preserves_historical_success() {
     let fixture = fixture();
     let plan = open_plan(&fixture);
     let mut run = start(&fixture, &["--plan-id", &plan]);
@@ -163,20 +163,6 @@ fn late_mutation_preserves_historical_success_but_prevents_reuse() {
         assert_eq!(receipt(&after, action), receipt(&originals, action));
     }
     assert_ne!(receipt(&after, "slow")["exit_status"], 0);
-    let output = jig(&fixture.root)
-        .args(["work", "check", "--plan-id", &plan, "--explain", "--json"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let preview: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let invocations = preview["selected_invocations"].as_array().unwrap();
-    for action in ["prerequisite", "dependent"] {
-        let invocation = invocations
-            .iter()
-            .find(|i| i["target"]["action"] == action)
-            .unwrap();
-        assert_eq!(invocation["disposition"], "selected", "{preview:#}");
-    }
 }
 
 #[test]

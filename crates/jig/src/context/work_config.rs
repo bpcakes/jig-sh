@@ -26,11 +26,25 @@ pub(crate) struct WorkConfig {
     checks: Vec<String>,
     #[serde(default)]
     gates: Vec<WorkGateConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    iteration_profile: Option<ProfileId>,
-    #[allow(dead_code)]
-    #[serde(default)]
-    refinements: Vec<WorkRefinementConfig>,
+    /// Retired `jig work` settings, still accepted so existing configuration
+    /// loads. Their values have no effect and never enter execution authority.
+    #[serde(default, rename = "iteration_profile", skip_serializing)]
+    _retired_iteration_profile: Option<toml::Value>,
+    #[serde(
+        default,
+        rename = "refinements",
+        serialize_with = "serialize_retired_refinements"
+    )]
+    _retired_refinements: Option<toml::Value>,
+}
+
+/// `refinements` always serialized as an array, so its now-empty slot keeps
+/// execution authority unchanged for configurations that never set it.
+fn serialize_retired_refinements<T, S>(_: &T, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.collect_seq(std::iter::empty::<()>())
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -128,18 +142,6 @@ pub(crate) enum ReviewScopeArg<'a> {
     Commit(&'a str),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct WorkRefinementConfig {
-    pub(crate) id: String,
-    #[serde(default)]
-    pub(crate) skill: Option<String>,
-    #[serde(default)]
-    pub(crate) mode: Option<String>,
-    #[serde(default)]
-    pub(crate) model: Option<String>,
-}
-
 impl super::RepoContext {
     pub(crate) fn work_receipt_metadata_paths(&self) -> Vec<&'static str> {
         self.config.work.receipt_metadata_paths()
@@ -149,17 +151,9 @@ impl super::RepoContext {
     pub(crate) fn work_tracker(&self) -> Option<&WorkTrackerConfig> {
         self.config.work.tracker()
     }
-
-    pub(crate) fn work_iteration_profile(&self) -> Option<&ProfileId> {
-        self.config.work.iteration_profile()
-    }
 }
 
 impl WorkConfig {
-    pub(crate) fn iteration_profile(&self) -> Option<&ProfileId> {
-        self.iteration_profile.as_ref()
-    }
-
     pub(crate) fn receipt_metadata_paths(&self) -> Vec<&'static str> {
         self.receipt_metadata
             .iter()
@@ -220,10 +214,6 @@ impl WorkConfig {
                 _ => None,
             })
             .collect()
-    }
-
-    pub(crate) fn refinements(&self) -> &[WorkRefinementConfig] {
-        &self.refinements
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -343,31 +333,6 @@ impl WorkConfig {
             }
         }
 
-        if self.refinements.len() > 1 {
-            bail!(
-                "Only one [[work.refinements]] entry is supported until refinement selection is implemented"
-            );
-        }
-        let mut refinement_ids = HashSet::new();
-        for refinement in &self.refinements {
-            if !refinement_ids.insert(refinement.id.as_str()) {
-                bail!(
-                    "Duplicate work refinement id '{}' in [[work.refinements]]",
-                    refinement.id
-                );
-            }
-            validate_prompt_token("work refinement id", &refinement.id)?;
-            if let Some(skill) = refinement.skill.as_deref() {
-                validate_prompt_token("work refinement skill", skill)?;
-            }
-            if let Some(mode) = refinement.mode.as_deref() {
-                validate_prompt_token("work refinement mode", mode)?;
-            }
-            if let Some(model) = refinement.model.as_deref() {
-                validate_codex_arg_value("refinement model", model)?;
-            }
-        }
-
         Ok(())
     }
 
@@ -428,8 +393,7 @@ pub(crate) fn parse_work_gate(value: &toml::Value) -> Result<WorkGate> {
         tracker: None,
         checks: Vec::new(),
         gates: vec![gate.clone()],
-        iteration_profile: None,
-        refinements: Vec::new(),
+        ..WorkConfig::default()
     };
     config.validate()?;
     Ok(resolve_work_gate(gate))

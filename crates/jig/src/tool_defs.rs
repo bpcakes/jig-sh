@@ -11,7 +11,6 @@ pub(crate) use repository::{
     RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool, RunInspection,
 };
 
-pub(crate) const DEFAULT_RECEIPTS_LIMIT: usize = 20;
 pub(crate) const LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL: &str = "jig.loop_acknowledge_occurrence";
 pub(crate) const LOOP_CLEAR_ATTEMPT_TOOL: &str = "jig.loop_clear_attempt";
 pub(crate) const LOOP_DISPATCH_TOOL: &str = "jig.loop_dispatch";
@@ -19,36 +18,8 @@ pub(crate) const LOOP_TICK_TOOL: &str = "jig.loop_tick";
 pub(crate) const WORKER_RUN_TOOL: &str = "jig.worker_run";
 
 pub(crate) mod args {
-    pub(crate) const ALTERNATIVES: &str = "alternatives";
-    pub(crate) const BODY: &str = "body";
-    pub(crate) const BODY_FILE: &str = "body_file";
-    pub(crate) const BASE: &str = "base";
-    pub(crate) const DISPOSITION: &str = "disposition";
-    pub(crate) const FAILED_ONLY: &str = "failed_only";
-    pub(crate) const LIMIT: &str = "limit";
     pub(crate) const NAME: &str = "name";
-    pub(crate) const NOTES: &str = "notes";
-    pub(crate) const OPERATION: &str = "operation";
-    pub(crate) const OUTCOME: &str = "outcome";
-    pub(crate) const PHASE: &str = "phase";
     pub(crate) const PLAN_ID: &str = "plan_id";
-    pub(crate) const RATIONALE: &str = "rationale";
-    pub(crate) const REASON: &str = "reason";
-    pub(crate) const RESOLUTION: &str = "resolution";
-    pub(crate) const SUPERSEDED_BY: &str = "superseded_by";
-    pub(crate) const SELECTED_OPTION: &str = "selected_option";
-    pub(crate) const SESSION_ID: &str = "session_id";
-    pub(crate) const SUCCESS: &str = "success";
-    pub(crate) const GATES: &str = "gates";
-    pub(crate) const MAX_ITERATIONS: &str = "max_iterations";
-    pub(crate) const TITLE: &str = "title";
-    pub(crate) const TOOL_NAME: &str = "tool_name";
-    pub(crate) const TOOLS: &str = "tools";
-    pub(crate) const CHECKPOINTS: &str = "checkpoints";
-    pub(crate) const CONSTRAINTS: &str = "constraints";
-    pub(crate) const OBJECTIVE: &str = "objective";
-    pub(crate) const VALIDATIONS: &str = "validations";
-    pub(crate) const EXPLAIN: &str = "explain";
 }
 
 pub(crate) mod cli_command {
@@ -169,19 +140,6 @@ pub(crate) mod cli_command {
     pub(crate) const VAULT_STATUS: &str = "status";
     pub(crate) const VAULT_TUI: &str = "tui";
     pub(crate) const WORK: &str = "work";
-    pub(crate) const WORK_APPEND: &str = "append";
-    pub(crate) const WORK_CHECK: &str = "check";
-    pub(crate) const WORK_DECIDE: &str = "decide";
-    pub(crate) const WORK_EVIDENCE: &str = "evidence";
-    pub(crate) const WORK_FINISH: &str = "finish";
-    pub(crate) const WORK_GATES: &str = "gates";
-    pub(crate) const WORK_GOAL: &str = "goal";
-    pub(crate) const WORK_REFINE: &str = "refine";
-    pub(crate) const WORK_RETIRE: &str = "retire";
-    pub(crate) const WORK_REVIEW: &str = "review";
-    pub(crate) const WORK_RECEIPTS: &str = "receipts";
-    pub(crate) const WORK_START: &str = "start";
-    pub(crate) const WORK_STATUS: &str = "status";
 }
 
 pub(crate) type JsonObject = Map<String, Value>;
@@ -189,256 +147,33 @@ pub(crate) type JsonObject = Map<String, Value>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MemoryTool {
     AgentDoctor,
-    Goal,
-    Start,
-    Append,
-    Check,
-    Gates,
-    Evidence,
-    Review,
-    Refine,
-    Decide,
-    Receipts,
-    Status,
-    Finish,
-    Retire,
 }
 
 impl MemoryTool {
-    const ALL: &'static [Self] = &[
-        Self::AgentDoctor,
-        Self::Goal,
-        Self::Start,
-        Self::Append,
-        Self::Check,
-        Self::Gates,
-        Self::Evidence,
-        Self::Review,
-        Self::Refine,
-        Self::Decide,
-        Self::Receipts,
-        Self::Status,
-        Self::Finish,
-        Self::Retire,
-    ];
+    const ALL: &'static [Self] = &[Self::AgentDoctor];
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             tool::AGENT_DOCTOR => Some(Self::AgentDoctor),
-            tool::WORK_GOAL => Some(Self::Goal),
-            tool::WORK_START => Some(Self::Start),
-            tool::WORK_APPEND => Some(Self::Append),
-            tool::WORK_CHECK => Some(Self::Check),
-            tool::WORK_GATES => Some(Self::Gates),
-            tool::WORK_EVIDENCE => Some(Self::Evidence),
-            tool::WORK_REVIEW => Some(Self::Review),
-            tool::WORK_REFINE => Some(Self::Refine),
-            tool::WORK_DECIDE => Some(Self::Decide),
-            tool::WORK_RECEIPTS => Some(Self::Receipts),
-            tool::WORK_STATUS => Some(Self::Status),
-            tool::WORK_FINISH => Some(Self::Finish),
-            tool::WORK_RETIRE => Some(Self::Retire),
             _ => None,
         }
-    }
-
-    pub(crate) const fn uses_repository_authority(self) -> bool {
-        matches!(
-            self,
-            Self::AgentDoctor
-                | Self::Goal
-                | Self::Start
-                | Self::Check
-                | Self::Gates
-                | Self::Evidence
-                | Self::Review
-                | Self::Refine
-                | Self::Status
-                | Self::Finish
-        )
     }
 
     const fn name(self) -> &'static str {
         match self {
             Self::AgentDoctor => tool::AGENT_DOCTOR,
-            Self::Goal => tool::WORK_GOAL,
-            Self::Start => tool::WORK_START,
-            Self::Append => tool::WORK_APPEND,
-            Self::Check => tool::WORK_CHECK,
-            Self::Gates => tool::WORK_GATES,
-            Self::Evidence => tool::WORK_EVIDENCE,
-            Self::Review => tool::WORK_REVIEW,
-            Self::Refine => tool::WORK_REFINE,
-            Self::Decide => tool::WORK_DECIDE,
-            Self::Receipts => tool::WORK_RECEIPTS,
-            Self::Status => tool::WORK_STATUS,
-            Self::Finish => tool::WORK_FINISH,
-            Self::Retire => tool::WORK_RETIRE,
         }
     }
 
     const fn description(self) -> &'static str {
         match self {
             Self::AgentDoctor => "Report local Codex agent tooling status for this repo.",
-            Self::Goal => {
-                "Create a goal-mode work harness with a durable plan and validation contract."
-            }
-            Self::Start => {
-                "Start structured work by opening a session and a plan with a resolved Git baseline; body and body_file are optional but mutually exclusive."
-            }
-            Self::Append => {
-                "Append nonblank progress to a structured work plan using exactly one of body or body_file."
-            }
-            Self::Check => {
-                "Validate required work gates, reuse current target passes and execute repairs with dependencies. Explicit gate ids force native evidence or legacy check gates; tool names select legacy checks only."
-            }
-            Self::Gates => "Report configured work gate status for a plan.",
-            Self::Evidence => {
-                "Summarize work gate evidence and receipt freshness; ok=true means inspection succeeded, while overall reports passed or blocked gates."
-            }
-            Self::Review => "Run configured Codex review gates and record structured findings.",
-            Self::Refine => {
-                "Run review-driven refinement, rerun review gates, then rerun normal check gates."
-            }
-            Self::Decide => "Record a structured work decision.",
-            Self::Receipts => "List structured work receipts.",
-            Self::Status => "Summarize structured work state.",
-            Self::Finish => "Close a structured work plan and active session.",
-            Self::Retire => {
-                "Retire an open work plan that will not be delivered. Requires a terminal disposition and a nonblank reason, evaluates no required gates, and claims no successful completion."
-            }
         }
     }
 
     fn input_schema(self) -> Value {
         match self {
-            Self::AgentDoctor | Self::Status => empty_input_schema(),
-            Self::Goal => object_schema(
-                &[
-                    (args::OBJECTIVE, string_schema()),
-                    (args::SUCCESS, string_schema()),
-                    (
-                        args::VALIDATIONS,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "minItems": 1
-                        }),
-                    ),
-                    (
-                        args::CONSTRAINTS,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }),
-                    ),
-                    (
-                        args::CHECKPOINTS,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }),
-                    ),
-                    (args::TITLE, string_schema()),
-                    (args::NOTES, string_schema()),
-                ],
-                &[args::OBJECTIVE, args::SUCCESS, args::VALIDATIONS],
-            ),
-            Self::Gates | Self::Evidence => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (
-                        "freshness_timeout_ms",
-                        json!({"type": "integer", "minimum": 1, "maximum": 30000, "default": 2000}),
-                    ),
-                ],
-                &[],
-            ),
-            Self::Review => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (
-                        args::GATES,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }),
-                    ),
-                ],
-                &[args::PLAN_ID],
-            ),
-            Self::Refine => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (
-                        args::GATES,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }),
-                    ),
-                    (
-                        args::MAX_ITERATIONS,
-                        json!({ "type": "integer", "minimum": 1 }),
-                    ),
-                ],
-                &[args::PLAN_ID],
-            ),
-            Self::Start => work_start_input_schema(),
-            Self::Append => work_append_input_schema(),
-            Self::Check => work_check_input_schema(),
-            Self::Decide => object_schema(
-                &[
-                    (args::TITLE, string_schema()),
-                    (args::SELECTED_OPTION, string_schema()),
-                    (args::RATIONALE, string_schema()),
-                    (
-                        args::ALTERNATIVES,
-                        json!({
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }),
-                    ),
-                    (args::PLAN_ID, string_schema()),
-                ],
-                &[args::TITLE, args::SELECTED_OPTION, args::RATIONALE],
-            ),
-            Self::Receipts => object_schema(
-                &[
-                    (args::SESSION_ID, string_schema()),
-                    (args::PLAN_ID, string_schema()),
-                    (args::TOOL_NAME, string_schema()),
-                    (args::FAILED_ONLY, json!({ "type": "boolean" })),
-                    (args::LIMIT, json!({ "type": "integer", "minimum": 1 })),
-                ],
-                &[],
-            ),
-            Self::Finish => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (args::RESOLUTION, string_schema()),
-                    (args::OUTCOME, string_schema()),
-                ],
-                &[args::PLAN_ID],
-            ),
-            Self::Retire => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (
-                        args::DISPOSITION,
-                        json!({
-                            "type": "string",
-                            "enum": crate::state::PlanDisposition::ALL
-                                .iter()
-                                .map(|disposition| disposition.as_str())
-                                .collect::<Vec<_>>(),
-                        }),
-                    ),
-                    (args::REASON, nonblank_string_schema()),
-                    (args::SUPERSEDED_BY, nonblank_string_schema()),
-                ],
-                &[args::PLAN_ID, args::DISPOSITION, args::REASON],
-            ),
+            Self::AgentDoctor => empty_input_schema(),
         }
     }
 }
@@ -475,19 +210,7 @@ pub(crate) fn tool_descriptors_for_surface(
     };
     execution
         .into_iter()
-        .chain(MemoryTool::ALL.iter().copied().map(|tool| {
-            let mut descriptor = memory_tool_descriptor(tool);
-            if surface == crate::surface::ResponseSurface::AgentV1
-                && matches!(
-                    tool,
-                    MemoryTool::Check | MemoryTool::Gates | MemoryTool::Evidence
-                )
-            {
-                descriptor["outputSchema"] =
-                    repository::schema_value::<crate::surface::work::WorkCompletion>();
-            }
-            descriptor
-        }))
+        .chain(MemoryTool::ALL.iter().copied().map(memory_tool_descriptor))
         .collect()
 }
 
@@ -564,39 +287,6 @@ fn empty_input_schema() -> Value {
     object_schema(&[], &[])
 }
 
-fn work_start_input_schema() -> Value {
-    let mut schema = object_schema(
-        &[
-            (args::TITLE, string_schema()),
-            (args::BODY, string_schema()),
-            (args::BODY_FILE, string_schema()),
-            (args::BASE, string_schema()),
-        ],
-        &[args::TITLE],
-    );
-    schema["not"] = json!({ "required": [args::BODY, args::BODY_FILE] });
-    schema
-}
-
-mod work_check;
-use work_check::work_check_input_schema;
-
-fn work_append_input_schema() -> Value {
-    let mut schema = object_schema(
-        &[
-            (args::PLAN_ID, string_schema()),
-            (args::BODY, nonblank_string_schema()),
-            (args::BODY_FILE, nonblank_string_schema()),
-        ],
-        &[args::PLAN_ID],
-    );
-    schema["oneOf"] = json!([
-        { "required": [args::BODY] },
-        { "required": [args::BODY_FILE] }
-    ]);
-    schema
-}
-
 fn object_schema(properties: &[(&str, Value)], required: &[&str]) -> Value {
     let mut schema = JsonObject::new();
     schema.insert("type".into(), Value::String("object".into()));
@@ -632,13 +322,6 @@ fn string_schema() -> Value {
     json!({ "type": "string" })
 }
 
-fn nonblank_string_schema() -> Value {
-    json!({
-        "type": "string",
-        "pattern": "\\S"
-    })
-}
-
 pub(crate) fn required_string_arg(map: &JsonObject, key: &str) -> Result<String> {
     string_arg(map, key).ok_or_else(|| anyhow!("Missing required argument: {key}"))
 }
@@ -665,74 +348,7 @@ mod tests {
 
         assert_eq!(names.len(), MemoryTool::ALL.len());
         assert_eq!(unique.len(), names.len());
-        assert!(unique.contains(tool::WORK_EVIDENCE));
-        assert!(unique.contains(tool::WORK_REVIEW));
-        assert!(unique.contains(tool::WORK_REFINE));
-    }
-
-    #[test]
-    fn work_append_schema_requires_exactly_one_nonblank_body_source() {
-        let schema = MemoryTool::Append.input_schema();
-
-        assert_eq!(schema["required"], json!([args::PLAN_ID]));
-        assert_eq!(
-            schema["oneOf"],
-            json!([
-                { "required": [args::BODY] },
-                { "required": [args::BODY_FILE] }
-            ])
-        );
-        assert_eq!(schema["properties"][args::BODY]["pattern"], "\\S");
-        assert_eq!(schema["properties"][args::BODY_FILE]["pattern"], "\\S");
-    }
-
-    #[test]
-    fn work_start_schema_rejects_conflicting_optional_body_sources() {
-        let schema = MemoryTool::Start.input_schema();
-
-        assert_eq!(schema["required"], json!([args::TITLE]));
-        assert_eq!(
-            schema["not"],
-            json!({ "required": [args::BODY, args::BODY_FILE] })
-        );
-    }
-
-    #[test]
-    fn work_check_schema_matches_runtime_selector_semantics() {
-        let schema = MemoryTool::Check.input_schema();
-        let validator = jsonschema::validator_for(&schema).unwrap();
-
-        assert_eq!(schema["required"], json!([args::PLAN_ID]));
-        for valid in [
-            json!({ "plan_id": "plan_1" }),
-            json!({ "plan_id": "plan_1", "gates": [], "tools": [] }),
-            json!({ "plan_id": "plan_1", "phase": null, "explain": null }),
-            json!({ "plan_id": "plan_1", "phase": "iteration", "explain": true }),
-            json!({ "plan_id": "plan_1", "phase": "final", "gates": [], "tools": [] }),
-            json!({ "plan_id": "plan_1", "gates": ["tests"], "tools": [] }),
-            json!({ "plan_id": "plan_1", "gates": [], "tools": ["jig.test"] }),
-        ] {
-            assert!(validator.is_valid(&valid), "schema rejected {valid}");
-        }
-        assert!(!validator.is_valid(&json!({
-            "plan_id": "plan_1",
-            "gates": ["tests"],
-            "tools": ["jig.test"]
-        })));
-        assert!(!validator.is_valid(&json!({
-            "plan_id": "plan_1",
-            "phase": "iteration",
-            "gates": ["tests"]
-        })));
-        assert!(!validator.is_valid(&json!({
-            "plan_id": "plan_1",
-            "phase": "final",
-            "tools": ["jig.test"]
-        })));
-        assert!(!validator.is_valid(&json!({
-            "plan_id": "plan_1",
-            "phase": "unknown"
-        })));
+        assert_eq!(names, [tool::AGENT_DOCTOR]);
     }
 
     #[test]

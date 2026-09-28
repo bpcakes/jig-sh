@@ -2,8 +2,6 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-#[cfg(test)]
-use crate::tool_defs::tool;
 use crate::{
     bootstrap, context::RepoContext, doctor, info, mcp, root_commands, runtime, status, tool_defs,
     ui,
@@ -30,7 +28,6 @@ mod sqlx;
 mod state;
 mod status_opts;
 mod vault;
-mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{
@@ -66,11 +63,6 @@ pub(crate) use vault::{
     VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultPassphraseChangeOpts,
     VaultPassphraseCommand, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
     VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, VaultTuiOpts,
-};
-pub(crate) use work::{
-    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
-    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkRetireOpts,
-    WorkReviewOpts, WorkStartOpts,
 };
 
 #[derive(Debug, Parser)]
@@ -113,7 +105,7 @@ Common workflows:
   jig info --commands  Show which commands are usable in this repository
   jig dev              Start configured development apps
   jig check test       Run the configured test suite
-  jig work status      Inspect structured work and required gates";
+  jig state summary    Summarize recorded local state";
 
 fn root_after_help() -> String {
     format!(
@@ -333,13 +325,9 @@ pub(crate) enum CommandKind {
         after_help = UI_AFTER_HELP
     )]
     Ui(UiOpts),
-    /// Manage structured work plans, receipts, gates, and decisions.
-    #[command(
-        name = root_commands::WORK.name,
-        display_order = root_commands::WORK.display_order,
-        subcommand
-    )]
-    Work(WorkCommand),
+    /// Removed structured-work commands; parsing only reports the replacement.
+    #[command(name = tool_defs::cli_command::WORK, hide = true, disable_help_flag = true)]
+    Work(RetiredWorkOpts),
     /// Run and inspect automated orchestration workflows.
     #[command(
         name = root_commands::LOOP.name,
@@ -618,6 +606,14 @@ pub(crate) struct UiOpts {
     pub(crate) plan: Option<String>,
     #[arg(long = "port", hide = true)]
     pub(crate) retired_port: Option<u16>,
+}
+
+/// Arguments of the removed `jig work` namespace, accepted only so every former
+/// invocation reports the same replacement guidance as a usage error.
+#[derive(Args, Debug)]
+pub(crate) struct RetiredWorkOpts {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+    pub(crate) args: Vec<std::ffi::OsString>,
 }
 
 impl UiOpts {

@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 use jig_ui::dashboard::{PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS};
 use serde_json::Value;
 
+#[path = "shared/legacy_plan.rs"]
+mod legacy_plan;
 #[path = "shared/pty.rs"]
 mod pty_support;
 mod support;
@@ -134,26 +136,8 @@ fn both_interactive_entrypoints_share_the_terminal_requirement() {
 #[test]
 fn plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors() {
     let root = fixture();
-    let started = jig(
-        root.path(),
-        &[
-            "work",
-            "start",
-            "--title",
-            "Example plan",
-            "--body",
-            "# Example plan",
-            "--print-plan-id",
-        ],
-    );
-    assert!(
-        started.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&started.stdout),
-        String::from_utf8_lossy(&started.stderr)
-    );
-    let plan_id = String::from_utf8(started.stdout).unwrap();
-    let plan_id = plan_id.trim();
+    let plan_id = legacy_plan::seed_open_plan(root.path(), "plan_example", "Example plan");
+    let plan_id = plan_id.as_str();
 
     let value = one_json_document(&jig(root.path(), &["ui", "--plan", plan_id, "--json"]));
     assert_eq!(value["command"], "ui");
@@ -323,20 +307,8 @@ fn product_version_is_independent_of_the_runner_contract_epoch() {
 #[test]
 fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
     let root = fixture();
-    let started = jig(
-        root.path(),
-        &[
-            "work",
-            "start",
-            "--title",
-            "Example plan detail",
-            "--body",
-            "# Example plan body",
-            "--print-plan-id",
-        ],
-    );
-    assert!(started.status.success());
-    let plan_id = String::from_utf8(started.stdout).unwrap();
+    let plan_id =
+        legacy_plan::seed_open_plan(root.path(), "plan_example_detail", "Example plan detail");
 
     let (mut master, mut child) = dashboard_child(root.path(), &["ui", "--plan", plan_id.trim()]);
     let mut terminal_output = Vec::new();

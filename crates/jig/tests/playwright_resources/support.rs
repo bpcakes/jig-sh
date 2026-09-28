@@ -1,4 +1,4 @@
-use super::cargo_fixture::{Fixture, Running, jig};
+use super::cargo_fixture::{Fixture, Running};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -126,23 +126,6 @@ impl BrowserFixture {
             !self.inner.signals.join("cargo-probes").exists(),
             "browser endpoint ownership must not invoke Cargo metadata"
         );
-    }
-
-    pub fn open_plan(&self) -> String {
-        let output = jig(&self.inner.root)
-            .args([
-                "work",
-                "start",
-                "--title",
-                "Example browser readiness",
-                "--body",
-                "Verify the current browser validator executes after admission.",
-                "--print-plan-id",
-            ])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8(output.stdout).unwrap().trim().into()
     }
 }
 

@@ -1,4 +1,4 @@
-use super::fixture::{Fixture, Running, jig};
+use super::fixture::{Fixture, Running};
 use serde_json::{Value, json};
 use std::{fs, process::Command};
 
@@ -370,18 +370,9 @@ pub fn mutate(fixture: &Fixture) {
 }
 
 pub fn open_plan(fixture: &Fixture) -> String {
-    let output = jig(&fixture.root)
-        .args([
-            "work",
-            "start",
-            "--title",
-            "Example dependency scheduling",
-            "--body",
-            "Validate original dependency evidence after a later source mutation.",
-            "--print-plan-id",
-        ])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    String::from_utf8(output.stdout).unwrap().trim().into()
+    crate::legacy_plan::seed_open_plan(
+        &fixture.root,
+        "plan_example_dependency",
+        "Example dependency scheduling",
+    )
 }

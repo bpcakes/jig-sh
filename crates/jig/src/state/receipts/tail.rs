@@ -8,89 +8,17 @@ fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> impl Iterat
         .filter_map(Value::as_str)
 }
 
-fn ensure_receipt_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
-    ensure_status_collection_active(cancelled)
-}
-
-pub(crate) fn current_worktree_fingerprint(ctx: &RepoContext) -> CurrentWorktreeFingerprint {
-    let result = if ctx.contract_version() >= 6 {
-        repository_source_snapshot(ctx.root()).map(|snapshot| snapshot.worktree_fingerprint)
-    } else {
-        repo_worktree_fingerprint(ctx.root())
-    };
-    current_worktree_fingerprint_from_result(result)
-        .expect("blocking worktree fingerprint collection cannot be cancelled")
-}
-
-pub(crate) fn current_worktree_fingerprint_with_cancellation(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<CurrentWorktreeFingerprint> {
-    let result = if ctx.contract_version() >= 6 {
-        repository_source_snapshot_with_cancellation(ctx.root(), cancelled)
-            .map(|snapshot| snapshot.worktree_fingerprint)
-    } else {
-        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled)
-    };
-    current_worktree_fingerprint_from_result(result)
-}
-
-pub(crate) fn current_worktree_fingerprint_for_receipt_with_cancellation(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> CurrentWorktreeFingerprint {
-    let result = if ctx.contract_version() >= 6 {
-        repository_source_snapshot_with_cancellation(ctx.root(), cancelled)
-            .map(|snapshot| snapshot.worktree_fingerprint)
-    } else {
-        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled)
-    };
-    current_worktree_fingerprint_from_result_for_receipt(result)
-}
-
-fn current_worktree_fingerprint_from_result(
-    result: Result<String>,
-) -> Result<CurrentWorktreeFingerprint> {
-    match result {
-        Ok(fingerprint) => Ok(CurrentWorktreeFingerprint {
-            fingerprint: Some(fingerprint),
-            error: None,
-        }),
-        Err(error) if is_git_receipt_collection_cancellation(&error) => {
-            Err(status_collection_cancellation())
-        }
-        Err(error) => Ok(CurrentWorktreeFingerprint {
-            fingerprint: None,
-            error: Some(format!("{error:#}")),
-        }),
-    }
-}
-
-fn current_worktree_fingerprint_from_result_for_receipt(
-    result: Result<String>,
-) -> CurrentWorktreeFingerprint {
-    match result {
-        Ok(fingerprint) => CurrentWorktreeFingerprint {
-            fingerprint: Some(fingerprint),
-            error: None,
-        },
-        Err(error) => CurrentWorktreeFingerprint {
-            fingerprint: None,
-            error: Some(format!("{error:#}")),
-        },
-    }
-}
-
-pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
-    record_receipt_inner(ctx, input, None, None, ReceiptPublication::Finalize)
-}
-
 pub(crate) fn record_target_receipt(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
     target: TargetReceiptMetadata,
 ) -> Result<String> {
     record_receipt_inner(ctx, input, Some(target), None, ReceiptPublication::Finalize)
+}
+
+#[cfg(test)]
+pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
+    record_receipt_inner(ctx, input, None, None, ReceiptPublication::Finalize)
 }
 
 /// Cancellation stops optional enrichment; publication still gets a bounded
@@ -106,27 +34,6 @@ pub(crate) fn record_receipt_with_cancellation(
         None,
         Some(cancelled),
         ReceiptPublication::Finalize,
-    )
-}
-
-/// For rollback-sensitive operations, cancellation aborts publication too.
-pub(crate) fn record_receipt_with_cancellation_if_no_current_plan_gate_evidence(
-    ctx: &RepoContext,
-    input: ReceiptInput<'_>,
-    plan_id: &str,
-    gate_ids: &BTreeSet<String>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    record_receipt_inner(
-        ctx,
-        input,
-        None,
-        Some(cancelled),
-        ReceiptPublication::GuardedReuse {
-            plan_id,
-            gate_ids,
-            cancelled,
-        },
     )
 }
 
@@ -151,11 +58,6 @@ pub(crate) fn record_receipt_with_cancellation_until(
 
 enum ReceiptPublication<'a> {
     Finalize,
-    GuardedReuse {
-        plan_id: &'a str,
-        gate_ids: &'a BTreeSet<String>,
-        cancelled: &'a dyn Fn() -> bool,
-    },
     Cancellable {
         deadline: std::time::Instant,
         cancelled: &'a dyn Fn() -> bool,
@@ -165,7 +67,7 @@ enum ReceiptPublication<'a> {
 impl ReceiptPublication<'_> {
     fn lock_budget(&self) -> (std::time::Instant, &dyn Fn() -> bool) {
         match self {
-            Self::Finalize | Self::GuardedReuse { .. } => (
+            Self::Finalize => (
                 std::time::Instant::now() + journal::RECEIPT_LOCK_TIMEOUT,
                 &|| false,
             ),
@@ -258,12 +160,9 @@ fn record_receipt_inner(
     let receipt = ReceiptRecord {
         target_freshness,
         id: new_id("receipt"),
-        session_id: match input.session_override {
-            Some(session_id) => Some(session_id),
-            None => {
-                super::session_pointer::read_with_cancellation_until(ctx, lock_cancelled, deadline)?
-            }
-        },
+        // Sessions ended only through the removed `jig work` lifecycle, so the
+        // current-session pointer can no longer be trusted as receipt context.
+        session_id: input.session_override,
         plan_id: input.plan_id,
         tool_name: input.tool_name.to_string(),
         args: redact_repository_root_in_value(input.args, &root_spellings),
@@ -310,35 +209,12 @@ fn record_receipt_inner(
     };
     let receipt_id = receipt.id.clone();
     with_receipt_journal_writer_until(ctx, deadline, lock_cancelled, |writer| {
-        if let ReceiptPublication::GuardedReuse {
-            plan_id,
-            gate_ids,
-            cancelled,
-        } = publication
-        {
-            let found = writer
-                .inspect(|journal| {
-                    current_plan_work_check_gate_evidence_in_locked_journal(
-                        journal,
-                        &ctx.state_file("receipts.jsonl"),
-                        plan_id,
-                        gate_ids,
-                        cancelled,
-                    )
-                })?
-                .unwrap_or_default();
-            if !found.is_empty() {
-                anyhow::bail!(
-                    "Reusable work-check evidence became stale because current-plan evidence was recorded for: {}; rerun the check against the current receipt journal",
-                    found.into_iter().collect::<Vec<_>>().join(", ")
-                );
-            }
-        }
         writer.append(&receipt)
     })?;
     Ok(receipt_id)
 }
 
+#[cfg(test)]
 pub(super) fn record_successful_state_tool(
     ctx: &RepoContext,
     input: StateToolReceipt<'_>,
@@ -364,51 +240,12 @@ pub(super) fn record_successful_state_tool(
     )
 }
 
-fn receipt_matches_filters(receipt: &ReceiptRecord, filter: &ReceiptListFilter) -> bool {
-    let session_matches = filter
-        .session_id
-        .as_ref()
-        .is_none_or(|session_id| receipt.session_id.as_ref() == Some(session_id));
-    let plan_matches = filter
-        .plan_id
-        .as_ref()
-        .is_none_or(|plan_id| receipt.plan_id.as_ref() == Some(plan_id));
-    let tool_matches = filter
-        .tool_name
-        .as_ref()
-        .is_none_or(|tool_name| receipt.tool_name == *tool_name);
-    let failure_matches = !filter.failed_only || receipt.exit_status != 0;
-
-    session_matches && plan_matches && tool_matches && failure_matches
-}
-
-fn receipt_args_include_receipt_id(receipt: &ReceiptRecord, receipt_id: &str) -> bool {
-    receipt
-        .args
-        .get("receipt_ids")
-        .and_then(Value::as_array)
-        .is_some_and(|receipt_ids| {
-            receipt_ids
-                .iter()
-                .any(|candidate| candidate.as_str() == Some(receipt_id))
-        })
-}
-
 fn receipt_args_has_receipt_ids(receipt: &ReceiptRecord) -> bool {
     receipt
         .args
         .get("receipt_ids")
         .and_then(Value::as_array)
         .is_some()
-}
-
-pub(super) fn receipt_list_value(receipt: ReceiptRecord) -> Result<Value> {
-    let diff_summary = receipt_diff_summary(&receipt);
-    let mut value = serde_json::to_value(receipt)?;
-    if let Some(object) = value.as_object_mut() {
-        object.insert("diff_summary".to_string(), Value::String(diff_summary));
-    }
-    Ok(value)
 }
 
 fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
@@ -419,7 +256,6 @@ fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
     let changed_paths_truncated =
         receipt.changed_paths_truncated || changed_path_count > receipt.changed_paths.len();
     ToolReceiptStatus {
-        effective_time: receipt_effective_time(receipt),
         receipt_id: receipt.id.clone(),
         exit_status: receipt.exit_status,
         ended_at_ms: receipt.ended_at_ms,
@@ -473,95 +309,6 @@ pub(crate) fn evidence_requires_time_validity(evidence: &Value) -> bool {
             .and_then(|value| value.get("active_waiver_count"))
             .and_then(Value::as_u64)
             .is_some_and(|count| count > 0)
-}
-
-fn work_review_receipt_status(receipt: &ReceiptRecord) -> WorkReviewReceiptStatus {
-    let diff_summary = receipt_diff_summary(receipt);
-    let changed_path_count = receipt
-        .changed_path_count
-        .unwrap_or(receipt.changed_paths.len());
-    let changed_paths_truncated =
-        receipt.changed_paths_truncated || changed_path_count > receipt.changed_paths.len();
-    WorkReviewReceiptStatus {
-        receipt_id: receipt.id.clone(),
-        exit_status: receipt.exit_status,
-        ended_at_ms: receipt.ended_at_ms,
-        evidence: receipt.evidence.as_ref().map(work_review_receipt_evidence),
-        changed_paths: receipt.changed_paths.clone(),
-        changed_path_count,
-        changed_paths_truncated,
-        changed_paths_digest: receipt.changed_paths_digest.clone(),
-        diff_summary,
-        worktree_fingerprint: receipt.worktree_fingerprint.clone(),
-        worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
-        valid_until_ms: receipt.valid_until_ms,
-        requires_time_validity: receipt
-            .evidence
-            .as_ref()
-            .is_some_and(evidence_requires_time_validity),
-    }
-}
-
-fn work_review_receipt_evidence(evidence: &Value) -> WorkReviewReceiptEvidence {
-    let finding_values = evidence["findings"].as_array();
-    let retained_finding_count = finding_values.map(Vec::len);
-    let retained_actionable_count = evidence["actionable_findings"].as_array().map(Vec::len);
-    let mut parse_error = evidence["parse_error"].as_str().map(str::to_string);
-    if parse_error.is_none() && evidence["status"].as_str().is_none() {
-        parse_error = Some("review evidence is missing status".into());
-    }
-    if parse_error.is_none()
-        && evidence.get("findings").is_some()
-        && retained_finding_count.is_none()
-    {
-        parse_error = Some("review evidence findings is not an array".into());
-    }
-    if parse_error.is_none()
-        && evidence.get("actionable_findings").is_some()
-        && retained_actionable_count.is_none()
-    {
-        parse_error = Some("review evidence actionable_findings is not an array".into());
-    }
-    let mut findings = Vec::new();
-    for finding in finding_values.into_iter().flatten() {
-        let Some(message) = finding.get("issue").and_then(Value::as_str) else {
-            continue;
-        };
-        let code = finding
-            .get("fingerprint")
-            .and_then(Value::as_str)
-            .or_else(|| finding.get("severity").and_then(Value::as_str))
-            .unwrap_or("review_finding")
-            .to_string();
-        findings.push(super::WorkReviewFinding {
-            code,
-            message: message.to_string(),
-            path: finding
-                .get("path")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            line: finding.get("line").and_then(Value::as_u64),
-        });
-    }
-    WorkReviewReceiptEvidence {
-        status: evidence["status"].as_str().map(str::to_string),
-        finding_count: evidence["raw_finding_count"]
-            .as_u64()
-            .or_else(|| retained_finding_count.map(|count| count as u64)),
-        actionable_count: evidence["raw_actionable_count"]
-            .as_u64()
-            .or_else(|| retained_actionable_count.map(|count| count as u64)),
-        retained_finding_count,
-        retained_actionable_count,
-        findings_truncated: evidence["findings_truncated"].as_bool(),
-        actionable_findings_truncated: evidence["actionable_findings_truncated"].as_bool(),
-        threshold: evidence["threshold"].as_str().map(str::to_string),
-        findings,
-        parse: parse_error.map_or(
-            WorkReviewEvidenceParse::Valid,
-            WorkReviewEvidenceParse::Invalid,
-        ),
-    }
 }
 
 pub(crate) fn receipt_diff_summary(receipt: &ReceiptRecord) -> String {

@@ -1,41 +1,6 @@
 //! Shared serial/wave execution: never publishes receipts or releases claims.
 use super::*;
 
-pub(in crate::runtime::run_execution) fn reuse_candidate(
-    finisher: &TargetFinisher<'_>,
-    planned: &PlannedTarget,
-    control: &TargetExecutionControl<'_>,
-    allow_reuse: bool,
-) -> std::result::Result<Option<TargetRunResult>, TargetStop> {
-    let terminal = !finisher
-        .run
-        .plan
-        .targets
-        .iter()
-        .any(|target| target.depends_on.contains(&planned.target));
-    if !allow_reuse
-        || !terminal
-        || !finisher.record_receipts
-        || crate::repository::execution_resources::has_browser_policy(planned)
-    {
-        return Ok(None);
-    }
-    let Some(plan_id) = finisher.work_plan_id else {
-        return Ok(None);
-    };
-    let reusable = crate::runtime::work::reusable_invocation_after_resource_wait(
-        finisher.ctx,
-        plan_id,
-        finisher.catalog,
-        planned,
-        control.remaining()?,
-        &|| control.remaining().is_err(),
-    );
-    control.remaining()?;
-    // Unknown or failed evidence is not permission to skip execution.
-    Ok(reusable.ok().flatten())
-}
-
 pub(in crate::runtime::run_execution) fn capture_admitted(
     finisher: &TargetFinisher<'_>,
     planned: &PlannedTarget,

@@ -15,7 +15,6 @@ mod repository_run;
 mod sqlx;
 mod state;
 mod vault;
-mod work;
 
 pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
@@ -52,12 +51,6 @@ pub(crate) use vault::{
     VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest, VaultTuiRequest,
     is_valid_vault_scope_id,
 };
-pub(crate) use work::{
-    DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckPhase, WorkCheckRequest,
-    WorkCommand, WorkDecisionRequest, WorkEvidenceRequest, WorkFinishRequest, WorkGatesRequest,
-    WorkGoalRequest, WorkReceiptsRequest, WorkRefineRequest, WorkRetireRequest, WorkReviewRequest,
-    WorkStartRequest,
-};
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
@@ -73,7 +66,6 @@ pub(crate) enum RuntimeCommand {
     #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
     Proxy(ProxyCommand),
     Agent(AgentCommand),
-    Work(WorkCommand),
     Loop(LoopCommand),
     State(StateCommand),
 }
@@ -117,21 +109,6 @@ impl RuntimeCommand {
                 | CheckCommand::AgentGuides
                 | CheckCommand::MigrationImmutability(_)
                 | CheckCommand::SqlxUncheckedNonTest => Native,
-            },
-            Self::Work(command) => match command {
-                WorkCommand::Check(_)
-                | WorkCommand::Gates(_)
-                | WorkCommand::Evidence(_)
-                | WorkCommand::Review(_)
-                | WorkCommand::Refine(_)
-                | WorkCommand::Status
-                | WorkCommand::Finish(_) => Cooperative,
-                WorkCommand::Goal(_)
-                | WorkCommand::Start(_)
-                | WorkCommand::Append(_)
-                | WorkCommand::Decide(_)
-                | WorkCommand::Retire(_)
-                | WorkCommand::Receipts(_) => Native,
             },
             Self::Loop(command) => match command {
                 LoopCommand::Tick(_)
@@ -195,19 +172,6 @@ mod tests {
     fn unsupported_observer_paths_keep_native_signal_handling() {
         let native_commands = [
             RuntimeCommand::Check(CheckCommand::AgentGuides),
-            RuntimeCommand::Work(WorkCommand::Retire(WorkRetireRequest {
-                plan_id: "plan_1".into(),
-                disposition: "superseded".into(),
-                reason: "Replaced by a redesign.".into(),
-                superseded_by: None,
-            })),
-            RuntimeCommand::Work(WorkCommand::Receipts(WorkReceiptsRequest {
-                session_id: None,
-                plan_id: None,
-                tool_name: None,
-                failed_only: false,
-                limit: 10,
-            })),
             RuntimeCommand::State(StateCommand::Diagnose(StateDiagnoseRequest { deep: true })),
             RuntimeCommand::State(StateCommand::CompactSessions(StateCompactSessionsRequest {
                 dry_run: true,
@@ -235,7 +199,6 @@ mod tests {
     fn command_backed_and_cancellable_scans_use_cooperative_signals() {
         let cooperative_commands = [
             RuntimeCommand::Check(CheckCommand::Test(ToolRequest::default())),
-            RuntimeCommand::Work(WorkCommand::Status),
             RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
             RuntimeCommand::Loop(LoopCommand::ClearAttempt(LoopClearAttemptRequest {
                 workflow: "ExampleProject".into(),

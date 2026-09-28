@@ -39,7 +39,7 @@ impl RootCommandCategory {
         match self {
             Self::GetStarted => "Get started",
             Self::Develop => "Develop",
-            Self::StructuredWork => "Structured work",
+            Self::StructuredWork => "Workflows",
             Self::ProjectData => "Project data",
             Self::LocalServices => "Local services",
             Self::AgentAutomation => "Agent and automation",
@@ -100,8 +100,6 @@ pub(crate) const STATUS: RootCommand =
     command(cli_command::STATUS, RootCommandCategory::Develop, 120);
 pub(crate) const UI: RootCommand = command(cli_command::UI, RootCommandCategory::Develop, 130);
 
-pub(crate) const WORK: RootCommand =
-    command(cli_command::WORK, RootCommandCategory::StructuredWork, 200);
 pub(crate) const LOOP: RootCommand =
     command(cli_command::LOOP, RootCommandCategory::StructuredWork, 210);
 
@@ -161,7 +159,6 @@ pub(crate) const ALL: &[RootCommand] = &[
     FILE_BUDGET,
     STATUS,
     UI,
-    WORK,
     LOOP,
     MIGRATION,
     SQLX,

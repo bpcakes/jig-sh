@@ -1,5 +1,16 @@
 # Target freshness collector measurements
 
+> **Historical record.** The command-level qualification harness
+> (`scripts/benchmark-target-freshness-commands.py`,
+> `scripts/benchmark-target-freshness-limits.py`,
+> `scripts/qualify-target-freshness-constrained.sh`,
+> `scripts/target-freshness-benchmark.Dockerfile`, and
+> `.github/workflows/target-freshness-qualification.yml`) was removed with
+> `jig work` in the release after v0.6.0, together with the `work gates`,
+> `work evidence`, finish, and status gate evaluation it measured. The numbers
+> below are historical and the command-level instructions no longer run.
+> `scripts/benchmark-target-freshness.py` remains for collector measurements.
+
 The retained results below qualified target freshness before the contract
 consolidation: the then-unreleased epoch 8 was the runner-only baseline and
 epoch 9 was the freshness treatment. They establish the performance of

@@ -201,76 +201,11 @@ pub(super) fn execute_manifest_tool_with_observer(
         tool_name,
         args,
         plan_id,
-        ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
+        ManifestToolExecutionOptions::new(record_receipt, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,
     )?
     .into_value()
-}
-
-#[cfg(test)]
-pub(super) fn execute_manifest_tool_result_without_worktree_fingerprint(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-) -> Result<Value> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result(true, false, false),
-        ManifestToolExecutionBoundary::single(),
-        &mut NoopExecutionObserver,
-    )?
-    .into_value()
-}
-
-pub(super) fn execute_manifest_tool_with_options_for_work_check(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-    position: PhasePosition,
-    expected_authority_digest: Option<&str>,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ManifestToolExecutionOutcome> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result(true, false, false),
-        ManifestToolExecutionBoundary {
-            position,
-            expected_authority_digest,
-        },
-        observer,
-    )
-}
-
-pub(super) fn execute_manifest_tool_without_lease_wait_for_work_check(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-    position: PhasePosition,
-    expected_authority_digest: Option<&str>,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ManifestToolExecutionOutcome> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result_without_lease_wait(true, false, false),
-        ManifestToolExecutionBoundary {
-            position,
-            expected_authority_digest,
-        },
-        observer,
-    )
 }
 
 pub(super) enum ManifestToolExecutionOutcome {
@@ -306,46 +241,14 @@ pub(in crate::runtime) fn undeclared_tool_message(ctx: &RepoContext, tool_name: 
 }
 
 #[derive(Clone, Copy)]
-enum ToolFailureMode {
-    FailFast,
-    CollectResult,
-}
-
-#[derive(Clone, Copy)]
 struct ManifestToolExecutionOptions {
     record_receipt: bool,
     collect_git_metadata: bool,
     collect_worktree_fingerprint: bool,
-    failure_mode: ToolFailureMode,
-    lease_contention: LeaseContention,
-}
-
-#[derive(Clone, Copy)]
-enum LeaseContention {
-    Wait,
-    Reject,
-}
-
-impl LeaseContention {
-    fn acquire(
-        self,
-        ctx: &RepoContext,
-        effects: &[jig_contract::ActionEffect],
-        observer: &mut dyn ExecutionControl,
-    ) -> Result<crate::state::RepositoryExecutionLease> {
-        match self {
-            Self::Wait => super::run_execution::acquire_observed_repository_execution_lease(
-                ctx, effects, observer,
-            ),
-            Self::Reject => {
-                crate::state::acquire_repository_execution_lease_without_wait(ctx, effects)
-            }
-        }
-    }
 }
 
 impl ManifestToolExecutionOptions {
-    const fn fail_fast(
+    const fn new(
         record_receipt: bool,
         collect_git_metadata: bool,
         collect_worktree_fingerprint: bool,
@@ -354,36 +257,6 @@ impl ManifestToolExecutionOptions {
             record_receipt,
             collect_git_metadata,
             collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::FailFast,
-            lease_contention: LeaseContention::Wait,
-        }
-    }
-
-    const fn collect_result(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
-        Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::CollectResult,
-            lease_contention: LeaseContention::Wait,
-        }
-    }
-
-    const fn collect_result_without_lease_wait(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
-        Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::CollectResult,
-            lease_contention: LeaseContention::Reject,
         }
     }
 }
@@ -497,9 +370,11 @@ fn execute_v6_action_alias(
         // only admission to a second resolution below, not permission to run
         // the action value resolved above.
         let repository_execution =
-            options
-                .lease_contention
-                .acquire(&current, &action.effects, observer)?;
+            super::run_execution::acquire_observed_repository_execution_lease(
+                &current,
+                &action.effects,
+                observer,
+            )?;
 
         let refreshed = super::refreshed_repository_context(&current)?;
         ensure_expected_execution_authority(&refreshed, boundary.expected_authority_digest)?;

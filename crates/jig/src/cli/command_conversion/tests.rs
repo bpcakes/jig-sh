@@ -197,39 +197,6 @@ fn dev_conversion_preserves_management_action_state_dirs() {
 }
 
 #[test]
-fn work_receipts_conversion_preserves_filters() {
-    let request: command::WorkReceiptsRequest = WorkReceiptsOpts {
-        session_id: Some("session_1".to_string()),
-        plan_id: Some("plan_1".to_string()),
-        tool_name: Some(crate::tool_defs::tool::TEST.to_string()),
-        failed_only: true,
-        limit: 7,
-    }
-    .into();
-
-    assert_eq!(request.session_id.as_deref(), Some("session_1"));
-    assert_eq!(request.plan_id.as_deref(), Some("plan_1"));
-    assert_eq!(
-        request.tool_name.as_deref(),
-        Some(crate::tool_defs::tool::TEST)
-    );
-    assert!(request.failed_only);
-    assert_eq!(request.limit, 7);
-}
-
-#[test]
-fn work_evidence_conversion_preserves_plan_id() {
-    let request: command::WorkEvidenceRequest = WorkEvidenceOpts {
-        projection: crate::surface::ResponseSurface::Standard,
-        freshness_timeout_ms: None,
-        plan_id: Some("plan_1".to_string()),
-    }
-    .into();
-
-    assert_eq!(request.plan_id.as_deref(), Some("plan_1"));
-}
-
-#[test]
 fn state_archive_conversion_preserves_cutoff_run_scope_and_dry_run() {
     let request: command::StateCommand = StateCommand::Archive(StateArchiveOpts {
         before: "2026-01-01".into(),

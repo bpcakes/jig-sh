@@ -2,13 +2,11 @@ use super::*;
 
 pub(super) enum Prepared {
     Run,
-    Reused(Box<TargetRunResult>),
     Stopped(TargetStop),
 }
 
 pub(super) enum WaveOutcome {
     Captured(CompletedTargetCapture, Option<CompletedExecutionPhase>),
-    Reused(TargetRunResult),
 }
 
 pub(super) fn prepare_wave(
@@ -16,7 +14,6 @@ pub(super) fn prepare_wave(
     control: &mut dyn RepositoryRunControl,
     pending: &[Pending<'_>],
     wave: &[Member],
-    allow_reuse: bool,
 ) -> Vec<Prepared> {
     wave.iter()
         .map(|member| {
@@ -49,23 +46,6 @@ pub(super) fn prepare_wave(
                         &target_control,
                         resolved,
                     )?;
-                    if let Some(result) = resources::reuse_candidate(
-                        finisher,
-                        pending.planned,
-                        &target_control,
-                        allow_reuse && pending.waited && !pending.force_execution,
-                    )? {
-                        // The proof query performs bounded source/journal work.
-                        // Re-establish the resource and configuration authority
-                        // afterwards, as on the serial admission path.
-                        resources::revalidate_authority(
-                            finisher,
-                            pending.planned,
-                            &target_control,
-                            resolved,
-                        )?;
-                        return Ok(Prepared::Reused(Box::new(result)));
-                    }
                 }
                 Ok(Prepared::Run)
             };
@@ -112,7 +92,6 @@ pub(super) fn execute_wave(
                         ),
                         None,
                     )),
-                    Prepared::Reused(result) => Ok(WaveOutcome::Reused(*result)),
                     Prepared::Run if pending.planned.resources.is_empty() => {
                         execute_parallel_target(
                             finisher.ctx,

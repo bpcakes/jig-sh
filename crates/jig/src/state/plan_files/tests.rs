@@ -45,21 +45,6 @@ fn canonical_plan_ids_accept_documented_shapes_and_reject_path_syntax() {
 }
 
 #[test]
-fn safe_plan_store_creates_missing_directories_and_round_trips_append() {
-    let temp = tempdir().unwrap();
-    let ctx = context(temp.path());
-    fs::remove_dir_all(temp.path().join(".agent")).unwrap();
-
-    let path = create_plan_body(&ctx, "plan_example", "# Example\n").unwrap();
-    append_plan_body(&ctx, "plan_example", b"\nMore").unwrap();
-    let body = read_plan_body(&ctx, "plan_example", &|| false).unwrap();
-
-    assert_eq!(path, temp.path().join(".agent/plans/plan_example.md"));
-    assert_eq!(body.text, "# Example\n\nMore");
-    assert!(!body.truncated);
-}
-
-#[test]
 fn create_refuses_to_replace_an_existing_body() {
     let temp = tempdir().unwrap();
     let ctx = context(temp.path());
@@ -72,24 +57,6 @@ fn create_refuses_to_replace_an_existing_body() {
         fs::read_to_string(plan_body_path(&ctx, "plan_existing").unwrap()).unwrap(),
         "original"
     );
-}
-
-#[test]
-fn append_fails_closed_when_the_original_body_is_missing() {
-    let temp = tempdir().unwrap();
-    let ctx = context(temp.path());
-    create_plan_body(&ctx, "plan_missing_body", "original").unwrap();
-    let path = plan_body_path(&ctx, "plan_missing_body").unwrap();
-    fs::remove_file(&path).unwrap();
-
-    let error = append_plan_body(&ctx, "plan_missing_body", b"replacement fragment").unwrap_err();
-
-    assert_eq!(
-        error.downcast_ref::<PlanFileError>().unwrap().kind(),
-        PlanFileErrorKind::NotFound
-    );
-    assert!(error.to_string().contains("restore the original body"));
-    assert!(!path.exists());
 }
 
 #[test]
@@ -197,193 +164,6 @@ fn make_fifo(path: &Path) {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn symlinked_ancestors_body_and_lock_never_escape_the_repository() {
-    use std::os::unix::fs::symlink;
-
-    for ancestor in [".agent", ".agent/plans"] {
-        let temp = tempdir().unwrap();
-        let ctx = context(temp.path());
-        fs::remove_dir_all(temp.path().join(".agent")).unwrap();
-        let outside = temp.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        if ancestor == ".agent" {
-            symlink(&outside, temp.path().join(".agent")).unwrap();
-        } else {
-            fs::create_dir(temp.path().join(".agent")).unwrap();
-            symlink(&outside, temp.path().join(".agent/plans")).unwrap();
-        }
-        assert!(create_plan_body(&ctx, "plan_escape", "unsafe").is_err());
-        assert!(fs::read_dir(&outside).unwrap().next().is_none());
-    }
-
-    let temp = tempdir().unwrap();
-    let ctx = context(temp.path());
-    let outside_body = temp.path().join("outside-body");
-    fs::write(&outside_body, "unchanged").unwrap();
-    fs::create_dir_all(temp.path().join(".agent/plans")).unwrap();
-    symlink(&outside_body, plan_body_path(&ctx, "plan_escape").unwrap()).unwrap();
-    assert!(read_plan_body(&ctx, "plan_escape", &|| false).is_err());
-    assert!(append_plan_body(&ctx, "plan_escape", b"changed").is_err());
-    assert_eq!(fs::read_to_string(&outside_body).unwrap(), "unchanged");
-
-    fs::remove_file(plan_body_path(&ctx, "plan_escape").unwrap()).unwrap();
-    create_plan_body(&ctx, "plan_escape", "body").unwrap();
-    let outside_lock = temp.path().join("outside-lock");
-    fs::write(&outside_lock, "unchanged").unwrap();
-    symlink(
-        &outside_lock,
-        temp.path().join(".agent/plans/plan_escape.md.lock"),
-    )
-    .unwrap();
-    assert!(append_plan_body(&ctx, "plan_escape", b"changed").is_err());
-    assert_eq!(fs::read_to_string(&outside_lock).unwrap(), "unchanged");
-    assert_eq!(
-        fs::read_to_string(plan_body_path(&ctx, "plan_escape").unwrap()).unwrap(),
-        "body"
-    );
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn fifo_and_device_targets_fail_without_a_peer() {
-    let temp = tempdir().unwrap();
-    let ctx = context(temp.path());
-    fs::create_dir_all(temp.path().join(".agent/plans")).unwrap();
-    let body_path = plan_body_path(&ctx, "plan_fifo").unwrap();
-    make_fifo(&body_path);
-    assert!(read_plan_body(&ctx, "plan_fifo", &|| false).is_err());
-    assert!(append_plan_body(&ctx, "plan_fifo", b"data").is_err());
-
-    create_plan_body(&ctx, "plan_lock_fifo", "body").unwrap();
-    make_fifo(&temp.path().join(".agent/plans/plan_lock_fifo.md.lock"));
-    assert!(append_plan_body(&ctx, "plan_lock_fifo", b"data").is_err());
-
-    let device = Dir::open_ambient_dir("/dev", ambient_authority()).unwrap();
-    let mut options = regular_options(false, false, false);
-    options.read(true);
-    let error = open_regular(
-        &device,
-        OsStr::new("null"),
-        &mut options,
-        Path::new("/dev/null"),
-    )
-    .unwrap_err();
-    assert_eq!(
-        error.downcast_ref::<PlanFileError>().unwrap().kind(),
-        PlanFileErrorKind::UnsafeType
-    );
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn append_waits_for_the_verified_sidecar_lock() {
-    let temp = tempdir().unwrap();
-    let ctx = context(temp.path());
-    create_plan_body(&ctx, "plan_locked", "body").unwrap();
-    let lock_path = temp.path().join(".agent/plans/plan_locked.md.lock");
-    let lock = File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .unwrap();
-    lock.lock_exclusive().unwrap();
-    let (tx, rx) = mpsc::channel();
-    let worker_ctx = ctx.clone();
-    let worker = thread::spawn(move || {
-        let result = append_plan_body(&worker_ctx, "plan_locked", b"+append");
-        tx.send(result).unwrap();
-    });
-
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
-    let body = File::open(plan_body_path(&ctx, "plan_locked").unwrap()).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        if !FileExt::try_lock_shared(&body).unwrap() {
-            break;
-        }
-        FileExt::unlock(&body).unwrap();
-        assert!(
-            std::time::Instant::now() < deadline,
-            "append never acquired the body lock before the sidecar"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-    let reader_ctx = ctx.clone();
-    let (read_tx, read_rx) = mpsc::channel();
-    let reader = thread::spawn(move || {
-        read_tx
-            .send(read_plan_body(&reader_ctx, "plan_locked", &|| false))
-            .unwrap();
-    });
-    // Keep this well below PLAN_BODY_LOCK_WAIT_LIMIT. The reader's 250ms
-    // shared-lock deadline starts immediately, and the appender still has to
-    // finish after the sidecar is released.
-    assert!(read_rx.recv_timeout(Duration::from_millis(20)).is_err());
-    FileExt::unlock(&lock).unwrap();
-    rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
-    let body_after_append = read_rx
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap();
-    worker.join().unwrap();
-    reader.join().unwrap();
-    assert_eq!(body_after_append.text, "body+append");
-    assert_eq!(
-        fs::read_to_string(plan_body_path(&ctx, "plan_locked").unwrap()).unwrap(),
-        "body+append"
-    );
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn body_read_wait_is_cancellable_and_never_returns_a_torn_append() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    let temp = tempdir().unwrap();
-    let ctx = context(temp.path());
-    create_plan_body(&ctx, "plan_read_lock", "before").unwrap();
-    let path = plan_body_path(&ctx, "plan_read_lock").unwrap();
-    let lock = File::open(&path).unwrap();
-    lock.lock_exclusive().unwrap();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let reader_cancelled = Arc::clone(&cancelled);
-    let reader_ctx = ctx.clone();
-    let (tx, rx) = mpsc::channel();
-    let reader = thread::spawn(move || {
-        tx.send(read_plan_body(&reader_ctx, "plan_read_lock", &|| {
-            reader_cancelled.load(Ordering::SeqCst)
-        }))
-        .unwrap();
-    });
-
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
-    cancelled.store(true, Ordering::SeqCst);
-    let error = rx
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_err();
-    assert!(crate::cancellation::is_status_collection_cancellation(
-        &error
-    ));
-    FileExt::unlock(&lock).unwrap();
-    reader.join().unwrap();
-
-    append_plan_body(&ctx, "plan_read_lock", b"+after").unwrap();
-    assert_eq!(
-        read_plan_body(&ctx, "plan_read_lock", &|| false)
-            .unwrap()
-            .text,
-        "before+after"
-    );
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn body_read_wait_has_a_finite_deadline_without_cancellation() {
     let temp = tempdir().unwrap();
     let ctx = context(temp.path());
@@ -433,4 +213,106 @@ fn ancestor_replacement_between_create_and_open_fails_closed() {
         assert!(fs::read_dir(&outside).unwrap().next().is_none());
         drop(ctx);
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn symlinked_ancestors_and_bodies_never_escape_the_repository() {
+    use std::os::unix::fs::symlink;
+
+    for ancestor in [".agent", ".agent/plans"] {
+        let temp = tempdir().unwrap();
+        let ctx = context(temp.path());
+        fs::remove_dir_all(temp.path().join(".agent")).unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        if ancestor == ".agent" {
+            symlink(&outside, temp.path().join(".agent")).unwrap();
+        } else {
+            fs::create_dir(temp.path().join(".agent")).unwrap();
+            symlink(&outside, temp.path().join(".agent/plans")).unwrap();
+        }
+        assert!(create_plan_body(&ctx, "plan_escape", "unsafe").is_err());
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    let temp = tempdir().unwrap();
+    let ctx = context(temp.path());
+    let outside_body = temp.path().join("outside-body");
+    fs::write(&outside_body, "unchanged").unwrap();
+    fs::create_dir_all(temp.path().join(".agent/plans")).unwrap();
+    symlink(&outside_body, plan_body_path(&ctx, "plan_escape").unwrap()).unwrap();
+    assert!(read_plan_body(&ctx, "plan_escape", &|| false).is_err());
+    assert_eq!(fs::read_to_string(&outside_body).unwrap(), "unchanged");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn fifo_and_device_targets_fail_without_a_peer() {
+    let temp = tempdir().unwrap();
+    let ctx = context(temp.path());
+    fs::create_dir_all(temp.path().join(".agent/plans")).unwrap();
+    let body_path = plan_body_path(&ctx, "plan_fifo").unwrap();
+    make_fifo(&body_path);
+    assert!(read_plan_body(&ctx, "plan_fifo", &|| false).is_err());
+
+    let device = Dir::open_ambient_dir("/dev", ambient_authority()).unwrap();
+    let mut options = regular_options(false, false, false);
+    options.read(true);
+    let error = open_regular(
+        &device,
+        OsStr::new("null"),
+        &mut options,
+        Path::new("/dev/null"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<PlanFileError>().unwrap().kind(),
+        PlanFileErrorKind::UnsafeType
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn body_read_wait_is_cancellable() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let temp = tempdir().unwrap();
+    let ctx = context(temp.path());
+    create_plan_body(&ctx, "plan_read_lock", "before").unwrap();
+    let path = plan_body_path(&ctx, "plan_read_lock").unwrap();
+    let lock = File::open(&path).unwrap();
+    lock.lock_exclusive().unwrap();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let reader_cancelled = Arc::clone(&cancelled);
+    let reader_ctx = ctx.clone();
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        tx.send(read_plan_body(&reader_ctx, "plan_read_lock", &|| {
+            reader_cancelled.load(Ordering::SeqCst)
+        }))
+        .unwrap();
+    });
+
+    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    cancelled.store(true, Ordering::SeqCst);
+    let error = rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert!(crate::cancellation::is_status_collection_cancellation(
+        &error
+    ));
+    FileExt::unlock(&lock).unwrap();
+    reader.join().unwrap();
+
+    assert_eq!(
+        read_plan_body(&ctx, "plan_read_lock", &|| false)
+            .unwrap()
+            .text,
+        "before"
+    );
 }

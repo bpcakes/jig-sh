@@ -131,7 +131,7 @@ class SourceRuntimeTests(unittest.TestCase):
         (self.root / "crates/jig/src/main.rs").write_text("this is broken Rust\n")
         (self.root / "Cargo.toml").write_text("broken TOML [\n")
         self.install("newer")
-        for command in [("--version",), ("work", "status"), ("mcp",), ("doctor",)]:
+        for command in [("--version",), ("state", "summary"), ("mcp",), ("doctor",)]:
             self.assert_ok(self.launcher(*command))
         self.assertEqual(cached.stat().st_mtime_ns, original)
         self.assertEqual(self.launcher("--version").stdout, "jig 0.4.0\n")

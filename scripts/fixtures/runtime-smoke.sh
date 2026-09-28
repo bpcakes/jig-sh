@@ -89,7 +89,7 @@ try:
         assert ("jig.sqlx_check" in tool_names) == expect_sqlx, tool_names
         assert ("jig.migration_add" in tool_names) == expect_sqlx, tool_names
     assert "jig.agent_doctor" in tool_names, tool_names
-    assert "jig.work_start" in tool_names, tool_names
+    assert not any(name.startswith("jig.work_") for name in tool_names), tool_names
     assert "jig.session_start" not in tool_names, tool_names
 
     send({
@@ -102,9 +102,8 @@ try:
         },
     })
     response = recv()
-    content = response["result"]["structuredContent"]
-    assert content["ok"] is True, response
-    assert "counts" in content, response
+    assert "error" in response, response
+    assert "Unsupported tool" in response["error"]["message"], response
 except Exception:
     print_mcp_stderr()
     raise
@@ -688,37 +687,24 @@ PY
       env -u JIG_DEV_BIN /bin/bash scripts/install-jig.sh >/dev/null
     )
 
-    work_json="$(scripts/jig work start --json --title "Fixture runtime plan" --body "## Fixture\nRuntime validation.")"
-    plan_id="$(printf '%s' "$work_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["plan"]["plan_id"])')"
-
     if [[ "$expect_sqlx" == "1" ]]; then
-      scripts/jig sqlx migration add "$migration_name" --plan-id "$plan_id" >/dev/null
+      scripts/jig sqlx migration add "$migration_name" >/dev/null
     fi
 
-    scripts/jig work check --plan-id "$plan_id" >/dev/null
-    scripts/jig work gates --plan-id "$plan_id" >/dev/null
+    # Fixtures may name a default branch that does not exist locally; compare
+    # native checks with the current commit, as the removed plan baseline did.
+    scripts/jig check --comparison-base HEAD >/dev/null
 
-    scripts/jig work decide \
-      --title "Fixture decision" \
-      --selected-option "Use jig" \
-      --rationale "Runtime contract is wired and validated." \
-      --plan-id "$plan_id" \
-      --alternatives "Ad-hoc shell commands" \
-      >/dev/null
-
-    receipts_json="$(scripts/jig work receipts --json --plan-id "$plan_id" --limit 20)"
-    RECEIPTS_JSON="$receipts_json" EXPECT_SQLX="$expect_sqlx" EXPECT_SCHEMA_DUMP="$expect_schema_dump" python3 <<'PY'
+    RECEIPTS_PATH=.agent/state/receipts.jsonl EXPECT_SQLX="$expect_sqlx" EXPECT_SCHEMA_DUMP="$expect_schema_dump" python3 <<'PY'
 import json
 import os
 
-payload = json.loads(os.environ["RECEIPTS_JSON"])
-tools = {receipt["tool_name"] for receipt in payload["receipts"]}
+with open(os.environ["RECEIPTS_PATH"], encoding="utf-8") as receipts:
+    tools = {json.loads(line)["tool_name"] for line in receipts if line.strip()}
 required = {
-    "jig.plans_open",
     "jig.contract_check",
     "jig.file_budget",
     "jig.test",
-    "jig.decisions_add",
 }
 if os.environ["EXPECT_SQLX"] == "1":
     required.update({"jig.sqlx_check", "jig.migration_add"})
@@ -730,44 +716,16 @@ if missing:
     raise SystemExit(f"Missing expected runtime receipts: {', '.join(missing)}")
 PY
 
-    scripts/jig work finish --plan-id "$plan_id" --resolution "fixture complete" --outcome success >/dev/null
+    # The retired structured-work namespace parses only to explain its replacement.
+    retired_work_stderr="$(mktemp "$repo_dir/.retired-work-stderr.XXXXXX")"
+    if scripts/jig work status >/dev/null 2>"$retired_work_stderr"; then
+      echo "Removed jig work namespace unexpectedly succeeded." >&2
+      exit 1
+    fi
+    grep -q 'jig work` was removed' "$retired_work_stderr"
+    rm -f "$retired_work_stderr"
 
-    # Non-success retirement closes a plan with no gate evidence at all.
-    retired_plan_id="$(scripts/jig work start --title "Retired fixture work" --body "Superseded validation plan." --print-plan-id)"
-    retire_json="$(scripts/jig work retire --json --plan-id "$retired_plan_id" \
-      --disposition superseded \
-      --reason "Superseded by the primary fixture plan." \
-      --superseded-by "$plan_id")"
-    RETIRE_JSON="$retire_json" PLAN_ID="$plan_id" python3 <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["RETIRE_JSON"])
-retirement = payload["plan"]["retirement"]
-if retirement["disposition"] != "superseded":
-    raise SystemExit(f"Unexpected retirement disposition: {retirement['disposition']}")
-if retirement["superseded_by"] != os.environ["PLAN_ID"]:
-    raise SystemExit("Retirement did not record the superseding plan reference")
-if payload["session_status"]["action"] not in {"ended", "left_active", "none"}:
-    raise SystemExit(f"Unexpected session action: {payload['session_status']['action']}")
-PY
-
-    gates_json="$(scripts/jig work gates --json --plan-id "$retired_plan_id")"
-    RETIRED_GATES_JSON="$gates_json" python3 <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["RETIRED_GATES_JSON"])
-if payload["plan_state"] != "closed":
-    raise SystemExit("Retired plan did not project as closed")
-if payload["plan_retirement"]["disposition"] != "superseded":
-    raise SystemExit("Retired plan did not project its disposition")
-PY
-
-    [[ -f ".agent/plans/${plan_id}.md" ]]
-    grep -q "Runtime validation" ".agent/plans/${plan_id}.md"
     [[ -f .agent/state/receipts.jsonl ]]
-    [[ -f .agent/state/decisions.jsonl ]]
     [[ -f "$install_base/$contract_cache_key-runtime/bin/jig" ]]
     [[ -f "$install_base/$contract_cache_key/bin/jig" ]]
     if [[ "$expect_sqlx" == "1" ]]; then
