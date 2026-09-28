@@ -4,8 +4,8 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::runtime::{
-    MIN_SUPPORTED_CONTRACT_VERSION, active_contract_versions_label_at,
-    is_active_contract_version_at, supported_contract_versions_label,
+    MIN_SUPPORTED_CONTRACT_VERSION, is_active_contract_version_at,
+    supported_contract_versions_label,
 };
 use super::*;
 
@@ -64,49 +64,25 @@ targets = [{ component = "repo", action = "contract" }]
 }
 
 #[test]
-fn work_link_epoch_is_supported_without_activating_or_reusing_reserved_epochs() {
+fn reserved_epochs_are_neither_supported_nor_active() {
     assert_eq!(CURRENT_CONTRACT_VERSION, 8);
-    assert_eq!(WORK_LINK_CONTRACT_VERSION, 11);
-    assert_eq!(MAX_SUPPORTED_CONTRACT_VERSION, 11);
+    assert_eq!(MAX_SUPPORTED_CONTRACT_VERSION, 8);
 
     for version in MIN_SUPPORTED_CONTRACT_VERSION..=CURRENT_CONTRACT_VERSION {
         assert!(is_supported_contract_version(version));
-        assert!(!supports_work_links(version));
+        assert!(is_active_contract_version(version));
     }
-    for version in [9, 10] {
+    for version in [9, 10, 11] {
         assert!(!is_supported_contract_version(version));
-        assert!(!supports_work_links(version));
+        assert!(!is_active_contract_version_at(version, version));
     }
-    assert!(is_supported_contract_version(WORK_LINK_CONTRACT_VERSION));
-    assert!(!is_active_contract_version(WORK_LINK_CONTRACT_VERSION));
-    assert!(supports_work_links(WORK_LINK_CONTRACT_VERSION));
-    assert_eq!(supported_contract_versions_label(), "2 through 8 and 11");
+    assert_eq!(supported_contract_versions_label(), "2 through 8");
     assert_eq!(active_contract_versions_label(), "2 through 8");
-
-    assert!(is_active_contract_version_at(
-        WORK_LINK_CONTRACT_VERSION,
-        WORK_LINK_CONTRACT_VERSION
-    ));
-    for version in [9, 10] {
-        assert!(!is_active_contract_version_at(
-            version,
-            WORK_LINK_CONTRACT_VERSION
-        ));
-    }
-    assert_eq!(
-        active_contract_versions_label_at(WORK_LINK_CONTRACT_VERSION),
-        "2 through 8 and 11"
-    );
 }
 
 #[test]
-fn repository_loading_accepts_work_link_epoch_and_rejects_reserved_epochs() {
-    let supported = tempdir().unwrap();
-    write_native_contract_fixture(supported.path(), WORK_LINK_CONTRACT_VERSION);
-    let context = RepoContext::load_from_root(supported.path().to_path_buf()).unwrap();
-    assert_eq!(context.contract_version(), WORK_LINK_CONTRACT_VERSION);
-
-    for reserved in [9, 10] {
+fn repository_loading_rejects_reserved_epochs() {
+    for reserved in [9, 10, 11] {
         let rejected = tempdir().unwrap();
         write_native_contract_fixture(rejected.path(), reserved);
         let error = RepoContext::load_from_root(rejected.path().to_path_buf())

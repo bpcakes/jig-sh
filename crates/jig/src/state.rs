@@ -19,8 +19,6 @@ pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
 pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, read_plan_body};
 #[cfg(test)]
-use plans::ensure_plan_exists;
-#[cfg(test)]
 pub(crate) use plans::{PlanOpenRequest, plans_open, seed_open_plan_for_test};
 pub(crate) use plans::{
     ensure_plan_is_open, open_plan_summaries, plan_baseline, plan_baseline_with_cancellation,
@@ -92,11 +90,9 @@ mod runs;
 mod session_compaction;
 mod sessions;
 mod support;
-mod tracker_identity;
 // The next delivery milestone exposes the lifecycle entrypoints built on this
 // portable, Jig-owned link authority.
 #[allow(dead_code)]
-pub(crate) mod work_links;
 
 pub(super) const MAINTENANCE_WRITER_COORDINATION_NOTE: &str = "Before applying a state rewrite, stop Jig processes launched with older runtimes that wrote through a pre-opened state-file handle. Current runtimes coordinate through the repository state lock.";
 

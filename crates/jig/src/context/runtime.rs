@@ -35,11 +35,8 @@ static PREVALIDATED_LAUNCHER_CONTEXT: Mutex<Option<RepoContext>> = Mutex::new(No
 pub(crate) const CURRENT_SESSION_FILE: &str = "jig-current-session.txt";
 pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
 pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
-pub(crate) const LAST_LEGACY_CONTRACT_VERSION: u32 = 8;
-// Epochs 9 and 10 remain reserved for historical, unreleased receipt formats.
-// T1 readers and writers reserve 11 for durable work links without making it the
-// default rendered repository contract before the linked workflow is complete.
-pub(crate) const WORK_LINK_CONTRACT_VERSION: u32 = 11;
+// Epochs 9 and 10 remain reserved for historical, unreleased receipt formats,
+// and 11 for the retired work-link journal. The next epoch is 12.
 pub(crate) const GIT_RUNTIME_CACHE_BASE: &str = ".git/jig-tools";
 pub(crate) const FALLBACK_RUNTIME_CACHE_BASE: &str = ".agent/.cache/jig";
 pub(crate) const RUNTIME_CACHE_PROFILE_SUFFIX: &str = "-runtime";
@@ -89,8 +86,7 @@ pub(crate) fn runtime_profile_cache_path(
 }
 
 pub(crate) const fn is_supported_contract_version(version: u32) -> bool {
-    (version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= LAST_LEGACY_CONTRACT_VERSION)
-        || supports_work_links(version)
+    version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= MAX_SUPPORTED_CONTRACT_VERSION
 }
 
 /// A cached launcher advertises only epochs already active in generated
@@ -101,10 +97,6 @@ pub(crate) const fn is_active_contract_version(version: u32) -> bool {
 
 pub(crate) const fn is_active_contract_version_at(version: u32, current_version: u32) -> bool {
     is_supported_contract_version(version) && version <= current_version
-}
-
-pub(crate) const fn supports_work_links(contract_version: u32) -> bool {
-    contract_version == WORK_LINK_CONTRACT_VERSION
 }
 
 pub(crate) fn active_contract_versions() -> impl Iterator<Item = u32> {

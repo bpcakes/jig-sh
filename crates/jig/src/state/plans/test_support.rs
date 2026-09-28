@@ -150,18 +150,3 @@ fn plan_open_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<St
         (Some(_), Some(_)) => bail!("Provide either `body` or `body_file`, not both."),
     }
 }
-
-/// Records a plan-close event the way the removed `jig work finish` did.
-pub(crate) fn seed_closed_plan_for_test(
-    ctx: &RepoContext,
-    plan_id: &str,
-    resolution: &str,
-) -> Result<()> {
-    let event = PlanEvent::close(
-        new_id("plan-event"),
-        plan_id.to_string(),
-        now_ms(),
-        Some(resolution.to_string()),
-    );
-    append_jsonl(&ctx.state_file("plans.jsonl"), &event)
-}

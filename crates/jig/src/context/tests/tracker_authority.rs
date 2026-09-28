@@ -23,10 +23,6 @@ fn tracker_guidance_does_not_change_contract_authority() {
         .unwrap();
         let changed = original.reload_execution_authority().unwrap();
         assert_eq!(changed.contract_digest(), original.contract_digest());
-        assert_eq!(
-            changed.work_tracker().unwrap().manual_export_guidance(),
-            Some(guidance)
-        );
     }
 
     fs::write(

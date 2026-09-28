@@ -18,9 +18,7 @@ use super::support::{AdvisoryLeaseFile, ensure_state_layout};
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
-pub(crate) use test_support::{
-    PlanOpenRequest, plans_open, seed_closed_plan_for_test, seed_open_plan_for_test,
-};
+pub(crate) use test_support::{PlanOpenRequest, plans_open, seed_open_plan_for_test};
 
 const PLAN_EXECUTION_LEASE_DIR: &str = ".agent/.cache/plan-execution-leases";
 
@@ -88,45 +86,6 @@ pub(crate) fn ensure_plan_is_open(ctx: &RepoContext, plan_id: &str) -> Result<()
 pub(crate) fn plan_status(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanStatus>> {
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     Ok(plan_status_from_events(&events, plan_id))
-}
-
-/// Plan existence for the reserved work-link journal.
-pub(crate) fn ensure_plan_exists(ctx: &RepoContext, plan_id: &str) -> Result<()> {
-    match plan_status_with_cancellation(ctx, plan_id, &|| false)? {
-        Some(_) => Ok(()),
-        None => bail!("Plan not found: {plan_id}"),
-    }
-}
-
-pub(crate) fn plan_status_with_cancellation(
-    ctx: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Option<PlanStatus>> {
-    ensure_plan_scan_active(cancelled)?;
-    let events = read_dashboard_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
-    let mut opened = false;
-    let mut closed = false;
-    for event in &events {
-        ensure_plan_scan_active(cancelled)?;
-        if event.plan_id() != plan_id {
-            continue;
-        }
-        match event {
-            PlanEvent::Open { .. } => {
-                opened = true;
-                closed = false;
-            }
-            PlanEvent::Close { .. } => closed = true,
-            _ => {}
-        }
-    }
-    ensure_plan_scan_active(cancelled)?;
-    Ok(match (opened, closed) {
-        (true, false) => Some(PlanStatus::Open),
-        (true, true) => Some(PlanStatus::Closed),
-        (false, _) => None,
-    })
 }
 
 pub(crate) fn open_plan_summaries(ctx: &RepoContext) -> Result<Vec<Value>> {

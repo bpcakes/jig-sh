@@ -180,36 +180,6 @@ fn legacy_unknown_plan_events_stay_readable() {
 }
 
 #[test]
-fn ensure_plan_exists_requires_open_event_but_allows_closed_plan() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    ensure_state_layout(&ctx).unwrap();
-
-    append_jsonl(
-        &ctx.state_file("plans.jsonl"),
-        &PlanEvent::append("1".into(), "plan_1".into(), 1, None),
-    )
-    .unwrap();
-
-    let error = ensure_plan_exists(&ctx, "plan_1").unwrap_err().to_string();
-    assert!(error.contains("Plan not found: plan_1"));
-
-    append_jsonl(
-        &ctx.state_file("plans.jsonl"),
-        &PlanEvent::open("2".into(), "plan_1".into(), 2, "Example".into(), None),
-    )
-    .unwrap();
-    append_jsonl(
-        &ctx.state_file("plans.jsonl"),
-        &PlanEvent::close("3".into(), "plan_1".into(), 3, Some("done".into())),
-    )
-    .unwrap();
-
-    ensure_plan_exists(&ctx, "plan_1").unwrap();
-}
-
-#[test]
 fn truncate_handles_multibyte_boundaries() {
     let value = format!("{}{}", "a".repeat(3999), "é");
     let truncated = truncate(&value);

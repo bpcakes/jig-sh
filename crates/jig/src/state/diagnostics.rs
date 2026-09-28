@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
 
-use super::jsonl::{scan_jsonl_raw, scan_jsonl_raw_bounded};
+use super::jsonl::scan_jsonl_raw;
 
 mod deep;
 mod linkage;
@@ -29,13 +29,12 @@ use deep::{
 };
 use linkage::{RunLinkageCollector, RunLinkageReport, analyze_receipt_linkage};
 
-const STATE_STREAMS: [(&str, &str); 6] = [
+const STATE_STREAMS: [(&str, &str); 5] = [
     ("sessions", "sessions.jsonl"),
     ("plans", "plans.jsonl"),
     ("receipts", "receipts.jsonl"),
     ("decisions", "decisions.jsonl"),
     ("runs", "runs.jsonl"),
-    ("work_links", "work-links.jsonl"),
 ];
 const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
 const RECEIPT_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
@@ -80,11 +79,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
     );
     let maintenance_cache = inspect_maintenance_cache(ctx.root(), MAX_DIAGNOSTIC_SAMPLES);
     let git = inspect_git_facts(ctx.root());
-    let work_links = request.deep.then(|| {
-        super::work_links::work_link_journal_diagnostics_from_path(
-            &ctx.state_file(super::work_links::WORK_LINKS_FILE),
-        )
-    });
     let totals = state_totals(&streams, &legacy_archive, &maintenance_cache);
     let recommendations = recommendations(
         request.deep,
@@ -108,7 +102,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         "streams": streams,
         "sessions": request.deep.then_some(session_compaction),
         "receipts": request.deep.then_some(receipt_payload),
-        "work_links": work_links,
         "run_linkage": run_linkage.to_value(),
         "legacy_archive": legacy_archive,
         "maintenance_cache": maintenance_cache,
@@ -205,15 +198,7 @@ fn inspect_stream(
         }
         Ok(())
     };
-    let result = match path.file_name().and_then(|name| name.to_str()) {
-        Some(super::work_links::WORK_LINKS_FILE) => scan_jsonl_raw_bounded(
-            path,
-            &|| false,
-            super::work_links::MAX_WORK_LINK_RECORD_BYTES,
-            &mut visit,
-        ),
-        _ => scan_jsonl_raw(path, &|| false, &mut visit),
-    };
+    let result = scan_jsonl_raw(path, &|| false, &mut visit);
 
     match result {
         Ok(scan) => {

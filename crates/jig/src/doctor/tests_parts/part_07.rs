@@ -387,7 +387,6 @@ fn signal_retirement_failure_preserves_the_process_independent_tracker_check() {
             "compatible",
             "compatible",
         )),
-        tracker: check("tracker", "Work tracker", true, true, "ready", "ready"),
         agent: check(
             "agent_skills",
             "Agent skills",
@@ -425,9 +424,6 @@ fn signal_retirement_failure_preserves_the_process_independent_tracker_check() {
         assert_eq!(process_check.status, "error");
         assert!(process_check.detail.contains("could not retire safely"));
     }
-    assert!(checks.tracker.ok);
-    assert_eq!(checks.tracker.status, "ready");
-    assert_eq!(checks.tracker.detail, "ready");
 }
 
 #[cfg(unix)]
