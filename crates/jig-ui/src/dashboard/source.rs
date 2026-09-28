@@ -2,9 +2,7 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
-    DEFAULT_TIMELINE_ROWS, MAX_TIMELINE_ROWS, PlanSnapshot, RecorderSnapshot, StatusLocalSnapshot,
-};
+use super::{DEFAULT_TIMELINE_ROWS, MAX_TIMELINE_ROWS, RecorderSnapshot, StatusLocalSnapshot};
 
 /// Supplies bounded dashboard observations to the serialized terminal worker.
 ///
@@ -19,13 +17,6 @@ pub trait DashboardSource: Send + Sync {
         request: RecorderRequest,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<RecorderRefresh, SourceError>;
-
-    fn plan(
-        &self,
-        basis: PlanBasis,
-        plan_id: String,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PlanSnapshotResult, SourceError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -100,12 +91,6 @@ impl<'de> Deserialize<'de> for TimelineLimit {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PlanBasis {
-    RecorderEpoch(RecorderEpochId),
-    Fresh,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecorderMode {
     Refresh,
     ReuseCurrent,
@@ -123,23 +108,11 @@ pub struct RecorderRefresh {
     pub status_local: StatusLocalSnapshot,
 }
 
-#[derive(Clone, Debug)]
-pub enum PlanSnapshotResult {
-    Found(Box<PlanSnapshot>),
-    NotFound,
-    StaleRecorderEpoch,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CollectionDomain {
     Repository,
-    Sessions,
-    Plans,
-    Decisions,
     Receipts,
     Loops,
-    Gates,
-    Body,
 }
 
 impl CollectionDomain {
@@ -147,13 +120,8 @@ impl CollectionDomain {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Repository => "repository",
-            Self::Sessions => "state.sessions",
-            Self::Plans => "state.plans",
-            Self::Decisions => "state.decisions",
             Self::Receipts => "state.receipts",
             Self::Loops => "loops",
-            Self::Gates => "gates",
-            Self::Body => "body",
         }
     }
 }

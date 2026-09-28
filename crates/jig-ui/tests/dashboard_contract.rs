@@ -4,40 +4,38 @@ use std::path::{Component, Path, PathBuf};
 
 use jig_ui::dashboard::{
     BoundUnit, BoundedRows, BoundedText, CollectionDomain, LIMIT_SPECS, LimitError, LimitId,
-    LimitShape, PARITY_REGISTRY, PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, ROOT_LIMIT_KEYS,
-    RecorderEpochId, SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS,
-    SnapshotError, SnapshotErrorCode, SourceError, TimelineLimit, root_limit, scenarios,
-    validate_input_bytes,
+    LimitShape, PARITY_REGISTRY, RECORDER_ROOT_FIELDS, ROOT_LIMIT_KEYS, RecorderEpochId,
+    SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, SnapshotError,
+    SnapshotErrorCode, SourceError, TimelineLimit, root_limit, scenarios,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[path = "dashboard_contract/parity_resolver.rs"]
 mod parity_resolver;
 
 #[test]
-fn recorder_schema_one_matches_checked_in_golden() {
+fn recorder_schema_two_matches_checked_in_golden() {
     let actual = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
-    let expected: Value = serde_json::from_str(include_str!("fixtures/recorder-v1.json")).unwrap();
+    let expected: Value = serde_json::from_str(include_str!("fixtures/recorder-v2.json")).unwrap();
     assert_eq!(actual, expected);
     assert_root_fields(&actual, RECORDER_ROOT_FIELDS);
     assert_eq!(actual["command"], "ui");
-    assert_eq!(actual["schema_version"], 1);
-    assert_eq!(actual["snapshot_kind"], "recorder");
+    assert_eq!(actual["schema_version"], 2);
     assert!(actual["harness"]["jig_version"].is_null());
     assert!(actual["errors"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn plan_schema_one_matches_checked_in_golden() {
-    let actual = serde_json::to_value(scenarios::plan_snapshot()).unwrap();
-    let expected: Value = serde_json::from_str(include_str!("fixtures/plan-v1.json")).unwrap();
-    assert_eq!(actual, expected);
-    assert_root_fields(&actual, PLAN_ROOT_FIELDS);
-    assert_eq!(actual["command"], "ui");
-    assert_eq!(actual["schema_version"], 1);
-    assert_eq!(actual["snapshot_kind"], "plan");
-    assert!(actual["plan"]["closed_at_ms"].is_null());
-    assert!(actual["errors"].as_array().unwrap().is_empty());
+    for removed in [
+        "snapshot_kind",
+        "current_session_id",
+        "counts",
+        "open_plans",
+        "history",
+    ] {
+        assert!(actual.get(removed).is_none(), "{removed} is still emitted");
+    }
+    assert!(actual["failures"][0].get("plan_id").is_none());
+    assert_eq!(actual["timeline"][0]["kind"], "receipt");
+    assert!(actual["timeline"][0].get("plan_id").is_none());
+    assert!(actual["timeline"][0].get("session_id").is_none());
 }
 
 #[test]
@@ -47,10 +45,6 @@ fn versioned_snapshots_round_trip_without_contract_loss() {
         serde_json::from_value(recorder.clone()).unwrap();
     assert_eq!(serde_json::to_value(decoded).unwrap(), recorder);
 
-    let plan = serde_json::to_value(scenarios::plan_snapshot()).unwrap();
-    let decoded: jig_ui::dashboard::PlanSnapshot = serde_json::from_value(plan.clone()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), plan);
-
     let status = serde_json::to_value(scenarios::status_snapshot()).unwrap();
     let decoded: jig_ui::dashboard::StatusSnapshot =
         serde_json::from_value(status.clone()).unwrap();
@@ -58,17 +52,16 @@ fn versioned_snapshots_round_trip_without_contract_loss() {
 }
 
 #[test]
-fn status_contract_has_the_local_schema_two_root() {
+fn status_contract_has_the_local_schema_three_root() {
     let actual = serde_json::to_value(scenarios::status_snapshot()).unwrap();
     assert_root_fields(&actual, STATUS_ROOT_FIELDS);
     assert_eq!(actual["command"], "status");
-    assert_eq!(actual["schema_version"], 2);
+    assert_eq!(actual["schema_version"], 3);
     assert_eq!(actual["outcome"], "complete");
     assert!(actual.get("providers").is_none());
+    assert!(actual.get("work").is_none());
     assert!(!actual.to_string().contains("work_packages"));
     assert!(!actual.to_string().contains("blockers"));
-    assert!(actual["work"]["state"]["open_plans"][0]["baseline"].is_object());
-    assert!(actual["work"]["gates"][0]["snapshot"]["gates"].is_array());
     assert!(actual["loops"]["attempts"].is_array());
     assert!(actual["loops"]["needs_attention"]["exhausted_attempts"].is_array());
     assert!(
@@ -76,36 +69,6 @@ fn status_contract_has_the_local_schema_two_root() {
             .get("remediation")
             .is_none()
     );
-}
-
-#[test]
-fn status_gate_wire_shapes_preserve_legacy_target_and_optional_reason() {
-    let evidence = json!({
-        "kind": "evidence",
-        "id": "api-evidence",
-        "required": true,
-        "target": "api:test",
-        "profile": null,
-        "conclusion": "success",
-        "status": "passed",
-        "run_id": null,
-        "freshness": "fresh",
-        "freshness_reason": "current",
-        "targets": []
-    });
-    let decoded: jig_ui::dashboard::StatusGate = serde_json::from_value(evidence.clone()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), evidence);
-
-    let unsupported = json!({
-        "kind": "future_gate",
-        "id": "future",
-        "required": false,
-        "status": "unsupported",
-        "future": 7
-    });
-    let decoded: jig_ui::dashboard::StatusGate =
-        serde_json::from_value(unsupported.clone()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), unsupported);
 }
 
 #[test]
@@ -129,49 +92,7 @@ fn raw_identity_controls_selection_when_display_text_collides() {
 }
 
 #[test]
-fn unsupported_status_gate_kinds_round_trip_without_loss() {
-    for (wire, expected) in [
-        (
-            serde_json::json!({
-            "kind": "future_gate",
-            "id": "future",
-            "required": true,
-            "status": "unsupported",
-            "reason": "new producer kind",
-            "future_policy": {"mode": "strict"}
-            }),
-            serde_json::json!({
-                "kind": "future_gate",
-                "id": "future",
-                "required": true,
-                "status": "unsupported",
-                "reason": "new producer kind",
-                "future_policy": {"mode": "strict"}
-            }),
-        ),
-        (
-            serde_json::json!({
-                "kind": "check",
-                "id": "future-check-shape",
-                "required": false,
-                "status": "unsupported",
-                "reason": null
-            }),
-            serde_json::json!({
-                "kind": "check",
-                "id": "future-check-shape",
-                "required": false,
-                "status": "unsupported"
-            }),
-        ),
-    ] {
-        let decoded: jig_ui::dashboard::StatusGate = serde_json::from_value(wire).unwrap();
-        assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
-    }
-}
-
-#[test]
-fn every_limit_identifier_and_ceiling_matches_the_plan() {
+fn every_limit_identifier_and_ceiling_matches_the_contract() {
     let actual = LIMIT_SPECS
         .iter()
         .map(|spec| {
@@ -184,8 +105,6 @@ fn every_limit_identifier_and_ceiling_matches_the_plan() {
         })
         .collect::<Vec<_>>();
     let expected = vec![
-        ("open_plans", 1_000, LimitShape::RootRows, true),
-        ("history", 10, LimitShape::RootRows, true),
         ("failures", 10, LimitShape::RootRows, true),
         ("failure_stderr_chars", 400, LimitShape::NestedText, false),
         ("tool_stats", 256, LimitShape::RootRows, true),
@@ -211,28 +130,6 @@ fn every_limit_identifier_and_ceiling_matches_the_plan() {
             false,
         ),
         ("timeline", 1_000, LimitShape::RootRows, true),
-        (
-            "timeline_decision_rationale_chars",
-            300,
-            LimitShape::NestedText,
-            false,
-        ),
-        ("gate_rows", 256, LimitShape::NestedRows, false),
-        ("gate_changed_paths", 100, LimitShape::NestedRows, false),
-        ("gate_matching_paths", 100, LimitShape::NestedRows, false),
-        ("gate_findings", 100, LimitShape::NestedRows, false),
-        ("plan_body_chars", 20_000, LimitShape::NestedText, false),
-        (
-            "plan_body_input_bytes",
-            80_004,
-            LimitShape::InputBytes,
-            false,
-        ),
-        ("plan_decisions", 100, LimitShape::RootRows, true),
-        ("plan_receipts", 50, LimitShape::RootRows, true),
-        ("receipt_changed_paths", 20, LimitShape::NestedRows, false),
-        ("receipt_stdout_chars", 1_000, LimitShape::NestedText, false),
-        ("receipt_stderr_chars", 1_000, LimitShape::NestedText, false),
     ];
     assert_eq!(actual, expected);
 
@@ -299,17 +196,16 @@ fn bounded_values_derive_omissions_and_reject_malformed_wire_data() {
         BoundedRows::for_limit(too_many, Some(1_001), LimitId::LoopScheduledOccurrences).is_err()
     );
     assert!(matches!(
-        BoundedRows::for_limit(vec![1_u8], Some(1), LimitId::PlanBodyChars),
+        BoundedRows::for_limit(vec![1_u8], Some(1), LimitId::FailureStderrChars),
         Err(LimitError::WrongShape { .. })
     ));
     assert!(matches!(
-        root_limit(LimitId::PlanBodyChars, Some(0)),
+        BoundedText::for_limit("x", Some(1), LimitId::LoopWorkflows),
         Err(LimitError::WrongShape { .. })
     ));
-    assert!(validate_input_bytes(80_004, LimitId::PlanBodyInputBytes).is_ok());
     assert!(matches!(
-        validate_input_bytes(80_005, LimitId::PlanBodyInputBytes),
-        Err(LimitError::Bound(error)) if error.unit == BoundUnit::Bytes
+        root_limit(LimitId::FailureStderrChars, Some(0)),
+        Err(LimitError::WrongShape { .. })
     ));
 }
 
@@ -317,7 +213,7 @@ fn bounded_values_derive_omissions_and_reject_malformed_wire_data() {
 fn partial_section_error_does_not_erase_other_recorder_data() {
     let snapshot = scenarios::partial_recorder_snapshot();
     assert!(snapshot.loops.is_none());
-    assert_eq!(snapshot.open_plans.len(), 1);
+    assert_eq!(snapshot.failures.len(), 1);
     assert_eq!(snapshot.timeline.len(), 1);
     assert_eq!(snapshot.errors.len(), 1);
     assert_eq!(snapshot.errors[0].scope(), "loops");
@@ -327,19 +223,21 @@ fn partial_section_error_does_not_erase_other_recorder_data() {
 fn error_scope_and_code_registries_are_exact_and_unique() {
     assert_eq!(
         SNAPSHOT_ERROR_SCOPES,
+        ["repository", "state.receipts", "loops"]
+    );
+    assert_eq!(
+        SNAPSHOT_ERROR_CODES,
         [
-            "repository",
-            "state.sessions",
-            "state.plans",
-            "state.decisions",
-            "state.receipts",
-            "loops",
-            "gates",
-            "body",
+            "git_observation_failed",
+            "git_upstream_comparison_failed",
+            "git_upstream_output_invalid",
+            "stream_open_failed",
+            "stream_read_failed",
+            "record_too_large",
+            "record_decode_failed",
+            "loop_observation_failed",
         ]
     );
-    assert_eq!(SNAPSHOT_ERROR_SCOPES.len(), 8);
-    assert_eq!(SNAPSHOT_ERROR_CODES.len(), 15);
     assert_eq!(
         SNAPSHOT_ERROR_CODES
             .iter()
@@ -350,13 +248,8 @@ fn error_scope_and_code_registries_are_exact_and_unique() {
     );
     for domain in [
         CollectionDomain::Repository,
-        CollectionDomain::Sessions,
-        CollectionDomain::Plans,
-        CollectionDomain::Decisions,
         CollectionDomain::Receipts,
         CollectionDomain::Loops,
-        CollectionDomain::Gates,
-        CollectionDomain::Body,
     ] {
         assert!(SNAPSHOT_ERROR_SCOPES.contains(&domain.as_str()));
     }
@@ -591,7 +484,7 @@ fn timeline_limits_reject_invalid_requests_at_the_boundary() {
 }
 
 #[test]
-fn recorder_and_plan_documents_reject_limit_metadata_drift() {
+fn recorder_documents_reject_limit_metadata_drift() {
     let custom = jig_ui::dashboard::RecorderSnapshot::new(
         RecorderEpochId::FIRST,
         1_700_000_000_000,
@@ -602,58 +495,74 @@ fn recorder_and_plan_documents_reject_limit_metadata_drift() {
     assert_eq!(custom_wire["limits"]["timeline"]["applied"], 500);
 
     let mut recorder_wire = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
-    recorder_wire["limits"]["open_plans"]["applied"] = Value::from(999);
+    recorder_wire["limits"]["failures"]["applied"] = Value::from(9);
     assert!(serde_json::from_value::<jig_ui::dashboard::RecorderSnapshot>(recorder_wire).is_err());
 
     let mut nested_wire = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
     nested_wire["failures"][0]["stderr_preview"]["applied_chars"] = Value::from(399);
     assert!(serde_json::from_value::<jig_ui::dashboard::RecorderSnapshot>(nested_wire).is_err());
 
-    let mut plan_wire = serde_json::to_value(scenarios::plan_snapshot()).unwrap();
-    plan_wire["limits"]["plan_receipts"]["applied"] = Value::from(49);
-    assert!(serde_json::from_value::<jig_ui::dashboard::PlanSnapshot>(plan_wire).is_err());
+    let mut timeline_wire = serde_json::to_value(scenarios::recorder_snapshot()).unwrap();
+    timeline_wire["timeline"][0]["stderr_preview"]["applied_chars"] = Value::from(401);
+    assert!(serde_json::from_value::<jig_ui::dashboard::RecorderSnapshot>(timeline_wire).is_err());
 }
 
 #[test]
 fn root_collections_cannot_serialize_past_their_ceiling() {
     let mut recorder = scenarios::recorder_snapshot();
-    let plan = recorder.open_plans[0].clone();
-    recorder.open_plans = vec![plan; LimitId::OpenPlans.ceiling() + 1];
+    let failure = recorder.failures[0].clone();
+    recorder.failures = vec![failure; LimitId::Failures.ceiling() + 1];
     assert!(serde_json::to_value(recorder).is_err());
 
-    let mut plan = scenarios::plan_snapshot();
-    let decision = plan.decisions[0].clone();
-    plan.decisions = vec![decision; LimitId::PlanDecisions.ceiling() + 1];
-    assert!(serde_json::to_value(plan).is_err());
+    let mut recorder = scenarios::recorder_snapshot();
+    let tool = recorder.tool_stats[0].clone();
+    recorder.tool_stats = vec![tool; LimitId::ToolStats.ceiling() + 1];
+    assert!(serde_json::to_value(recorder).is_err());
 }
 
 #[test]
 fn snapshot_errors_use_registered_domains_and_codes() {
     let error = SnapshotError::new(
-        CollectionDomain::Plans,
+        CollectionDomain::Receipts,
         SnapshotErrorCode::RecordDecodeFailed,
-        Some("plan_example".to_string()),
+        Some("receipt_example".to_string()),
         "invalid record",
     );
-    assert_eq!(error.scope(), "state.plans");
+    assert_eq!(error.scope(), "state.receipts");
     assert_eq!(error.code(), "record_decode_failed");
-    assert_eq!(error.subject_id(), Some("plan_example"));
+    assert_eq!(error.subject_id(), Some("receipt_example"));
     assert_eq!(error.message(), "invalid record");
     assert!(serde_json::from_str::<SnapshotError>(
-        r#"{"scope":"state.planz","code":"record_decode_failed","subject_id":null,"message":"bad"}"#
+        r#"{"scope":"state.receiptz","code":"record_decode_failed","subject_id":null,"message":"bad"}"#
     )
     .is_err());
     assert!(serde_json::from_str::<SnapshotError>(
-        r#"{"scope":"state.plans","code":"record_decode_faild","subject_id":null,"message":"bad"}"#
+        r#"{"scope":"state.receipts","code":"record_decode_faild","subject_id":null,"message":"bad"}"#
     )
     .is_err());
+    for retired in [
+        "state.sessions",
+        "state.plans",
+        "state.decisions",
+        "gates",
+        "body",
+    ] {
+        assert!(
+            serde_json::from_value::<SnapshotError>(serde_json::json!({
+                "scope": retired,
+                "code": "stream_read_failed",
+                "subject_id": null,
+                "message": "retired",
+            }))
+            .is_err(),
+            "{retired} is still accepted"
+        );
+    }
 }
 
 #[test]
-fn source_contracts_keep_modes_bases_and_partial_data_distinct() {
-    use jig_ui::dashboard::{
-        Observation, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest,
-    };
+fn source_contracts_keep_modes_and_partial_data_distinct() {
+    use jig_ui::dashboard::{Observation, RecorderMode, RecorderRequest};
 
     let request = RecorderRequest {
         mode: RecorderMode::ReuseCurrent,
@@ -661,14 +570,6 @@ fn source_contracts_keep_modes_bases_and_partial_data_distinct() {
     };
     assert_eq!(request.mode, RecorderMode::ReuseCurrent);
     assert_eq!(request.timeline_limit.get(), 1_000);
-    assert_eq!(
-        PlanBasis::RecorderEpoch(RecorderEpochId::FIRST),
-        PlanBasis::RecorderEpoch(RecorderEpochId::FIRST)
-    );
-    assert_ne!(
-        PlanBasis::Fresh,
-        PlanBasis::RecorderEpoch(RecorderEpochId::FIRST)
-    );
 
     let error = SnapshotError::new(
         CollectionDomain::Receipts,
@@ -680,22 +581,13 @@ fn source_contracts_keep_modes_bases_and_partial_data_distinct() {
     assert_eq!(partial.data, Some(7));
     assert_eq!(partial.error, Some(error));
     let unavailable = Observation::<u8>::unavailable(SnapshotError::new(
-        CollectionDomain::Body,
-        SnapshotErrorCode::BodyNotFound,
-        Some("plan_example".to_string()),
-        "plan body missing",
+        CollectionDomain::Loops,
+        SnapshotErrorCode::LoopObservationFailed,
+        None,
+        "loop status missing",
     ));
     assert!(unavailable.data.is_none());
-    assert_eq!(unavailable.error.unwrap().scope(), "body");
-
-    assert!(matches!(
-        PlanSnapshotResult::NotFound,
-        PlanSnapshotResult::NotFound
-    ));
-    assert!(matches!(
-        PlanSnapshotResult::StaleRecorderEpoch,
-        PlanSnapshotResult::StaleRecorderEpoch
-    ));
+    assert_eq!(unavailable.error.unwrap().scope(), "loops");
     assert_eq!(
         SourceError::Cancelled.to_string(),
         "dashboard collection cancelled"

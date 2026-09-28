@@ -26,7 +26,7 @@ pub(super) fn dispatch(
     {
         bail!("explicit run comparison authority requires repository contract version 7 or later");
     }
-    let (work_plan_id, record_receipts) = request.tool.into_parts();
+    let record_receipts = request.tool.record_receipt();
     let plan = crate::repository::plan_action_run_with_cancellation(
         &current,
         &catalog,
@@ -35,7 +35,6 @@ pub(super) fn dispatch(
             profile: request.profile,
             affected_base: request.affected_base,
             comparison: request.comparison,
-            work_plan_id: work_plan_id.clone(),
         },
         request.arguments,
         &|| observer.cancelled(),
@@ -44,16 +43,12 @@ pub(super) fn dispatch(
         return Ok(json!({"ok": true, "command": "run plan", "executed": false, "plan": plan}));
     }
     validate_effect_approval("jig run", &plan.effects, &request.approved_effects)?;
-    if let Some(id) = work_plan_id.as_deref() {
-        crate::state::ensure_plan_is_open(&current, id)?;
-    }
     let execution = execute_foreground_action_run(
         &current,
         &catalog,
         plan.clone(),
         ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id,
             record_receipts,
             fail_fast: request.fail_fast,
         },

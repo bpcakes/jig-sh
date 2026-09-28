@@ -7,22 +7,20 @@ fn status_entrypoint_uses_requested_refresh_cadence() {
 }
 
 #[test]
-fn work_options_preserve_cli_refresh_limit_and_initial_plan() {
-    let options = super::work_dashboard_options(
-        crate::cli::UiOpts {
+fn ui_options_start_on_timeline_with_cli_refresh_and_limit() {
+    let options = super::timeline_dashboard_options(
+        &crate::cli::UiOpts {
             refresh_seconds: Some(11),
             timeline_limit: Some(250),
-            plan: Some("plan_example".to_string()),
             retired_port: None,
         },
         jig_ui::dashboard::TimelineLimit::new(250).unwrap(),
     )
     .unwrap();
 
-    assert_eq!(options.initial_tab, jig_ui::terminal::InitialTab::Work);
+    assert_eq!(options.initial_tab, jig_ui::terminal::InitialTab::Timeline);
     assert_eq!(options.refresh_interval, std::time::Duration::from_secs(11));
     assert_eq!(options.timeline_limit.get(), 250);
-    assert_eq!(options.initial_plan.as_deref(), Some("plan_example"));
 }
 
 #[test]

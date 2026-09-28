@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -11,24 +10,18 @@ use tempfile::NamedTempFile;
 use time::{Date, Month};
 use ulid::Ulid;
 
-use crate::context::{RepoContext, WorkGate};
-use crate::repository::{RepositoryCatalog, plan_independent_targets, resolve_evidence_targets};
-use crate::tool_defs::tool;
+use crate::context::RepoContext;
 
 use super::super::MAINTENANCE_WRITER_COORDINATION_NOTE;
 use super::super::compression::{create_dir_all_synced, sync_directory};
 use super::super::jsonl::{
-    JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, read_jsonl, rewrite_jsonl_raw_locked,
-    scan_jsonl_raw, scan_jsonl_raw_locked, with_jsonl_write_lock,
+    JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, rewrite_jsonl_raw_locked, scan_jsonl_raw,
+    scan_jsonl_raw_locked, with_jsonl_write_lock,
 };
 use super::super::maintenance::create_receipts_backup;
-use super::super::records::{PlanEvent, ReceiptRecord};
+use super::super::records::ReceiptRecord;
 use super::super::support::ensure_state_layout;
-use super::{
-    IndexedTargetReceipts, WORK_CHECK_EVIDENCE_SCHEMA, WorkCheckBatchEvidence, parse_raw_receipt,
-    receipt_arg_strings, receipt_args_has_receipt_ids, target_receipt_status,
-    time_validity_is_current, validate_receipt_stream,
-};
+use super::{parse_raw_receipt, validate_receipt_stream};
 
 #[derive(Debug)]
 pub(crate) struct StateArchiveRequest {
@@ -39,10 +32,6 @@ pub(crate) struct StateArchiveRequest {
 pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let before_ms = parse_archive_before_ms(&request.before)?;
-    let open_plan_ids =
-        current_open_plan_ids(&read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?);
-    let configured_evidence = configured_gate_evidence_keys(ctx)?;
-    let cross_plan_targets = configured_evidence.cross_plan_targets.clone();
     let receipts_path = ctx.state_file("receipts.jsonl");
     let source_path = receipts_path
         .strip_prefix(ctx.root())
@@ -52,54 +41,13 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
     let mut recovery_hint = None;
     let mut archive_hint = None;
     let result = with_jsonl_write_lock(&receipts_path, |guard| {
-        let mut protection_index = ReceiptProtectionIndex::with_evidence(
-            &open_plan_ids,
-            &configured_evidence.targets,
-            cross_plan_targets,
-        );
-        let protection_scan = scan_jsonl_raw_locked(guard, &receipts_path, &|| false, |record| {
-            let receipt = parse_raw_receipt(record, &receipts_path)?;
-            protection_index.observe(
-                &receipt,
-                &open_plan_ids,
-                &configured_evidence.check_tools,
-                &configured_evidence.check_gate_ids,
-                &configured_evidence.review_gate_ids,
-            );
-            Ok(())
-        })?;
-        if protection_scan.unterminated_final_record {
-            bail!(
-                "Refusing to archive {} because its final JSONL record is not newline-terminated",
-                receipts_path.display()
-            );
-        }
-        let mut protected = protection_index.protected_receipt_ids()?;
-        if ctx.contract_version() >= jig_contract::freshness::TARGET_FRESHNESS_CONTRACT_VERSION
-            || protection_index
-                .target_roots()
-                .any(|receipt| receipt.target_freshness.is_some())
-        {
-            dependency_protection::protect_dependencies(
-                guard,
-                &receipts_path,
-                protection_index.target_roots().cloned(),
-                &mut protected,
-                protection_index.now_ms,
-            )?;
-        }
         let mut receipt_count_before = 0usize;
         let mut receipts_archived = 0usize;
-        let mut protected_retained = 0usize;
         let count_scan = scan_jsonl_raw_locked(guard, &receipts_path, &|| false, |record| {
             let receipt = parse_raw_receipt(record, &receipts_path)?;
             receipt_count_before = receipt_count_before.saturating_add(1);
             if receipt.ended_at_ms < before_ms {
-                if protected.contains(&receipt.id) {
-                    protected_retained = protected_retained.saturating_add(1);
-                } else {
-                    receipts_archived = receipts_archived.saturating_add(1);
-                }
+                receipts_archived = receipts_archived.saturating_add(1);
             }
             Ok(())
         })?;
@@ -125,7 +73,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
                 guard,
                 &receipts_path,
                 path,
-                |receipt| receipt.ended_at_ms < before_ms && !protected.contains(&receipt.id),
+                |receipt| receipt.ended_at_ms < before_ms,
             )?),
             None => None,
         };
@@ -137,13 +85,11 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
                 &|| false,
                 |record| {
                     let receipt = parse_raw_receipt(record, &receipts_path)?;
-                    Ok(
-                        if receipt.ended_at_ms < before_ms && !protected.contains(&receipt.id) {
-                            RawJsonlRewrite::Drop
-                        } else {
-                            RawJsonlRewrite::Keep
-                        },
-                    )
+                    Ok(if receipt.ended_at_ms < before_ms {
+                        RawJsonlRewrite::Drop
+                    } else {
+                        RawJsonlRewrite::Keep
+                    })
                 },
                 validate_receipt_stream,
             )?;
@@ -168,7 +114,6 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
             "receipt_count_before": receipt_count_before,
             "receipts_archived": receipts_archived,
             "receipts_retained": receipts_retained,
-            "protected_receipts_retained": protected_retained,
             "uncompressed_bytes": artifact.as_ref().map(|artifact| artifact.uncompressed_bytes),
             "compressed_bytes": artifact.as_ref().map(|artifact| artifact.compressed_bytes),
             "sha256": artifact.as_ref().map(|artifact| artifact.sha256.as_str()),
@@ -465,103 +410,6 @@ pub(super) fn sha256_reader(mut reader: impl Read) -> Result<String> {
     }
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
-
-fn current_open_plan_ids(events: &[PlanEvent]) -> BTreeSet<String> {
-    let mut open = BTreeMap::<String, bool>::new();
-    for event in events {
-        match event {
-            PlanEvent::Open { plan_id, .. } => {
-                open.insert(plan_id.clone(), true);
-            }
-            PlanEvent::Close { plan_id, .. } => {
-                open.insert(plan_id.clone(), false);
-            }
-            PlanEvent::Append { .. } | PlanEvent::Unknown { .. } => {}
-        }
-    }
-    open.into_iter()
-        .filter_map(|(plan_id, is_open)| is_open.then_some(plan_id))
-        .collect()
-}
-
-struct ConfiguredGateEvidence {
-    check_tools: BTreeSet<String>,
-    check_gate_ids: BTreeSet<String>,
-    review_gate_ids: BTreeSet<String>,
-    targets: BTreeMap<String, BTreeSet<jig_contract::TargetId>>,
-    cross_plan_targets: BTreeSet<jig_contract::TargetId>,
-}
-
-fn configured_gate_evidence_keys(ctx: &RepoContext) -> Result<ConfiguredGateEvidence> {
-    let mut configured = ConfiguredGateEvidence {
-        check_tools: BTreeSet::new(),
-        check_gate_ids: BTreeSet::new(),
-        review_gate_ids: BTreeSet::new(),
-        targets: BTreeMap::new(),
-        cross_plan_targets: BTreeSet::new(),
-    };
-    let gates = ctx.work_gates();
-    let repository = gates
-        .iter()
-        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
-        .then(|| RepositoryCatalog::from_context(ctx))
-        .transpose()?;
-    for gate in gates {
-        match gate {
-            WorkGate::Check(gate) => {
-                configured.check_gate_ids.insert(gate.id);
-                configured.check_tools.insert(gate.tool);
-            }
-            WorkGate::CodexReview(gate) => {
-                configured.review_gate_ids.insert(gate.id);
-            }
-            WorkGate::Evidence(gate) => {
-                let catalog = repository
-                    .as_ref()
-                    .expect("evidence gates initialize the repository catalog");
-                configured
-                    .targets
-                    .insert(gate.id, resolve_evidence_targets(catalog, &gate.selector)?);
-            }
-            WorkGate::Unsupported(_) => {}
-        }
-    }
-    if let Some(repository) = repository {
-        configured.cross_plan_targets = plan_independent_targets(
-            &repository,
-            &configured.targets.values().flatten().cloned().collect(),
-        );
-    }
-    Ok(configured)
-}
-
-#[derive(Clone, Debug)]
-struct LatestReceipt {
-    id: String,
-    worker_receipt_id: Option<String>,
-    valid_until_ms: Option<u64>,
-    requires_time_validity: bool,
-}
-
-#[derive(Clone, Debug)]
-struct ProtectedWorkCheck {
-    id: String,
-    receipt_ids: Vec<String>,
-    valid_until_ms: Option<u64>,
-    requires_time_validity: bool,
-}
-
-#[derive(Debug, Default)]
-struct ProtectedCheckReceipts {
-    direct_receipt: Option<LatestReceipt>,
-    exact_work_check: Option<ProtectedWorkCheck>,
-    legacy_work_check: Option<ProtectedWorkCheck>,
-}
-
-include!("archive/index.rs");
-
-include!("archive/protection.rs");
-mod dependency_protection;
 
 pub(in crate::state) fn parse_archive_before_ms(value: &str) -> Result<u64> {
     let value = value.trim();

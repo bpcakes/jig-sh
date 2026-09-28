@@ -1,7 +1,6 @@
 use super::*;
 use flate2::read::GzDecoder;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::process::Command;
@@ -35,318 +34,6 @@ fn successful_receipt_preview_preserves_utf8_boundaries() {
     assert_eq!(
         preview.strip_suffix('…').unwrap(),
         "a".repeat(SUCCESSFUL_RECEIPT_PREVIEW_BYTES - 1)
-    );
-}
-
-#[test]
-fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
-    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
-    let check_gate_tools = BTreeSet::from([tool::TEST.to_string()]);
-    let review_gate_ids = BTreeSet::from(["rust-review".to_string()]);
-    let evidence_targets = BTreeMap::from([(
-        "api-tests".to_string(),
-        BTreeSet::from(["api:test".parse().unwrap()]),
-    )]);
-    let mut index =
-        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
-    let mut target = test_receipt(
-        "receipt_target",
-        "plan_open",
-        "jig.target_run",
-        35,
-        json!({}),
-    );
-    target.run_id = Some("run_1".into());
-    target.target = Some("api:test".parse().unwrap());
-    let mut closed_target = test_receipt(
-        "receipt_closed_target",
-        "plan_closed",
-        "jig.target_run",
-        45,
-        json!({}),
-    );
-    closed_target.run_id = Some("run_2".into());
-    closed_target.target = Some("api:test".parse().unwrap());
-    let receipts = [
-        test_receipt("receipt_direct", "plan_open", tool::TEST, 10, json!({})),
-        test_receipt(
-            "receipt_batch",
-            "plan_open",
-            tool::WORK_CHECK,
-            20,
-            json!({
-                "tools": [tool::TEST],
-                "receipt_ids": ["receipt_direct"],
-            }),
-        ),
-        test_receipt(
-            "receipt_review",
-            "plan_open",
-            tool::WORK_REVIEW,
-            30,
-            json!({"gate_id": "rust-review"}),
-        ),
-        test_receipt("receipt_non_gate", "plan_open", tool::CLIPPY, 40, json!({})),
-        target,
-        closed_target,
-        test_receipt("receipt_closed", "plan_closed", tool::TEST, 50, json!({})),
-    ];
-    for receipt in &receipts {
-        index.observe(
-            receipt,
-            &open_plan_ids,
-            &check_gate_tools,
-            &BTreeSet::new(),
-            &review_gate_ids,
-        );
-    }
-
-    let protected = index.protected_receipt_ids().unwrap();
-
-    assert_eq!(
-        protected,
-        BTreeSet::from([
-            "receipt_batch".to_string(),
-            "receipt_direct".to_string(),
-            "receipt_review".to_string(),
-            "receipt_target".to_string(),
-        ])
-    );
-}
-
-#[test]
-fn receipt_archive_protection_keeps_latest_targets_after_many_runs() {
-    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
-    let evidence_targets = BTreeMap::from([(
-        "verify".to_string(),
-        BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]),
-    )]);
-    let mut index =
-        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
-
-    for sequence in 0..=1024 {
-        let mut partial = test_receipt(
-            &format!("receipt_partial_{sequence}"),
-            "plan_open",
-            "jig.target_run",
-            sequence,
-            json!({}),
-        );
-        partial.run_id = Some(format!("run_partial_{sequence}"));
-        partial.target = Some("api:lint".parse().unwrap());
-        index.observe(
-            &partial,
-            &open_plan_ids,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-        );
-    }
-    for (receipt_id, target) in [
-        ("receipt_complete_lint", "api:lint"),
-        ("receipt_complete_test", "api:test"),
-    ] {
-        let mut complete =
-            test_receipt(receipt_id, "plan_open", "jig.target_run", 2_000, json!({}));
-        complete.run_id = Some("run_complete".into());
-        complete.target = Some(target.parse().unwrap());
-        index.observe(
-            &complete,
-            &open_plan_ids,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-        );
-    }
-
-    assert_eq!(
-        index.protected_receipt_ids().unwrap(),
-        BTreeSet::from([
-            "receipt_complete_lint".to_string(),
-            "receipt_complete_test".to_string(),
-        ])
-    );
-}
-
-#[test]
-fn receipt_archive_protection_remains_bounded_across_incomplete_runs() {
-    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
-    let evidence_targets = BTreeMap::from([(
-        "verify".to_string(),
-        BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]),
-    )]);
-    let mut index =
-        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
-
-    for sequence in 0..=16 * 1024 {
-        let mut partial = test_receipt(
-            &format!("receipt_partial_{sequence}"),
-            "plan_open",
-            "jig.target_run",
-            sequence,
-            json!({}),
-        );
-        partial.run_id = Some(format!("run_partial_{sequence}"));
-        partial.target = Some("api:lint".parse().unwrap());
-        index.observe(
-            &partial,
-            &open_plan_ids,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-        );
-    }
-
-    assert_eq!(
-        index.protected_receipt_ids().unwrap(),
-        BTreeSet::from(["receipt_partial_16384".to_string()])
-    );
-}
-
-#[test]
-fn archive_protection_keeps_expired_target_as_latest_outcome() {
-    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
-    let evidence_targets = BTreeMap::from([(
-        "verify".to_string(),
-        BTreeSet::from(["repo:file-budget".parse().unwrap()]),
-    )]);
-    let mut index =
-        ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets, BTreeSet::new());
-    let mut expired = test_receipt(
-        "receipt_expired",
-        "plan_open",
-        "jig.target_run",
-        10,
-        json!({}),
-    );
-    expired.run_id = Some("run_expired".into());
-    expired.target = Some("repo:file-budget".parse().unwrap());
-    expired.valid_until_ms = Some(0);
-    expired.evidence = Some(json!({"requires_time_validity": true}));
-    index.observe(
-        &expired,
-        &open_plan_ids,
-        &BTreeSet::new(),
-        &BTreeSet::new(),
-        &BTreeSet::new(),
-    );
-
-    assert_eq!(
-        index.protected_receipt_ids().unwrap(),
-        BTreeSet::from(["receipt_expired".to_string()])
-    );
-}
-
-#[test]
-fn receipt_protection_matches_successful_legacy_batch_lookup() {
-    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
-    let check_gate_tools = BTreeSet::from([tool::TEST.to_string()]);
-    let review_gate_ids = BTreeSet::new();
-    let direct = test_receipt("receipt_direct", "plan_open", tool::TEST, 10, json!({}));
-    let successful_legacy = test_receipt(
-        "receipt_legacy_success",
-        "plan_open",
-        tool::WORK_CHECK,
-        20,
-        json!({"tools": [tool::TEST]}),
-    );
-    let mut failed_legacy = test_receipt(
-        "receipt_legacy_failed",
-        "plan_open",
-        tool::WORK_CHECK,
-        30,
-        json!({"tools": [tool::TEST]}),
-    );
-    failed_legacy.exit_status = 1;
-    let unrelated_exact_schema = test_receipt(
-        "receipt_exact_other",
-        "plan_open",
-        tool::WORK_CHECK,
-        40,
-        json!({"tools": [tool::TEST], "receipt_ids": []}),
-    );
-    let mut index = ReceiptProtectionIndex::default();
-    for receipt in [
-        direct,
-        successful_legacy,
-        failed_legacy,
-        unrelated_exact_schema,
-    ] {
-        index.observe(
-            &receipt,
-            &open_plan_ids,
-            &check_gate_tools,
-            &BTreeSet::new(),
-            &review_gate_ids,
-        );
-    }
-
-    let protected = index.protected_receipt_ids().unwrap();
-
-    assert_eq!(
-        protected,
-        BTreeSet::from([
-            "receipt_direct".to_string(),
-            "receipt_legacy_success".to_string(),
-        ])
-    );
-}
-
-#[test]
-fn newest_review_protects_its_worker_receipt_by_physical_order() {
-    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
-    let check_gate_tools = BTreeSet::new();
-    let review_gate_ids = BTreeSet::from(["rust-review".to_string()]);
-    let old_worker = test_receipt(
-        "receipt_worker_old",
-        "plan_open",
-        crate::tool_defs::WORKER_RUN_TOOL,
-        400,
-        json!({}),
-    );
-    let mut old_review = test_receipt(
-        "receipt_review_old",
-        "plan_open",
-        tool::WORK_REVIEW,
-        500,
-        json!({"gate_id": "rust-review"}),
-    );
-    old_review.evidence = Some(json!({"worker_receipt_id": "receipt_worker_old"}));
-    let latest_worker = test_receipt(
-        "receipt_worker_latest",
-        "plan_open",
-        crate::tool_defs::WORKER_RUN_TOOL,
-        200,
-        json!({}),
-    );
-    let mut latest_review = test_receipt(
-        "receipt_review_latest",
-        "plan_open",
-        tool::WORK_REVIEW,
-        100,
-        json!({"gate_id": "rust-review"}),
-    );
-    latest_review.exit_status = 1;
-    latest_review.evidence = Some(json!({"worker_receipt_id": "receipt_worker_latest"}));
-    let mut index = ReceiptProtectionIndex::default();
-    for receipt in [old_worker, old_review, latest_worker, latest_review] {
-        index.observe(
-            &receipt,
-            &open_plan_ids,
-            &check_gate_tools,
-            &BTreeSet::new(),
-            &review_gate_ids,
-        );
-    }
-
-    let protected = index.protected_receipt_ids().unwrap();
-
-    assert_eq!(
-        protected,
-        BTreeSet::from([
-            "receipt_review_latest".to_string(),
-            "receipt_worker_latest".to_string(),
-        ])
     );
 }
 
@@ -441,14 +128,12 @@ fn recorded_receipt_persists_bounded_change_set_metadata() {
             tool_name: tool::TEST,
             args: json!({}),
             invoked_command_key: None,
-            plan_id: None,
             started_at_ms: 1,
             ended_at_ms: 2,
             exit_status: 0,
             stdout: &"success output ".repeat(100),
             stderr: "",
             evidence: None,
-            session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: None,
@@ -491,14 +176,12 @@ fn cancelled_git_enrichment_does_not_prevent_durable_receipt_append() {
             tool_name: tool::TEST,
             args: json!({}),
             invoked_command_key: None,
-            plan_id: None,
             started_at_ms: 1,
             ended_at_ms: 2,
             exit_status: 1,
             stdout: "",
             stderr: "cancelled",
             evidence: None,
-            session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
@@ -523,49 +206,6 @@ fn cancelled_git_enrichment_does_not_prevent_durable_receipt_append() {
             .as_deref()
             .is_some_and(|error| error.contains("collection was cancelled"))
     );
-}
-
-fn test_receipt(
-    id: &str,
-    plan_id: &str,
-    tool_name: &str,
-    ended_at_ms: u64,
-    args: Value,
-) -> ReceiptRecord {
-    ReceiptRecord {
-        target_freshness: None,
-        id: id.to_string(),
-        session_id: None,
-        plan_id: Some(plan_id.to_string()),
-        tool_name: tool_name.to_string(),
-        args,
-        invoked_command_key: None,
-        started_at_ms: 0,
-        ended_at_ms,
-        exit_status: 0,
-        stdout_preview: String::new(),
-        stderr_preview: String::new(),
-        evidence: None,
-        run_id: None,
-        target: None,
-        config_digest: None,
-        input_digest: None,
-        findings: Vec::new(),
-        finding_count: None,
-        findings_truncated: false,
-        findings_digest: None,
-        evaluated_at_ms: None,
-        valid_until_ms: None,
-        changed_paths: Vec::new(),
-        changed_path_count: None,
-        changed_paths_truncated: false,
-        changed_paths_digest: None,
-        diff_stat: crate::git_receipts::DiffStat::default(),
-        git_status_error: None,
-        git_diff_stat_error: None,
-        worktree_fingerprint: None,
-        worktree_fingerprint_error: None,
-    }
 }
 
 fn raw_receipt(id: &str, ended_at_ms: u64, extra: &str) -> String {
@@ -599,4 +239,4 @@ fn run_git(root: &Path, args: &[&str]) {
     );
 }
 
-mod session_pointer;
+mod journal_contention;

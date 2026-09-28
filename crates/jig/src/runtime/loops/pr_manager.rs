@@ -533,7 +533,6 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             prompt: &prompt,
             receipt: WorkerReceiptRequest {
                 purpose: "pr_manager",
-                plan_id: None,
                 workflow_id: Some(&repair.workflow.id),
                 item_key: Some(&repair.item.item_key),
                 collect_git_metadata: false,

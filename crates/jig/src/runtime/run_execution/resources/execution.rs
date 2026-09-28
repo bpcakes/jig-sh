@@ -33,7 +33,6 @@ pub(in crate::runtime::run_execution) fn capture_admitted(
         finisher.ctx,
         finisher.catalog,
         &finisher.run.result.run_id,
-        finisher.work_plan_id,
         planned,
         control,
     );

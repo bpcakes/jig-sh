@@ -248,12 +248,11 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
             profile: None,
             affected_base: None,
             comparison: None,
-            work_plan_id: None,
         },
     )
     .unwrap();
     let (run, _lease) =
-        crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan, None).unwrap();
+        crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan).unwrap();
     fs::write(temp.path().join("api/drift.txt"), "stable drift\n").unwrap();
 
     let execution = crate::runtime::run_execution::execute_started_check_run(
@@ -262,7 +261,6 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
         },
@@ -299,13 +297,12 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
             profile: None,
             affected_base: None,
             comparison: None,
-            work_plan_id: None,
         },
         Default::default(),
     )
     .unwrap();
     let (run, _lease) =
-        crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan, None).unwrap();
+        crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan).unwrap();
     fs::write(temp.path().join("api/drift.txt"), "stable drift\n").unwrap();
 
     let execution = crate::runtime::run_execution::execute_started_check_run(
@@ -314,7 +311,6 @@ fn worktree_target_rejects_stable_drift_before_it_starts() {
         run,
         crate::runtime::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
         },

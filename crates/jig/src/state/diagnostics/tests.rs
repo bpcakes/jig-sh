@@ -23,131 +23,10 @@ fn diagnose_missing_state_is_strictly_read_only() {
 
     assert_eq!(output["state_dir_exists"], false);
     assert_eq!(output["totals"]["stream_bytes"], 0);
-    assert_eq!(output["sessions"]["projected_shallow_bytes"], 0);
-    assert_eq!(output["work_links"]["authority"], "empty");
+    assert!(output.get("sessions").is_none());
     assert_eq!(before, fixture_paths(temp.path()));
     assert!(!ctx.state_dir().exists());
     assert!(!temp.path().join(".git").exists());
-}
-
-#[test]
-fn deep_diagnose_uses_journal_authority_while_shallow_remains_generic() {
-    let temp = tempdir().unwrap();
-    let ctx = fixture_context(temp.path());
-    fs::create_dir_all(ctx.state_dir()).unwrap();
-    fs::write(
-        ctx.state_file("work-links.jsonl"),
-        b"{\"id\":\"work-link_future\",\"schema_version\":2,\"plan_id\":\"plan_example\"}\n",
-    )
-    .unwrap();
-    let shallow = state_diagnose(&ctx, StateDiagnoseRequest { deep: false });
-    assert!(shallow["work_links"].is_null());
-    assert_eq!(shallow["streams"]["work_links"]["records"], 1);
-
-    let unsupported = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
-    assert_eq!(unsupported["work_links"]["authority"], "unsupported");
-    assert_eq!(unsupported["work_links"]["unsupported_plans"], 1);
-    fs::write(ctx.state_file("work-links.jsonl"), b"{").unwrap();
-    let torn = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
-    assert_eq!(torn["work_links"]["authority"], "torn");
-    assert_eq!(torn["work_links"]["torn_tail"], true);
-}
-
-#[test]
-fn deep_diagnose_reports_the_final_physical_line_for_a_torn_work_link() {
-    let temp = tempdir().unwrap();
-    let ctx = fixture_context(temp.path());
-    fs::create_dir_all(ctx.state_dir()).unwrap();
-    // A valid future-version record is longer than the torn final line.
-    let record =
-        b"{\"id\":\"work-link_future\",\"schema_version\":2,\"plan_id\":\"plan_example\"}\n";
-    for blank_lines in [0, 2] {
-        let mut bytes = record.to_vec();
-        bytes.extend(std::iter::repeat_n(b'\n', blank_lines));
-        bytes.push(b'{');
-        fs::write(ctx.state_file("work-links.jsonl"), bytes).unwrap();
-
-        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
-
-        assert_eq!(output["work_links"]["authority"], "torn");
-        assert_eq!(
-            output["work_links"]["errors"][0]["line_number"],
-            2 + blank_lines
-        );
-    }
-}
-
-#[test]
-fn unsupported_lock_deep_diagnosis_preserves_torn_work_link_authority() {
-    use crate::state::work_links::{
-        WorkLinkEstablishedBy, WorkLinkIssueV1, WorkLinkProjection, WorkLinkRecordV1,
-        WorkLinkSnapshotV1, project_work_link,
-    };
-
-    let temp = tempdir().unwrap();
-    let ctx = fixture_context(temp.path());
-    fs::create_dir_all(ctx.state_dir()).unwrap();
-    let path = ctx.state_file("work-links.jsonl");
-    let mut completed = serde_json::to_vec(&WorkLinkRecordV1 {
-        id: "work-link_example".into(),
-        schema_version: 1,
-        plan_id: "plan_example".into(),
-        issue: WorkLinkIssueV1::beads("01EXAMPLEWORKSPACE", "example-123").unwrap(),
-        snapshot: WorkLinkSnapshotV1::new(1, "Example", "Description", "Acceptance").unwrap(),
-        established_by: WorkLinkEstablishedBy::Attach,
-    })
-    .unwrap();
-    completed.extend_from_slice(b"\n{");
-
-    for (bytes, final_line) in [(vec![b'{'], 1), (completed, 2)] {
-        fs::write(&path, &bytes).unwrap();
-        let locked = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
-        let unlocked = super::super::jsonl::with_unsupported_scan_lock(|| {
-            assert!(matches!(
-                project_work_link(&ctx, "plan_example").unwrap(),
-                WorkLinkProjection::Corrupt(_)
-            ));
-            state_diagnose(&ctx, StateDiagnoseRequest { deep: true })
-        });
-
-        assert_eq!(unlocked["work_links"], locked["work_links"]);
-        assert_eq!(unlocked["work_links"]["authority"], "torn");
-        assert_eq!(
-            unlocked["work_links"]["errors"][0]["line_number"],
-            final_line
-        );
-        assert_eq!(
-            unlocked["streams"]["work_links"],
-            locked["streams"]["work_links"]
-        );
-        assert_eq!(unlocked["streams"]["work_links"]["torn_tail"], true);
-        assert_eq!(unlocked["streams"]["work_links"]["records"], final_line);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-    }
-}
-
-#[test]
-fn journal_stream_diagnostics_enforce_semantic_record_limits() {
-    let temp = tempdir().unwrap();
-    let ctx = fixture_context(temp.path());
-    fs::create_dir_all(ctx.state_dir()).unwrap();
-    fs::write(
-        ctx.state_file(super::super::work_links::WORK_LINKS_FILE),
-        vec![b'x'; super::super::work_links::MAX_WORK_LINK_RECORD_BYTES + 1],
-    )
-    .unwrap();
-    for deep in [false, true] {
-        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep });
-        assert!(
-            output["streams"]["work_links"]["scan_error"]
-                .as_str()
-                .unwrap()
-                .contains("dashboard read limit")
-        );
-        if deep {
-            assert_eq!(output["work_links"]["authority"], "corrupt");
-        }
-    }
 }
 
 fn assert_stream_diagnostics(output: &serde_json::Value, sessions: &str, recursive: &str) {
@@ -172,30 +51,6 @@ fn assert_stream_diagnostics(output: &serde_json::Value, sessions: &str, recursi
         2
     );
     assert_eq!(output["streams"]["plans"]["torn_tail"], true);
-}
-
-fn assert_session_projection(
-    output: &serde_json::Value,
-    sessions: &str,
-    recursive: &str,
-    ordinary: &str,
-    nested_summary: &str,
-) {
-    let compacted = recursive.replace(
-        &format!(r#""summary":{nested_summary}"#),
-        r#""summary":null"#,
-    );
-    let projected = compacted.len() + 1 + ordinary.len() + 1;
-    assert_eq!(output["sessions"]["recursive_session_records"], 1);
-    assert_eq!(output["sessions"]["recursive_summary_values"], 1);
-    assert_eq!(
-        output["sessions"]["projected_shallow_bytes"],
-        projected as u64
-    );
-    assert_eq!(
-        output["sessions"]["estimated_reclaimable_bytes"],
-        (sessions.len() - projected) as u64
-    );
 }
 
 fn assert_receipt_and_archive_diagnostics(
@@ -230,9 +85,12 @@ fn assert_receipt_and_archive_diagnostics(
     assert_eq!(output["legacy_archive"]["files"], 2);
     assert_eq!(output["legacy_archive"]["bytes"], 8);
     assert_eq!(output["totals"]["legacy_archive_bytes"], 8);
-    assert_eq!(
-        output["recommendations"][0]["command"],
-        "jig state compact sessions --dry-run"
+    assert!(
+        output["recommendations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|recommendation| recommendation["kind"] != "compact_sessions")
     );
 }
 
@@ -289,7 +147,7 @@ fn diagnose_reports_exact_stream_and_deep_storage_facts() {
     let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
 
     assert_stream_diagnostics(&output, &sessions, &recursive);
-    assert_session_projection(&output, &sessions, &recursive, ordinary, nested_summary);
+    assert!(output.get("sessions").is_none());
     assert_receipt_and_archive_diagnostics(&output, args, stdout, stderr, evidence, paths, diff);
 }
 
@@ -389,7 +247,6 @@ fn diagnose_recommends_receipt_retention_and_export_before_repair() {
     let recommendations = recommendations(
         true,
         &streams,
-        &SessionCompactionDiagnostics::default(),
         &receipts,
         &LegacyArchiveDiagnostics::default(),
         &MaintenanceCacheDiagnostics::default(),
@@ -417,27 +274,6 @@ fn diagnose_recommends_receipt_retention_and_export_before_repair() {
                 .as_str()
                 .is_some_and(|command| command.contains("state archive"))
     }));
-}
-
-#[test]
-fn raw_session_analysis_handles_escaped_keys_and_shallow_nulls() {
-    let record = br#"{
-            "summ\u0061ry": {
-                "recent_sessions": [
-                    {"summary": null},
-                    {"summary": {"value": "escaped \" } ]"}}
-                ]
-            }
-        }"#;
-    serde_json::from_slice::<IgnoredAny>(record).unwrap();
-
-    let projection = analyze_session_record(record).unwrap();
-
-    assert_eq!(projection.recursive_summary_values, 1);
-    assert_eq!(
-        projection.projected_record_bytes,
-        record.len() as u64 - br#"{"value": "escaped \" } ]"}"#.len() as u64 + 4
-    );
 }
 
 fn fixture_paths(root: &Path) -> BTreeSet<PathBuf> {

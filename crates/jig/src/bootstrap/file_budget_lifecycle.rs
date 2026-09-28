@@ -395,12 +395,8 @@ fn validate_receipt_proof_with_context(ctx: &RepoContext) -> Result<LifecyclePro
         .action(&target)
         .context("file-budget action disappeared")?;
     let configuration = action_file_budget_configuration(action)?;
-    let prepared = crate::repository::prepare_file_budget_input_v1(
-        ctx,
-        Some(request),
-        configuration,
-        receipt.original.plan_id.clone(),
-    )?;
+    let prepared =
+        crate::repository::prepare_file_budget_input_v1(ctx, Some(request), configuration)?;
     for (field, current) in [
         (
             "policy_preparation",

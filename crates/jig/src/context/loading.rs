@@ -54,11 +54,8 @@ impl RepoContext {
             }
         }
 
-        let current_session_path = resolve_current_session_path(&root);
-
         Ok(Self {
             root,
-            current_session_path,
             config,
             manifest,
             contract_digest,

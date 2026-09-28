@@ -319,7 +319,6 @@ fn execute_parallel_target(
                     ctx,
                     catalog,
                     &run.result.run_id,
-                    run.work_plan_id.as_deref(),
                     planned,
                     control,
                     freshness,

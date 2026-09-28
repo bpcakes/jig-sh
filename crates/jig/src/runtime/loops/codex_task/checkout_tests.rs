@@ -38,14 +38,12 @@ mod tests {
             tool_name: "worker_run",
             args: json!({"purpose": "scheduled_codex_task"}),
             invoked_command_key: None,
-            plan_id: None,
             started_at_ms: now,
             ended_at_ms: now,
             exit_status: 0,
             stdout: "",
             stderr: "",
             evidence: Some(json!({"kind": "worker_run"})),
-            session_override: Some("session-example".into()),
             collect_git_metadata: false,
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: None,
@@ -502,7 +500,7 @@ esac
         let baseline = ReceiptJournalBaseline::capture(&ctx).unwrap();
         let before = fs::read(&path).unwrap_or_default();
         let result = crate::runtime::dispatch(&ctx, crate::command::RuntimeCommand::Check(
-            crate::command::CheckCommand::Test(crate::command::ToolRequest::new(None, false)),
+            crate::command::CheckCommand::Test(crate::command::ToolRequest::new(false)),
         )).unwrap();
         assert_eq!(result["ok"], true, "{result:#}");
         assert!(result["receipt_id"].is_null());

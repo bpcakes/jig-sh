@@ -77,7 +77,6 @@ mod test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod test_process;
 mod tool_defs;
-mod tracker;
 mod ui;
 
 // Shared protocol between generated optional Cargo command defaults and

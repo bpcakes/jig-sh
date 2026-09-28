@@ -76,3 +76,71 @@ fn incomplete_scans_never_yield_a_clean_linkage_verdict() {
     );
     assert!(unreadable["streams"]["runs"]["scan_error"].is_string());
 }
+
+#[test]
+fn structurally_invalid_queued_plan_is_inconsistent_and_not_recoverable() {
+    let (_temp, ctx) = fixture_context();
+    write_orphan_batch(&ctx);
+    let mut invalid_plan = plan();
+    invalid_plan.execution_layers.clear();
+    let target: TargetId = "api:test".parse().unwrap();
+    let mut result = TargetRunResult::queued(
+        target.clone(),
+        invalid_plan.config_digest.clone(),
+        invalid_plan.targets[0].input_digest.clone(),
+    );
+    result.status = RunStatus::Completed;
+    result.conclusion = Some(RunConclusion::Success);
+    result.started_at_ms = Some(1);
+    result.ended_at_ms = Some(2);
+    result.exit_code = Some(0);
+    write_records(
+        &ctx.state_file("runs.jsonl"),
+        &[
+            json!({
+                "id": "run_event_queued",
+                "run_id": RUN_A,
+                "event": "queued",
+                "timestamp_ms": 1,
+                "plan": invalid_plan,
+            }),
+            json!({
+                "id": "run_event_target_completed",
+                "run_id": RUN_A,
+                "event": "target_completed",
+                "timestamp_ms": 2,
+                "target": target,
+                "result": result,
+            }),
+            json!({
+                "id": "run_event_completed",
+                "run_id": RUN_A,
+                "event": "completed",
+                "timestamp_ms": 3,
+                "conclusion": "success",
+            }),
+        ],
+    );
+
+    let journal = diagnose(&ctx, true);
+    let finding = finding_for(&journal, RUN_A);
+    assert_eq!(finding["status"], "inconsistent");
+    assert_string_array_contains(
+        &finding["journal_anomalies"],
+        "execution layers omit planned target(s): api:test",
+    );
+
+    let runs_path = ctx.state_file("runs.jsonl");
+    crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "invalid-plan-recovery", None)
+        .unwrap();
+    fs::write(&runs_path, b"").unwrap();
+
+    let backup = diagnose(&ctx, true);
+    let finding = finding_for(&backup, RUN_A);
+    assert_eq!(finding["status"], "unverifiable");
+    assert!(finding["recovery"].is_null());
+    assert_string_array_contains(
+        &backup["run_linkage"]["sources"]["errors"],
+        "execution layers omit planned target(s): api:test",
+    );
+}

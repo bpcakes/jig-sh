@@ -4,10 +4,8 @@ use std::cell::Cell;
 use std::io::Write;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use jig_ui::dashboard::{
-    DashboardSource, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest, TimelineLimit,
-};
+use anyhow::{Context, Result};
+use jig_ui::dashboard::{DashboardSource, RecorderMode, RecorderRequest, TimelineLimit};
 use jig_ui::terminal::{DashboardOptions, InitialTab};
 
 use crate::cli::UiOpts;
@@ -25,26 +23,28 @@ pub(crate) fn run(ctx: RepoContext, opts: UiOpts, json_output: bool) -> Result<(
     if json_output {
         let output_started = Cell::new(false);
         let result = supervised(|cancelled| {
-            let document = json_document(ctx, opts.plan, timeline_limit, cancelled)?;
+            let document = json_document(ctx, timeline_limit, cancelled)?;
             output_started.set(true);
             write_json(&document)
         });
         return finish_json_result(result, output_started.get());
     }
-    let options = work_dashboard_options(opts, timeline_limit)?;
+    let options = timeline_dashboard_options(&opts, timeline_limit)?;
     supervised(|cancelled| {
         jig_ui::terminal::run_with_cancellation(RepoDashboardSource::new(ctx), options, cancelled)
     })
 }
 
-fn work_dashboard_options(opts: UiOpts, timeline_limit: TimelineLimit) -> Result<DashboardOptions> {
-    Ok(DashboardOptions::new(
-        InitialTab::Work,
+fn timeline_dashboard_options(
+    opts: &UiOpts,
+    timeline_limit: TimelineLimit,
+) -> Result<DashboardOptions> {
+    DashboardOptions::new(
+        InitialTab::Timeline,
         Duration::from_secs(opts.effective_refresh_seconds()),
     )
     .with_timeline_limit(timeline_limit.get())
-    .context("the validated timeline limit was outside the terminal range")?
-    .with_initial_plan(opts.plan))
+    .context("the validated timeline limit was outside the terminal range")
 }
 
 pub(crate) fn run_status(ctx: RepoContext, refresh_interval: Duration) -> Result<()> {
@@ -70,20 +70,10 @@ fn finish_json_result(result: Result<()>, output_started: bool) -> Result<()> {
 
 fn json_document(
     ctx: RepoContext,
-    plan_id: Option<String>,
     timeline_limit: TimelineLimit,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<u8>> {
     let source = RepoDashboardSource::new(ctx);
-    if let Some(plan_id) = plan_id {
-        return match source.plan(PlanBasis::Fresh, plan_id.clone(), cancelled)? {
-            PlanSnapshotResult::Found(snapshot) => serialize_json(&snapshot),
-            PlanSnapshotResult::NotFound => bail!("plan `{plan_id}` was not found"),
-            PlanSnapshotResult::StaleRecorderEpoch => {
-                bail!("fresh plan collection returned an invalid stale-epoch result")
-            }
-        };
-    }
     let refresh = source.recorder(
         RecorderRequest {
             mode: RecorderMode::Refresh,

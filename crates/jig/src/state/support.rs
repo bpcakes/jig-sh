@@ -1,12 +1,8 @@
 //! State helpers that are independent of durable record schemas and JSONL mechanics.
 
 use std::fs::{self, File};
-#[cfg(test)]
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(test)]
-use anyhow::Context;
 use anyhow::Result;
 use fs4::fs_std::FileExt;
 use ulid::Ulid;
@@ -86,18 +82,5 @@ pub(super) fn new_id(prefix: &str) -> String {
 
 pub(super) fn ensure_state_layout(ctx: &RepoContext) -> Result<()> {
     fs::create_dir_all(ctx.state_dir())?;
-    fs::create_dir_all(ctx.root().join(".agent/plans"))?;
-    if let Some(parent) = ctx.current_session_path().parent() {
-        fs::create_dir_all(parent)?;
-    }
     Ok(())
-}
-
-#[cfg(test)]
-pub(super) fn rel_path(root: &Path, path: &Path) -> Result<String> {
-    Ok(path
-        .strip_prefix(root)
-        .with_context(|| format!("{} is not under {}", path.display(), root.display()))?
-        .display()
-        .to_string())
 }

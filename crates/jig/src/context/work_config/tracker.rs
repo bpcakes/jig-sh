@@ -111,7 +111,7 @@ mod tests {
         let config = parse("");
 
         config.validate().unwrap();
-        assert!(config.tracker().is_none());
+        assert!(config.tracker.as_ref().is_none());
         assert_eq!(
             serde_json::to_value(config).unwrap(),
             json!({"checks": [], "gates": [], "refinements": []})
@@ -133,7 +133,7 @@ mod tests {
             serde_json::to_value(&implicit).unwrap(),
             serde_json::to_value(&explicit).unwrap()
         );
-        let tracker = implicit.tracker().unwrap();
+        let tracker = implicit.tracker.as_ref().unwrap();
         assert_eq!(tracker.kind(), "beads");
         assert_eq!(tracker.workspace_id(), WORKSPACE_ID);
         assert_eq!(tracker.root(), ".beads");
@@ -149,7 +149,7 @@ mod tests {
 
         config.validate().unwrap();
         assert_eq!(
-            config.tracker().unwrap().manual_export_guidance(),
+            config.tracker.as_ref().unwrap().manual_export_guidance(),
             Some("Run the repository export helper.")
         );
     }

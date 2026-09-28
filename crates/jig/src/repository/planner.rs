@@ -37,7 +37,6 @@ pub(crate) struct PlanRunRequest {
     pub(crate) profile: Option<String>,
     pub(crate) affected_base: Option<String>,
     pub(crate) comparison: Option<ComparisonRequestV1>,
-    pub(crate) work_plan_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -122,7 +121,6 @@ fn plan_run_with_policy(
         bail!("repository source changed while resolving affected paths; plan again");
     }
     let comparison_request = request.comparison.clone();
-    let work_plan_id = request.work_plan_id.clone();
     let mut plan = plan_run_with_source_and_paths(
         catalog,
         request,
@@ -167,7 +165,6 @@ fn plan_run_with_policy(
                 ctx,
                 comparison_request.clone(),
                 configuration,
-                work_plan_id.clone(),
             )?);
         }
         plan.id = plan_digest(&plan)?;
@@ -290,11 +287,6 @@ pub(crate) fn validate_run_plan(
                 .iter()
                 .find_map(|target| target.prepared_native_input.as_ref())
                 .map(|input| input.request.clone()),
-            work_plan_id: plan
-                .targets
-                .iter()
-                .find_map(|target| target.prepared_native_input.as_ref())
-                .and_then(|input| input.work_plan_id.clone()),
         },
         arguments,
         policy,

@@ -473,7 +473,6 @@ fn tick_with_execution(
                 "kind": &workflow.kind,
             }),
             invoked_command_key: None,
-            plan_id: None,
             started_at_ms: started,
             ended_at_ms: ended,
             exit_status: if evidence["error"].is_null() && loop_status_is_success(status) {
@@ -487,7 +486,6 @@ fn tick_with_execution(
                 .or(release_warning.as_deref())
                 .unwrap_or(""),
             evidence: Some(evidence.clone()),
-            session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,

@@ -5,8 +5,8 @@ use clap::{Args, Subcommand};
 use crate::tool_defs;
 
 pub(super) const STATE_ARCHIVE_AFTER_HELP: &str = "\
-Archive old receipt records and, with --include-runs, completed run histories
-while retaining open-plan evidence. Apply mode first terminalizes an abandoned
+Archive old receipt records and, with --include-runs, completed run histories.
+Apply mode first terminalizes an abandoned
 run when its stable worker lease proves that no worker remains. Preview is
 strictly read-only. Archival then requires every known run to be terminal so a
 live reader's durable journal cursor cannot be shifted.
@@ -17,7 +17,6 @@ midnight, or a Unix millisecond timestamp.
 Examples:
   jig state summary
   jig state diagnose --deep
-  jig state compact sessions --dry-run
   jig state restore --backup .agent/.cache/state-backups/<id>
   jig state export receipts --before 2026-01-01 --output receipts.jsonl.gz
   jig state archive --before 2026-01-01
@@ -32,12 +31,6 @@ pub(crate) enum StateCommand {
     /// Diagnose state size, integrity, and legacy storage pathologies.
     #[command(name = tool_defs::cli_command::STATE_DIAGNOSE)]
     Diagnose(StateDiagnoseOpts),
-    /// Compact a canonical state stream without discarding logical facts.
-    #[command(name = tool_defs::cli_command::STATE_COMPACT)]
-    Compact {
-        #[command(subcommand)]
-        command: StateCompactCommand,
-    },
     /// Restore an exact state stream from a Jig maintenance backup.
     #[command(name = tool_defs::cli_command::STATE_RESTORE)]
     Restore(StateRestoreOpts),
@@ -47,7 +40,7 @@ pub(crate) enum StateCommand {
         #[command(subcommand)]
         command: StateExportCommand,
     },
-    /// Archive old receipts and completed runs while preserving open-plan state.
+    /// Archive old receipts and completed runs.
     #[command(
         name = tool_defs::cli_command::STATE_ARCHIVE,
         after_help = STATE_ARCHIVE_AFTER_HELP
@@ -62,19 +55,6 @@ pub(crate) struct StateDiagnoseOpts {
         help = "Parse stream-specific payloads to find recursive summaries and storage waste"
     )]
     pub(crate) deep: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum StateCompactCommand {
-    /// Normalize legacy recursive session summaries.
-    #[command(name = tool_defs::cli_command::STATE_SESSIONS)]
-    Sessions(StateCompactSessionsOpts),
-}
-
-#[derive(Args, Debug)]
-pub(crate) struct StateCompactSessionsOpts {
-    #[arg(long, help = "Validate and report the rewrite without changing state")]
-    pub(crate) dry_run: bool,
 }
 
 #[derive(Args, Debug)]

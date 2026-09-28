@@ -325,7 +325,7 @@ fn unresolved_supported_batch_child_makes_linkage_incomplete() {
 #[test]
 fn unresolved_v1_child_receipt_stays_incomplete_when_its_copied_run_id_resolves() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -447,7 +447,7 @@ fn assert_preservation_recommendation(output: &Value) {
 #[test]
 fn reused_batch_evidence_may_reference_several_runs() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let live_run = started.result.run_id;
     drop(lease);
     write_records(
@@ -477,12 +477,12 @@ fn reused_batch_evidence_may_reference_several_runs() {
 #[test]
 fn conflicting_batch_and_child_run_ids_make_linkage_incomplete() {
     let (_temp, ctx) = fixture_context();
-    let (first, first_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (first, first_lease) = start_run(&ctx, plan()).unwrap();
     let first_run = first.result.run_id;
     complete_target(&ctx, &first_run);
     complete_run(&ctx, &first_run, RunConclusion::Success).unwrap();
     drop(first_lease);
-    let (second, second_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (second, second_lease) = start_run(&ctx, plan()).unwrap();
     let second_run = second.result.run_id;
     complete_target(&ctx, &second_run);
     complete_run(&ctx, &second_run, RunConclusion::Success).unwrap();
@@ -733,73 +733,5 @@ fn diagnosis_uses_authoritative_target_and_completion_validation() {
     assert_string_array_contains(
         &finding["journal_anomalies"],
         "completed before every target reached a conclusion",
-    );
-}
-
-#[test]
-fn structurally_invalid_queued_plan_is_inconsistent_and_not_recoverable() {
-    let (_temp, ctx) = fixture_context();
-    write_orphan_batch(&ctx);
-    let mut invalid_plan = plan();
-    invalid_plan.execution_layers.clear();
-    let target: TargetId = "api:test".parse().unwrap();
-    let mut result = TargetRunResult::queued(
-        target.clone(),
-        invalid_plan.config_digest.clone(),
-        invalid_plan.targets[0].input_digest.clone(),
-    );
-    result.status = RunStatus::Completed;
-    result.conclusion = Some(RunConclusion::Success);
-    result.started_at_ms = Some(1);
-    result.ended_at_ms = Some(2);
-    result.exit_code = Some(0);
-    write_records(
-        &ctx.state_file("runs.jsonl"),
-        &[
-            json!({
-                "id": "run_event_queued",
-                "run_id": RUN_A,
-                "event": "queued",
-                "timestamp_ms": 1,
-                "plan": invalid_plan,
-            }),
-            json!({
-                "id": "run_event_target_completed",
-                "run_id": RUN_A,
-                "event": "target_completed",
-                "timestamp_ms": 2,
-                "target": target,
-                "result": result,
-            }),
-            json!({
-                "id": "run_event_completed",
-                "run_id": RUN_A,
-                "event": "completed",
-                "timestamp_ms": 3,
-                "conclusion": "success",
-            }),
-        ],
-    );
-
-    let journal = diagnose(&ctx, true);
-    let finding = finding_for(&journal, RUN_A);
-    assert_eq!(finding["status"], "inconsistent");
-    assert_string_array_contains(
-        &finding["journal_anomalies"],
-        "execution layers omit planned target(s): api:test",
-    );
-
-    let runs_path = ctx.state_file("runs.jsonl");
-    crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "invalid-plan-recovery", None)
-        .unwrap();
-    fs::write(&runs_path, b"").unwrap();
-
-    let backup = diagnose(&ctx, true);
-    let finding = finding_for(&backup, RUN_A);
-    assert_eq!(finding["status"], "unverifiable");
-    assert!(finding["recovery"].is_null());
-    assert_string_array_contains(
-        &backup["run_linkage"]["sources"]["errors"],
-        "execution layers omit planned target(s): api:test",
     );
 }

@@ -1,10 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use jig_contract::TargetId;
-
-pub(super) fn cross_plan_receipt_is_eligible(plan_id: Option<&str>) -> bool {
-    plan_id.is_some_and(|plan_id| !plan_id.is_empty())
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetReceiptStatus {
@@ -28,50 +22,3 @@ pub(crate) struct TargetReceiptStatus {
     pub(crate) valid_until_ms: Option<u64>,
     pub(crate) requires_time_validity: bool,
 }
-
-/// One original receipt per configured target. Run IDs describe execution
-/// provenance, not whether two receipts prove the same current inputs.
-#[derive(Debug)]
-pub(super) struct IndexedTargetReceipts {
-    required_targets: BTreeSet<TargetId>,
-    selected: BTreeMap<TargetId, TargetReceiptStatus>,
-}
-
-impl IndexedTargetReceipts {
-    pub(super) fn new(required_targets: BTreeSet<TargetId>) -> Self {
-        Self {
-            required_targets,
-            selected: BTreeMap::new(),
-        }
-    }
-
-    pub(super) fn observe(&mut self, receipt: &TargetReceiptStatus) {
-        if !self.required_targets.contains(&receipt.target) {
-            return;
-        }
-        // Select outcomes, not successes. A newer failure or unverifiable receipt
-        // must not resurrect a previous pass. Ordering is stable under journal
-        // union, duplicate records and out-of-order physical lines.
-        let replace = self.selected.get(&receipt.target).is_none_or(|previous| {
-            (receipt.ended_at_ms, receipt.receipt_id.as_str())
-                > (previous.ended_at_ms, previous.receipt_id.as_str())
-        });
-        if replace {
-            self.selected
-                .insert(receipt.target.clone(), receipt.clone());
-        }
-    }
-
-    pub(super) fn observe_cross_plan(&mut self, receipt: &TargetReceiptStatus) {
-        if cross_plan_receipt_is_eligible(receipt.plan_id.as_deref()) {
-            self.observe(receipt);
-        }
-    }
-
-    pub(super) fn selected(&self) -> &BTreeMap<TargetId, TargetReceiptStatus> {
-        &self.selected
-    }
-}
-
-#[cfg(test)]
-mod tests;

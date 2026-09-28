@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
@@ -26,16 +25,15 @@ pub(crate) use execution_config::{
 };
 pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
 use runtime::non_empty_legacy_jig_version;
-pub(crate) use runtime::{
-    CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX, RepoConfigProbe,
-    RuntimeCacheProfile, WORK_LINK_CONTRACT_VERSION, active_contract_versions,
-    active_contract_versions_label, is_active_contract_version, is_supported_contract_version,
-    runtime_cache_base, runtime_profile_cache_name, runtime_profile_cache_path,
-    supports_work_links,
-};
 #[cfg(test)]
 pub(crate) use runtime::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
+};
+pub(crate) use runtime::{
+    JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX, RepoConfigProbe, RuntimeCacheProfile,
+    active_contract_versions, active_contract_versions_label, is_active_contract_version,
+    is_supported_contract_version, runtime_cache_base, runtime_profile_cache_name,
+    runtime_profile_cache_path,
 };
 
 pub(crate) use execution_config::ExecutionConfig;
@@ -346,7 +344,6 @@ struct ContractManifest {
 #[derive(Clone, Debug)]
 pub(crate) struct RepoContext {
     root: PathBuf,
-    current_session_path: PathBuf,
     config: RepoConfig,
     manifest: ContractManifest,
     contract_digest: String,
@@ -668,10 +665,6 @@ impl RepoContext {
     pub(crate) fn state_file(&self, name: &str) -> PathBuf {
         self.state_dir().join(name)
     }
-
-    pub(crate) fn current_session_path(&self) -> PathBuf {
-        self.current_session_path.clone()
-    }
 }
 
 #[derive(Serialize)]
@@ -789,13 +782,13 @@ pub(crate) use validation::{
 };
 
 mod repository_root;
-use repository_root::{find_optional_repo_root, repo_root_from_env, resolve_current_session_path};
+use repository_root::{find_optional_repo_root, repo_root_from_env};
 pub(crate) use repository_root::{find_repo_root_from, find_repo_root_from_or_env};
 
 // Keep launcher protocol constants in this module shell: repository tooling
 // reads their declarations directly without compiling the Rust include tree.
 pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 8;
-pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 11;
+pub(crate) const MAX_SUPPORTED_CONTRACT_VERSION: u32 = 8;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";

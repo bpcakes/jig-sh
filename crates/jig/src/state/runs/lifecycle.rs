@@ -88,7 +88,6 @@ pub(in crate::state) struct RunLifecycleValidator {
     event_count: usize,
     known_event_count: usize,
     queued: bool,
-    work_plan_id: Option<String>,
     planned_targets: BTreeSet<TargetId>,
     completed_targets: BTreeSet<TargetId>,
     completed_at_ms: Option<u64>,
@@ -149,7 +148,6 @@ impl RunLifecycleValidator {
                 .map(|target| target.target.clone())
                 .collect();
             self.queued = true;
-            self.work_plan_id.clone_from(&event.work_plan_id);
         } else if known && !self.queued {
             bail!(
                 "run '{}' has a {} event before queued",
@@ -266,10 +264,6 @@ impl RunLifecycleValidator {
 
     pub(in crate::state) fn completed_at_ms(&self) -> Option<u64> {
         self.completed_at_ms
-    }
-
-    pub(super) fn work_plan_id(&self) -> Option<&str> {
-        self.work_plan_id.as_deref()
     }
 }
 

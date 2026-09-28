@@ -146,11 +146,6 @@ impl super::RepoContext {
     pub(crate) fn work_receipt_metadata_paths(&self) -> Vec<&'static str> {
         self.config.work.receipt_metadata_paths()
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn work_tracker(&self) -> Option<&WorkTrackerConfig> {
-        self.config.work.tracker()
-    }
 }
 
 impl WorkConfig {
@@ -161,11 +156,6 @@ impl WorkConfig {
                 ReceiptMetadata::Beads => ".beads",
             })
             .collect()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn tracker(&self) -> Option<&WorkTrackerConfig> {
-        self.tracker.as_ref()
     }
 
     pub(crate) fn gates(&self) -> Vec<WorkGate> {

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::cancellation::{
     ensure_status_collection_active, is_status_collection_cancellation,
@@ -10,7 +10,7 @@ use crate::cancellation::{
 };
 use crate::context::RepoContext;
 use crate::runtime::{loop_status_snapshot_with_cancellation, refreshed_repository_context};
-use crate::state::{now_ms, state_summary_with_cancellation};
+use crate::state::now_ms;
 
 pub(crate) mod git;
 
@@ -33,9 +33,6 @@ pub(crate) fn snapshot_with_cancellation(
     let ctx = &current;
     let (repository, mut errors) = repository_snapshot(ctx, cancelled)?;
     ensure_collection_active(cancelled)?;
-    let (work, work_errors) = work_snapshot(ctx, cancelled)?;
-    errors.extend(work_errors);
-    ensure_collection_active(cancelled)?;
     let (loops, loop_error) = loop_snapshot(ctx, cancelled)?;
     if let Some(error) = loop_error {
         errors.push(error);
@@ -51,7 +48,6 @@ pub(crate) fn snapshot_with_cancellation(
         observed_at_ms: now_ms(),
         outcome: if partial { "partial" } else { "complete" },
         repository,
-        work,
         loops,
         errors,
     })
@@ -78,7 +74,6 @@ struct StatusSnapshot {
     observed_at_ms: u64,
     outcome: &'static str,
     repository: RepositorySnapshot,
-    work: Value,
     loops: Value,
     errors: Vec<StatusCollectionError>,
 }
@@ -217,35 +212,6 @@ fn local_upstream_snapshot(
         state,
         basis: "local_tracking_ref",
     }))
-}
-
-fn work_snapshot(
-    ctx: &RepoContext,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<(Value, Vec<StatusCollectionError>)> {
-    ensure_collection_active(cancelled)?;
-    let (state, errors) = match state_summary_with_cancellation(ctx, cancelled) {
-        Ok(state) => (state, Vec::new()),
-        Err(error) if is_status_collection_cancellation(&error) => return Err(error),
-        Err(error) => (
-            Value::Null,
-            vec![StatusCollectionError {
-                scope: "work.state".into(),
-                code: "work_state_unavailable",
-                message: format!("{error:#}"),
-            }],
-        ),
-    };
-    ensure_collection_active(cancelled)?;
-    // Gate evaluation was removed with `jig work`; the documented field
-    // remains present and empty.
-    Ok((
-        json!({
-            "state": state,
-            "gates": [],
-        }),
-        errors,
-    ))
 }
 
 fn loop_snapshot(

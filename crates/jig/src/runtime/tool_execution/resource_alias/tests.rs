@@ -93,7 +93,6 @@ fn failed_alias_fails_fast_with_its_receipt() {
         &ctx,
         REQUESTED_ALIAS,
         json!({"value": ARGUMENT}),
-        None,
         true,
         &mut NoopExecutionObserver,
     )
@@ -151,7 +150,6 @@ fn invoke(
         ctx,
         REQUESTED_ALIAS,
         json!({"value": ARGUMENT}),
-        None,
         ManifestToolExecutionOptions::new(true, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,

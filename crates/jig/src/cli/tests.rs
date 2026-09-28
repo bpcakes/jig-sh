@@ -616,13 +616,7 @@ fn parses_state_maintenance_commands() {
         other => panic!("expected state diagnose command, got {other:?}"),
     }
 
-    let cli = Cli::try_parse_from(["jig", "state", "compact", "sessions", "--dry-run"]).unwrap();
-    match cli.command {
-        CommandKind::State(StateCommand::Compact {
-            command: StateCompactCommand::Sessions(opts),
-        }) => assert!(opts.dry_run),
-        other => panic!("expected state compact sessions command, got {other:?}"),
-    }
+    assert!(Cli::try_parse_from(["jig", "state", "compact", "sessions", "--dry-run"]).is_err());
 
     let cli = Cli::try_parse_from([
         "jig",
@@ -689,7 +683,8 @@ fn parses_tool_no_receipt_flag() {
         other => panic!("expected check contract command, got {other:?}"),
     }
 
-    let error = Cli::try_parse_from([
+    // The retired `--plan-id` is accepted and ignored, so it no longer conflicts.
+    let cli = Cli::try_parse_from([
         "jig",
         "check",
         "contract",
@@ -697,8 +692,15 @@ fn parses_tool_no_receipt_flag() {
         "plan_1",
         "--no-receipt",
     ])
-    .unwrap_err();
-    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    .unwrap();
+    let CommandKind::Check(CheckOpts {
+        command: Some(CheckCommand::Contract(opts)),
+        ..
+    }) = cli.command
+    else {
+        panic!("expected check contract command");
+    };
+    assert!(opts.tool.no_receipt);
 }
 
 #[test]

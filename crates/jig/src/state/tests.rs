@@ -10,10 +10,9 @@ use tempfile::tempdir;
 use super::jsonl::{
     jsonl_end_offset, read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
     read_receipt_window_with_bytes, read_receipts_reverse_with_cancellation,
-    receipts_for_plan_with_lock, state_lock_path, try_scan_jsonl_raw_from, with_jsonl_write_lock,
-    write_jsonl_locked,
+    read_receipts_reverse_with_test_lock, state_lock_path, try_scan_jsonl_raw_from,
+    with_jsonl_write_lock, write_jsonl_locked,
 };
-use super::records::SessionEvent;
 use super::*;
 use crate::command::StateRestoreRequest;
 use crate::context::RepoContext;
@@ -117,14 +116,12 @@ fn receipt_window_reads_a_bounded_tail_independent_of_old_history() {
                 tool_name: "jig.test",
                 args: json!({}),
                 invoked_command_key: Some("test".into()),
-                plan_id: None,
                 started_at_ms: index as u64,
                 ended_at_ms: index as u64 + 1,
                 exit_status: i32::from(index == 50),
                 stdout: &output,
                 stderr: "",
                 evidence: None,
-                session_override: None,
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
                 worktree_fingerprint_override: None,
@@ -264,14 +261,12 @@ fn receipt_window_rejects_an_unterminated_final_record() {
             tool_name: "jig.test",
             args: json!({}),
             invoked_command_key: Some("test".into()),
-            plan_id: None,
             started_at_ms: 1,
             ended_at_ms: 2,
             exit_status: 0,
             stdout: "",
             stderr: "",
             evidence: None,
-            session_override: None,
             collect_git_metadata: false,
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: None,
@@ -292,7 +287,7 @@ fn receipt_window_rejects_an_unterminated_final_record() {
 }
 
 #[test]
-fn receipt_plan_query_uses_stable_snapshot_when_advisory_locks_are_unsupported() {
+fn receipt_reverse_read_uses_stable_snapshot_when_advisory_locks_are_unsupported() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -302,14 +297,12 @@ fn receipt_plan_query_uses_stable_snapshot_when_advisory_locks_are_unsupported()
             tool_name: "jig.test",
             args: json!({}),
             invoked_command_key: Some("test".into()),
-            plan_id: Some("plan_fallback".into()),
             started_at_ms: 1,
             ended_at_ms: 2,
             exit_status: 0,
             stdout: "",
             stderr: "",
             evidence: None,
-            session_override: None,
             collect_git_metadata: false,
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: None,
@@ -317,16 +310,14 @@ fn receipt_plan_query_uses_stable_snapshot_when_advisory_locks_are_unsupported()
     )
     .unwrap();
 
-    let receipts = receipts_for_plan_with_lock(
-        &ctx.state_file("receipts.jsonl"),
-        "plan_fallback",
-        50,
-        |_| Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
-    )
-    .unwrap();
+    let receipts =
+        read_receipts_reverse_with_test_lock(&ctx.state_file("receipts.jsonl"), 50, |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+        })
+        .unwrap();
 
     assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].plan_id.as_deref(), Some("plan_fallback"));
+    assert_eq!(receipts[0].tool_name, "jig.test");
 }
 
 #[test]
@@ -341,7 +332,7 @@ fn receipt_fallback_ignores_an_unterminated_final_record() {
     bytes.extend_from_slice(&partial[..partial.len() / 2]);
     fs::write(&path, bytes).unwrap();
 
-    let receipts = receipts_for_plan_with_lock(&path, "plan_1", 50, |_| {
+    let receipts = read_receipts_reverse_with_test_lock(&path, 50, |_| {
         Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
     })
     .unwrap();
@@ -762,7 +753,7 @@ fn cancellable_jsonl_read_checks_between_records() {
 
 mod receipt_cases;
 use receipt_cases::receipt_record;
-mod session_and_plans;
+mod support_cases;
 
 mod archive_validation;
 

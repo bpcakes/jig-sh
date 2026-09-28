@@ -4,27 +4,21 @@ pub use self::errors::{
     Observation, SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, SnapshotError, SnapshotErrorCode,
 };
 use super::{
-    AppliedLimit, BoundedRows, BoundedText, LimitId, PlanLimits, RecorderEpochId, RecorderLimits,
-    TimelineLimit,
+    AppliedLimit, BoundedRows, BoundedText, LimitId, RecorderEpochId, RecorderLimits, TimelineLimit,
 };
 
 mod errors;
 
-pub const RECORDER_SCHEMA_VERSION: u64 = 1;
+pub const RECORDER_SCHEMA_VERSION: u64 = 2;
 pub const UI_COMMAND: &str = "ui";
 pub const RECORDER_ROOT_FIELDS: &[&str] = &[
     "ok",
     "command",
     "schema_version",
-    "snapshot_kind",
     "generated_at_ms",
     "epoch_id",
     "repo",
     "harness",
-    "current_session_id",
-    "counts",
-    "open_plans",
-    "history",
     "failures",
     "tool_stats",
     "loops",
@@ -34,45 +28,16 @@ pub const RECORDER_ROOT_FIELDS: &[&str] = &[
     "limits",
     "errors",
 ];
-pub const PLAN_ROOT_FIELDS: &[&str] = &[
-    "ok",
-    "command",
-    "schema_version",
-    "snapshot_kind",
-    "generated_at_ms",
-    "basis_epoch",
-    "detail_observed_at_ms",
-    "gates_observed_at_ms",
-    "decisions_observed_at_ms",
-    "plan",
-    "body",
-    "gates",
-    "decisions",
-    "receipts",
-    "limits",
-    "errors",
-];
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotKind {
-    Recorder,
-    Plan,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecorderSnapshot {
     pub ok: bool,
     pub command: String,
     pub schema_version: u64,
-    pub snapshot_kind: SnapshotKind,
     pub generated_at_ms: u64,
     pub epoch_id: RecorderEpochId,
     pub repo: RepositoryObservation,
     pub harness: HarnessObservation,
-    pub current_session_id: Option<String>,
-    pub counts: RecorderCounts,
-    pub open_plans: Vec<OpenPlan>,
-    pub history: Vec<PlanSummary>,
     pub failures: Vec<Failure>,
     pub tool_stats: Vec<ToolStat>,
     pub loops: Option<LoopObservation>,
@@ -95,15 +60,10 @@ impl RecorderSnapshot {
             ok: true,
             command: UI_COMMAND.to_string(),
             schema_version: RECORDER_SCHEMA_VERSION,
-            snapshot_kind: SnapshotKind::Recorder,
             generated_at_ms,
             epoch_id,
             repo: RepositoryObservation::default(),
             harness: HarnessObservation::default(),
-            current_session_id: None,
-            counts: RecorderCounts::default(),
-            open_plans: Vec::new(),
-            history: Vec::new(),
             failures: Vec::new(),
             tool_stats: Vec::new(),
             loops: None,
@@ -111,14 +71,6 @@ impl RecorderSnapshot {
             timeline_show: "all".to_string(),
             timeline_limit,
             limits: RecorderLimits {
-                open_plans: super::AppliedLimit {
-                    applied: LimitId::OpenPlans.ceiling(),
-                    omitted: Some(0),
-                },
-                history: super::AppliedLimit {
-                    applied: LimitId::History.ceiling(),
-                    omitted: Some(0),
-                },
                 failures: super::AppliedLimit {
                     applied: LimitId::Failures.ceiling(),
                     omitted: Some(0),
@@ -137,18 +89,6 @@ impl RecorderSnapshot {
     }
 
     fn validate(&self) -> Result<(), String> {
-        validate_root_rows(
-            LimitId::OpenPlans,
-            self.open_plans.len(),
-            self.limits.open_plans,
-            LimitId::OpenPlans.ceiling(),
-        )?;
-        validate_root_rows(
-            LimitId::History,
-            self.history.len(),
-            self.limits.history,
-            LimitId::History.ceiling(),
-        )?;
         validate_root_rows(
             LimitId::Failures,
             self.failures.len(),
@@ -177,11 +117,6 @@ impl RecorderSnapshot {
             self.timeline_limit,
         )?;
 
-        for plan in &self.open_plans {
-            if let Some(gates) = &plan.gates {
-                gates.validate()?;
-            }
-        }
         for failure in &self.failures {
             validate_text(&failure.stderr_preview, LimitId::FailureStderrChars)?;
         }
@@ -201,15 +136,10 @@ struct RecorderSnapshotWire {
     ok: bool,
     command: String,
     schema_version: u64,
-    snapshot_kind: SnapshotKind,
     generated_at_ms: u64,
     epoch_id: RecorderEpochId,
     repo: RepositoryObservation,
     harness: HarnessObservation,
-    current_session_id: Option<String>,
-    counts: RecorderCounts,
-    open_plans: Vec<OpenPlan>,
-    history: Vec<PlanSummary>,
     failures: Vec<Failure>,
     tool_stats: Vec<ToolStat>,
     loops: Option<LoopObservation>,
@@ -230,94 +160,6 @@ impl Serialize for RecorderSnapshot {
 impl<'de> Deserialize<'de> for RecorderSnapshot {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let snapshot = RecorderSnapshotWire::deserialize(deserializer)?;
-        snapshot.validate().map_err(serde::de::Error::custom)?;
-        Ok(snapshot)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PlanSnapshot {
-    pub ok: bool,
-    pub command: String,
-    pub schema_version: u64,
-    pub snapshot_kind: SnapshotKind,
-    pub generated_at_ms: u64,
-    pub basis_epoch: RecorderEpochId,
-    pub detail_observed_at_ms: u64,
-    pub gates_observed_at_ms: u64,
-    pub decisions_observed_at_ms: u64,
-    pub plan: PlanSummary,
-    pub body: Option<BoundedText>,
-    pub gates: Option<GatesObservation>,
-    pub decisions: Vec<Decision>,
-    pub receipts: Vec<Receipt>,
-    pub limits: PlanLimits,
-    pub errors: Vec<SnapshotError>,
-}
-
-impl PlanSnapshot {
-    fn validate(&self) -> Result<(), String> {
-        validate_root_rows(
-            LimitId::PlanDecisions,
-            self.decisions.len(),
-            self.limits.plan_decisions,
-            LimitId::PlanDecisions.ceiling(),
-        )?;
-        validate_root_rows(
-            LimitId::PlanReceipts,
-            self.receipts.len(),
-            self.limits.plan_receipts,
-            LimitId::PlanReceipts.ceiling(),
-        )?;
-        if let Some(body) = &self.body {
-            validate_text(body, LimitId::PlanBodyChars)?;
-        }
-        if let Some(gates) = &self.gates {
-            gates.validate()?;
-        }
-        for decision in &self.decisions {
-            validate_text(&decision.rationale, LimitId::TimelineDecisionRationaleChars)?;
-        }
-        for receipt in &self.receipts {
-            validate_rows(&receipt.changed_paths, LimitId::ReceiptChangedPaths)?;
-            validate_text(&receipt.stdout_preview, LimitId::ReceiptStdoutChars)?;
-            validate_text(&receipt.stderr_preview, LimitId::ReceiptStderrChars)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(remote = "PlanSnapshot")]
-struct PlanSnapshotWire {
-    ok: bool,
-    command: String,
-    schema_version: u64,
-    snapshot_kind: SnapshotKind,
-    generated_at_ms: u64,
-    basis_epoch: RecorderEpochId,
-    detail_observed_at_ms: u64,
-    gates_observed_at_ms: u64,
-    decisions_observed_at_ms: u64,
-    plan: PlanSummary,
-    body: Option<BoundedText>,
-    gates: Option<GatesObservation>,
-    decisions: Vec<Decision>,
-    receipts: Vec<Receipt>,
-    limits: PlanLimits,
-    errors: Vec<SnapshotError>,
-}
-
-impl Serialize for PlanSnapshot {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.validate().map_err(serde::ser::Error::custom)?;
-        PlanSnapshotWire::serialize(self, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for PlanSnapshot {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let snapshot = PlanSnapshotWire::deserialize(deserializer)?;
         snapshot.validate().map_err(serde::de::Error::custom)?;
         Ok(snapshot)
     }
@@ -380,91 +222,6 @@ pub struct HarnessObservation {
     pub contract_version: u64,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RecorderCounts {
-    pub sessions: u64,
-    pub session_events: u64,
-    pub plans: u64,
-    pub plan_events: u64,
-    pub open_plans: u64,
-    pub decisions: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct OpenPlan {
-    pub plan_id: String,
-    pub title: String,
-    pub body_path: Option<String>,
-    pub opened_at_ms: Option<u64>,
-    pub baseline_ref: Option<String>,
-    pub baseline_oid: Option<String>,
-    pub baseline_error: Option<String>,
-    pub gates: Option<GatesObservation>,
-    pub gates_error: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PlanSummary {
-    pub plan_id: String,
-    pub title: String,
-    pub state: String,
-    pub opened_at_ms: Option<u64>,
-    pub closed_at_ms: Option<u64>,
-    pub resolution: Option<String>,
-    pub duration_ms: Option<u64>,
-    pub baseline_ref: Option<String>,
-    pub baseline_oid: Option<String>,
-    pub baseline_error: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GatesObservation {
-    pub overall: String,
-    pub gates: BoundedRows<GateObservation>,
-}
-
-impl GatesObservation {
-    fn validate(&self) -> Result<(), String> {
-        validate_rows(&self.gates, LimitId::GateRows)?;
-        for gate in self.gates.items() {
-            gate.validate()?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GateObservation {
-    pub id: String,
-    pub tool: Option<String>,
-    pub skill: Option<String>,
-    pub required: bool,
-    pub status: String,
-    pub freshness: Option<String>,
-    pub ended_at_ms: Option<u64>,
-    pub diff_summary: Option<String>,
-    pub changed_paths: BoundedRows<String>,
-    pub matching_paths: BoundedRows<String>,
-    pub findings: BoundedRows<GateFinding>,
-    pub remediation: Option<Remediation>,
-}
-
-impl GateObservation {
-    fn validate(&self) -> Result<(), String> {
-        validate_rows(&self.changed_paths, LimitId::GateChangedPaths)?;
-        validate_rows(&self.matching_paths, LimitId::GateMatchingPaths)?;
-        validate_rows(&self.findings, LimitId::GateFindings)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GateFinding {
-    pub code: String,
-    pub message: String,
-    pub path: Option<String>,
-    pub line: Option<u64>,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Remediation {
     pub argv: Vec<String>,
@@ -475,7 +232,6 @@ pub struct Remediation {
 pub struct Failure {
     pub id: String,
     pub tool_name: String,
-    pub plan_id: Option<String>,
     pub ended_at_ms: Option<u64>,
     pub exit_status: i64,
     pub stderr_preview: BoundedText,
@@ -637,9 +393,6 @@ pub struct LoopStateError {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TimelineRow {
     Receipt(ReceiptTimelineRow),
-    Plan(PlanTimelineRow),
-    Session(SessionTimelineRow),
-    Decision(DecisionTimelineRow),
 }
 
 impl TimelineRow {
@@ -647,9 +400,6 @@ impl TimelineRow {
     pub fn stable_identity(&self) -> &str {
         match self {
             Self::Receipt(row) => &row.stable_identity,
-            Self::Plan(row) => &row.stable_identity,
-            Self::Session(row) => &row.stable_identity,
-            Self::Decision(row) => &row.stable_identity,
         }
     }
 
@@ -660,10 +410,6 @@ impl TimelineRow {
                     validate_text(stderr, LimitId::FailureStderrChars)?;
                 }
             }
-            Self::Decision(row) => {
-                validate_text(&row.rationale, LimitId::TimelineDecisionRationaleChars)?;
-            }
-            Self::Plan(_) | Self::Session(_) => {}
         }
         Ok(())
     }
@@ -676,8 +422,6 @@ pub struct ReceiptTimelineRow {
     pub id: String,
     pub tool_name: String,
     pub invoked_command_key: Option<String>,
-    pub plan_id: Option<String>,
-    pub session_id: Option<String>,
     pub exit_status: i64,
     pub started_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
@@ -685,66 +429,4 @@ pub struct ReceiptTimelineRow {
     pub diff_summary: Option<String>,
     pub changed_path_count: Option<u64>,
     pub stderr_preview: Option<BoundedText>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PlanTimelineRow {
-    pub stable_identity: String,
-    pub timestamp_ms: Option<u64>,
-    pub id: String,
-    pub event: String,
-    pub plan_id: String,
-    pub title: Option<String>,
-    pub resolution: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SessionTimelineRow {
-    pub stable_identity: String,
-    pub timestamp_ms: Option<u64>,
-    pub id: String,
-    pub event: String,
-    pub session_id: String,
-    pub outcome: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DecisionTimelineRow {
-    pub stable_identity: String,
-    pub timestamp_ms: Option<u64>,
-    pub id: String,
-    pub plan_id: Option<String>,
-    pub title: String,
-    pub selected_option: String,
-    pub rationale: BoundedText,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Decision {
-    pub id: String,
-    pub session_id: Option<String>,
-    pub plan_id: Option<String>,
-    pub timestamp_ms: u64,
-    pub title: String,
-    pub selected_option: String,
-    pub alternatives: Vec<String>,
-    pub rationale: BoundedText,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Receipt {
-    pub timestamp_ms: Option<u64>,
-    pub id: String,
-    pub tool_name: String,
-    pub invoked_command_key: Option<String>,
-    pub plan_id: Option<String>,
-    pub session_id: Option<String>,
-    pub exit_status: i64,
-    pub started_at_ms: Option<u64>,
-    pub ended_at_ms: Option<u64>,
-    pub duration_ms: Option<u64>,
-    pub diff_summary: Option<String>,
-    pub changed_paths: BoundedRows<String>,
-    pub stdout_preview: BoundedText,
-    pub stderr_preview: BoundedText,
 }

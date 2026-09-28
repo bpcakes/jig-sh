@@ -10,20 +10,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
-use serde::{
-    Serialize,
-    de::{DeserializeOwned, IgnoredAny},
-};
+#[cfg(test)]
+use serde::de::DeserializeOwned;
+use serde::{Serialize, de::IgnoredAny};
 use tempfile::NamedTempFile;
 
 use crate::cancellation::ensure_status_collection_active;
 
 use super::records::ReceiptRecord;
-
-#[cfg(test)]
-mod test_lock;
-#[cfg(test)]
-pub(super) use test_lock::with_unsupported_scan_lock;
 
 const JSONL_READ_CHUNK: usize = 16 * 1024;
 pub(crate) const DASHBOARD_JSONL_RECORD_BYTES: usize = 1024 * 1024;
@@ -74,9 +68,6 @@ impl JsonlRecordTooLarge {
 impl std::fmt::Display for JsonlRecordTooLarge {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let recovery = match self.path.file_name().and_then(|name| name.to_str()) {
-            Some("sessions.jsonl") => {
-                "run `scripts/jig state diagnose --deep`, then preview `scripts/jig state compact sessions --dry-run`"
-            }
             Some("receipts.jsonl") => {
                 "run `scripts/jig state diagnose --deep`, then preview `scripts/jig state archive --before <cutoff> --dry-run`"
             }
@@ -138,11 +129,7 @@ pub(super) fn append_jsonl_with_end_offset<T: Serialize>(path: &Path, value: &T)
 }
 
 mod durable_append;
-#[cfg(test)]
-pub(crate) use durable_append::{DurableAppendFailurePoint, fail_next_durable_append_at};
-pub(super) use durable_append::{
-    append_jsonl_durable_locked, append_jsonl_locked, confirm_jsonl_durable_locked,
-};
+pub(super) use durable_append::append_jsonl_locked;
 
 pub(super) struct JsonlWriteGuard {
     lock_file: File,
@@ -424,10 +411,12 @@ pub(super) fn state_lock_path(path: &Path) -> PathBuf {
     parent.join(lock_name)
 }
 
+#[cfg(test)]
 pub(super) fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
     read_jsonl_with_cancellation(path, &|| false)
 }
 
+#[cfg(test)]
 pub(super) fn read_jsonl_with_cancellation<T: DeserializeOwned>(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -493,23 +482,6 @@ pub(super) fn scan_jsonl_raw(
     scan_jsonl_raw_with_limit(path, cancelled, None, visitor)
 }
 
-/// Bounded authority scans preserve torn tails even when locking is unsupported.
-pub(super) fn scan_jsonl_raw_bounded(
-    path: &Path,
-    cancelled: &dyn Fn() -> bool,
-    max_record_bytes: usize,
-    visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
-) -> Result<JsonlScanStats> {
-    scan_jsonl_raw_with_limit_and_lock(
-        path,
-        cancelled,
-        Some(max_record_bytes),
-        false,
-        visitor,
-        try_scan_lock_shared,
-    )
-}
-
 pub(crate) fn scan_dashboard_jsonl_raw(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -522,26 +494,6 @@ pub(crate) fn scan_dashboard_jsonl_raw(
         *count = count.saturating_add(1);
     });
     scan_jsonl_raw_with_limit(path, cancelled, Some(DASHBOARD_JSONL_RECORD_BYTES), visitor)
-}
-
-pub(crate) fn read_dashboard_jsonl<T: DeserializeOwned>(
-    path: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Vec<T>> {
-    let mut items = Vec::new();
-    scan_dashboard_jsonl_raw(path, cancelled, |record| {
-        let value = serde_json::from_slice(record.bytes).with_context(|| {
-            format!(
-                "Failed to parse dashboard JSONL record {} at byte {} in {}",
-                record.line_number,
-                record.start_offset,
-                path.display()
-            )
-        })?;
-        items.push(value);
-        Ok(())
-    })?;
-    Ok(items)
 }
 
 fn scan_jsonl_raw_with_limit(
@@ -561,10 +513,6 @@ fn scan_jsonl_raw_with_limit(
 }
 
 fn try_scan_lock_shared(file: &File) -> io::Result<bool> {
-    #[cfg(test)]
-    if test_lock::unsupported() {
-        return Err(io::ErrorKind::Unsupported.into());
-    }
     FileExt::try_lock_shared(file)
 }
 
@@ -708,35 +656,15 @@ pub(super) fn scan_jsonl_raw_locked(
     scan_jsonl_file(&file, path, cancelled, &mut visitor)
 }
 
-pub(super) fn scan_jsonl_raw_locked_bounded(
-    _guard: &JsonlWriteGuard,
-    path: &Path,
-    cancelled: &dyn Fn() -> bool,
-    max_record_bytes: usize,
-    mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
-) -> Result<JsonlScanStats> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(JsonlScanStats::default());
-        }
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Failed to open {} for locked scan", path.display()));
-        }
-    };
-    scan_jsonl_file_with_limit(&file, path, cancelled, Some(max_record_bytes), &mut visitor)
-}
-
 mod read_access;
 use read_access::{JsonlReadAccess, ReadLockLabels, with_jsonl_read};
 
 mod reverse;
 pub(super) use reverse::read_receipts_reverse;
-pub(crate) use reverse::read_receipts_reverse_with_cancellation;
 #[cfg(test)]
 pub(super) use reverse::{
-    read_receipt_window, read_receipt_window_with_bytes, receipts_for_plan_with_lock,
+    read_receipt_window, read_receipt_window_with_bytes, read_receipts_reverse_with_cancellation,
+    read_receipts_reverse_with_test_lock,
 };
 
 mod snapshot;

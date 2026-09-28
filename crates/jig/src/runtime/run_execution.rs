@@ -51,7 +51,6 @@ pub(super) struct SourceObservationMetrics {
 
 pub(super) struct ExecuteCheckRunRequest {
     pub(super) alias_override: Option<ExecutionAliasOverride>,
-    pub(super) work_plan_id: Option<String>,
     pub(super) record_receipts: bool,
     pub(super) fail_fast: bool,
 }
@@ -70,7 +69,7 @@ pub(super) fn execute_check_run(
     request: ExecuteCheckRunRequest,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckRunExecution> {
-    let (run, _lease) = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
+    let (run, _lease) = start_check_run(ctx, catalog, plan)?;
     execute_started_check_run(ctx, catalog, run, request, &|| Ok(cancelled()))
 }
 
@@ -130,7 +129,6 @@ pub(super) fn execute_freshly_planned_check_run_with_lease(
     repository_execution: crate::state::RepositoryExecutionLease,
     observe_durable_cancellation: bool,
 ) -> Result<CheckRunExecution> {
-    validate_prepared_work_plan_identity(&plan, request.work_plan_id.as_deref())?;
     crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     // A nonempty run gets the same source check from its first target
     // precondition. An empty affected plan has no such target, so it must prove
@@ -146,17 +144,12 @@ pub(super) fn execute_freshly_planned_check_run_with_lease(
         let (run, lease, cursor) = crate::state::start_run_with_event_cursor_and_execution_lease(
             ctx,
             plan,
-            request.work_plan_id.clone(),
             repository_execution,
         )?;
         (run, lease, Some(cursor))
     } else {
-        let (run, lease) = crate::state::start_run_with_execution_lease(
-            ctx,
-            plan,
-            request.work_plan_id.clone(),
-            repository_execution,
-        )?;
+        let (run, lease) =
+            crate::state::start_run_with_execution_lease(ctx, plan, repository_execution)?;
         (run, lease, None)
     };
     let cancellation = cursor.map(|cursor| {
@@ -207,61 +200,26 @@ pub(super) fn start_check_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     plan: RunPlan,
-    work_plan_id: Option<String>,
 ) -> Result<(crate::state::DurableRun, crate::state::RunLease)> {
-    validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
     let repository_execution =
         crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
     let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    crate::state::start_run_with_execution_lease(ctx, plan, work_plan_id, repository_execution)
+    crate::state::start_run_with_execution_lease(ctx, plan, repository_execution)
 }
 
 pub(super) fn start_check_run_with_event_cursor(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     plan: RunPlan,
-    work_plan_id: Option<String>,
 ) -> Result<(
     crate::state::DurableRun,
     crate::state::RunLease,
     crate::state::RunEventCursor,
 )> {
-    validate_prepared_work_plan_identity(&plan, work_plan_id.as_deref())?;
     let repository_execution =
         crate::state::acquire_repository_execution_lease_without_wait(ctx, &plan.effects)?;
     let plan = crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    crate::state::start_run_with_event_cursor_and_execution_lease(
-        ctx,
-        plan,
-        work_plan_id,
-        repository_execution,
-    )
-}
-
-fn validate_prepared_work_plan_identity(plan: &RunPlan, supplied: Option<&str>) -> Result<()> {
-    let mut prepared = plan
-        .targets
-        .iter()
-        .filter_map(|target| target.prepared_native_input.as_ref())
-        .map(|input| input.work_plan_id.as_deref());
-    let Some(expected) = prepared.next() else {
-        return Ok(());
-    };
-    if prepared.any(|candidate| candidate != expected) {
-        bail!(
-            "run plan '{}' contains inconsistent prepared work-plan identities",
-            plan.id
-        );
-    }
-    if expected != supplied {
-        bail!(
-            "run plan '{}' was prepared for work_plan_id {:?}, but execution supplied {:?}",
-            plan.id,
-            expected,
-            supplied
-        );
-    }
-    Ok(())
+    crate::state::start_run_with_event_cursor_and_execution_lease(ctx, plan, repository_execution)
 }
 
 pub(super) fn execute_started_check_run(
@@ -330,7 +288,6 @@ fn execute_started_check_run_inner(
         ctx,
         catalog,
         run: &run,
-        work_plan_id: run.work_plan_id.as_deref(),
         record_receipts: request.record_receipts,
     };
     let target_count = run.plan.targets.len();
@@ -535,15 +492,8 @@ fn execute_started_check_run_inner(
                     PhasePosition::new(target_index, target_count)
                         .expect("planned target position must be valid"),
                 );
-                let capture = run_target_capture(
-                    ctx,
-                    catalog,
-                    &run_id,
-                    run.work_plan_id.as_deref(),
-                    planned,
-                    control,
-                    freshness.as_ref(),
-                );
+                let capture =
+                    run_target_capture(ctx, catalog, &run_id, planned, control, freshness.as_ref());
                 let completed = CompletedTargetCapture::now(Some(started_at_ms), capture);
                 let (completed, fingerprint) =
                     source_epoch.finish_completed_target(ctx, planned, completed);
@@ -604,19 +554,17 @@ fn run_target_capture_inner(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run_id: &str,
-    work_plan_id: Option<&str>,
     planned: &PlannedTarget,
     run_control: &mut dyn RepositoryRunControl,
 ) -> TargetCapture {
     let mut control = TargetExecutionControl::new(ctx, planned, run_control);
-    run_target_with_control(ctx, catalog, run_id, work_plan_id, planned, &mut control)
+    run_target_with_control(ctx, catalog, run_id, planned, &mut control)
 }
 
 fn run_target_with_control(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run_id: &str,
-    work_plan_id: Option<&str>,
     planned: &PlannedTarget,
     control: &mut TargetExecutionControl<'_>,
 ) -> TargetCapture {
@@ -674,7 +622,6 @@ fn run_target_with_control(
                                 cancelled: &|| control.is_cancelled(),
                                 run_id,
                                 target: &planned.target,
-                                work_plan_id,
                             }) {
                                 Ok(result) => TargetCapture::from_native_action(result),
                                 Err(error) => {

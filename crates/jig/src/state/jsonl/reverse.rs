@@ -18,16 +18,15 @@ pub(in crate::state) fn read_receipt_window_with_bytes(
     read_receipts_reverse(path, limit, |_| true)
 }
 #[cfg(test)]
-pub(in crate::state) fn receipts_for_plan_with_lock(
+pub(in crate::state) fn read_receipts_reverse_with_test_lock(
     path: &Path,
-    plan_id: &str,
     limit: usize,
     mut lock_data: impl FnMut(&File) -> io::Result<()>,
 ) -> Result<Vec<ReceiptRecord>> {
     read_receipts_reverse_with_lock(
         path,
         limit,
-        |receipt| receipt.plan_id.as_deref() == Some(plan_id),
+        |_| true,
         &|| false,
         None,
         |file| lock_data(file).map(|()| true),
@@ -335,7 +334,8 @@ fn skip_unterminated_tail(
     Ok((0, bytes_read))
 }
 
-pub(crate) fn read_receipts_reverse_with_cancellation(
+#[cfg(test)]
+pub(in crate::state) fn read_receipts_reverse_with_cancellation(
     path: &Path,
     limit: usize,
     predicate: impl Fn(&ReceiptRecord) -> bool,

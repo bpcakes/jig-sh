@@ -153,8 +153,9 @@ pub(crate) struct PlanRunArgs {
     pub(crate) affected_base: Option<String>,
     #[serde(default)]
     pub(crate) comparison: Option<ComparisonRequestV1>,
-    #[serde(default)]
-    pub(crate) work_plan_id: Option<String>,
+    /// Retired. Accepted and ignored until the next contract epoch.
+    #[serde(default, rename = "work_plan_id")]
+    pub(crate) _retired_work_plan_id: Option<String>,
     #[serde(default)]
     pub(crate) arguments: BTreeMap<String, ActionArguments>,
 }
@@ -163,8 +164,9 @@ pub(crate) struct PlanRunArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExecuteRunArgs {
     pub(crate) plan: RunPlan,
-    #[serde(default)]
-    pub(crate) work_plan_id: Option<String>,
+    /// Retired. Accepted and ignored until the next contract epoch.
+    #[serde(default, rename = "work_plan_id")]
+    pub(crate) _retired_work_plan_id: Option<String>,
     #[serde(default = "default_true")]
     pub(crate) record_receipts: bool,
     #[serde(default)]
@@ -360,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_schema_accepts_closed_comparison_and_work_plan_authority() {
+    fn plan_schema_accepts_closed_comparison_and_ignores_retired_work_plan_id() {
         let value = json!({
             "comparison": {
                 "kind": "strict_inventory",
@@ -380,7 +382,6 @@ mod tests {
             }
         })));
         let parsed = serde_json::from_value::<PlanRunArgs>(value).unwrap();
-        assert_eq!(parsed.work_plan_id.as_deref(), Some("plan_example"));
         assert!(matches!(
             parsed.comparison,
             Some(ComparisonRequestV1::StrictInventory {

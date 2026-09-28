@@ -53,26 +53,6 @@ fn receipt_archive_and_export_reject_an_unterminated_final_record_before_publica
 }
 
 #[test]
-fn state_tool_receipts_skip_git_metadata_collection() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    session_start(&ctx).unwrap();
-
-    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
-    let receipt = receipts
-        .iter()
-        .find(|receipt| receipt.tool_name == tool::SESSION_START)
-        .unwrap();
-    assert_eq!(receipt.args["operation"], "session_start");
-    assert!(receipt.changed_paths.is_empty());
-    assert_eq!(receipt.diff_stat.files, 0);
-    assert!(receipt.git_status_error.is_none());
-    assert!(receipt.git_diff_stat_error.is_none());
-}
-
-#[test]
 fn composite_archive_failure_preserves_completed_run_recovery_paths() {
     let runs = json!({
         "runs_archived": 2,

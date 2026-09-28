@@ -21,7 +21,7 @@ fn loop_tick_noop_records_idle_receipt() {
     assert_eq!(output["idle"], true);
     assert_eq!(output["workflow"]["kind"], "noop_status");
     assert_eq!(output["observed"]["repo"]["name"], "demo");
-    assert_eq!(output["observed"]["open_plan_count"], 1);
+    assert!(output["observed"].get("open_plan_count").is_none());
     assert!(output["receipt_id"].as_str().is_some());
 
     let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, false)});

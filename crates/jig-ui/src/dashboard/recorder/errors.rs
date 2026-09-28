@@ -2,16 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::super::CollectionDomain;
 
-pub const SNAPSHOT_ERROR_SCOPES: &[&str] = &[
-    "repository",
-    "state.sessions",
-    "state.plans",
-    "state.decisions",
-    "state.receipts",
-    "loops",
-    "gates",
-    "body",
-];
+pub const SNAPSHOT_ERROR_SCOPES: &[&str] = &["repository", "state.receipts", "loops"];
 pub const SNAPSHOT_ERROR_CODES: &[&str] = &[
     "git_observation_failed",
     "git_upstream_comparison_failed",
@@ -21,13 +12,6 @@ pub const SNAPSHOT_ERROR_CODES: &[&str] = &[
     "record_too_large",
     "record_decode_failed",
     "loop_observation_failed",
-    "gate_observation_failed",
-    "body_not_found",
-    "body_unsafe_path",
-    "body_unsafe_type",
-    "body_read_failed",
-    "body_invalid_utf8",
-    "unsupported_platform",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -111,13 +95,6 @@ pub enum SnapshotErrorCode {
     RecordTooLarge,
     RecordDecodeFailed,
     LoopObservationFailed,
-    GateObservationFailed,
-    BodyNotFound,
-    BodyUnsafePath,
-    BodyUnsafeType,
-    BodyReadFailed,
-    BodyInvalidUtf8,
-    UnsupportedPlatform,
 }
 
 impl SnapshotErrorCode {
@@ -132,13 +109,6 @@ impl SnapshotErrorCode {
             Self::RecordTooLarge => "record_too_large",
             Self::RecordDecodeFailed => "record_decode_failed",
             Self::LoopObservationFailed => "loop_observation_failed",
-            Self::GateObservationFailed => "gate_observation_failed",
-            Self::BodyNotFound => "body_not_found",
-            Self::BodyUnsafePath => "body_unsafe_path",
-            Self::BodyUnsafeType => "body_unsafe_type",
-            Self::BodyReadFailed => "body_read_failed",
-            Self::BodyInvalidUtf8 => "body_invalid_utf8",
-            Self::UnsupportedPlatform => "unsupported_platform",
         }
     }
 }

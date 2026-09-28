@@ -37,7 +37,7 @@ const DASHBOARD_SCHEDULER_TESTS: &str = "crates/jig-ui/src/terminal/runtime/sche
 const CLI_CUTOVER_TESTS: &str = "crates/jig/tests/ui_cutover.rs";
 const CLI_ARCHITECTURE_TESTS: &str = "crates/jig/tests/ui_architecture.rs";
 
-/// One entry for every row in project-plan section 5.6.
+/// One entry for every dashboard parity capability.
 ///
 /// Every entry points to a real test in `test_source`. The owning dashboard
 /// contract suite resolves those references before release validation.
@@ -47,7 +47,7 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "Repository, harness, and default-branch identity",
         Shared,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "repository_open_plans_failures_and_tool_times_keep_exact_semantics"
+        "repository_failures_and_tool_times_keep_exact_semantics"
     ),
     parity!(
         "current_revision",
@@ -57,46 +57,11 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "local_header_reports_default_branch_age_and_detached_state_on_every_local_tab"
     ),
     parity!(
-        "state_counts",
-        "Session, plan, and decision counts",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "work_timeline_and_health_render_typed_parity_fields"
-    ),
-    parity!(
-        "open_plans",
-        "Open plans",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "repository_open_plans_failures_and_tool_times_keep_exact_semantics"
-    ),
-    parity!(
-        "gate_table",
-        "Gate table",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "plan_detail_preserves_sections_errors_and_inert_argv"
-    ),
-    parity!(
-        "gate_remediation",
-        "Gate remediation command",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "plan_detail_preserves_sections_errors_and_inert_argv"
-    ),
-    parity!(
-        "gate_error",
-        "Gate collection error",
-        Recorder,
-        DASHBOARD_LOCAL_TESTS,
-        "gate_error_preserves_other_plans"
-    ),
-    parity!(
         "recent_failures",
         "Recent failures",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "repository_open_plans_failures_and_tool_times_keep_exact_semantics"
+        "repository_failures_and_tool_times_keep_exact_semantics"
     ),
     parity!(
         "failure_stderr",
@@ -104,13 +69,6 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         Recorder,
         DASHBOARD_LOCAL_TESTS,
         "failure_stderr_is_bounded_and_scrollable"
-    ),
-    parity!(
-        "closed_history",
-        "Closed work history",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "work_timeline_and_health_render_typed_parity_fields"
     ),
     parity!(
         "tool_statistics",
@@ -148,25 +106,18 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "exhausted_attempt_keeps_identity_and_inert_recovery_argv"
     ),
     parity!(
-        "mixed_timeline",
-        "Mixed timeline",
+        "receipt_timeline",
+        "Receipt timeline",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "mixed_timeline_is_newest_first_and_every_plan_row_opens_its_raw_id"
-    ),
-    parity!(
-        "timeline_plan_link",
-        "Plan-linked timeline navigation",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "mixed_timeline_is_newest_first_and_every_plan_row_opens_its_raw_id"
+        "receipt_timeline_is_newest_first_and_rows_open_their_detail"
     ),
     parity!(
         "timeline_filter",
-        "Timeline kind filter",
+        "Timeline failure filter",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "timeline_filters_cover_every_kind_and_preserve_raw_identity"
+        "timeline_filters_select_failures_and_preserve_raw_identity"
     ),
     parity!(
         "timeline_limit",
@@ -176,60 +127,11 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "timeline_limit_endpoints_and_plus_minus_controls_are_enforced"
     ),
     parity!(
-        "plan_body",
-        "Plan body",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "bounded_plan_body_and_fifty_receipts_remain_reachable"
-    ),
-    parity!(
-        "plan_body_error",
-        "Plan body error",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "plan_detail_preserves_sections_errors_and_inert_argv"
-    ),
-    parity!(
-        "plan_baseline",
-        "Plan baseline",
-        Recorder,
-        DASHBOARD_LOCAL_TESTS,
-        "plan_summary_renders_baseline_values_and_errors"
-    ),
-    parity!(
-        "plan_decisions",
-        "Plan decisions",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "plan_detail_leaf_navigation_preserves_parent_state"
-    ),
-    parity!(
-        "plan_receipts",
-        "Plan receipts",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "bounded_plan_body_and_fifty_receipts_remain_reachable"
-    ),
-    parity!(
-        "receipt_output",
-        "Receipt stdout/stderr",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "receipt_output_and_paths_keep_independent_bounds"
-    ),
-    parity!(
-        "receipt_paths",
-        "Receipt changed paths",
-        Recorder,
-        DASHBOARD_LOCAL_PARITY_TESTS,
-        "receipt_output_and_paths_keep_independent_bounds"
-    ),
-    parity!(
         "receipt_diff_duration",
         "Receipt diff and duration",
         Recorder,
         DASHBOARD_LOCAL_PARITY_TESTS,
-        "plan_detail_leaf_navigation_preserves_parent_state"
+        "receipt_timeline_is_newest_first_and_rows_open_their_detail"
     ),
     parity!(
         "dashboard_json",
@@ -237,13 +139,6 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         Recorder,
         CLI_CUTOVER_TESTS,
         "recorder_json_emits_one_local_snapshot"
-    ),
-    parity!(
-        "plan_json",
-        "Plan JSON route",
-        Recorder,
-        CLI_CUTOVER_TESTS,
-        "plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors"
     ),
     parity!(
         "auto_refresh",
@@ -257,35 +152,35 @@ pub const PARITY_REGISTRY: &[ParityEntry] = &[
         "Status overview structure",
         Status,
         DASHBOARD_MODEL_TESTS,
-        "status_view_surfaces_local_repository_work_loops_and_errors"
+        "status_view_surfaces_local_repository_harness_loops_and_errors"
     ),
     parity!(
         "repository_cleanliness",
         "Repository cleanliness and revision",
         Status,
         DASHBOARD_MODEL_TESTS,
-        "status_view_surfaces_local_repository_work_loops_and_errors"
+        "status_view_surfaces_local_repository_harness_loops_and_errors"
     ),
     parity!(
         "upstream",
         "Upstream tracking",
         Status,
         DASHBOARD_MODEL_TESTS,
-        "status_view_surfaces_local_repository_work_loops_and_errors"
+        "status_view_surfaces_local_repository_harness_loops_and_errors"
     ),
     parity!(
         "aggregate_errors",
         "Aggregate collection errors",
         Status,
         DASHBOARD_MODEL_TESTS,
-        "status_view_surfaces_local_repository_work_loops_and_errors"
+        "status_view_surfaces_local_repository_harness_loops_and_errors"
     ),
     parity!(
         "status_local_counts",
-        "Status local work and loop counts",
+        "Status local loop counts",
         Status,
         DASHBOARD_MODEL_TESTS,
-        "status_view_surfaces_local_repository_work_loops_and_errors"
+        "status_view_surfaces_local_repository_harness_loops_and_errors"
     ),
     parity!(
         "status_refresh",

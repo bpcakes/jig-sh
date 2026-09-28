@@ -79,7 +79,6 @@ Validation contexts are deliberately different:
 | Context | Supported recipe |
 | --- | --- |
 | Standalone diagnostic, including a review's local test command | Outside a repo-mode worker, use `scripts/jig check <target> --no-receipt` when no receipt is required. This suppresses receipts, not native run metadata. |
-| Plan-linked validation | Plans can no longer be opened, but `scripts/jig check <target> --plan-id <plan-id>` still links a receipt to a plan that was open before the upgrade. Run it outside the repo-mode worker or in its isolated task checkout, and preserve the receipt and original plan ID. `--no-receipt` conflicts with `--plan-id`. |
 | Repo-mode worker | Use direct test commands that leave the checkout clean. A legacy contract's receipt-free command can be suitable when it writes no other tracked state; native checks still append `.agent/state/runs.jsonl`. Do not treat `--no-receipt` as a blanket safe-nesting flag. |
 | Isolated task | Run validation in the task worktree. Receipt and run-journal changes cause the worktree to be retained for inspection, not merged or discarded. |
 

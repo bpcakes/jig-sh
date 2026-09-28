@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use jig_ui::dashboard::*;
@@ -6,13 +6,10 @@ use sha2::{Digest, Sha256};
 
 use crate::context::RepoContext;
 use crate::state::{
-    DashboardDecisionRecord, DashboardPlanEvent, DashboardReceiptRecord, DashboardSessionEvent,
-    JsonlRecordTooLarge, PlanFileError, PlanFileErrorKind, RawJsonlRecord,
-    current_session_with_cancellation, read_plan_body, read_receipts_reverse_with_cancellation,
-    receipt_diff_summary, scan_dashboard_jsonl_raw,
+    DashboardReceiptRecord, JsonlRecordTooLarge, RawJsonlRecord, receipt_diff_summary,
+    scan_dashboard_jsonl_raw,
 };
 
-const STATUS_RECENT_ROWS: usize = 10;
 pub(in crate::ui::source) const MAX_AGGREGATION_KEYS: usize = 4_096;
 
 pub(super) struct LocalObservationEpoch {
@@ -21,11 +18,6 @@ pub(super) struct LocalObservationEpoch {
     context: RepoContext,
     repository: StatusRepositoryObservation,
     status_repository_errors: Vec<StatusCollectionError>,
-    current_session_id: Option<String>,
-    current_session_error: Option<SnapshotError>,
-    sessions: StreamSection<SessionFacts>,
-    plans: StreamSection<PlanFacts>,
-    decisions: StreamSection<DecisionFacts>,
     receipts: StreamSection<ReceiptFacts>,
     loops: Option<StatusLoopObservation>,
     loop_error: Option<SnapshotError>,
@@ -38,32 +30,9 @@ struct StreamSection<T> {
 }
 
 #[derive(Clone, Default)]
-struct SessionFacts {
-    starts: u64,
-    events: u64,
-    timeline: Vec<TimelineRow>,
-}
-
-#[derive(Clone, Default)]
-struct PlanFacts {
-    distinct: BTreeMap<String, PlanInfo>,
-    open_events: u64,
-    events: u64,
-    timeline: Vec<TimelineRow>,
-}
-
-#[derive(Clone, Default)]
-struct DecisionFacts {
-    count: u64,
-    recent: Vec<StatusDecisionSummary>,
-    timeline: Vec<TimelineRow>,
-}
-
-#[derive(Clone, Default)]
 struct ReceiptFacts {
     count: u64,
     failed: u64,
-    recent: Vec<StatusReceiptSummary>,
     failures: Vec<Failure>,
     tool_stats: Vec<ToolStat>,
     tool_count: usize,
@@ -74,7 +43,6 @@ struct ReceiptFacts {
 struct MutableReceiptFacts {
     count: u64,
     failed: u64,
-    recent: Vec<StatusReceiptSummary>,
     failures: Vec<Failure>,
     tools: BTreeMap<String, MutableToolStat>,
     timeline: Vec<TimelineRow>,
@@ -87,18 +55,6 @@ struct MutableToolStat {
     total_duration_ms: u64,
     last_exit_status: i64,
     last_ended_at_ms: u64,
-}
-
-#[derive(Clone, Default)]
-struct PlanInfo {
-    title: String,
-    body_path: Option<String>,
-    opened_at_ms: Option<u64>,
-    closed_at_ms: Option<u64>,
-    resolution: Option<String>,
-    baseline: Option<crate::state::PlanBaseline>,
-    opened: bool,
-    closed: bool,
 }
 
 impl LocalObservationEpoch {
@@ -115,27 +71,8 @@ impl LocalObservationEpoch {
                     collection_error_for(CollectionDomain::Repository, error, cancelled)
                 })?;
 
-        let sessions = collect_sessions(context, cancelled)?;
-        let plans = collect_plans(context, cancelled)?;
-        let decisions = collect_decisions(context, cancelled)?;
         let receipts = collect_receipts(context, cancelled)?;
         ensure_active(cancelled)?;
-        let (current_session_id, current_session_error) =
-            match current_session_with_cancellation(context, cancelled) {
-                Ok(session) => (session, None),
-                Err(error) if crate::cancellation::is_status_collection_cancellation(&error) => {
-                    return Err(SourceError::Cancelled);
-                }
-                Err(error) => (
-                    None,
-                    Some(SnapshotError::new(
-                        CollectionDomain::Sessions,
-                        SnapshotErrorCode::StreamReadFailed,
-                        None,
-                        format!("failed to read current session: {error:#}"),
-                    )),
-                ),
-            };
 
         let (loops, loop_error) = match crate::runtime::typed_loop_status_snapshot_with_cancellation(
             context, cancelled,
@@ -162,11 +99,6 @@ impl LocalObservationEpoch {
             context: context.clone(),
             repository,
             status_repository_errors,
-            current_session_id,
-            current_session_error,
-            sessions,
-            plans,
-            decisions,
             receipts,
             loops,
             loop_error,
@@ -179,18 +111,11 @@ impl LocalObservationEpoch {
 
     pub(super) fn status_local(&self) -> StatusLocalSnapshot {
         let mut errors = self.status_repository_errors.clone();
-        errors.extend(self.status_snapshot_errors().into_iter().map(status_error));
-        let state_available = self.state_error().is_none();
+        errors.extend(self.loop_error.clone().map(status_error));
         StatusLocalSnapshot {
             epoch_id: self.id,
             observed_at_ms: self.observed_at_ms,
             repository: self.repository.clone(),
-            work: StatusWorkSnapshot {
-                state: state_available.then(|| self.status_state()),
-                // Gate evaluation was removed with `jig work`; the documented
-                // field remains present and empty.
-                gates: Vec::new(),
-            },
             loops: self.loops.clone(),
             errors,
         }
@@ -214,40 +139,11 @@ impl LocalObservationEpoch {
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             contract_version: u64::from(self.context.contract_version()),
         };
-        snapshot
-            .current_session_id
-            .clone_from(&self.current_session_id);
-        snapshot.counts = RecorderCounts {
-            sessions: self.sessions.data.starts,
-            session_events: self.sessions.data.events,
-            plans: self.plans.data.open_events,
-            plan_events: self.plans.data.events,
-            open_plans: self.open_plan_count(),
-            decisions: self.decisions.data.count,
-        };
-        snapshot.open_plans = self.recorder_open_plans();
-        snapshot.history = self.history();
         snapshot.failures = self.receipts.data.failures.clone();
         snapshot.tool_stats = self.receipts.data.tool_stats.clone();
         snapshot.loops = self.loops.as_ref().map(recorder_loops).transpose()?;
         snapshot.timeline = self.timeline(timeline_limit.get());
         snapshot.limits = RecorderLimits {
-            open_plans: root_limit(
-                LimitId::OpenPlans,
-                Some(
-                    self.open_plan_count_usize()
-                        .saturating_sub(snapshot.open_plans.len()),
-                ),
-            )
-            .map_err(limit_error)?,
-            history: root_limit(
-                LimitId::History,
-                Some(
-                    self.closed_plan_count()
-                        .saturating_sub(snapshot.history.len()),
-                ),
-            )
-            .map_err(limit_error)?,
             failures: root_limit(
                 LimitId::Failures,
                 Some(
@@ -279,123 +175,8 @@ impl LocalObservationEpoch {
         Ok(snapshot)
     }
 
-    pub(super) fn plan(
-        &self,
-        plan_id: &str,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PlanSnapshotResult, SourceError> {
-        retained_plan(self, plan_id, cancelled)
-    }
-
-    pub(super) fn fresh_plan(
-        context: &RepoContext,
-        id: RecorderEpochId,
-        plan_id: &str,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PlanSnapshotResult, SourceError> {
-        fresh_plan(context, id, plan_id, cancelled)
-    }
-
-    fn status_state(&self) -> StatusStateSnapshot {
-        StatusStateSnapshot {
-            ok: true,
-            repo: StatusStateRepository {
-                name: self.context.repo_name().to_string(),
-                default_branch: self.context.default_branch().to_string(),
-                source_commit: Some(self.context.source_commit().to_string()),
-                source_path: Some(crate::state::public_source_path(&self.context)),
-            },
-            current_session_id: self.current_session_id.clone(),
-            counts: StatusStateCounts {
-                sessions: self.sessions.data.starts,
-                session_events: self.sessions.data.events,
-                plans: self.plans.data.open_events,
-                plan_events: self.plans.data.events,
-                open_plans: self.open_plan_count(),
-                receipts: self.receipts.data.count,
-                failed_receipts: self.receipts.data.failed,
-                decisions: self.decisions.data.count,
-            },
-            open_plans: self
-                .plans
-                .data
-                .distinct
-                .iter()
-                .filter(|(_, plan)| plan.opened && !plan.closed)
-                .map(|(id, plan)| plan.status_open(id))
-                .collect(),
-            recent_receipts: self.receipts.data.recent.clone(),
-            recent_decisions: self.decisions.data.recent.clone(),
-        }
-    }
-
-    fn recorder_open_plans(&self) -> Vec<OpenPlan> {
-        let mut plans = self
-            .plans
-            .data
-            .distinct
-            .iter()
-            .filter(|(_, plan)| plan.opened && !plan.closed)
-            .map(|(id, plan)| OpenPlan {
-                plan_id: id.clone(),
-                title: plan.title.clone(),
-                body_path: plan.body_path.clone(),
-                opened_at_ms: plan.opened_at_ms,
-                baseline_ref: plan
-                    .baseline
-                    .as_ref()
-                    .map(|value| value.requested_ref.clone()),
-                baseline_oid: plan.baseline.as_ref().and_then(|value| {
-                    value
-                        .commit_oid
-                        .clone()
-                        .or_else(|| value.empty_tree_oid.clone())
-                }),
-                baseline_error: plan.baseline.as_ref().and_then(|value| value.error.clone()),
-                gates: None,
-                gates_error: None,
-            })
-            .collect::<Vec<_>>();
-        plans.sort_by(|left, right| {
-            right
-                .opened_at_ms
-                .cmp(&left.opened_at_ms)
-                .then_with(|| left.plan_id.cmp(&right.plan_id))
-        });
-        plans.truncate(LimitId::OpenPlans.ceiling());
-        plans
-    }
-
-    fn history(&self) -> Vec<PlanSummary> {
-        let mut plans = self
-            .plans
-            .data
-            .distinct
-            .iter()
-            .filter(|(_, plan)| plan.opened && plan.closed)
-            .map(|(id, plan)| plan.summary(id))
-            .collect::<Vec<_>>();
-        plans.sort_by(|left, right| {
-            right
-                .closed_at_ms
-                .cmp(&left.closed_at_ms)
-                .then_with(|| left.plan_id.cmp(&right.plan_id))
-        });
-        plans.truncate(LimitId::History.ceiling());
-        plans
-    }
-
     fn timeline(&self, limit: usize) -> Vec<TimelineRow> {
-        let mut rows = self
-            .sessions
-            .data
-            .timeline
-            .iter()
-            .chain(&self.plans.data.timeline)
-            .chain(&self.decisions.data.timeline)
-            .chain(&self.receipts.data.timeline)
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut rows = self.receipts.data.timeline.clone();
         rows.sort_by(|left, right| {
             timeline_timestamp(right)
                 .cmp(&timeline_timestamp(left))
@@ -406,65 +187,7 @@ impl LocalObservationEpoch {
     }
 
     fn timeline_total(&self) -> usize {
-        usize::try_from(
-            self.sessions.data.events
-                + self.plans.data.events
-                + self.decisions.data.count
-                + self.receipts.data.count,
-        )
-        .unwrap_or(usize::MAX)
-    }
-
-    fn open_plan_count(&self) -> u64 {
-        u64::try_from(self.open_plan_count_usize()).unwrap_or(u64::MAX)
-    }
-
-    fn open_plan_count_usize(&self) -> usize {
-        self.plans
-            .data
-            .distinct
-            .values()
-            .filter(|plan| plan.opened && !plan.closed)
-            .count()
-    }
-
-    fn closed_plan_count(&self) -> usize {
-        self.plans
-            .data
-            .distinct
-            .values()
-            .filter(|plan| plan.opened && plan.closed)
-            .count()
-    }
-
-    fn snapshot_errors(&self) -> Vec<SnapshotError> {
-        [
-            self.sessions.error.clone(),
-            self.current_session_error.clone(),
-            self.plans.error.clone(),
-            self.decisions.error.clone(),
-            self.receipts.error.clone(),
-            self.loop_error.clone(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
-    }
-
-    fn state_error(&self) -> Option<&SnapshotError> {
-        self.sessions
-            .error
-            .as_ref()
-            .or(self.plans.error.as_ref())
-            .or(self.receipts.error.as_ref())
-            .or(self.decisions.error.as_ref())
-            .or(self.current_session_error.as_ref())
-    }
-
-    fn status_snapshot_errors(&self) -> Vec<SnapshotError> {
-        let mut errors = self.state_error().cloned().into_iter().collect::<Vec<_>>();
-        errors.extend(self.loop_error.clone());
-        errors
+        usize::try_from(self.receipts.data.count).unwrap_or(usize::MAX)
     }
 
     fn recorder_errors(&self) -> Vec<SnapshotError> {
@@ -485,53 +208,15 @@ impl LocalObservationEpoch {
                     error.message.clone(),
                 )
             })
-            .chain(self.snapshot_errors())
+            .chain(self.receipts.error.clone())
+            .chain(self.loop_error.clone())
             .collect()
     }
 }
 
-impl PlanInfo {
-    fn status_open(&self, plan_id: &str) -> StatusOpenPlan {
-        StatusOpenPlan {
-            plan_id: plan_id.to_string(),
-            title: self.title.clone(),
-            body_path: self.body_path.clone(),
-            baseline: self.baseline.clone().map(status_baseline),
-        }
-    }
-
-    fn summary(&self, plan_id: &str) -> PlanSummary {
-        PlanSummary {
-            plan_id: plan_id.to_string(),
-            title: self.title.clone(),
-            state: if self.closed { "closed" } else { "open" }.to_string(),
-            opened_at_ms: self.opened_at_ms,
-            closed_at_ms: self.closed_at_ms,
-            resolution: self.resolution.clone(),
-            duration_ms: self
-                .opened_at_ms
-                .zip(self.closed_at_ms)
-                .map(|(opened, closed)| closed.saturating_sub(opened)),
-            baseline_ref: self
-                .baseline
-                .as_ref()
-                .map(|value| value.requested_ref.clone()),
-            baseline_oid: self.baseline.as_ref().and_then(|value| {
-                value
-                    .commit_oid
-                    .clone()
-                    .or_else(|| value.empty_tree_oid.clone())
-            }),
-            baseline_error: self.baseline.as_ref().and_then(|value| value.error.clone()),
-        }
-    }
-}
-
 mod collect;
-mod plan;
 mod support;
 
 use collect::*;
-use plan::*;
 pub(super) use support::collection_error;
 use support::*;

@@ -36,8 +36,8 @@ pub(crate) use proxy::{
 pub(crate) use repository_run::RepositoryRunRequest;
 pub(crate) use sqlx::SqlxCommand;
 pub(crate) use state::{
-    StateArchiveRequest, StateCommand, StateCompactSessionsRequest, StateDiagnoseRequest,
-    StateExportReceiptsRequest, StateRestoreRequest,
+    StateArchiveRequest, StateCommand, StateDiagnoseRequest, StateExportReceiptsRequest,
+    StateRestoreRequest,
 };
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyRequest, VaultBackupCommand, VaultBackupCreateRequest,
@@ -121,7 +121,6 @@ impl RuntimeCommand {
             Self::State(command) => match command {
                 StateCommand::Summary => Cooperative,
                 StateCommand::Diagnose(_)
-                | StateCommand::CompactSessions(_)
                 | StateCommand::Restore(_)
                 | StateCommand::ExportReceipts(_)
                 | StateCommand::Archive(_) => Native,
@@ -136,29 +135,24 @@ impl RuntimeCommand {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ToolRequest {
-    plan_id: Option<String>,
     record_receipt: bool,
 }
 
 impl Default for ToolRequest {
     fn default() -> Self {
         Self {
-            plan_id: None,
             record_receipt: true,
         }
     }
 }
 
 impl ToolRequest {
-    pub(crate) const fn new(plan_id: Option<String>, record_receipt: bool) -> Self {
-        Self {
-            plan_id,
-            record_receipt,
-        }
+    pub(crate) const fn new(record_receipt: bool) -> Self {
+        Self { record_receipt }
     }
 
-    pub(crate) fn into_parts(self) -> (Option<String>, bool) {
-        (self.plan_id, self.record_receipt)
+    pub(crate) const fn record_receipt(&self) -> bool {
+        self.record_receipt
     }
 }
 
@@ -173,9 +167,6 @@ mod tests {
         let native_commands = [
             RuntimeCommand::Check(CheckCommand::AgentGuides),
             RuntimeCommand::State(StateCommand::Diagnose(StateDiagnoseRequest { deep: true })),
-            RuntimeCommand::State(StateCommand::CompactSessions(StateCompactSessionsRequest {
-                dry_run: true,
-            })),
             RuntimeCommand::State(StateCommand::Restore(StateRestoreRequest {
                 backup: PathBuf::from("backup"),
             })),

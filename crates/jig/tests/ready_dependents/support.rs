@@ -215,7 +215,7 @@ fn configured_fixture(
     fs::create_dir_all(&fixture.signals).unwrap();
     let manifest_path = fixture.root.join(".agent/jig-contract.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["contract_version"] = json!(11);
+    manifest["contract_version"] = json!(8);
     let names = ["prerequisite", "dependent", "slow"]
         .into_iter()
         .map(str::to_owned)
@@ -315,10 +315,8 @@ pub fn release(fixture: &Fixture, name: &str) {
     signal(fixture, &format!("release-{name}"));
 }
 
-pub fn start(fixture: &Fixture, extra: &[&str]) -> Running {
-    let mut args = vec!["check", "--profile", "verify"];
-    args.extend_from_slice(extra);
-    let mut run = fixture.spawn_args("example-run", &args);
+pub fn start(fixture: &Fixture) -> Running {
+    let mut run = fixture.spawn_args("example-run", &["check", "--profile", "verify"]);
     run.wait_named_entry("prerequisite");
     run.wait_named_entry("slow");
     assert!(!fixture.signals.join("entered-dependent").exists());
@@ -367,12 +365,4 @@ pub fn mutate(fixture: &Fixture) {
         "pub fn changed_example() {}\n",
     )
     .unwrap();
-}
-
-pub fn open_plan(fixture: &Fixture) -> String {
-    crate::legacy_plan::seed_open_plan(
-        &fixture.root,
-        "plan_example_dependency",
-        "Example dependency scheduling",
-    )
 }

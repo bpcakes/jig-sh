@@ -166,9 +166,10 @@ The live execution worker collects one shared source snapshot, checks runner,
 working-directory, and native prepared authority around each execution, and
 retains the existing global launch and mutation guards. Sequential and parallel
 targets use the same recording rules. Dependency references name the original
-receipt, target, run, work plan, identity, successful conclusion, and effective
-time boundary. The child must finish before its dependent starts and remain
-valid at that time.
+receipt, target, run, identity, successful conclusion, and effective time
+boundary. The child must complete in the dependent's run, finish before the
+dependent starts, and remain valid at that time. The reference's `plan_id` is
+recorded empty and not compared.
 
 ## Deadlines and diagnostics
 
@@ -191,16 +192,11 @@ inherited validity. A parent can have no deadline of its own while inheriting a
 dependency's deadline. A missing required boundary cannot be repaired by another
 child's finite boundary, and equality with a deadline is already expired.
 
-Target results and receipts carry this effective validity. Archive protection
-and file-budget adoption/update enforce it.
+Target results and receipts carry this effective validity. File-budget
+adoption and update enforce it.
 
-Archive retains each configured plan-independent target's repository-wide newest
-outcome, including blockers and receipts from closed plans. It also retains
-existing open-plan protections and the original dependency closure of protected,
-time-current proofs. It does not recompute source identities. If required
-originals are missing or have unsupported metadata, archive stops before backup or
-journal mutation. A single location index resolves required originals without
-rescanning the journal for each dependency level.
+Archive no longer retains receipts for work plans or their dependency closures;
+every receipt older than the cutoff is archived.
 
 File-budget adoption and update still require the original full-repository,
 input/configuration, policy, and native prepared-authority checks. Epoch 8 also
@@ -229,10 +225,8 @@ A completed native failure can have a complete identity, just like a completed
 command failure. Blocked, cancelled, timed-out, and skipped executions cannot
 obtain complete execution proof.
 
-Dependency execution proof requires a nonempty, shared work-plan identity. A
-dependent run outside a work plan records incomplete dependency proof. Archive
-frontier resolution scans once per dependency depth; deep-chain performance has
-not been separately benchmarked.
+Dependency execution proof no longer requires a work plan: every dependent run
+records complete proof for dependencies that completed earlier in the same run.
 
 The historical [bounded inspection measurements](benchmarks/work-inspection.md)
 record the performance of the removed compact work inspection.

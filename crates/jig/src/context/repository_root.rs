@@ -53,32 +53,6 @@ fn find_optional_repo_root_from(start: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
-pub(super) fn resolve_current_session_path(root: &Path) -> PathBuf {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE]);
-    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
-    command.env("GIT_OPTIONAL_LOCKS", "0");
-    let output = command.output();
-
-    if let Ok(output) = output
-        && output.status.success()
-    {
-        let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !resolved.is_empty() {
-            let path = PathBuf::from(&resolved);
-            return if path.is_absolute() {
-                path
-            } else {
-                root.join(path)
-            };
-        }
-    }
-
-    root.join(".agent/.cache").join(CURRENT_SESSION_FILE)
-}
-
 #[cfg(test)]
 impl RepoContext {
     pub(crate) fn load_from(root: &Path) -> Result<Self> {
@@ -90,7 +64,6 @@ impl RepoContext {
         let contract_digest = contract_source_digest(&loaded_config.config, &manifest_authority)?;
         Ok(Self {
             root: root.to_path_buf(),
-            current_session_path: root.join(".agent/.cache").join(CURRENT_SESSION_FILE),
             config: loaded_config.config,
             manifest,
             contract_digest,

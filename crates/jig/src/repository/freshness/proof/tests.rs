@@ -58,7 +58,7 @@ fn encode_identity(identity: &mut TargetIdentityV1) {
 
 fn receipt(id: &str, target: &str, run: &str, started: u64, ended: u64) -> Value {
     json!({
-        "id": id, "plan_id": "plan_example", "run_id": run,
+        "id": id, "run_id": run,
         "target": target.parse::<jig_contract::TargetId>().unwrap(), "tool_name": "jig_target",
         "args": {}, "started_at_ms": started, "ended_at_ms": ended, "exit_status": 0,
         "stdout_preview": "", "stderr_preview": "", "changed_paths": [],
@@ -95,7 +95,7 @@ fn depend(parent: &mut Value, child: &Value) {
     parent["target_freshness"]["identity"] = json!(identity);
     parent["target_freshness"]["dependency_execution_proof"].as_array_mut().unwrap().push(json!({
         "target": child["target"], "receipt_id": child["id"], "run_id": child["run_id"],
-        "plan_id": child["plan_id"], "identity_digest": dependency.identity_digest, "conclusion": "success",
+        "plan_id": "", "identity_digest": dependency.identity_digest, "conclusion": "success",
         "effective_valid_until_ms": child["target_freshness"]["effective_valid_until_ms"],
         "effective_requires_time_validity": child["target_freshness"]["effective_requires_time_validity"],
     }));
@@ -127,7 +127,7 @@ fn evaluate(records: &[Value], selected_id: &str, now: u64) -> TargetFreshness {
     let expected = complete(&selected)
         .map(|(identity, _)| identity.clone())
         .unwrap_or_else(|| identity("web:test"));
-    let mut validator = OriginalProofValidator::new(index, "plan_example", now);
+    let mut validator = OriginalProofValidator::new(index, now);
     let result = validator.evaluate(&selected, &Ok(expected), &mut budget);
     validator.revalidate(&budget).unwrap();
     result
@@ -229,11 +229,6 @@ fn every_dependency_reference_field_must_match_its_original() {
             Code::DependencyProofInvalid,
         ),
         (
-            "plan_id",
-            json!("plan_different"),
-            Code::DependencyProofInvalid,
-        ),
-        (
             "identity_digest",
             json!("different"),
             Code::DependencyProofInvalid,
@@ -287,7 +282,7 @@ fn failed_root_can_be_fresh_but_failed_or_late_dependencies_cannot_prove_executi
 }
 
 #[test]
-fn missing_nonleaf_proof_cycles_and_cross_plan_originals_block() {
+fn missing_nonleaf_proof_and_cycles_block() {
     let mut child = receipt("receipt_child", "api:test", "run_one", 10, 20);
     let mut parent = receipt("receipt_parent", "web:test", "run_two", 30, 40);
     depend(&mut parent, &child);
@@ -304,16 +299,23 @@ fn missing_nonleaf_proof_cycles_and_cross_plan_originals_block() {
     ));
     depend(&mut child, &parent);
     assert!(has(
-        &evaluate(&[child.clone(), parent.clone()], "receipt_parent", 90),
-        Code::DependencyProofInvalid
-    ));
-    child["target_freshness"]["dependency_execution_proof"] = json!([]);
-    child["target_freshness"]["identity"]["dependencies"] = json!([]);
-    child["plan_id"] = json!("plan_other");
-    assert!(has(
         &evaluate(&[child, parent], "receipt_parent", 90),
         Code::DependencyProofInvalid
     ));
+}
+
+#[test]
+fn legacy_plan_ids_do_not_affect_dependency_proofs() {
+    let mut child = receipt("receipt_child", "api:test", "run_one", 10, 20);
+    child["plan_id"] = json!("plan_other");
+    let mut parent = receipt("receipt_parent", "web:test", "run_two", 30, 40);
+    parent["plan_id"] = json!("plan_example");
+    depend(&mut parent, &child);
+    parent["target_freshness"]["dependency_execution_proof"][0]["plan_id"] = json!("plan_example");
+    assert_eq!(
+        evaluate(&[child, parent], "receipt_parent", 90).status,
+        Status::Fresh
+    );
 }
 
 #[test]
@@ -371,28 +373,6 @@ fn location_index_detects_conflicts_replacement_and_shared_limits() {
     assert!(
         matches!(OriginalReceiptIndex::open(&path, &mut small), Err(error) if error.reason.code == Code::CollectionLimit)
     );
-}
-
-#[test]
-fn original_lookup_does_not_accept_selection_that_predates_a_newer_blocker() {
-    let original = receipt("receipt_original", "web:test", "run_one", 10, 20);
-    let temp = journal(std::slice::from_ref(&original));
-    let path = temp.path().join("receipts.jsonl");
-    let mut budget = CollectionBudget::new(
-        CollectionLimits::with_timeout(Duration::from_secs(2)),
-        &|| false,
-    );
-    let mut index = OriginalReceiptIndex::open(&path, &mut budget).unwrap();
-    let selected = index.get("receipt_original", &mut budget).unwrap().unwrap();
-    let mut blocker = receipt("receipt_blocker", "web:test", "run_two", 30, 40);
-    blocker["exit_status"] = json!(1);
-    std::fs::write(&path, format!("{original}\n{blocker}\n")).unwrap();
-    let originals =
-        OriginalReceiptIndex::open_for_plan(&path, "plan_example", &mut budget).unwrap();
-    let mut validator = OriginalProofValidator::new(originals, "plan_example", 50);
-    let result = validator.evaluate(&selected, &Ok(identity("web:test")), &mut budget);
-    assert_eq!(result.status, Status::Unknown);
-    assert!(has(&result, Code::SourceRaced));
 }
 
 #[test]

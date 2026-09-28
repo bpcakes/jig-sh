@@ -4,10 +4,10 @@ use super::{
     App, DashboardOptions, DashboardSource, EVENT_POLL_INTERVAL, Result, RuntimeAction,
     TerminalSession, event, handle_event, render,
 };
-use crate::dashboard::{PlanBasis, PlanSnapshotResult, RecorderMode, TimelineLimit};
+use crate::dashboard::{RecorderMode, TimelineLimit};
 use anyhow::Context;
 
-use super::scheduler::{ScheduledRequest, Scheduler, WorkKind};
+use super::scheduler::{ScheduledRequest, Scheduler};
 use super::worker::{RefreshResult, RefreshWorker, apply_refresh_result};
 
 pub(super) fn run(
@@ -35,7 +35,6 @@ pub(super) fn run(
             return Ok(());
         }
         dirty |= finish_worker(&mut app, &mut scheduler, &mut worker)?;
-        drain_plan_intent(&mut app, &mut scheduler);
         scheduler.enqueue_due(std::time::Instant::now());
         dirty |= start_next(&source, &mut app, &mut scheduler, &mut worker)?;
 
@@ -81,22 +80,10 @@ fn finish_worker(
             request.generation
         );
     }
-    let detail_superseded =
-        matches!(&request.kind, WorkKind::Plan { .. }) && scheduler.detail_pending();
-    let projection_is_outdated = match &request.kind {
-        WorkKind::Recorder(request) => request.timeline_limit != scheduler.timeline_limit(),
-        WorkKind::Plan { .. } => false,
-    };
-    if projection_is_outdated {
-        apply_outdated_projection(app, scheduler, &request, result);
-    } else if detail_superseded {
-        // The newer queued detail request owns the visible loading state.
-    } else if let Some((basis, plan_id, stale_retries)) = stale_detail_retry(app, &request, &result)
-    {
-        app.detail.refresh_plan(plan_id.clone(), basis);
-        scheduler.retry_stale_detail(basis, plan_id, stale_retries);
-    } else {
+    if request.request.timeline_limit == scheduler.timeline_limit() {
         apply_refresh_result(app, &request, result);
+    } else {
+        apply_outdated_projection(app, scheduler, &request, result);
     }
     scheduler.complete(request.generation, std::time::Instant::now());
     Ok(true)
@@ -106,58 +93,18 @@ fn apply_outdated_projection(
     app: &mut App,
     scheduler: &mut Scheduler,
     request: &ScheduledRequest,
-    result: std::result::Result<RefreshResult, crate::dashboard::SourceError>,
+    result: RefreshResult,
 ) {
-    match (&request.kind, result) {
-        (WorkKind::Recorder(recorder_request), Ok(RefreshResult::Recorder(refresh)))
-            if refresh.recorder.timeline_limit == recorder_request.timeline_limit.get() =>
-        {
+    match result {
+        Ok(refresh) if refresh.recorder.timeline_limit == request.request.timeline_limit.get() => {
             app.recorder.refreshing = false;
         }
-        (_, result) => {
+        result => {
             apply_refresh_result(app, request, result);
         }
     }
-    if !scheduler.current_local_projection_pending() {
+    if !scheduler.recorder_pending() {
         scheduler.queue_recorder(RecorderMode::ReuseCurrent);
-    }
-}
-
-fn stale_detail_retry(
-    app: &App,
-    request: &ScheduledRequest,
-    result: &std::result::Result<RefreshResult, crate::dashboard::SourceError>,
-) -> Option<(PlanBasis, String, u8)> {
-    let WorkKind::Plan {
-        basis: PlanBasis::RecorderEpoch(request_epoch),
-        plan_id,
-        stale_retries,
-    } = &request.kind
-    else {
-        return None;
-    };
-    if *stale_retries >= 1
-        || !matches!(
-            result,
-            Ok(RefreshResult::Plan(PlanSnapshotResult::StaleRecorderEpoch))
-        )
-        || app.detail.loading_plan.as_deref() != Some(plan_id)
-    {
-        return None;
-    }
-    let current_epoch = app.recorder.data.as_ref()?.epoch_id;
-    (current_epoch != *request_epoch).then(|| {
-        (
-            PlanBasis::RecorderEpoch(current_epoch),
-            plan_id.clone(),
-            stale_retries + 1,
-        )
-    })
-}
-
-fn drain_plan_intent(app: &mut App, scheduler: &mut Scheduler) {
-    if let Some((basis, plan_id)) = app.take_plan_request() {
-        scheduler.queue_detail(basis, plan_id);
     }
 }
 
@@ -173,9 +120,7 @@ fn start_next(
     let Some(request) = scheduler.start_next() else {
         return Ok(false);
     };
-    if matches!(request.kind, WorkKind::Recorder(_)) {
-        app.recorder.refreshing = true;
-    }
+    app.recorder.refreshing = true;
     *worker = Some(RefreshWorker::spawn(Arc::clone(source), request)?);
     Ok(true)
 }
@@ -185,8 +130,6 @@ fn apply_action(app: &mut App, scheduler: &mut Scheduler, action: RuntimeAction)
         RuntimeAction::Ignore => return false,
         RuntimeAction::Redraw | RuntimeAction::TabChanged => {}
         RuntimeAction::Refresh => scheduler.queue_recorder(RecorderMode::Refresh),
-        RuntimeAction::DetailRequested => drain_plan_intent(app, scheduler),
-        RuntimeAction::RefreshDetail => queue_detail_refresh(app, scheduler),
         RuntimeAction::GrowTimeline => change_timeline_limit(app, scheduler, true),
         RuntimeAction::ShrinkTimeline => change_timeline_limit(app, scheduler, false),
         RuntimeAction::Quit => unreachable!("quit is handled before action application"),
@@ -217,7 +160,7 @@ fn change_timeline_limit(app: &mut App, scheduler: &mut Scheduler, grow: bool) {
 
     scheduler.set_timeline_limit(next);
     if grow {
-        if !scheduler.current_local_projection_pending() {
+        if !scheduler.recorder_pending() {
             let mode = if app.recorder.data.is_some() || scheduler.recorder_active() {
                 RecorderMode::ReuseCurrent
             } else {
@@ -227,29 +170,6 @@ fn change_timeline_limit(app: &mut App, scheduler: &mut Scheduler, grow: bool) {
         }
     } else {
         app.shrink_timeline_limit(next.get());
-    }
-}
-
-fn queue_detail_refresh(app: &mut App, scheduler: &mut Scheduler) {
-    let Some((plan_id, is_open)) = app.detail.plan().map_or_else(
-        || {
-            app.detail
-                .target_plan_id
-                .clone()
-                .map(|plan_id| (plan_id, false))
-        },
-        |plan| Some((plan.raw_plan_id.clone(), plan.is_open)),
-    ) else {
-        return;
-    };
-    if is_open {
-        scheduler.queue_recorder(RecorderMode::Refresh);
-        if app.refresh_plan_detail() {
-            drain_plan_intent(app, scheduler);
-        }
-    } else {
-        app.detail.refresh_plan(plan_id.clone(), PlanBasis::Fresh);
-        scheduler.queue_detail(PlanBasis::Fresh, plan_id);
     }
 }
 
@@ -294,10 +214,10 @@ mod tests {
                 RuntimeAction::Refresh
             ));
             assert!(scheduler.recorder_pending());
-            assert!(matches!(
-                scheduler.start_next().unwrap().kind,
-                WorkKind::Recorder(_)
-            ));
+            assert_eq!(
+                scheduler.start_next().unwrap().request.mode,
+                RecorderMode::Refresh
+            );
         }
     }
 
@@ -319,11 +239,11 @@ mod tests {
         assert_eq!(scheduler.timeline_limit().get(), 250);
         let scheduled = scheduler.start_next().unwrap();
         assert_eq!(
-            scheduled.kind,
-            WorkKind::Recorder(RecorderRequest {
+            scheduled.request,
+            RecorderRequest {
                 mode: RecorderMode::Refresh,
                 timeline_limit: TimelineLimit::new(250).unwrap(),
-            })
+            }
         );
 
         let mut recorder = scenarios::recorder_snapshot();
@@ -334,7 +254,6 @@ mod tests {
                 epoch_id: recorder.epoch_id,
                 observed_at_ms: status.observed_at_ms,
                 repository: status.repository,
-                work: status.work,
                 loops: status.loops,
                 errors: status.errors,
             },

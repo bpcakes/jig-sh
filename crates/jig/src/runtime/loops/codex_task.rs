@@ -151,7 +151,6 @@ pub(super) fn codex_task_tick(
             prompt: &prompt,
             receipt: WorkerReceiptRequest {
                 purpose: "scheduled_codex_task",
-                plan_id: None,
                 workflow_id: Some(&workflow.id),
                 item_key: Some(execution.item_key),
                 collect_git_metadata: matches!(settings.checkout, CodexTaskCheckout::Repo),

@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn native_standalone_diagnostics_and_linked_checks_keep_distinct_evidence_contracts() {
-    for linked in [false, true] {
+fn native_standalone_diagnostics_and_recorded_checks_keep_distinct_evidence_contracts() {
+    for recorded in [false, true] {
         let temp = tempdir().unwrap();
         write_v6_evidence_fixture_repo(temp.path(), "");
         init_git_repo(temp.path());
@@ -13,8 +13,9 @@ fn native_standalone_diagnostics_and_linked_checks_keep_distinct_evidence_contra
             &ctx,
             CommandKind::Check(crate::cli::CheckOpts {
                 tool: crate::cli::ToolOpts {
-                    plan_id: linked.then(|| "plan_1".into()),
-                    no_receipt: !linked,
+                    // The retired plan id is accepted and ignored.
+                    plan_id: recorded.then(|| "plan_1".into()),
+                    no_receipt: !recorded,
                 },
                 profile: None,
                 affected: None,
@@ -32,10 +33,10 @@ fn native_standalone_diagnostics_and_linked_checks_keep_distinct_evidence_contra
         );
         let after = fs::read(&receipts).unwrap_or_default();
         assert!(after.starts_with(&before));
-        if linked {
+        if recorded {
             let appended: serde_json::Value =
                 serde_json::from_slice(&after[before.len()..]).unwrap();
-            assert_eq!(appended["plan_id"], "plan_1");
+            assert!(appended["plan_id"].is_null(), "{appended:#}");
             assert_eq!(
                 appended["id"],
                 result["results"][0]["response"]["receipt_id"]

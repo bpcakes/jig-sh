@@ -14,7 +14,6 @@ pub(crate) fn resolve_comparison_v1(
     resolve_comparison_inner(root, request, GitReceiptCollection::Blocking)
 }
 
-#[allow(dead_code, reason = "staged cancellable native comparison API")]
 pub(crate) fn resolve_comparison_v1_with_cancellation(
     root: &Path,
     request: ComparisonRequestV1,

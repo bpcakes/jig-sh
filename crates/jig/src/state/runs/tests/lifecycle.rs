@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn unknown_future_events_are_ignored() {
     let (_temp, ctx) = context();
-    let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     append_event(
         &ctx,
         RunEventRecord {
@@ -66,7 +66,7 @@ fn archive_retains_unknown_only_future_runs_without_treating_them_as_nonterminal
 #[test]
 fn corrupt_known_lifecycle_is_rejected() {
     let (_temp, ctx) = context();
-    let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     complete_run(&ctx, &started.result.run_id, RunConclusion::Success).unwrap();
 
     let error = run_by_id(&ctx, &started.result.run_id).unwrap_err();

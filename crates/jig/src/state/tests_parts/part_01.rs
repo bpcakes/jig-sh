@@ -22,7 +22,6 @@ fn receipts_archive_dry_run_does_not_rewrite_state() {
     .unwrap();
 
     assert_eq!(output["receipts_archived"], 1);
-    assert_eq!(output["protected_receipts_retained"], 0);
     assert!(output["archive_path"].is_null());
     assert_eq!(
         fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap(),
@@ -122,24 +121,4 @@ fn receipt_archive_and_export_reject_an_unterminated_final_record_before_publica
     assert!(!export_path.exists());
     assert!(!temp.path().join(".agent/.cache/state-backups").exists());
     assert!(!temp.path().join(".agent/.cache/state-archives").exists());
-}
-
-#[test]
-fn state_tool_receipts_skip_git_metadata_collection() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    session_start(&ctx).unwrap();
-
-    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
-    let receipt = receipts
-        .iter()
-        .find(|receipt| receipt.tool_name == tool::SESSION_START)
-        .unwrap();
-    assert_eq!(receipt.args["operation"], "session_start");
-    assert!(receipt.changed_paths.is_empty());
-    assert_eq!(receipt.diff_stat.files, 0);
-    assert!(receipt.git_status_error.is_none());
-    assert!(receipt.git_diff_stat_error.is_none());
 }

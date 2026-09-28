@@ -15,7 +15,6 @@ pub(super) fn execute(
     tool: &ManifestTool,
     action: ActionSpec,
     args: Value,
-    plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
     observer: &mut dyn ExecutionControl,
     repository_execution: crate::state::RepositoryExecutionLease,
@@ -27,7 +26,6 @@ pub(super) fn execute(
         &catalog,
         PlanRunRequest {
             selectors: vec![target.to_string()],
-            work_plan_id: plan_id.clone(),
             ..PlanRunRequest::default()
         },
         BTreeMap::from([(target.clone(), serde_json::from_value(args.clone())?)]),
@@ -57,7 +55,6 @@ pub(super) fn execute(
         &catalog,
         plan,
         ExecuteCheckRunRequest {
-            work_plan_id: plan_id,
             record_receipts: options.record_receipt,
             fail_fast: true,
             alias_override: Some(ExecutionAliasOverride {

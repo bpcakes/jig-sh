@@ -75,6 +75,7 @@ fn scheduled_repo_task_detects_receipt_history_rewrites() {
     write_fixture_repo(temp.path());
     configure_scheduled_task(&temp, "repo-task", "checkout = \"repo\"", false);
     let receipts = temp.path().join(".agent/state/receipts.jsonl");
+    fs::create_dir_all(receipts.parent().unwrap()).unwrap();
     fs::write(&receipts, "{\"id\":\"receipt-seed\"}\n").unwrap();
     git_ok(temp.path(), ["add", ".agent/state/receipts.jsonl"]);
     git_ok(temp.path(), ["commit", "-m", "seed receipt history"]);

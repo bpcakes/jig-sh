@@ -69,7 +69,6 @@ mod tests {
             prompt: "fix this",
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",
-                plan_id: Some("plan_1"),
                 workflow_id: None,
                 item_key: None,
                 collect_git_metadata: true,
@@ -389,7 +388,6 @@ printf 'authoritative result\n' > "$out"
                 prompt: "example prompt",
                 receipt: WorkerReceiptRequest {
                     purpose: "test",
-                    plan_id: None,
                     workflow_id: None,
                     item_key: None,
                     collect_git_metadata: false,
@@ -444,7 +442,6 @@ printf 'authoritative result\n' > "$out"
                 prompt: "example prompt",
                 receipt: WorkerReceiptRequest {
                     purpose: "test",
-                    plan_id: None,
                     workflow_id: Some("ExampleProject"),
                     item_key: Some("ExampleProject@100"),
                     collect_git_metadata: false,

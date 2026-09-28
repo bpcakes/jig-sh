@@ -1,8 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use jig_ui::dashboard::{
-    DashboardSource, PlanBasis, PlanSnapshotResult, RecorderEpochId, RecorderMode, RecorderRefresh,
-    RecorderRequest, SourceError,
+    DashboardSource, RecorderEpochId, RecorderMode, RecorderRefresh, RecorderRequest, SourceError,
 };
 
 use crate::context::RepoContext;
@@ -119,32 +118,6 @@ impl DashboardSource for RepoDashboardSource {
             recorder: epoch.recorder(request.timeline_limit)?,
             status_local: epoch.status_local(),
         })
-    }
-
-    fn plan(
-        &self,
-        basis: PlanBasis,
-        plan_id: String,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<PlanSnapshotResult, SourceError> {
-        let epoch = match basis {
-            PlanBasis::RecorderEpoch(id) => {
-                let Some(epoch) = self.retained_epoch()? else {
-                    return Ok(PlanSnapshotResult::StaleRecorderEpoch);
-                };
-                if epoch.id() != id {
-                    return Ok(PlanSnapshotResult::StaleRecorderEpoch);
-                }
-                epoch
-            }
-            PlanBasis::Fresh => {
-                let current = crate::runtime::refreshed_repository_context(&self.context)
-                    .map_err(|error| epoch::collection_error(error, cancelled))?;
-                let id = self.allocate_epoch()?;
-                return LocalObservationEpoch::fresh_plan(&current, id, &plan_id, cancelled);
-            }
-        };
-        epoch.plan(&plan_id, cancelled)
     }
 }
 

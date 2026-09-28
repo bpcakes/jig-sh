@@ -34,6 +34,7 @@ pub(in crate::state) fn read_jsonl_with_io<T: DeserializeOwned>(
     )
 }
 
+#[cfg(test)]
 const UNLOCKED_SNAPSHOT_SAMPLES: usize = 3;
 const UNLOCKED_RAW_SNAPSHOT_ATTEMPTS: usize = 3;
 
@@ -61,6 +62,7 @@ pub(super) fn read_stable_unlocked_snapshot<T: DeserializeOwned>(
     unreachable!("unlocked snapshot sampling always returns")
 }
 
+#[cfg(test)]
 pub(super) fn read_stable_unlocked_snapshot_with_cancellation<T: DeserializeOwned>(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -166,6 +168,7 @@ pub(super) fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> b
     true
 }
 
+#[cfg(test)]
 pub(super) fn read_snapshot_with_cancellation(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
@@ -175,6 +178,7 @@ pub(super) fn read_snapshot_with_cancellation(
     read_file_with_cancellation(&file, path, cancelled)
 }
 
+#[cfg(test)]
 pub(super) fn read_file_with_cancellation(
     file: &File,
     path: &Path,
@@ -197,6 +201,7 @@ pub(super) fn read_file_with_cancellation(
     Ok(bytes)
 }
 
+#[cfg(test)]
 pub(super) fn parse_jsonl_file_with_cancellation<T: DeserializeOwned>(
     file: &File,
     path: &Path,
@@ -428,6 +433,7 @@ pub(super) fn finish_raw_line(
     )
 }
 
+#[cfg(test)]
 pub(super) enum ParsedSnapshot<T> {
     Complete(Vec<T>),
     InvalidFinal {
@@ -445,6 +451,7 @@ pub(super) fn parse_jsonl_snapshot<T: DeserializeOwned>(
     parse_jsonl_snapshot_with_cancellation(bytes, path, allow_partial_final, &|| false)
 }
 
+#[cfg(test)]
 pub(super) fn parse_jsonl_snapshot_with_cancellation<T: DeserializeOwned>(
     bytes: &[u8],
     path: &Path,

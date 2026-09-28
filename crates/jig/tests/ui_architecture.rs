@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jig_ui::dashboard::{
-    DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS,
+    DEFAULT_TIMELINE_ROWS, LIMIT_SPECS, RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION,
     SNAPSHOT_ERROR_CODES, SNAPSHOT_ERROR_SCOPES, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 
@@ -186,7 +186,7 @@ fn assert_no_retired_dashboard_guidance(documents: &[(&str, String)]) {
 
 fn assert_human_dashboard_guidance(documents: &[(&str, String)]) {
     let readme = document(documents, "README.md");
-    assert!(readme.contains("Status, Work, Timeline, and Health"));
+    assert!(readme.contains("Status, Timeline, and Health"));
     assert!(readme.contains("docs/developer-ux.md#terminal-dashboard"));
 
     let developer_ux = document(documents, "docs/developer-ux.md");
@@ -210,15 +210,15 @@ fn assert_machine_dashboard_contract(public_contract: &str) {
         .split_once("\n## ")
         .unwrap()
         .0;
-    assert!(
-        dashboard_contract.contains("`snapshot_kind` is the string `\"recorder\"` or `\"plan\"`")
-    );
+    assert!(dashboard_contract.contains(&format!(
+        "`schema_version` is the unsigned integer `{RECORDER_SCHEMA_VERSION}`"
+    )));
     assert!(public_contract.contains("contract version 7"));
     assert!(
         dashboard_contract.contains(&format!("defaults to {DEFAULT_TIMELINE_ROWS}")),
         "dashboard contract must match the default timeline size"
     );
-    for fields in [RECORDER_ROOT_FIELDS, PLAN_ROOT_FIELDS, STATUS_ROOT_FIELDS] {
+    for fields in [RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS] {
         let ordered_fields = fields
             .iter()
             .map(|field| format!("`{field}`"))

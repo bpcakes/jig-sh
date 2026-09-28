@@ -38,7 +38,6 @@ fn native_context<'a>(
         cancelled: &not_cancelled,
         run_id: "run_example",
         target,
-        work_plan_id: None,
     }
 }
 
@@ -305,7 +304,6 @@ legacy_aliases = ["jig.compat_check"]"#,
         &ctx,
         "jig.compat_check",
         serde_json::json!({}),
-        None,
         true,
         &mut crate::execution::NoopExecutionObserver,
     )
@@ -349,7 +347,6 @@ legacy_aliases = ["jig.migration_add"]"#,
         &ctx,
         tool::MIGRATION_ADD,
         serde_json::json!({"name": "Create Examples"}),
-        None,
         true,
         &mut crate::execution::NoopExecutionObserver,
     )
@@ -398,7 +395,6 @@ legacy_aliases = ["jig.compat_contract"]"#,
         &ctx,
         "jig.compat_contract",
         serde_json::json!({}),
-        None,
         true,
         &mut crate::execution::NoopExecutionObserver,
     )
@@ -451,7 +447,6 @@ legacy_aliases = ["jig.compat_check"]"#,
         &ctx,
         "jig.bootstrap",
         serde_json::json!({}),
-        None,
         true,
         &mut crate::execution::NoopExecutionObserver,
     )

@@ -50,9 +50,6 @@ fn normalize_external_check_args(
             _ => selectors.push(arg),
         }
     }
-    if tool.no_receipt && tool.plan_id.is_some() {
-        anyhow::bail!("--no-receipt cannot be combined with --plan-id");
-    }
     Ok(selectors)
 }
 

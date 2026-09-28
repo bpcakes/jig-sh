@@ -20,13 +20,12 @@ fn targets_without_a_worktree_effect_cannot_mutate_the_repository() {
                 profile: None,
                 affected_base: None,
                 comparison: None,
-                work_plan_id: None,
             },
             Default::default(),
         )
         .unwrap();
         let (run, _lease) =
-            crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan, None).unwrap();
+            crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan).unwrap();
 
         let execution = crate::runtime::run_execution::execute_started_check_run(
             &ctx,
@@ -34,7 +33,6 @@ fn targets_without_a_worktree_effect_cannot_mutate_the_repository() {
             run,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
                 alias_override: None,
-                work_plan_id: None,
                 record_receipts: true,
                 fail_fast: false,
             },

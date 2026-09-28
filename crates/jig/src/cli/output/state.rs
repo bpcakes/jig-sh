@@ -4,26 +4,13 @@ pub(super) fn format_state_summary(value: &serde_json::Value) -> String {
     let counts = &value["counts"];
     let repo = &value["repo"];
     let repo_name = value_str(repo, "name").unwrap_or("<unknown>");
-    let sessions = value_u64(counts, "sessions").unwrap_or(0);
-    let session_events = value_u64(counts, "session_events").unwrap_or(0);
-    let plans = value_u64(counts, "plans").unwrap_or(0);
-    let plan_events = value_u64(counts, "plan_events").unwrap_or(0);
-    let open_plans = value_u64(counts, "open_plans").unwrap_or(0);
     let receipts = value_u64(counts, "receipts").unwrap_or(0);
     let failed_receipts = value_u64(counts, "failed_receipts").unwrap_or(0);
-    let decisions = value_u64(counts, "decisions").unwrap_or(0);
 
     [
         "State summary:".into(),
-        format!("  Sessions: {sessions} ({session_events} events)"),
-        format!("  Plans: {plans} ({open_plans} open, {plan_events} events)"),
         format!("  Receipts: {receipts} ({failed_receipts} failed)"),
-        format!("  Decisions: {decisions}"),
         format!("Repo: {repo_name}"),
-        format!(
-            "Current session: {}",
-            value_str(value, "current_session_id").unwrap_or("none")
-        ),
     ]
     .join("\n")
 }
@@ -57,17 +44,7 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
         lines.push(format!("    State recovery backups: {backup_bytes}"));
         lines.push(format!("    Receipt archives: {archive_bytes}"));
     }
-    if value_bool(value, "deep").unwrap_or(false) {
-        let recursive = value["sessions"]["recursive_session_records"]
-            .as_u64()
-            .unwrap_or(0);
-        let reclaimable = value["sessions"]["estimated_reclaimable_bytes"]
-            .as_u64()
-            .unwrap_or(0);
-        lines.push(format!("  Recursive session records: {recursive}"));
-        lines.push(format!("  Estimated reclaimable bytes: {reclaimable}"));
-    } else {
-        lines.push("  Session recursion: not analyzed (rerun with --deep)".into());
+    if !value_bool(value, "deep").unwrap_or(false) {
         lines.push("  Receipt payloads: not analyzed (rerun with --deep)".into());
     }
     push_run_linkage_lines(&mut lines, &value["run_linkage"]);
@@ -216,49 +193,6 @@ fn id_preview(ids: &serde_json::Value, total: Option<u64>) -> String {
     }
 }
 
-pub(super) fn format_state_compact_summary(value: &serde_json::Value) -> String {
-    let dry_run = value_bool(value, "dry_run").unwrap_or(false);
-    let changed = value_u64(value, "records_changed").unwrap_or(0);
-    let duplicates = value_u64(value, "duplicate_records").unwrap_or(0);
-    let has_changes = changed > 0 || duplicates > 0;
-    let before = value_u64(value, "bytes_before").unwrap_or(0);
-    let after = value_u64(value, "bytes_after").unwrap_or(0);
-    let status = match (dry_run, has_changes) {
-        (true, true) => "dry run (changes available)",
-        (true, false) => "dry run (no changes)",
-        (false, true) => "compacted",
-        (false, false) => "no-op",
-    };
-    let mut lines = vec![
-        format!("State compact sessions: {status}"),
-        format!("  Records changed: {changed}"),
-        format!("  Duplicate records removed: {duplicates}"),
-        format!("  Bytes: {before} -> {after}"),
-    ];
-    if let Some(reclaimable) = value_u64(value, "bytes_reclaimable") {
-        lines.push(format!("  Bytes reclaimable: {reclaimable}"));
-    }
-    if let Some(checksum) = value_str(value, "source_sha256") {
-        lines.push(format!("  Source SHA-256: {checksum}"));
-    }
-    match value_str(value, "backup_path") {
-        Some(backup) => lines.push(format!("  Recovery backup: {backup}")),
-        None if dry_run => lines.push("  Recovery backup: not written during dry run".into()),
-        None => lines.push("  Recovery backup: not written; state was already canonical".into()),
-    }
-    lines.push(
-        "  Cache durability: recovery backups under .agent/.cache are local and ignored; copy them elsewhere for durable recovery."
-            .into(),
-    );
-    lines
-        .push("  Git history: working-tree compaction does not remove reachable Git blobs.".into());
-    if let Some(note) = value_str(value, "writer_coordination_note") {
-        lines.push(format!("  Writer coordination: {note}"));
-    }
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
-}
-
 pub(super) fn format_state_restore_summary(value: &serde_json::Value) -> String {
     let stream = value_str(value, "stream").unwrap_or("<unknown>");
     let bytes = value_u64(value, "bytes_restored").unwrap_or(0);
@@ -369,12 +303,6 @@ pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String 
     if runs_included {
         lines.push(format!("  Runs archived: {runs_archived}"));
         lines.push(format!("  Runs retained: {runs_retained}"));
-    }
-    if let Some(protected) = value_u64(value, "protected_receipts_retained") {
-        lines.push(format!("  Protected receipts retained: {protected}"));
-    }
-    if runs_included && let Some(protected) = value_u64(value, "protected_runs_retained") {
-        lines.push(format!("  Protected runs retained: {protected}"));
     }
     match value_str(value, "archive_path") {
         Some(path) => lines.push(format!("  Local archive: {path}")),

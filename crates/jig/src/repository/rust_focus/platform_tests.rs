@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use super::tests::{config, fixture, git, owned_command, prepare_focus, write};
 use super::*;
-use crate::state::{PlanOpenRequest, plans_open};
 
 fn metadata(root: &Path, platform: Option<&str>) -> Value {
     let mut command = Command::new("cargo");
@@ -114,19 +113,7 @@ fn automatic_cross_target_focus_preserves_host_proc_macro_consumers() {
     assert!(has_edge(&unfiltered, "example-derive", "example-leaf"));
     assert!(!has_edge(&filtered, "example-derive", "example-leaf"));
 
-    let opened = plans_open(
-        &ctx,
-        PlanOpenRequest {
-            title: "Example cross-target host dependency".into(),
-            body: None,
-            body_file: None,
-            base: None,
-        },
-    )
-    .unwrap();
-    let automatic = RustFocusV1::Automatic {
-        plan_id: Some(opened["plan_id"].as_str().unwrap().into()),
-    };
+    let automatic = RustFocusV1::Automatic { plan_id: None };
     write(root, "leaf/src/lib.rs", "pub const VALUE: u32 = 2;\n");
 
     // The unfiltered graph still proves the ordinary reverse-dependency

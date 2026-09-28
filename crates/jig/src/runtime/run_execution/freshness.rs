@@ -205,8 +205,7 @@ impl ExecutionFreshness {
                             .iter()
                             .find(|entry| entry.target == dependency)
                     });
-                    if reference.plan_id.is_empty()
-                        || run.work_plan_id.as_deref() != Some(reference.plan_id.as_str())
+                    if reference.run_id != run.result.run_id
                         || expected.is_none_or(|expected| {
                             expected.identity_digest != reference.identity_digest
                         })
@@ -278,7 +277,8 @@ impl ExecutionFreshness {
                         target: planned.target.clone(),
                         receipt_id: receipt_id.into(),
                         run_id: run.result.run_id.clone(),
-                        plan_id: run.work_plan_id.clone().unwrap_or_default(),
+                        // Work plans were removed; the contract field stays empty.
+                        plan_id: String::new(),
                         identity_digest: identity.identity_digest.clone(),
                         conclusion,
                         effective_valid_until_ms: metadata.effective_valid_until_ms,
@@ -302,7 +302,6 @@ pub(super) fn run_target_capture(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     run_id: &str,
-    work_plan_id: Option<&str>,
     planned: &PlannedTarget,
     run_control: &mut dyn RepositoryRunControl,
     freshness: Option<&freshness::ExecutionFreshness>,
@@ -310,8 +309,7 @@ pub(super) fn run_target_capture(
     let authority =
         freshness.map(|freshness| freshness.before_target(ctx, catalog, planned, run_control));
     let authority_started_at_ms = freshness.map(|_| now_ms());
-    let mut capture =
-        run_target_capture_inner(ctx, catalog, run_id, work_plan_id, planned, run_control);
+    let mut capture = run_target_capture_inner(ctx, catalog, run_id, planned, run_control);
     if let (Some(freshness), Some(authority)) = (freshness, authority) {
         capture.freshness_authority =
             Some(authority.and_then(|guard| {

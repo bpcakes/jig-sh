@@ -64,7 +64,7 @@ fn pre_release_epoch_nine_receipt_remains_readable_but_stale_after_v8_consolidat
     let selected = index.get("receipt_old", &mut budget).unwrap().unwrap();
     let current: TargetIdentityV1 =
         serde_json::from_value(upgraded()["target_freshness"]["identity"].clone()).unwrap();
-    let mut validator = OriginalProofValidator::new(index, "plan_example", 30);
+    let mut validator = OriginalProofValidator::new(index, 30);
     let result = validator.evaluate(&selected, &Ok(current), &mut budget);
     assert_eq!(result.status, Status::Stale);
     assert!(has(&result, Code::AuthorityVersionChanged));
@@ -91,7 +91,7 @@ fn pre_release_epoch_ten_receipt_remains_readable_but_stale_after_v8_consolidati
     let selected = index.get("receipt_old", &mut budget).unwrap().unwrap();
     let current: TargetIdentityV1 =
         serde_json::from_value(upgraded()["target_freshness"]["identity"].clone()).unwrap();
-    let mut validator = OriginalProofValidator::new(index, "plan_example", 30);
+    let mut validator = OriginalProofValidator::new(index, 30);
     let result = validator.evaluate(&selected, &Ok(current), &mut budget);
     assert_eq!(result.status, Status::Stale);
     assert!(has(&result, Code::AuthorityVersionChanged));

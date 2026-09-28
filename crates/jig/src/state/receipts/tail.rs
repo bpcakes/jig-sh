@@ -1,13 +1,3 @@
-fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> impl Iterator<Item = &'a str> {
-    receipt
-        .args
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-}
-
 pub(crate) fn record_target_receipt(
     ctx: &RepoContext,
     input: ReceiptInput<'_>,
@@ -160,10 +150,9 @@ fn record_receipt_inner(
     let receipt = ReceiptRecord {
         target_freshness,
         id: new_id("receipt"),
-        // Sessions ended only through the removed `jig work` lifecycle, so the
-        // current-session pointer can no longer be trusted as receipt context.
-        session_id: input.session_override,
-        plan_id: input.plan_id,
+        // Work sessions were removed; the field remains for existing records.
+        session_id: None,
+        plan_id: None,
         tool_name: input.tool_name.to_string(),
         args: redact_repository_root_in_value(input.args, &root_spellings),
         invoked_command_key: input.invoked_command_key,
@@ -212,40 +201,6 @@ fn record_receipt_inner(
         writer.append(&receipt)
     })?;
     Ok(receipt_id)
-}
-
-#[cfg(test)]
-pub(super) fn record_successful_state_tool(
-    ctx: &RepoContext,
-    input: StateToolReceipt<'_>,
-) -> Result<String> {
-    record_receipt(
-        ctx,
-        ReceiptInput {
-            tool_name: input.tool_name,
-            args: input.args,
-            invoked_command_key: None,
-            plan_id: input.plan_id,
-            started_at_ms: input.started_at_ms,
-            ended_at_ms: now_ms(),
-            exit_status: 0,
-            stdout: "",
-            stderr: "",
-            evidence: None,
-            session_override: input.session_override,
-            collect_git_metadata: false,
-            collect_worktree_fingerprint: false,
-            worktree_fingerprint_override: None,
-        },
-    )
-}
-
-fn receipt_args_has_receipt_ids(receipt: &ReceiptRecord) -> bool {
-    receipt
-        .args
-        .get("receipt_ids")
-        .and_then(Value::as_array)
-        .is_some()
 }
 
 fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {

@@ -19,8 +19,8 @@ mod tests;
 pub enum InitialTab {
     /// Local status overview used by `jig status --tui`.
     Status,
-    /// Local work overview used by canonical `jig ui`.
-    Work,
+    /// Local recorder timeline used by canonical `jig ui`.
+    Timeline,
 }
 
 /// Terminal runtime configuration.
@@ -29,7 +29,6 @@ pub struct DashboardOptions {
     pub initial_tab: InitialTab,
     pub refresh_interval: Duration,
     pub timeline_limit: TimelineLimit,
-    pub initial_plan: Option<String>,
 }
 
 impl DashboardOptions {
@@ -39,7 +38,6 @@ impl DashboardOptions {
             initial_tab,
             refresh_interval,
             timeline_limit: TimelineLimit::DEFAULT,
-            initial_plan: None,
         }
     }
 
@@ -52,12 +50,6 @@ impl DashboardOptions {
     pub fn with_timeline_limit(mut self, rows: usize) -> Result<Self, SourceError> {
         self.timeline_limit = TimelineLimit::new(rows)?;
         Ok(self)
-    }
-
-    #[must_use]
-    pub fn with_initial_plan(mut self, plan_id: Option<String>) -> Self {
-        self.initial_plan = plan_id;
-        self
     }
 }
 

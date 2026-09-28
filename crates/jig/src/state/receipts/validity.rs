@@ -3,9 +3,6 @@ use jig_contract::freshness::{
     TARGET_IDENTITY_SCHEMA_VERSION, TargetFreshnessMetadata, TargetFreshnessStateV1,
     supported_freshness_epoch,
 };
-use serde_json::Value;
-
-use super::{ReceiptRecord, evidence_requires_time_validity};
 
 /// Extract the declared effective deadline. This is a time-only constraint;
 /// it never grants identity validity or replaces original proof validation.
@@ -32,68 +29,4 @@ pub(crate) fn metadata_time(metadata: &TargetFreshnessMetadata) -> EffectiveTime
         metadata.effective_valid_until_ms,
         metadata.effective_requires_time_validity,
     )
-}
-
-pub(crate) fn effective_time_from_value(value: &Value) -> Option<EffectiveTimeValidityV1> {
-    let projected = (value.get("effective_valid_until_ms").is_some()
-        || value.get("effective_requires_time_validity").is_some())
-    .then(|| {
-        serde_json::from_value::<EffectiveTimeValidityV1>(value.clone())
-            .unwrap_or_else(|_| EffectiveTimeValidityV1::new(None, true))
-    });
-    let metadata = value.get("target_freshness").map(|metadata| {
-        serde_json::from_value::<TargetFreshnessMetadata>(metadata.clone()).map_or_else(
-            |_| EffectiveTimeValidityV1::new(None, true),
-            |metadata| metadata_time(&metadata),
-        )
-    });
-    match (projected, metadata) {
-        (Some(left), Some(right)) => Some(left.combine(right)),
-        (left, right) => left.or(right),
-    }
-}
-
-pub(crate) fn receipt_effective_time(receipt: &ReceiptRecord) -> Option<EffectiveTimeValidityV1> {
-    let own = EffectiveTimeValidityV1::new(
-        receipt.valid_until_ms,
-        receipt
-            .evidence
-            .as_ref()
-            .is_some_and(evidence_requires_time_validity),
-    );
-    let metadata = receipt.target_freshness.as_ref().map(metadata_time);
-    let evidence = receipt
-        .evidence
-        .as_ref()
-        .and_then(effective_time_from_value);
-    metadata
-        .or(evidence)
-        .map(|first| own.combine(first).combine(evidence.unwrap_or_default()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn incomplete_freshness_preserves_time_constraints_without_inventing_one() {
-        for (boundary, required) in [(None, false), (Some(100), true), (None, true)] {
-            let value = json!({"target_freshness": {
-                "schema_version": 1, "contract_epoch": 8, "state": "incomplete",
-                "global_execution_proof": {"state": "unknown"},
-                "effective_valid_until_ms": boundary, "effective_requires_time_validity": required,
-                "reasons": [{"code": "collection_limit"}], "reasons_total": 1,
-                "reasons_truncated": false
-            }});
-            assert_eq!(
-                effective_time_from_value(&value),
-                Some(EffectiveTimeValidityV1::new(boundary, required))
-            );
-        }
-        assert_eq!(
-            effective_time_from_value(&json!({"target_freshness": {"schema_version": 99}})),
-            Some(EffectiveTimeValidityV1::new(None, true))
-        );
-    }
 }
