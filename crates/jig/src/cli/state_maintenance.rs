@@ -88,9 +88,9 @@ fn state_diagnose_summary_lists_run_linkage_findings_and_affected_ids() {
         },
         "recommendations": [{
             "kind": "preserve_unlinked_receipt_evidence",
-            "reason": "6 receipt(s) reference 5 run(s) whose lifecycle is unavailable.",
+            "reason": "6 receipt(s) reference 5 run(s) whose lifecycle is unavailable. Keep existing receipts and journals unchanged, export receipts for retention, and document the affected run and receipt IDs and this limitation in repository documentation or an issue tracker.",
             "command": "jig state export receipts --before <YYYY-MM-DD> --output receipts-preserved.jsonl.gz",
-            "alternative_command": "jig work decide --title \"Run history unavailable\" --selected-option \"Preserve receipts; record affected IDs\" --rationale \"...\""
+            "alternative_command": null
         }]
     }));
 
@@ -109,7 +109,11 @@ fn state_diagnose_summary_lists_run_linkage_findings_and_affected_ids() {
     ));
     assert!(!summary.contains("every affected ID"));
     assert!(summary.contains("Command: jig state export receipts"));
-    assert!(summary.contains("Alternative: jig work decide"));
+    assert!(summary.contains("Keep existing receipts and journals unchanged"));
+    assert!(summary.contains("affected run and receipt IDs"));
+    assert!(summary.contains("repository documentation or an issue tracker"));
+    assert!(!summary.contains("Alternative:"));
+    assert!(!summary.contains("jig work"));
 }
 
 #[test]

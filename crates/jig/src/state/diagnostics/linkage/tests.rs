@@ -431,12 +431,17 @@ fn assert_preservation_recommendation(output: &Value) {
             .unwrap()
             .contains("state export receipts")
     );
-    assert!(
-        recommendation["alternative_command"]
-            .as_str()
-            .unwrap()
-            .contains("work decide")
-    );
+    assert!(recommendation["alternative_command"].is_null());
+    let reason = recommendation["reason"].as_str().unwrap();
+    assert!(reason.contains("keep existing receipts and journals unchanged"));
+    assert!(reason.contains("affected run and receipt IDs"));
+    assert!(reason.contains("repository documentation or an issue tracker"));
+    let preservation = output["run_linkage"]["guidance"]["preservation"]
+        .as_str()
+        .unwrap();
+    assert!(preservation.contains("repository documentation or an issue tracker"));
+    assert!(!output.to_string().contains("jig work"));
+    assert!(!output.to_string().contains("append a decision"));
 }
 
 #[test]

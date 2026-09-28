@@ -115,7 +115,7 @@ pub(in crate::state::diagnostics) fn guidance() -> Value {
     json!({
         "derived_caches": "Run leases, indexes, and other artifacts under .agent/.cache are derived from the journals. Rebuilding them never restores missing run events, event identities, or their order.",
         "authoritative_recovery": "Exact recovery needs an authoritative copy of the original run journal: a manifested state backup, a copy from another checkout, or committed Git history. Only such a source can restore the original event IDs and order, and restoring it replaces the whole stream, so preserve any newer appends first.",
-        "preservation": "Keep existing receipts and journals unchanged. Export the affected receipts for retention and append a decision that records the affected run and receipt IDs and states that their run history is unavailable.",
+        "preservation": "Keep existing receipts and journals unchanged. Export the affected receipts for retention and document the affected run and receipt IDs and the unavailable run history in repository documentation or an issue tracker.",
         "new_evidence": "Rerunning checks produces new receipts and new run events. It is new evidence and never reconstructs the missing history.",
         "never": [
             "Do not append fabricated queued, target_completed, or completed events for the affected runs.",
@@ -170,11 +170,11 @@ pub(in crate::state::diagnostics) fn recommendations(report: &RunLinkageReport) 
         recommendations.push(json!({
             "kind": "preserve_unlinked_receipt_evidence",
             "command": "jig state export receipts --before <YYYY-MM-DD> --output receipts-preserved.jsonl.gz",
-            "alternative_command": "jig work decide --title \"Run history unavailable\" --selected-option \"Preserve receipts; record affected IDs\" --rationale \"<affected run and receipt IDs; run history unavailable>\"",
+            "alternative_command": null,
             "affected_run_ids": unavailable.iter().map(|finding| finding.run_id.clone()).collect::<Vec<_>>(),
             "affected_run_ids_truncated": coverage_truncated,
             "reason": format!(
-                "{receipt_total} reference {unavailable_total} whose lifecycle is unavailable or unverifiable in this checkout ({}). Existing receipts remain valid evidence: keep them, export them for retention, and append a decision naming the affected run and receipt IDs and this limitation. Rebuilding derived caches does not restore run events, a new check run is new evidence rather than restored history, and no queued, target_completed, or completed events may be fabricated.",
+                "{receipt_total} reference {unavailable_total} whose lifecycle is unavailable or unverifiable in this checkout ({}). Existing receipts remain valid evidence: keep existing receipts and journals unchanged, export receipts for retention, and document the affected run and receipt IDs and this limitation in repository documentation or an issue tracker. Rebuilding derived caches does not restore run events, a new check run is new evidence rather than restored history, and no queued, target_completed, or completed events may be fabricated.",
                 preview_ids(run_ids, unavailable_count)
             ),
         }));
