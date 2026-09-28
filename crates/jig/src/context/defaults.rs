@@ -6,6 +6,5 @@ pub(crate) const DEFAULT_CODEX_MARKETPLACE_PLUGINS: &[&str] = &[
     "jig-rust@jig-skills",
     "jig-swift@jig-skills",
     "jig-typescript@jig-skills",
-    "jig-exec-plans@jig-skills",
 ];
 pub(crate) const SUPPORTED_WEB_PACKAGE_MANAGERS: &[&str] = &["bun", "npm", "pnpm", "yarn"];

@@ -439,7 +439,7 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
             "files_removed": [],
             "conflicts": [
                 {
-                    "path": ".agent/PLANS.md",
+                    "path": ".github/workflows/rust-tests.yml",
                     "detail": "destination differs from the rendered template-managed path"
                 }
             ]
@@ -462,7 +462,7 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
     assert!(summary.contains("mode: preview"));
     assert!(summary.contains("managed files: 1 created, 0 modified, 0 removed"));
     assert!(summary.contains("stack: Rust workspace, SQLx"));
-    assert!(summary.contains(".agent/PLANS.md"));
+    assert!(summary.contains(".github/workflows/rust-tests.yml"));
     assert!(summary.contains("SQLx metadata directory was not detected"));
     assert!(summary.contains("Re-run jig adopt . --write"));
 }
@@ -575,7 +575,7 @@ fn adopt_human_summary_includes_repository_notes_after_frontend_guidance() {
             "The first scripts/jig command may install or compile a compatible Jig runtime into this repo's contract/profile cache.",
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.",
             "Re-run scripts/jig doctor after setup changes to confirm readiness.",
-            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION; structured work and receipt inspection are optional.",
+            "Choose checks for the affected behavior with scripts/jig check COMPONENT:ACTION.",
             "Use scripts/jig file-budget audit for standalone source-size diagnostics without creating runs or receipts.",
             "Frontend checks expect package scripts for lint, typecheck, build:bundle, and test:coverage plus a package-manager lockfile; generated preset apps include them.",
             "Frontend checks are available as scripts/jig check typescript-lint, typescript-typecheck, typescript-build, and typescript-coverage; select those relevant to the change.",

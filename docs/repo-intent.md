@@ -24,7 +24,7 @@ The README says this repo is a harness that keeps coding agents on contract acro
 
 The harness was extracted from the durable parts of an existing application workflow. The extracted pieces are generic agent guidance, a stable command contract, repo policy scripts, GitHub Actions workflows, a template sync flow, and the Rust `jig` runtime.
 
-Generated or adopted repos receive assets such as `.jig.toml`, `.mcp.json`, `AGENTS.md`, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and workflows.
+Generated or adopted repos receive assets such as `.jig.toml`, `.mcp.json`, `AGENTS.md`, `agent-map.md`, `.agent/jig-contract.json`, scripts, and workflows.
 
 Full harnesses also seed the authored `.jig/file-budget.toml` policy once and
 generate a repository-wide native `repo:file-budget` action. The policy is not

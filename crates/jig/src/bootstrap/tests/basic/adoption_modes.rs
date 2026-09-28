@@ -615,21 +615,60 @@ fn minimal_to_full_adoption_still_rejects_unrelated_managed_conflicts() {
     fs::create_dir_all(&repo).unwrap();
 
     run_adopt(footprint_adopt_opts(&repo, template.path(), true, false)).unwrap();
-    fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+    fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
 
     let error = run_adopt(footprint_adopt_opts(&repo, template.path(), false, false))
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains(".agent/PLANS.md"));
+    assert!(error.contains(".agent/state/.gitkeep"));
     assert_eq!(
-        fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-        "project plan notes\n"
+        fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+        "project notes\n"
     );
     assert!(
         fs::read_to_string(repo.join(".jig.toml"))
             .unwrap()
             .contains("harness_footprint = \"minimal\"")
+    );
+}
+
+#[test]
+fn update_retires_formerly_managed_exec_plan_paths() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    let retired = [".agent/PLANS.md", ".agent/plans/.gitkeep"];
+    fs::create_dir_all(repo.join(".agent/plans")).unwrap();
+    for path in retired {
+        fs::write(repo.join(path), "").unwrap();
+        add_managed_manifest_path(&repo, path);
+    }
+
+    let error = run_update(update_opts(&repo, template.path(), false))
+        .unwrap_err()
+        .to_string();
+    for path in retired {
+        assert!(error.contains(path), "{error}");
+        assert!(repo.join(path).is_file(), "{path} changed without --force");
+    }
+
+    let output = run_update(update_opts(&repo, template.path(), true)).unwrap();
+    let reported = output["render_report"]["retired_managed_paths"]
+        .as_array()
+        .unwrap();
+    for path in retired {
+        assert!(reported.iter().any(|reported| reported == path), "{path}");
+        assert!(!repo.join(path).exists(), "{path} was not retired");
+    }
+    assert!(
+        managed_manifest_paths(&repo)
+            .iter()
+            .all(|path| !retired.contains(&path.as_str()))
     );
 }
 

@@ -321,7 +321,6 @@ jig_version = "0.2.0-beta.1"
             "jig-rust@jig-skills",
             "jig-swift@jig-skills",
             "jig-typescript@jig-skills",
-            "jig-exec-plans@jig-skills",
         ]
     );
 }

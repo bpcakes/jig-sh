@@ -6,7 +6,7 @@ This matrix captures what was extracted from the source application workflow and
 |---|---|---|
 | `AGENTS.md` | Templated | Converted to generic repo-wide guidance with configurable paths and commands. |
 | `agent-map.md` | Templated + generated | Rendered as a starter file, then refreshed by native `scripts/jig agent-map generate`. |
-| `.agent/PLANS.md` | Templated | Preserved as the generic ExecPlan contract. |
+| `.agent/PLANS.md` | Retired | No longer generated; `jig update` retires the formerly managed file. |
 | `.agent/jig-contract.json` | Templated | Declares command-backed and native repo contract tools for CLI and MCP consumers, with SQLx tools gated by `sqlx_enabled` and migration-add gated by the flat migration layout. |
 | `.agent/state/*.jsonl` | Runtime-owned | Append-only repo memory populated by `jig`. |
 | `scripts/jig doctor` / `scripts/jig doctor --json` | Runtime-owned | Unified read-only readiness check for runtime/contract compatibility, config, required command executables, Codex-side Jig skills, dev proxy status, vault status, and the next setup command. Human-readable by default; `--json` for automation. |

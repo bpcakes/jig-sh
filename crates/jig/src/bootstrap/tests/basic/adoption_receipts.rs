@@ -77,7 +77,7 @@ fn adopt_preview_reports_conflicts_without_overwriting() {
         answers: AnswerOpts::default(),
     })
     .unwrap();
-    fs::write(repo.join(".agent/PLANS.md"), "repo-owned plan notes\n").unwrap();
+    fs::write(repo.join(".agent/state/.gitkeep"), "repo-owned notes\n").unwrap();
 
     let output = run_adopt(AdoptOpts {
         components: Default::default(),
@@ -102,12 +102,13 @@ fn adopt_preview_reports_conflicts_without_overwriting() {
             .unwrap()
             .iter()
             .any(|conflict| {
-                conflict["path"] == ".agent/PLANS.md" && conflict["kind"] == "modified_managed_path"
+                conflict["path"] == ".agent/state/.gitkeep"
+                    && conflict["kind"] == "modified_managed_path"
             })
     );
     assert_eq!(
-        fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-        "repo-owned plan notes\n"
+        fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+        "repo-owned notes\n"
     );
 }
 
@@ -176,7 +177,7 @@ fn adopt_write_records_backup_receipt_for_overwritten_managed_files() {
         answers: AnswerOpts::default(),
     })
     .unwrap();
-    fs::write(repo.join(".agent/PLANS.md"), "repo-owned plan notes\n").unwrap();
+    fs::write(repo.join(".agent/state/.gitkeep"), "repo-owned notes\n").unwrap();
 
     let output = run_adopt(AdoptOpts {
         components: Default::default(),
@@ -200,7 +201,7 @@ fn adopt_write_records_backup_receipt_for_overwritten_managed_files() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|conflict| conflict["path"] == ".agent/PLANS.md")
+            .any(|conflict| conflict["path"] == ".agent/state/.gitkeep")
     );
     let receipt_path = repo.join(".agent/.cache/adopt/adopt-last.json");
     let receipt: serde_json::Value =
@@ -225,12 +226,12 @@ fn adopt_write_records_backup_receipt_for_overwritten_managed_files() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|backup| backup["path"] == ".agent/PLANS.md")
-        .expect("missing .agent/PLANS.md backup");
+        .find(|backup| backup["path"] == ".agent/state/.gitkeep")
+        .expect("missing .agent/state/.gitkeep backup");
     let backup_path = backup["backup_path"].as_str().unwrap();
     assert_eq!(
         fs::read_to_string(backup_path).unwrap(),
-        "repo-owned plan notes\n"
+        "repo-owned notes\n"
     );
     assert!(
         receipt["undo_hint"]
@@ -258,7 +259,7 @@ fn adopt_rejects_receipt_leaf_symlinks_before_managed_mutation_even_with_force()
             let repo = temp.path().join("repo");
             fs::create_dir_all(&repo).unwrap();
             run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-            fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+            fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
 
             let receipt_path = repo.join(relative);
             fs::remove_file(&receipt_path).unwrap();
@@ -285,8 +286,8 @@ fn adopt_rejects_receipt_leaf_symlinks_before_managed_mutation_even_with_force()
             assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
             assert_eq!(regular_file_tree_snapshot(&outside), outside_before);
             assert_eq!(
-                fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-                "project plan notes\n"
+                fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+                "project notes\n"
             );
             assert_eq!(
                 fs::read_to_string(&outside_target).unwrap(),
@@ -313,7 +314,7 @@ fn adopt_rejects_receipt_leaf_directories_before_managed_mutation() {
             let repo = temp.path().join("repo");
             fs::create_dir_all(&repo).unwrap();
             run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-            fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+            fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
 
             let receipt_path = repo.join(relative);
             fs::remove_file(&receipt_path).unwrap();
@@ -334,8 +335,8 @@ fn adopt_rejects_receipt_leaf_directories_before_managed_mutation() {
             );
             assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
             assert_eq!(
-                fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-                "project plan notes\n"
+                fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+                "project notes\n"
             );
             assert!(receipt_path.is_dir());
         }
@@ -351,7 +352,7 @@ fn adopt_preview_ignores_unsafe_receipt_leaves_and_remains_read_only() {
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
     run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-    fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+    fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
 
     let outside = temp.path().join("outside");
     fs::create_dir(&outside).unwrap();
@@ -373,8 +374,8 @@ fn adopt_preview_ignores_unsafe_receipt_leaves_and_remains_read_only() {
     assert_eq!(regular_file_tree_snapshot(&repo), repo_before);
     assert_eq!(regular_file_tree_snapshot(&outside), outside_before);
     assert_eq!(
-        fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-        "project plan notes\n"
+        fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+        "project notes\n"
     );
 }
 
@@ -467,7 +468,7 @@ fn adopt_rejects_unsafe_receipt_and_backup_ancestors_before_managed_mutation() {
         let repo = temp.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
         run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
-        fs::write(repo.join(".agent/PLANS.md"), "project plan notes\n").unwrap();
+        fs::write(repo.join(".agent/state/.gitkeep"), "project notes\n").unwrap();
         let outside = temp.path().join(format!("outside-{unsafe_kind}"));
         let unsafe_path = match unsafe_kind {
             "receipt" => {
@@ -490,8 +491,8 @@ fn adopt_rejects_unsafe_receipt_and_backup_ancestors_before_managed_mutation() {
 
         assert!(error.contains("is a symlink"), "{unsafe_kind}: {error}");
         assert_eq!(
-            fs::read_to_string(repo.join(".agent/PLANS.md")).unwrap(),
-            "project plan notes\n"
+            fs::read_to_string(repo.join(".agent/state/.gitkeep")).unwrap(),
+            "project notes\n"
         );
         assert_eq!(
             fs::read_to_string(outside.join("project-sentinel")).unwrap(),

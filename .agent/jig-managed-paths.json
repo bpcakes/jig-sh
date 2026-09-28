@@ -2,10 +2,8 @@
   "version": 1,
   "paths": [
     ".agent/.cache/.gitignore",
-    ".agent/PLANS.md",
     ".agent/jig-contract.json",
     ".agent/jig-managed-paths.json",
-    ".agent/plans/.gitkeep",
     ".agent/state/.gitkeep",
     ".gitattributes",
     ".github/workflows/agent-map-check.yml",

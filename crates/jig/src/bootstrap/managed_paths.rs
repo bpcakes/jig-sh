@@ -64,8 +64,6 @@ const WEB_MANAGED_PATHS: &[&str] = &[
 const MINIMAL_MANAGED_PATHS: &[&str] = &[
     ".jig.toml",
     ".agent/jig-contract.json",
-    ".agent/PLANS.md",
-    ".agent/plans/.gitkeep",
     ".agent/state/.gitkeep",
     ".agent/.cache/.gitignore",
     MANIFEST_PATH,

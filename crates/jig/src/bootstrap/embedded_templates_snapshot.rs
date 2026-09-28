@@ -8,16 +8,8 @@ pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.agent/.cache/.gitignore.jinja")),
     },
     EmbeddedTemplateFile {
-        relative_path: ".agent/PLANS.md.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.agent/PLANS.md.jinja")),
-    },
-    EmbeddedTemplateFile {
         relative_path: ".agent/jig-contract.json.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.agent/jig-contract.json.jinja")),
-    },
-    EmbeddedTemplateFile {
-        relative_path: ".agent/plans/.gitkeep.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.agent/plans/.gitkeep.jinja")),
     },
     EmbeddedTemplateFile {
         relative_path: ".agent/state/.gitkeep.jinja",

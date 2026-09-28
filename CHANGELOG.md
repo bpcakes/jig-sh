@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- Stop shipping ExecPlan and structured-work guidance. Generated repositories no
+  longer receive `.agent/PLANS.md` or `.agent/plans/.gitkeep`, generated `AGENTS.md`
+  no longer directs agents to ExecPlans or `jig work`, and the default Codex skills
+  omit `jig-exec-plans@jig-skills`. `jig update` reports both formerly managed files
+  as removed paths and deletes them with `--force`; move any local edits to
+  `.agent/PLANS.md` first. Existing `.jig.toml` skill lists are preserved, so remove
+  `jig-exec-plans@jig-skills` there to stop expecting it. `jig work` commands and
+  receipts are unchanged.
+
 ## v0.6.0 - 2026-09-27
 
 ### Added
