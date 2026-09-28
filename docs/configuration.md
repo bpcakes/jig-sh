@@ -1242,8 +1242,6 @@ It also provides runtime-owned commands, including maintenance of append-only me
 - `scripts/jig state summary`
 - `scripts/jig state diagnose`
 - `scripts/jig state diagnose --deep`
-- `scripts/jig state compact sessions --dry-run`
-- `scripts/jig state compact sessions`
 - `scripts/jig state restore --backup <backup-directory-or-manifest>`
 - `scripts/jig state export receipts --before YYYY-MM-DD --output <file.jsonl.gz>`
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`
@@ -1251,13 +1249,13 @@ It also provides runtime-owned commands, including maintenance of append-only me
 
 The former `scripts/jig work ...` commands were removed; every invocation fails
 as a usage error that points to `scripts/jig check COMPONENT:ACTION` and
-`scripts/jig state summary`. Plans that were open at upgrade stay open and remain
-visible in `status`, `state summary`, and `ui`, but no command can close them.
+`scripts/jig state summary`. Jig no longer reads plans, sessions, or decisions, so
+plans that were open at upgrade are not listed anywhere.
 
 Contract tools and checks intentionally append receipts under `.agent/state/`.
 Read-only inspection commands such as `state summary` and `status` do not add
 new receipts. For one-off contract command runs that should not record evidence,
-pass `--no-receipt`; `--no-receipt` conflicts with `--plan-id`. When
+pass `--no-receipt`. The retired `--plan-id` is accepted and ignored. When
 receipt recording is skipped, command JSON still includes `"receipt_id": null`.
 Native execution still writes its run journal with `--no-receipt`; this flag is
 not a promise of a clean checkout. Repo-mode scheduled workers accept only their
@@ -1273,8 +1271,7 @@ child receipt with supervised evidence status `cancelled`; cancellation before
 spawn appends no child receipt because no command ran.
 
 Use `scripts/jig state diagnose` for a read-only size and integrity report.
-`--deep` additionally analyzes recursive session summaries, projected
-compaction savings, receipt payload categories, and archive recommendations
+`--deep` additionally analyzes receipt payload categories and archive recommendations
 for oversized receipt or run journals. `--deep` also joins every receipt run
 reference, including child receipts named by historical
 `jig.work_check_targets/v1` and `jig.work_check/v2` batch evidence, to the run
@@ -1286,20 +1283,16 @@ reports the check as not performed. `ok` only means the command ran; the
 `integrity` object and `recommendations` carry the findings. The report also includes
 local disk usage from maintenance backups under
 `.agent/.cache/state-backups/` and compressed receipt archives under
-`.agent/.cache/state-archives/`. Repair legacy recursive summaries with
-`state compact sessions`: run `--dry-run` first, then apply the rewrite. Apply
-mode validates the replacement and first stores an exact gzip backup plus
-checksum manifest under ignored
-`.agent/.cache/state-backups/<id>/`. Pass either that directory or its
-`manifest.json` to `state restore --backup ...` to verify and restore the exact
-pre-compaction stream.
+`.agent/.cache/state-archives/`. `state compact sessions` was removed; pass a
+sessions backup directory it created, or its `manifest.json`, to
+`state restore --backup ...` to verify and restore the exact pre-compaction
+stream.
 
 Use `scripts/jig state archive --before ...` when `receipts.jsonl` grows too
 large, and add `--include-runs` when `runs.jsonl` also needs retention;
 shared-repository Codex task preflight refuses an active receipt journal larger
 than 64 MiB, so archive before it reaches that bound.
-`--before YYYY-MM-DD` is interpreted as a UTC cutoff date. Archiving keeps
-evidence and completed run history linked to open plans active, never selects
+`--before YYYY-MM-DD` is interpreted as a UTC cutoff date. Archiving never selects
 nonterminal runs, and refuses run-journal maintenance while any known run is
 nonterminal so live byte cursors remain valid. It writes eligible receipt records and opt-in whole run-event
 groups as separate gzip JSONL artifacts under ignored

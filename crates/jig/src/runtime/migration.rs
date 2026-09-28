@@ -12,13 +12,11 @@ pub(super) fn add(
     request: crate::command::MigrationAddRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let (plan_id, record_receipt) = request.tool.into_parts();
     tool_execution::execute_manifest_tool_with_observer(
         ctx,
         tool::MIGRATION_ADD,
         json!({ args::NAME: request.name }),
-        plan_id,
-        record_receipt,
+        request.tool.record_receipt(),
         observer,
     )
     .map(|value| {

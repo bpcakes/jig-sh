@@ -5,11 +5,9 @@ use crate::{command, tool_defs};
 use super::ToolOpts;
 
 const MIGRATION_ADD_AFTER_HELP: &str = "\
-Use --plan-id to associate the migration with an open structured work plan.
-
 Examples:
   jig migration add create_users
-  jig migration add add_login_tokens --plan-id plan_abc123
+  jig migration add add_login_tokens --no-receipt
 
 The `jig sqlx migration add NAME` and `jig migration-add NAME` paths remain accepted for compatibility.";
 
@@ -18,7 +16,7 @@ Create migrations in the repository's configured backend format.
 
 Examples:
   jig migration add create_users
-  jig migration add add_login_tokens --plan-id plan_abc123";
+  jig migration add add_login_tokens --no-receipt";
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum MigrationCommand {
@@ -61,9 +59,7 @@ mod tests {
         .into();
 
         assert_eq!(request.name, "create_users");
-        let (plan_id, record_receipt) = request.tool.into_parts();
-        assert_eq!(plan_id.as_deref(), Some("plan_1"));
-        assert!(record_receipt);
+        assert!(request.tool.record_receipt());
 
         let no_receipt_request: command::MigrationAddRequest = MigrationAddOpts {
             name: "drop_old_table".to_string(),
@@ -74,8 +70,6 @@ mod tests {
         }
         .into();
 
-        let (plan_id, record_receipt) = no_receipt_request.tool.into_parts();
-        assert_eq!(plan_id, None);
-        assert!(!record_receipt);
+        assert!(!no_receipt_request.tool.record_receipt());
     }
 }

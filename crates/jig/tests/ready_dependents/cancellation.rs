@@ -64,7 +64,7 @@ fn publication_error_closes_resource_arrivals_and_terminalizes_run() {
     // The resource worker has finished one root, but stays alive for the
     // resource-backed dependent of the ordinary prerequisite.
     let fixture = resource_dependent_fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     release(&fixture, "slow");
     run.wait_target_publication("slow");
     assert!(!fixture.signals.join("entered-dependent").exists());

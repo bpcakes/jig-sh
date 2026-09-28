@@ -23,7 +23,7 @@ fn diagnose_missing_state_is_strictly_read_only() {
 
     assert_eq!(output["state_dir_exists"], false);
     assert_eq!(output["totals"]["stream_bytes"], 0);
-    assert_eq!(output["sessions"]["projected_shallow_bytes"], 0);
+    assert!(output.get("sessions").is_none());
     assert_eq!(before, fixture_paths(temp.path()));
     assert!(!ctx.state_dir().exists());
     assert!(!temp.path().join(".git").exists());
@@ -51,30 +51,6 @@ fn assert_stream_diagnostics(output: &serde_json::Value, sessions: &str, recursi
         2
     );
     assert_eq!(output["streams"]["plans"]["torn_tail"], true);
-}
-
-fn assert_session_projection(
-    output: &serde_json::Value,
-    sessions: &str,
-    recursive: &str,
-    ordinary: &str,
-    nested_summary: &str,
-) {
-    let compacted = recursive.replace(
-        &format!(r#""summary":{nested_summary}"#),
-        r#""summary":null"#,
-    );
-    let projected = compacted.len() + 1 + ordinary.len() + 1;
-    assert_eq!(output["sessions"]["recursive_session_records"], 1);
-    assert_eq!(output["sessions"]["recursive_summary_values"], 1);
-    assert_eq!(
-        output["sessions"]["projected_shallow_bytes"],
-        projected as u64
-    );
-    assert_eq!(
-        output["sessions"]["estimated_reclaimable_bytes"],
-        (sessions.len() - projected) as u64
-    );
 }
 
 fn assert_receipt_and_archive_diagnostics(
@@ -109,9 +85,12 @@ fn assert_receipt_and_archive_diagnostics(
     assert_eq!(output["legacy_archive"]["files"], 2);
     assert_eq!(output["legacy_archive"]["bytes"], 8);
     assert_eq!(output["totals"]["legacy_archive_bytes"], 8);
-    assert_eq!(
-        output["recommendations"][0]["command"],
-        "jig state compact sessions --dry-run"
+    assert!(
+        output["recommendations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|recommendation| recommendation["kind"] != "compact_sessions")
     );
 }
 
@@ -168,7 +147,7 @@ fn diagnose_reports_exact_stream_and_deep_storage_facts() {
     let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
 
     assert_stream_diagnostics(&output, &sessions, &recursive);
-    assert_session_projection(&output, &sessions, &recursive, ordinary, nested_summary);
+    assert!(output.get("sessions").is_none());
     assert_receipt_and_archive_diagnostics(&output, args, stdout, stderr, evidence, paths, diff);
 }
 
@@ -268,7 +247,6 @@ fn diagnose_recommends_receipt_retention_and_export_before_repair() {
     let recommendations = recommendations(
         true,
         &streams,
-        &SessionCompactionDiagnostics::default(),
         &receipts,
         &LegacyArchiveDiagnostics::default(),
         &MaintenanceCacheDiagnostics::default(),
@@ -296,27 +274,6 @@ fn diagnose_recommends_receipt_retention_and_export_before_repair() {
                 .as_str()
                 .is_some_and(|command| command.contains("state archive"))
     }));
-}
-
-#[test]
-fn raw_session_analysis_handles_escaped_keys_and_shallow_nulls() {
-    let record = br#"{
-            "summ\u0061ry": {
-                "recent_sessions": [
-                    {"summary": null},
-                    {"summary": {"value": "escaped \" } ]"}}
-                ]
-            }
-        }"#;
-    serde_json::from_slice::<IgnoredAny>(record).unwrap();
-
-    let projection = analyze_session_record(record).unwrap();
-
-    assert_eq!(projection.recursive_summary_values, 1);
-    assert_eq!(
-        projection.projected_record_bytes,
-        record.len() as u64 - br#"{"value": "escaped \" } ]"}"#.len() as u64 + 4
-    );
 }
 
 fn fixture_paths(root: &Path) -> BTreeSet<PathBuf> {

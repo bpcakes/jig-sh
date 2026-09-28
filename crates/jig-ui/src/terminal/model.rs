@@ -1,6 +1,6 @@
 use crate::dashboard::{
     StatusCollectionError, StatusLocalSnapshot, StatusLoopObservation, StatusRepositoryObservation,
-    StatusWorkSnapshot, UpstreamObservation,
+    UpstreamObservation,
 };
 
 mod app;
@@ -17,29 +17,26 @@ use support::moved_index;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Tab {
     Status,
-    Work,
     Timeline,
     Health,
 }
 
 impl Tab {
-    pub(crate) const ALL: [Self; 4] = [Self::Status, Self::Work, Self::Timeline, Self::Health];
+    pub(crate) const ALL: [Self; 3] = [Self::Status, Self::Timeline, Self::Health];
 
     pub(crate) const fn index(self) -> usize {
         match self {
             Self::Status => 0,
-            Self::Work => 1,
-            Self::Timeline => 2,
-            Self::Health => 3,
+            Self::Timeline => 1,
+            Self::Health => 2,
         }
     }
 
     pub(crate) const fn title(self) -> &'static str {
         match self {
             Self::Status => "1 Status",
-            Self::Work => "2 Work",
-            Self::Timeline => "3 Timeline",
-            Self::Health => "4 Health",
+            Self::Timeline => "2 Timeline",
+            Self::Health => "3 Health",
         }
     }
 }
@@ -49,7 +46,6 @@ pub(crate) struct Dashboard {
     pub(crate) outcome: String,
     pub(crate) observed_at_ms: u64,
     pub(crate) repository: RepositoryView,
-    pub(crate) work: WorkView,
     pub(crate) loops: LoopView,
     pub(crate) errors: Vec<CollectionErrorView>,
 }
@@ -65,7 +61,6 @@ impl From<StatusLocalSnapshot> for Dashboard {
             outcome: outcome.to_string(),
             observed_at_ms: snapshot.observed_at_ms,
             repository: snapshot.repository.into(),
-            work: WorkView::from_snapshot(&snapshot.work),
             loops: LoopView::from_snapshot(snapshot.loops.as_ref()),
             errors: snapshot.errors.into_iter().map(Into::into).collect(),
         }
@@ -114,36 +109,6 @@ impl From<UpstreamObservation> for UpstreamView {
             behind: observation.behind,
             state: sanitize_text(&observation.state),
             basis: sanitize_text(&observation.basis),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct WorkView {
-    pub(crate) open_plans: u64,
-    pub(crate) current_session_id: Option<String>,
-    pub(crate) gate_snapshots: usize,
-    pub(crate) gate_errors: usize,
-}
-
-impl WorkView {
-    fn from_snapshot(work: &StatusWorkSnapshot) -> Self {
-        Self {
-            open_plans: work
-                .state
-                .as_ref()
-                .map_or(0, |state| state.counts.open_plans),
-            current_session_id: work
-                .state
-                .as_ref()
-                .and_then(|state| state.current_session_id.as_deref())
-                .map(sanitize_text),
-            gate_snapshots: work.gates.len(),
-            gate_errors: work
-                .gates
-                .iter()
-                .filter(|gate| gate.error.is_some())
-                .count(),
         }
     }
 }

@@ -31,25 +31,22 @@ pub(crate) fn prepare_file_budget_input_v1(
     ctx: &RepoContext,
     request: Option<ComparisonRequestV1>,
     configuration: NativeFileBudgetConfigV1,
-    work_plan_id: Option<String>,
 ) -> Result<PreparedNativeInputV1> {
     let now = time::OffsetDateTime::now_utc().date();
     let current_date = PolicyDateV1::new(now.year() as u16, now.month() as u8, now.day())
         .map_err(anyhow::Error::msg)?;
-    prepare_file_budget_input_at_v1(ctx, request, configuration, work_plan_id, current_date)
+    prepare_file_budget_input_at_v1(ctx, request, configuration, current_date)
 }
 
 fn prepare_file_budget_input_at_v1(
     ctx: &RepoContext,
     request: Option<ComparisonRequestV1>,
     configuration: NativeFileBudgetConfigV1,
-    work_plan_id: Option<String>,
     current_date: PolicyDateV1,
 ) -> Result<PreparedNativeInputV1> {
-    let work_plan_id = normalize_work_plan_id(work_plan_id)?;
     let request = normalize_request(match request {
         Some(request) => request,
-        None => default_comparison_request(ctx, work_plan_id.as_deref())?,
+        None => default_comparison_request(ctx)?,
     })?;
     let view = current_view(&request);
     let policy = prepare_policy(ctx, view, current_date);
@@ -62,33 +59,16 @@ fn prepare_file_budget_input_at_v1(
         policy_source: PolicySourceV1 {
             path: POLICY_PATH_V1.to_owned(),
         },
-        work_plan_id,
+        work_plan_id: None,
         policy,
         comparison,
     })
 }
 
-fn default_comparison_request(
-    ctx: &RepoContext,
-    work_plan_id: Option<&str>,
-) -> Result<ComparisonRequestV1> {
-    if let Some(work_plan_id) = work_plan_id {
-        let baseline = crate::state::plan_baseline(ctx, work_plan_id)?
-            .ok_or_else(|| anyhow::anyhow!("work plan '{work_plan_id}' does not exist"))?;
-        if let Some(error) = baseline.error {
-            anyhow::bail!("work plan '{work_plan_id}' has no usable comparison baseline: {error}");
-        }
-        let requested_oid = baseline
-            .commit_oid
-            .or(baseline.empty_tree_oid)
-            .ok_or_else(|| {
-                anyhow::anyhow!("work plan '{work_plan_id}' has no exact comparison identity")
-            })?;
-        return Ok(ComparisonRequestV1::ExactTree {
-            requested_oid,
-            provenance: jig_contract::ExactTreeProvenanceV1::WorkPlan,
-        });
-    }
+/// The comparison native checks and automatic Rust focus use when a request
+/// names none: the merge base with the default branch, or the empty tree
+/// before the first commit.
+pub(super) fn default_comparison_request(ctx: &RepoContext) -> Result<ComparisonRequestV1> {
     if crate::git_receipts::resolve_git_commit(ctx.root(), "HEAD").is_err()
         && let Ok(Some(empty_tree_oid)) =
             crate::git_receipts::resolve_empty_tree_for_unborn_repository(ctx.root())
@@ -101,22 +81,6 @@ fn default_comparison_request(
     Ok(ComparisonRequestV1::MergeBaseRef {
         requested_ref: ctx.default_branch().to_owned(),
     })
-}
-
-fn normalize_work_plan_id(work_plan_id: Option<String>) -> Result<Option<String>> {
-    let Some(work_plan_id) = work_plan_id else {
-        return Ok(None);
-    };
-    let normalized = work_plan_id.trim();
-    anyhow::ensure!(!normalized.is_empty(), "work_plan_id must not be empty");
-    anyhow::ensure!(
-        normalized.len() <= 128
-            && normalized
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')),
-        "work_plan_id contains unsupported characters or exceeds 128 bytes"
-    );
-    Ok(Some(normalized.to_owned()))
 }
 
 fn normalize_request(request: ComparisonRequestV1) -> Result<ComparisonRequestV1> {
@@ -402,7 +366,6 @@ max_lines = 100
             &ctx,
             None,
             NativeFileBudgetConfigV1::default(),
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -418,50 +381,6 @@ max_lines = 100
     }
 
     #[test]
-    fn work_plan_defaults_to_its_captured_exact_commit() {
-        let (_temp, ctx) = prepared_repository(VALID_POLICY);
-        let opened = crate::state::plans_open(
-            &ctx,
-            crate::state::PlanOpenRequest {
-                title: "Example plan".into(),
-                body: Some("# Example plan\n".into()),
-                body_file: None,
-                base: None,
-            },
-        )
-        .unwrap();
-        let plan_id = opened["plan_id"].as_str().unwrap().to_owned();
-        let head = git(ctx.root(), &["rev-parse", "HEAD"]);
-        let prepared = prepare_file_budget_input_at_v1(
-            &ctx,
-            None,
-            NativeFileBudgetConfigV1::default(),
-            Some(plan_id.clone()),
-            fixed_date(),
-        )
-        .unwrap();
-
-        assert_eq!(prepared.work_plan_id.as_deref(), Some(plan_id.as_str()));
-        assert_eq!(
-            prepared.request,
-            ComparisonRequestV1::ExactTree {
-                requested_oid: head.clone(),
-                provenance: jig_contract::ExactTreeProvenanceV1::WorkPlan,
-            }
-        );
-        assert!(matches!(
-            prepared.comparison,
-            ComparisonPreparationV1::Ready {
-                comparison: ResolvedComparisonV1::ExactTree {
-                    requested_oid,
-                    peeled_commit_oid: Some(_),
-                    ..
-                }
-            } if requested_oid == head
-        ));
-    }
-
-    #[test]
     fn index_view_reads_policy_from_the_index_and_types_absence_as_missing() {
         let (_temp, ctx) = prepared_repository(VALID_POLICY);
         std::fs::write(ctx.root().join(POLICY_PATH_V1), "version = 2\n").unwrap();
@@ -470,7 +389,6 @@ max_lines = 100
             &ctx,
             Some(ComparisonRequestV1::IndexAgainstHead),
             NativeFileBudgetConfigV1::default(),
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -481,7 +399,6 @@ max_lines = 100
             &ctx,
             Some(ComparisonRequestV1::IndexAgainstHead),
             NativeFileBudgetConfigV1::default(),
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -507,7 +424,6 @@ max_lines = 100
                 &ctx,
                 Some(ComparisonRequestV1::IndexAgainstHead),
                 NativeFileBudgetConfigV1::default(),
-                None,
             )
             .unwrap();
             if extra == 0 {
@@ -546,7 +462,6 @@ max_lines = 100
                 provenance: jig_contract::ExactTreeProvenanceV1::Explicit,
             }),
             NativeFileBudgetConfigV1::default(),
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -578,7 +493,6 @@ max_lines = 100
                 missing_comparison: MissingComparisonV1::StrictInventory,
                 ..NativeFileBudgetConfigV1::default()
             },
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -636,7 +550,6 @@ max_lines = 100
                 provenance: jig_contract::ExactTreeProvenanceV1::PushBefore,
             }),
             NativeFileBudgetConfigV1::default(),
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -665,7 +578,6 @@ max_lines = 100
             &ctx,
             Some(request.clone()),
             NativeFileBudgetConfigV1::default(),
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -681,7 +593,6 @@ max_lines = 100
                 missing_comparison: MissingComparisonV1::StrictInventory,
                 ..NativeFileBudgetConfigV1::default()
             },
-            None,
             fixed_date(),
         )
         .unwrap();
@@ -721,7 +632,6 @@ max_lines = 100
                 missing_comparison: MissingComparisonV1::StrictInventory,
                 ..NativeFileBudgetConfigV1::default()
             },
-            None,
         )
         .unwrap();
         let mut budget = CollectionBudget::new(

@@ -3,8 +3,9 @@ use std::path::Path;
 
 use anyhow::{Result, bail, ensure};
 use jig_contract::{
-    ActionRunner, CargoImpactDispositionV1, PreparedRustInputV1, RunPlan, RustFocusV1,
-    RustNextestConfigV1, RustScopeDispositionV1, TargetId,
+    ActionRunner, CargoImpactDispositionV1, ComparisonRequestV1, PreparedRustInputV1,
+    ResolvedComparisonV1, RunPlan, RustFocusV1, RustNextestConfigV1, RustScopeDispositionV1,
+    TargetId,
 };
 
 use crate::{
@@ -166,8 +167,9 @@ fn prepare(
                     prepared.targets = targets.clone();
                     filter = requested_filter.as_deref();
                 }
-                RustFocusV1::Automatic { plan_id } => {
-                    let comparison = automatic_paths(ctx, plan_id.as_deref(), cancelled)?;
+                // A legacy plan id is accepted and ignored.
+                RustFocusV1::Automatic { .. } => {
+                    let comparison = automatic_paths(ctx, cancelled)?;
                     match comparison {
                         Some((base, paths)) => {
                             prepared.comparison_base = Some(base);
@@ -240,31 +242,40 @@ fn prepare(
     Ok(prepared)
 }
 
+/// Automatic focus compares against the same base as native checks. An
+/// unresolvable comparison falls back to the broad workspace scope.
 fn automatic_paths(
     ctx: &RepoContext,
-    plan_id: Option<&str>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<(String, Vec<String>)>> {
-    let Some(plan_id) = plan_id else {
+    let Ok(request) = super::native_input::default_comparison_request(ctx) else {
         return Ok(None);
     };
-    crate::state::ensure_plan_is_open(ctx, plan_id)?;
-    let baseline = crate::state::plan_baseline_with_cancellation(ctx, plan_id, cancelled)?;
-    let Some(baseline) = baseline else {
-        return Ok(None);
-    };
-    let comparison = if let Some(oid) = baseline.commit_oid {
-        crate::git_receipts::plan_change_snapshot_with_cancellation(ctx.root(), &oid, cancelled)
-            .map(|snapshot| (oid, snapshot.all_changed_paths()))
-    } else if let Some(oid) = baseline.empty_tree_oid {
-        crate::git_receipts::plan_change_snapshot_from_empty_tree_with_cancellation(
+    let comparison = match request {
+        ComparisonRequestV1::ExactTree { requested_oid, .. } => {
+            crate::git_receipts::plan_change_snapshot_from_empty_tree_with_cancellation(
+                ctx.root(),
+                &requested_oid,
+                cancelled,
+            )
+            .map(|snapshot| (requested_oid, snapshot.all_changed_paths()))
+        }
+        request => crate::git_receipts::resolve_comparison_v1_with_cancellation(
             ctx.root(),
-            &oid,
+            request,
             cancelled,
         )
-        .map(|snapshot| (oid, snapshot.all_changed_paths()))
-    } else {
-        return Ok(None);
+        .and_then(|resolved| match resolved {
+            ResolvedComparisonV1::MergeBase { merge_base_oid, .. } => {
+                crate::git_receipts::plan_change_snapshot_with_cancellation(
+                    ctx.root(),
+                    &merge_base_oid,
+                    cancelled,
+                )
+                .map(|snapshot| (merge_base_oid, snapshot.all_changed_paths()))
+            }
+            _ => anyhow::bail!("the default comparison did not resolve to a merge base"),
+        }),
     };
     ensure!(!cancelled(), "Rust focus comparison was cancelled");
     Ok(comparison.ok())

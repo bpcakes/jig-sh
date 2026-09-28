@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::model::{App, Dashboard, Tab};
+use super::model::{App, Dashboard, LocalDashboard, Tab};
 
 mod local;
 mod responsive;
@@ -64,7 +64,6 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
 
     match app.tab {
         Tab::Status => draw_overview(frame, area, app),
-        Tab::Work => local::draw_work(frame, area, app),
         Tab::Timeline => local::draw_timeline(frame, area, app),
         Tab::Health => local::draw_health(frame, area, app),
     }
@@ -94,8 +93,8 @@ fn draw_overview(frame: &mut Frame, area: Rect, app: &App) {
         top[0],
     );
     frame.render_widget(
-        Paragraph::new(work_lines(status))
-            .block(panel("Work"))
+        Paragraph::new(harness_lines(app.recorder.data.as_ref()))
+            .block(panel("Harness"))
             .wrap(Wrap { trim: true }),
         top[1],
     );
@@ -144,16 +143,23 @@ fn repository_lines(status: &Dashboard) -> Vec<Line<'static>> {
     lines
 }
 
-fn work_lines(status: &Dashboard) -> Vec<Line<'static>> {
+fn harness_lines(recorder: Option<&LocalDashboard>) -> Vec<Line<'static>> {
+    let Some(recorder) = recorder else {
+        return vec![Line::from("Local recorder not loaded.")];
+    };
     vec![
-        Line::from(format!("Open plans: {}", status.work.open_plans)),
         Line::from(format!(
-            "Current session: {}",
-            status.work.current_session_id.as_deref().unwrap_or("none")
+            "Runtime: {} · contract {}",
+            recorder.harness.runtime_version, recorder.harness.contract_version
         )),
         Line::from(format!(
-            "Gate snapshots: {} · errors {}",
-            status.work.gate_snapshots, status.work.gate_errors
+            "Source: {}",
+            recorder.repo.source_path.as_deref().unwrap_or("—")
+        )),
+        Line::from(format!(
+            "Recorder epoch {} · generated {}",
+            recorder.epoch_id.get(),
+            super::model::format_timestamp(Some(recorder.generated_at_ms))
         )),
     ]
 }
@@ -191,11 +197,10 @@ fn error_lines(status: &Dashboard) -> Vec<Line<'static>> {
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let text = if app.detail_is_open() {
-        local::detail_footer(app)
+        local::detail_footer()
     } else {
         match app.tab {
             Tab::Status => "q quit  Tab views  r refresh".to_string(),
-            Tab::Work => "q quit  Tab views  j/k select  Enter detail  r refresh".to_string(),
             Tab::Timeline => {
                 "q quit  Tab views  j/k select  Enter detail  f/F filter  +/- rows  r refresh"
                     .to_string()
@@ -224,7 +229,7 @@ fn repository_label(status: &Dashboard) -> String {
     format!("{} {branch}@{revision} {clean}", repo.name)
 }
 
-fn recorder_repository_label(recorder: &super::model::LocalDashboard) -> String {
+fn recorder_repository_label(recorder: &LocalDashboard) -> String {
     let branch = recorder
         .repo
         .branch

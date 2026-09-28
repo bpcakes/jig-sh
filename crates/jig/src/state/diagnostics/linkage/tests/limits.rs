@@ -15,7 +15,7 @@ fn receipt_linkage_analysis_rejects_unusable_identities() {
 
 fn diagnose_conflicting_receipt_runs(reverse: bool) -> Value {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let present_run = started.result.run_id;
     complete_target(&ctx, &present_run);
     complete_run(&ctx, &present_run, RunConclusion::Success).unwrap();
@@ -50,7 +50,7 @@ fn conflicting_duplicate_receipt_runs_are_order_independent_and_incomplete() {
 #[test]
 fn identical_duplicate_receipt_runs_remain_clean() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();

@@ -6,8 +6,6 @@ mod cancellation;
 mod capacity;
 #[path = "cargo_resources/support.rs"]
 mod fixture;
-#[path = "shared/legacy_plan.rs"]
-mod legacy_plan;
 #[path = "ready_dependents/safety.rs"]
 mod safety;
 #[path = "ready_dependents/support.rs"]
@@ -26,8 +24,7 @@ fn cargo_sibling_does_not_hold_ordinary_dependency_chain() {
 }
 
 fn assert_ready_dependent(fixture: fixture::Fixture) {
-    let plan = open_plan(&fixture);
-    let mut run = start(&fixture, &["--plan-id", &plan]);
+    let mut run = start(&fixture);
     release(&fixture, "prerequisite");
     run.wait_named_entry("dependent");
     assert!(run.running());
@@ -56,7 +53,7 @@ fn assert_ready_dependent(fixture: fixture::Fixture) {
     assert_eq!(proofs.len(), 1);
     assert_eq!(proofs[0]["receipt_id"], prerequisite["id"]);
     assert_eq!(proofs[0]["run_id"], prerequisite["run_id"]);
-    assert_eq!(proofs[0]["plan_id"], prerequisite["plan_id"]);
+    assert_eq!(proofs[0]["plan_id"], "");
     assert_eq!(
         proofs[0]["identity_digest"],
         prerequisite["target_freshness"]["identity"]["identity_digest"]

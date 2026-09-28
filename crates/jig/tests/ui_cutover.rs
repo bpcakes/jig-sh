@@ -10,11 +10,9 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use jig_ui::dashboard::{PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS};
+use jig_ui::dashboard::{RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION};
 use serde_json::Value;
 
-#[path = "shared/legacy_plan.rs"]
-mod legacy_plan;
 #[path = "shared/pty.rs"]
 mod pty_support;
 mod support;
@@ -112,8 +110,8 @@ fn recorder_json_emits_one_local_snapshot() {
 
     assert_eq!(value["ok"], true);
     assert_eq!(value["command"], "ui");
-    assert_eq!(value["schema_version"], 1);
-    assert_eq!(value["snapshot_kind"], "recorder");
+    assert_eq!(value["schema_version"], RECORDER_SCHEMA_VERSION);
+    assert!(value.get("snapshot_kind").is_none());
     assert_eq!(value["timeline_limit"], 1);
     assert_exact_root_fields(&value, RECORDER_ROOT_FIELDS);
 }
@@ -131,34 +129,6 @@ fn both_interactive_entrypoints_share_the_terminal_requirement() {
     assert!(error.contains("`Jig dashboard` requires terminal input and output"));
     assert!(error.contains("jig ui --json"));
     assert!(error.contains("jig status --json"));
-}
-
-#[test]
-fn plan_json_uses_the_plan_schema_and_missing_plans_use_standard_errors() {
-    let root = fixture();
-    let plan_id = legacy_plan::seed_open_plan(root.path(), "plan_example", "Example plan");
-    let plan_id = plan_id.as_str();
-
-    let value = one_json_document(&jig(root.path(), &["ui", "--plan", plan_id, "--json"]));
-    assert_eq!(value["command"], "ui");
-    assert_eq!(value["schema_version"], 1);
-    assert_eq!(value["snapshot_kind"], "plan");
-    assert_eq!(value["plan"]["plan_id"], plan_id);
-    assert_exact_root_fields(&value, PLAN_ROOT_FIELDS);
-
-    let missing = jig(root.path(), &["--json", "ui", "--plan", "plan_missing"]);
-    assert!(!missing.status.success());
-    assert_eq!(missing.status.code(), Some(1));
-    let error = one_error_document(&missing);
-    assert_eq!(error["ok"], false);
-    assert_eq!(error["command"], "ui");
-    assert_eq!(error["error"]["kind"], "command_failed");
-    assert!(
-        error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("plan_missing")
-    );
 }
 
 fn one_error_document(output: &Output) -> Value {
@@ -220,14 +190,7 @@ fn json_refresh_flag_fails_as_usage_before_repository_loading() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_jig"))
         .env_remove("JIG_REPO_ROOT")
-        .args([
-            "--json",
-            "ui",
-            "--plan",
-            "plan_example",
-            "--timeline-limit",
-            "10",
-        ])
+        .args(["--json", "ui", "--plan", "plan_example"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -237,7 +200,7 @@ fn json_refresh_flag_fails_as_usage_before_repository_loading() {
         error["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("--timeline-limit")
+            .contains("--plan")
     );
 }
 
@@ -305,19 +268,12 @@ fn product_version_is_independent_of_the_runner_contract_epoch() {
 }
 
 #[test]
-fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
+fn interactive_ui_starts_on_the_timeline() {
     let root = fixture();
-    let plan_id =
-        legacy_plan::seed_open_plan(root.path(), "plan_example_detail", "Example plan detail");
 
-    let (mut master, mut child) = dashboard_child(root.path(), &["ui", "--plan", plan_id.trim()]);
+    let (mut master, mut child) = dashboard_child(root.path(), &["ui"]);
     let mut terminal_output = Vec::new();
-    wait_for_output(
-        &mut child,
-        &mut master,
-        &mut terminal_output,
-        plan_id.trim().as_bytes(),
-    );
+    wait_for_output(&mut child, &mut master, &mut terminal_output, b"Timeline");
     master.write_all(b"q").unwrap();
     let status = pty_support::wait_for_child_while_draining(
         &mut child,
@@ -327,11 +283,6 @@ fn interactive_ui_starts_on_work_and_opens_the_requested_plan() {
     )
     .expect("dashboard did not stop after q");
     assert!(status.success());
-    assert!(
-        terminal_output
-            .windows(b"Work".len())
-            .any(|window| window == b"Work")
-    );
     assert!(
         terminal_output
             .windows(b"\x1b[?1049l".len())

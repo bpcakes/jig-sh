@@ -20,7 +20,6 @@ mod tests;
 /// The cache key is the original receipt ID. Different executions of a shared
 /// target are distinct proof nodes, even when their identity tokens are equal.
 pub(crate) struct OriginalProofValidator {
-    plan_id: Option<String>,
     now_ms: u64,
     originals: OriginalReceiptIndex,
     loaded: BTreeMap<String, Rc<TargetReceiptStatus>>,
@@ -28,18 +27,8 @@ pub(crate) struct OriginalProofValidator {
 }
 
 impl OriginalProofValidator {
-    #[cfg(test)]
-    pub(crate) fn new(originals: OriginalReceiptIndex, plan_id: &str, now_ms: u64) -> Self {
-        Self::for_receipt_plan(originals, Some(plan_id), now_ms)
-    }
-
-    pub(crate) fn for_receipt_plan(
-        originals: OriginalReceiptIndex,
-        plan_id: Option<&str>,
-        now_ms: u64,
-    ) -> Self {
+    pub(crate) fn new(originals: OriginalReceiptIndex, now_ms: u64) -> Self {
         Self {
-            plan_id: plan_id.map(str::to_owned),
             now_ms,
             originals,
             loaded: BTreeMap::new(),
@@ -63,17 +52,6 @@ impl OriginalProofValidator {
         selected: &TargetReceiptStatus,
         budget: &mut CollectionBudget<'_>,
     ) -> TargetFreshness {
-        if !self.originals.selected_is_current(selected) {
-            return unverified(
-                selected,
-                CollectionFailure::new(
-                    Code::SourceRaced,
-                    "a newer original receipt appeared during target selection",
-                )
-                .reason,
-                self.now_ms,
-            );
-        }
         let mut result = match self.resolve(&selected.receipt_id, budget) {
             Ok(result) => result,
             Err(error) => unverified(selected, error.reason, self.now_ms),
@@ -106,7 +84,7 @@ impl OriginalProofValidator {
             }
             if exiting {
                 let receipt = self.loaded[&id].clone();
-                let result = self.validate_original(&receipt, self.plan_id.as_deref(), self.now_ms);
+                let result = self.validate_original(&receipt, self.now_ms);
                 self.validated.insert(id.clone(), result);
                 visiting.remove(&id);
                 continue;
@@ -147,16 +125,9 @@ impl OriginalProofValidator {
         Ok(self.validated[root].clone())
     }
 
-    fn validate_original(
-        &self,
-        receipt: &TargetReceiptStatus,
-        plan_id: Option<&str>,
-        now_ms: u64,
-    ) -> TargetFreshness {
+    fn validate_original(&self, receipt: &TargetReceiptStatus, now_ms: u64) -> TargetFreshness {
         let mut result = empty();
-        if receipt.plan_id.as_deref() != plan_id
-            || receipt.run_id.as_deref().is_none_or(str::is_empty)
-            || plan_id.is_some_and(str::is_empty)
+        if receipt.run_id.as_deref().is_none_or(str::is_empty)
             || receipt.ended_at_ms < receipt.started_at_ms
         {
             add(&mut result, Status::Unknown, Code::DependencyProofInvalid);
@@ -242,7 +213,6 @@ impl OriginalProofValidator {
                     metadata,
                     identity,
                     dependency_execution_proof,
-                    plan_id,
                 );
             }
         }
@@ -257,7 +227,6 @@ impl OriginalProofValidator {
         metadata: &TargetFreshnessV1,
         identity: &TargetIdentityV1,
         references: &[DependencyExecutionProofV1],
-        plan_id: Option<&str>,
     ) {
         let mut time = jig_contract::freshness::EffectiveTimeValidityV1::new(
             receipt.valid_until_ms,
@@ -310,7 +279,7 @@ impl OriginalProofValidator {
                     .saturating_sub(validated.reasons.reasons.len() as u64),
             );
             result.reasons.reasons_truncated |= validated.reasons.reasons_truncated;
-            if !reference_matches(reference, original, plan_id)
+            if !reference_matches(reference, original)
                 || original.ended_at_ms > receipt.started_at_ms
                 || reference
                     .effective_valid_until_ms
@@ -364,7 +333,6 @@ fn complete(
 fn reference_matches(
     reference: &DependencyExecutionProofV1,
     original: &TargetReceiptStatus,
-    plan_id: Option<&str>,
 ) -> bool {
     let Some((identity, _)) = complete(original) else {
         return false;
@@ -376,8 +344,6 @@ fn reference_matches(
         && reference.target == original.target
         && original.run_id.as_deref() == Some(reference.run_id.as_str())
         && !reference.run_id.is_empty()
-        && Some(reference.plan_id.as_str()) == plan_id
-        && original.plan_id.as_deref() == plan_id
         && reference.identity_digest == identity.identity_digest
         && reference.conclusion == RunConclusion::Success
         && original.exit_status == 0

@@ -47,7 +47,7 @@ checks = ["jig.rust_file_loc"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(None, false),
+                tool: crate::command::ToolRequest::new(false),
             },
         )),
     )

@@ -336,7 +336,6 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
             plan,
             crate::runtime::run_execution::ExecuteCheckRunRequest {
                 alias_override: None,
-                work_plan_id: None,
                 record_receipts: true,
                 fail_fast: false,
             },
@@ -363,25 +362,7 @@ fn foreground_prestart_cancellation_keeps_existing_check_run_evidence() {
 }
 
 #[test]
-fn foreground_explain_defers_work_plan_openness_to_execution() {
-    let temp = tempdir().unwrap();
-    write_v6_evidence_fixture_repo(temp.path(), "");
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let mut args = request(&["api:test"]);
-    args.tool = ToolRequest::new(Some("plan_missing".into()), true);
-    args.explain = true;
-    let explained = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args.clone())).unwrap();
-    assert_eq!(explained["command"], "run plan");
-    assert_eq!(explained["executed"], false);
-    args.explain = false;
-    let error = crate::runtime::dispatch(&ctx, RuntimeCommand::Run(args)).unwrap_err();
-    assert!(error.to_string().contains("plan_missing"), "{error:#}");
-    assert!(!ctx.state_file("runs.jsonl").exists());
-}
-
-#[test]
-fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
+fn foreground_run_and_check_record_receipts_without_a_work_plan() {
     for (native, check) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = tempdir().unwrap();
         write_non_rust_file_budget_fixture_repo(temp.path());
@@ -417,24 +398,13 @@ fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
         }
         init_git_repo(temp.path());
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let started = crate::state::plans_open(
-            &ctx,
-            crate::state::PlanOpenRequest {
-                title: "Native run fixture".into(),
-                body: Some("Validate native work identity".into()),
-                body_file: None,
-                base: None,
-            },
-        )
-        .unwrap();
-        let id = started["plan_id"].as_str().unwrap().to_owned();
         let mut args = request(&["web:file-loc"]);
         if native {
             args.comparison = Some(jig_contract::ComparisonRequestV1::StrictInventory {
                 reason: jig_contract::StrictInventoryReasonV1::ExplicitCheck,
             });
         }
-        args.tool = ToolRequest::new(Some(id.clone()), true);
+        args.tool = ToolRequest::new(true);
         let command = if check {
             RuntimeCommand::Check(crate::command::CheckCommand::Repository(
                 crate::command::RepositoryCheckRequest {
@@ -453,14 +423,13 @@ fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
         let output = crate::runtime::dispatch(&ctx, command).unwrap();
         assert_eq!(output["ok"], true, "{output:#}");
         if native {
-            assert_eq!(
-                output["plan"]["targets"][0]["prepared_native_input"]["work_plan_id"],
-                id
-            );
+            let prepared = &output["plan"]["targets"][0]["prepared_native_input"];
+            assert!(prepared.is_object(), "{output:#}");
+            assert!(prepared.get("work_plan_id").is_none(), "{prepared:#}");
         }
         let durable =
             crate::state::run_by_id(&ctx, output["run"]["run_id"].as_str().unwrap()).unwrap();
-        assert_eq!(durable.work_plan_id.as_deref(), Some(id.as_str()));
+        assert!(durable.work_plan_id.is_none());
         let receipt = output["run"]["targets"][0]["receipt_id"].as_str().unwrap();
         let receipts = fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap();
         let receipt: Value = receipts
@@ -468,6 +437,6 @@ fn foreground_run_and_check_preserve_work_plan_and_receipt_identity() {
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .find(|r| r["id"] == receipt)
             .unwrap();
-        assert_eq!(receipt["plan_id"], id);
+        assert!(receipt["plan_id"].is_null(), "{receipt:#}");
     }
 }

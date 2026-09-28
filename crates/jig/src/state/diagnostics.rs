@@ -2,8 +2,10 @@
 //!
 //! This module deliberately does not use the normal state-layout or JSONL
 //! mutation helpers. Diagnosis must be safe to run before `.agent/state`
-//! exists, and a legacy recursive session record can be hundreds of megabytes.
-//! Each stream is therefore inspected one physical record at a time.
+//! exists, and a legacy record can be hundreds of megabytes. Each stream is
+//! therefore inspected one physical record at a time. The session, plan and
+//! decision streams are no longer written or read by Jig; they are still sized
+//! and checked because adopted repositories keep them.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,10 +25,7 @@ use super::jsonl::scan_jsonl_raw;
 mod deep;
 mod linkage;
 
-use deep::{
-    ReceiptPayloadDiagnostics, SessionCompactionDiagnostics, analyze_receipt_record,
-    analyze_session_record,
-};
+use deep::{ReceiptPayloadDiagnostics, analyze_receipt_record};
 use linkage::{RunLinkageCollector, RunLinkageReport, analyze_receipt_linkage};
 
 const STATE_STREAMS: [(&str, &str); 5] = [
@@ -42,7 +41,6 @@ const MAX_DIAGNOSTIC_SAMPLES: usize = 20;
 
 pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -> Value {
     let mut streams = BTreeMap::new();
-    let mut session_compaction = SessionCompactionDiagnostics::default();
     let mut receipt_payload = ReceiptPayloadDiagnostics::default();
     let mut linkage_collector = RunLinkageCollector::default();
 
@@ -52,7 +50,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
             ctx.root(),
             &path,
             request.deep.then_some(stream_name),
-            &mut session_compaction,
             &mut receipt_payload,
             &mut linkage_collector,
         );
@@ -83,7 +80,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
     let recommendations = recommendations(
         request.deep,
         &streams,
-        &session_compaction,
         &receipt_payload,
         &legacy_archive,
         &maintenance_cache,
@@ -100,7 +96,6 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         "state_dir_exists": ctx.state_dir().is_dir(),
         "totals": totals,
         "streams": streams,
-        "sessions": request.deep.then_some(session_compaction),
         "receipts": request.deep.then_some(receipt_payload),
         "run_linkage": run_linkage.to_value(),
         "legacy_archive": legacy_archive,
@@ -114,7 +109,6 @@ fn inspect_stream(
     root: &Path,
     path: &Path,
     deep_stream: Option<&str>,
-    session_compaction: &mut SessionCompactionDiagnostics,
     receipt_payload: &mut ReceiptPayloadDiagnostics,
     linkage: &mut RunLinkageCollector,
 ) -> StreamDiagnostics {
@@ -158,23 +152,6 @@ fn inspect_stream(
         }
 
         let deep_result: Result<()> = match deep_stream {
-            Some("sessions") => {
-                let projection = analyze_session_record(record)?;
-                session_compaction.analyzed_records += 1;
-                session_compaction.recursive_summary_values = session_compaction
-                    .recursive_summary_values
-                    .saturating_add(projection.recursive_summary_values);
-                session_compaction.estimated_reclaimable_bytes = session_compaction
-                    .estimated_reclaimable_bytes
-                    .saturating_add(projection.reclaimable_bytes);
-                session_compaction.growth_bytes = session_compaction
-                    .growth_bytes
-                    .saturating_add(projection.growth_bytes);
-                if projection.recursive_summary_values > 0 {
-                    session_compaction.recursive_session_records += 1;
-                }
-                Ok(())
-            }
             Some("receipts") => {
                 analyze_receipt_record(record, receipt_payload)?;
                 receipt_payload.analyzed_records += 1;
@@ -210,17 +187,6 @@ fn inspect_stream(
             report.max_line = scan.max_line_number;
             report.unterminated_final_record = scan.unterminated_final_record;
             report.torn_tail = scan.unterminated_final_record;
-
-            if deep_stream == Some("sessions") {
-                // Blank and malformed records are not transformed, so start
-                // with all source bytes and subtract only the exact value-span
-                // savings discovered in valid session records.
-                session_compaction.source_bytes = scan.file_bytes;
-                session_compaction.projected_shallow_bytes = scan
-                    .file_bytes
-                    .saturating_sub(session_compaction.estimated_reclaimable_bytes)
-                    .saturating_add(session_compaction.growth_bytes);
-            }
         }
         Err(error) => {
             report.exists = path.exists();
@@ -578,24 +544,12 @@ fn state_totals(
 fn recommendations(
     deep: bool,
     streams: &BTreeMap<String, StreamDiagnostics>,
-    sessions: &SessionCompactionDiagnostics,
     receipts: &ReceiptPayloadDiagnostics,
     legacy_archive: &LegacyArchiveDiagnostics,
     maintenance_cache: &MaintenanceCacheDiagnostics,
     run_linkage: &RunLinkageReport,
 ) -> Vec<Value> {
     let mut recommendations = linkage::recommendations(run_linkage);
-    if deep && sessions.recursive_session_records > 0 {
-        recommendations.push(json!({
-            "kind": "compact_sessions",
-            "command": "jig state compact sessions --dry-run",
-            "reason": format!(
-                "{} session records contain nested summaries; projected recovery is {} bytes",
-                sessions.recursive_session_records,
-                sessions.estimated_reclaimable_bytes,
-            ),
-        }));
-    }
     if streams
         .values()
         .any(|stream| stream.malformed_records > 0 || stream.torn_tail)
@@ -629,7 +583,7 @@ fn recommendations(
             "kind": "archive_runs",
             "command": "jig state archive --before <YYYY-MM-DD> --include-runs --dry-run",
             "reason": format!(
-                "Run state uses {run_stream_bytes} bytes; preview archiving completed run histories after all known runs become terminal, while retaining open-plan evidence."
+                "Run state uses {run_stream_bytes} bytes; preview archiving completed run histories after all known runs become terminal."
             ),
         }));
     }

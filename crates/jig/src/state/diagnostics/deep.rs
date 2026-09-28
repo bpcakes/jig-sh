@@ -2,67 +2,7 @@ use std::ops::Range;
 
 use anyhow::{Context, Result, bail};
 
-use super::super::json_scan::{
-    first_non_whitespace, skip_json_string, skip_json_value, skip_whitespace,
-};
-
-#[derive(Debug, Default, serde::Serialize)]
-pub(super) struct SessionCompactionDiagnostics {
-    pub(super) source_bytes: u64,
-    pub(super) analyzed_records: u64,
-    pub(super) recursive_session_records: u64,
-    pub(super) recursive_summary_values: u64,
-    pub(super) projected_shallow_bytes: u64,
-    pub(super) estimated_reclaimable_bytes: u64,
-    pub(super) growth_bytes: u64,
-}
-
-#[derive(Debug, Default)]
-pub(super) struct SessionRecordProjection {
-    pub(super) recursive_summary_values: u64,
-    pub(super) projected_record_bytes: u64,
-    pub(super) reclaimable_bytes: u64,
-    pub(super) growth_bytes: u64,
-}
-
-pub(super) fn analyze_session_record(record: &[u8]) -> Result<SessionRecordProjection> {
-    let mut projection = SessionRecordProjection {
-        projected_record_bytes: record.len() as u64,
-        ..SessionRecordProjection::default()
-    };
-    visit_object_members(record, 0..record.len(), &mut |key, value| {
-        if key != "summary" || first_non_whitespace(record, &value) != Some(b'{') {
-            return Ok(());
-        }
-        visit_object_members(record, value, &mut |key, value| {
-            if key != "recent_sessions" || first_non_whitespace(record, &value) != Some(b'[') {
-                return Ok(());
-            }
-            visit_array_values(record, value, &mut |reference| {
-                if first_non_whitespace(record, &reference) != Some(b'{') {
-                    return Ok(());
-                }
-                visit_object_members(record, reference, &mut |key, nested_summary| {
-                    if key == "summary" && record[nested_summary.clone()] != *b"null" {
-                        projection.recursive_summary_values += 1;
-                        let original_bytes = nested_summary.len() as u64;
-                        projection.projected_record_bytes = projection
-                            .projected_record_bytes
-                            .saturating_sub(original_bytes)
-                            .saturating_add(4);
-                        if original_bytes > 4 {
-                            projection.reclaimable_bytes += original_bytes - 4;
-                        } else {
-                            projection.growth_bytes += 4 - original_bytes;
-                        }
-                    }
-                    Ok(())
-                })
-            })
-        })
-    })?;
-    Ok(projection)
-}
+use super::super::json_scan::{skip_json_string, skip_json_value, skip_whitespace};
 
 #[derive(Debug, Default, serde::Serialize)]
 pub(super) struct ReceiptPayloadDiagnostics {

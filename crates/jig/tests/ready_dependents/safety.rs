@@ -3,8 +3,7 @@ use super::support::*;
 #[test]
 fn resource_timeout_does_not_cancel_unrelated_dependency_chain() {
     let fixture = resource_timeout_fixture();
-    let plan = open_plan(&fixture);
-    let mut run = start(&fixture, &["--plan-id", &plan]);
+    let mut run = start(&fixture);
     // Keep the ordinary prerequisite active until the resource target has
     // exhausted its budget and published its failed source observation.
     run.wait_target_publication("slow");
@@ -62,7 +61,7 @@ fn timed_out_resource_wave_retries_source_only_once_for_all_members() {
 #[test]
 fn source_mutation_during_resource_timeout_still_stops_unrelated_work() {
     let fixture = resource_timeout_fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     mutate(&fixture);
     run.wait_target_publication("slow");
     // A successful independent observation must still reject changed source.
@@ -95,7 +94,7 @@ fn fail_fast_does_not_admit_siblings_or_dependents_after_failure() {
 #[test]
 fn failed_prerequisite_never_releases_dependent() {
     let fixture = fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     signal(&fixture, "fail-prerequisite");
     release(&fixture, "prerequisite");
     run.wait_target_publication("prerequisite");
@@ -111,7 +110,7 @@ fn failed_prerequisite_never_releases_dependent() {
 #[test]
 fn mutation_before_prerequisite_validation_prevents_dependent_start() {
     let fixture = fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     mutate(&fixture);
     release(&fixture, "prerequisite");
     run.wait_target_publication("prerequisite");
@@ -127,7 +126,7 @@ fn mutation_before_prerequisite_validation_prevents_dependent_start() {
 #[test]
 fn mutation_during_dependent_rejects_its_success() {
     let fixture = fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     release(&fixture, "prerequisite");
     run.wait_named_entry("dependent");
     mutate(&fixture);
@@ -145,8 +144,7 @@ fn mutation_during_dependent_rejects_its_success() {
 #[test]
 fn late_mutation_preserves_historical_success() {
     let fixture = fixture();
-    let plan = open_plan(&fixture);
-    let mut run = start(&fixture, &["--plan-id", &plan]);
+    let mut run = start(&fixture);
     release(&fixture, "prerequisite");
     run.wait_named_entry("dependent");
     release(&fixture, "dependent");
@@ -168,7 +166,7 @@ fn late_mutation_preserves_historical_success() {
 #[test]
 fn cancellation_accounts_for_pending_dependent_without_starting_it() {
     let fixture = fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     run.cancel();
     run.finish_failure();
     assert!(!fixture.signals.join("entered-dependent").exists());

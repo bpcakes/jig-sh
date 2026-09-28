@@ -150,11 +150,6 @@ pub(in crate::cli) fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {
         CommandKind::Ui(opts) if cli.json && opts.refresh_seconds.is_some() => {
             "`--refresh-seconds` cannot be combined with `--json`"
         }
-        CommandKind::Ui(opts)
-            if cli.json && opts.plan.is_some() && opts.timeline_limit.is_some() =>
-        {
-            "`--timeline-limit` cannot be combined with `--plan` in JSON mode"
-        }
         CommandKind::Work(_) => {
             "`jig work` was removed; validate changes with `jig check COMPONENT:ACTION` and inspect recorded state with `jig state summary`"
         }

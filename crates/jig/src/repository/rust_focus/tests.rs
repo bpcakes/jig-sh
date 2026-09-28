@@ -12,7 +12,6 @@ use super::*;
 use crate::{
     context::CommandOutputLimit,
     execution::{NoopExecutionObserver, run_supervised_execution_command},
-    state::{PlanOpenRequest, plans_open},
     test_env::TestRepoBuilder,
 };
 
@@ -131,7 +130,7 @@ pub(super) fn fixture() -> (TempDir, RepoContext) {
         "{}",
         String::from_utf8_lossy(&lock.stderr)
     );
-    git(root, &["init", "--quiet"]);
+    git(root, &["init", "--quiet", "--initial-branch=main"]);
     git(root, &["add", "."]);
     git(
         root,
@@ -229,21 +228,11 @@ fn real_library_focus_excludes_sibling_build_and_empty_filter_fails() {
 }
 
 #[test]
-fn automatic_focus_uses_recorded_baseline_across_commit_and_uncommitted_changes() {
+fn automatic_focus_uses_the_default_branch_merge_base_across_commits_and_uncommitted_changes() {
     let (temp, ctx) = fixture();
     let root = temp.path();
     let baseline = git(root, &["rev-parse", "HEAD"]);
-    let opened = plans_open(
-        &ctx,
-        PlanOpenRequest {
-            title: "Example accumulated Rust changes".into(),
-            body: Some("Validate both packages changed since the recorded baseline.".into()),
-            body_file: None,
-            base: None,
-        },
-    )
-    .unwrap();
-    let plan_id = opened["plan_id"].as_str().unwrap();
+    git(root, &["switch", "--quiet", "-c", "example-feature"]);
     write(
         root,
         "selected/src/lib.rs",
@@ -263,9 +252,7 @@ fn automatic_focus_uses_recorded_baseline_across_commit_and_uncommitted_changes(
     let prepared = prepare_focus(
         &ctx,
         &config(true),
-        Some(RustFocusV1::Automatic {
-            plan_id: Some(plan_id.into()),
-        }),
+        Some(RustFocusV1::Automatic { plan_id: None }),
     );
     assert_eq!(prepared.comparison_base.as_deref(), Some(baseline.as_str()));
     assert_eq!(
@@ -305,16 +292,14 @@ fn explicit_unknown_package_and_focus_on_full_action_are_rejected() {
 }
 
 #[test]
-fn automatic_missing_recorded_baseline_uses_explicit_broad_fallback() {
-    let (_temp, ctx) = fixture();
-    crate::state::seed_open_plan_for_test(
-        &ctx,
-        "plan_example_missing",
-        "Example missing baseline",
-        "Legacy plan has no baseline authority.",
-    )
-    .unwrap();
-    for plan_id in [None, Some("plan_example_missing".into())] {
+fn automatic_focus_without_the_default_branch_uses_explicit_broad_fallback() {
+    let (temp, ctx) = fixture();
+    git(
+        temp.path(),
+        &["branch", "--quiet", "-m", "example-unrelated"],
+    );
+    // A retired plan id is accepted and ignored.
+    for plan_id in [None, Some("plan_example_legacy".into())] {
         let prepared = prepare_focus(
             &ctx,
             &config(true),
@@ -425,19 +410,7 @@ fn automatic_focus_accounts_for_root_library_relocated_inside_another_member() {
             "Example relocated root library baseline",
         ],
     );
-    let opened = plans_open(
-        &ctx,
-        PlanOpenRequest {
-            title: "Example relocated root library ownership".into(),
-            body: Some("Retain root package coverage for its source and sibling module.".into()),
-            body_file: None,
-            base: None,
-        },
-    )
-    .unwrap();
-    let automatic = RustFocusV1::Automatic {
-        plan_id: Some(opened["plan_id"].as_str().unwrap().into()),
-    };
+    let automatic = RustFocusV1::Automatic { plan_id: None };
 
     for (changed_path, changed_source) in [
         (

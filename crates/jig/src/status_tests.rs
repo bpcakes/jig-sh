@@ -6,7 +6,7 @@ use super::*;
 use crate::test_env::TestRepoBuilder;
 
 #[test]
-fn local_status_schema_two_omits_the_removed_subsystem() {
+fn local_status_schema_three_omits_removed_sections() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .repo_name("ExampleProject")
@@ -28,9 +28,10 @@ fn local_status_schema_two_omits_the_removed_subsystem() {
             .copied()
             .collect()
     );
-    assert_eq!(snapshot["schema_version"], 2);
+    assert_eq!(snapshot["schema_version"], 3);
     assert_eq!(snapshot["command"], "status");
     assert!(snapshot.get("providers").is_none());
+    assert!(snapshot.get("work").is_none());
     let encoded = snapshot.to_string();
     assert!(!encoded.contains("work_packages"));
     assert!(!encoded.contains("input_freshness"));
@@ -70,7 +71,6 @@ fn status_collection_is_read_only() {
     let snapshot = snapshot(&ctx).unwrap();
 
     assert!(snapshot["repository"].is_object());
-    assert!(snapshot["work"].is_object());
     assert!(snapshot["loops"].is_object());
     assert_eq!(
         git_output(temp.path(), &["status", "--porcelain=v1"]),
@@ -79,7 +79,7 @@ fn status_collection_is_read_only() {
 }
 
 #[test]
-fn work_snapshot_propagates_a_non_sticky_typed_cancellation() {
+fn loop_snapshot_propagates_a_non_sticky_typed_cancellation() {
     use std::cell::Cell;
 
     let root = tempdir().unwrap();
@@ -95,13 +95,13 @@ sqlx_enabled = false
     let ctx = RepoContext::load_from(root.path()).unwrap();
     let calls = Cell::new(0);
 
-    let result = work_snapshot(&ctx, &|| {
+    let result = loop_snapshot(&ctx, &|| {
         let current = calls.get();
         calls.set(current + 1);
         current == 1
     });
     let Err(error) = result else {
-        panic!("non-sticky cancellation was converted into a partial work snapshot")
+        panic!("non-sticky cancellation was converted into a partial loop snapshot")
     };
 
     assert!(is_status_collection_cancellation(&error));

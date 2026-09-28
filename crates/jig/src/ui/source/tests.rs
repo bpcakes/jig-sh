@@ -1,19 +1,17 @@
 use std::fs;
 
 use jig_ui::dashboard::{
-    DashboardSource, PlanBasis, PlanSnapshotResult, RecorderMode, RecorderRequest, SourceError,
-    TimelineLimit,
+    DashboardSource, RecorderMode, RecorderRequest, SourceError, TimelineLimit,
 };
 use serde_json::json;
 use tempfile::tempdir;
 
 use crate::context::RepoContext;
-use crate::state::{ReceiptInput, record_receipt, seed_open_plan_for_test};
+use crate::state::{ReceiptInput, record_receipt};
 use crate::test_env::TestRepoBuilder;
 
 use super::RepoDashboardSource;
 
-mod details;
 mod edge_cases;
 mod limits;
 
@@ -24,11 +22,6 @@ fn source_fixture() -> (tempfile::TempDir, RepoDashboardSource) {
             r#"
 [commands]
 custom_check_command = "true"
-
-[[work.gates]]
-id = "custom"
-kind = "check"
-tool = "jig.custom_check"
 "#,
         )
         .required_commands(["custom_check_command"])
@@ -40,21 +33,18 @@ tool = "jig.custom_check"
         }))
         .write();
     let context = RepoContext::load_from(root.path()).unwrap();
-    seed_open_plan_for_test(&context, "plan_example", "Example plan", "# Example plan\n").unwrap();
     record_receipt(
         &context,
         ReceiptInput {
             tool_name: "jig.custom_check",
             args: json!({}),
             invoked_command_key: Some("custom_check_command".to_string()),
-            plan_id: Some("plan_example".to_string()),
             started_at_ms: 10,
             ended_at_ms: 20,
             exit_status: 0,
             stdout: "ok",
             stderr: "",
             evidence: None,
-            session_override: None,
             collect_git_metadata: false,
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: None,
@@ -180,18 +170,7 @@ fn recorder_refresh_pairs_one_epoch_and_reuse_performs_no_refresh() {
     assert_eq!(first.recorder.epoch_id, first.status_local.epoch_id);
     let encoded = serde_json::to_value(&first.recorder).unwrap();
     let _: jig_ui::dashboard::RecorderSnapshot = serde_json::from_value(encoded).unwrap();
-    assert_eq!(first.recorder.open_plans.len(), 1);
-    assert_eq!(
-        first
-            .status_local
-            .work
-            .state
-            .as_ref()
-            .unwrap()
-            .open_plans
-            .len(),
-        1
-    );
+    assert_eq!(first.recorder.timeline.len(), 1);
 
     crate::state::reset_dashboard_scan_counts();
     let reused = source
@@ -199,18 +178,11 @@ fn recorder_refresh_pairs_one_epoch_and_reuse_performs_no_refresh() {
         .unwrap();
     assert_eq!(reused.recorder.epoch_id, first.recorder.epoch_id);
     assert_eq!(reused.status_local.epoch_id, first.status_local.epoch_id);
-    for stream in [
-        "sessions.jsonl",
-        "plans.jsonl",
-        "decisions.jsonl",
-        "receipts.jsonl",
-    ] {
-        assert_eq!(
-            crate::state::dashboard_scan_count(&source.context.state_file(stream)),
-            0,
-            "ReuseCurrent must not traverse {stream}"
-        );
-    }
+    assert_eq!(
+        crate::state::dashboard_scan_count(&source.context.state_file("receipts.jsonl")),
+        0,
+        "ReuseCurrent must not traverse receipts"
+    );
 }
 
 #[test]
@@ -225,92 +197,11 @@ fn reuse_before_the_first_refresh_is_a_modeled_empty_state() {
 }
 
 #[test]
-fn stale_missing_fresh_and_failed_refresh_retention_are_distinct() {
-    let (root, source) = source_fixture();
-    let first = source
-        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
-        .unwrap();
-    let first_id = first.recorder.epoch_id;
-    assert!(matches!(
-        source
-            .plan(
-                PlanBasis::RecorderEpoch(first_id),
-                "plan_example".to_string(),
-                &|| false,
-            )
-            .unwrap(),
-        PlanSnapshotResult::Found(_)
-    ));
-
-    let cancelled = source
-        .recorder(recorder_request(RecorderMode::Refresh), &|| true)
-        .unwrap_err();
-    assert_eq!(cancelled, SourceError::Cancelled);
-    let retained = source
-        .recorder(recorder_request(RecorderMode::ReuseCurrent), &|| false)
-        .unwrap();
-    assert_eq!(retained.recorder.epoch_id, first_id);
-
-    let second = source
-        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
-        .unwrap();
-    assert!(matches!(
-        source
-            .plan(
-                PlanBasis::RecorderEpoch(first_id),
-                "plan_example".to_string(),
-                &|| false,
-            )
-            .unwrap(),
-        PlanSnapshotResult::StaleRecorderEpoch
-    ));
-    assert!(matches!(
-        source
-            .plan(
-                PlanBasis::RecorderEpoch(second.recorder.epoch_id),
-                "missing_plan".to_string(),
-                &|| false,
-            )
-            .unwrap(),
-        PlanSnapshotResult::NotFound
-    ));
-
-    assert!(matches!(
-        source
-            .plan(PlanBasis::Fresh, "plan_example".to_string(), &|| false)
-            .unwrap(),
-        PlanSnapshotResult::Found(_)
-    ));
-    let after_fresh = source
-        .recorder(recorder_request(RecorderMode::ReuseCurrent), &|| false)
-        .unwrap();
-    assert_eq!(after_fresh.recorder.epoch_id, second.recorder.epoch_id);
-
-    fs::write(root.path().join(".agent/state/plans.jsonl"), "").unwrap();
-    let third = source
-        .recorder(recorder_request(RecorderMode::Refresh), &|| false)
-        .unwrap();
-    assert!(matches!(
-        source
-            .plan(
-                PlanBasis::RecorderEpoch(third.recorder.epoch_id),
-                "plan_example".to_string(),
-                &|| false,
-            )
-            .unwrap(),
-        PlanSnapshotResult::NotFound
-    ));
-}
-
-#[test]
 fn typed_loop_fields_reach_the_recorder_without_json_reparse() {
     let (_root, source) = source_fixture();
     let refresh = source
         .recorder(recorder_request(RecorderMode::Refresh), &|| false)
         .unwrap();
-    let plan = &refresh.recorder.open_plans[0];
-    assert!(plan.gates.is_none());
-    assert!(plan.gates_error.is_none());
     let loops = refresh.recorder.loops.as_ref().unwrap();
     assert!(!loops.workflows.items().is_empty());
 }
@@ -383,14 +274,12 @@ fn recorder_status_projection_matches_local_status_command_data() {
                 tool_name: "jig.custom_check",
                 args: json!({}),
                 invoked_command_key: Some("custom_check_command".to_string()),
-                plan_id: Some("plan_example".to_string()),
                 started_at_ms: 100,
                 ended_at_ms: if index == 11 { 5 } else { 200 },
                 exit_status: 0,
                 stdout: "ok",
                 stderr: "",
                 evidence: None,
-                session_override: None,
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
                 worktree_fingerprint_override: None,
@@ -398,43 +287,6 @@ fn recorder_status_projection_matches_local_status_command_data() {
         )
         .unwrap();
     }
-    let decisions = (0..12)
-        .map(|index| {
-            format!(
-                "{}\n",
-                json!({
-                    "id": format!("decision-{index:02}"),
-                    "session_id": null,
-                    "plan_id": "plan_example",
-                    "timestamp_ms": if index == 11 { 5 } else { 200 },
-                    "title": format!("Decision {index}"),
-                    "selected_option": "A",
-                    "alternatives": [],
-                    "rationale": "because"
-                })
-            )
-        })
-        .collect::<String>();
-    fs::write(root.path().join(".agent/state/decisions.jsonl"), decisions).unwrap();
-    let plans_path = root.path().join(".agent/state/plans.jsonl");
-    let mut plans = fs::read_to_string(&plans_path).unwrap();
-    plans.push_str(&format!(
-        "{}\n",
-        json!({
-            "id": "plan-append-different-path",
-            "plan_id": "plan_example",
-            "event": "append",
-            "timestamp_ms": 300,
-            "body_path": ".agent/plans/different.md"
-        })
-    ));
-    fs::write(plans_path, plans).unwrap();
-    let config_path = root.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replace(
-        "/tmp/template",
-        &root.path().join("template").display().to_string(),
-    );
-    fs::write(config_path, config).unwrap();
     let source = RepoDashboardSource::new(RepoContext::load_from(root.path()).unwrap());
     let _clock = crate::state::set_test_now_ms(1_900_000_000_000);
     let legacy = crate::status::snapshot_with_cancellation(&source.context, &|| false).unwrap();
@@ -450,47 +302,15 @@ fn recorder_status_projection_matches_local_status_command_data() {
     let typed = serde_json::to_value(typed.status_local).unwrap();
 
     assert_eq!(typed["repository"], legacy["repository"]);
-    assert_eq!(typed["work"], legacy["work"]);
     assert_eq!(typed["loops"], legacy["loops"]);
     assert_eq!(typed["errors"], legacy["errors"]);
-    assert_eq!(
-        typed["work"]["state"]["recent_receipts"]
-            .as_array()
-            .unwrap()
-            .len(),
-        10
-    );
-    assert_eq!(
-        typed["work"]["state"]["recent_decisions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        10
-    );
-    assert_eq!(
-        typed["work"]["state"]["repo"]["source_path"],
-        "<repository-root>/template"
-    );
+    assert!(typed.get("work").is_none());
+    assert!(legacy.get("work").is_none());
 }
 
 #[test]
 fn recorder_status_projection_matches_status_errors() {
     let (root, source) = source_fixture();
-    let plans_path = root.path().join(".agent/state/plans.jsonl");
-    let mut plans = fs::read_to_string(&plans_path).unwrap();
-    plans.push_str(&format!(
-        "{}\n",
-        json!({
-            "id": "plan-open-duplicate-status",
-            "plan_id": "plan_example",
-            "event": "open",
-            "timestamp_ms": 50,
-            "title": "Duplicate",
-            "body_path": null,
-            "baseline": null
-        })
-    ));
-    fs::write(plans_path, plans).unwrap();
     let loop_cache = root.path().join(".agent/.cache/loop");
     fs::create_dir_all(&loop_cache).unwrap();
     fs::write(loop_cache.join("attempts.json"), "not-json").unwrap();
@@ -514,31 +334,40 @@ fn recorder_status_projection_matches_status_errors() {
         .unwrap()
         .iter()
         .filter_map(|error| error["scope"].as_str())
-        .filter(|scope| scope.starts_with("work.gates") || *scope == "loops")
+        .filter(|scope| *scope != "repository")
         .collect::<Vec<_>>();
     assert_eq!(relevant_scopes, ["loops"]);
 }
 
 #[test]
-fn local_epoch_traverses_each_state_stream_once() {
+fn local_epoch_traverses_receipts_once_and_ignores_legacy_streams() {
     let (_root, source) = source_fixture();
+    let context = &source.context;
+    for stream in ["sessions.jsonl", "plans.jsonl", "decisions.jsonl"] {
+        fs::write(context.state_file(stream), "{}\n").unwrap();
+    }
     crate::state::reset_dashboard_scan_counts();
     let refresh = source
         .recorder(recorder_request(RecorderMode::Refresh), &|| false)
         .unwrap();
-    let context = &source.context;
 
-    for stream in [
-        "sessions.jsonl",
-        "plans.jsonl",
-        "decisions.jsonl",
-        "receipts.jsonl",
-    ] {
+    assert_eq!(
+        crate::state::dashboard_scan_count(&context.state_file("receipts.jsonl")),
+        1,
+        "receipts should be traversed exactly once"
+    );
+    for stream in ["sessions.jsonl", "plans.jsonl", "decisions.jsonl"] {
         assert_eq!(
             crate::state::dashboard_scan_count(&context.state_file(stream)),
-            1,
-            "{stream} should be traversed exactly once"
+            0,
+            "{stream} is no longer read"
         );
     }
-    assert_eq!(refresh.recorder.open_plans.len(), 1);
+    assert!(
+        refresh
+            .recorder
+            .errors
+            .iter()
+            .all(|error| error.scope() == "repository")
+    );
 }

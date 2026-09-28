@@ -52,8 +52,8 @@ pub(crate) use proxy::{
 };
 pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{
-    StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
-    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts,
+    StateArchiveOpts, StateCommand, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
+    StateRestoreOpts,
 };
 pub(crate) use status_opts::{StatusCommand, StatusOpts};
 pub(crate) use vault::{
@@ -193,18 +193,15 @@ Examples:
 
 const UI_AFTER_HELP: &str = "\
 Opens a read-only terminal dashboard over repository status and .agent/state:
-plans, gates, receipts, loops, repository state, and activity.
+receipts, loops, repository state, and activity.
 Interactive mode requires terminal stdin and stdout and records no receipts.
 
 Pass --json for one local recorder snapshot.
-Combine --plan with --json for one plan-detail snapshot.
 
 Examples:
   jig ui
-  jig ui --plan PLAN_ID
   jig ui --timeline-limit 120
-  jig ui --json
-  jig ui --plan PLAN_ID --json";
+  jig ui --json";
 
 const VAULT_AFTER_HELP: &str = "\
 Jig Vault stores encrypted project fields outside the repository. References
@@ -472,13 +469,10 @@ pub(crate) struct AgentMapOpts {
 
 #[derive(Args, Clone, Debug, Default)]
 pub(crate) struct ToolOpts {
-    #[arg(long, help = "Structured work plan id to attach the receipt to")]
+    /// Retired with work plans; accepted and ignored.
+    #[arg(long, hide = true)]
     pub(crate) plan_id: Option<String>,
-    #[arg(
-        long,
-        conflicts_with = "plan_id",
-        help = "Run without appending a receipt to .agent/state"
-    )]
+    #[arg(long, help = "Run without appending a receipt to .agent/state")]
     pub(crate) no_receipt: bool,
 }
 
@@ -594,16 +588,9 @@ pub(crate) struct UiOpts {
         long,
         value_name = "ROWS",
         value_parser = clap::value_parser!(u64).range(1..=1000),
-        help = "Initial activity rows for the TUI or recorder JSON; defaults to 120 (not valid with plan JSON)"
+        help = "Initial activity rows for the TUI or recorder JSON; defaults to 120"
     )]
     pub(crate) timeline_limit: Option<u64>,
-    #[arg(
-        long,
-        value_name = "PLAN_ID",
-        value_parser = parse_ui_plan_id,
-        help = "Open this plan's detail view; with --json emit one plan snapshot"
-    )]
-    pub(crate) plan: Option<String>,
     #[arg(long = "port", hide = true)]
     pub(crate) retired_port: Option<u16>,
 }
@@ -624,12 +611,6 @@ impl UiOpts {
     pub(crate) fn effective_timeline_limit(&self) -> u64 {
         self.timeline_limit.unwrap_or(120)
     }
-}
-
-fn parse_ui_plan_id(value: &str) -> Result<String, String> {
-    crate::state::validate_plan_id(value)
-        .map(|()| value.to_string())
-        .map_err(|error| error.to_string())
 }
 
 mod command_conversion;

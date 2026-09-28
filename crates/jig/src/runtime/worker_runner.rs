@@ -32,7 +32,6 @@ const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(1
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WorkerReceiptRequest<'a> {
     pub(crate) purpose: &'a str,
-    pub(crate) plan_id: Option<&'a str>,
     pub(crate) workflow_id: Option<&'a str>,
     pub(crate) item_key: Option<&'a str>,
     pub(crate) collect_git_metadata: bool,
@@ -669,7 +668,6 @@ fn record_worker_receipt(
         "codex_home_resolved": request
             .codex_home
             .map(|home| home.display().to_string()),
-        "plan_id": request.receipt.plan_id,
         "workflow_id": request.receipt.workflow_id,
         "item_key": request.receipt.item_key,
         "error": outcome.error,
@@ -686,19 +684,16 @@ fn record_worker_receipt(
             "runner": "codex_exec",
             "mode": "exec",
             "purpose": request.receipt.purpose,
-            "plan_id": request.receipt.plan_id,
             "workflow_id": request.receipt.workflow_id,
             "item_key": request.receipt.item_key,
         }),
         invoked_command_key: None,
-        plan_id: request.receipt.plan_id.map(ToOwned::to_owned),
         started_at_ms: outcome.started_at_ms,
         ended_at_ms: outcome.ended_at_ms,
         exit_status: outcome.exit_status,
         stdout: outcome.stdout,
         stderr: outcome.stderr,
         evidence: Some(evidence),
-        session_override: None,
         collect_git_metadata: request.receipt.collect_git_metadata,
         collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
         worktree_fingerprint_override: None,

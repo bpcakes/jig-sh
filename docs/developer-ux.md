@@ -160,8 +160,8 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig file-budget audit` provides standalone source-size diagnostics without creating runs or receipts.
-- `scripts/jig state summary` summarizes recorded state, including any plans still open from before `jig work` was removed. Former `scripts/jig work ...` invocations fail with a usage error that points to `check` and `state summary`.
-- `scripts/jig status` collects local repository, recorded plan, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
+- `scripts/jig state summary` summarizes recorded receipts. Former `scripts/jig work ...` invocations fail with a usage error that points to `check` and `state summary`.
+- `scripts/jig status` collects local repository, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` opens the unified read-only terminal dashboard over the same local state.
 - `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
@@ -212,8 +212,9 @@ profile. Use `jig run --explain` to inspect that selection first.
 The foreground command shares MCP planning, execution, receipts and cancellation.
 Approve every planned `worktree` and `external` effect explicitly with repeated
 `--approve-effect` flags. `--explain` prints the plan without execution or run
-state. `--plan-id`, `--no-receipt`, `--fail-fast`, and `--comparison-*` have the
-same repository execution meaning as on `check`. This requires contract v6 or
+state. `--no-receipt`, `--fail-fast`, and `--comparison-*` have the same
+repository execution meaning as on `check`; the retired `--plan-id` is accepted
+and ignored. This requires contract v6 or
 later; general declared action arguments remain follow-up work.
 
 Bare `scripts/jig check` resolves the default verification profile. For a
@@ -275,7 +276,7 @@ may appear before or after target selectors, for example
 
 ## State Health And Retention
 
-Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze legacy recursive session summaries and receipt payload growth, and to verify that every receipt run reference still resolves to run history in the journal, a run archive, or an exact backup. Missing or unverifiable history is reported with the affected run and receipt IDs and read-only preservation guidance; it is never repaired by inventing events. `state compact sessions --dry-run` validates and previews the repair. Apply mode creates an exact compressed backup under ignored `.agent/.cache/` before replacing the session stream, and `state restore --backup <path>` verifies that backup before restoring it.
+Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze receipt payload growth and to verify that every receipt run reference still resolves to run history in the journal, a run archive, or an exact backup. Missing or unverifiable history is reported with the affected run and receipt IDs and read-only preservation guidance; it is never repaired by inventing events. Legacy `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` streams are still sized and checked, but Jig no longer reads them. `state compact sessions` was removed; `state restore --backup <path>` still restores a sessions backup it created.
 
 Receipt retention is also local. `state archive --before <date>` compresses eligible old records into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks the active stream. `state restore --backup <path>` can restore that exact receipt preimage. `state export receipts --before <date> --output <file.jsonl.gz>` makes a non-mutating copy at a caller-selected destination. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
 
@@ -284,23 +285,21 @@ Receipt retention is also local. `state archive --before <date>` compresses elig
 `scripts/jig ui` is the canonical read-only dashboard for local repository and recorder state. `scripts/jig status --tui` enters the same application on Status. Upgrading from 0.3.0 replaces the separate browser and status dashboards and their external status providers.
 
 ```sh
-scripts/jig ui                         # start on Work
-scripts/jig ui --plan PLAN_ID          # start in plan detail
+scripts/jig ui                         # start on Timeline
 scripts/jig status --tui               # start on Status
 scripts/jig --json ui                  # one recorder snapshot
-scripts/jig --json ui --plan PLAN_ID   # one plan snapshot
 scripts/jig status --json              # one local status snapshot
 ```
 
-The four tabs are Status, Work, Timeline, and Health. Status summarizes local repository, work, loop, and collection observations. Work shows open and completed plans recorded before `jig work` was removed; work-gate evaluation was removed, so plans no longer show gate results. Timeline merges sessions, plan events, receipts, and decisions newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. Plan detail includes the bounded plan body, decisions, receipts, changed paths, and captured output.
+The three tabs are Status, Timeline, and Health. Status summarizes local repository, harness, loop, and collection observations. Timeline lists receipts newest-first. Health shows recent failures, receipt output, per-tool aggregates, and loop attempts that need attention. The Work tab, plan detail, and session, plan, and decision rows were removed with structured work.
 
-At the top level, use Tab or Shift-Tab, left/right, or `1` through `4` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Work, Timeline, or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys; plan detail uses Tab between sections, `h`/`l` or left/right scroll horizontally, and Enter can open a selected receipt or nested detail.
+At the top level, use Tab or Shift-Tab, left/right, or `1` through `3` to switch tabs; `j`/`k`, up/down, PageUp/PageDown, Home, and End move through lists; and `q` or Ctrl-C quits. Enter opens the selected item on Timeline or Health. `f`/`F` plus `-`/`+` control the Timeline filter and row limit. `r` and `R` refresh local data. Escape closes detail first and quits only from the top level. Detail views retain the movement keys, and `h`/`l` or left/right scroll horizontally.
 
 Local collection defaults to a 10-second completion-relative schedule. Refreshes never overlap, run through one cancellable worker, and publish repository status and recorder state as one epoch. A damaged state stream remains a visible local error while usable observations stay available. Neither entrypoint writes receipts, fetches remotes, or executes actions.
 
 The full layout is comfortable at 108 by 24 cells or larger and supported from 72 by 20. Terminals from 40 by 12 use a compact layout; smaller terminals show a safe micro summary. Both stdin and stdout must be terminals. When redirected, the interactive command exits nonzero with guidance to use `jig ui --json` for recorder data or `jig status --json` for local status data, and terminal state is restored on cancellation or failure.
 
-The recorder and plan JSON documents use schema version 1 but are different shapes, selected by `snapshot_kind`. They are one-shot, read-only documents rather than addresses for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120; it is invalid with plan JSON. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 2.
+The recorder JSON document uses schema version 2. It is a one-shot, read-only document rather than an address for a running service. `jig ui --timeline-limit 1..1000` applies to that entrypoint's TUI and recorder JSON and defaults to 120. Refresh options are invalid with JSON. Limits and partial collection errors are serialized explicitly; see [Public Contract](public-contract.md#dashboard-and-status-output) for field and bound details. `jig status --json` uses its separate local-status schema version 3.
 
 The 0.3.0 cutover removes the browser server, browser URLs, and HTTP snapshot endpoints. The old `--port` option is accepted only by a hidden migration shim that exits with status 2 and directs callers to the terminal or one-shot JSON forms; it may stop parsing in a later release. Callers needing the browser transport can continue using 0.3.0. The cutover does not change generated launcher scope or itself require a new contract epoch because `ui` and `status` remain runtime-owned repository commands.
 

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{File, Metadata};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use jig_contract::freshness::FreshnessReasonCode;
 use sha2::{Digest, Sha256};
 
-use super::{TargetReceiptStatus, cross_plan_receipt_is_eligible, target_receipt_status};
+use super::{TargetReceiptStatus, target_receipt_status};
 use crate::repository::freshness::{CollectionBudget, CollectionFailure, CollectionResult};
 use crate::state::records::ReceiptRecord;
 
@@ -25,9 +25,6 @@ struct OriginalLocation {
 /// A bounded location index, not a copy of the receipt journal. Proof traversal
 /// loads each required original once and charges its repeated read explicitly.
 pub(crate) struct OriginalReceiptIndex {
-    selection_plan: Option<String>,
-    reusable_targets: BTreeSet<jig_contract::TargetId>,
-    require_latest: bool,
     latest: BTreeMap<jig_contract::TargetId, (u64, String)>,
     path: PathBuf,
     file: Option<File>,
@@ -37,33 +34,11 @@ pub(crate) struct OriginalReceiptIndex {
 
 impl OriginalReceiptIndex {
     pub(crate) fn open(path: &Path, budget: &mut CollectionBudget<'_>) -> CollectionResult<Self> {
-        Self::open_inner(path, None, &BTreeSet::new(), false, budget)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn open_for_plan(
-        path: &Path,
-        plan_id: &str,
-        budget: &mut CollectionBudget<'_>,
-    ) -> CollectionResult<Self> {
-        Self::open_inner(path, Some(plan_id), &BTreeSet::new(), true, budget)
-    }
-
-    fn open_inner(
-        path: &Path,
-        plan_id: Option<&str>,
-        reusable_targets: &BTreeSet<jig_contract::TargetId>,
-        require_latest: bool,
-        budget: &mut CollectionBudget<'_>,
-    ) -> CollectionResult<Self> {
         budget.ensure_active()?;
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
-                    selection_plan: plan_id.map(str::to_owned),
-                    reusable_targets: reusable_targets.clone(),
-                    require_latest,
                     latest: BTreeMap::new(),
                     path: path.into(),
                     file: None,
@@ -131,12 +106,7 @@ impl OriginalReceiptIndex {
                         "original receipt journal contains an empty receipt ID",
                     ));
                 }
-                if let Some(target) = envelope.target
-                    && (plan_id.is_none()
-                        || envelope.plan_id.as_deref() == plan_id
-                        || (reusable_targets.contains(&target)
-                            && cross_plan_receipt_is_eligible(envelope.plan_id.as_deref())))
-                {
+                if let Some(target) = envelope.target {
                     let candidate = (envelope.ended_at_ms, envelope.id.clone());
                     if latest
                         .get(&target)
@@ -178,9 +148,6 @@ impl OriginalReceiptIndex {
             offset += record.len() as u64;
         }
         let index = Self {
-            selection_plan: plan_id.map(str::to_owned),
-            reusable_targets: reusable_targets.clone(),
-            require_latest,
             latest,
             path: path.into(),
             file: Some(reader.into_inner()),
@@ -189,20 +156,6 @@ impl OriginalReceiptIndex {
         };
         index.revalidate(budget)?;
         Ok(index)
-    }
-
-    pub(crate) fn selected_is_current(&self, receipt: &TargetReceiptStatus) -> bool {
-        self.selection_plan.as_deref().is_none_or(|plan| {
-            receipt.plan_id.as_deref() == Some(plan)
-                || (self.reusable_targets.contains(&receipt.target)
-                    && cross_plan_receipt_is_eligible(receipt.plan_id.as_deref()))
-        }) && (!self.require_latest
-            || self
-                .latest
-                .get(&receipt.target)
-                .is_some_and(|(ended_at_ms, id)| {
-                    *ended_at_ms == receipt.ended_at_ms && id == &receipt.receipt_id
-                }))
     }
 
     fn get_record(

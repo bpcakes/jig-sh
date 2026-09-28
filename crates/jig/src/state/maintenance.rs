@@ -1,16 +1,17 @@
-//! Transactional state compaction backups and recovery.
+//! Transactional state backups and recovery.
 
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 use ulid::Ulid;
 
-use crate::command::{StateCompactSessionsRequest, StateRestoreRequest};
+use crate::command::StateRestoreRequest;
 use crate::context::RepoContext;
 
 use super::MAINTENANCE_WRITER_COORDINATION_NOTE;
@@ -18,11 +19,8 @@ use super::compression::{
     GzipWriteReport, create_dir_all_synced, decompress_gzip_to_temp, gzip_file_atomic, sha256_file,
     sync_directory,
 };
-use super::jsonl::with_jsonl_write_lock;
+use super::jsonl::{scan_jsonl_raw, with_jsonl_write_lock};
 use super::receipts::validate_receipt_stream;
-use super::session_compaction::{
-    SessionCompactionAnalysis, analyze_session_compaction, write_compacted_sessions,
-};
 use super::support::now_ms;
 
 const BACKUP_MANIFEST_VERSION: u32 = 1;
@@ -45,6 +43,8 @@ struct BackupStream {
     compressed_file: &'static str,
 }
 
+/// Session compaction was removed with work sessions. Backups it created remain
+/// restorable, but no command creates new ones.
 const SESSION_BACKUP_STREAM: BackupStream = BackupStream {
     name: SESSIONS_STREAM,
     state_file: "sessions.jsonl",
@@ -111,83 +111,6 @@ pub(in crate::state) fn read_run_backup_manifest(
         original_sha256: manifest.original_sha256,
         compressed_bytes: manifest.compressed_bytes,
     }))
-}
-
-pub(crate) fn compact_sessions(
-    ctx: &RepoContext,
-    request: StateCompactSessionsRequest,
-) -> Result<Value> {
-    let sessions_path = ctx.state_file("sessions.jsonl");
-    if !sessions_path.exists() {
-        return Ok(compaction_value(
-            &SessionCompactionAnalysis::empty(),
-            request.dry_run,
-            None,
-        ));
-    }
-    if request.dry_run {
-        let analysis = analyze_session_compaction(&sessions_path)?;
-        return Ok(compaction_value(&analysis, true, None));
-    }
-
-    let mut backup_hint = None;
-    let result = with_jsonl_write_lock(&sessions_path, |_guard| {
-        let analysis = analyze_session_compaction(&sessions_path)?;
-        if !analysis.needs_rewrite() {
-            return Ok(compaction_value(&analysis, false, None));
-        }
-
-        let (backup_dir, _) = create_state_backup(
-            ctx,
-            &sessions_path,
-            "sessions",
-            SESSION_BACKUP_STREAM,
-            Some((analysis.source_bytes, &analysis.source_sha256)),
-        )?;
-        backup_hint = Some(backup_dir.clone());
-
-        let parent = sessions_path
-            .parent()
-            .context("sessions.jsonl must have a parent directory")?;
-        let source_permissions = fs::metadata(&sessions_path)
-            .with_context(|| format!("Failed to inspect {}", sessions_path.display()))?
-            .permissions();
-        let mut compacted = NamedTempFile::new_in(parent)
-            .with_context(|| format!("Failed to create compacted state in {}", parent.display()))?;
-        write_compacted_sessions(&sessions_path, &analysis, &mut compacted)?;
-        fs::set_permissions(compacted.path(), source_permissions)
-            .context("Failed to preserve session state permissions")?;
-        compacted
-            .as_file_mut()
-            .sync_all()
-            .context("Failed to sync compacted session state and permissions")?;
-
-        let compacted_analysis = analyze_session_compaction(compacted.path())?;
-        validate_compacted_analysis(&analysis, &compacted_analysis)?;
-        compacted
-            .persist(&sessions_path)
-            .map_err(|error| error.error)
-            .with_context(|| format!("Failed to publish {}", sessions_path.display()))?;
-        sync_directory(parent).with_context(|| {
-            format!(
-                "Compacted state was published but its directory sync failed; exact recovery backup: {}",
-                backup_dir.display()
-            )
-        })?;
-
-        Ok(compaction_value(
-            &analysis,
-            false,
-            Some(backup_dir.display().to_string()),
-        ))
-    });
-    result.map_err(|error| {
-        let recovery = backup_hint.as_ref().map_or_else(
-            || "Session compaction failed before creating a recovery backup".into(),
-            |path| format!("Session compaction recovery backup: {}", path.display()),
-        );
-        anyhow!("{error:#}\n{recovery}")
-    })
 }
 
 pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) -> Result<Value> {
@@ -402,49 +325,6 @@ fn create_state_backup(
     Ok((backup_dir, backup))
 }
 
-fn compaction_value(
-    analysis: &SessionCompactionAnalysis,
-    dry_run: bool,
-    backup_path: Option<String>,
-) -> Value {
-    json!({
-        "ok": true,
-        "command": "state compact sessions",
-        "dry_run": dry_run,
-        "source_path": SESSIONS_SOURCE_PATH,
-        "physical_records": analysis.physical_records,
-        "logical_records": analysis.logical_records,
-        "duplicate_records": analysis.duplicate_records,
-        "records_changed": analysis.records_changed,
-        "recursive_references": analysis.recursive_references,
-        "bytes_before": analysis.source_bytes,
-        "bytes_after": analysis.compacted_bytes,
-        "bytes_reclaimable": analysis.bytes_reclaimable(),
-        "source_sha256": analysis.source_sha256,
-        "backup_path": backup_path,
-        "git_history_rewritten": false,
-        "history_note": "Working-tree compaction does not remove reachable Git blobs.",
-        "writer_coordination_note": MAINTENANCE_WRITER_COORDINATION_NOTE,
-    })
-}
-
-fn validate_compacted_analysis(
-    original: &SessionCompactionAnalysis,
-    compacted: &SessionCompactionAnalysis,
-) -> Result<()> {
-    if compacted.physical_records != original.logical_records
-        || compacted.logical_records != original.logical_records
-        || compacted.duplicate_records != 0
-        || compacted.records_changed != 0
-        || compacted.recursive_references != 0
-        || compacted.source_bytes != original.compacted_bytes
-        || !original.same_logical_state(compacted)
-    {
-        bail!("Compacted session state failed validation; the original file was not replaced");
-    }
-    Ok(())
-}
-
 fn write_manifest_atomic(directory: &Path, manifest: &StateBackupManifest) -> Result<()> {
     let mut temp = NamedTempFile::new_in(directory).with_context(|| {
         format!(
@@ -508,11 +388,21 @@ fn validate_manifest(manifest: &StateBackupManifest) -> Result<BackupStream> {
 
 fn validate_restored_stream(stream: BackupStream, path: &Path) -> Result<()> {
     match stream.name {
-        SESSIONS_STREAM => analyze_session_compaction(path).map(|_| ()),
+        SESSIONS_STREAM => validate_legacy_session_stream(path),
         RECEIPTS_STREAM => validate_receipt_stream(path),
         RUNS_STREAM => super::runs::validate_run_stream(path),
         _ => unreachable!("validated backup streams are exhaustive"),
     }
+}
+
+/// Sessions are no longer read, so a legacy backup only has to be valid JSONL.
+fn validate_legacy_session_stream(path: &Path) -> Result<()> {
+    scan_jsonl_raw(path, &|| false, |record| {
+        serde_json::from_slice::<IgnoredAny>(record.bytes)
+            .map(|_| ())
+            .with_context(|| format!("Invalid session JSONL record {}", record.line_number))
+    })
+    .map(|_| ())
 }
 
 fn sha256_file_or_empty(path: &Path) -> Result<super::compression::GzipReadReport> {
@@ -541,102 +431,48 @@ mod tests {
 
     use super::*;
 
-    fn write_recursive_sessions(ctx: &RepoContext) -> Vec<u8> {
-        fs::create_dir_all(ctx.state_dir()).unwrap();
-        let first = json!({
-            "id": "event-1",
-            "session_id": "session-1",
-            "event": "start",
-            "timestamp_ms": 1,
-            "outcome": null,
-            "summary": {
-                "default_branch": "main",
-                "open_plans": [],
-                "recent_decisions": [],
-                "recent_receipts": [],
-                "recent_sessions": [],
-                "repo_name": "fixture",
-                "source_commit": "abc",
-                "source_path": "fixture"
-            }
-        });
-        let second = json!({
-            "id": "event-2",
-            "session_id": "session-2",
-            "event": "start",
-            "timestamp_ms": 2,
-            "outcome": null,
-            "summary": {
-                "default_branch": "main",
-                "open_plans": [],
-                "recent_decisions": [],
-                "recent_receipts": [],
-                "recent_sessions": [first],
-                "repo_name": "fixture",
-                "source_commit": "abc",
-                "source_path": "fixture"
-            }
-        });
-        let bytes = format!(
-            "{}\n{}\n",
-            serde_json::to_string(&first).unwrap(),
-            serde_json::to_string(&second).unwrap()
-        )
-        .into_bytes();
-        fs::write(ctx.state_file("sessions.jsonl"), &bytes).unwrap();
-        bytes
-    }
-
     #[test]
-    fn compact_backup_and_restore_round_trip_exactly() {
+    fn legacy_session_backups_restore_exactly() {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path()).write();
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let original = write_recursive_sessions(&ctx);
-
-        let dry_run =
-            compact_sessions(&ctx, StateCompactSessionsRequest { dry_run: true }).unwrap();
-        assert_eq!(
-            fs::read(ctx.state_file("sessions.jsonl")).unwrap(),
-            original
+        fs::create_dir_all(ctx.state_dir()).unwrap();
+        let sessions = ctx.state_file("sessions.jsonl");
+        let original = format!(
+            "{}\n",
+            json!({"id": "event-1", "session_id": "session-1", "event": "start", "timestamp_ms": 1})
         );
-        assert!(dry_run["backup_path"].is_null());
-
-        let compacted =
-            compact_sessions(&ctx, StateCompactSessionsRequest { dry_run: false }).unwrap();
-        let backup = PathBuf::from(compacted["backup_path"].as_str().unwrap());
-        let compacted_bytes = fs::read(ctx.state_file("sessions.jsonl")).unwrap();
-        assert!(compacted_bytes.len() < original.len());
-        let repeated =
-            compact_sessions(&ctx, StateCompactSessionsRequest { dry_run: false }).unwrap();
-        assert_eq!(repeated["records_changed"], 0);
-        assert!(repeated["backup_path"].is_null());
-        let appended = json!({
-            "id": "event-3",
-            "session_id": "session-3",
-            "event": "end",
-            "timestamp_ms": 3,
-            "outcome": "done"
-        });
-        let mut current_with_append = compacted_bytes;
-        current_with_append.extend_from_slice(
-            format!("{}\n", serde_json::to_string(&appended).unwrap()).as_bytes(),
-        );
-        fs::write(ctx.state_file("sessions.jsonl"), &current_with_append).unwrap();
+        fs::write(&sessions, &original).unwrap();
+        let (backup, _) =
+            create_state_backup(&ctx, &sessions, "sessions", SESSION_BACKUP_STREAM, None).unwrap();
+        let current = format!("{original}{}\n", json!({"id": "event-2", "event": "end"}));
+        fs::write(&sessions, &current).unwrap();
 
         let restored = restore_backup(&ctx, StateRestoreRequest { backup }).unwrap();
         assert_eq!(restored["changed"], true);
-        assert_eq!(restored["bytes_restored"], original.len() as u64);
-        assert_eq!(
-            fs::read(ctx.state_file("sessions.jsonl")).unwrap(),
-            original
-        );
+        assert_eq!(fs::read_to_string(&sessions).unwrap(), original);
         let recovery = PathBuf::from(restored["recovery_backup_path"].as_str().unwrap());
-        let recovered = restore_backup(&ctx, StateRestoreRequest { backup: recovery }).unwrap();
-        assert_eq!(recovered["changed"], true);
-        assert_eq!(
-            fs::read(ctx.state_file("sessions.jsonl")).unwrap(),
-            current_with_append
+        restore_backup(&ctx, StateRestoreRequest { backup: recovery }).unwrap();
+        assert_eq!(fs::read_to_string(&sessions).unwrap(), current);
+    }
+
+    #[test]
+    fn legacy_session_backups_must_hold_valid_jsonl() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        fs::create_dir_all(ctx.state_dir()).unwrap();
+        let sessions = ctx.state_file("sessions.jsonl");
+        fs::write(&sessions, "not json\n").unwrap();
+        let (backup, _) =
+            create_state_backup(&ctx, &sessions, "sessions", SESSION_BACKUP_STREAM, None).unwrap();
+        fs::write(&sessions, "").unwrap();
+
+        let error = restore_backup(&ctx, StateRestoreRequest { backup }).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("not valid sessions state"),
+            "{error:#}"
         );
+        assert_eq!(fs::read_to_string(&sessions).unwrap(), "");
     }
 }

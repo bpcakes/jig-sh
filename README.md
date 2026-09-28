@@ -125,7 +125,6 @@ Checks append receipt records. A simplified record looks like this:
 ```json
 {
   "tool_name": "jig.test",
-  "plan_id": null,
   "exit_status": 0,
   "changed_paths": ["README.md"],
   "diff_stat": { "files": 1, "insertions": 8, "deletions": 2 }
@@ -178,8 +177,8 @@ profile. Use `jig run --explain` to inspect that selection first.
 
 `run` requires contract v6 or later. Approve each planned `worktree` or `external`
 effect explicitly; approvals must match the plan. `--explain` creates no run or
-receipts. Selection, `--plan-id`, `--no-receipt`, `--fail-fast`, and native
-`--comparison-*` options use the shared repository execution behavior.
+receipts. Selection, `--no-receipt`, `--fail-fast`, and native `--comparison-*`
+options use the shared repository execution behavior.
 
 In contract v7, `--affected BASE` combines Git changes with checked-in component, dependency, and action-input policy. The plan explains why each target was selected before execution. See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
 
@@ -253,24 +252,23 @@ Contract v7 also provides the native `repo:file-budget` action backed by the rep
 
 ### Orchestration and terminal dashboard
 
-`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local repository and recorder state. `jig status --tui` opens the same dashboard on Status instead of Work.
+`jig loop` runs configured, bounded orchestration workflows and records their leases, attempts, and outcomes. `jig ui` opens the unified read-only terminal dashboard over local repository and recorder state. `jig status --tui` opens the same dashboard on Status instead of Timeline.
 
 ```sh
 scripts/jig loop status
 scripts/jig loop dispatch         # call every minute from an external scheduler
 scripts/jig status
-scripts/jig ui                    # terminal dashboard, starting on Work
+scripts/jig ui                    # terminal dashboard, starting on Timeline
 scripts/jig status --tui          # same dashboard, starting on Status
 scripts/jig --json ui             # one recorder snapshot
-scripts/jig --json ui --plan PLAN_ID
 scripts/jig status --json         # local status snapshot
 ```
 
-The four tabs are Status, Work, Timeline, and Health. Collection failures remain visible as partial status instead of hiding usable local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. A `codex_task` workflow runs a checked-in prompt on a cron schedule; choose its checkout based on whether results should remain isolated or update the main repository, then invoke `loop dispatch` from cron, launchd, systemd, or persistent CI. See [Scheduled Codex Tasks](docs/codex-task-operations.md), [Loop configuration](docs/configuration.md#loop-shape), and [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
+The three tabs are Status, Timeline, and Health. Collection failures remain visible as partial status instead of hiding usable local state. Interactive output requires terminal stdin and stdout; use the domain-specific JSON commands in pipelines. A `codex_task` workflow runs a checked-in prompt on a cron schedule; choose its checkout based on whether results should remain isolated or update the main repository, then invoke `loop dispatch` from cron, launchd, systemd, or persistent CI. See [Scheduled Codex Tasks](docs/codex-task-operations.md), [Loop configuration](docs/configuration.md#loop-shape), and [Terminal Dashboard](docs/developer-ux.md#terminal-dashboard).
 
 ### State maintenance
 
-`jig ui` presents `.agent/state/` without mutating it: open plans and gates, recent failures, finished work, per-tool check health, loop workflows, repository status, and a filterable activity timeline. Enter opens bounded plan, receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive.
+`jig ui` presents `.agent/state/` without mutating it: recent failures, per-tool check health, loop workflows, repository status, and a filterable receipt timeline. Enter opens bounded receipt, failure, or loop details where the active tab offers them. Local collection refreshes on one completion-relative 10-second schedule, remains serialized, and keeps navigation responsive.
 
 The 0.3.0 browser server and URL endpoints are gone. A hidden `--port` parser exits with a migration diagnostic and may stop parsing in a later release. Use the terminal dashboard or one-shot JSON.
 

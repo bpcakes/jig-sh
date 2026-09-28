@@ -6,7 +6,6 @@ use std::path::PathBuf;
 pub(crate) enum StateCommand {
     Summary,
     Diagnose(StateDiagnoseRequest),
-    CompactSessions(StateCompactSessionsRequest),
     Restore(StateRestoreRequest),
     ExportReceipts(StateExportReceiptsRequest),
     Archive(StateArchiveRequest),
@@ -15,11 +14,6 @@ pub(crate) enum StateCommand {
 #[derive(Debug)]
 pub(crate) struct StateDiagnoseRequest {
     pub(crate) deep: bool,
-}
-
-#[derive(Debug)]
-pub(crate) struct StateCompactSessionsRequest {
-    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug)]

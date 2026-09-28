@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use jig_contract::freshness::EffectiveTimeValidityV1;
 use jig_contract::{ActionId, ComponentId, Finding, TargetId};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::context::RepoContext;
@@ -19,20 +17,20 @@ use super::privacy::{
     redact_repository_root, redact_repository_root_in_value, repository_root_spellings,
 };
 use super::records::ReceiptRecord;
-use super::support::{new_id, now_ms, truncate};
+use super::support::{new_id, truncate};
 
 mod archive;
 mod journal;
 mod originals;
 mod validity;
 pub(crate) use originals::OriginalReceiptIndex;
-pub(crate) use validity::{metadata_time, receipt_effective_time};
+pub(crate) use validity::metadata_time;
 mod target_evidence;
 pub(super) use archive::parse_archive_before_ms;
 use archive::refuse_unterminated_receipt_stream;
-#[cfg(test)]
-use archive::{ReceiptProtectionIndex, sha256_reader, write_receipt_gzip};
 pub(crate) use archive::{StateArchiveRequest, receipts_archive, receipts_export};
+#[cfg(test)]
+use archive::{sha256_reader, write_receipt_gzip};
 #[cfg(test)]
 pub(crate) use journal::receipt_append_may_have_landed_for_test;
 pub(crate) use journal::{
@@ -40,7 +38,6 @@ pub(crate) use journal::{
     with_receipt_journal_writer_until,
 };
 pub(crate) use target_evidence::TargetReceiptStatus;
-use target_evidence::{IndexedTargetReceipts, cross_plan_receipt_is_eligible};
 
 const SUCCESSFUL_RECEIPT_PREVIEW_BYTES: usize = 512;
 
@@ -48,14 +45,12 @@ pub(crate) struct ReceiptInput<'a> {
     pub(crate) tool_name: &'a str,
     pub(crate) args: Value,
     pub(crate) invoked_command_key: Option<String>,
-    pub(crate) plan_id: Option<String>,
     pub(crate) started_at_ms: u64,
     pub(crate) ended_at_ms: u64,
     pub(crate) exit_status: i32,
     pub(crate) stdout: &'a str,
     pub(crate) stderr: &'a str,
     pub(crate) evidence: Option<Value>,
-    pub(crate) session_override: Option<String>,
     pub(crate) collect_git_metadata: bool,
     pub(crate) collect_worktree_fingerprint: bool,
     pub(crate) worktree_fingerprint_override: Option<std::result::Result<String, String>>,
@@ -124,15 +119,6 @@ impl FileBudgetLifecycleReceipt {
     }
 }
 
-#[cfg(test)]
-pub(super) struct StateToolReceipt<'a> {
-    pub(super) tool_name: &'a str,
-    pub(super) args: Value,
-    pub(super) started_at_ms: u64,
-    pub(super) plan_id: Option<String>,
-    pub(super) session_override: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ToolReceiptStatus {
     pub(crate) receipt_id: String,
@@ -156,92 +142,6 @@ pub(crate) const WORK_CHECK_TARGETS_SCHEMA: &str = "jig.work_check_targets/v1";
 #[cfg(test)]
 pub(crate) fn work_check_targets_evidence(targets: &[Value]) -> Value {
     serde_json::json!({"schema": WORK_CHECK_TARGETS_SCHEMA, "targets": targets})
-}
-
-const fn usize_is_zero(value: &usize) -> bool {
-    *value == 0
-}
-
-const fn bool_is_false(value: &bool) -> bool {
-    !*value
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct WorkCheckBatchEvidence {
-    #[serde(default, flatten)]
-    pub(crate) effective_time: Option<EffectiveTimeValidityV1>,
-    pub(crate) schema: String,
-    #[serde(default)]
-    pub(crate) changed_paths: Vec<String>,
-    #[serde(default)]
-    pub(crate) changed_path_count: usize,
-    #[serde(default)]
-    pub(crate) changed_paths_truncated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) changed_paths_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) valid_until_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "bool_is_false")]
-    pub(crate) requires_time_validity: bool,
-    pub(crate) gates: Vec<WorkCheckGateEvidence>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct WorkCheckGateEvidence {
-    #[serde(default, flatten)]
-    pub(crate) effective_time: Option<EffectiveTimeValidityV1>,
-    pub(crate) gate_id: String,
-    pub(crate) tool: String,
-    pub(crate) status: String,
-    pub(crate) applicability: String,
-    #[serde(default)]
-    pub(crate) required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) paths: Option<Vec<String>>,
-    #[serde(default)]
-    pub(crate) paths_ignore: Vec<String>,
-    #[serde(default)]
-    pub(crate) reuse: bool,
-    #[serde(default)]
-    pub(crate) forced: bool,
-    pub(crate) gate_signature: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) baseline_oid: Option<String>,
-    pub(crate) reason: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) changed_paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "usize_is_zero")]
-    pub(crate) changed_path_count: usize,
-    #[serde(default, skip_serializing_if = "bool_is_false")]
-    pub(crate) changed_paths_truncated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) changed_paths_digest: Option<String>,
-    #[serde(default)]
-    pub(crate) matching_paths: Vec<String>,
-    #[serde(default)]
-    pub(crate) matching_path_count: usize,
-    #[serde(default)]
-    pub(crate) matching_paths_truncated: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) matching_paths_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) scope_fingerprint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) scope_error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) tool_receipt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) exit_status: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) source_plan_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) source_batch_receipt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) source_tool_receipt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) valid_until_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "bool_is_false")]
-    pub(crate) requires_time_validity: bool,
 }
 
 fn parse_raw_receipt(record: RawJsonlRecord<'_>, path: &Path) -> Result<ReceiptRecord> {

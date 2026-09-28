@@ -21,7 +21,7 @@ fn an_arbitrary_event_with_a_matching_run_id_is_not_a_verified_lifecycle() {
 #[test]
 fn a_complete_lifecycle_with_an_unknown_event_is_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -57,7 +57,7 @@ fn a_complete_lifecycle_with_an_unknown_event_is_unverifiable() {
 #[test]
 fn unrelated_invalid_active_lifecycle_prevents_a_clean_verdict() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -99,7 +99,7 @@ fn unrelated_invalid_active_lifecycle_prevents_a_clean_verdict() {
 #[test]
 fn unrelated_invalid_archive_lifecycle_makes_history_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -145,7 +145,7 @@ fn unrelated_invalid_archive_lifecycle_makes_history_unverifiable() {
 #[test]
 fn unknown_event_in_a_second_gzip_member_makes_history_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -216,7 +216,7 @@ fn events_before_queued_are_reported_as_inconsistent_not_healthy() {
 #[test]
 fn live_and_completed_lifecycles_written_by_the_runtime_are_not_orphans() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     mark_run_running(&ctx, &run_id).unwrap();
     write_records(
@@ -277,7 +277,7 @@ fn assert_archived_child_is_resolved(output: &Value, run_id: &str) {
 #[test]
 fn archived_targets_batch_child_is_resolved_from_receipt_history() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -302,7 +302,7 @@ fn archived_targets_batch_child_is_resolved_from_receipt_history() {
 #[test]
 fn archived_gates_batch_child_is_resolved_from_receipt_history() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -400,12 +400,12 @@ fn conflicting_archived_child_run_associations_remain_incomplete() {
 #[test]
 fn archival_preserves_conflicts_between_active_and_archived_child_receipts() {
     let (_temp, ctx) = fixture_context();
-    let (older, older_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (older, older_lease) = start_run(&ctx, plan()).unwrap();
     let older_run_id = older.result.run_id;
     complete_target(&ctx, &older_run_id);
     complete_run(&ctx, &older_run_id, RunConclusion::Success).unwrap();
     drop(older_lease);
-    let (newer, newer_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (newer, newer_lease) = start_run(&ctx, plan()).unwrap();
     let newer_run_id = newer.result.run_id;
     complete_target(&ctx, &newer_run_id);
     complete_run(&ctx, &newer_run_id, RunConclusion::Success).unwrap();
@@ -463,7 +463,7 @@ fn archival_preserves_conflicts_between_active_and_archived_child_receipts() {
 #[test]
 fn verified_archived_history_is_not_an_orphan() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     mark_run_running(&ctx, &run_id).unwrap();
     complete_target(&ctx, &run_id);
@@ -511,7 +511,7 @@ fn verified_archived_history_is_not_an_orphan() {
 #[test]
 fn symlinked_run_archive_makes_missing_history_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -556,7 +556,7 @@ fn symlinked_run_archive_makes_missing_history_unverifiable() {
 #[test]
 fn symlinked_run_archive_root_makes_missing_history_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();

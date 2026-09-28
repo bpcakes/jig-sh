@@ -1,6 +1,5 @@
 use super::tests::{config, fixture, git, prepare_focus, run_prepared, write};
 use super::*;
-use crate::state::{PlanOpenRequest, plans_open};
 
 #[test]
 fn automatic_focus_preserves_workspace_feature_owners() {
@@ -30,19 +29,7 @@ fn automatic_focus_preserves_workspace_feature_owners() {
         root,
         &["commit", "--quiet", "-m", "Example feature baseline"],
     );
-    let opened = plans_open(
-        &ctx,
-        PlanOpenRequest {
-            title: "Example feature context".into(),
-            body: None,
-            body_file: None,
-            base: None,
-        },
-    )
-    .unwrap();
-    let focus = RustFocusV1::Automatic {
-        plan_id: Some(opened["plan_id"].as_str().unwrap().into()),
-    };
+    let focus = RustFocusV1::Automatic { plan_id: None };
     write(
         root,
         "selected/src/lib.rs",

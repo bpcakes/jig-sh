@@ -36,8 +36,7 @@ fn plan() -> RunPlan {
 #[test]
 fn lifecycle_round_trips_from_append_only_events() {
     let (_temp, ctx) = context();
-    super::super::seed_open_plan_for_test(&ctx, "plan_work", "Work", "Body").unwrap();
-    let (started, _lease) = start_run(&ctx, plan(), Some("plan_work".into())).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     let target: TargetId = "repo:test".parse().unwrap();
 
@@ -53,7 +52,7 @@ fn lifecycle_round_trips_from_append_only_events() {
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
 
     let reloaded = run_by_id(&ctx, &run_id).unwrap();
-    assert_eq!(reloaded.work_plan_id.as_deref(), Some("plan_work"));
+    assert!(reloaded.work_plan_id.is_none());
     assert_eq!(reloaded.result.status, RunStatus::Completed);
     assert_eq!(reloaded.result.conclusion, Some(RunConclusion::Success));
     assert_eq!(
@@ -65,7 +64,7 @@ fn lifecycle_round_trips_from_append_only_events() {
 #[test]
 fn reverse_lookup_reopens_the_run_journal_after_atomic_replacement() {
     let (_temp, ctx) = context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
     drop(lease);
@@ -113,7 +112,7 @@ fn abandoned_run_recovery_preserves_a_prior_target_failure() {
         ],
         vec![vec![failed_target.clone(), unfinished_target]],
     );
-    let (started, _lease) = start_run(&ctx, plan, None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan).unwrap();
     let run_id = started.result.run_id;
     mark_run_running(&ctx, &run_id).unwrap();
     mark_target_started(&ctx, &run_id, failed_target.clone()).unwrap();
@@ -144,7 +143,7 @@ fn start_run_rejects_execution_layers_that_do_not_cover_the_plan() {
     let mut invalid = plan();
     invalid.execution_layers.clear();
 
-    let error = start_run(&ctx, invalid, None)
+    let error = start_run(&ctx, invalid)
         .err()
         .expect("invalid execution layers must be rejected");
 
@@ -218,7 +217,7 @@ fn archive_and_restore_reject_queued_plans_with_invalid_structure() {
 #[test]
 fn archive_removes_completed_runs_and_keeps_recovery_artifacts() {
     let (_temp, ctx) = context();
-    let (completed, completed_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (completed, completed_lease) = start_run(&ctx, plan()).unwrap();
     let completed_id = completed.result.run_id;
     let lease_path = run_lease_path(&ctx, &completed_id).unwrap();
     let target: TargetId = "repo:test".parse().unwrap();
@@ -281,7 +280,7 @@ fn archive_verifies_the_published_artifact_before_rewriting_runs() {
         Vec::new(),
         Vec::new(),
     );
-    let (completed, completed_lease) = start_run(&ctx, completed_plan, None).unwrap();
+    let (completed, completed_lease) = start_run(&ctx, completed_plan).unwrap();
     let completed_id = completed.result.run_id;
     complete_run(&ctx, &completed_id, RunConclusion::Success).unwrap();
     drop(completed_lease);
@@ -310,7 +309,7 @@ fn archive_verifies_the_published_artifact_before_rewriting_runs() {
 #[test]
 fn archive_retains_a_terminal_run_until_its_worker_lease_is_released() {
     let (_temp, ctx) = context();
-    let (completed, completed_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (completed, completed_lease) = start_run(&ctx, plan()).unwrap();
     let completed_id = completed.result.run_id;
     let lease_path = run_lease_path(&ctx, &completed_id).unwrap();
     let target: TargetId = "repo:test".parse().unwrap();
@@ -345,7 +344,7 @@ fn archive_retains_a_terminal_run_until_its_worker_lease_is_released() {
 #[test]
 fn archive_refuses_to_shift_the_cursor_of_a_nonterminal_run() {
     let (_temp, ctx) = context();
-    let (completed, _completed_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (completed, _completed_lease) = start_run(&ctx, plan()).unwrap();
     let completed_id = completed.result.run_id;
     let target: TargetId = "repo:test".parse().unwrap();
     mark_run_running(&ctx, &completed_id).unwrap();
@@ -358,7 +357,7 @@ fn archive_refuses_to_shift_the_cursor_of_a_nonterminal_run() {
     result.exit_code = Some(0);
     record_target_result(&ctx, &completed_id, result).unwrap();
     complete_run(&ctx, &completed_id, RunConclusion::Success).unwrap();
-    let (active, _active_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (active, _active_lease) = start_run(&ctx, plan()).unwrap();
 
     let error = runs_archive(&ctx, &u64::MAX.to_string(), true).unwrap_err();
 
@@ -386,14 +385,13 @@ fn run_start_cursor_observes_cancellation_after_an_archive_rewrite() {
         Vec::new(),
         Vec::new(),
     );
-    let (completed, completed_lease) = start_run(&ctx, empty_plan, None).unwrap();
+    let (completed, completed_lease) = start_run(&ctx, empty_plan).unwrap();
     complete_run(&ctx, &completed.result.run_id, RunConclusion::Success).unwrap();
     drop(completed_lease);
     let archived = runs_archive(&ctx, &u64::MAX.to_string(), false).unwrap();
     assert_eq!(archived["runs_archived"], 1);
 
-    let (active, _active_lease, mut cursor) =
-        start_run_with_event_cursor(&ctx, plan(), None).unwrap();
+    let (active, _active_lease, mut cursor) = start_run_with_event_cursor(&ctx, plan()).unwrap();
     request_run_cancel(&ctx, &active.result.run_id).unwrap();
 
     assert!(
@@ -413,7 +411,7 @@ fn restore_refuses_to_replace_a_live_run_journal() {
             Vec::new(),
         )
     };
-    let (backed_up, backed_up_lease) = start_run(&ctx, empty_plan(), None).unwrap();
+    let (backed_up, backed_up_lease) = start_run(&ctx, empty_plan()).unwrap();
     complete_run(&ctx, &backed_up.result.run_id, RunConclusion::Success).unwrap();
     drop(backed_up_lease);
     let runs_path = ctx.state_file(RUNS_FILE);
@@ -425,7 +423,7 @@ fn restore_refuses_to_replace_a_live_run_journal() {
     )
     .unwrap();
 
-    let (active, active_lease) = start_run(&ctx, empty_plan(), None).unwrap();
+    let (active, active_lease) = start_run(&ctx, empty_plan()).unwrap();
     let before_nonterminal_restore = fs::read(&runs_path).unwrap();
     let error = super::super::restore_backup(
         &ctx,
@@ -533,7 +531,7 @@ fn archive_rejects_run_ids_that_could_escape_the_lease_directory() {
 #[test]
 fn archive_apply_reconciles_an_abandoned_run_before_rewriting() {
     let (_temp, ctx) = context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     drop(lease);
 
@@ -545,34 +543,10 @@ fn archive_apply_reconciles_an_abandoned_run_before_rewriting() {
 }
 
 #[test]
-fn archive_retains_completed_runs_linked_to_open_work_plans() {
-    let (_temp, ctx) = context();
-    super::super::seed_open_plan_for_test(&ctx, "plan_open", "Open", "Body").unwrap();
-    let (started, _lease) = start_run(
-        &ctx,
-        RunPlan::new(
-            "run-plan_empty",
-            "sha256:config",
-            SourceIdentity::new(Some("abc".into()), "sha256:worktree"),
-            Vec::new(),
-            Vec::new(),
-        ),
-        Some("plan_open".into()),
-    )
-    .unwrap();
-    complete_run(&ctx, &started.result.run_id, RunConclusion::Success).unwrap();
-
-    let archived = runs_archive(&ctx, &u64::MAX.to_string(), true).unwrap();
-
-    assert_eq!(archived["runs_archived"], 0);
-    assert_eq!(archived["protected_runs_retained"], 1);
-}
-
-#[test]
 fn run_lookup_only_deserializes_full_events_for_the_requested_run() {
     let (_temp, ctx) = context();
-    let (_first, _first_lease) = start_run(&ctx, plan(), None).unwrap();
-    let (second, _second_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (_first, _first_lease) = start_run(&ctx, plan()).unwrap();
+    let (second, _second_lease) = start_run(&ctx, plan()).unwrap();
     FULL_RUN_EVENT_PARSE_COUNT.with(|counter| counter.set(0));
     RUN_EVENT_IDENTITY_PARSE_COUNT.with(|counter| counter.set(0));
 
@@ -588,7 +562,7 @@ fn reverse_run_lookup_handles_records_larger_than_the_read_chunk() {
     let (_temp, ctx) = context();
     let mut large_plan = plan();
     large_plan.selectors = vec!["x".repeat(REVERSE_RUN_READ_CHUNK * 2)];
-    let (started, _lease) = start_run(&ctx, large_plan, None).unwrap();
+    let (started, _lease) = start_run(&ctx, large_plan).unwrap();
 
     let loaded = run_by_id(&ctx, &started.result.run_id).unwrap();
 
@@ -599,7 +573,7 @@ fn reverse_run_lookup_handles_records_larger_than_the_read_chunk() {
 #[test]
 fn run_lookup_rejects_an_unterminated_final_record() {
     let (_temp, ctx) = context();
-    let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     let path = ctx.state_file(RUNS_FILE);
     let mut bytes = fs::read(&path).unwrap();
     assert_eq!(bytes.pop(), Some(b'\n'));
@@ -613,7 +587,7 @@ fn run_lookup_rejects_an_unterminated_final_record() {
 #[test]
 fn reverse_run_lookup_rejects_an_escape_rewritten_key_and_value() {
     let (_temp, ctx) = context();
-    let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     append_event(
         &ctx,
         RunEventRecord {
@@ -645,7 +619,7 @@ fn reverse_run_lookup_rejects_an_escape_rewritten_key_and_value() {
 #[test]
 fn cancellation_requests_are_idempotent() {
     let (_temp, ctx) = context();
-    let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
 
     let first = request_run_cancel(&ctx, &run_id).unwrap();
@@ -660,7 +634,7 @@ fn cancellation_requests_are_idempotent() {
 #[test]
 fn queued_runs_keep_a_stable_lease_inode_after_reconciliation() {
     let (_temp, ctx) = context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     let lease_path = ctx
         .root()
@@ -682,7 +656,7 @@ fn queued_runs_keep_a_stable_lease_inode_after_reconciliation() {
 #[test]
 fn dropping_a_run_lease_unlocks_before_inherited_descriptors_close() {
     let (_temp, ctx) = context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let inherited_descriptor = lease._file.try_clone().unwrap();
 
     drop(lease);
@@ -698,7 +672,7 @@ fn concurrent_reconciliation_appends_one_terminal_event() {
     use std::sync::{Arc, Barrier};
 
     let (_temp, ctx) = context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     drop(lease);
 
@@ -741,7 +715,7 @@ fn concurrent_reconciliation_appends_one_terminal_event() {
 #[test]
 fn cancellation_observed_after_completion_does_not_corrupt_the_run() {
     let (_temp, ctx) = context();
-    let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, _lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     let target: TargetId = "repo:test".parse().unwrap();
     let mut result = TargetRunResult::queued(target, "sha256:config", "sha256:input");

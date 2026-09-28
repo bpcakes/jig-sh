@@ -23,7 +23,7 @@ fn external_check_selectors_accept_execution_flags_after_targets() {
     };
     assert_eq!(request.selectors, ["api:test", "web:lint"]);
     assert!(request.fail_fast);
-    assert_eq!(request.tool.into_parts(), (None, false));
+    assert!(!request.tool.record_receipt());
 }
 
 #[test]
@@ -222,19 +222,6 @@ fn state_maintenance_conversion_preserves_arguments() {
     match request {
         command::StateCommand::Diagnose(request) => assert!(request.deep),
         other => panic!("expected state diagnose request, got {other:?}"),
-    }
-
-    let request: command::StateCommand = StateCommand::Compact {
-        command: StateCompactCommand::Sessions(StateCompactSessionsOpts { dry_run: true }),
-    }
-    .into();
-    match request {
-        command::StateCommand::CompactSessions(request) => {
-            assert!(request.dry_run);
-        }
-        other => {
-            panic!("expected state compact sessions request, got {other:?}")
-        }
     }
 
     let backup = std::path::PathBuf::from("backup/manifest.json");

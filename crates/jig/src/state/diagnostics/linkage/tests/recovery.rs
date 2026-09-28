@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn exact_state_backup_is_reported_as_recoverable_without_restoring_it() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -75,7 +75,7 @@ fn exact_state_backup_is_reported_as_recoverable_without_restoring_it() {
 #[test]
 fn backup_recovery_exposes_current_nonterminal_history_without_a_command() {
     let (_temp, ctx) = fixture_context();
-    let (backed_up, backed_up_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (backed_up, backed_up_lease) = start_run(&ctx, plan()).unwrap();
     let backed_up_id = backed_up.result.run_id;
     complete_target(&ctx, &backed_up_id);
     complete_run(&ctx, &backed_up_id, RunConclusion::Success).unwrap();
@@ -84,7 +84,7 @@ fn backup_recovery_exposes_current_nonterminal_history_without_a_command() {
     crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "example-recovery", None)
         .unwrap();
 
-    let (active, _active_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (active, _active_lease) = start_run(&ctx, plan()).unwrap();
     let active_id = active.result.run_id;
     let active_records = fs::read_to_string(&runs_path)
         .unwrap()
@@ -125,7 +125,7 @@ fn backup_recovery_exposes_current_nonterminal_history_without_a_command() {
 #[test]
 fn backup_recovery_exposes_a_lease_only_restore_blocker() {
     let (_temp, ctx) = fixture_context();
-    let (backed_up, backed_up_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (backed_up, backed_up_lease) = start_run(&ctx, plan()).unwrap();
     let backed_up_id = backed_up.result.run_id;
     complete_target(&ctx, &backed_up_id);
     complete_run(&ctx, &backed_up_id, RunConclusion::Success).unwrap();
@@ -134,7 +134,7 @@ fn backup_recovery_exposes_a_lease_only_restore_blocker() {
     crate::state::maintenance::create_runs_backup(&ctx, &runs_path, "example-lease-recovery", None)
         .unwrap();
 
-    let (active, _active_lease) = start_run(&ctx, plan(), None).unwrap();
+    let (active, _active_lease) = start_run(&ctx, plan()).unwrap();
     let active_id = active.result.run_id;
     fs::write(&runs_path, b"").unwrap();
     write_records(
@@ -177,7 +177,7 @@ fn backup_recovery_exposes_a_lease_only_restore_blocker() {
 #[test]
 fn recovery_uses_newest_verified_complete_backup_not_a_newer_partial_one() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     let runs_path = ctx.state_file("runs.jsonl");
     let (partial_dir, _) =
@@ -230,7 +230,7 @@ fn inaccessible_backup_is_unverifiable_until_access_is_restored() {
     use std::os::unix::fs::PermissionsExt;
 
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -287,7 +287,7 @@ fn inaccessible_backup_is_unverifiable_until_access_is_restored() {
 #[test]
 fn recovery_skips_newer_backup_with_wrong_source_path() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -330,7 +330,7 @@ fn recovery_skips_newer_backup_with_wrong_source_path() {
 #[test]
 fn recovery_skips_newer_backup_with_unrelated_invalid_lifecycle() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -412,7 +412,7 @@ fn tampered_backup_and_corrupt_archive_make_history_unverifiable_not_missing() {
     assert_eq!(output["run_linkage"]["runs"]["missing"], 0);
 
     // A backup whose bytes no longer match its manifest is not an exact source.
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     drop(lease);
     let runs_path = ctx.state_file("runs.jsonl");
@@ -457,7 +457,7 @@ fn tampered_backup_and_corrupt_archive_make_history_unverifiable_not_missing() {
 #[test]
 fn symlinked_backup_directory_makes_missing_history_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
@@ -501,7 +501,7 @@ fn symlinked_backup_directory_makes_missing_history_unverifiable() {
 #[test]
 fn symlinked_backup_root_makes_missing_history_unverifiable() {
     let (_temp, ctx) = fixture_context();
-    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let (started, lease) = start_run(&ctx, plan()).unwrap();
     let run_id = started.result.run_id;
     complete_target(&ctx, &run_id);
     complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();

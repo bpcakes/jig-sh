@@ -6,11 +6,9 @@ use std::process::{Command, Output};
 use serde_json::Value;
 
 use jig_ui::dashboard::{
-    PLAN_ROOT_FIELDS, RECORDER_ROOT_FIELDS, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
+    RECORDER_ROOT_FIELDS, RECORDER_SCHEMA_VERSION, STATUS_ROOT_FIELDS, STATUS_SCHEMA_VERSION,
 };
 
-#[path = "shared/legacy_plan.rs"]
-mod legacy_plan;
 mod support;
 
 fn fixture() -> tempfile::TempDir {
@@ -97,23 +95,13 @@ fn assert_exact_root_fields(value: &Value, expected: &[&str]) {
 }
 
 #[test]
-fn recorder_plan_and_status_json_entrypoints_remain_portable_after_deletion() {
+fn recorder_and_status_json_entrypoints_remain_portable_after_deletion() {
     let root = fixture();
 
     let recorder = success_json(jig(root.path(), &["ui", "--json"]));
     assert_eq!(recorder["command"], "ui");
-    assert_eq!(recorder["snapshot_kind"], "recorder");
+    assert_eq!(recorder["schema_version"], RECORDER_SCHEMA_VERSION);
     assert_exact_root_fields(&recorder, RECORDER_ROOT_FIELDS);
-
-    let plan_id = legacy_plan::seed_open_plan(root.path(), "plan_example", "Example plan");
-    let plan = success_json(jig(
-        root.path(),
-        &["ui", "--plan", plan_id.trim(), "--json"],
-    ));
-    assert_eq!(plan["command"], "ui");
-    assert_eq!(plan["snapshot_kind"], "plan");
-    assert_eq!(plan["plan"]["plan_id"], plan_id.trim());
-    assert_exact_root_fields(&plan, PLAN_ROOT_FIELDS);
 
     let status = success_json(jig(root.path(), &["status", "--json"]));
     assert_eq!(status["command"], "status");

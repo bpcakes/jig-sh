@@ -185,7 +185,6 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs, cancelled: &dyn Fn() -> bool) -> R
             profile: args.profile,
             affected_base: args.affected_base,
             comparison: args.comparison,
-            work_plan_id: args.work_plan_id,
         },
         arguments,
         cancelled,
@@ -205,17 +204,11 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
         &args.plan.effects,
         &args.approved_effects,
     )?;
-    if let Some(plan_id) = args.work_plan_id.as_deref() {
-        crate::state::ensure_plan_is_open(&current, plan_id)?;
-    }
-
     let worker_ctx = current;
     let worker_catalog = catalog;
     let worker_plan = args.plan;
-    let work_plan_id = args.work_plan_id;
     let request = ExecuteCheckRunRequest {
         alias_override: None,
-        work_plan_id: work_plan_id.clone(),
         record_receipts: args.record_receipts,
         fail_fast: args.fail_fast,
     };
@@ -236,7 +229,6 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
                 &worker_ctx,
                 &worker_catalog,
                 worker_plan,
-                work_plan_id,
             ) {
                 Ok(started) => started,
                 Err(error) => {
@@ -409,7 +401,6 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ),
-            None,
         )
         .unwrap();
         fs::write(ctx.state_file("runs.jsonl"), "not-json\n").unwrap();

@@ -13,16 +13,9 @@ pub(crate) use execution_leases::{
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
-pub(crate) use jsonl::read_receipts_reverse_with_cancellation;
 pub(crate) use jsonl::{JsonlRecordTooLarge, RawJsonlRecord, scan_dashboard_jsonl_raw};
 #[cfg(test)]
 pub(crate) use jsonl::{dashboard_scan_count, reset_dashboard_scan_counts};
-pub(crate) use plan_files::{PlanFileError, PlanFileErrorKind, read_plan_body};
-#[cfg(test)]
-pub(crate) use plans::{PlanOpenRequest, plans_open, seed_open_plan_for_test};
-pub(crate) use plans::{
-    ensure_plan_is_open, open_plan_summaries, plan_baseline, plan_baseline_with_cancellation,
-};
 pub(crate) use receipts::WORK_CHECK_TARGETS_SCHEMA;
 pub(crate) use receipts::evidence_requires_time_validity;
 pub(crate) use receipts::metadata_time;
@@ -41,13 +34,9 @@ pub(crate) use receipts::{
 };
 pub(crate) use receipts::{latest_file_budget_lifecycle_receipt, receipt_append_may_have_landed};
 pub(crate) use receipts::{receipt_record_id, with_receipt_journal_writer};
-pub(crate) use records::PlanBaseline;
-pub(crate) use records::{
-    DecisionRecord as DashboardDecisionRecord, PlanEvent as DashboardPlanEvent,
-    ReceiptRecord as DashboardReceiptRecord, SessionEventEnvelope as DashboardSessionEvent,
-};
+pub(crate) use records::ReceiptRecord as DashboardReceiptRecord;
 #[cfg(test)]
-use records::{PlanEvent, ReceiptRecord};
+use records::ReceiptRecord;
 pub(crate) use runs::{
     DurableRun, RunEventCursor, RunLease, block_nonterminal_run, complete_run, mark_run_running,
     mark_target_started, reconcile_run_for_inspection, record_target_result, request_run_cancel,
@@ -57,12 +46,8 @@ pub(crate) use runs::{
 #[cfg(test)]
 pub(crate) use runs::{start_run, start_run_with_event_cursor};
 #[cfg(test)]
-use sessions::build_summary;
-#[cfg(test)]
-pub(crate) use sessions::{current_session, session_start, state_summary};
-pub(crate) use sessions::{
-    current_session_with_cancellation, public_source_path, state_summary_with_cancellation,
-};
+pub(crate) use summary::state_summary;
+pub(crate) use summary::state_summary_with_cancellation;
 #[cfg(test)]
 use support::ensure_state_layout;
 pub(crate) use support::now_ms;
@@ -79,25 +64,17 @@ pub(crate) use resource_leases::{ResourceClaim, ResourceClaimMode, ResourceLease
 mod json_scan;
 mod jsonl;
 mod maintenance;
-mod plan_files;
-mod session_pointer;
-pub(crate) use plan_files::validate_plan_id;
-mod plans;
 mod privacy;
 mod receipts;
 mod records;
 mod runs;
-mod session_compaction;
-mod sessions;
+mod summary;
 mod support;
-// The next delivery milestone exposes the lifecycle entrypoints built on this
-// portable, Jig-owned link authority.
-#[allow(dead_code)]
 
 pub(super) const MAINTENANCE_WRITER_COORDINATION_NOTE: &str = "Before applying a state rewrite, stop Jig processes launched with older runtimes that wrote through a pre-opened state-file handle. Current runtimes coordinate through the repository state lock.";
 
 pub(crate) use diagnostics::state_diagnose;
-pub(crate) use maintenance::{compact_sessions, restore_backup};
+pub(crate) use maintenance::restore_backup;
 
 pub(crate) fn state_archive(
     ctx: &RepoContext,

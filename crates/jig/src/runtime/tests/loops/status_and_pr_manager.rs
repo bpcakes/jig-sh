@@ -1,36 +1,4 @@
 #[test]
-fn loop_tick_releases_lease_and_records_failed_receipt_on_workflow_error() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    fs::write(temp.path().join(".agent/state/plans.jsonl"), "{not-json\n").unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
-            workflow: Some("noop-status".into()),
-            lease_ttl_seconds: None,
-            max_attempts: None,
-            backoff_seconds: None,
-        })),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Loop workflow 'noop-status' failed; receipt"));
-
-    let status = crate::runtime::dispatch(
-        &ctx,
-        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest { workflow: None })),
-    )
-    .unwrap();
-    assert!(status["leases"].as_array().unwrap().is_empty());
-
-    let receipts = serde_json::json!({"receipts": crate::runtime::tests::common::tool_receipts(&ctx, LOOP_TICK_TOOL, true)});
-    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
-}
-
-#[test]
 fn loop_configured_noop_workflow_uses_toml_tuning() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

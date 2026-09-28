@@ -488,7 +488,7 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: true,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(None, false),
+                tool: crate::command::ToolRequest::new(false),
             },
         )),
     )
@@ -508,7 +508,7 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(None, false),
+                tool: crate::command::ToolRequest::new(false),
             },
         )),
     )
@@ -550,7 +550,6 @@ checks = ["jig.fmt_check", "jig.test"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    crate::state::seed_open_plan_for_test(&ctx, "plan_work", "Work", "Body").unwrap();
 
     let output = super::dispatch(
         &ctx,
@@ -562,7 +561,7 @@ checks = ["jig.fmt_check", "jig.test"]
                 comparison: None,
                 explain: false,
                 fail_fast: false,
-                tool: crate::command::ToolRequest::new(Some("plan_work".into()), true),
+                tool: crate::command::ToolRequest::new(true),
             },
         )),
     )
@@ -570,7 +569,7 @@ checks = ["jig.fmt_check", "jig.test"]
     let run_id = output["run"]["run_id"].as_str().unwrap();
 
     let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
-    assert_eq!(durable.work_plan_id.as_deref(), Some("plan_work"));
+    assert!(durable.work_plan_id.is_none());
     assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
     assert_eq!(
         durable.result.conclusion,
@@ -589,10 +588,10 @@ checks = ["jig.fmt_check", "jig.test"]
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .filter(|receipt| receipt["plan_id"] == "plan_work")
+        .filter(|receipt| receipt["run_id"] == run_id)
         .collect::<Vec<_>>();
     assert_eq!(receipts.len(), 2);
-    assert!(receipts.iter().all(|receipt| receipt["run_id"] == run_id));
+    assert!(receipts.iter().all(|receipt| receipt["plan_id"].is_null()));
     assert!(receipts.iter().all(|receipt| receipt["target"].is_object()));
     assert!(
         receipts
@@ -642,7 +641,6 @@ checks = ["jig.test"]
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
         },

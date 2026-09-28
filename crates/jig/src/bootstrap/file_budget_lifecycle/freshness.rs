@@ -38,11 +38,7 @@ pub(super) fn validate(
         .targets
         .get(&receipt.target)
         .context("native lifecycle identity is missing")?;
-    let mut validator = OriginalProofValidator::for_receipt_plan(
-        originals,
-        receipt.plan_id.as_deref(),
-        crate::state::now_ms(),
-    );
+    let mut validator = OriginalProofValidator::new(originals, crate::state::now_ms());
     let result = validator.evaluate(receipt, expected, budget);
     ensure!(
         result.status == TargetFreshnessStatus::Fresh,

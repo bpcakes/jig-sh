@@ -61,7 +61,7 @@ pub(crate) fn run_direct_file_budget(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeActionResult> {
     let prepared =
-        crate::repository::prepare_file_budget_input_v1(repository, request, configuration, None)?;
+        crate::repository::prepare_file_budget_input_v1(repository, request, configuration)?;
     if let PolicyPreparationV1::InvalidPolicy {
         diagnostics_count,
         diagnostics_digest,

@@ -29,7 +29,6 @@ tool = "jig.custom_check"
         }))
         .write();
     std::fs::write(root.join(".gitignore"), ".agent/.cache/\n.agent/runtime/\n").unwrap();
-    write_open_plan(root);
 }
 
 pub(super) fn write_command_fixture_repo(root: &Path) {
@@ -57,7 +56,6 @@ tool = "jig.custom_check"
             "command": "rust_test_command"
         }))
         .write();
-    write_open_plan(root);
 }
 
 pub(super) fn write_v6_evidence_fixture_repo(root: &Path, gates: &str) {
@@ -160,7 +158,6 @@ targets = [
         .unwrap(),
     )
     .unwrap();
-    write_open_plan(root);
 }
 
 pub(super) fn write_non_rust_file_budget_fixture_repo(root: &Path) {
@@ -264,7 +261,6 @@ target = "web:file-loc"
         .unwrap(),
     )
     .unwrap();
-    write_open_plan(root);
 }
 
 pub(super) fn write_wide_v6_evidence_fixture_repo(root: &Path, commands: &[String]) {
@@ -344,7 +340,6 @@ default_branch = "main"
         .unwrap(),
     )
     .unwrap();
-    write_open_plan(root);
 }
 
 pub(super) fn add_v6_effectful_evidence_actions(root: &Path) {
@@ -395,11 +390,6 @@ depends_on = [{ component = "api", action = "generate" }]
         serde_json::to_string_pretty(&manifest).unwrap(),
     )
     .unwrap();
-}
-
-pub(super) fn write_open_plan(root: &Path) {
-    let ctx = RepoContext::load_from(root).unwrap();
-    crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Test plan", "# Test plan\n").unwrap();
 }
 
 pub(super) fn init_git_repo(root: &Path) {

@@ -200,10 +200,6 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
     } else {
         reconcile_abandoned_runs_before_archive(ctx, &runs_path)?
     };
-    let open_plan_ids = crate::state::open_plan_summaries(ctx)?
-        .into_iter()
-        .filter_map(|plan| plan["plan_id"].as_str().map(str::to_owned))
-        .collect::<BTreeSet<_>>();
     let mut recovery_hint = None;
     let mut archive_hint = None;
     let result = with_jsonl_write_lock(&runs_path, |guard| {
@@ -224,7 +220,6 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
             );
         }
         let mut archived_run_ids = BTreeSet::new();
-        let mut protected_runs_retained = 0usize;
         let mut active_run_leases_retained = 0usize;
         let mut run_events_archived = 0usize;
         for (run_id, lifecycle) in &lifecycles {
@@ -232,12 +227,7 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
                 .completed_at_ms()
                 .is_some_and(|ended| ended < before_ms)
             {
-                if lifecycle
-                    .work_plan_id()
-                    .is_some_and(|plan_id| open_plan_ids.contains(plan_id))
-                {
-                    protected_runs_retained = protected_runs_retained.saturating_add(1);
-                } else if !run_lease_is_idle(ctx, run_id)? {
+                if !run_lease_is_idle(ctx, run_id)? {
                     // A worker may append its terminal event just before
                     // releasing the lease. Retain that run until a later
                     // archive so every supported host keeps one stable inode
@@ -346,7 +336,6 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
             "run_events_archived": run_events_archived,
             "runs_archived": runs_archived,
             "runs_retained": runs_retained,
-            "protected_runs_retained": protected_runs_retained,
             "active_run_leases_retained": active_run_leases_retained,
             "abandoned_runs_reconciled": abandoned_runs_reconciled,
             "run_leases_pruned": run_leases_pruned,

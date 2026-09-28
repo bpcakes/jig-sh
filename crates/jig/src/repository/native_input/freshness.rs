@@ -11,7 +11,6 @@ pub(crate) fn revalidate_freshness_native_input(
         ctx,
         prepared.request.clone(),
         prepared.configuration.clone(),
-        prepared.work_plan_id.clone(),
         budget,
     )?;
     retain_push_before_fetch_provenance(prepared, &mut current);
@@ -81,7 +80,6 @@ fn prepare_observed_input(
     ctx: &RepoContext,
     request: ComparisonRequestV1,
     configuration: NativeFileBudgetConfigV1,
-    work_plan_id: Option<String>,
     budget: &mut CollectionBudget<'_>,
 ) -> CollectionResult<PreparedNativeInputV1> {
     budget.ensure_active()?;
@@ -145,7 +143,7 @@ fn prepare_observed_input(
         policy_source: PolicySourceV1 {
             path: POLICY_PATH_V1.into(),
         },
-        work_plan_id,
+        work_plan_id: None,
         policy,
         comparison,
     })

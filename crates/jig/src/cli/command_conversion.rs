@@ -13,13 +13,12 @@ use super::{
     ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
     ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
     ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
-    StateCompactCommand, StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand,
-    StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
+    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
     fn from(opts: ToolOpts) -> Self {
-        Self::new(opts.plan_id, !opts.no_receipt)
+        Self::new(!opts.no_receipt)
     }
 }
 
@@ -221,14 +220,9 @@ fn merge_tool_opts(parent: ToolOpts, child: ToolOpts) -> Result<ToolOpts> {
     if parent.plan_id.is_some() && child.plan_id.is_some() {
         bail!("--plan-id may be supplied before or after the check name, not both");
     }
-    let plan_id = parent.plan_id.or(child.plan_id);
-    let no_receipt = parent.no_receipt || child.no_receipt;
-    if plan_id.is_some() && no_receipt {
-        bail!("--plan-id cannot be combined with --no-receipt");
-    }
     Ok(ToolOpts {
-        plan_id,
-        no_receipt,
+        plan_id: parent.plan_id.or(child.plan_id),
+        no_receipt: parent.no_receipt || child.no_receipt,
     })
 }
 
@@ -279,9 +273,6 @@ impl From<StateCommand> for command::StateCommand {
         match command {
             StateCommand::Summary => Self::Summary,
             StateCommand::Diagnose(opts) => Self::Diagnose(opts.into()),
-            StateCommand::Compact { command } => match command {
-                StateCompactCommand::Sessions(opts) => Self::CompactSessions(opts.into()),
-            },
             StateCommand::Restore(opts) => Self::Restore(opts.into()),
             StateCommand::Export { command } => match command {
                 StateExportCommand::Receipts(opts) => Self::ExportReceipts(opts.into()),
@@ -294,14 +285,6 @@ impl From<StateCommand> for command::StateCommand {
 impl From<StateDiagnoseOpts> for command::StateDiagnoseRequest {
     fn from(opts: StateDiagnoseOpts) -> Self {
         Self { deep: opts.deep }
-    }
-}
-
-impl From<StateCompactSessionsOpts> for command::StateCompactSessionsRequest {
-    fn from(opts: StateCompactSessionsOpts) -> Self {
-        Self {
-            dry_run: opts.dry_run,
-        }
     }
 }
 

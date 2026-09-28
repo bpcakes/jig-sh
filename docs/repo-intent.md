@@ -38,7 +38,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 - bootstrap flows: `jig init`, `jig adopt`, and `jig update`
 - command-backed tool execution
 - MCP protocol handling over stdio
-- append-only runtime state for sessions, plans, receipts, and decisions
+- append-only runtime state for receipts and runs
 - agent tooling doctor/bootstrap commands for Codex-side Jig skills
 - receipt metadata collection, including git changed paths and diff stats
 
@@ -62,7 +62,7 @@ The repo appears to be designing for a future where agents work repeatedly insid
 - a clear command contract
 - machine-readable tool definitions
 - a way to run checks without guessing project conventions
-- durable traces of plans, decisions, and command results
+- durable traces of command results
 - compatibility rules so generated tooling can evolve without surprising downstream repos
 
 The strongest product thesis visible in the code is:
@@ -98,15 +98,15 @@ human-authored waiver.
 
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It does not load repositories or own runtime aggregation policy.
 
-`crates/jig/src/status.rs` owns read-only aggregation of local Git, recorded plan, lease, and attempt state.
+`crates/jig/src/status.rs` owns read-only aggregation of local Git, lease, and attempt state.
 
-`crates/jig-ui` owns the unified interactive terminal application used by both `scripts/jig ui` and `scripts/jig status --tui`. Its typed `DashboardSource` boundary carries local recorder and plan-detail snapshots without exposing `RepoContext`, state storage, or runtime policy. The CLI adapter in `crates/jig/src/ui.rs` and `crates/jig/src/ui/source/` owns repository collection and status aggregation. The TUI is read-only: it does not write receipts, fetch remotes, run actions, or launch agents.
+`crates/jig-ui` owns the unified interactive terminal application used by both `scripts/jig ui` and `scripts/jig status --tui`. Its typed `DashboardSource` boundary carries local recorder and status snapshots without exposing `RepoContext`, state storage, or runtime policy. The CLI adapter in `crates/jig/src/ui.rs` and `crates/jig/src/ui/source/` owns repository collection and status aggregation. The TUI is read-only: it does not write receipts, fetch remotes, run actions, or launch agents.
 
 `crates/jig-tui` owns terminal-safe display text plus the raw-mode, alternate-screen, cursor-restoration, actionable-key, and cooperative-worker foundations shared by terminal interfaces. `crates/jig-codex-tui` builds the searchable Codex-home picker on that base behind an `InspectionSource` trait. The adapter in `crates/jig/src/cli/codex_run.rs` supplies exact discovered paths and streams normalized account and usage updates from the runtime's bounded app-server inspection pool; the presentation crate does not read authentication files or launch Codex itself.
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
 
-The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` and `jig ui --plan PLAN_ID --json` use bounded recorder schema 1 without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
+The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig status --tui` starts the same application on Status. Both use one local refresh domain that publishes repository status and recorder state as one epoch. One-shot `jig ui --json` uses bounded recorder schema 2 without starting the terminal application. The retired browser transport has no replacement server or HTTP compatibility layer.
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
@@ -114,30 +114,19 @@ The canonical `scripts/jig ui` entrypoint starts on Work, while `scripts/jig sta
 
 `crates/jig/src/state/` stores append-only JSONL records:
 
-- `sessions.jsonl`: session start/end events and write-time summaries; recent-session references inside new summaries are shallow so history cannot recurse
-- `plans.jsonl`: plan open/append/close events; readable, but no current command writes new ones
 - `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
-- `decisions.jsonl`: structured decision records; readable, but no current command writes new ones
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
-- `work-links.jsonl`: immutable joins from Jig plans to portable external-work
-  identities and their observed task snapshots
+
+Repositories adopted before structured work was removed may also keep
+`sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`. Jig no longer writes or
+reads them; `state diagnose` still reports their size and integrity.
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
-validated whole-file rewrites: session compaction creates an exact recovery
-backup under ignored `.agent/.cache/state-backups/`, and state archiving writes
-old receipt records plus, when explicitly requested, completed run-event groups
-as separate compressed cold streams under ignored
-`.agent/.cache/state-archives/`. Explicit receipt exports
-go only to the caller-selected path. None of these operations rewrite Git
-history.
-
-The work-link journal is not a maintenance rewrite target. Its committed records
-are newline-terminated, and unknown versions are retained as raw history without
-acquiring link authority. Beads task definitions come from a bounded read-only
-JSONL snapshot; Jig does not invoke `br`, inspect its SQLite store, or mutate task
-data in the current milestone.
-
-The current session pointer is cache state, not part of the durable JSONL record model.
+validated whole-file rewrites: state archiving writes old receipt records plus,
+when explicitly requested, completed run-event groups as separate compressed cold
+streams under ignored `.agent/.cache/state-archives/`, after an exact recovery
+backup under ignored `.agent/.cache/state-backups/`. Explicit receipt exports go
+only to the caller-selected path. None of these operations rewrite Git history.
 
 ## Design Principles Visible In The Code
 
@@ -185,7 +174,7 @@ For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 - CLI shape: `crates/jig/src/cli.rs`
 - command, legacy make, and MCP dispatch: `crates/jig/src/runtime.rs`
 - MCP protocol: `crates/jig/src/mcp.rs`
-- sessions/plans/receipts/decisions: `crates/jig/src/state.rs` and `crates/jig/src/state/`
+- receipts and runs: `crates/jig/src/state.rs` and `crates/jig/src/state/`
 - bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
 - generated outputs: `templates/project/`
 

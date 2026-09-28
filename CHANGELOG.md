@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- Record dependency execution proof without a work plan. Target freshness now
+  matches dependency proofs within the dependent's run and leaves the proof's
+  `plan_id` empty, so dependents outside a plan no longer report
+  `dependency_proof_invalid`. Automatic Rust focus now compares against the
+  merge base with the default branch, like native checks, instead of a work-plan
+  baseline, and falls back to the whole workspace when that base cannot be
+  resolved.
+
 ### Removed
 
 - Stop shipping ExecPlan and structured-work guidance. Generated repositories no
@@ -15,13 +25,25 @@
   `jig work` invocations fail with a usage error that points to
   `jig check COMPONENT:ACTION` and `jig state summary`; removed MCP tools return
   the standard unsupported-tool error. Work-gate evaluation and the receipt reuse
-  it performed are gone, so every check executes its targets. `jig status` keeps
-  `work.gates` as an empty array, `jig ui` plan and recorder documents keep `gates`
-  as `null`, and `status --freshness-timeout-ms` is accepted but ignored. `[work]`
-  configuration, `--plan-id`, MCP `work_plan_id`, and existing plan, session, and
-  decision records remain readable, but plans can no longer be opened or closed;
-  plans open at upgrade stay open. New receipts no longer inherit the
-  current-session pointer. The contract version is unchanged.
+  it performed are gone, so every check executes its targets.
+  `status --freshness-timeout-ms` is accepted but ignored, and `[work]`
+  configuration still loads. New receipts no longer inherit the current-session
+  pointer. The contract version is unchanged.
+- **Breaking:** stop reading work plans, sessions, and decisions. `--plan-id` and
+  MCP `work_plan_id` are accepted and ignored, and runs and receipts no longer
+  record a plan. `jig state summary` reports only receipt counts and recent
+  receipts. `jig status --json` moves to `schema_version: 3` without its `work`
+  section. `jig ui` drops the Work tab, plan detail, and session, plan, and
+  decision timeline rows, starts on Timeline, and removes `--plan`; its recorder
+  document moves to `schema_version: 2` without `snapshot_kind`,
+  `current_session_id`, `counts`, `open_plans`, or `history`, and receipt rows and
+  failures no longer carry `plan_id` or `session_id`. `jig state archive` no
+  longer retains receipts and runs for open plans, `jig state compact sessions` is
+  removed, and `jig state restore` still accepts the sessions backups it created.
+  Existing `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl` files stay in
+  place and are still sized by `jig state diagnose`, which no longer analyzes
+  session recursion. The loop `noop-status` workflow no longer reports open plans
+  or work-gate counts.
 - Stop validating the retired `[work].iteration_profile` and `[[work.refinements]]`
   settings. Both are still accepted so existing configuration loads, never affect
   execution authority, and are dropped by `jig update`.

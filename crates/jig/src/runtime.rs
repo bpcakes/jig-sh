@@ -126,7 +126,6 @@ fn dispatch_state(
             )
         }
         StateCommand::Diagnose(request) => Ok(crate::state::state_diagnose(ctx, request)),
-        StateCommand::CompactSessions(request) => crate::state::compact_sessions(ctx, request),
         StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
         StateCommand::ExportReceipts(request) => {
             crate::state::receipts_export(ctx, &request.before, &request.output)
@@ -386,7 +385,6 @@ fn dispatch_repository_check_with_catalog(
             "explicit check comparison authority requires repository contract version 7 or later"
         );
     }
-    let (work_plan_id, _) = request.tool.clone().into_parts();
     let plan = crate::repository::plan_run_with_cancellation(
         ctx,
         catalog,
@@ -395,7 +393,6 @@ fn dispatch_repository_check_with_catalog(
             profile: request.profile,
             affected_base: request.affected_base,
             comparison: request.comparison,
-            work_plan_id,
         },
         &|| observer.cancelled(),
     )?;
@@ -462,15 +459,13 @@ fn execute_repository_check_plan(
     fail_fast: bool,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let (work_plan_id, record_receipts) = tool.into_parts();
     let execution = run_execution::execute_freshly_planned_check_run(
         ctx,
         catalog,
         plan.clone(),
         run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id,
-            record_receipts,
+            record_receipts: tool.record_receipt(),
             fail_fast,
         },
         observer,

@@ -354,7 +354,7 @@ target result and an aggregate receipt only when compatibility requires it.
 
 Gate evaluation, agent-review gates, and structured work plans were removed
 with `jig work`. Receipts linked to plans recorded before that removal remain
-readable, and `--plan-id` can still link new runs to a plan that remains open.
+readable; `--plan-id` is accepted and ignored.
 
 ## Caching policy
 

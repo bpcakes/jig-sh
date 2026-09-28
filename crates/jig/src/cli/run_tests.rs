@@ -52,7 +52,7 @@ fn status_run_reconciles_an_abandoned_worker_before_rendering() {
         )],
         vec![vec![target]],
     );
-    let (started, lease) = crate::state::start_run(&ctx, plan, None).unwrap();
+    let (started, lease) = crate::state::start_run(&ctx, plan).unwrap();
     drop(lease);
 
     let output = status_run_output(&ctx, &started.result.run_id).unwrap();
@@ -540,7 +540,7 @@ fn capability_probe_can_use_launcher_contract_when_manifest_is_malformed() {
 }
 
 #[test]
-fn capability_probe_without_explicit_version_rejects_inactive_epoch() {
+fn capability_probe_without_explicit_version_rejects_unsupported_epoch() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .contract_version(11)
@@ -556,13 +556,13 @@ fn capability_probe_without_explicit_version_rejects_inactive_epoch() {
     .to_string();
 
     assert!(
-        error.contains("Inactive Jig contract version 11"),
+        error.contains("Unsupported jig contract version: 11"),
         "{error}"
     );
 }
 
 #[test]
-fn repository_probe_without_explicit_version_rejects_inactive_epoch() {
+fn repository_probe_without_explicit_version_rejects_unsupported_epoch() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .contract_version(11)
@@ -590,7 +590,7 @@ profiles = []"#,
     .to_string();
 
     assert!(
-        error.contains("Inactive Jig contract version 11"),
+        error.contains("Unsupported jig contract version: 11"),
         "{error}"
     );
 }

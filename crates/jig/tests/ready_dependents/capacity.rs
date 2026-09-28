@@ -8,11 +8,7 @@ use std::{
 #[test]
 fn contended_resource_waiters_leave_slots_for_an_ordinary_dependency_chain() {
     let fixture = resource_batch_fixture(false);
-    let plan = open_plan(&fixture);
-    let mut run = fixture.spawn_args(
-        "example-contended",
-        &["check", "--profile", "verify", "--plan-id", &plan],
-    );
+    let mut run = fixture.spawn_args("example-contended", &["check", "--profile", "verify"]);
     run.wait_named_entry("cargo-0");
     run.wait_named_entry("prerequisite");
     assert!(
@@ -149,7 +145,7 @@ fn newly_ready_disjoint_resource_enters_the_active_contended_batch() {
 #[test]
 fn resource_worker_accepts_a_dependent_after_its_first_wave_drains() {
     let fixture = resource_dependent_fixture();
-    let mut run = start(&fixture, &[]);
+    let mut run = start(&fixture);
     release(&fixture, "slow");
     run.wait_target_publication("slow");
     assert!(!fixture.signals.join("entered-dependent").exists());

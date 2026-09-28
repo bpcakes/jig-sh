@@ -1,3 +1,5 @@
+use crate::dashboard::Remediation;
+
 use super::*;
 
 pub(super) fn health_items(
@@ -134,9 +136,6 @@ fn failure_detail(failure: &FailureView) -> DetailDocument {
         format!("Exit: {}", failure.exit_status),
         format!("Ended: {}", failure.ended_at),
     ];
-    if let Some(plan) = &failure.display_plan_id {
-        lines.push(format!("Plan: {plan}"));
-    }
     append_text(&mut lines, "Stderr", &failure.stderr);
     DetailDocument::new("Failure detail", lines)
 }
@@ -385,5 +384,38 @@ fn state_error_health(error: &LoopStateError, duplicate_ordinal: usize) -> Healt
                 field("Error", &error.error),
             ],
         ),
+    }
+}
+
+/// A producer recovery command shown as inert, shell-quoted text. The
+/// dashboard never executes it.
+struct RemediationView {
+    display: String,
+    inert_argv: String,
+}
+
+impl From<Remediation> for RemediationView {
+    fn from(remediation: Remediation) -> Self {
+        Self {
+            display: sanitize_text(&remediation.display),
+            inert_argv: remediation
+                .argv
+                .iter()
+                .map(|arg| quote_argument(&sanitize_text(arg)))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+}
+
+fn quote_argument(argument: &str) -> String {
+    if !argument.is_empty()
+        && argument
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_@%+=:,./-".contains(character))
+    {
+        argument.to_string()
+    } else {
+        format!("'{}'", argument.replace('\'', "'\"'\"'"))
     }
 }

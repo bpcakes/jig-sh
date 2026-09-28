@@ -4,15 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 pub const DEFAULT_TIMELINE_ROWS: usize = 120;
 pub const MAX_TIMELINE_ROWS: usize = 1_000;
-pub const ROOT_LIMIT_KEYS: &[&str] = &[
-    "open_plans",
-    "history",
-    "failures",
-    "tool_stats",
-    "timeline",
-    "plan_decisions",
-    "plan_receipts",
-];
+pub const ROOT_LIMIT_KEYS: &[&str] = &["failures", "tool_stats", "timeline"];
 
 /// A bounded row collection with explicit information about omitted input.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -209,7 +201,6 @@ impl<'de> Deserialize<'de> for BoundedText {
 pub enum BoundUnit {
     Rows,
     Characters,
-    Bytes,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,7 +266,7 @@ impl fmt::Display for BoundViolation {
 
 impl Error for BoundViolation {}
 
-/// Root-level applied limit metadata in schema-1 recorder documents.
+/// Root-level applied limit metadata in recorder documents.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppliedLimit {
     pub applied: usize,
@@ -284,17 +275,9 @@ pub struct AppliedLimit {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RecorderLimits {
-    pub open_plans: AppliedLimit,
-    pub history: AppliedLimit,
     pub failures: AppliedLimit,
     pub tool_stats: AppliedLimit,
     pub timeline: AppliedLimit,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PlanLimits {
-    pub plan_decisions: AppliedLimit,
-    pub plan_receipts: AppliedLimit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -302,7 +285,6 @@ pub enum LimitShape {
     RootRows,
     NestedRows,
     NestedText,
-    InputBytes,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,8 +297,6 @@ pub struct LimitSpec {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LimitId {
-    OpenPlans,
-    History,
     Failures,
     FailureStderrChars,
     ToolStats,
@@ -327,26 +307,12 @@ pub enum LimitId {
     LoopWaitingAttempts,
     LoopExhaustedAttempts,
     Timeline,
-    TimelineDecisionRationaleChars,
-    GateRows,
-    GateChangedPaths,
-    GateMatchingPaths,
-    GateFindings,
-    PlanBodyChars,
-    PlanBodyInputBytes,
-    PlanDecisions,
-    PlanReceipts,
-    ReceiptChangedPaths,
-    ReceiptStdoutChars,
-    ReceiptStderrChars,
 }
 
 impl LimitId {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::OpenPlans => "open_plans",
-            Self::History => "history",
             Self::Failures => "failures",
             Self::FailureStderrChars => "failure_stderr_chars",
             Self::ToolStats => "tool_stats",
@@ -357,18 +323,6 @@ impl LimitId {
             Self::LoopWaitingAttempts => "loop_waiting_attempts",
             Self::LoopExhaustedAttempts => "loop_exhausted_attempts",
             Self::Timeline => "timeline",
-            Self::TimelineDecisionRationaleChars => "timeline_decision_rationale_chars",
-            Self::GateRows => "gate_rows",
-            Self::GateChangedPaths => "gate_changed_paths",
-            Self::GateMatchingPaths => "gate_matching_paths",
-            Self::GateFindings => "gate_findings",
-            Self::PlanBodyChars => "plan_body_chars",
-            Self::PlanBodyInputBytes => "plan_body_input_bytes",
-            Self::PlanDecisions => "plan_decisions",
-            Self::PlanReceipts => "plan_receipts",
-            Self::ReceiptChangedPaths => "receipt_changed_paths",
-            Self::ReceiptStdoutChars => "receipt_stdout_chars",
-            Self::ReceiptStderrChars => "receipt_stderr_chars",
         }
     }
 
@@ -441,20 +395,6 @@ fn limit_spec(id: LimitId, shape: LimitShape) -> Result<&'static LimitSpec, Limi
     }
 }
 
-pub fn validate_input_bytes(byte_len: usize, id: LimitId) -> Result<(), LimitError> {
-    let spec = limit_spec(id, LimitShape::InputBytes)?;
-    if byte_len > spec.ceiling {
-        Err(LimitError::Bound(BoundViolation {
-            retained: byte_len,
-            applied: spec.ceiling,
-            unit: BoundUnit::Bytes,
-            provided_total: None,
-        }))
-    } else {
-        Ok(())
-    }
-}
-
 pub fn root_limit(id: LimitId, omitted: Option<usize>) -> Result<AppliedLimit, LimitError> {
     let spec = limit_spec(id, LimitShape::RootRows)?;
     Ok(AppliedLimit {
@@ -464,18 +404,6 @@ pub fn root_limit(id: LimitId, omitted: Option<usize>) -> Result<AppliedLimit, L
 }
 
 pub const LIMIT_SPECS: &[LimitSpec] = &[
-    LimitSpec {
-        id: LimitId::OpenPlans,
-        ceiling: 1_000,
-        shape: LimitShape::RootRows,
-        serialized_at_root: true,
-    },
-    LimitSpec {
-        id: LimitId::History,
-        ceiling: 10,
-        shape: LimitShape::RootRows,
-        serialized_at_root: true,
-    },
     LimitSpec {
         id: LimitId::Failures,
         ceiling: 10,
@@ -535,77 +463,5 @@ pub const LIMIT_SPECS: &[LimitSpec] = &[
         ceiling: MAX_TIMELINE_ROWS,
         shape: LimitShape::RootRows,
         serialized_at_root: true,
-    },
-    LimitSpec {
-        id: LimitId::TimelineDecisionRationaleChars,
-        ceiling: 300,
-        shape: LimitShape::NestedText,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::GateRows,
-        ceiling: 256,
-        shape: LimitShape::NestedRows,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::GateChangedPaths,
-        ceiling: 100,
-        shape: LimitShape::NestedRows,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::GateMatchingPaths,
-        ceiling: 100,
-        shape: LimitShape::NestedRows,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::GateFindings,
-        ceiling: 100,
-        shape: LimitShape::NestedRows,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::PlanBodyChars,
-        ceiling: 20_000,
-        shape: LimitShape::NestedText,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::PlanBodyInputBytes,
-        ceiling: 80_004,
-        shape: LimitShape::InputBytes,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::PlanDecisions,
-        ceiling: 100,
-        shape: LimitShape::RootRows,
-        serialized_at_root: true,
-    },
-    LimitSpec {
-        id: LimitId::PlanReceipts,
-        ceiling: 50,
-        shape: LimitShape::RootRows,
-        serialized_at_root: true,
-    },
-    LimitSpec {
-        id: LimitId::ReceiptChangedPaths,
-        ceiling: 20,
-        shape: LimitShape::NestedRows,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::ReceiptStdoutChars,
-        ceiling: 1_000,
-        shape: LimitShape::NestedText,
-        serialized_at_root: false,
-    },
-    LimitSpec {
-        id: LimitId::ReceiptStderrChars,
-        ceiling: 1_000,
-        shape: LimitShape::NestedText,
-        serialized_at_root: false,
     },
 ];

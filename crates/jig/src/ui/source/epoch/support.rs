@@ -126,154 +126,6 @@ pub(super) fn scheduled_occurrence(value: &StatusScheduledOccurrence) -> Schedul
     }
 }
 
-pub(super) fn plan_decisions(
-    context: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<(Vec<Decision>, usize, Option<SnapshotError>), SourceError> {
-    let path = context.state_file("decisions.jsonl");
-    let mut rows = NewestRows::new(LimitId::PlanDecisions.ceiling());
-    let mut total = 0usize;
-    let result = scan_dashboard_jsonl_raw(&path, cancelled, |raw| {
-        let decision = serde_json::from_slice::<DashboardDecisionRecord>(raw.bytes)?;
-        if decision.plan_id.as_deref() == Some(plan_id) {
-            total = total.saturating_add(1);
-            rows.push(Decision {
-                id: decision.id,
-                session_id: decision.session_id,
-                plan_id: decision.plan_id,
-                timestamp_ms: decision.timestamp_ms,
-                title: decision.title,
-                selected_option: decision.selected_option,
-                alternatives: decision.alternatives,
-                rationale: bounded_text(
-                    &decision.rationale,
-                    LimitId::TimelineDecisionRationaleChars,
-                )?,
-            });
-        }
-        Ok(())
-    });
-    let error = stream_error(CollectionDomain::Decisions, result, cancelled)?;
-    let mut rows = rows.into_rows();
-    rows.sort_by(|left, right| {
-        right
-            .timestamp_ms
-            .cmp(&left.timestamp_ms)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    Ok((rows, total, error))
-}
-
-pub(super) struct PlanReceiptReduction {
-    pub(super) rows: Vec<Receipt>,
-    pub(super) total: Option<usize>,
-    pub(super) error: Option<SnapshotError>,
-}
-
-pub(super) fn plan_receipts(
-    context: &RepoContext,
-    plan_id: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<PlanReceiptReduction, SourceError> {
-    let path = context.state_file("receipts.jsonl");
-    let mut rows = Vec::new();
-    let mut total = 0usize;
-    let result = scan_dashboard_jsonl_raw(&path, cancelled, |raw| {
-        let receipt = serde_json::from_slice::<DashboardReceiptRecord>(raw.bytes)?;
-        if receipt.plan_id.as_deref() == Some(plan_id) {
-            total = total.saturating_add(1);
-            push_recent_file_order(
-                &mut rows,
-                plan_receipt(&receipt)?,
-                LimitId::PlanReceipts.ceiling(),
-            );
-        }
-        Ok(())
-    });
-    if let Some(error) = stream_error(CollectionDomain::Receipts, result, cancelled)? {
-        return Ok(PlanReceiptReduction {
-            rows: Vec::new(),
-            total: None,
-            error: Some(error),
-        });
-    }
-    rows.reverse();
-    Ok(PlanReceiptReduction {
-        rows,
-        total: Some(total),
-        error: None,
-    })
-}
-
-pub(super) fn receipt_snapshot_error(error: anyhow::Error) -> SnapshotError {
-    let code = if error.downcast_ref::<JsonlRecordTooLarge>().is_some() {
-        SnapshotErrorCode::RecordTooLarge
-    } else if error
-        .chain()
-        .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some())
-    {
-        SnapshotErrorCode::RecordDecodeFailed
-    } else {
-        SnapshotErrorCode::StreamReadFailed
-    };
-    SnapshotError::new(CollectionDomain::Receipts, code, None, format!("{error:#}"))
-}
-
-pub(super) fn plan_receipt(receipt: &DashboardReceiptRecord) -> Result<Receipt, SourceError> {
-    Ok(Receipt {
-        timestamp_ms: Some(receipt.ended_at_ms),
-        id: receipt.id.clone(),
-        tool_name: receipt.tool_name.clone(),
-        invoked_command_key: receipt.invoked_command_key.clone(),
-        plan_id: receipt.plan_id.clone(),
-        session_id: receipt.session_id.clone(),
-        exit_status: i64::from(receipt.exit_status),
-        started_at_ms: Some(receipt.started_at_ms),
-        ended_at_ms: Some(receipt.ended_at_ms),
-        duration_ms: Some(receipt.ended_at_ms.saturating_sub(receipt.started_at_ms)),
-        diff_summary: Some(receipt_diff_summary(receipt)),
-        changed_paths: bounded_rows(receipt.changed_paths.clone(), LimitId::ReceiptChangedPaths)?,
-        stdout_preview: bounded_text(&receipt.stdout_preview, LimitId::ReceiptStdoutChars)?,
-        stderr_preview: bounded_text(&receipt.stderr_preview, LimitId::ReceiptStderrChars)?,
-    })
-}
-
-pub(super) fn plan_body_error(plan_id: &str, error: &anyhow::Error) -> SnapshotError {
-    let (code, message) = error.downcast_ref::<PlanFileError>().map_or(
-        (SnapshotErrorCode::BodyReadFailed, format!("{error:#}")),
-        |error| {
-            let code = match error.kind() {
-                PlanFileErrorKind::InvalidId | PlanFileErrorKind::UnsafePath => {
-                    SnapshotErrorCode::BodyUnsafePath
-                }
-                PlanFileErrorKind::NotFound => SnapshotErrorCode::BodyNotFound,
-                PlanFileErrorKind::UnsafeType => SnapshotErrorCode::BodyUnsafeType,
-                PlanFileErrorKind::InvalidUtf8 => SnapshotErrorCode::BodyInvalidUtf8,
-                PlanFileErrorKind::Read => SnapshotErrorCode::BodyReadFailed,
-                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-                PlanFileErrorKind::UnsupportedPlatform => SnapshotErrorCode::UnsupportedPlatform,
-            };
-            (code, error.to_string())
-        },
-    );
-    SnapshotError::new(
-        CollectionDomain::Body,
-        code,
-        Some(plan_id.to_string()),
-        message,
-    )
-}
-
-pub(super) fn status_baseline(value: crate::state::PlanBaseline) -> StatusPlanBaseline {
-    StatusPlanBaseline {
-        requested_ref: value.requested_ref,
-        commit_oid: value.commit_oid,
-        empty_tree_oid: value.empty_tree_oid,
-        error: value.error,
-    }
-}
-
 pub(super) fn stable_identity(kind: &str, record: RawJsonlRecord<'_>) -> String {
     let digest = Sha256::digest(record.bytes);
     format!("{kind}:{}:{digest:x}", record.start_offset)
@@ -312,16 +164,6 @@ impl<T: Timestamped> NewestRows<T> {
     }
 }
 
-pub(super) fn push_recent_file_order<T>(rows: &mut Vec<T>, row: T, limit: usize) {
-    if limit == 0 {
-        return;
-    }
-    if rows.len() == limit {
-        rows.remove(0);
-    }
-    rows.push(row);
-}
-
 pub(super) trait Timestamped {
     fn timestamp(&self) -> u64;
     fn tie_breaker(&self) -> &str;
@@ -340,53 +182,10 @@ impl Timestamped for TimelineRow {
 pub(super) fn timeline_timestamp(row: &TimelineRow) -> u64 {
     match row {
         TimelineRow::Receipt(row) => row.timestamp_ms.unwrap_or(0),
-        TimelineRow::Plan(row) => row.timestamp_ms.unwrap_or(0),
-        TimelineRow::Session(row) => row.timestamp_ms.unwrap_or(0),
-        TimelineRow::Decision(row) => row.timestamp_ms.unwrap_or(0),
-    }
-}
-
-impl Timestamped for StatusDecisionSummary {
-    fn timestamp(&self) -> u64 {
-        self.timestamp_ms
-    }
-
-    fn tie_breaker(&self) -> &str {
-        &self.id
-    }
-}
-
-impl Timestamped for StatusReceiptSummary {
-    fn timestamp(&self) -> u64 {
-        self.ended_at_ms.unwrap_or(0)
-    }
-
-    fn tie_breaker(&self) -> &str {
-        &self.id
     }
 }
 
 impl Timestamped for Failure {
-    fn timestamp(&self) -> u64 {
-        self.ended_at_ms.unwrap_or(0)
-    }
-
-    fn tie_breaker(&self) -> &str {
-        &self.id
-    }
-}
-
-impl Timestamped for Decision {
-    fn timestamp(&self) -> u64 {
-        self.timestamp_ms
-    }
-
-    fn tie_breaker(&self) -> &str {
-        &self.id
-    }
-}
-
-impl Timestamped for Receipt {
     fn timestamp(&self) -> u64 {
         self.ended_at_ms.unwrap_or(0)
     }
@@ -410,16 +209,6 @@ pub(super) fn bounded_rows<T>(
     let total = rows.len();
     rows.truncate(limit.ceiling());
     BoundedRows::for_limit(rows, Some(total), limit).map_err(limit_error)
-}
-
-pub(super) fn finish_stream<T>(
-    domain: CollectionDomain,
-    data: T,
-    result: anyhow::Result<impl Sized>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<StreamSection<T>, SourceError> {
-    let error = stream_error(domain, result.map(|_| ()), cancelled)?;
-    Ok(StreamSection { data, error })
 }
 
 pub(super) fn stream_error(
@@ -457,17 +246,6 @@ pub(super) fn stream_error(
 
 pub(super) fn status_error(error: SnapshotError) -> StatusCollectionError {
     let (scope, code) = match error.scope() {
-        "state.sessions" | "state.plans" | "state.decisions" | "state.receipts" => (
-            "work.state".to_string(),
-            "work_state_unavailable".to_string(),
-        ),
-        "gates" => (
-            error.subject_id().map_or_else(
-                || "work.gates".to_string(),
-                |plan_id| format!("work.gates.{plan_id}"),
-            ),
-            "work_gates_unavailable".to_string(),
-        ),
         "loops" => ("loops".to_string(), "loop_status_unavailable".to_string()),
         scope => (scope.to_string(), error.code().to_string()),
     };

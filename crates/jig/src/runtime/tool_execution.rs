@@ -25,7 +25,6 @@ pub(super) struct NativeActionContext<'a> {
     pub(super) cancelled: &'a dyn Fn() -> bool,
     pub(super) run_id: &'a str,
     pub(super) target: &'a TargetId,
-    pub(super) work_plan_id: Option<&'a str>,
 }
 
 pub(super) fn run_prepared_native_action(
@@ -59,7 +58,6 @@ pub(super) fn run_prepared_native_action(
         "comparison": prepared.comparison,
         "run_id": context.run_id,
         "target": context.target,
-        "work_plan_id": context.work_plan_id,
         "repository_contract_version": context.repository.contract_version(),
     });
     if let PolicyPreparationV1::InvalidPolicy {
@@ -156,7 +154,7 @@ fn native_result(
 }
 use crate::repository::RepositoryCatalog;
 use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
-use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
+use crate::tool_defs::{self, JsonObject, args, kind, tool};
 
 mod failure;
 
@@ -170,8 +168,7 @@ pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
     request: crate::command::ToolRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let (plan_id, record_receipt) = request.into_parts();
-    execute_manifest_tool_with_observer(ctx, tool_name, args, plan_id, record_receipt, observer)
+    execute_manifest_tool_with_observer(ctx, tool_name, args, request.record_receipt(), observer)
 }
 
 pub(super) fn call_manifest_tool_with_observer(
@@ -180,19 +177,18 @@ pub(super) fn call_manifest_tool_with_observer(
     args_obj: &JsonObject,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    let plan_id = string_arg(args_obj, args::PLAN_ID);
+    // A legacy `plan_id` argument is accepted and ignored.
     let args = tool_defs::execution_tool_args(tool, args_obj)?;
 
     // MCP execution tools are evidence-producing by design; the CLI-only
     // --no-receipt escape hatch is intentionally not part of the tool schema.
-    execute_manifest_tool_with_observer(ctx, &tool.name, args, plan_id, true, observer)
+    execute_manifest_tool_with_observer(ctx, &tool.name, args, true, observer)
 }
 
 pub(super) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
-    plan_id: Option<String>,
     record_receipt: bool,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
@@ -200,7 +196,6 @@ pub(super) fn execute_manifest_tool_with_observer(
         ctx,
         tool_name,
         args,
-        plan_id,
         ManifestToolExecutionOptions::new(record_receipt, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,
@@ -280,7 +275,6 @@ fn execute_manifest_tool_with_options(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
-    plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
     boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
@@ -302,9 +296,7 @@ fn execute_manifest_tool_with_options(
                 "Contract-v6 tool '{tool_name}' does not resolve to a repository action through legacy_aliases"
             );
         }
-        return execute_v6_action_alias(
-            current, tool_name, args, plan_id, options, boundary, observer,
-        );
+        return execute_v6_action_alias(current, tool_name, args, options, boundary, observer);
     }
     if let Some(error) = jig_features::tool_admission_error(&current, tool_name) {
         bail!(error);
@@ -319,7 +311,6 @@ fn execute_manifest_tool_with_options(
                 timeout_seconds: None,
             },
             args,
-            plan_id,
             options,
             boundary.position,
             observer,
@@ -342,7 +333,6 @@ fn execute_manifest_tool_with_options(
                     timeout: current.command_timeout().duration(),
                 },
                 args,
-                plan_id,
                 options,
                 boundary.position,
                 observer,
@@ -356,7 +346,6 @@ fn execute_v6_action_alias(
     mut current: RepoContext,
     tool_name: &str,
     args: Value,
-    plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
     boundary: ManifestToolExecutionBoundary<'_>,
     observer: &mut dyn ExecutionControl,
@@ -399,7 +388,6 @@ fn execute_v6_action_alias(
             &tool,
             action,
             normalized,
-            plan_id,
             options,
             boundary.position,
             observer,
@@ -482,7 +470,6 @@ fn execute_action_alias(
     tool: &ManifestTool,
     action: ActionSpec,
     args: Value,
-    plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
@@ -494,7 +481,6 @@ fn execute_action_alias(
             tool,
             action,
             args,
-            plan_id,
             options,
             observer,
             repository_execution,
@@ -524,7 +510,6 @@ fn execute_action_alias(
                     .unwrap_or_else(|| ctx.command_timeout().duration()),
             },
             args,
-            plan_id,
             options,
             position,
             observer,
@@ -538,7 +523,6 @@ fn execute_action_alias(
                 timeout_seconds: action.timeout_seconds,
             },
             args,
-            plan_id,
             options,
             position,
             observer,
@@ -569,7 +553,6 @@ fn execute_action_alias(
                         .unwrap_or_else(|| ctx.command_timeout().duration()),
                 },
                 args,
-                plan_id,
                 options,
                 position,
                 observer,

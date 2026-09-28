@@ -28,7 +28,6 @@ fn parallel_read_only_layer_fails_closed_and_reports_failure_on_a_source_mutatio
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: false,
             fail_fast: false,
         },
@@ -99,7 +98,6 @@ fn cancelled_parallel_target_keeps_not_started_evidence_after_a_sibling_mutation
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: false,
             fail_fast: false,
         },
@@ -146,7 +144,6 @@ fn parallel_target_that_fails_authority_before_start_keeps_specific_receipt_evid
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
         },
@@ -237,7 +234,6 @@ depends_on = [{ component = "api", action = "generate" }]
             profile: None,
             affected_base: None,
             comparison: None,
-            work_plan_id: None,
         },
         Default::default(),
     )
@@ -257,7 +253,6 @@ depends_on = [{ component = "api", action = "generate" }]
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: false,
             fail_fast: false,
         },
@@ -320,7 +315,6 @@ checks = ["jig.first", "jig.second"]
         plan,
         super::run_execution::ExecuteCheckRunRequest {
             alias_override: None,
-            work_plan_id: None,
             record_receipts: true,
             fail_fast: false,
         },
@@ -380,7 +374,7 @@ checks = ["jig.a_fail", "jig.z_later"]
                 comparison: None,
                 explain: false,
                 fail_fast,
-                tool: crate::command::ToolRequest::new(None, true),
+                tool: crate::command::ToolRequest::new(true),
             },
         ))
     };
@@ -458,7 +452,7 @@ rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
     let output = dispatch_with_observer(
         &ctx,
         RuntimeCommand::Check(crate::command::CheckCommand::Test(
-            crate::command::ToolRequest::new(None, false),
+            crate::command::ToolRequest::new(false),
         )),
         &mut observer,
     )
@@ -512,7 +506,7 @@ fn plain_v6_named_test_routes_through_repository_planning_for_every_component() 
     let output = dispatch_with_observer(
         &ctx,
         RuntimeCommand::Check(crate::command::CheckCommand::Test(
-            crate::command::ToolRequest::new(None, false),
+            crate::command::ToolRequest::new(false),
         )),
         &mut observer,
     )
@@ -579,7 +573,7 @@ command_output_limit_bytes = {OUTPUT_BYTES}
     let output = crate::runtime::dispatch(
         &ctx,
         RuntimeCommand::Check(crate::command::CheckCommand::Test(
-            crate::command::ToolRequest::new(None, false),
+            crate::command::ToolRequest::new(false),
         )),
     )
     .unwrap();
@@ -758,7 +752,6 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
         &ctx,
         crate::tool_defs::tool::TEST,
         json!({}),
-        None,
         true,
         &mut crate::execution::NoopExecutionObserver,
     )

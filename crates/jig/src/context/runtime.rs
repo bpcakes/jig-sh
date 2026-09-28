@@ -32,7 +32,6 @@ static PREVALIDATED_LAUNCHER_CONTEXT: OnceLock<RepoContext> = OnceLock::new();
 // launcher-validated context; environment-mutating tests serialize access.
 static PREVALIDATED_LAUNCHER_CONTEXT: Mutex<Option<RepoContext>> = Mutex::new(None);
 
-pub(crate) const CURRENT_SESSION_FILE: &str = "jig-current-session.txt";
 pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
 pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
 // Epochs 9 and 10 remain reserved for historical, unreleased receipt formats,
