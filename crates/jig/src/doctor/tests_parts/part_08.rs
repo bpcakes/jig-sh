@@ -160,12 +160,7 @@ fn doctor_reports_all_checks_when_config_is_invalid() {
     assert_eq!(check_by_id(&output, "agent_skills")["status"], "blocked");
     assert_eq!(check_by_id(&output, "proxy")["status"], "blocked");
     assert_eq!(check_by_id(&output, "vault")["status"], "blocked");
-    for id in [
-        "contract",
-        "required_tools",
-        "agent_skills",
-        "proxy",
-    ] {
+    for id in ["contract", "required_tools", "agent_skills", "proxy"] {
         assert!(
             check_by_id(&output, id)["detail"]
                 .as_str()

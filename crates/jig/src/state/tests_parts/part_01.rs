@@ -122,4 +122,3 @@ fn receipt_archive_and_export_reject_an_unterminated_final_record_before_publica
     assert!(!temp.path().join(".agent/.cache/state-backups").exists());
     assert!(!temp.path().join(".agent/.cache/state-archives").exists());
 }
-
