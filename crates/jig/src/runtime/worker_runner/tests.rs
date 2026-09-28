@@ -59,7 +59,6 @@ mod tests {
         let mut request = CodexExecRequest {
             root: Path::new("/tmp/repo"),
             codex_home: Some(Path::new("/tmp/codex-home")),
-            mode: CodexExecMode::Exec,
             model: Some("gpt-x"),
             approval_policy: Some("never"),
             sandbox: Some("workspace-write"),
@@ -67,7 +66,7 @@ mod tests {
             extra_args: Vec::new(),
             output_schema: None,
             transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
-            prompt: CodexPrompt::Stdin("fix this"),
+            prompt: "fix this",
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",
                 plan_id: Some("plan_1"),
@@ -380,7 +379,6 @@ printf 'authoritative result\n' > "$out"
             CodexExecRequest {
                 root: temp.path(),
                 codex_home: None,
-                mode: CodexExecMode::Exec,
                 model: None,
                 approval_policy: Some("never"),
                 sandbox: Some("workspace-write"),
@@ -388,7 +386,7 @@ printf 'authoritative result\n' > "$out"
                 extra_args: Vec::new(),
                 output_schema: None,
                 transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
-                prompt: CodexPrompt::Stdin("example prompt"),
+                prompt: "example prompt",
                 receipt: WorkerReceiptRequest {
                     purpose: "test",
                     plan_id: None,
@@ -436,7 +434,6 @@ printf 'authoritative result\n' > "$out"
             CodexExecRequest {
                 root: temp.path(),
                 codex_home: None,
-                mode: CodexExecMode::Exec,
                 model: None,
                 approval_policy: Some("never"),
                 sandbox: Some("workspace-write"),
@@ -444,7 +441,7 @@ printf 'authoritative result\n' > "$out"
                 extra_args: Vec::new(),
                 output_schema: None,
                 transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
-                prompt: CodexPrompt::Stdin("example prompt"),
+                prompt: "example prompt",
                 receipt: WorkerReceiptRequest {
                     purpose: "test",
                     plan_id: None,

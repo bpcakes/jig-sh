@@ -30,38 +30,6 @@ const WORKER_PROVIDER_PREVIEW_BYTES: usize = 4_000;
 const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CodexExecMode {
-    Exec,
-}
-
-impl CodexExecMode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Exec => "exec",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum CodexPrompt<'a> {
-    Stdin(&'a str),
-}
-
-impl<'a> CodexPrompt<'a> {
-    const fn delivery(self) -> &'static str {
-        match self {
-            Self::Stdin(_) => "stdin",
-        }
-    }
-
-    fn stdin_prompt(self) -> Option<&'a str> {
-        match self {
-            Self::Stdin(prompt) => Some(prompt),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct WorkerReceiptRequest<'a> {
     pub(crate) purpose: &'a str,
     pub(crate) plan_id: Option<&'a str>,
@@ -80,7 +48,6 @@ pub(crate) struct WorkerPhase<'a> {
 pub(crate) struct CodexExecRequest<'a> {
     pub(crate) root: &'a Path,
     pub(crate) codex_home: Option<&'a Path>,
-    pub(crate) mode: CodexExecMode,
     pub(crate) model: Option<&'a str>,
     pub(crate) approval_policy: Option<&'a str>,
     pub(crate) sandbox: Option<&'a str>,
@@ -88,7 +55,8 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) extra_args: Vec<OsString>,
     pub(crate) output_schema: Option<&'a Value>,
     pub(crate) transcript_overflow_policy: ProcessOutputOverflowPolicy,
-    pub(crate) prompt: CodexPrompt<'a>,
+    /// Delivered to `codex exec` on stdin.
+    pub(crate) prompt: &'a str,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
     pub(crate) phase: Option<WorkerPhase<'a>>,
 }
@@ -352,7 +320,7 @@ fn run_codex_exec_inner(
     );
     let output = run_worker_command(
         &mut command,
-        request.prompt.stdin_prompt(),
+        Some(request.prompt),
         codex_timeout(ctx)?,
         request.receipt.purpose,
         request.transcript_overflow_policy,
@@ -424,11 +392,8 @@ fn build_codex_command(
         command.arg("--output-schema").arg(schema_path);
     }
     command.arg("-o").arg(output_path);
-    match request.prompt {
-        CodexPrompt::Stdin(_) => {
-            command.arg("-");
-        }
-    }
+    // The prompt is written to the worker's stdin.
+    command.arg("-");
     command
 }
 
@@ -687,7 +652,7 @@ fn record_worker_receipt(
         "schema_version": 1,
         "provider": "codex",
         "runner": "codex_exec",
-        "mode": request.mode.as_str(),
+        "mode": "exec",
         "purpose": request.receipt.purpose,
         "status": status,
         "model": request.model,
@@ -695,7 +660,7 @@ fn record_worker_receipt(
         "sandbox": request.sandbox,
         "ephemeral": request.ephemeral,
         "output_schema": request.output_schema.is_some(),
-        "prompt_delivery": request.prompt.delivery(),
+        "prompt_delivery": "stdin",
         "extra_args": request
             .extra_args
             .iter()
@@ -719,7 +684,7 @@ fn record_worker_receipt(
         args: json!({
             "provider": "codex",
             "runner": "codex_exec",
-            "mode": request.mode.as_str(),
+            "mode": "exec",
             "purpose": request.receipt.purpose,
             "plan_id": request.receipt.plan_id,
             "workflow_id": request.receipt.workflow_id,

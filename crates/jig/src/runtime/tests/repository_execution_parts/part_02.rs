@@ -754,11 +754,13 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     fs::write(temp.path().join(".agent/state"), "not a directory").unwrap();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let error = tool_execution::execute_manifest_tool_result_without_worktree_fingerprint(
+    let error = tool_execution::execute_manifest_tool_with_observer(
         &ctx,
         crate::tool_defs::tool::TEST,
         json!({}),
         None,
+        true,
+        &mut crate::execution::NoopExecutionObserver,
     )
     .unwrap_err()
     .to_string();

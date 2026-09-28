@@ -440,11 +440,6 @@ impl RepoContext {
         self.config.schema_dump_enabled
     }
 
-    #[cfg(test)]
-    pub(crate) fn work_refinements(&self) -> &[work_config::WorkRefinementConfig] {
-        self.config.work.refinements()
-    }
-
     pub(crate) fn schema_docs_dir(&self) -> &str {
         &self.config.schema_docs_dir
     }

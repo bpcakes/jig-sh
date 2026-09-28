@@ -23,8 +23,7 @@ use crate::execution::{
     run_authoritative_execution_command,
 };
 use crate::runtime::worker_runner::{
-    CodexExecFailure, CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt,
-    WorkerReceiptRequest, run_codex_exec,
+    CodexExecFailure, CodexExecOutcome, CodexExecRequest, WorkerReceiptRequest, run_codex_exec,
 };
 use crate::state::now_ms;
 
@@ -524,7 +523,6 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
         CodexExecRequest {
             root: worktree,
             codex_home: repair.codex_home,
-            mode: CodexExecMode::Exec,
             model: None,
             approval_policy: Some("never"),
             sandbox: Some("workspace-write"),
@@ -532,7 +530,7 @@ fn run_pr_repair_in_worktree<L: serde::Serialize>(
             extra_args: Vec::new(),
             output_schema: Some(&output_schema),
             transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
-            prompt: CodexPrompt::Stdin(&prompt),
+            prompt: &prompt,
             receipt: WorkerReceiptRequest {
                 purpose: "pr_manager",
                 plan_id: None,

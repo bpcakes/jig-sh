@@ -201,8 +201,7 @@ pub(super) fn execute_command_tool(
         &stdout,
         &stderr,
     );
-    let receipt_id =
-        receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
+    let receipt_id = receipt_id_or_preserve_tool_error(tool_failure, receipt_result)?;
 
     tool_response_value(ToolExecutionResponse {
         ok: true,
@@ -276,8 +275,7 @@ fn finish_configured_command_error(
         &stdout,
         &stderr,
     );
-    let receipt_id =
-        receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
+    let receipt_id = receipt_id_or_preserve_tool_error(tool_failure, receipt_result)?;
     tool_response_value(ToolExecutionResponse {
         ok: true,
         tool: invocation.tool_name,

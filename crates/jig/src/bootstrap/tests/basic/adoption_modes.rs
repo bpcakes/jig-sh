@@ -192,10 +192,8 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
     );
     assert_eq!(gate("project-evidence")["kind"].as_str(), Some("evidence"));
     assert_eq!(gate("project-evidence")["required"].as_bool(), Some(false));
-    assert_eq!(
-        config["work"]["refinements"][0]["id"].as_str(),
-        Some("project-refinement")
-    );
+    // Retired `jig work` refinements are not carried forward.
+    assert!(config["work"].get("refinements").is_none());
     for stale_id in [
         "sqlx",
         "schema",

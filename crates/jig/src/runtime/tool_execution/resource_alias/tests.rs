@@ -86,15 +86,9 @@ fn cancelling_a_waiting_alias_never_starts_the_child_or_releases_the_owner() {
 }
 
 #[test]
-fn failed_alias_keeps_collect_result_and_fail_fast_semantics() {
+fn failed_alias_fails_fast_with_its_receipt() {
     let fixture = Fixture::new(7, 0);
     let ctx = fixture.context();
-    let output = invoke(&ctx, &mut NoopExecutionObserver)
-        .unwrap()
-        .into_value()
-        .unwrap();
-    assert_eq!(output["ok"], true);
-    assert_eq!(output["result"]["exit_status"], 7);
     let error = execute_manifest_tool_with_observer(
         &ctx,
         REQUESTED_ALIAS,
@@ -112,13 +106,10 @@ fn failed_alias_keeps_collect_result_and_fail_fast_semantics() {
 fn failed_declared_dependency_prevents_alias_child_execution() {
     let fixture = Fixture::new(0, 9);
     let ctx = fixture.context();
-    let output = invoke(&ctx, &mut NoopExecutionObserver)
-        .unwrap()
-        .into_value()
-        .unwrap();
-    assert_eq!(output["tool"], REQUESTED_ALIAS);
-    assert_eq!(output["args"], json!({"value": ARGUMENT}));
-    assert_ne!(output["result"]["exit_status"], 0);
+    let error = invoke(&ctx, &mut NoopExecutionObserver)
+        .err()
+        .expect("a failed dependency must fail the alias");
+    assert!(error.to_string().contains(REQUESTED_ALIAS), "{error:#}");
     assert!(!fixture.marker().exists());
 }
 
@@ -161,7 +152,7 @@ fn invoke(
         REQUESTED_ALIAS,
         json!({"value": ARGUMENT}),
         None,
-        ManifestToolExecutionOptions::collect_result(true, true, true),
+        ManifestToolExecutionOptions::new(true, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,
     )

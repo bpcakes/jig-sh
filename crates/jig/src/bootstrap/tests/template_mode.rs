@@ -289,7 +289,7 @@ fn update_recopy_seeds_then_preserves_authored_file_budget_policy() {
 }
 
 #[test]
-fn update_and_recopy_preserve_authored_iteration_profile() {
+fn update_and_recopy_drop_retired_iteration_profile() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_git_worktree();
@@ -325,10 +325,9 @@ fn update_and_recopy_preserve_authored_iteration_profile() {
         .unwrap();
 
         let updated = read_answers_toml(&answers_path).unwrap();
-        assert_eq!(
-            updated["work"]["iteration_profile"].as_str(),
-            Some("verify"),
-            "iteration profile was lost with recopy={recopy}"
+        assert!(
+            updated["work"].get("iteration_profile").is_none(),
+            "retired iteration profile survived recopy={recopy}"
         );
     }
 }

@@ -221,8 +221,7 @@ pub(super) fn execute_native_tool(
         &output.stdout,
         &output.stderr,
     );
-    let receipt_id =
-        receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
+    let receipt_id = receipt_id_or_preserve_tool_error(tool_failure, receipt_result)?;
 
     tool_response_value(ToolExecutionResponse {
         ok: true,
@@ -312,7 +311,7 @@ fn cancelled_native_tool_outcome(
     Ok(ManifestToolExecutionOutcome::Cancelled(response))
 }
 
-fn receipt_id_or_preserve_tool_error(
+pub(super) fn receipt_id_or_preserve_tool_error(
     tool_failure: Option<String>,
     receipt_result: Result<Option<String>>,
 ) -> Result<Option<String>> {
@@ -326,34 +325,5 @@ fn receipt_id_or_preserve_tool_error(
         }
     } else {
         receipt_result
-    }
-}
-
-#[cfg(test)]
-fn receipt_id_or_preserve_receipt_recording_context(
-    tool_failure: Option<String>,
-    receipt_result: Result<Option<String>>,
-) -> Result<Option<String>> {
-    match (tool_failure, receipt_result) {
-        (Some(tool_failure), Err(receipt_error)) => {
-            bail!("{tool_failure}\nreceipt recording also failed:\n{receipt_error:#}")
-        }
-        (_, receipt_result) => receipt_result,
-    }
-}
-
-pub(super) fn receipt_id_for_failure_mode(
-    failure_mode: ToolFailureMode,
-    tool_failure: Option<String>,
-    receipt_result: Result<Option<String>>,
-) -> Result<Option<String>> {
-    match failure_mode {
-        ToolFailureMode::FailFast => {
-            receipt_id_or_preserve_tool_error(tool_failure, receipt_result)
-        }
-        #[cfg(test)]
-        ToolFailureMode::CollectResult => {
-            receipt_id_or_preserve_receipt_recording_context(tool_failure, receipt_result)
-        }
     }
 }

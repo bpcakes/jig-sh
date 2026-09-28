@@ -21,7 +21,6 @@ mod tests;
 /// target are distinct proof nodes, even when their identity tokens are equal.
 pub(crate) struct OriginalProofValidator {
     plan_id: Option<String>,
-    use_original_plan: bool,
     now_ms: u64,
     originals: OriginalReceiptIndex,
     loaded: BTreeMap<String, Rc<TargetReceiptStatus>>,
@@ -41,7 +40,6 @@ impl OriginalProofValidator {
     ) -> Self {
         Self {
             plan_id: plan_id.map(str::to_owned),
-            use_original_plan: false,
             now_ms,
             originals,
             loaded: BTreeMap::new(),
@@ -108,12 +106,7 @@ impl OriginalProofValidator {
             }
             if exiting {
                 let receipt = self.loaded[&id].clone();
-                let plan_id = if self.use_original_plan {
-                    receipt.plan_id.as_deref()
-                } else {
-                    self.plan_id.as_deref()
-                };
-                let result = self.validate_original(&receipt, plan_id, self.now_ms);
+                let result = self.validate_original(&receipt, self.plan_id.as_deref(), self.now_ms);
                 self.validated.insert(id.clone(), result);
                 visiting.remove(&id);
                 continue;

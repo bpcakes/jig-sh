@@ -118,7 +118,7 @@ pub(super) fn execute(
         return Ok(ManifestToolExecutionOutcome::Cancelled(response));
     }
     let failure = manifest_tool_result_failure(&response)?.map(|(_, message)| message);
-    receipt_id_for_failure_mode(options.failure_mode, failure, Ok(result.receipt_id.clone()))?;
+    receipt_id_or_preserve_tool_error(failure, Ok(result.receipt_id.clone()))?;
     Ok(ManifestToolExecutionOutcome::Completed(response))
 }
 

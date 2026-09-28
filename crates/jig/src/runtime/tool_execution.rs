@@ -201,28 +201,9 @@ pub(super) fn execute_manifest_tool_with_observer(
         tool_name,
         args,
         plan_id,
-        ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
+        ManifestToolExecutionOptions::new(record_receipt, true, true),
         ManifestToolExecutionBoundary::single(),
         observer,
-    )?
-    .into_value()
-}
-
-#[cfg(test)]
-pub(super) fn execute_manifest_tool_result_without_worktree_fingerprint(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-) -> Result<Value> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result(true, false, false),
-        ManifestToolExecutionBoundary::single(),
-        &mut NoopExecutionObserver,
     )?
     .into_value()
 }
@@ -260,22 +241,14 @@ pub(in crate::runtime) fn undeclared_tool_message(ctx: &RepoContext, tool_name: 
 }
 
 #[derive(Clone, Copy)]
-enum ToolFailureMode {
-    FailFast,
-    #[cfg(test)]
-    CollectResult,
-}
-
-#[derive(Clone, Copy)]
 struct ManifestToolExecutionOptions {
     record_receipt: bool,
     collect_git_metadata: bool,
     collect_worktree_fingerprint: bool,
-    failure_mode: ToolFailureMode,
 }
 
 impl ManifestToolExecutionOptions {
-    const fn fail_fast(
+    const fn new(
         record_receipt: bool,
         collect_git_metadata: bool,
         collect_worktree_fingerprint: bool,
@@ -284,21 +257,6 @@ impl ManifestToolExecutionOptions {
             record_receipt,
             collect_git_metadata,
             collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::FailFast,
-        }
-    }
-
-    #[cfg(test)]
-    const fn collect_result(
-        record_receipt: bool,
-        collect_git_metadata: bool,
-        collect_worktree_fingerprint: bool,
-    ) -> Self {
-        Self {
-            record_receipt,
-            collect_git_metadata,
-            collect_worktree_fingerprint,
-            failure_mode: ToolFailureMode::CollectResult,
         }
     }
 }

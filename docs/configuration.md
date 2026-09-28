@@ -393,11 +393,11 @@ Nested accepted keys are:
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[execution]`: `command_timeout_seconds`, `command_output_limit_bytes`
-- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted but ignored
+- `[work]`: `receipt_metadata`, `tracker`, `checks`, `gates`, `iteration_profile`, `refinements`; `iteration_profile` and `refinements` are accepted with any value but ignored, and `jig update` drops them
 - `[work.tracker]`: `kind`, `workspace_id`, `export`, `manual_export_guidance`; the
   current `beads` kind accepts only manual export and no configurable store root
 - `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`; check gates also accept `paths`, `paths_ignore`, and `reuse`
-- `[[work.refinements]]`: `id`, `skill`, `mode`, `model` (validated but ignored)
+- `[[work.refinements]]`: retired; entries are accepted without validation and ignored
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
 - `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`, `prepare_command`
 - `[agent_tooling.codex]`: `marketplaces`
@@ -582,14 +582,15 @@ execution-authority digest does not change. `receipt_metadata` and `tracker`
 keep working. `checks` and `gates` still define the default check profile for
 legacy contract v2–v5 repositories and adoption's gate preview, and generated
 repositories still render `[[work.gates]]`. `iteration_profile` and
-`refinements` are accepted but ignored. See
+`refinements` are accepted with any value but ignored, never enter execution
+authority, and are dropped by `jig update`. See
 [Removed Work Commands](public-contract.md#removed-work-commands) for the
 command-level compatibility rules.
 
 ### Focused Rust checks
 
 `work.iteration_profile` is accepted for compatibility but ignored; it selected
-the profile for the removed `work check --phase iteration`.
+the profile for the removed `work check --phase iteration`. `jig update` drops it.
 
 Contract-v8-or-later repositories may declare the opt-in, versioned
 `rust_nextest_v1` runner. The following action uses ordinary target execution,
@@ -740,7 +741,7 @@ For compatibility, older repos may still use `work.checks`; Jig backfills entrie
 
 Generated v6 profiles include applicable SQLx, sqlc, schema, language, frontend, and contract targets. Generated legacy repositories continue to emit the corresponding tool gates such as `jig.sqlx_check`, `jig.schema_check`, and `jig.schema_dump`. The legacy catalog's derived default verification profile excludes the one known effectful historical gate, `jig.schema_dump`, instead of making it part of bare `jig check`. Any other configured legacy gate that is not a read-only check is rejected instead of being silently omitted.
 
-`kind = "codex_review"` gates and `[[work.refinements]]` entries are still validated but never run. Review thresholds in `fail_on` and `severity` must name `critical`, `warning`, or `suggestion`, or the aliases `high`, `medium`, and `low`; `scope` must be `uncommitted`, `base:<ref>`, `base=<ref>`, `commit:<sha>`, or `commit=<sha>`. At most one refinement entry is accepted.
+`kind = "codex_review"` gates are still validated but never run; retired `[[work.refinements]]` entries are not validated. Review thresholds in `fail_on` and `severity` must name `critical`, `warning`, or `suggestion`, or the aliases `high`, `medium`, and `low`; `scope` must be `uncommitted`, `base:<ref>`, `base=<ref>`, `commit:<sha>`, or `commit=<sha>`.
 
 ## `frontend_apps` Shape
 

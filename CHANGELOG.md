@@ -22,6 +22,9 @@
   decision records remain readable, but plans can no longer be opened or closed;
   plans open at upgrade stay open. New receipts no longer inherit the
   current-session pointer. The contract version is unchanged.
+- Stop validating the retired `[work].iteration_profile` and `[[work.refinements]]`
+  settings. Both are still accepted so existing configuration loads, never affect
+  execution authority, and are dropped by `jig update`.
 
 ## v0.6.0 - 2026-09-27
 

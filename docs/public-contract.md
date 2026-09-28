@@ -726,7 +726,8 @@ recorded, and older reused-evidence and work-check batch records remain readable
 repositories load unchanged and the execution-authority digest does not change.
 `receipt_metadata` and `tracker` keep working. `checks` and `gates` still define
 the default check profile for legacy contract v2–v5 repositories and adoption's
-gate preview; `iteration_profile` and `refinements` are accepted but ignored.
+gate preview; `iteration_profile` and `refinements` are accepted with any value but
+ignored, and `jig update` drops them.
 Generated repositories still render `[[work.gates]]`. See
 [Configuration](configuration.md) for the accepted keys.
 
