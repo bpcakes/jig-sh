@@ -49,13 +49,19 @@ fn evidence_round_trips_outside_the_checkout() {
             read(&ctx, &occurrence.occurrence_id, &|| false).unwrap(),
             Some(evidence)
         );
+        // Compare canonical paths: temporary directories can be reached
+        // through a symlink, as on macOS.
         let path = path_for_test(&ctx, &occurrence.occurrence_id).unwrap();
         let expected_parent = if git {
             temp.path().join(".git/jig/loop/evidence")
         } else {
             temp.path().join(".agent/runtime/loop/evidence")
         };
-        assert_eq!(path.parent(), Some(expected_parent.as_path()));
+        assert!(path.is_file(), "{}", path.display());
+        assert_eq!(
+            path.parent().unwrap().canonicalize().unwrap(),
+            expected_parent.canonicalize().unwrap()
+        );
         assert!(read(&ctx, "example@2000", &|| false).unwrap().is_none());
     }
 }
