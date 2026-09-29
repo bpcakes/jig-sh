@@ -20,16 +20,12 @@ use super::compression::{
     sync_directory,
 };
 use super::jsonl::{scan_jsonl_raw, with_jsonl_write_lock};
-use super::receipts::validate_receipt_stream;
 use super::support::now_ms;
 
 const BACKUP_MANIFEST_VERSION: u32 = 1;
 const SESSIONS_STREAM: &str = "sessions";
 const SESSIONS_SOURCE_PATH: &str = ".agent/state/sessions.jsonl";
 const SESSIONS_BACKUP_FILE: &str = "sessions.jsonl.gz";
-const RECEIPTS_STREAM: &str = "receipts";
-const RECEIPTS_SOURCE_PATH: &str = ".agent/state/receipts.jsonl";
-const RECEIPTS_BACKUP_FILE: &str = "receipts.jsonl.gz";
 const RUNS_STREAM: &str = "runs";
 const RUNS_SOURCE_PATH: &str = ".agent/state/runs.jsonl";
 const RUNS_BACKUP_FILE: &str = "runs.jsonl.gz";
@@ -52,13 +48,6 @@ const SESSION_BACKUP_STREAM: BackupStream = BackupStream {
     compressed_file: SESSIONS_BACKUP_FILE,
 };
 
-const RECEIPT_BACKUP_STREAM: BackupStream = BackupStream {
-    name: RECEIPTS_STREAM,
-    state_file: "receipts.jsonl",
-    source_path: RECEIPTS_SOURCE_PATH,
-    compressed_file: RECEIPTS_BACKUP_FILE,
-};
-
 const RUN_BACKUP_STREAM: BackupStream = BackupStream {
     name: RUNS_STREAM,
     state_file: "runs.jsonl",
@@ -78,39 +67,11 @@ struct StateBackupManifest {
     compressed_bytes: u64,
 }
 
-/// Manifest facts exposed only after the state-maintenance boundary has
-/// recognized an exact runs backup that `state restore` can accept.
-pub(in crate::state) struct ValidatedRunBackupManifest {
-    pub(in crate::state) compressed_file: String,
-    pub(in crate::state) created_at_ms: u64,
-    pub(in crate::state) original_bytes: u64,
-    pub(in crate::state) original_sha256: String,
-    pub(in crate::state) compressed_bytes: u64,
-}
-
 fn read_state_backup_manifest(path: &Path) -> Result<StateBackupManifest> {
     let manifest_text =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     serde_json::from_str(&manifest_text)
         .with_context(|| format!("Failed to parse {}", path.display()))
-}
-
-pub(in crate::state) fn read_run_backup_manifest(
-    path: &Path,
-) -> Result<Option<ValidatedRunBackupManifest>> {
-    let manifest = read_state_backup_manifest(path)?;
-    if manifest.stream != RUNS_STREAM {
-        return Ok(None);
-    }
-    let stream = validate_manifest(&manifest)?;
-    debug_assert_eq!(stream.name, RUNS_STREAM);
-    Ok(Some(ValidatedRunBackupManifest {
-        compressed_file: manifest.compressed_file,
-        created_at_ms: manifest.created_at_ms,
-        original_bytes: manifest.original_bytes,
-        original_sha256: manifest.original_sha256,
-        compressed_bytes: manifest.compressed_bytes,
-    }))
 }
 
 pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) -> Result<Value> {
@@ -248,21 +209,6 @@ pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) ->
     })
 }
 
-pub(super) fn create_receipts_backup(
-    ctx: &RepoContext,
-    source: &Path,
-    directory_prefix: &str,
-    expected: Option<(u64, &str)>,
-) -> Result<(PathBuf, GzipWriteReport)> {
-    create_state_backup(
-        ctx,
-        source,
-        directory_prefix,
-        RECEIPT_BACKUP_STREAM,
-        expected,
-    )
-}
-
 pub(super) fn create_runs_backup(
     ctx: &RepoContext,
     source: &Path,
@@ -360,7 +306,6 @@ fn validate_manifest(manifest: &StateBackupManifest) -> Result<BackupStream> {
     }
     let stream = match (manifest.stream.as_str(), manifest.source_path.as_str()) {
         (SESSIONS_STREAM, SESSIONS_SOURCE_PATH) => SESSION_BACKUP_STREAM,
-        (RECEIPTS_STREAM, RECEIPTS_SOURCE_PATH) => RECEIPT_BACKUP_STREAM,
         (RUNS_STREAM, RUNS_SOURCE_PATH) => RUN_BACKUP_STREAM,
         _ => {
             bail!(
@@ -389,7 +334,6 @@ fn validate_manifest(manifest: &StateBackupManifest) -> Result<BackupStream> {
 fn validate_restored_stream(stream: BackupStream, path: &Path) -> Result<()> {
     match stream.name {
         SESSIONS_STREAM => validate_legacy_session_stream(path),
-        RECEIPTS_STREAM => validate_receipt_stream(path),
         RUNS_STREAM => super::runs::validate_run_stream(path),
         _ => unreachable!("validated backup streams are exhaustive"),
     }

@@ -51,10 +51,7 @@ pub(crate) use proxy::{
     ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts,
 };
 pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
-pub(crate) use state::{
-    StateArchiveOpts, StateCommand, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
-    StateRestoreOpts,
-};
+pub(crate) use state::{StateArchiveOpts, StateCommand, StateRestoreOpts};
 pub(crate) use status_opts::{StatusCommand, StatusOpts};
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyOpts, VaultBackupCommand, VaultBackupCreateOpts,

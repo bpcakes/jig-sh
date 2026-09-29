@@ -122,11 +122,8 @@ fn dispatch_state(
                 },
             )
         }
-        StateCommand::Diagnose(request) => Ok(crate::state::state_diagnose(ctx, request)),
+        StateCommand::Diagnose => Ok(crate::state::state_diagnose(ctx)),
         StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
-        StateCommand::ExportReceipts(request) => {
-            crate::state::receipts_export(ctx, &request.before, &request.output)
-        }
         StateCommand::Archive(request) => crate::state::state_archive(ctx, request),
     }
 }

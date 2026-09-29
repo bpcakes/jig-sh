@@ -278,7 +278,7 @@ The three tabs are Status, Timeline, and Health. Collection failures remain visi
 
 The 0.3.0 browser server and URL endpoints are gone. A hidden `--port` parser exits with a migration diagnostic and may stop parsing in a later release. Use the terminal dashboard or one-shot JSON.
 
-Use `scripts/jig state diagnose` to inspect run, receipt, and legacy stream growth. Compaction, archival, export, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
+Use `scripts/jig state diagnose` to inspect run and legacy stream growth. Archival, restore, locking, and recovery behavior are documented under [Runtime State](docs/public-contract.md#runtime-state). Recovery artifacts under `.agent/.cache/` are local and ignored; copy any artifact that needs durable retention outside the checkout.
 
 ### Vault
 

@@ -12,7 +12,7 @@
 - `src/cli/run/dev_launch.rs`: private dev-worker CLI handoff; its worker owns the existing dev lifecycle and output.
 - `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
 - `src/mcp.rs`: JSON-RPC/MCP stdio server.
-- `src/state.rs`: run history under `.agent/state`, plus read access to the legacy receipt journal.
+- `src/state.rs`: run history under `.agent/state`, with its diagnosis, archive, and restore maintenance.
 - `src/runtime/loops/evidence.rs`: per-occurrence loop evidence recorded under Git metadata; `src/runtime/loops/show.rs` reports it for `jig loop show`.
 - `src/ui.rs`: `jig ui` and `jig status --tui` CLI adapter for the separately owned `jig-ui` terminal crate.
 - `src/ui/source.rs`: typed recorder and status source with retained local epochs.
@@ -32,7 +32,7 @@
 - Change command-preview sanitization and warnings: `src/cli/output/command_display.rs`; provider renderers own layout and JSON interpretation.
 - Change manifest-tool behavior around command execution: `src/runtime.rs`.
 - Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
-- Change run history, legacy receipt reading, or `jig state summary`: `src/state.rs` and `src/state/`.
+- Change run history, state maintenance, or `jig state summary`: `src/state.rs` and `src/state/`.
 - Change loop occurrence evidence, its retention, or `jig loop show`: `src/runtime/loops/evidence.rs` and `src/runtime/loops/show.rs`.
 - Change the data exposed by the unified dashboard, including its run-history timeline and health aggregates: `src/ui/source/`.
 - Change dashboard navigation, scheduling, or rendering: `crates/jig-ui/`.

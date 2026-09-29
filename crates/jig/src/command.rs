@@ -35,10 +35,7 @@ pub(crate) use proxy::{
 };
 pub(crate) use repository_run::RepositoryRunRequest;
 pub(crate) use sqlx::SqlxCommand;
-pub(crate) use state::{
-    StateArchiveRequest, StateCommand, StateDiagnoseRequest, StateExportReceiptsRequest,
-    StateRestoreRequest,
-};
+pub(crate) use state::{StateArchiveRequest, StateCommand, StateRestoreRequest};
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyRequest, VaultBackupCommand, VaultBackupCreateRequest,
     VaultBackupRestoreRequest, VaultCommand, VaultExecAssignment, VaultExecEnvironment,
@@ -121,10 +118,9 @@ impl RuntimeCommand {
             },
             Self::State(command) => match command {
                 StateCommand::Summary => Cooperative,
-                StateCommand::Diagnose(_)
-                | StateCommand::Restore(_)
-                | StateCommand::ExportReceipts(_)
-                | StateCommand::Archive(_) => Native,
+                StateCommand::Diagnose | StateCommand::Restore(_) | StateCommand::Archive(_) => {
+                    Native
+                }
             },
             Self::AgentMap(_)
             | Self::GenerateSqlxUncheckedQueriesTodo(_)
@@ -144,17 +140,12 @@ mod tests {
     fn unsupported_observer_paths_keep_native_signal_handling() {
         let native_commands = [
             RuntimeCommand::Check(CheckCommand::AgentGuides),
-            RuntimeCommand::State(StateCommand::Diagnose(StateDiagnoseRequest { deep: true })),
+            RuntimeCommand::State(StateCommand::Diagnose),
             RuntimeCommand::State(StateCommand::Restore(StateRestoreRequest {
                 backup: PathBuf::from("backup"),
             })),
-            RuntimeCommand::State(StateCommand::ExportReceipts(StateExportReceiptsRequest {
-                before: "2026-01-01".into(),
-                output: PathBuf::from("receipts.json"),
-            })),
             RuntimeCommand::State(StateCommand::Archive(StateArchiveRequest {
                 before: "2026-01-01".into(),
-                include_runs: true,
                 dry_run: true,
             })),
         ];

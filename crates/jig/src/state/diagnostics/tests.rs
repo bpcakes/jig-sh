@@ -19,7 +19,7 @@ fn diagnose_missing_state_is_strictly_read_only() {
     let ctx = fixture_context(temp.path());
     let before = fixture_paths(temp.path());
 
-    let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
+    let output = state_diagnose(&ctx);
 
     assert_eq!(output["state_dir_exists"], false);
     assert_eq!(output["totals"]["stream_bytes"], 0);
@@ -53,49 +53,17 @@ fn assert_stream_diagnostics(output: &serde_json::Value, sessions: &str, recursi
     assert_eq!(output["streams"]["plans"]["torn_tail"], true);
 }
 
-fn assert_receipt_and_archive_diagnostics(
-    output: &serde_json::Value,
-    args: &str,
-    stdout: &str,
-    stderr: &str,
-    evidence: &str,
-    paths: &str,
-    diff: &str,
-) {
-    assert_eq!(output["receipts"]["analyzed_records"], 1);
-    assert_eq!(output["receipts"]["args_bytes"], args.len() as u64);
-    assert_eq!(
-        output["receipts"]["stdout_preview_bytes"],
-        stdout.len() as u64
-    );
-    assert_eq!(
-        output["receipts"]["stderr_preview_bytes"],
-        stderr.len() as u64
-    );
-    assert_eq!(
-        output["receipts"]["output_preview_bytes"],
-        (stdout.len() + stderr.len()) as u64
-    );
-    assert_eq!(output["receipts"]["evidence_bytes"], evidence.len() as u64);
-    assert_eq!(
-        output["receipts"]["changed_paths_bytes"],
-        paths.len() as u64
-    );
-    assert_eq!(output["receipts"]["diff_stat_bytes"], diff.len() as u64);
+fn assert_archive_diagnostics(output: &serde_json::Value) {
     assert_eq!(output["legacy_archive"]["files"], 2);
     assert_eq!(output["legacy_archive"]["bytes"], 8);
     assert_eq!(output["totals"]["legacy_archive_bytes"], 8);
-    assert!(
-        output["recommendations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|recommendation| recommendation["kind"] != "compact_sessions")
-    );
+    assert!(output.get("receipts").is_none());
+    assert!(output.get("run_linkage").is_none());
+    assert!(output.get("deep").is_none());
 }
 
 #[test]
-fn diagnose_reports_exact_stream_and_deep_storage_facts() {
+fn diagnose_reports_exact_stream_and_archive_facts() {
     let temp = tempdir().unwrap();
     let ctx = fixture_context(temp.path());
     fs::create_dir_all(ctx.state_dir().join("archive/nested")).unwrap();
@@ -114,41 +82,16 @@ fn diagnose_reports_exact_stream_and_deep_storage_facts() {
     let malformed_plans = b"{}\n{\"broken\":";
     fs::write(ctx.state_file("plans.jsonl"), malformed_plans).unwrap();
 
-    let args = r#"{"command":"x"}"#;
-    let stdout = r#""out""#;
-    let stderr = r#""err""#;
-    let evidence = r#"{"ok":true}"#;
-    let paths = r#"["a","b"]"#;
-    let diff = r#"{"files":2,"insertions":1,"deletions":0}"#;
-    let receipt = [
-        r#"{"id":"r","args":"#,
-        args,
-        r#","stdout_preview":"#,
-        stdout,
-        r#","stderr_preview":"#,
-        stderr,
-        r#","evidence":"#,
-        evidence,
-        r#","changed_paths":"#,
-        paths,
-        r#","diff_stat":"#,
-        diff,
-        "}",
-    ]
-    .concat();
-    fs::write(
-        ctx.state_file("receipts.jsonl"),
-        format!("{receipt}\n").as_bytes(),
-    )
-    .unwrap();
+    fs::write(ctx.state_file("receipts.jsonl"), b"{\"id\":\"r\"}\n").unwrap();
     fs::write(ctx.state_dir().join("archive/old.jsonl"), b"abc").unwrap();
     fs::write(ctx.state_dir().join("archive/nested/older.jsonl"), b"12345").unwrap();
 
-    let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
+    let output = state_diagnose(&ctx);
 
     assert_stream_diagnostics(&output, &sessions, &recursive);
     assert!(output.get("sessions").is_none());
-    assert_receipt_and_archive_diagnostics(&output, args, stdout, stderr, evidence, paths, diff);
+    assert_eq!(output["streams"]["receipts"]["records"], 1);
+    assert_archive_diagnostics(&output);
 }
 
 #[test]
@@ -173,7 +116,7 @@ fn diagnose_reports_tracking_ignore_and_union_merge_facts() {
         &["add", ".gitattributes", ".agent/state/sessions.jsonl"],
     );
 
-    let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: false });
+    let output = state_diagnose(&ctx);
 
     assert_eq!(output["git"]["repository"], true);
     assert_eq!(output["git"]["paths"]["sessions"]["tracked"], true);
@@ -202,7 +145,7 @@ fn diagnose_includes_local_maintenance_cache_usage() {
     fs::write(backups.join("manifest.json"), b"manifest").unwrap();
     fs::write(archives.join("receipts.jsonl.gz"), b"archive").unwrap();
 
-    let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: false });
+    let output = state_diagnose(&ctx);
 
     assert_eq!(output["maintenance_cache"]["exists"], true);
     assert_eq!(output["maintenance_cache"]["files"], 3);
@@ -222,58 +165,55 @@ fn diagnose_includes_local_maintenance_cache_usage() {
 }
 
 #[test]
-fn diagnose_recommends_receipt_retention_and_export_before_repair() {
+fn diagnose_recommends_run_archival_and_names_legacy_streams() {
     let mut streams = BTreeMap::new();
     streams.insert(
         "receipts".into(),
         StreamDiagnostics {
-            bytes: RECEIPT_RETENTION_RECOMMENDATION_BYTES,
-            deep_analysis_error_count: 2,
+            path: ".agent/state/receipts.jsonl".into(),
+            bytes: 10,
+            ..StreamDiagnostics::default()
+        },
+    );
+    streams.insert(
+        "sessions".into(),
+        StreamDiagnostics {
+            path: ".agent/state/sessions.jsonl".into(),
+            bytes: 5,
             ..StreamDiagnostics::default()
         },
     );
     streams.insert(
         "runs".into(),
         StreamDiagnostics {
-            bytes: RECEIPT_RETENTION_RECOMMENDATION_BYTES,
+            bytes: RUN_RETENTION_RECOMMENDATION_BYTES,
             ..StreamDiagnostics::default()
         },
     );
-    let receipts = ReceiptPayloadDiagnostics {
-        total_top_level_value_bytes: RECEIPT_RETENTION_RECOMMENDATION_BYTES,
-        ..ReceiptPayloadDiagnostics::default()
-    };
 
     let recommendations = recommendations(
-        true,
         &streams,
-        &receipts,
         &LegacyArchiveDiagnostics::default(),
         &MaintenanceCacheDiagnostics::default(),
-        &RunLinkageReport::not_checked(),
     );
 
     assert!(recommendations.iter().any(|recommendation| {
-        recommendation["kind"] == "archive_receipts"
-            && recommendation["command"]
-                .as_str()
-                .is_some_and(|command| command.contains("state archive"))
-            && recommendation["alternative_command"]
-                .as_str()
-                .is_some_and(|command| command.contains("state export receipts"))
-    }));
-    assert!(recommendations.iter().any(|recommendation| {
-        recommendation["kind"] == "export_receipts_before_repair"
-            && recommendation["command"]
-                .as_str()
-                .is_some_and(|command| command.contains("state export receipts"))
-    }));
-    assert!(recommendations.iter().any(|recommendation| {
         recommendation["kind"] == "archive_runs"
-            && recommendation["command"]
-                .as_str()
-                .is_some_and(|command| command.contains("state archive"))
+            && recommendation["command"] == "jig state archive --before <YYYY-MM-DD> --dry-run"
     }));
+    let legacy = recommendations
+        .iter()
+        .find(|recommendation| recommendation["kind"] == "legacy_state_streams")
+        .unwrap();
+    let reason = legacy["reason"].as_str().unwrap();
+    assert!(reason.starts_with("15 bytes"), "{reason}");
+    assert!(reason.contains(".agent/state/receipts.jsonl"), "{reason}");
+    assert!(reason.contains(".agent/state/sessions.jsonl"), "{reason}");
+    assert!(
+        recommendations
+            .iter()
+            .all(|recommendation| recommendation["kind"] != "archive_receipts")
+    );
 }
 
 fn fixture_paths(root: &Path) -> BTreeSet<PathBuf> {

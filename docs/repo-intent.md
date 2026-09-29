@@ -115,9 +115,7 @@ The canonical `scripts/jig ui` entrypoint starts on Timeline, while `scripts/jig
 `crates/jig/src/state/` stores append-only JSONL records:
 
 - `runs.jsonl`: accepted immutable plans and folded execution lifecycle events, including each target's conclusion and the output tail of a target that did not succeed
-- `receipts.jsonl`: no longer written; check and loop receipts from earlier runtimes remain readable by export, archive, restore, and diagnosis
-
-Repositories adopted before structured work was removed may also keep
+Repositories from earlier runtimes may also keep `receipts.jsonl`,
 `sessions.jsonl`, `plans.jsonl`, and `decisions.jsonl`. Jig no longer writes or
 reads them; `state diagnose` still reports their size and integrity.
 
@@ -127,11 +125,10 @@ the checkout; `jig loop show` reports it. That evidence follows the occurrence
 history's retention rather than being append-only.
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
-validated whole-file rewrites: state archiving writes old receipt records plus,
-when explicitly requested, completed run-event groups as separate compressed cold
-streams under ignored `.agent/.cache/state-archives/`, after an exact recovery
-backup under ignored `.agent/.cache/state-backups/`. Explicit receipt exports go
-only to the caller-selected path. None of these operations rewrite Git history.
+validated whole-file rewrites: state archiving writes completed run-event groups
+to a compressed cold stream under ignored `.agent/.cache/state-archives/`, after
+an exact recovery backup under ignored `.agent/.cache/state-backups/`. Neither
+operation rewrites Git history.
 
 ## Design Principles Visible In The Code
 
@@ -179,7 +176,7 @@ For runtime changes, read `crates/jig/AGENTS.md` and use its entrypoint map:
 - CLI shape: `crates/jig/src/cli.rs`
 - command, legacy make, and MCP dispatch: `crates/jig/src/runtime.rs`
 - MCP protocol: `crates/jig/src/mcp.rs`
-- runs and receipts: `crates/jig/src/state.rs` and `crates/jig/src/state/`
+- run history and state maintenance: `crates/jig/src/state.rs` and `crates/jig/src/state/`
 - loop occurrence evidence and `loop show`: `crates/jig/src/runtime/loops/evidence.rs` and `crates/jig/src/runtime/loops/show.rs`
 - bootstrap and template rendering: `crates/jig/src/bootstrap.rs` and `crates/jig/src/bootstrap/`
 - generated outputs: `templates/project/`

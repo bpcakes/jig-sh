@@ -124,7 +124,7 @@ pub(super) fn prepare_repository_checkout(
         "repo checkout",
         observer,
     )?;
-    match repo_task_has_changes(ctx, ctx.root(), observer) {
+    match git_is_dirty(ctx, ctx.root(), observer) {
         Ok(false) => {}
         Ok(true) => {
             return Err(CheckoutPreparationFailure::new(anyhow!(
