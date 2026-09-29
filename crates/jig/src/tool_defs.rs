@@ -94,8 +94,6 @@ pub(crate) mod cli_command {
     pub(crate) const STATE: &str = "state";
     pub(crate) const STATE_ARCHIVE: &str = "archive";
     pub(crate) const STATE_DIAGNOSE: &str = "diagnose";
-    pub(crate) const STATE_EXPORT: &str = "export";
-    pub(crate) const STATE_RECEIPTS: &str = "receipts";
     pub(crate) const STATE_RESTORE: &str = "restore";
     pub(crate) const STATE_SUMMARY: &str = "summary";
     pub(crate) const STATUS: &str = "status";

@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
 
-use super::super::{LEGACY_RECEIPT_JOURNAL_EXCLUDE, git_output};
+use super::super::git_output;
 
 const OBSERVATION_LIMIT: usize = 100;
 const VALUE_LIMIT: usize = 512;
@@ -77,7 +77,6 @@ fn observed_paths(ctx: &RepoContext, path: &Path) -> (Vec<String>, bool) {
             "--untracked-files=all",
             "--",
             ".",
-            LEGACY_RECEIPT_JOURNAL_EXCLUDE,
         ],
         &mut NoopExecutionObserver,
     ) else {

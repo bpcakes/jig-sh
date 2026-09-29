@@ -600,7 +600,6 @@ fn parses_state_archive_command() {
     match cli.command {
         CommandKind::State(StateCommand::Archive(opts)) => {
             assert_eq!(opts.before, "2026-01-01");
-            assert!(opts.include_runs);
             assert!(opts.dry_run);
         }
         other => panic!("expected state archive command, got {other:?}"),
@@ -609,11 +608,12 @@ fn parses_state_archive_command() {
 
 #[test]
 fn parses_state_maintenance_commands() {
-    let cli = Cli::try_parse_from(["jig", "state", "diagnose", "--deep"]).unwrap();
-    match cli.command {
-        CommandKind::State(StateCommand::Diagnose(opts)) => assert!(opts.deep),
-        other => panic!("expected state diagnose command, got {other:?}"),
-    }
+    let cli = Cli::try_parse_from(["jig", "state", "diagnose"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        CommandKind::State(StateCommand::Diagnose)
+    ));
+    assert!(Cli::try_parse_from(["jig", "state", "diagnose", "--deep"]).is_err());
 
     assert!(Cli::try_parse_from(["jig", "state", "compact", "sessions", "--dry-run"]).is_err());
 
@@ -635,26 +635,19 @@ fn parses_state_maintenance_commands() {
         other => panic!("expected state restore command, got {other:?}"),
     }
 
-    let cli = Cli::try_parse_from([
-        "jig",
-        "state",
-        "export",
-        "receipts",
-        "--before",
-        "2026-01-01",
-        "--output",
-        "receipts.jsonl.gz",
-    ])
-    .unwrap();
-    match cli.command {
-        CommandKind::State(StateCommand::Export {
-            command: StateExportCommand::Receipts(opts),
-        }) => {
-            assert_eq!(opts.before, "2026-01-01");
-            assert_eq!(opts.output, std::path::PathBuf::from("receipts.jsonl.gz"));
-        }
-        other => panic!("expected state export receipts command, got {other:?}"),
-    }
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "state",
+            "export",
+            "receipts",
+            "--before",
+            "2026-01-01",
+            "--output",
+            "receipts.jsonl.gz",
+        ])
+        .is_err()
+    );
 }
 
 #[test]

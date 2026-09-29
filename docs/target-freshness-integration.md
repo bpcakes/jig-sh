@@ -9,8 +9,8 @@ Jig no longer records target freshness. Earlier runtimes derived a
 `target_freshness` identity from these declarations and wrote it into every check
 receipt; checks now record no receipts, and every check run executes its targets.
 The declarations remain validated contract fields that inspection reports, but
-they do not change what a check runs or records. Receipts and run records that
-carry `target_freshness` remain readable, and current readers ignore it.
+they do not change what a check runs or records. Run records that carry
+`target_freshness` remain readable, and current readers ignore it.
 
 Omitted policies mean `inputs_policy = "whole_repository"` and
 `source_state = "git"`. Generated checks keep these conservative defaults,

@@ -183,7 +183,6 @@ fn archive_and_restore_reject_queued_plans_with_invalid_structure() {
         &ctx,
         crate::command::StateArchiveRequest {
             before: u64::MAX.to_string(),
-            include_runs: true,
             dry_run: true,
         },
     )
@@ -245,7 +244,6 @@ fn archive_removes_completed_runs_and_keeps_recovery_artifacts() {
         &ctx,
         crate::command::StateArchiveRequest {
             before: u64::MAX.to_string(),
-            include_runs: true,
             dry_run: false,
         },
     )

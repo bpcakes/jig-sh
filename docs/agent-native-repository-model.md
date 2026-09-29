@@ -337,7 +337,7 @@ that could change behavior without a reviewable contract diff.
 Contract versions 2 through 5 remain readable. For those contracts, the
 runtime synthesizes a `repo` component and maps each legacy manifest tool onto
 a compatible repo-scoped action. Existing command names and tool calls keep
-working, and receipts they recorded under earlier runtimes remain readable. Contract version 6 templates emit native component and
+working. Contract version 6 templates emit native component and
 action records and still render target-aware `[[work.gates]]` entries, which are
 accepted but no longer evaluated.
 
@@ -351,14 +351,12 @@ contribute adapter metadata and component-scoped actions instead.
 Run history records each target result with its run id, structured target,
 configuration digest, input digest, exit code, and normalized findings. A target
 that did not succeed also records a bounded tail of its stdout and stderr.
-Jig no longer writes receipts; check receipts written by earlier runtimes, which
-carried the same target fields, remain readable and append-only. Loop
-occurrences record their own evidence under Git metadata, reported by
-`jig loop show`.
+Jig no longer writes or reads receipts; an existing `receipts.jsonl` is left in
+place as history. Loop occurrences record their own evidence under Git
+metadata, reported by `jig loop show`.
 
 Gate evaluation, agent-review gates, and structured work plans were removed
-with `jig work`. Receipts linked to plans recorded before that removal remain
-readable; `--plan-id` is accepted and ignored.
+with `jig work`. `--plan-id` is accepted and ignored.
 
 ## Caching policy
 

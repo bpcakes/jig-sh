@@ -193,13 +193,6 @@ fn resolve_git_commit_inner(
     parse_git_object_oid(&output.stdout, "baseline")
 }
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
-pub(crate) struct DiffStat {
-    pub(crate) files: usize,
-    pub(crate) insertions: u64,
-    pub(crate) deletions: u64,
-}
-
 fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
     if stdout.is_empty() {
         return Ok(Vec::new());

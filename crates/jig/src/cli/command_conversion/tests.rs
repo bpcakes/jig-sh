@@ -219,7 +219,7 @@ fn dev_conversion_preserves_management_action_state_dirs() {
 }
 
 #[test]
-fn state_archive_conversion_preserves_cutoff_run_scope_and_dry_run() {
+fn state_archive_conversion_preserves_cutoff_and_dry_run() {
     let request: command::StateCommand = StateCommand::Archive(StateArchiveOpts {
         before: "2026-01-01".into(),
         include_runs: true,
@@ -230,7 +230,6 @@ fn state_archive_conversion_preserves_cutoff_run_scope_and_dry_run() {
     match request {
         command::StateCommand::Archive(request) => {
             assert_eq!(request.before, "2026-01-01");
-            assert!(request.include_runs);
             assert!(request.dry_run);
         }
         other => panic!("expected state archive request, got {other:?}"),
@@ -239,12 +238,8 @@ fn state_archive_conversion_preserves_cutoff_run_scope_and_dry_run() {
 
 #[test]
 fn state_maintenance_conversion_preserves_arguments() {
-    let request: command::StateCommand =
-        StateCommand::Diagnose(StateDiagnoseOpts { deep: true }).into();
-    match request {
-        command::StateCommand::Diagnose(request) => assert!(request.deep),
-        other => panic!("expected state diagnose request, got {other:?}"),
-    }
+    let request: command::StateCommand = StateCommand::Diagnose.into();
+    assert!(matches!(request, command::StateCommand::Diagnose));
 
     let backup = std::path::PathBuf::from("backup/manifest.json");
     let request: command::StateCommand = StateCommand::Restore(StateRestoreOpts {
@@ -256,23 +251,5 @@ fn state_maintenance_conversion_preserves_arguments() {
             assert_eq!(request.backup, backup);
         }
         other => panic!("expected state restore request, got {other:?}"),
-    }
-
-    let output = std::path::PathBuf::from("receipts.jsonl.gz");
-    let request: command::StateCommand = StateCommand::Export {
-        command: StateExportCommand::Receipts(StateExportReceiptsOpts {
-            before: "2026-01-01".into(),
-            output: output.clone(),
-        }),
-    }
-    .into();
-    match request {
-        command::StateCommand::ExportReceipts(request) => {
-            assert_eq!(request.before, "2026-01-01");
-            assert_eq!(request.output, output);
-        }
-        other => {
-            panic!("expected state export receipts request, got {other:?}")
-        }
     }
 }

@@ -13,7 +13,7 @@ use super::{
     ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
     ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
     ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
-    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
+    StateRestoreOpts, ToolOpts,
 };
 
 impl From<AgentMapCommand> for command::AgentMapCommand {
@@ -204,19 +204,10 @@ impl From<StateCommand> for command::StateCommand {
     fn from(command: StateCommand) -> Self {
         match command {
             StateCommand::Summary => Self::Summary,
-            StateCommand::Diagnose(opts) => Self::Diagnose(opts.into()),
+            StateCommand::Diagnose => Self::Diagnose,
             StateCommand::Restore(opts) => Self::Restore(opts.into()),
-            StateCommand::Export { command } => match command {
-                StateExportCommand::Receipts(opts) => Self::ExportReceipts(opts.into()),
-            },
             StateCommand::Archive(opts) => Self::Archive(opts.into()),
         }
-    }
-}
-
-impl From<StateDiagnoseOpts> for command::StateDiagnoseRequest {
-    fn from(opts: StateDiagnoseOpts) -> Self {
-        Self { deep: opts.deep }
     }
 }
 
@@ -228,20 +219,10 @@ impl From<StateRestoreOpts> for command::StateRestoreRequest {
     }
 }
 
-impl From<StateExportReceiptsOpts> for command::StateExportReceiptsRequest {
-    fn from(opts: StateExportReceiptsOpts) -> Self {
-        Self {
-            before: opts.before,
-            output: opts.output,
-        }
-    }
-}
-
 impl From<StateArchiveOpts> for command::StateArchiveRequest {
     fn from(opts: StateArchiveOpts) -> Self {
         Self {
             before: opts.before,
-            include_runs: opts.include_runs,
             dry_run: opts.dry_run,
         }
     }
