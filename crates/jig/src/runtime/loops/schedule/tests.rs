@@ -668,16 +668,17 @@ schedule = "* * * * *"
         panic!("expected workflow lease");
     };
 
-    let receipt_lock_dir = temp.path().join(".agent/.cache/state-locks");
-    fs::create_dir_all(&receipt_lock_dir).unwrap();
-    let receipt_lock = OpenOptions::new()
+    // Holding the lease ledger lock parks the dispatcher at its workflow lease
+    // attempt, after it has claimed the occurrence; claiming reads leases
+    // without locking.
+    let lease_lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(receipt_lock_dir.join("receipts.jsonl.lock"))
+        .open(temp.path().join(LOOP_CACHE_DIR).join("leases.lock"))
         .unwrap();
-    receipt_lock.lock_exclusive().unwrap();
+    lease_lock.lock_exclusive().unwrap();
 
     let root = temp.path().to_path_buf();
     let dispatch_at = timestamp("2026-08-21T08:42:30Z");
@@ -715,7 +716,7 @@ schedule = "* * * * *"
         .reconcile_stale_for_test(u64::MAX)
         .unwrap();
     assert_eq!(reconciled.len(), 1);
-    FileExt::unlock(&receipt_lock).unwrap();
+    FileExt::unlock(&lease_lock).unwrap();
 
     let deferred = dispatcher.join().unwrap().unwrap();
     assert_eq!(deferred["status"], "deferred", "{deferred:#}");
